@@ -26,7 +26,12 @@ defmodule Aqua.Aloud do
       and it belongs to members alone.
     * A line that is not YOURS. You say aloud what you said — every
       selected message must be authored by the caller, or the verb would
-      let one person speak another's words under their own name.
+      let one person speak another's words under their own name. One
+      extension: a line your own assistant said to you, in your own
+      athanor, is yours to share — it was said to nobody else. The copy
+      says so (`shared_agent: true` in its payload) and is attributed to
+      you, never to the assistant. A room's assistant's lines belong to
+      the room and stay refused.
     * A copy into the SAME conversation. Nothing to say aloud; the line is
       already there.
 
@@ -119,11 +124,12 @@ defmodule Aqua.Aloud do
   # something from far up a long conversation.
   #
   # Author-only, enforced HERE and not in a client: every selected row must
-  # be the caller's own. The copy is attributed to the caller, so a foreign
-  # line would be one person speaking another's words under their own name
-  # — refused whole, not filtered, so the person is told rather than
-  # quietly published less than they picked (the same posture as a missing
-  # attachment).
+  # be the caller's own, or — when the source is the caller's own athanor —
+  # their assistant's answer to them. The copy is attributed to the caller,
+  # so a foreign line would be one person speaking another's words under
+  # their own name — refused whole, not filtered, so the person is told
+  # rather than quietly published less than they picked (the same posture
+  # as a missing attachment).
   defp take(ctx, conversation_id, message_ids) do
     found =
       message_ids
@@ -138,10 +144,25 @@ defmodule Aqua.Aloud do
 
     cond do
       found == [] -> {:error, :not_found}
-      Enum.any?(found, &(&1.author != ctx.user_id)) -> {:error, :not_the_author}
+      Enum.any?(found, &(not sayable?(&1, ctx))) -> {:error, :not_the_author}
       true -> {:ok, found}
     end
   end
+
+  defp sayable?(%{author: author}, %Context{user_id: author}), do: true
+  defp sayable?(%{author: "aqua", kind: "text"}, ctx), do: own_athanor?(ctx)
+  defp sayable?(_row, _ctx), do: false
+
+  # Whether the source estate is the caller's own athanor — the one place
+  # an assistant's line was said to them alone.
+  defp own_athanor?(%Context{user_id: user_id, athanor_id: focus}) when is_binary(user_id) do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, %{personal_athanor_id: ^focus}} -> true
+      _ -> false
+    end
+  end
+
+  defp own_athanor?(_ctx), do: false
 
   defp copy(source_ctx, target_ctx, source_id, target_id, rows) do
     Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
@@ -166,6 +187,7 @@ defmodule Aqua.Aloud do
          {:ok, refs} <- Attachments.store(target_ctx, target_id, message_id, files) do
       payload =
         %{"aloud_from" => %{"conversation_id" => source_id, "message_id" => row.id}}
+        |> put_shared_agent(row)
         |> put_refs(refs)
 
       case Conversations.append(target_ctx, target_id, %{
@@ -189,6 +211,11 @@ defmodule Aqua.Aloud do
 
   defp put_refs(payload, []), do: payload
   defp put_refs(payload, refs), do: Map.put(payload, "attachments", refs)
+
+  # The copy is the person's, attributed to them; the mark says the words
+  # were their assistant's, so a room can render "shared from AQUA".
+  defp put_shared_agent(payload, %{author: "aqua"}), do: Map.put(payload, "shared_agent", true)
+  defp put_shared_agent(payload, _row), do: payload
 
   # A message's blobs as upload-shaped files, read out of the source estate
   # so `Attachments.store/4` can write them into the target's own tree.

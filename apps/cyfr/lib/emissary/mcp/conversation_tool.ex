@@ -149,7 +149,8 @@ defmodule Emissary.MCP.ConversationTool do
           "message_ids" => %{
             "type" => "array",
             "items" => %{"type" => "string"},
-            "description" => "aloud: your own messages to copy, in any order"
+            "description" =>
+              "aloud: your own messages to copy, in any order — or your assistant's replies to you in your own athanor"
           },
           "target_athanor" => %{
             "type" => "string",
@@ -333,7 +334,9 @@ defmodule Emissary.MCP.ConversationTool do
         {:error, {:invalid_argument, "aloud reaches only estates you are a member of"}}
 
       {:error, :not_the_author} ->
-        {:error, {:invalid_argument, "only your own lines can be said aloud"}}
+        {:error,
+         {:invalid_argument,
+          "only your own lines can be said aloud — or your own assistant's, from your own athanor"}}
 
       {:error, :same_conversation} ->
         {:error, {:invalid_argument, "that line is already in this conversation"}}

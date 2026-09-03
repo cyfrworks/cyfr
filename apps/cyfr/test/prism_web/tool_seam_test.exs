@@ -77,7 +77,7 @@ defmodule PrismWeb.ToolSeamTest do
     # authenticated member context, and the registry gate exists for
     # surfaces that do not. Same functions, two doors —
     # `PrismWeb.MCPHelpers` states the rule.
-    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.ConversationStorage.create"},
+    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex", "Arca.ConversationStorage.create"},
     {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.ConversationStorage.delete"},
     # Following is the person's own sidebar and notify roster — the rows
     # the `conversation.follow`/`unfollow` verbs write for a headless
@@ -87,12 +87,13 @@ defmodule PrismWeb.ToolSeamTest do
      "Arca.TopicSubscriptionStorage.unfollow"},
     # Withdrawing an approval the person was shown. The grant belongs to the
     # click that made it; the runner is told, not asked.
-    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Aqua.ConversationRunner.revoke_grant"},
+    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex",
+     "Aqua.ConversationRunner.revoke_grant"},
     # Attachments a person drags into their own chat, and the same call
     # undone when the message they belonged to is not sent. Storage-capped by
     # `Sanctum.Tenancy.Caps.check_storage/2` like every other tenant write.
-    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Aqua.Attachments.store"},
-    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Aqua.Attachments.discard"}
+    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex", "Aqua.Attachments.store"},
+    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex", "Aqua.Attachments.discard"}
   ]
 
   # The namespaces whose state the console must not change behind the tool

@@ -49,6 +49,12 @@ defmodule PrismWeb.ConversationLiveTest do
 
   # Attributed like production events: the runner drops an event that names
   # no execution (the guarded clause is the contract, not a convenience).
+  # The open thread is a nested LiveView of its own: events reach it by
+  # name, a different thread is a different child, and what the tape shows
+  # is read by rendering the pane — a render of the page does not wait for
+  # the pane's process to apply a broadcast.
+  defp pane(view), do: Enum.find(live_children(view), &String.starts_with?(&1.id, "pane-"))
+
   defp emit(runner, kind, data) do
     %{execution_id: eid} = :sys.get_state(runner)
 
@@ -85,7 +91,7 @@ defmodule PrismWeb.ConversationLiveTest do
     # anything once "whose agent answers?" had more than one answer.
     assert html =~ "Talk to the group"
 
-    alice_view
+    pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua hello from alice"})
     |> render_submit()
 
@@ -104,16 +110,16 @@ defmodule PrismWeb.ConversationLiveTest do
     # the sender's socket, owns the turn.
     emit(runner, "text_delta", %{"content" => "Hi Alice, hi Bob"})
     :sys.get_state(runner)
-    assert render(bob_view) =~ "Hi Alice, hi Bob"
+    assert render(pane(bob_view)) =~ "Hi Alice, hi Bob"
 
     complete(runner)
     :sys.get_state(runner)
     Process.sleep(50)
 
-    rendered = render(bob_view)
+    rendered = render(pane(bob_view))
     assert rendered =~ "Hi Alice, hi Bob"
     refute rendered =~ "is asking"
-    assert render(alice_view) =~ "Hi Alice, hi Bob"
+    assert render(pane(alice_view)) =~ "Hi Alice, hi Bob"
 
     assert [%{author: a}, %{author: "aqua"}] = Conversations.messages(start_ctx, conv.id)
     assert a == alice.user_id
@@ -127,7 +133,7 @@ defmodule PrismWeb.ConversationLiveTest do
 
     {alice_view, _} = mount_athanor(alice_conn, "")
 
-    alice_view
+    pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua pull a component"})
     |> render_submit()
 
@@ -147,12 +153,12 @@ defmodule PrismWeb.ConversationLiveTest do
     :sys.get_state(runner)
     Process.sleep(50)
 
-    assert render(alice_view) =~ "Pull component"
-    assert render(bob_view) =~ "Pull component"
+    assert render(pane(alice_view)) =~ "Pull component"
+    assert render(pane(bob_view)) =~ "Pull component"
     [apr] = Conversations.pending_approvals(start_ctx, conv.id)
 
     # Bob approves from his tab.
-    bob_view
+    pane(bob_view)
     |> element("#" <> apr.id <> " button[phx-value-scope=once]")
     |> render_click()
 
@@ -162,8 +168,8 @@ defmodule PrismWeb.ConversationLiveTest do
     assert run_ctx.user_id == bob.user_id
     Process.sleep(100)
 
-    assert render(bob_view) =~ "Approved"
-    assert render(alice_view) =~ "Approved"
+    assert render(pane(bob_view)) =~ "Approved"
+    assert render(pane(alice_view)) =~ "Approved"
     {:ok, done} = Conversations.get_message(start_ctx, apr.id)
     assert done.status == "approved"
     assert done.resolved_by == bob.user_id
@@ -207,7 +213,7 @@ defmodule PrismWeb.ConversationLiveTest do
 
     {alice_view, _} = mount_athanor(alice_conn, "", group)
 
-    alice_view
+    pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "lunch at noon?"})
     |> render_submit()
 
@@ -231,12 +237,12 @@ defmodule PrismWeb.ConversationLiveTest do
     # a per-group setting.
     assert bob_html =~ "Talk to the group"
 
-    bob_view
+    pane(bob_view)
     |> form("form[phx-submit=submit]", %{"message" => "sure"})
     |> render_submit()
 
     Process.sleep(50)
-    assert render(alice_view) =~ "sure"
+    assert render(pane(alice_view)) =~ "sure"
     refute_receive {:fake_start, _, _, _, _}, 200
 
     # Bob is removed: his tab is sent away, and a fresh open is refused.
@@ -252,7 +258,7 @@ defmodule PrismWeb.ConversationLiveTest do
 
     refute redirected_html =~ "lunch at noon?"
 
-    alice_view
+    pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua book it"})
     |> render_submit()
 
@@ -284,14 +290,14 @@ defmodule PrismWeb.ConversationLiveTest do
           {"note.txt", "hi there", "text/plain"},
           {"plan.md", "second", "text/markdown"}
         ] do
-      alice_view
+      pane(alice_view)
       |> file_input("form[phx-submit=submit]", :attachments, [
         %{name: name, content: content, type: type}
       ])
       |> render_upload(name)
     end
 
-    alice_view
+    pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua read these"})
     |> render_submit()
 

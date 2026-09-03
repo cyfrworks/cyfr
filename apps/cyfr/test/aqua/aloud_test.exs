@@ -140,6 +140,43 @@ defmodule Aqua.AloudTest do
              )
   end
 
+  test "your own assistant's line, from your own athanor, is yours to share — a room's is not", %{
+    ctx: ctx,
+    private: private,
+    shared: shared
+  } do
+    # The user's row must name the personal athanor for "own" to hold.
+    {:ok, _} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: ctx.user_id, provider: "local"})
+    {:ok, u} = Sanctum.Tenancy.Users.get(ctx.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, ctx.athanor_id)
+
+    {:ok, answer} =
+      Conversations.append(ctx, private.id, %{author: "aqua", kind: "text", content: "Try BA117."})
+
+    assert {:ok, [copy]} = Aloud.post(ctx, private.id, [answer.id], shared.athanor_id, shared.id)
+
+    # Attributed to the person, marked as the assistant's words.
+    assert copy.author == ctx.user_id
+    assert copy.content == "Try BA117."
+    assert Conversations.payload(copy)["shared_agent"] == true
+
+    # The room's own assistant spoke to the room; nobody carries that out.
+    room_ctx = %{ctx | athanor_id: shared.athanor_id}
+
+    {:ok, room_answer} =
+      Conversations.append(room_ctx, shared.id, %{author: "aqua", kind: "text", content: "Sure."})
+
+    assert {:error, :not_the_author} =
+             Aloud.post(room_ctx, shared.id, [room_answer.id], private.athanor_id, private.id)
+
+    # A system line is nobody's to say aloud, at home or not.
+    {:ok, note} =
+      Conversations.append(ctx, private.id, %{author: "system", kind: "system", content: "📝"})
+
+    assert {:error, :not_the_author} =
+             Aloud.post(ctx, private.id, [note.id], shared.athanor_id, shared.id)
+  end
+
   test "only your own lines can be said aloud", %{ctx: ctx, private: private, shared: shared} do
     mine = said(ctx, private, "my line")
 

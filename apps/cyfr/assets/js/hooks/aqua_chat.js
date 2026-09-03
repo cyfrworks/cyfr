@@ -79,7 +79,9 @@ const AquaChat = {
       if (files.length === 0) return
       e.preventDefault()
 
-      const fileInput = document.querySelector("input[data-phx-upload-ref]")
+      // This composer's own upload input: a page may hold more than one pane.
+      const scope = this.el.form || this.el.closest("form") || document
+      const fileInput = scope.querySelector("input[data-phx-upload-ref]")
       if (!fileInput) return
 
       fileInput.dispatchEvent(
