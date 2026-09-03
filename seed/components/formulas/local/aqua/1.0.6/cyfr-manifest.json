@@ -1,7 +1,7 @@
 {
   "name": "aqua",
   "type": "formula",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "publisher": "local",
   "description": "AQUA agentic loop. Per-agent tool allowlist (tool_policy: tool.action -> ask|auto, supports tool.* globs); read-kind actions and auto-flagged actions are directly callable, everything else is requested for human approval. Uniform for orchestrator and sub-agents.",
   "dependencies": {
@@ -204,6 +204,12 @@
       "aqua.create",
       "aqua.update",
       "aqua.delete",
+      "notes.keep",
+      "notes.pin",
+      "notes.forget",
+      "notes.list",
+      "notes.read",
+      "notes.search",
       "config.get",
       "config.get_all",
       "config.list",

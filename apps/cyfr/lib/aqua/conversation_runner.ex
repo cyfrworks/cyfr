@@ -1599,7 +1599,7 @@ defmodule Aqua.ConversationRunner do
   # `msg` is already marked "running" by the caller's compare-and-set.
   defp run_approval(state, ctx, msg, scope) do
     intent = approval_intent(msg)
-    proposal = proposal_of(intent)
+    proposal = intent |> proposal_of() |> with_provenance(state)
 
     state = apply_scope(state, ctx, msg, proposal, scope)
     state = broadcast(state, {:message_updated, msg})
@@ -1672,20 +1672,76 @@ defmodule Aqua.ConversationRunner do
 
   # `:conversation` and `:always` are both STANDING grants — they answer
   # for calls nobody has seen yet — so both are refused for
-  # destructive/external actions; only `:once` may approve those. The card
-  # hides these buttons, but the card is a client; the rule is decided
-  # here, on the kind the intent already carries.
+  # destructive/external actions; only `:once` may approve those. Past the
+  # kind, the action's own standing rule — minted onto the intent from the
+  # same annotation `Aqua.ToolGrants` reads at the write — has the last
+  # word: `false` takes no standing answer at all, `"conversation"` takes
+  # none at agent scope. The card hides these buttons, but the card is a
+  # client; the rule is decided here, on what the intent already carries.
   defp scope_permitted(msg, scope) when scope in [:conversation, :always] do
-    case approval_intent(msg)["action_kind"] do
-      kind when kind in ["destructive", "external"] ->
-        {:error, {:scope_not_permitted, kind}}
+    intent = approval_intent(msg)
 
-      _ ->
+    cond do
+      intent["action_kind"] in ["destructive", "external"] ->
+        {:error, {:scope_not_permitted, intent["action_kind"]}}
+
+      intent["standing"] == false ->
+        {:error, {:scope_not_permitted, :never_standing}}
+
+      intent["standing"] == "conversation" and scope == :always ->
+        {:error, {:scope_not_permitted, :conversation_only}}
+
+      true ->
         :ok
     end
   end
 
   defp scope_permitted(_msg, _scope), do: :ok
+
+  # A note kept from a turn names the turn. The runner is the one party
+  # that knows both the conversation and the execution, so it stamps them
+  # onto the approved call's arguments; the tool reads them as provenance
+  # and nothing else, and a value the model put there is overwritten.
+  @note_writes ~w(keep pin)
+
+  defp with_provenance(%{tool: "notes", action: action, args: args} = proposal, state)
+       when action in @note_writes do
+    args =
+      (args || %{})
+      |> Map.put("conversation", state.id)
+      |> Cyfr.MapUtil.put_present("execution", state.execution_id)
+
+    %{proposal | args: args}
+  end
+
+  defp with_provenance(proposal, _state), do: proposal
+
+  # What an approved card kept lands on the tape as a visible line, in the
+  # runner's voice: the agent proposed, a person clicked, and the room sees
+  # what was kept. `author: "system"` like every other runner line — never
+  # `"aqua"`, which the tape reads as the agent's own speech.
+  defp note_kept(state, :approved, intent, %{result: result}) do
+    case {proposal_of(intent), note_line(result)} do
+      {%{tool: "notes"}, line} when is_binary(line) ->
+        append_and_broadcast(state, %{author: "system", kind: "system", content: line})
+
+      _ ->
+        state
+    end
+  end
+
+  defp note_kept(state, _outcome, _intent, _payload), do: state
+
+  defp note_line(%{} = result) do
+    cond do
+      name = result[:kept] || result["kept"] -> "📝 Kept a note: #{name}"
+      name = result[:pinned] || result["pinned"] -> "📝 Pinned #{name}"
+      name = result[:cleared] || result["cleared"] -> "📝 Cleared #{name}"
+      true -> nil
+    end
+  end
+
+  defp note_line(_result), do: nil
 
   # A standing approval is a row now, not a `MapSet` that a restart
   # discards and not an edit to the agent's authored markdown.
@@ -1820,6 +1876,7 @@ defmodule Aqua.ConversationRunner do
             notify_resolved(state, updated)
 
             state
+            |> note_kept(outcome, intent, payload)
             |> append_history(system_text)
             |> broadcast({:message_updated, updated})
             |> touch()

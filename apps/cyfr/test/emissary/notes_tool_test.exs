@@ -8,6 +8,10 @@ defmodule Emissary.MCP.NotesToolTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.NotesTool, as: Tool
+  alias Emissary.MCP.ToolRegistry
+  alias Sanctum.Authority
+  alias Sanctum.Authority.Blob
+  alias Sanctum.Context
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -52,6 +56,50 @@ defmodule Emissary.MCP.NotesToolTest do
   end
 
   defp call(ctx, args), do: Tool.handle("notes", ctx, args)
+
+  # A chain authority granting exactly `pairs`, the shape the consent blob
+  # mints from a manifest's `caps.tools`.
+  defp granting(pairs) do
+    node = "formula:local.aqua"
+    tools = pairs |> Enum.map(fn {tool, action} -> "#{tool}.#{action}" end) |> Enum.sort()
+
+    {:ok, blob} =
+      Blob.parse(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          node => %{
+            "limits" => %{
+              "timeout" => "1m",
+              "max_memory_bytes" => 67_108_864,
+              "max_request_size" => 1_048_576,
+              "max_response_size" => 5_242_880,
+              "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+              "max_concurrent_tasks" => 10,
+              "batch_timeout" => "1m"
+            },
+            "edges" => %{"@ingress" => %{"tools" => tools}}
+          }
+        }
+      })
+
+    {:ok, auth} =
+      Authority.root(
+        %{
+          profile_id: "prof-notes",
+          consent_id: "consent-notes",
+          source_ref: node,
+          kind: :owner,
+          invoke_mode: :open_inert,
+          activation: %{node => "sha256:notes"}
+        },
+        blob
+      )
+
+    auth
+  end
+
+  defp in_chain(ctx, args, auth),
+    do: ToolRegistry.call_in_chain("notes", Context.enter_guest(ctx), args, auth)
 
   test "a note lands in the estate you are working in, and nowhere else", %{
     ctx: ctx,
@@ -229,16 +277,125 @@ defmodule Emissary.MCP.NotesToolTest do
     assert msg =~ "search"
   end
 
-  test "an agent cannot write notes — the root is host-only" do
-    # `Arca.Storage`'s layout gives `notes/` no guest name, so it does not
-    # exist at the guest boundary at all. Keeping something is a person's
-    # act — or a person's click on what an agent proposed.
+  test "a guest cannot name the root; a chain reaches the tool, interactively" do
+    # `Arca.Storage`'s layout gives `notes/` no guest name, so a WASM guest
+    # cannot write to it as a path. The tool is what a chain reaches — by
+    # proposing, and a person clicking — and the credential gate is the
+    # same on both planes.
     refute Map.has_key?(Arca.Storage.guest_scopes(), "notes")
     assert "notes" in Arca.Storage.tenant_roots()
 
     for {name, spec} <- Tool.definition().annotations.actions do
-      assert spec.planes == [:external], "#{name} is reachable in-chain"
+      assert spec.planes == [:external, :in_chain], "#{name} is not reachable from a chain"
       assert spec.consent == :interactive, "#{name} is reachable by a standing credential"
+    end
+  end
+
+  test "an approved call keeps a note from inside the chain, and only an OIDC session's chain may",
+       %{ctx: ctx, estate: estate} do
+    auth = granting([{"notes", "keep"}, {"notes", "read"}])
+
+    args = %{
+      "action" => "keep",
+      "name" => "decided",
+      "content" => "Lisbon",
+      "conversation" => "conv_1",
+      "execution" => "exec_1"
+    }
+
+    # The person's own session, now guest-planed by the approved run: the
+    # plane is not asked again, the surface is.
+    assert {:ok, %{kept: "decided", athanor_id: id}} = in_chain(ctx, args, auth)
+    assert id == estate.id
+
+    assert {:ok, %{conversation: "conv_1", execution: "exec_1", kept_by: kept_by}} =
+             in_chain(ctx, %{"action" => "read", "name" => "decided"}, auth)
+
+    assert kept_by == ctx.user_id
+
+    # The same formula started by a key or a schedule is refused inside the
+    # chain exactly as it is at the door — the click was a session's.
+    for method <- [:api_key, :scheduled] do
+      assert {:error, {:consent_class_required, {:surface_not_permitted, ^method}}} =
+               in_chain(%{ctx | auth_method: method}, args, auth)
+    end
+
+    # And the door still refuses the guest plane outright — before consent
+    # is even consulted.
+    assert {:error, {:guest_plane_call, "notes"}} =
+             ToolRegistry.call_external("notes", Context.enter_guest(ctx), args)
+
+    # A chain whose authority predates the notes actions is denied before
+    # the tool is reached — legibly, so re-consent is the obvious answer.
+    assert {:error, "Denied by chain authority: " <> _} =
+             in_chain(ctx, args, granting([{"notes", "read"}]))
+  end
+
+  test "a room's assistant reads only the room's notes", %{ctx: ctx, home: home} do
+    auth = granting([{"notes", "list"}, {"notes", "search"}])
+    {:ok, _} = call(home, %{"action" => "keep", "name" => "flight", "content" => "BA117"})
+
+    # From the trip, a chain cannot open the person's own pile — however
+    # the model asks for it.
+    for args <- [
+          %{"action" => "list", "scope" => "mine"},
+          %{"action" => "search", "query" => "BA117", "scope" => "everywhere"}
+        ] do
+      assert {:error, {:invalid_argument, msg}} = in_chain(ctx, args, auth)
+      assert msg =~ "room's assistant"
+    end
+
+    # The person's own turn, in their own athanor, may look everywhere.
+    assert {:ok, %{matches: [%{name: "flight"}]}} =
+             in_chain(
+               home,
+               %{"action" => "search", "query" => "BA117", "scope" => "everywhere"},
+               auth
+             )
+
+    # And the person themselves, at the door, was never bounded.
+    assert {:ok, %{notes: [%{name: "flight"}]}} =
+             call(ctx, %{"action" => "list", "scope" => "mine"})
+  end
+
+  test "an estate has one pinned page", %{ctx: ctx, home: home} do
+    assert {:error, {:invalid_argument, msg}} =
+             call(ctx, %{"action" => "pin", "name" => "about-you", "content" => "me"})
+
+    assert msg =~ "about-us"
+
+    assert {:error, {:invalid_argument, msg}} =
+             call(home, %{"action" => "pin", "name" => "about-us", "content" => "us"})
+
+    assert msg =~ "about-you"
+
+    assert {:ok, %{pinned: "about-you"}} =
+             call(home, %{
+               "action" => "pin",
+               "name" => "about-you",
+               "content" => "Prefers mornings."
+             })
+
+    assert {:ok, %{name: "about-you", content: "Prefers mornings."}} = Aqua.Notes.pinned(home)
+    assert :none = Aqua.Notes.pinned(ctx)
+  end
+
+  test "the shipped soul's manifest grants the notes actions its policy names" do
+    # The chain authority is exact `tool.action` membership in the consent
+    # blob, minted from the manifest's caps against the loaded providers —
+    # a name no provider serves drops silently, so this pins that every
+    # notes action the soul may propose survives the expansion.
+    manifest =
+      "../../../../seed/components/formulas/local/aqua/1.0.6/cyfr-manifest.json"
+      |> Path.expand(__DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    caps = Compendium.Manifest.Caps.from_manifest(manifest)
+    granted = Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
+
+    for action <- ~w(keep pin forget list read search) do
+      assert "notes.#{action}" in granted, "notes.#{action} is not in the shipped caps"
     end
   end
 

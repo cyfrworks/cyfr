@@ -66,7 +66,19 @@ defmodule Aqua.FakeTurn do
 
   def run_approved(proposal, ctx, profile_id) do
     report({:fake_run_approved, proposal, ctx, profile_id})
-    {:ok, %{"status" => "ok", "id" => "wh_fake"}}
+
+    # A notes write answers in the tool's own shape, so the runner's tape
+    # line can be driven without the real chain.
+    case proposal do
+      %{tool: "notes", action: "keep", args: %{"name" => name}} ->
+        {:ok, %{kept: name, athanor_id: ctx.athanor_id}}
+
+      %{tool: "notes", action: "pin", args: %{"name" => name}} ->
+        {:ok, %{pinned: name, athanor_id: ctx.athanor_id}}
+
+      _ ->
+        {:ok, %{"status" => "ok", "id" => "wh_fake"}}
+    end
   end
 
   @doc false

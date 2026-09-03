@@ -231,6 +231,24 @@ defmodule Aqua.ActionsTest do
       assert intent.hinted_risk == "low"
     end
 
+    test "a proposal's standing rule rides on the intent, spelled for the row" do
+      policy = %{"notes.pin" => "ask", "notes.keep" => "ask", "component.pull" => "ask"}
+
+      card = fn tool, action ->
+        input = ~s(```aqua-actions
+[{"kind":"ui.request_approval","title":"t","summary":"s","risk":"low","action_description":"d","proposal":{"tool":"#{tool}","action":"#{action}","args":{}}}]
+```)
+        assert [intent] = AquaActions.parse(input, policy).intents
+        intent
+      end
+
+      # The same declaration `Aqua.ToolGrants` reads at the write, here as
+      # it survives JSON: a string, `false`, or nothing.
+      assert card.("notes", "pin").standing == false
+      assert card.("notes", "keep").standing == "conversation"
+      assert card.("component", "pull").standing == nil
+    end
+
     test "proposal matched by a `tool.*` glob in the allowlist is accepted" do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"Pull","summary":"fetch it","risk":"medium","action_description":"component.pull","proposal":{"tool":"component","action":"pull","args":{"ref":"catalyst:local.x:1.0.0"}}}]

@@ -7,12 +7,19 @@ defmodule Emissary.MCP.NotesTool do
 
   The domain is `Aqua.Notes`; this module is its door, and two gates sit on
   it on two axes. The storage root is host-only — `Arca.Storage`'s layout
-  gives `notes/` no guest name — so a WASM guest cannot name it at all. And
-  every action declares `consent: :interactive`: a note is kept, read and
-  forgotten by a person's own session, never by a standing credential. An
-  API key (a `*` key included) is refused at the registry's dispatch gate
-  and does not see the tool in `tools/list`. Same two axes, same reason, as
-  the `conversation` tool.
+  gives `notes/` no guest name — so a WASM guest cannot name it as a path.
+  And every action declares `consent: :interactive`: a note is kept, read
+  and forgotten by a person's own session, never by a standing credential.
+  An API key (a `*` key included) is refused at the registry's dispatch
+  gate and does not see the tool in `tools/list`.
+
+  The actions are reachable in-chain too, which is how an agent keeps a
+  note at all: it proposes, a person clicks, and the approved call runs
+  inside the chain under the turn's authority. The consent class keeps its
+  surface half there — only an `:oidc` session's chain gets through — so
+  the same formula started by a key or a schedule is refused exactly as at
+  the door. A running chain reads across estates only from the person's
+  own athanor (`Aqua.Notes`); a room's assistant sees the room's pile.
 
   ## Where a note lands
 
@@ -57,20 +64,31 @@ defmodule Emissary.MCP.NotesTool do
         readOnlyHint: false,
         destructiveHint: true,
         actions: %{
-          # External plane only. Keeping something is a person's act, and
-          # the root is host-only for the same sentence — an agent that
-          # could write here would be deciding what to remember about you.
+          # In-chain as well as at the door: the writes are `ask` in the
+          # soul's policy, so from a chain each one is a card a person
+          # clicked; the reads are `auto`, bounded to the room by the
+          # domain. Interactive on every action — the credential gate is
+          # the same on both planes.
           "keep" => %{
             kind: :write,
-            planes: [:external],
+            planes: [:external, :in_chain],
             consent: :interactive,
             standing: :conversation
           },
-          "pin" => %{kind: :write, planes: [:external], consent: :interactive, standing: false},
-          "forget" => %{kind: :destructive, planes: [:external], consent: :interactive},
-          "list" => %{kind: :read, planes: [:external], consent: :interactive},
-          "read" => %{kind: :read, planes: [:external], consent: :interactive},
-          "search" => %{kind: :read, planes: [:external], consent: :interactive}
+          "pin" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            consent: :interactive,
+            standing: false
+          },
+          "forget" => %{
+            kind: :destructive,
+            planes: [:external, :in_chain],
+            consent: :interactive
+          },
+          "list" => %{kind: :read, planes: [:external, :in_chain], consent: :interactive},
+          "read" => %{kind: :read, planes: [:external, :in_chain], consent: :interactive},
+          "search" => %{kind: :read, planes: [:external, :in_chain], consent: :interactive}
         }
       },
       input_schema: %{
@@ -99,6 +117,16 @@ defmodule Emissary.MCP.NotesTool do
               "Reads only: where to look — the estate in focus (default), your own " <>
                 "athanor, or every estate you belong to. Writes take none; a note " <>
                 "lands where you are."
+          },
+          "conversation" => %{
+            "type" => "string",
+            "description" =>
+              "keep, pin: provenance — the conversation the note was kept from. " <>
+                "Supplied by the host when a card is approved."
+          },
+          "execution" => %{
+            "type" => "string",
+            "description" => "keep, pin: provenance — the execution the note was kept from."
           }
         },
         "required" => ["action"]
@@ -167,8 +195,14 @@ defmodule Emissary.MCP.NotesTool do
 
   defp scope(args), do: Map.get(args, "scope", "estate")
 
-  # The execution a note was kept from rides in as the host-supplied
-  # lineage of an in-chain call; a call from the external door has none.
-  defp provenance(args),
-    do: [execution: args["root_execution_id"] || args["parent_execution_id"]]
+  # Where a note was kept from. The runner stamps the conversation and the
+  # execution onto an approved call's arguments — it is the one party that
+  # knows both — and a chain's host-supplied lineage names the execution
+  # too; a call from the door carries whatever the person chose to say.
+  defp provenance(args) do
+    [
+      conversation: args["conversation"],
+      execution: args["execution"] || args["root_execution_id"] || args["parent_execution_id"]
+    ]
+  end
 end

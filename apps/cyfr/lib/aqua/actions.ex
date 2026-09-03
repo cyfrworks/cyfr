@@ -259,7 +259,7 @@ defmodule Aqua.Actions do
          {:ok, summary} <- string_field(obj, "summary"),
          {:ok, action_description} <- string_field(obj, "action_description"),
          {:ok, hinted_risk} <- risk_field(obj),
-         {:ok, proposal, action_kind} <-
+         {:ok, proposal, action_kind, standing} <-
            validate_proposal(Map.get(obj, "proposal"), tool_policy) do
       {:ok,
        %{
@@ -272,6 +272,11 @@ defmodule Aqua.Actions do
          # annotations (or AquaVirtualTools for `files`/`storage`/`http`).
          # Approval cards color themselves from this kind.
          action_kind: action_kind,
+         # How far a standing answer may reach, from the same declaration:
+         # `"conversation"`, `false`, or nil for either scope. Spelled as
+         # it survives the row's JSON round trip, because the runner reads
+         # it back from there.
+         standing: wire_standing(standing),
          hinted_risk: hinted_risk,
          action_description: action_description,
          proposal: proposal
@@ -281,10 +286,14 @@ defmodule Aqua.Actions do
 
   defp validate_kind(kind, _obj, _policy), do: {:error, "unknown kind: #{inspect(kind)}"}
 
+  defp wire_standing(:conversation), do: "conversation"
+  defp wire_standing(false), do: false
+  defp wire_standing(_), do: nil
+
   # Pure-confirmation card with no executable proposal. Used when the agent
   # wants explicit user buy-in before continuing freeform reasoning. Kind is
   # `nil` because no specific action is bound.
-  defp validate_proposal(nil, _policy), do: {:ok, nil, nil}
+  defp validate_proposal(nil, _policy), do: {:ok, nil, nil, nil}
 
   defp validate_proposal(%{} = p, tool_policy) do
     with {:ok, tool} <- string_field(p, "tool"),
@@ -294,8 +303,8 @@ defmodule Aqua.Actions do
          args <- Map.get(p, "args", %{}),
          :ok <- ensure_object(args, "ui.request_approval.proposal.args"),
          :ok <- lookup_proposal(tool_policy, tool, action) do
-      kind = kind_for(tool, action)
-      {:ok, %{tool: tool, action: action, args: args}, kind}
+      {:ok, %{tool: tool, action: action, args: args}, kind_for(tool, action),
+       standing_for(tool, action)}
     end
   end
 

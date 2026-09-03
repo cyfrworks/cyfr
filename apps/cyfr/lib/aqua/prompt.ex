@@ -28,6 +28,12 @@ defmodule Aqua.Prompt do
       than an estate, the difference is the whole point: Tom in Acme has
       Tom's prompt and Acme's files, and the prompt has to say so rather
       than let the model assume its own tree is here.
+
+  The estate's notes come last: its pinned page (short, read every turn)
+  and the index of what is filed, read through `Aqua.Notes` under the
+  focus — the room's pile in a room, the person's own in their own
+  athanor. Sorted and free of timestamps, so everything before it is the
+  same bytes turn after turn.
   """
 
   alias Sanctum.Context
@@ -59,7 +65,8 @@ defmodule Aqua.Prompt do
       runtime(authority),
       working_in(opts),
       Aqua.Actions.system_prelude(tool_policy),
-      several_people(Keyword.get(opts, :several_people?, false))
+      several_people(Keyword.get(opts, :several_people?, false)),
+      notes(ctx)
     ])
   end
 
@@ -165,4 +172,49 @@ defmodule Aqua.Prompt do
 
   defp several_people(true), do: @several_people
   defp several_people(_), do: []
+
+  # The estate's notes, and the boundary said out loud. A room's turn is
+  # told it sees the room's pile and nothing else; a turn in the person's
+  # own athanor is told it may also search every estate they belong to.
+  # The model never has to discover either by being refused.
+  @notes_rule "These notes belong to the estate this conversation is in. Propose " <>
+                "`notes.keep` for what people would want found again — a decision, a " <>
+                "fact, a preference — and `notes.pin` only for what every future turn " <>
+                "needs; never keep a secret or a credential. Read a filed note with " <>
+                "`notes.read` before answering from your memory of it."
+
+  @room_rule " Notes in other estates, and a person's own, are not readable from " <>
+               "here — a person reads those from their own assistant."
+
+  @home_rule " You may also search the notes of every estate this person belongs to " <>
+               "(`notes.search` with scope `everywhere`)."
+
+  defp notes(ctx) do
+    rule = if Aqua.Notes.at_home?(ctx), do: @home_rule, else: @room_rule
+
+    pinned =
+      case Aqua.Notes.pinned(ctx) do
+        {:ok, %{name: name, content: content}} -> ["\n\n### Pinned: ", name, "\n\n", content]
+        :none -> []
+      end
+
+    index =
+      case Aqua.Notes.index(ctx) do
+        {:ok, []} ->
+          "\n\nNo notes filed yet."
+
+        {:ok, entries} ->
+          [
+            "\n\nFiled notes:\n",
+            Enum.map(entries, fn %{name: name, line: line} ->
+              ["- ", name, if(line == "", do: [], else: [" — ", line]), "\n"]
+            end)
+          ]
+
+        {:error, _} ->
+          []
+      end
+
+    ["\n\n---\n\n## Notes\n\n", @notes_rule, rule, pinned, index]
+  end
 end

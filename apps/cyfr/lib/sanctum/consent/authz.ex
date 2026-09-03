@@ -134,6 +134,26 @@ defmodule Sanctum.Consent.Authz do
   end
 
   @doc """
+  The interactive arm for a call already inside a running chain.
+
+  An approved proposal runs guest-planed: the chain's authority was applied
+  at the dispatch chokepoint and the card the person clicked is the consent
+  moment, so the plane is not asked again. The surface half stays — only an
+  `:oidc` session's chain reaches an interactive action. A key- or
+  schedule-started run of the same formula is refused here exactly as it
+  is at the door.
+  """
+  @spec authorize_interactive_in_chain(Context.t()) :: {:ok, :interactive} | {:error, refusal()}
+  def authorize_interactive_in_chain(%Context{} = ctx) do
+    with :ok <- check_authenticated(ctx) do
+      case ctx.auth_method do
+        :oidc -> {:ok, :interactive}
+        method -> {:error, {:surface_not_permitted, method}}
+      end
+    end
+  end
+
+  @doc """
   Render a refusal as the `consent_class_required:` sentence the caller
   reads — the ONE spelling of this vocabulary's prose. Every surface that
   answers a consent refusal (`Sanctum.MCP.ProfileTool`, the MCP dispatch

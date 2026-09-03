@@ -474,6 +474,107 @@ defmodule Aqua.ConversationRunnerTest do
     assert [] = Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
   end
 
+  test "a standing rule on the intent is the runner's rule too", %{
+    alice: alice,
+    bob: bob,
+    conv: conv
+  } do
+    {_eid, _runner, _} = start_turn(alice, conv, "plant")
+
+    card = fn title, standing, action ->
+      {:ok, apr} =
+        Conversations.append(alice, conv.id, %{
+          author: "aqua",
+          kind: "approval",
+          status: "pending",
+          content: title,
+          payload: %{
+            "orchestrator" => "aqua",
+            "intent" => %{
+              "kind" => "request_approval",
+              "title" => title,
+              "action_kind" => "write",
+              "standing" => standing,
+              "proposal" => %{
+                "tool" => "notes",
+                "action" => action,
+                "args" => %{"name" => "about-us", "content" => "x"}
+              }
+            }
+          }
+        })
+
+      apr
+    end
+
+    # `false` — read back from the row's JSON as `false` — takes no
+    # standing answer at any scope; the one click is still every member's.
+    pin = card.("Pin", false, "pin")
+
+    for scope <- [:conversation, :always] do
+      assert {:error, {:scope_not_permitted, :never_standing}} =
+               ConversationRunner.approve(bob, conv.id, pin.id, scope)
+    end
+
+    :ok = ConversationRunner.approve(bob, conv.id, pin.id, :once)
+
+    # `"conversation"` takes the thread's standing answer and refuses the
+    # agent's.
+    keep = card.("Keep", "conversation", "keep")
+
+    assert {:error, {:scope_not_permitted, :conversation_only}} =
+             ConversationRunner.approve(bob, conv.id, keep.id, :always)
+
+    :ok = ConversationRunner.approve(bob, conv.id, keep.id, :conversation)
+
+    rows = Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
+    assert [{"notes", "keep"}] = rows |> Aqua.ToolGrants.allowed_keys() |> MapSet.to_list()
+  end
+
+  test "an approved note names the turn it was kept from, and lands on the tape as a line", %{
+    alice: alice,
+    conv: conv
+  } do
+    {eid, _runner, _} = start_turn(alice, conv, "remember this")
+
+    {:ok, apr} =
+      Conversations.append(alice, conv.id, %{
+        author: "aqua",
+        kind: "approval",
+        status: "pending",
+        content: "Keep a note",
+        payload: %{
+          "orchestrator" => "aqua",
+          "intent" => %{
+            "kind" => "request_approval",
+            "title" => "Keep a note",
+            "action_kind" => "write",
+            "standing" => "conversation",
+            "proposal" => %{
+              "tool" => "notes",
+              "action" => "keep",
+              # Whatever the model wrote here is the runner's to overwrite.
+              "args" => %{"name" => "decided", "content" => "Lisbon", "conversation" => "forged"}
+            }
+          }
+        }
+      })
+
+    :ok = ConversationRunner.approve(alice, conv.id, apr.id, :once)
+
+    assert_receive {:fake_run_approved, proposal, _ctx, _profile}, 5_000
+    assert proposal.args["name"] == "decided"
+    assert proposal.args["conversation"] == conv.id
+    assert proposal.args["execution"] == eid
+
+    # The room sees what was kept, in the runner's voice — never the
+    # agent's, which the tape would read as speech.
+    assert_receive {:conversation, _,
+                    {:message,
+                     %{author: "system", kind: "system", content: "📝 Kept a note: decided"}}},
+                   5_000
+  end
+
   test "a standing decline denies the pair and outranks a declared auto", %{
     alice: alice,
     bob: bob,

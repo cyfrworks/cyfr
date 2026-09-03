@@ -76,6 +76,36 @@ defmodule Aqua.Notes do
   @spec pinned_names() :: [String.t()]
   def pinned_names, do: @pinned_names
 
+  @doc """
+  The one pinned page this estate has: `about-you` in a person's own
+  athanor, `about-us` in a shared one. The other name is refused at
+  `pin/4` — an estate has one page, and which one is a fact about the
+  estate, not a choice per call.
+  """
+  @spec pinned_page(Context.t()) :: {:ok, String.t()} | {:error, :not_found}
+  def pinned_page(%Context{} = ctx) do
+    case Sanctum.Tenancy.Athanors.get(Context.athanor!(ctx)) do
+      {:ok, %{kind: "person"}} -> {:ok, "about-you"}
+      {:ok, _} -> {:ok, "about-us"}
+      {:error, _} -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Whether the context is focused on the person's own athanor. A running
+  chain may read across estates only from there — see `list/2`.
+  """
+  @spec at_home?(Context.t()) :: boolean()
+  def at_home?(%Context{user_id: user_id, athanor_id: focus})
+      when is_binary(user_id) and is_binary(focus) do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, %{personal_athanor_id: ^focus}} -> true
+      _ -> false
+    end
+  end
+
+  def at_home?(_ctx), do: false
+
   @spec pinned?(String.t()) :: boolean()
   def pinned?(name), do: name in @pinned_names
 
@@ -130,7 +160,7 @@ defmodule Aqua.Notes do
           | {:error, refusal()}
   def pin(%Context{} = ctx, name, content, provenance \\ []) when is_binary(content) do
     with :ok <- check_name(name),
-         :ok <- require_pinned(name) do
+         :ok <- require_pinned(ctx, name) do
       case String.trim(content) do
         "" -> clear(ctx, name)
         body -> write_pinned(ctx, name, body, provenance)
@@ -158,6 +188,46 @@ defmodule Aqua.Notes do
   # ---------------------------------------------------------------------------
   # Reads — scoped
   # ---------------------------------------------------------------------------
+
+  @doc "The estate's pinned page with its provenance, or `:none` when nothing is pinned."
+  @spec pinned(Context.t()) :: {:ok, note()} | :none
+  def pinned(%Context{} = ctx) do
+    with {:ok, name} <- pinned_page(ctx),
+         {:ok, note} <- fetch(ctx, name) do
+      {:ok, note}
+    else
+      _ -> :none
+    end
+  end
+
+  @doc """
+  The filed notes of the focused estate as name and first line, sorted by
+  name — what a turn is shown so it can read one on demand. No timestamps
+  and no sizes, so the same pile renders the same bytes.
+  """
+  @spec index(Context.t()) :: {:ok, [%{name: String.t(), line: String.t()}]} | {:error, refusal()}
+  def index(%Context{} = ctx) do
+    with {:ok, names} <- names(ctx) do
+      {:ok,
+       for name <- names, not pinned?(name) do
+         line =
+           case Arca.get(ctx, path(name)) do
+             {:ok, binary} -> ctx |> decode(name, binary) |> Map.fetch!(:content) |> first_line()
+             _ -> ""
+           end
+
+         %{name: name, line: line}
+       end}
+    end
+  end
+
+  defp first_line(body) do
+    body
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.find("", &(&1 != ""))
+    |> String.slice(0, 120)
+  end
 
   @doc "Every note name in the scope, with the estate each lives in."
   @spec list(Context.t(), scope()) ::
@@ -237,13 +307,25 @@ defmodule Aqua.Notes do
       else: :ok
   end
 
-  defp require_pinned(name) do
-    if pinned?(name),
-      do: :ok,
-      else:
+  defp require_pinned(ctx, name) do
+    cond do
+      not pinned?(name) ->
         {:error,
          {:invalid_argument,
           "pin takes one of #{Enum.join(@pinned_names, ", ")} — keep files everything else"}}
+
+      true ->
+        case pinned_page(ctx) do
+          {:ok, ^name} ->
+            :ok
+
+          {:ok, other} ->
+            {:error, {:invalid_argument, "this estate's pinned page is #{other}, not #{name}"}}
+
+          {:error, :not_found} ->
+            {:error, {:invalid_argument, "the estate in focus could not be read"}}
+        end
+    end
   end
 
   defp write_pinned(ctx, name, body, provenance) do
@@ -330,20 +412,24 @@ defmodule Aqua.Notes do
   defp contexts(ctx, "estate"), do: {:ok, [ctx]}
 
   defp contexts(ctx, "mine") do
-    with {:ok, mine} <- personal(ctx), do: {:ok, [mine]}
+    with :ok <- guest_may_cross(ctx),
+         {:ok, mine} <- personal(ctx),
+         do: {:ok, [mine]}
   end
 
   # Every seat the person holds, the focus first. An estate the focus can
   # no longer open (archived between the listing and the read) is skipped,
   # not an error — the answer is what can be read now.
   defp contexts(%Context{} = ctx, "everywhere") do
-    others =
-      for athanor <- Sanctum.Tenancy.list_athanors(ctx),
-          athanor.id != ctx.athanor_id,
-          {:ok, focused} <- [Context.focus(ctx, athanor)],
-          do: focused
+    with :ok <- guest_may_cross(ctx) do
+      others =
+        for athanor <- Sanctum.Tenancy.list_athanors(ctx),
+            athanor.id != ctx.athanor_id,
+            {:ok, focused} <- [Context.focus(ctx, athanor)],
+            do: focused
 
-    {:ok, [ctx | others]}
+      {:ok, [ctx | others]}
+    end
   end
 
   defp contexts(_ctx, other) do
@@ -351,6 +437,22 @@ defmodule Aqua.Notes do
      {:invalid_argument,
       "scope must be one of #{Enum.join(@scopes, ", ")}, got #{inspect(other)}"}}
   end
+
+  # A running chain reads across estates only from the person's own
+  # athanor. In a room, the room's assistant sees the room's pile and
+  # nothing else — a private ledger is not something a shared turn can
+  # open, however politely it asks. The person can, from their own
+  # assistant or from the door.
+  defp guest_may_cross(%Context{plane: :guest} = ctx) do
+    if at_home?(ctx),
+      do: :ok,
+      else:
+        {:error,
+         {:invalid_argument,
+          "a room's assistant reads only the room's notes — look in your own from your own assistant"}}
+  end
+
+  defp guest_may_cross(_ctx), do: :ok
 
   # "Mine" is the person's own athanor, reached through `Context.focus/2` —
   # the audited narrowing entry, not a raw struct update: focus checks

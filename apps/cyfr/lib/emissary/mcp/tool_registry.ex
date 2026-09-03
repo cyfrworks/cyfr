@@ -563,11 +563,11 @@ defmodule Emissary.MCP.ToolRegistry do
   # ownership, definition authority, the domain's finer consent arms).
   # Public solely so the discovery-parity test can ask the exact question
   # dispatch answers without executing any handler.
-  @spec authorize_annotated_action(String.t(), map(), Context.t(), map()) ::
+  @spec authorize_annotated_action(String.t(), map(), Context.t(), map(), boolean()) ::
           :ok
           | {:error,
              Sanctum.Unauthorized.reason() | :action_missing | {:unknown_action, String.t()}}
-  def authorize_annotated_action(name, meta, ctx, args) do
+  def authorize_annotated_action(name, meta, ctx, args, in_chain? \\ false) do
     action = args["action"] || args[:action]
     annotation = ActionAnnotations.annotation(meta, action)
 
@@ -586,7 +586,7 @@ defmodule Emissary.MCP.ToolRegistry do
         with :ok <- check_auth(name, ctx, annotation),
              :ok <- check_scope(ctx, annotation),
              :ok <- check_permission(ctx, annotation) do
-          check_consent(ctx, annotation)
+          check_consent(ctx, annotation, in_chain?)
         end
     end
   end
@@ -663,13 +663,24 @@ defmodule Emissary.MCP.ToolRegistry do
   # and the wire boundary renders it through `Authz.message/1`. This gate
   # used to flatten it to prose bound to ProfileTool's spelling by comment
   # alone.
-  defp check_consent(ctx, annotation) do
+  #
+  # In-chain, the interactive class keeps its surface half and drops its
+  # plane half: an approved proposal runs guest-planed under the chain's
+  # authority, and the click was the consent. A `:staging` action has no
+  # in-chain arm — none is reachable from a chain — so it keeps the full
+  # check, plane included.
+  defp check_consent(ctx, annotation, in_chain?) do
     case Map.get(annotation, :consent) do
       nil ->
         :ok
 
       :interactive ->
-        case Sanctum.Consent.Authz.authorize_interactive(ctx) do
+        interactive =
+          if in_chain?,
+            do: Sanctum.Consent.Authz.authorize_interactive_in_chain(ctx),
+            else: Sanctum.Consent.Authz.authorize_interactive(ctx)
+
+        case interactive do
           {:ok, :interactive} -> :ok
           {:error, refusal} -> {:error, {:consent_class_required, refusal}}
         end
@@ -722,7 +733,7 @@ defmodule Emissary.MCP.ToolRegistry do
         {:ok, {module, meta}} ->
           result =
             with :ok <- validate_against_schema(meta, args),
-                 :ok <- authorize_annotated_action(name, meta, ctx, args) do
+                 :ok <- authorize_annotated_action(name, meta, ctx, args, in_chain?) do
               execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
             else
               {:error, _} = refusal -> refusal

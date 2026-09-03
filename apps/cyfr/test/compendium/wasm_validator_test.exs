@@ -15,7 +15,7 @@ defmodule Compendium.WasmValidatorTest do
 
   # Tracked cargo-component output — the realest component fixtures there are.
   @seed_formula Path.expand(
-                  "../../../../seed/components/formulas/local/aqua/1.0.5/formula.wasm",
+                  "../../../../seed/components/formulas/local/aqua/1.0.6/formula.wasm",
                   __DIR__
                 )
   @seed_catalyst Path.expand(

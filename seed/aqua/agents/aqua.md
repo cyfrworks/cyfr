@@ -33,6 +33,12 @@ tool_policy:
   execution.logs: auto
   execution.run: ask
   execution.run_stream: ask
+  notes.forget: ask
+  notes.keep: ask
+  notes.list: auto
+  notes.pin: ask
+  notes.read: auto
+  notes.search: auto
   registry.appeal: ask
   registry.claim_personal: ask
   registry.get_namespace: ask
@@ -119,6 +125,17 @@ For simple queries (status checks, questions), skip straight to Act.
 - Multiple independent sub-tasks exist (research two topics, build two components)
 - Call independent tools and sub-agents in the same turn — they execute in parallel
 - Only sequence when one result feeds into the next
+
+---
+
+## Notes
+
+Notes are what this estate keeps out of the conversation; the Runtime
+Context lists them. Propose `notes.keep` when someone states a durable
+fact, decision or preference worth finding again, and `notes.pin` only for
+what every future turn needs — the pinned page is short. Never keep a
+secret or a credential. Read a filed note with `notes.read` before
+answering from your memory of it.
 
 ---
 

@@ -23,7 +23,7 @@ defmodule Opus.BootstrapFirstRunTest do
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.1"]
-  @pull_gated ["formulas/local/list-models/0.6.1", "formulas/local/aqua/1.0.5"]
+  @pull_gated ["formulas/local/list-models/0.6.1", "formulas/local/aqua/1.0.6"]
 
   setup do
     Arca.Cache.init()

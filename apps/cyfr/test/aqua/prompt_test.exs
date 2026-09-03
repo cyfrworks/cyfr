@@ -94,4 +94,85 @@ defmodule Aqua.PromptTest do
     assert prompt =~ "component.pull"
     assert prompt =~ "need approval"
   end
+
+  describe "the estate's notes" do
+    setup do
+      test_path = Path.join(System.tmp_dir!(), "prompt_notes_#{:rand.uniform(1_000_000)}")
+      original = Application.get_env(:cyfr, :base_path)
+      Application.put_env(:cyfr, :base_path, test_path)
+
+      on_exit(fn ->
+        File.rm_rf!(test_path)
+
+        if original,
+          do: Application.put_env(:cyfr, :base_path, original),
+          else: Application.delete_env(:cyfr, :base_path)
+      end)
+
+      n = System.unique_integer([:positive])
+      user = "local|idp|prompt-#{n}"
+
+      {:ok, mine} =
+        Sanctum.Tenancy.Athanors.create(%{
+          kind: "person",
+          name: "Me",
+          slug: "me#{n}",
+          owner_user_id: user,
+          created_by: user
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: user, provider: "local"})
+      {:ok, u} = Sanctum.Tenancy.Users.get(user)
+      {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
+      {:ok, _} = Sanctum.Tenancy.Members.create(%{user_id: user, athanor_id: mine.id})
+      {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
+
+      room = %{Sanctum.TestContext.local() | user_id: user, athanor_id: estate.id}
+      {:ok, home} = Sanctum.Context.focus(room, mine.id)
+      {:ok, room: room, home: home}
+    end
+
+    test "the pinned page and the filed index come last, and a room is told its bounds", %{
+      room: room
+    } do
+      {:ok, _} = Aqua.Notes.pin(room, "about-us", "We are planning a trip.")
+      {:ok, _} = Aqua.Notes.keep(room, "flight", "BA117 on the 3rd\nseat 4A")
+      {:ok, _} = Aqua.Notes.keep(room, "decided", "Lisbon")
+
+      prompt = Prompt.compose(room, agent: agent(%{"notes.keep" => "ask"}), authority: nil)
+
+      [before, notes] = String.split(prompt, "## Notes", parts: 2)
+      assert before =~ "## Runtime Context"
+      assert before =~ "need approval"
+
+      assert notes =~ "### Pinned: about-us\n\nWe are planning a trip."
+      # Sorted by name, first line only, no timestamps.
+      assert notes =~ "- decided — Lisbon\n- flight — BA117 on the 3rd\n"
+      refute notes =~ "seat 4A"
+      refute notes =~ ~r/\d{4}-\d{2}-\d{2}T/
+
+      assert notes =~ "not readable from here"
+      refute notes =~ "scope `everywhere`"
+    end
+
+    test "a person's own athanor carries about-you and may look everywhere", %{home: home} do
+      {:ok, _} = Aqua.Notes.pin(home, "about-you", "Prefers mornings.")
+
+      prompt = Prompt.compose(home, agent: agent(), authority: nil)
+
+      assert prompt =~ "### Pinned: about-you\n\nPrefers mornings."
+      assert prompt =~ "scope `everywhere`"
+      refute prompt =~ "not readable from here"
+      assert prompt =~ "No notes filed yet."
+    end
+
+    test "the same pile renders the same bytes", %{room: room} do
+      {:ok, _} = Aqua.Notes.keep(room, "decided", "Lisbon")
+
+      [_, first] = String.split(Prompt.compose(room, agent: agent(), authority: nil), "## Notes")
+      [_, again] = String.split(Prompt.compose(room, agent: agent(), authority: nil), "## Notes")
+
+      assert first == again
+    end
+  end
 end
