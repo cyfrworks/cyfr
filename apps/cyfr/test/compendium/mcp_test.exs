@@ -1607,14 +1607,18 @@ defmodule Compendium.MCPTest do
 
   describe "aqua tool - status, skills, delete semantics" do
     test "status speaks the one provenance vocabulary", %{ctx: ctx} do
-      # The fixture materialized every shipped agent (they shadow the seed).
+      # The fixture materialized every shipped agent (they shadow the seed);
+      # the shipped scroll is read in place.
       {:ok, %{files: files}} = MCP.handle("aqua", ctx, %{"action" => "status"})
 
       assert %{state: "bundled_modified"} =
                Enum.find(files, &(&1.path == "aqua/agents/aqua.md"))
+
+      assert %{state: "bundled"} =
+               Enum.find(files, &(&1.path == "aqua/skills/capability-acquisition"))
     end
 
-    test "reset keeps member-created agents unless all=true", %{ctx: ctx} do
+    test "reset keeps member-created agents and scrolls unless all=true", %{ctx: ctx} do
       :ok =
         Arca.put(
           ctx,
@@ -1622,10 +1626,19 @@ defmodule Compendium.MCPTest do
           "---\ntitle: Keeper\nparent: aqua\n---\n\nkeeper\n"
         )
 
+      {:ok, %{created: "pdf"}} =
+        MCP.handle("aqua", ctx, %{
+          "action" => "skill_create",
+          "name" => "pdf",
+          "description" => "fills PDF forms",
+          "content" => "Use the reference."
+        })
+
       {:ok, %{reset: true, reverted: reverted, kept: kept}} =
         MCP.handle("aqua", ctx, %{"action" => "reset"})
 
       assert "aqua/agents/keeper.md" in kept
+      assert "aqua/skills/pdf" in kept
       assert "aqua/agents/aqua_web.md" in reverted
       assert Arca.exists?(ctx, ["aqua", "agents", "keeper.md"])
 
@@ -1633,34 +1646,150 @@ defmodule Compendium.MCPTest do
         MCP.handle("aqua", ctx, %{"action" => "reset", "all" => true})
 
       refute Arca.exists?(ctx, ["aqua", "agents", "keeper.md"])
+      refute Arca.exists?(ctx, ["aqua", "skills", "pdf", "SKILL.md"])
     end
 
-    test "skill_list and skill_get serve the skills tree", %{ctx: ctx} do
-      # The empty state is honest and actionable — the machinery is live
-      # even when the install ships no skills.
-      {:ok, empty} = MCP.handle("aqua", ctx, %{"action" => "skill_list"})
-      assert empty.skills == []
-      assert empty.hint =~ "aqua/skills/<name>/SKILL.md"
+    test "skill_list and skill_get serve the scrolls, shipped and the estate's own", %{ctx: ctx} do
+      # The shipped scroll is read in place from the seed.
+      {:ok, shipped} = MCP.handle("aqua", ctx, %{"action" => "skill_list"})
+      assert [%{name: "capability-acquisition", description: line}] = shipped.skills
+      assert line =~ "registry"
+      refute Map.has_key?(shipped, :hint)
 
-      skill_dir =
-        Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), ["aqua", "skills", "pdf"])
+      {:ok, %{created: "pdf"}} =
+        MCP.handle("aqua", ctx, %{
+          "action" => "skill_create",
+          "name" => "pdf",
+          "description" => "fills PDF forms",
+          "content" => "Use the reference."
+        })
 
-      File.mkdir_p!(skill_dir)
-
-      File.write!(
-        Path.join(skill_dir, "SKILL.md"),
-        "---\nname: pdf\ndescription: fills PDF forms\n---\n\nUse the reference.\n"
-      )
-
-      File.write!(Path.join(skill_dir, "reference.md"), "field tables")
+      # A resource beside the manifest, as a member adds one by hand.
+      :ok = Arca.put(ctx, ["aqua", "skills", "pdf", "reference.md"], "field tables")
 
       {:ok, listing} = MCP.handle("aqua", ctx, %{"action" => "skill_list"})
-      assert [%{name: "pdf", description: "fills PDF forms"}] = listing.skills
-      refute Map.has_key?(listing, :hint)
+      assert Enum.map(listing.skills, & &1.name) == ["capability-acquisition", "pdf"]
 
       {:ok, skill} = MCP.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
+      assert skill.description == "fills PDF forms"
       assert skill.content =~ "Use the reference."
       assert skill.resources == ["reference.md"]
+    end
+
+    test "a scroll is updated in place and keeps its files", %{ctx: ctx} do
+      {:ok, _} =
+        MCP.handle("aqua", ctx, %{
+          "action" => "skill_create",
+          "name" => "pdf",
+          "description" => "fills PDF forms",
+          "content" => "Use the reference."
+        })
+
+      :ok = Arca.put(ctx, ["aqua", "skills", "pdf", "reference.md"], "field tables")
+
+      {:ok, %{updated: "pdf"}} =
+        MCP.handle("aqua", ctx, %{
+          "action" => "skill_update",
+          "name" => "pdf",
+          "content" => "Read it twice."
+        })
+
+      {:ok, skill} = MCP.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
+      assert skill.content == "Read it twice."
+      assert skill.description == "fills PDF forms"
+      assert skill.resources == ["reference.md"]
+
+      assert {:error, {:not_found, "Scroll", "nope"}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "skill_update",
+                 "name" => "nope",
+                 "content" => "x"
+               })
+    end
+
+    test "a scroll needs a line and a body, and a name nobody holds", %{ctx: ctx} do
+      base = %{"action" => "skill_create", "name" => "pdf", "content" => "Use it."}
+
+      assert {:error, {:invalid_argument, msg}} = MCP.handle("aqua", ctx, base)
+      assert msg =~ "description"
+
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, Map.put(base, "description", "two\nlines"))
+
+      assert msg =~ "one line"
+
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "skill_create",
+                 "name" => "pdf",
+                 "description" => "d"
+               })
+
+      assert msg =~ "content"
+
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "skill_create",
+                 "name" => "capability-acquisition",
+                 "description" => "d",
+                 "content" => "c"
+               })
+
+      assert msg =~ "already exists"
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "skill_create",
+                 "name" => "../x",
+                 "description" => "d",
+                 "content" => "c"
+               })
+    end
+
+    test "the shipped scroll cannot be deleted; an edited copy reverts; the estate's own goes", %{
+      ctx: ctx
+    } do
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "skill_delete",
+                 "name" => "capability-acquisition"
+               })
+
+      assert msg =~ "ships with the server"
+
+      {:ok, %{updated: _}} =
+        MCP.handle("aqua", ctx, %{
+          "action" => "skill_update",
+          "name" => "capability-acquisition",
+          "content" => "Shortened."
+        })
+
+      {:ok, %{files: files}} = MCP.handle("aqua", ctx, %{"action" => "status"})
+
+      assert %{state: "bundled_modified"} =
+               Enum.find(files, &(&1.path == "aqua/skills/capability-acquisition"))
+
+      {:ok, %{deleted: "capability-acquisition", restored: "shipped"}} =
+        MCP.handle("aqua", ctx, %{"action" => "skill_delete", "name" => "capability-acquisition"})
+
+      {:ok, back} =
+        MCP.handle("aqua", ctx, %{"action" => "skill_get", "name" => "capability-acquisition"})
+
+      assert back.content =~ "component(action: \"search\""
+
+      {:ok, _} =
+        MCP.handle("aqua", ctx, %{
+          "action" => "skill_create",
+          "name" => "pdf",
+          "description" => "d",
+          "content" => "c"
+        })
+
+      {:ok, %{deleted: "pdf"}} =
+        MCP.handle("aqua", ctx, %{"action" => "skill_delete", "name" => "pdf"})
+
+      assert {:error, {:not_found, "Scroll", "pdf"}} =
+               MCP.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
     end
 
     test "a shipped agent refuses delete and points at disable; an edited one reverts", %{

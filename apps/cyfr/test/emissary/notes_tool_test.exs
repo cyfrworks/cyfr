@@ -397,6 +397,12 @@ defmodule Emissary.MCP.NotesToolTest do
     for action <- ~w(keep pin forget list read search) do
       assert "notes.#{action}" in granted, "notes.#{action} is not in the shipped caps"
     end
+
+    for action <- ~w(skill_list skill_get skill_create skill_update) do
+      assert "aqua.#{action}" in granted, "aqua.#{action} is not in the shipped caps"
+    end
+
+    refute "aqua.skill_delete" in granted
   end
 
   test "the annotations say what a person may pre-answer" do

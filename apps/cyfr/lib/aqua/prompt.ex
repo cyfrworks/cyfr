@@ -66,6 +66,7 @@ defmodule Aqua.Prompt do
       working_in(opts),
       Aqua.Actions.system_prelude(tool_policy),
       several_people(Keyword.get(opts, :several_people?, false)),
+      scrolls(ctx),
       notes(ctx)
     ])
   end
@@ -172,6 +173,27 @@ defmodule Aqua.Prompt do
 
   defp several_people(true), do: @several_people
   defp several_people(_), do: []
+
+  # The estate's scrolls — procedures kept as Agent Skills — as an index
+  # of name and line, read on demand with `aqua.skill_get`. Sorted by
+  # name and free of anything that changes between turns; an estate with
+  # no scrolls gets no section rather than an empty one.
+  defp scrolls(ctx) do
+    case Aqua.AgentConfig.call_aqua(ctx, %{"action" => "skill_list"}) do
+      {:ok, %{"skills" => [_ | _] = skills}} ->
+        [
+          "\n\n---\n\n## Scrolls\n\nProcedures this estate has learned. Read one with " <>
+            "`aqua.skill_get` before doing what it describes; propose `aqua.skill_create` " <>
+            "when a procedure worth repeating has just worked.\n",
+          Enum.map(skills, fn %{"name" => name, "description" => description} ->
+            ["- ", name, if(description == "", do: [], else: [" — ", description]), "\n"]
+          end)
+        ]
+
+      _ ->
+        []
+    end
+  end
 
   # The estate's notes, and the boundary said out loud. A room's turn is
   # told it sees the room's pile and nothing else; a turn in the person's

@@ -166,6 +166,16 @@ defmodule Aqua.PromptTest do
       assert prompt =~ "No notes filed yet."
     end
 
+    test "the scroll index sits between the prelude and the notes", %{room: room} do
+      prompt = Prompt.compose(room, agent: agent(%{"component.pull" => "ask"}), authority: nil)
+
+      [before, rest] = String.split(prompt, "## Scrolls", parts: 2)
+      assert before =~ "need approval"
+      [scrolls, _notes] = String.split(rest, "## Notes", parts: 2)
+      assert scrolls =~ "- capability-acquisition — "
+      assert scrolls =~ "`aqua.skill_get`"
+    end
+
     test "the same pile renders the same bytes", %{room: room} do
       {:ok, _} = Aqua.Notes.keep(room, "decided", "Lisbon")
 

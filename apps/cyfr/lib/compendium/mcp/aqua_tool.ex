@@ -71,7 +71,7 @@ defmodule Compendium.MCP.AquaTool do
       name: "aqua",
       title: "AQUA Agent System",
       description:
-        "Manage the AQUA agent system — orchestrators, sub-agents, prompts, skills, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, 'create'/'update'/'delete' to manage agents (pass type=orchestrator|sub-agent on create; docs are read-only), 'status' to see which agents are shipped/modified/own, 'skill_list'/'skill_get' for the skills tree, or 'reset' to revert edited copies of shipped files (member-created agents and skills are kept unless all=true).",
+        "Manage the AQUA agent system — orchestrators, sub-agents, prompts, scrolls, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, 'create'/'update'/'delete' to manage agents (pass type=orchestrator|sub-agent on create; docs are read-only), 'status' to see which files are shipped/modified/own, 'skill_list'/'skill_get' to read the estate's scrolls (procedures kept as Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the estate made, or 'reset' to revert edited copies of shipped files (member-created agents and scrolls are kept unless all=true).",
       annotations: %{
         readOnlyHint: false,
         destructiveHint: true,
@@ -86,6 +86,26 @@ defmodule Compendium.MCP.AquaTool do
           "status" => %{kind: :read, planes: [:external, :in_chain]},
           "skill_list" => %{kind: :read, planes: [:external, :in_chain]},
           "skill_get" => %{kind: :read, planes: [:external, :in_chain]},
+          # A scroll is a procedure the estate learns. Writing one is a
+          # member's act at the door and a card from a chain — the soul's
+          # policy holds both writes at `ask`, so an agent proposes a
+          # scroll and a person clicks. Deleting stays a member's act
+          # alone: never proposable, never standing.
+          "skill_create" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          },
+          "skill_update" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          },
+          "skill_delete" => %{
+            kind: :destructive,
+            planes: [:external],
+            permission: :component_manage
+          },
           "create" => %{kind: :write, planes: [:external], permission: :component_manage},
           "update" => %{kind: :write, planes: [:external], permission: :component_manage},
           "delete" => %{
@@ -117,14 +137,18 @@ defmodule Compendium.MCP.AquaTool do
               "reset",
               "status",
               "skill_list",
-              "skill_get"
+              "skill_get",
+              "skill_create",
+              "skill_update",
+              "skill_delete"
             ],
             "description" =>
-              "Action: list/get agents and guides, create/update/delete to manage agents (for create, pass type=orchestrator|sub-agent to choose the agent kind; docs are read-only), status for per-file provenance (bundled/bundled_modified/user), skill_list/skill_get for the skills tree, or reset to revert edited copies of shipped files (member-created agents and skills are kept unless all=true)."
+              "Action: list/get agents and guides, create/update/delete to manage agents (for create, pass type=orchestrator|sub-agent to choose the agent kind; docs are read-only), status for per-file provenance (bundled/bundled_modified/user), skill_list/skill_get to read scrolls, skill_create/skill_update to write one (name, description, content), skill_delete to remove one the estate made, or reset to revert edited copies of shipped files (member-created agents and scrolls are kept unless all=true)."
           },
           "name" => %{
             "type" => "string",
-            "description" => "Agent, guide, or skill name (for get/update/delete/skill_get)"
+            "description" =>
+              "Agent, guide, or scroll name (for get/update/delete and the skill_* actions)"
           },
           "type" => %{
             "type" => "string",
@@ -147,11 +171,13 @@ defmodule Compendium.MCP.AquaTool do
           },
           "description" => %{
             "type" => "string",
-            "description" => "Agent description shown to LLM (for create/update actions)"
+            "description" =>
+              "Agent description shown to LLM (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
           },
           "content" => %{
             "type" => "string",
-            "description" => "Prompt content in markdown (for create/update actions)"
+            "description" =>
+              "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
           },
           "tool_policy" => %{
             "type" => "object",
@@ -490,7 +516,7 @@ defmodule Compendium.MCP.AquaTool do
        }}
     else
       {:error, :not_found} ->
-        {:error, {:not_found, "Skill", name}}
+        {:error, {:not_found, "Scroll", name}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -501,6 +527,105 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   def handle(_ctx, %{"action" => "skill_get"}) do
+    {:error, {:invalid_argument, "Missing required argument: name"}}
+  end
+
+  # A scroll is a dir unit with `SKILL.md` as its sentinel. Creating one
+  # lands the manifest through the overlay's unit commit — refuse-or-
+  # replace, sentinel last, rollback on failure — so a half-written scroll
+  # never reads as one. The name is taken if the union holds it, shipped
+  # or the estate's own.
+  def handle(%Context{} = ctx, %{"action" => "skill_create", "name" => name} = args) do
+    with :ok <- validate_name(name),
+         :ok <- refute_skill_taken(ctx, name),
+         {:ok, manifest} <- skill_manifest_bytes(name, args["description"], args["content"]) do
+      case Arca.Overlay.commit_unit(
+             ctx,
+             AquaPath.skill_dir(name),
+             {:files, [{[AquaPath.skill_manifest_name()], manifest}]},
+             cap: {:checked, byte_size(manifest)}
+           ) do
+        {:ok, _written} ->
+          {:ok, %{created: name}}
+
+        {:error, {:limit_reached, _, _} = reason} ->
+          {:error, reason}
+
+        {:error, reason} ->
+          Logger.error("[AquaTool] aqua.skill_create #{name} failed: #{inspect(reason)}")
+          {:error, {:unavailable, "Storage"}}
+      end
+    end
+  end
+
+  def handle(_ctx, %{"action" => "skill_create"}) do
+    {:error, {:invalid_argument, "Missing required argument: name"}}
+  end
+
+  # Updating rewrites the manifest alone. A plain put inside a shipped
+  # scroll materializes the whole unit first (the overlay's copy-on-write),
+  # so the scroll's other files come along; a unit commit here would have
+  # replaced the unit whole and dropped them.
+  def handle(%Context{} = ctx, %{"action" => "skill_update", "name" => name} = args) do
+    with :ok <- validate_name(name),
+         {:ok, meta, body} <- read_skill_manifest(ctx, name),
+         {:ok, manifest} <-
+           skill_manifest_bytes(
+             name,
+             Map.get(args, "description", meta["description"]),
+             Map.get(args, "content", body)
+           ),
+         :ok <- Arca.put(ctx, AquaPath.skill_manifest(name), manifest) do
+      {:ok, %{updated: name}}
+    else
+      {:error, :not_found} ->
+        {:error, {:not_found, "Scroll", name}}
+
+      {:error, {:invalid_argument, _} = refusal} ->
+        {:error, refusal}
+
+      {:error, {:limit_reached, _, _} = reason} ->
+        {:error, reason}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, reason} ->
+        passthrough_or_unavailable(reason, "aqua.skill_update #{name}")
+    end
+  end
+
+  def handle(_ctx, %{"action" => "skill_update"}) do
+    {:error, {:invalid_argument, "Missing required argument: name"}}
+  end
+
+  # Same disposition as an agent: a shipped, unedited scroll cannot be
+  # deleted; an edited copy reverts to shipped; the estate's own goes.
+  def handle(%Context{} = ctx, %{"action" => "skill_delete", "name" => name}) do
+    with :ok <- validate_name(name) do
+      case Arca.Overlay.drop_unit(ctx, AquaPath.skill_dir(name)) do
+        {:ok, :revealed_shipped} ->
+          {:ok, %{deleted: name, restored: "shipped"}}
+
+        {:ok, :deleted} ->
+          {:ok, %{deleted: name}}
+
+        {:error, :bundled} ->
+          {:error,
+           {:invalid_argument,
+            "Scroll '#{name}' ships with the server and cannot be deleted — edit it, or reset"}}
+
+        {:error, :not_found} ->
+          {:error, {:not_found, "Scroll", name}}
+
+        {:error, reason} ->
+          Logger.error("[AquaTool] aqua.skill_delete #{name} failed: #{inspect(reason)}")
+          {:error, {:unavailable, "Storage"}}
+      end
+    end
+  end
+
+  def handle(_ctx, %{"action" => "skill_delete"}) do
     {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
@@ -623,6 +748,48 @@ defmodule Compendium.MCP.AquaTool do
   defp read_skill_manifest(ctx, name) do
     with {:ok, binary} <- Arca.get(ctx, AquaPath.skill_manifest(name)) do
       AquaAgent.parse_frontmatter(binary)
+    end
+  end
+
+  defp refute_skill_taken(ctx, name) do
+    if Arca.exists?(ctx, AquaPath.skill_manifest(name)),
+      do: {:error, {:invalid_argument, "Scroll '#{name}' already exists"}},
+      else: :ok
+  end
+
+  # The Agent Skills manifest: frontmatter `name` (the directory's) and a
+  # one-line `description` (what the index shows), then the body. Both
+  # are required — a scroll nobody can find by its line is not a scroll.
+  # Values are JSON-encoded, the one YAML scalar spelling that survives
+  # any description.
+  defp skill_manifest_bytes(name, description, content) do
+    description = if is_binary(description), do: String.trim(description), else: ""
+    content = if is_binary(content), do: String.trim(content), else: ""
+
+    cond do
+      description == "" ->
+        {:error, {:invalid_argument, "A scroll needs a one-line description"}}
+
+      String.contains?(description, "\n") ->
+        {:error, {:invalid_argument, "A scroll's description is one line"}}
+
+      content == "" ->
+        {:error, {:invalid_argument, "A scroll needs content"}}
+
+      true ->
+        {:ok,
+         IO.iodata_to_binary([
+           "---\n",
+           "name: ",
+           Jason.encode!(name),
+           "\n",
+           "description: ",
+           Jason.encode!(description),
+           "\n",
+           "---\n\n",
+           content,
+           "\n"
+         ])}
     end
   end
 
