@@ -344,7 +344,7 @@ defmodule PrismWeb.WebhooksLive do
   # Atomize only keys that already exist as atoms (the rendered fields are
   # compile-time literals). Unknown keys stay strings so a hostile payload
   # can't grow the atom table.
-  defp atomize_key(k), do: PrismWeb.AgentsLive.Catalog.existing_atom(k) || k
+  defp atomize_key(k), do: PrismWeb.AquaLive.Catalog.existing_atom(k) || k
 
   defp extract(map, key) when is_map(map) do
     Map.get(map, key) || Map.get(map, to_string(key))

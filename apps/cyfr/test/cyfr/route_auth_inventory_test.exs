@@ -75,6 +75,7 @@ defmodule Cyfr.RouteAuthInventoryTest do
     {:get, "/chat"} => :browser_authenticated,
     {:get, "/a/:athanor"} => :browser_authenticated,
     {:get, "/a/:athanor/agents"} => :browser_authenticated,
+    {:get, "/a/:athanor/aqua"} => :browser_authenticated,
     {:get, "/a/:athanor/activities"} => :browser_authenticated,
     {:get, "/a/:athanor/enforcements"} => :browser_authenticated,
     {:get, "/a/:athanor/executions"} => :browser_authenticated,

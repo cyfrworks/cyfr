@@ -309,7 +309,7 @@ defmodule PrismWeb.AquaApprovalCard do
   defp action_kind(%{action_kind: k}) when is_binary(k), do: safe_atom(k)
   defp action_kind(_), do: nil
 
-  defp safe_atom(s), do: PrismWeb.AgentsLive.Catalog.existing_atom(s)
+  defp safe_atom(s), do: PrismWeb.AquaLive.Catalog.existing_atom(s)
 
   # Colour ramp: `:read` is calm green (rare on cards), `:write` is near-neutral
   # slate (the common case — shouldn't spike cortisol), `:execute` amber,

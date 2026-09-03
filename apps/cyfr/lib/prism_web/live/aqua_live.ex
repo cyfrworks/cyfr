@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.AgentsLive do
+defmodule PrismWeb.AquaLive do
   @moduledoc """
-  The athanor's AQUA agents — orchestrators and their sub-agents, each with
-  a prompt, a model and a capability allowlist. The definitions are the
-  athanor's own (`Compendium.AquaTemplate` seeds them); every member edits
-  the same ones, through the `aqua` tool.
+  The estate's AQUA, at `/a/<athanor>/aqua`: the soul and the roles it
+  clones into — each with a prompt, a model and a capability allowlist,
+  the estate's own (`Compendium.AquaTemplate` seeds them), edited by any
+  member through the `aqua` tool — beside the page the soul reads first
+  (`about-you` in a person's athanor, `about-us` in a group's, pinned
+  through the `notes` tool), the notes kept here, and the scrolls it can
+  read on demand. Every write from this page goes through the tool an
+  agent's card goes through, so one gate answers for both.
 
   This is also where a person connects a model: the soul's catalyst
   needs an API key bound to it before AQUA can answer, and "Connect a
@@ -16,14 +20,14 @@ defmodule PrismWeb.AgentsLive do
 
   use PrismWeb, :live_view
 
-  alias PrismWeb.AgentsLive.Catalog
+  alias PrismWeb.AquaLive.Catalog
 
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
-      |> assign(:page_title, "Agents")
-      |> assign(:active_nav, "agents")
+      |> assign(:page_title, "AQUA")
+      |> assign(:active_nav, "aqua")
       |> assign(:editor_agents, [])
       |> assign(:editor_editing_prompt, nil)
       |> assign(:editor_prompt_content, "")
@@ -34,10 +38,23 @@ defmodule PrismWeb.AgentsLive do
       |> assign(:consent_sheet_ref, nil)
       |> assign(:model_status, %{})
       |> assign(:personal_source, nil)
+      |> assign(:pinned_name, nil)
+      |> assign(:about, "")
+      |> assign(:about_editing?, false)
+      |> assign(:notes, [])
+      |> assign(:note_open, nil)
+      |> assign(:skills, [])
+      |> assign(:skill_open, nil)
 
     socket =
       if connected?(socket) and socket.assigns[:context],
-        do: socket |> load_editor_agents() |> load_models(),
+        do:
+          socket
+          |> load_editor_agents()
+          |> load_models()
+          |> load_about()
+          |> load_notes()
+          |> load_skills(),
         else: socket
 
     {:ok, socket}
@@ -271,6 +288,66 @@ defmodule PrismWeb.AgentsLive do
   # ============================================================================
 
   # The consent sheet for an orchestrator's catalyst: the model gets its key.
+  # The pinned page, written through the `notes` tool: the person at the
+  # keyboard and an agent proposing a card go through one gate.
+  def handle_event("about_edit", _params, socket),
+    do: {:noreply, assign(socket, :about_editing?, true)}
+
+  def handle_event("about_cancel", _params, socket),
+    do: {:noreply, assign(socket, :about_editing?, false)}
+
+  def handle_event("about_save", %{"content" => content}, socket) do
+    args = %{"name" => socket.assigns.pinned_name, "content" => content}
+
+    case call_tool(socket.assigns.context, "notes/pin", args) do
+      {:ok, _} ->
+        {:noreply, socket |> assign(:about_editing?, false) |> load_about() |> load_notes()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not pin that: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("note_open", %{"name" => name}, socket) do
+    case call_tool(socket.assigns.context, "notes/read", %{"name" => name}) do
+      {:ok, note} ->
+        {:noreply, assign(socket, :note_open, note)}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Could not read that note: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("note_close", _params, socket), do: {:noreply, assign(socket, :note_open, nil)}
+
+  def handle_event("note_forget", %{"name" => name}, socket) do
+    case call_tool(socket.assigns.context, "notes/forget", %{"name" => name}) do
+      {:ok, _} ->
+        open = socket.assigns.note_open
+        socket = if open && open.name == name, do: assign(socket, :note_open, nil), else: socket
+        {:noreply, load_notes(socket)}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Could not forget that note: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("skill_open", %{"name" => name}, socket) do
+    case call_tool(socket.assigns.context, "aqua/skill_get", %{"name" => name}) do
+      {:ok, skill} ->
+        {:noreply, assign(socket, :skill_open, skill)}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Could not read that scroll: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("skill_close", _params, socket),
+    do: {:noreply, assign(socket, :skill_open, nil)}
+
   def handle_event("open_consent", %{"ref" => ref}, socket) when is_binary(ref) and ref != "" do
     {:noreply, assign(socket, :consent_sheet_ref, ref)}
   end
@@ -507,6 +584,164 @@ defmodule PrismWeb.AgentsLive do
           athanor={@athanor}
         />
       </div>
+
+      <%!-- The pinned page: what the soul reads first, every turn here.
+          Yours to write; the soul never edits it. --%>
+      <section
+        id="aqua-about"
+        class="rounded-lg border border-gray-800 bg-gray-900/40 p-4 space-y-2"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <h4 class="text-sm font-medium text-gray-200">{about_title(@pinned_name)}</h4>
+            <p class="text-[11px] text-gray-500">
+              Read first on every turn here — up to 2 KiB. Written by people, never by AQUA.
+            </p>
+          </div>
+          <button
+            :if={not @about_editing? and @pinned_name}
+            type="button"
+            phx-click="about_edit"
+            class="rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
+          >
+            Edit
+          </button>
+        </div>
+        <form :if={@about_editing?} phx-submit="about_save" class="space-y-2">
+          <textarea
+            name="content"
+            rows="6"
+            maxlength="2048"
+            class="w-full rounded bg-gray-950 border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+          >{@about}</textarea>
+          <div class="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              phx-click="about_cancel"
+              class="rounded px-3 py-1 text-xs text-gray-300 hover:bg-gray-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 text-xs font-medium text-white"
+            >
+              Pin
+            </button>
+          </div>
+        </form>
+        <pre
+          :if={not @about_editing? and @about != ""}
+          class="whitespace-pre-wrap text-xs text-gray-300 font-sans"
+        >{@about}</pre>
+        <p :if={not @about_editing? and @about == ""} class="text-xs text-gray-600">
+          Nothing pinned yet.
+        </p>
+      </section>
+
+      <%!-- What was kept here, out of the conversations. --%>
+      <details
+        id="aqua-notes"
+        class="rounded-lg border border-gray-800 bg-gray-900/40"
+        open={@notes != []}
+      >
+        <summary class="cursor-pointer px-4 py-2 text-sm font-medium text-gray-200">
+          Notes <span class="text-xs text-gray-500">({length(@notes)})</span>
+        </summary>
+        <div class="border-t border-gray-800 px-4 py-2 space-y-2">
+          <p :if={@notes == []} class="text-xs text-gray-600">
+            Nothing kept yet. AQUA proposes a note when something is worth keeping; you decide.
+          </p>
+          <ul :if={@notes != []} class="divide-y divide-gray-800/60">
+            <li :for={note <- @notes} class="flex items-center gap-2 py-1">
+              <button
+                type="button"
+                phx-click="note_open"
+                phx-value-name={note.name}
+                class="min-w-0 flex-1 truncate text-left text-xs text-gray-300 hover:text-white font-mono"
+              >
+                {note.name}
+              </button>
+              <button
+                type="button"
+                phx-click="note_forget"
+                phx-value-name={note.name}
+                data-confirm={"Forget #{note.name}? The note is gone for everyone here."}
+                class="text-[10px] text-gray-500 hover:text-red-400"
+              >
+                Forget
+              </button>
+            </li>
+          </ul>
+          <div
+            :if={@note_open}
+            id="aqua-note-open"
+            class="rounded border border-gray-800 bg-gray-950 p-3 space-y-1"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-mono text-gray-200">{@note_open.name}</span>
+              <button
+                type="button"
+                phx-click="note_close"
+                class="text-gray-500 hover:text-gray-300"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <p class="text-[10px] text-gray-500">{provenance_line(@note_open)}</p>
+            <pre class="whitespace-pre-wrap text-xs text-gray-300 font-sans">{@note_open.content}</pre>
+          </div>
+        </div>
+      </details>
+
+      <%!-- The scrolls: what AQUA can read on demand. --%>
+      <details id="aqua-scrolls" class="rounded-lg border border-gray-800 bg-gray-900/40">
+        <summary class="cursor-pointer px-4 py-2 text-sm font-medium text-gray-200">
+          Scrolls <span class="text-xs text-gray-500">({length(@skills)})</span>
+        </summary>
+        <div class="border-t border-gray-800 px-4 py-2 space-y-2">
+          <p :if={@skills == []} class="text-xs text-gray-600">
+            No scrolls here. AQUA can write one when it learns a way of working worth keeping.
+          </p>
+          <ul :if={@skills != []} class="divide-y divide-gray-800/60">
+            <li :for={skill <- @skills} class="py-1">
+              <button
+                type="button"
+                phx-click="skill_open"
+                phx-value-name={skill.name}
+                class="text-left text-xs text-gray-300 hover:text-white"
+              >
+                <span class="font-mono">{skill.name}</span>
+                <span :if={skill.description != ""} class="ml-2 text-gray-500">
+                  {skill.description}
+                </span>
+              </button>
+            </li>
+          </ul>
+          <div
+            :if={@skill_open}
+            id="aqua-scroll-open"
+            class="rounded border border-gray-800 bg-gray-950 p-3 space-y-1"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-mono text-gray-200">{@skill_open.name}</span>
+              <button
+                type="button"
+                phx-click="skill_close"
+                class="text-gray-500 hover:text-gray-300"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <pre class="whitespace-pre-wrap text-xs text-gray-300 font-mono">{@skill_open.content}</pre>
+            <p :if={@skill_open.resources != []} class="text-[10px] text-gray-500">
+              Files: {Enum.join(@skill_open.resources, ", ")}
+            </p>
+          </div>
+        </div>
+      </details>
       
     <!-- Consent sheet: bind a vault entry to the soul's model -->
       <div :if={@consent_sheet_ref} class="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -834,6 +1069,61 @@ defmodule PrismWeb.AgentsLive do
 
   # One owner for the aqua call and its key normalization.
   defp call_aqua(ctx, args), do: Aqua.AgentConfig.call_aqua(ctx, args)
+
+  # The pinned page: what the soul reads first, every turn here. Which
+  # page is the estate's kind (`Aqua.Notes.pinned_page/1`); its body is
+  # read the way any note is.
+  defp load_about(socket) do
+    ctx = socket.assigns.context
+
+    case Aqua.Notes.pinned_page(ctx) do
+      {:ok, name} ->
+        about =
+          case call_tool(ctx, "notes/read", %{"name" => name}) do
+            {:ok, %{content: content}} -> content
+            _ -> ""
+          end
+
+        socket |> assign(:pinned_name, name) |> assign(:about, about)
+
+      {:error, _} ->
+        socket
+    end
+  end
+
+  # The estate's filed notes; the pinned page is a slot, not a note.
+  defp load_notes(socket) do
+    notes =
+      case call_tool(socket.assigns.context, "notes/list", %{}) do
+        {:ok, %{notes: notes}} -> Enum.reject(notes, &(&1.name == socket.assigns.pinned_name))
+        _ -> []
+      end
+
+    assign(socket, :notes, notes)
+  end
+
+  defp load_skills(socket) do
+    skills =
+      case call_tool(socket.assigns.context, "aqua/skill_list", %{}) do
+        {:ok, %{skills: skills}} -> skills
+        _ -> []
+      end
+
+    assign(socket, :skills, skills)
+  end
+
+  defp about_title("about-you"), do: "About you"
+  defp about_title(_page), do: "About us"
+
+  defp provenance_line(%{kept_by: by, kept_at: at, conversation: conversation}) do
+    [
+      "kept by " <> if(is_binary(by), do: principal_label(by), else: "someone"),
+      is_binary(at) && "on " <> at,
+      is_binary(conversation) && "from a conversation"
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.join(" · ")
+  end
 
   # Whose `aqua/` trees this page shows: the person's own, then the estate
   # in focus. One tree when they are the same.

@@ -36,7 +36,7 @@ defmodule Prism.AquaTemplatePolicyTest do
   # enumerate under that name.
   @tag :requires_opus_modules
   test "the capability matrix offers reachable actions, with their real kinds" do
-    catalog = Map.new(PrismWeb.AgentsLive.Catalog.enumerate_tool_actions())
+    catalog = Map.new(PrismWeb.AquaLive.Catalog.enumerate_tool_actions())
 
     # A real kind, not the `:write` default a missing annotation falls back to.
     assert {"run", :execute} in catalog["execution"]

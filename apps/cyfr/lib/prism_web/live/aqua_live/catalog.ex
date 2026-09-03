@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.AgentsLive.Catalog do
+defmodule PrismWeb.AquaLive.Catalog do
   @moduledoc """
   Pure data transforms behind the Agents page: the tool/action catalog the
   capability matrix renders, kind classification, and the model-picker
@@ -99,7 +99,7 @@ defmodule PrismWeb.AgentsLive.Catalog do
 
   def kind_from_meta(_, tool, action) do
     Logger.warning(
-      "[AgentsLive] Tool action `#{tool}.#{action}` has no kind annotation — " <>
+      "[AquaLive] Tool action `#{tool}.#{action}` has no kind annotation — " <>
         "left off the policy catalogue (the policy plane refuses it too)"
     )
 

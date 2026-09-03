@@ -741,7 +741,7 @@ defmodule PrismWeb.RegistryLive do
   # ============================================================================
 
   defp cf(c, key) when is_map(c) do
-    c[key] || c[PrismWeb.AgentsLive.Catalog.existing_atom(key)]
+    c[key] || c[PrismWeb.AquaLive.Catalog.existing_atom(key)]
   end
 
   defp status(c), do: cf(c, "status") || "active"

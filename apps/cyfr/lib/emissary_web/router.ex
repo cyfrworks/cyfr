@@ -406,7 +406,9 @@ defmodule EmissaryWeb.Router do
         # An athanor's chat used to live here; it forwards to the chat zone
         # with the estate named.
         live "/", ChatRedirectLive, :index
-        live "/agents", AgentsLive, :index
+        # The estate's AQUA; the old name forwards.
+        live "/aqua", AquaLive, :index
+        live "/agents", AquaRedirectLive, :index
         # /activities: unified activities feed (mcp_log + execution fan-out).
         live "/activities", ActivitiesLive, :index
         # /enforcements: live policy-decision feed (Arca.PolicyLog rows from

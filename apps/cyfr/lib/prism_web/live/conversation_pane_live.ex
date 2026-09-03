@@ -562,7 +562,7 @@ defmodule PrismWeb.ConversationPaneLive do
         {:noreply, put_flash(socket, :error, "This athanor has been archived.")}
 
       {:error, :no_orchestrator} ->
-        {:noreply, put_flash(socket, :error, "This estate has no assistant — see Agents.")}
+        {:noreply, put_flash(socket, :error, "This estate has no assistant — see AQUA.")}
 
       {:error, :storage_full} ->
         {:noreply, put_flash(socket, :error, "This athanor's storage is full.")}
@@ -898,10 +898,10 @@ defmodule PrismWeb.ConversationPaneLive do
             ◼ {if @cancel_requested, do: "Cancelling…", else: "Stop"}
           </button>
           <.link
-            navigate={PrismWeb.Focus.path(@athanor_route, "/agents")}
+            navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
             class="rounded px-2 py-1 text-[11px] uppercase tracking-wider text-gray-500 hover:bg-gray-800 hover:text-gray-300"
           >
-            Agents
+            AQUA
           </.link>
         </div>
       </header>
@@ -936,7 +936,7 @@ defmodule PrismWeb.ConversationPaneLive do
           <%= if @model_ready in [:no_model, :no_key] do %>
             <span>{athanor_label(@athanor)} has no model yet.</span>
             <.link
-              navigate={PrismWeb.Focus.path(@athanor_route, "/agents")}
+              navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
               class="text-blue-400 hover:text-blue-300"
             >
               Connect a model

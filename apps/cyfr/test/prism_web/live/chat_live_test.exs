@@ -454,10 +454,10 @@ defmodule PrismWeb.ChatLiveTest do
     assert to in ["/chat", "/login?error=no_athanor"]
   end
 
-  test "the Agents page mounts with the athanor's soul and roles, and opens the grant sheet for a model",
+  test "the AQUA page mounts with the athanor's soul and roles, and opens the grant sheet for a model",
        %{conn: conn} do
     conn = log_in_user(conn, test_user())
-    {view, _html} = mount_athanor(conn, "/agents")
+    {view, _html} = mount_athanor(conn, "/aqua")
     assert render(view) =~ "soul"
     assert has_element?(view, "code", "aqua")
 

@@ -10,7 +10,7 @@ defmodule PrismWeb.NavTest do
     keys = Enum.map(Nav.items("lite"), & &1.key)
 
     assert keys ==
-             ~w(chat agents tinctures members vault schedules webhooks mcp_servers settings legal)
+             ~w(chat aqua tinctures members vault schedules webhooks mcp_servers settings legal)
 
     refute "executions" in keys
     refute "api_keys" in keys
@@ -58,16 +58,16 @@ defmodule PrismWeb.NavTest do
 
   test "a link is focused on the athanor unless the page is global — the chat is" do
     chat = Enum.find(Nav.items("lite"), &(&1.key == "chat"))
-    agents = Enum.find(Nav.items("lite"), &(&1.key == "agents"))
+    aqua = Enum.find(Nav.items("lite"), &(&1.key == "aqua"))
 
     assert chat.scope == :global
     assert Nav.href(chat, "home") == "/chat"
-    assert agents.scope == :athanor
-    assert Nav.href(agents, "home") == "/a/home/agents"
+    assert aqua.scope == :athanor
+    assert Nav.href(aqua, "home") == "/a/home/aqua"
 
     assert Nav.global?("/chat")
     assert Nav.global?("/chat?a=home&c=conv_1")
-    refute Nav.global?("/agents")
+    refute Nav.global?("/aqua")
     # The engine reads the same list from the glue namespace.
     assert Nav.global_paths() == Cyfr.GlobalPages.paths()
   end

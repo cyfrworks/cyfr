@@ -5,7 +5,7 @@ defmodule PrismWeb.ModelCatalog do
   @moduledoc """
   One loader for the model catalogue (`formula:local.list-models`).
 
-  It lived twice — ConversationLive and AgentsLive each spelled the ref,
+  It lived twice — ConversationPaneLive and AquaLive each spelled the ref,
   the spawn, the decode and the timeout — and had drifted: 15s vs 60s
   deadlines, and one copy dropped the `refs` half of the result the other
   read. The caller spawns through `load/2` and handles the one message
@@ -80,7 +80,7 @@ defmodule PrismWeb.ModelCatalog do
     models =
       (decoded["models"] || %{})
       |> Map.new(fn {provider, value} ->
-        {provider, PrismWeb.AgentsLive.Catalog.normalize_provider_models(value)}
+        {provider, PrismWeb.AquaLive.Catalog.normalize_provider_models(value)}
       end)
 
     %{models: models, refs: decoded["refs"] || %{}}
