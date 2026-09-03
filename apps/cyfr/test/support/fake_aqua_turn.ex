@@ -28,9 +28,22 @@ defmodule Aqua.FakeTurn do
     end
   end
 
-  def start(ctx, input) do
+  @doc """
+  The pinned profile a turn runs as. The fake answers a fixed one so the
+  runner's three-step start (pin → compose → run) has something to thread;
+  a test that cares which profile was pinned asserts on `:fake_start`.
+  """
+  def pin_profile(ctx) do
+    report({:fake_pin_profile, ctx})
+    {:ok, %{profile_id: fake_profile_id()}}
+  end
+
+  @doc "The profile id `pin_profile/1` answers."
+  def fake_profile_id, do: "prof_fake"
+
+  def start(ctx, input, profile_id) do
     eid = "exec_fake_" <> Integer.to_string(System.unique_integer([:positive]))
-    report({:fake_start, eid, ctx, input})
+    report({:fake_start, eid, ctx, input, profile_id})
     {:ok, eid}
   end
 
@@ -51,8 +64,8 @@ defmodule Aqua.FakeTurn do
   def events_since(_execution_id, _athanor_id), do: []
   def running?(_ctx, _execution_id), do: false
 
-  def run_approved(proposal, ctx) do
-    report({:fake_run_approved, proposal, ctx})
+  def run_approved(proposal, ctx, profile_id) do
+    report({:fake_run_approved, proposal, ctx, profile_id})
     {:ok, %{"status" => "ok", "id" => "wh_fake"}}
   end
 

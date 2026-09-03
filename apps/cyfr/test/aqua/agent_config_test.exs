@@ -2,9 +2,11 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.AgentConfigTest do
-  # The agent's tool_policy is the athanor's: a chat decision that outlives
-  # the turn ("always" / "never") edits that one allowlist in place, and the
-  # athanor's definitions come from the shipped template on first read.
+  # The agent's tool_policy is DECLARED policy, and the athanor's
+  # definitions come from the shipped template on first read. A chat
+  # decision that outlives the turn ("always" / "never") is not an edit to
+  # it — those are `Aqua.ToolGrants` rows, composed over the declaration at
+  # use time.
   use ExUnit.Case, async: false
 
   alias Aqua.AgentConfig
@@ -40,25 +42,25 @@ defmodule Aqua.AgentConfigTest do
     assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
   end
 
-  test "set_tool_auto / drop_tool edit the athanor's allowlist in place", %{ctx: ctx} do
+  test "a standing decision never rewrites the declared policy", %{ctx: ctx} do
     assert policy(ctx, "aqua")["component.pull"] == "ask"
 
-    :ok = AgentConfig.set_tool_auto(ctx, "aqua", "component.pull")
-    assert policy(ctx, "aqua")["component.pull"] == "auto"
+    {:ok, _} =
+      Aqua.ToolGrants.put(ctx, %{
+        scope: "agent",
+        effect: "allow",
+        agent_athanor_id: ctx.athanor_id,
+        agent_name: "aqua",
+        tool: "component",
+        action: "pull"
+      })
 
-    :ok = AgentConfig.drop_tool(ctx, "aqua", "component.pull")
-    refute Map.has_key?(policy(ctx, "aqua"), "component.pull")
+    # The agent's own file still says "ask" — a chat click is a decision,
+    # not an edit to what the author declared.
+    assert policy(ctx, "aqua")["component.pull"] == "ask"
 
-    # The template on disk is untouched — the edit materialized the one
-    # agent file into the athanor's own tree.
-    {:ok, raw} =
-      Arca.get(
-        Sanctum.system_context(),
-        Compendium.AquaTemplate.seed_prefix() ++ ["agents", "aqua.md"]
-      )
-
-    {:ok, shipped} = Compendium.AquaAgent.parse("aqua", raw)
-    assert shipped.tool_policy["component.pull"] == "ask"
+    # And nothing was materialized into the athanor's tree to say so.
+    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
   end
 
   test "put_formula_tool_surface always attaches the policy, never a tool list" do
@@ -79,17 +81,5 @@ defmodule Aqua.AgentConfigTest do
 
     empty = AgentConfig.put_formula_tool_surface(%{"task" => "t"}, nil)
     assert empty["tool_policy"] == %{}
-  end
-
-  test "the system prompt names every guest storage scope", %{ctx: ctx} do
-    # The prose in build_dynamic_context is hand-written; this pins it to
-    # the vocabulary `Arca.Storage.guest_scopes/0` defines, so a renamed or
-    # added guest scope cannot leave the model prompt describing a stale one.
-    prompt = AgentConfig.build_system_prompt(ctx)
-
-    for scope <- Map.keys(Arca.Storage.guest_scopes()) do
-      assert prompt =~ scope <> "/",
-             "system prompt no longer mentions guest scope #{scope}/"
-    end
   end
 end

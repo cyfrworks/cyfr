@@ -516,6 +516,33 @@ defmodule Sanctum.Context do
   end
 
   @doc """
+  Narrow onto another athanor for a domain read or write on a tree the
+  caller can already name — the one chokepoint for what used to be
+  scattered `%{ctx | athanor_id: …}` struct updates (a roster read of your
+  own crew, an agent resolved from its owner's tree, an editor write that
+  follows the agent home).
+
+  A user context goes through `focus/2` whole: membership or the audited
+  operator open, and an archived athanor refused. A **system** context
+  (`auth_method: :system`) crosses tenants by design — recovery resolving
+  a stored agent from its owner's tree has no member to speak as — but an
+  archived athanor is still refused; the platform plane gets no door into
+  a closed furnace either.
+  """
+  @spec refocus(t(), String.t()) ::
+          {:ok, t()} | {:error, :not_found | :archived | :not_member}
+  def refocus(%__MODULE__{auth_method: :system} = ctx, athanor_id)
+      when is_binary(athanor_id) do
+    case Sanctum.Tenancy.Athanors.get(athanor_id) do
+      {:ok, %{status: "archived"}} -> {:error, :archived}
+      {:ok, _} -> {:ok, %{ctx | athanor_id: athanor_id, scope: :athanor}}
+      {:error, _} -> {:error, :not_found}
+    end
+  end
+
+  def refocus(%__MODULE__{} = ctx, athanor_id), do: focus(ctx, athanor_id)
+
+  @doc """
   Tuple form of the tenant presence-gate: `:ok | {:error, :missing_tenant}`.
 
   Use this at boundary entry points (plugs, controllers, API-key auth) that

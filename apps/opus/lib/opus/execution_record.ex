@@ -66,7 +66,8 @@ defmodule Opus.ExecutionRecord do
           root_execution_id: String.t() | nil,
           resolver_digest: String.t() | nil,
           activation_digest: String.t() | nil,
-          activation_graph: String.t() | nil
+          activation_graph: String.t() | nil,
+          profile_id: String.t() | nil
         }
 
   defstruct [
@@ -90,7 +91,8 @@ defmodule Opus.ExecutionRecord do
     :root_execution_id,
     :resolver_digest,
     :activation_digest,
-    :activation_graph
+    :activation_graph,
+    :profile_id
   ]
 
   @doc """
@@ -132,7 +134,11 @@ defmodule Opus.ExecutionRecord do
       error: nil,
       host_policy: host_policy,
       parent_execution_id: parent_execution_id,
-      root_execution_id: root_execution_id
+      root_execution_id: root_execution_id,
+      # Which consent rooted this run. `Opus.Chain.run_root/5` resolves the
+      # profile before anything executes and passes its id here, so the row
+      # records the authority rather than leaving it to be re-derived.
+      profile_id: Keyword.get(opts, :profile_id)
     }
   end
 
@@ -250,6 +256,7 @@ defmodule Opus.ExecutionRecord do
            resolver_digest: record.resolver_digest,
            activation_digest: record.activation_digest,
            activation_graph: record.activation_graph,
+           profile_id: record.profile_id,
            runner_id: runner_id(),
            lease_until: lease_until()
          }) do
@@ -412,7 +419,8 @@ defmodule Opus.ExecutionRecord do
       activation_digest: result[:activation_digest],
       # The canonically-encoded graph string, exactly as stamped — never
       # decoded and re-encoded, which could break its canonical form.
-      activation_graph: result[:activation_graph]
+      activation_graph: result[:activation_graph],
+      profile_id: result[:profile_id]
     }
   end
 

@@ -7,7 +7,10 @@ defmodule Emissary do
   resource registries, and external MCP server supervision.
 
   Emissary owns the transport and dispatch; each namespace registers its own
-  tools/resources (see `Emissary.MCP.ToolProvider`). Shared primitives like
-  `Cyfr.UUID7` live in the glue namespace, not here.
+  tools/resources (see `Emissary.MCP.ToolProvider`) — except the two
+  person-surface tools Emissary registers itself, `conversation` and
+  `memory`: they wrap `Aqua`/`Arca` domain functions, and `Aqua.ToolSeamTest`
+  keeps the agent harness from owning a provider of its own. Shared
+  primitives like `Cyfr.UUID7` live in the glue namespace, not here.
   """
 end

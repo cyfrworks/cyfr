@@ -16,11 +16,15 @@ defmodule PrismWeb.MCPHelpers do
   answer for both.
 
   What does not go through a tool is state that exists only because a
-  person is looking at a screen — their UI preferences, the conversation
-  they are having, a cache key being invalidated after a refresh. There is
-  no tool for those because there should not be one: a `conversation.read`
-  tool would put someone's chat history inside the agent-reachable surface,
-  which is the opposite of what a private console is for.
+  person is looking at a screen — their UI preferences, a cache key being
+  invalidated after a refresh, the chat they are typing into. Chat IS on
+  the wire (`Emissary.MCP.ConversationTool` — external-plane and
+  OIDC-interactive, so no agent and no API key reaches it), but the
+  console does not call its own tool for it: the LiveView already holds
+  an authenticated member context, so it is a deliberate in-process
+  client of the same domain functions the tool wraps. Same functions,
+  two doors — the registry gate exists for surfaces that arrive without
+  one.
 
   The rule, then: **if an agent should be able to do it, it is a tool call.
   If it exists only for the person at the keyboard, the console owns it

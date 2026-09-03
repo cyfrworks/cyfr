@@ -432,6 +432,66 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
   end
 
+  describe "athanor.pair" do
+    test "mints a frozen DM with someone you share an estate with — and finds it again",
+         %{alice: alice, bob: bob, ctx: ctx, n: n} do
+      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+
+      # Reachability first: they must already sit in one room.
+      {:ok, shared} = call(a, "athanor", %{"action" => "create", "name" => "Shared #{n}"})
+      {:ok, _} = Members.ensure(bob, scope: "athanor", athanor_id: shared.id)
+
+      assert {:ok, pair} = call(a, "athanor", %{"action" => "pair", "user" => bob})
+      assert pair.kind == "group"
+      assert pair.roster == "frozen"
+      assert pair.member_count == 2
+
+      # The row only — filling it is first need, so the click is instant.
+      refute pair.provisioned
+
+      # Click again (either side): the same tape, not a second one.
+      b = ctx.(bob, Sanctum.TestContext.athanor_id(), [])
+      assert {:ok, same} = call(b, "athanor", %{"action" => "pair", "user" => alice})
+      assert same.id == pair.id
+    end
+
+    test "a stranger is unreachable — no shared estate, no pair", %{
+      alice: alice,
+      bob: bob,
+      ctx: ctx
+    } do
+      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+
+      # Bob exists on this server; that is not enough. The refusal reads
+      # the same as it would for an id that names nobody — the wire is not
+      # a directory.
+      assert {:error, {:invalid_argument, msg}} =
+               call(a, "athanor", %{"action" => "pair", "user" => bob})
+
+      assert msg =~ "already share an estate"
+
+      assert {:error, {:invalid_argument, ^msg}} =
+               call(a, "athanor", %{
+                 "action" => "pair",
+                 "user" => "github|https://github.com|nobody"
+               })
+    end
+
+    test "a pair is two people, and never a standing credential", %{alice: alice, ctx: ctx} do
+      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+
+      assert {:error, {:invalid_argument, _}} =
+               call(a, "athanor", %{"action" => "pair", "user" => alice})
+
+      # `consent: :interactive` on the annotation: the registry refuses an
+      # API key before the handler runs, with the typed code.
+      key = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
+
+      assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
+               call(key, "athanor", %{"action" => "pair", "user" => "github|x|other"})
+    end
+  end
+
   describe "AthanorTool.resolve/3 returns a focused context" do
     # Every downstream act (provisioning above all) must run at
     # `scope: :athanor` with the resolved athanor bound — a platform

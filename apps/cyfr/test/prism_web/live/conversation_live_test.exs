@@ -25,6 +25,25 @@ defmodule PrismWeb.ConversationLiveTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
+    # The seeded agent names a catalyst this sandbox does not hold, and a
+    # named ref that does not resolve now refuses the turn (deliberately).
+    # These tests drive the fake engine, not a model — unpin it in Home,
+    # where most of them chat.
+    {:ok, home} = Sanctum.Tenancy.Athanors.home()
+    unpin_catalyst(home.id)
+
+    :ok
+  end
+
+  # A named catalyst that does not resolve in the estate refuses the turn;
+  # these sandboxes hold none, so the fixture agent pins none.
+  defp unpin_catalyst(athanor_id) do
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(
+        %{Sanctum.TestContext.local() | athanor_id: athanor_id},
+        %{"action" => "update", "name" => "aqua", "catalyst_ref" => ""}
+      )
+
     :ok
   end
 
@@ -60,17 +79,17 @@ defmodule PrismWeb.ConversationLiveTest do
     assert html =~ "has no model yet"
     assert html =~ "Connect a model"
 
-    # Home is the household furnace: AQUA answers a bare message, and the
-    # composer says so rather than teaching `@aqua`. Every other group is
-    # the other way round.
-    assert html =~ "Ask AQUA…"
-    refute html =~ "@aqua to ask AQUA"
+    # Two people are in Home, so a message has to say who it is for. This
+    # is derived from the roster now rather than a per-athanor setting:
+    # Home used to answer every bare line by flag, which stopped meaning
+    # anything once "whose agent answers?" had more than one answer.
+    assert html =~ "Talk to the group"
 
     alice_view
     |> form("form[phx-submit=submit]", %{"message" => "@aqua hello from alice"})
     |> render_submit()
 
-    assert_receive {:fake_start, eid, start_ctx, input}, 10_000
+    assert_receive {:fake_start, eid, start_ctx, input, _profile}, 10_000
     assert start_ctx.user_id == alice.user_id
     assert input["task"] =~ ~r/: hello from alice$/
     assert_receive {:fake_subscribe, ^eid, runner}, 5_000
@@ -112,7 +131,7 @@ defmodule PrismWeb.ConversationLiveTest do
     |> form("form[phx-submit=submit]", %{"message" => "@aqua pull a component"})
     |> render_submit()
 
-    assert_receive {:fake_start, eid, start_ctx, _}, 10_000
+    assert_receive {:fake_start, eid, start_ctx, _, _profile}, 10_000
     assert_receive {:fake_subscribe, ^eid, runner}, 5_000
     [conv] = Conversations.list(start_ctx)
     {bob_view, _} = mount_athanor(bob_conn, "?c=" <> conv.id)
@@ -137,7 +156,9 @@ defmodule PrismWeb.ConversationLiveTest do
     |> element("#" <> apr.id <> " button[phx-value-scope=once]")
     |> render_click()
 
-    assert_receive {:fake_run_approved, %{tool: "component", action: "pull"}, run_ctx}, 5_000
+    assert_receive {:fake_run_approved, %{tool: "component", action: "pull"}, run_ctx, _profile},
+                   5_000
+
     assert run_ctx.user_id == bob.user_id
     Process.sleep(100)
 
@@ -180,6 +201,7 @@ defmodule PrismWeb.ConversationLiveTest do
     alice = test_user()
     bob = test_user()
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Two #{alice.namespace}")
+    unpin_catalyst(group.id)
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
     bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
 
@@ -189,7 +211,7 @@ defmodule PrismWeb.ConversationLiveTest do
     |> form("form[phx-submit=submit]", %{"message" => "lunch at noon?"})
     |> render_submit()
 
-    refute_receive {:fake_start, _, _, _}, 300
+    refute_receive {:fake_start, _, _, _, _}, 300
 
     ctx =
       Sanctum.Context.build(
@@ -204,8 +226,10 @@ defmodule PrismWeb.ConversationLiveTest do
     [conv] = Conversations.list(ctx)
     {bob_view, bob_html} = mount_athanor(bob_conn, "?c=" <> conv.id, group)
     assert bob_html =~ "lunch at noon?"
-    # the answer-mode control is a group's
-    assert has_element?(bob_view, "select[name=answer_mode]")
+    # Two people are here, so the composer says a mention is needed rather
+    # than offering to ask the agent directly. Derived from the roster, not
+    # a per-group setting.
+    assert bob_html =~ "Talk to the group"
 
     bob_view
     |> form("form[phx-submit=submit]", %{"message" => "sure"})
@@ -213,7 +237,7 @@ defmodule PrismWeb.ConversationLiveTest do
 
     Process.sleep(50)
     assert render(alice_view) =~ "sure"
-    refute_receive {:fake_start, _, _, _}, 200
+    refute_receive {:fake_start, _, _, _, _}, 200
 
     # Bob is removed: his tab is sent away, and a fresh open is refused.
     :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: bob.user_id)
@@ -232,7 +256,7 @@ defmodule PrismWeb.ConversationLiveTest do
     |> form("form[phx-submit=submit]", %{"message" => "@aqua book it"})
     |> render_submit()
 
-    assert_receive {:fake_start, _eid, _ctx, input}, 10_000
+    assert_receive {:fake_start, _eid, _ctx, input, _profile}, 10_000
     # the whole exchange reaches the agent, each line attributed
     assert input["task"] =~ ~r/: lunch at noon\?/
     assert input["task"] =~ ~r/: sure/
@@ -249,6 +273,7 @@ defmodule PrismWeb.ConversationLiveTest do
     {:ok, group} =
       Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Files #{alice.namespace}")
 
+    unpin_catalyst(group.id)
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
     bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
     carol_conn = log_in_user(build_conn(), carol)
@@ -270,7 +295,7 @@ defmodule PrismWeb.ConversationLiveTest do
     |> form("form[phx-submit=submit]", %{"message" => "@aqua read these"})
     |> render_submit()
 
-    assert_receive {:fake_start, _eid, ctx, input}, 10_000
+    assert_receive {:fake_start, _eid, ctx, input, _profile}, 10_000
     attached = Enum.sort_by(input["attachments"], & &1["filename"])
     assert [%{"filename" => "note.txt", "data" => data}, %{"filename" => "plan.md"}] = attached
     assert Base.decode64!(data) == "hi there"

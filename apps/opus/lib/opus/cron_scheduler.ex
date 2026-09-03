@@ -606,7 +606,7 @@ defmodule Opus.CronScheduler do
            # Through the port for the same reason the MCP ingress is: one
            # door into "start a root", whoever is knocking.
            run_result =
-             Cyfr.Execution.run_root(ctx, schedule.profile_id, exec_reference, input,
+             Cyfr.Execution.run_root(ctx, {:id, schedule.profile_id}, exec_reference, input,
                execution_id: execution_id,
                class: :background
              )

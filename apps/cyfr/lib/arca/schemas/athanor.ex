@@ -7,8 +7,13 @@ defmodule Arca.Schemas.Athanor do
   components, consents, executions, schedules, keys and members; it is the
   isolation unit and the outbound principal.
 
-  `kind` is `"person"` (exactly one member, its owner) or `"group"`. `home`
-  marks the one seeded group athanor every server has. `status` is
+  `kind` is `"person"` (exactly one member, its owner) or `"group"`. A
+  group's `roster` is `"open"` — members may invite — or `"frozen"`: it
+  takes its members at birth and never gains another, which is what a DM
+  is. `pair_key` is set on a two-person frozen estate so "click Alice"
+  finds the one that exists instead of minting a second.
+
+  `home` marks the one seeded group athanor every server has. `status` is
   `"active"` or `"archived"` — an athanor is never deleted. `settings` is a
   JSON document owned by `Sanctum.Tenancy.Athanors`.
   """
@@ -19,12 +24,15 @@ defmodule Arca.Schemas.Athanor do
   @primary_key {:id, :string, autogenerate: false}
 
   @kinds ["person", "group"]
+  @rosters ["open", "frozen"]
   @statuses ["active", "archived"]
 
   @type t :: %__MODULE__{}
 
   schema "athanors" do
     field :kind, :string
+    field :roster, :string, default: "open"
+    field :pair_key, :string
     field :name, :string
     field :slug, :string
     field :home, :boolean, default: false
@@ -39,6 +47,7 @@ defmodule Arca.Schemas.Athanor do
   end
 
   def kinds, do: @kinds
+  def rosters, do: @rosters
   def statuses, do: @statuses
 
   # What a row is born with. Identity fields (`id`, `kind`, `home`,
@@ -46,6 +55,8 @@ defmodule Arca.Schemas.Athanor do
   @create_fields [
     :id,
     :kind,
+    :roster,
+    :pair_key,
     :name,
     :slug,
     :home,
@@ -77,6 +88,7 @@ defmodule Arca.Schemas.Athanor do
       message: "must be alphanumeric with underscores or hyphens"
     )
     |> validate_inclusion(:kind, @kinds)
+    |> validate_inclusion(:roster, @rosters)
     |> validate_inclusion(:status, @statuses)
     # The slug grammar is the namespace grammar: a person's athanor slug is
     # their cyfr.run namespace, a group's slug is chosen from its name.
@@ -87,6 +99,7 @@ defmodule Arca.Schemas.Athanor do
     |> unique_constraint([:kind, :slug])
     |> unique_constraint(:home, name: :athanors_home_index)
     |> unique_constraint(:owner_user_id)
+    |> unique_constraint(:pair_key)
   end
 
   # A person athanor names its owner; a group has none.

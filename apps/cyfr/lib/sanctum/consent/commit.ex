@@ -206,7 +206,8 @@ defmodule Sanctum.Consent.Commit do
     scope = Map.get(decisions, :scope, :versionless)
     invoke_mode = Map.get(decisions, :invoke_mode, default_invoke_mode(kind))
 
-    with {:ok, source_ref} <- Plan.name_ref(Map.get(decisions, :ref, "")),
+    with :ok <- Plan.check_label(label),
+         {:ok, source_ref} <- Plan.name_ref(Map.get(decisions, :ref, "")),
          {:ok, component} <- Plan.fetch_component(ctx, source_ref),
          {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, shape_input} <- ShapeDerivation.shape_input(ctx, source_ref),

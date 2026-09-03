@@ -1393,12 +1393,26 @@ defmodule Compendium.MCPTest do
       assert is_map(result.tool_policy)
     end
 
-    test "get returns the athanor's policy — one allowlist for every member", %{ctx: ctx} do
+    test "get returns the athanor's declared policy — one allowlist for every member", %{
+      ctx: ctx
+    } do
       {:ok, before} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
       assert before.tool_policy["build.compile"] == "auto"
 
-      :ok = Aqua.AgentConfig.drop_tool(ctx, "aqua_builder", "build.compile")
-      :ok = Aqua.AgentConfig.set_tool_auto(ctx, "aqua_builder", "files.write")
+      # Editing declared policy goes through the tool — the agents page's
+      # path. A chat decision does NOT come here; those are
+      # `Aqua.ToolGrants` rows composed over this at use time.
+      edited =
+        before.tool_policy
+        |> Map.delete("build.compile")
+        |> Map.put("files.write", "auto")
+
+      {:ok, _} =
+        MCP.handle("aqua", ctx, %{
+          "action" => "update",
+          "name" => "aqua_builder",
+          "tool_policy" => edited
+        })
 
       {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
 

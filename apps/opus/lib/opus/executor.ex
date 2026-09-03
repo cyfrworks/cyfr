@@ -142,7 +142,10 @@ defmodule Opus.Executor do
     record_opts = [
       component_type: component_type,
       parent_execution_id: opts[:parent_execution_id],
-      root_execution_id: opts[:root_execution_id]
+      root_execution_id: opts[:root_execution_id],
+      # Set by `Opus.Chain.run_root/5` only: a child walks its parent's
+      # authority and roots no profile of its own, so it records none.
+      profile_id: opts[:profile_id]
     ]
 
     record_opts =

@@ -51,15 +51,30 @@ defmodule PrismWeb.TopbarLiveTest do
     render_click(bar, "toggle_popover", %{"name" => "athanors"})
     assert render(bar) =~ "Bells"
 
-    # something happens in the group while Home is in focus: a badge
-    Sanctum.Notify.broadcast(group.id, :approval_pending, %{conversation_id: "c"})
+    # something happens in a FOLLOWED thread of the group while Home is in
+    # focus: a badge. The creator follows their own thread.
+    group_ctx =
+      Sanctum.Context.build(
+        user_id: alice.user_id,
+        athanor_id: group.id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, conv} = Arca.ConversationStorage.create(group_ctx, %{title: "Bells thread"})
+    Sanctum.Notify.broadcast(group.id, :approval_pending, %{conversation_id: conv.id})
     :sys.get_state(bar.pid)
     assert render(bar) =~ "bg-blue-500/80"
 
-    # a card settled by someone, or a rename, does not add to the count
+    # a card settled by someone, or a rename, does not add to the count —
+    # and neither does a thread this person does not follow: the tray is
+    # where following becomes a notification fact.
     before = render(bar)
     Sanctum.Notify.broadcast(group.id, :approval_resolved, %{})
     Sanctum.Notify.broadcast(group.id, :athanor_changed, %{name: "Bells"})
+    Sanctum.Notify.broadcast(group.id, :approval_pending, %{conversation_id: "conv_unfollowed"})
     :sys.get_state(bar.pid)
     assert render(bar) == before
   end

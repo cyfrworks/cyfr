@@ -607,7 +607,7 @@ defmodule Opus.MCP do
     # intercepts this one too, and the readiness gate applies — even
     # though this module ships inside the engine it is calling.
     case Cyfr.Execution.run_root(ctx, selector, reference, input, opts) do
-      {:error, :no_profile} when is_nil(selector) ->
+      {:error, :no_profile} when selector == :default ->
         {:error,
          {:consent_required,
           %{
@@ -620,12 +620,12 @@ defmodule Opus.MCP do
     end
   end
 
-  defp profile_selector(args) do
-    case args["profile"] do
-      selector when is_binary(selector) and selector != "" -> selector
-      _ -> nil
-    end
-  end
+  # The one place a caller-supplied string becomes a selector. `"profile"`
+  # takes an id or a label because a person naming their own grant should
+  # not have to know which of the two they are holding;
+  # `RootSelect.decode/1` owns the discrimination, and the label grammar
+  # is what keeps it from being a guess.
+  defp profile_selector(args), do: Sanctum.Authority.RootSelect.decode(args["profile"])
 
   # The §4.3 signals stay TYPED to the boundary: the wire router promotes
   # them to protocol-level errors (-335xx + error.data), the console and

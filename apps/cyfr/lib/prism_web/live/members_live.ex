@@ -87,6 +87,66 @@ defmodule PrismWeb.MembersLive do
     end
   end
 
+  # Click a name → the frozen pair of the two of you, found or minted, and
+  # its chat opens. Reachability is decided in the tool ("you already share
+  # an active estate"), which is true of anyone on this list.
+  def handle_event("open_dm", %{"user-id" => user_id}, socket) do
+    with {:ok, %{id: id}} <- call_tool(socket, "athanor/pair", %{"user" => user_id}),
+         {:ok, %{athanor: %{route: route}}} <-
+           call_tool(socket, "session/use", %{"athanor" => id}) do
+      {:noreply, push_navigate(socket, to: PrismWeb.Focus.path(route, ""))}
+    else
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not open a DM: #{error_message(reason)}")}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Could not open a DM.")}
+    end
+  end
+
+  # Growing a DM is a NEW open group with the three of you — the pair's
+  # door stays closed and its history stays where it was said. The partner
+  # is seated by user id (an active seat at once); the new person arrives
+  # by email, the ordinary first contact on an open athanor.
+  def handle_event("add_third", %{"email" => email}, socket) do
+    %{athanor: pair, members: members, context: ctx} = socket.assigns
+
+    partner =
+      Enum.find_value(members, fn m ->
+        id = m[:user_id]
+        if is_binary(id) and id != ctx.user_id and m[:status] == "active", do: id
+      end)
+
+    name = String.slice("#{pair.name} +", 0, 80)
+
+    with true <- is_binary(partner),
+         {:ok, %{id: group_id}} <- call_tool(socket, "athanor/create", %{"name" => name}),
+         {:ok, _} <-
+           call_tool(socket, "member/add", %{"user_id" => partner, "athanor" => group_id}),
+         {:ok, _} <-
+           call_tool(socket, "member/add", %{
+             "email" => String.trim(email),
+             "athanor" => group_id
+           }),
+         {:ok, %{athanor: %{route: route}}} <-
+           call_tool(socket, "session/use", %{"athanor" => group_id}) do
+      {:noreply,
+       socket
+       |> put_flash(
+         :info,
+         "A new group with the three of you. This conversation stays as it was — " <>
+           "nothing moves."
+       )
+       |> push_navigate(to: PrismWeb.Focus.path(route, "/members"))}
+    else
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not add: #{error_message(reason)}")}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Could not add someone right now.")}
+    end
+  end
+
   def handle_event("create_group", %{"name" => name}, socket) do
     case call_tool(socket, "athanor/create", %{"name" => String.trim(name)}) do
       {:ok, _} ->
@@ -149,6 +209,14 @@ defmodule PrismWeb.MembersLive do
       else: "Leave Home? The others keep it."
   end
 
+  # A frozen pair ends when ANYONE leaves — and a later click mints a new,
+  # empty tape. Said before it happens, because people will read it as
+  # data loss otherwise: it is, and it is deliberate.
+  defp leave_confirm(%{roster: "frozen"}, _members) do
+    "Leaving ends this conversation for both of you — it is archived, and " <>
+      "messaging them again starts a new, empty one. Continue?"
+  end
+
   defp leave_confirm(_athanor, members) do
     if last_active?(members),
       do: "You are the last member. Leaving archives this group. Continue?",
@@ -159,6 +227,9 @@ defmodule PrismWeb.MembersLive do
     do: Enum.count(members, &(&1[:status] == "active")) <= 1
 
   defp last_active?(_), do: false
+
+  defp frozen?(%{roster: "frozen"}), do: true
+  defp frozen?(_), do: false
 
   defp load(socket) do
     ctx = socket.assigns.context
@@ -199,7 +270,7 @@ defmodule PrismWeb.MembersLive do
             phx-click="leave"
             data-confirm={leave_confirm(@athanor, @members)}
           >
-            Leave group
+            {if frozen?(@athanor), do: "End conversation", else: "Leave group"}
           </.button>
         </:actions>
       </.page_header>
@@ -212,10 +283,17 @@ defmodule PrismWeb.MembersLive do
             {if @athanor, do: @athanor.name, else: "Athanor"}
           </h3>
           <p class="text-xs text-gray-500 mb-4">
-            <%= if @athanor && @athanor.kind == "person" do %>
-              Your own athanor. It has one member — you.
-            <% else %>
-              Every member is this group's admin: anyone here may add or remove anyone.
+            <%= cond do %>
+              <% @athanor && @athanor.kind == "person" -> %>
+                Your own athanor. It has one member — you.
+              <% @athanor && frozen?(@athanor) -> %>
+                A direct conversation — its two members were set when it opened, and
+                nobody else can join. To bring someone in, add them below: that starts
+                a new group with the three of you and leaves this one as it is.
+              <% true -> %>
+                Every member is this group's admin: anyone here may add or remove anyone.
+                You can only DM someone you already share an estate with — anyone on
+                this list qualifies.
             <% end %>
           </p>
 
@@ -234,7 +312,21 @@ defmodule PrismWeb.MembersLive do
             <:col :let={m} label="Actions">
               <div :if={@athanor && @athanor.kind == "group"} class="flex gap-2">
                 <.button
-                  :if={m[:status] == "active" && m[:user_id] != @context.user_id}
+                  :if={
+                    m[:status] == "active" && m[:user_id] != @context.user_id &&
+                      not frozen?(@athanor)
+                  }
+                  variant="ghost"
+                  phx-click="open_dm"
+                  phx-value-user-id={m[:user_id]}
+                >
+                  Message
+                </.button>
+                <.button
+                  :if={
+                    m[:status] == "active" && m[:user_id] != @context.user_id &&
+                      not frozen?(@athanor)
+                  }
                   variant="ghost"
                   phx-click="remove"
                   phx-value-user-id={m[:user_id]}
@@ -255,7 +347,7 @@ defmodule PrismWeb.MembersLive do
           </.table>
 
           <form
-            :if={@athanor && @athanor.kind == "group"}
+            :if={@athanor && @athanor.kind == "group" && not frozen?(@athanor)}
             phx-submit="add"
             phx-change="form_changed"
             class="mt-4 flex gap-2 items-end"
@@ -270,6 +362,26 @@ defmodule PrismWeb.MembersLive do
               />
             </div>
             <.button type="submit">Add member</.button>
+          </form>
+
+          <%!-- A DM's door is closed; growing the room is a different act.
+                The pair stands, nothing is copied. --%>
+          <form
+            :if={@athanor && frozen?(@athanor)}
+            phx-submit="add_third"
+            phx-change="form_changed"
+            class="mt-4 flex gap-2 items-end"
+          >
+            <div class="flex-1">
+              <.input
+                name="email"
+                value={@new_email}
+                type="email"
+                required
+                placeholder="someone@example.com"
+              />
+            </div>
+            <.button type="submit">Add someone — starts a new group</.button>
           </form>
         </.card>
 

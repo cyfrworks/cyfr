@@ -103,6 +103,26 @@ defmodule Sanctum.Tenancy.Users do
 
   def get(_), do: {:error, :not_found}
 
+  @doc """
+  How a person is named to other people: their display name, else their
+  email, else the raw id.
+
+  Here rather than beside a caller because it is a fact about the `users`
+  row, and it is now read by two domains that must not depend on each
+  other — the agent harness prefixing a group turn's lines, and tenancy
+  naming a pair estate after the two people in it.
+  """
+  @spec display_name(String.t() | nil) :: String.t()
+  def display_name(nil), do: "someone"
+
+  def display_name(user_id) when is_binary(user_id) do
+    case get(user_id) do
+      {:ok, %{display_name: name}} when is_binary(name) and name != "" -> name
+      {:ok, %{email: email}} when is_binary(email) and email != "" -> email
+      _ -> user_id
+    end
+  end
+
   @doc "Every identity that signed in with this (lowercased) email."
   @spec list_by_email(String.t()) :: [User.t()]
   def list_by_email(email) when is_binary(email) do

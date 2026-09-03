@@ -70,15 +70,21 @@ defmodule PrismWeb.ToolSeamTest do
     # in; `Compendium.MCP.Shared.namespace_bearer/2` reads it afterwards.
     {"apps/cyfr/lib/prism_web/controllers/claim_namespace_controller.ex",
      "Compendium.Registry.CredentialStore.put_push_token"},
-    # The conversation is the console's own surface: AQUA participates in a
-    # thread, it does not own the thread. There is deliberately no
-    # `conversation.*` tool — an agent posts by being addressed, not by
-    # creating threads on someone's behalf. (A `conversation.read` tool
-    # would put private chat history inside the agent-reachable surface,
-    # which is the opposite of what a private console is for —
-    # `PrismWeb.MCPHelpers` states the rule.)
+    # Chat IS on the wire now (`conversation.*`, external-plane and
+    # OIDC-only, so no agent and no API key reaches it) — and the console
+    # is a deliberate in-process client of the same domain functions
+    # rather than a caller of its own tool: the LiveView already holds an
+    # authenticated member context, and the registry gate exists for
+    # surfaces that do not. Same functions, two doors —
+    # `PrismWeb.MCPHelpers` states the rule.
     {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.ConversationStorage.create"},
     {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.ConversationStorage.delete"},
+    # Following is the person's own sidebar and notify roster — the rows
+    # the `conversation.follow`/`unfollow` verbs write for a headless
+    # client, written directly for the same reason as create/delete above.
+    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.TopicSubscriptionStorage.follow"},
+    {"apps/cyfr/lib/prism_web/live/conversation_live.ex",
+     "Arca.TopicSubscriptionStorage.unfollow"},
     # Withdrawing an approval the person was shown. The grant belongs to the
     # click that made it; the runner is told, not asked.
     {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Aqua.ConversationRunner.revoke_grant"},
@@ -101,7 +107,11 @@ defmodule PrismWeb.ToolSeamTest do
   # deliberately outside this seam: the gate exists for STATE CHANGES; a
   # read needs no consent walk and wrapping every one in MCPHelpers would
   # be indirection without a gate behind it.
-  @mutating_verb ~r/^(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|scan\w*|save\w*|destroy\w*|add_\w+|store\w*|discard\w*)$/
+  # `follow`/`unfollow` joined for the same reason as `scan`: they write
+  # rows and read as innocuous verbs, so they slipped past the roster.
+  # Exact names, not `follow\w*` — `followed`/`followers` are reads, and
+  # reads stay outside this seam.
+  @mutating_verb ~r/^(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|scan\w*|save\w*|destroy\w*|add_\w+|store\w*|discard\w*|follow|unfollow)$/
 
   # Any `Module.function(` call, whatever the module is called locally.
   @any_call ~r/\b([A-Z]\w*(?:\.[A-Z]\w+)*)\.([a-z_]\w*[!?]?)\(/

@@ -294,7 +294,7 @@ defmodule EmissaryWeb.WebhookController do
       # A webhook fires under its bound profile's consent — the binding is
       # enforced at create/update and by the NOT NULL column.
       run_result =
-        Cyfr.Execution.run_root(ctx, webhook.profile_id, webhook.target_ref, input,
+        Cyfr.Execution.run_root(ctx, {:id, webhook.profile_id}, webhook.target_ref, input,
           class: :background
         )
 

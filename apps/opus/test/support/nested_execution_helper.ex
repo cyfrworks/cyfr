@@ -61,7 +61,7 @@ defmodule Opus.Test.NestedExecution do
   Returns `{:ok, decoded_probe_output, raw_result}`.
   """
   def run_probe(ctx, input, opts \\ []) do
-    case Opus.run_root(ctx, nil, @probe_ref, input, opts) do
+    case Opus.run_root(ctx, :default, @probe_ref, input, opts) do
       {:ok, result} -> {:ok, decode(result.output), result}
       other -> other
     end

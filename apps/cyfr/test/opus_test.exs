@@ -100,7 +100,7 @@ defmodule OpusTest do
   end
 
   defp run_consented(ctx, input) do
-    Opus.run_root(ctx, nil, @test_ref, input, consent_source: Source.Memory)
+    Opus.run_root(ctx, :default, @test_ref, input, consent_source: Source.Memory)
   end
 
   describe "run_root/5" do
@@ -120,14 +120,14 @@ defmodule OpusTest do
 
     test "refuses an unconsented component instead of guessing", %{ctx: ctx} do
       assert {:error, :no_profile} =
-               Opus.run_root(ctx, nil, "reagent:local.nonexistent:0.1.0", %{},
+               Opus.run_root(ctx, :default, "reagent:local.nonexistent:0.1.0", %{},
                  consent_source: Source.Memory
                )
     end
 
     test "returns error for empty reference", %{ctx: ctx} do
       assert {:error, {:invalid_reference, _reason}} =
-               Opus.run_root(ctx, nil, "", %{}, consent_source: Source.Memory)
+               Opus.run_root(ctx, :default, "", %{}, consent_source: Source.Memory)
     end
   end
 

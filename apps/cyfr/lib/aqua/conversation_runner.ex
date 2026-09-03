@@ -24,15 +24,19 @@ defmodule Aqua.ConversationRunner do
 
   Every message is persisted and shown to every member as soon as it is
   sent — people talk to each other in the thread. Whether it also starts
-  an AQUA turn is *addressing*: in a person's own athanor every message
-  does; in a group only a message that `@`-mentions an orchestrator does,
-  unless the group's setting says AQUA answers everything
-  (`Sanctum.Tenancy.Athanors.answer_mode/1`). A turn's task is every human
-  message since the last turn — the ones that did not address AQUA
-  included, so the agent hears the whole exchange — each line prefixed
-  with the speaker's name in a group. One turn runs at a time; a message
-  that addresses AQUA while one runs is queued (bounded) and starts when
-  the running turn completes.
+  an AQUA turn is *addressing*, and it is derived rather than configured:
+  an estate with exactly one human addresses its agent with every message,
+  because there is nobody else the message could be for; any other estate
+  needs a mention, every time. There is no follow-up rule — a sticky agent
+  would leave you unable to speak to the people in the room without
+  starting a turn.
+
+  Nothing is dropped by that. A turn's task is every human message since
+  the last turn, the ones that did not address AQUA included, so the agent
+  hears the whole exchange and a bare follow-up reaches it on the next
+  mention. Lines are prefixed with the speaker's name when several people
+  are present. One turn runs at a time; a message that addresses AQUA
+  while one runs is queued (bounded) and starts when it completes.
 
   ## Broadcasts — `{:conversation, conversation_id, event}`
 
@@ -78,8 +82,11 @@ defmodule Aqua.ConversationRunner do
   # A turn's task is bounded — a long-quiet group can pile up chatter.
   @window_rows 50
   @window_bytes 60_000
-  # The athanor's orchestrator names are an MCP round trip; cached briefly.
-  @orchestrators_ttl_ms 60_000
+  # One human line, in BYTES — the SSOT for message size, sitting under the
+  # task window. The wire schema carries an advisory `maxLength` too, but
+  # that counts graphemes and the LiveView never passes through it; this
+  # check is what actually governs, for every sender.
+  @max_message_bytes 32 * 1024
 
   # Ceiling on the async turn start reporting back. Every fault inside the
   # task is converted to a `{:turn_start_result, ...}` message, so this
@@ -111,6 +118,11 @@ defmodule Aqua.ConversationRunner do
   @spec ensure(String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
   def ensure(conversation_id, athanor_id)
       when is_binary(conversation_id) and is_binary(athanor_id) do
+    # The Registry is keyed by conversation_id ALONE — the athanor_id here
+    # seeds init for a fresh runner, it does not scope the lookup. Tenant
+    # proof is the caller's: every public entry goes through a
+    # tenant-keyed `Conversations.get` first (`call/3`), and
+    # `turn_running?/2` re-checks the athanor on the answer.
     case Registry.lookup(Aqua.ConversationRegistry, conversation_id) do
       [{pid, _}] ->
         {:ok, pid}
@@ -203,8 +215,14 @@ defmodule Aqua.ConversationRunner do
   def send_message(%Context{} = ctx, conversation_id, text, opts \\ []) do
     # The orchestrator roster is an MCP call — resolved here, in the
     # caller, never inside the runner's handle_call, where one slow
-    # resolve would block every member's sends. The runner refreshes its
-    # cache from this value only when the cache is stale.
+    # resolve would block every member's sends.
+    #
+    # It belongs to THIS SENDER and is used for THIS message only. It used
+    # to seed a 60-second cache on the runner that every subsequent
+    # sender's mentions were then parsed against — so for up to a minute
+    # after Alice spoke, Bob's `@tom` resolved against Alice's roster.
+    # Harmless while every member shares one estate-wide roster; a
+    # cross-wiring the moment agents belong to people.
     opts = Keyword.put_new_lazy(opts, :orchestrators, fn -> AquaTurn.orchestrators(ctx) end)
     call(ctx, conversation_id, {:send, ctx, text, opts})
   end
@@ -303,15 +321,12 @@ defmodule Aqua.ConversationRunner do
     # send into a live one: a tab left open on a chat whose furnace closed
     # would otherwise start one on its next click.
     with {:ok, conv} <- Conversations.get(ctx, conversation_id),
-         {:ok, %{status: "active"} = athanor} <- Athanors.get(athanor_id) do
+         {:ok, %{status: "active"}} <- Athanors.get(athanor_id) do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor_id))
 
       state = %{
         id: conv.id,
         athanor_id: athanor_id,
-        # person | group — a person's athanor addresses AQUA with every message.
-        kind: athanor.kind,
-        answer_mode: Athanors.answer_mode(athanor),
         system_ctx: ctx,
         turn: Application.get_env(:cyfr, :aqua_turn, AquaTurn),
         # The context of the member whose turn is running.
@@ -331,6 +346,10 @@ defmodule Aqua.ConversationRunner do
         usage: %{input: 0, output: 0},
         grants: MapSet.new(),
         orchestrator: nil,
+        # The profile the running turn pinned. An approval decided during
+        # the turn roots THIS profile rather than re-selecting one; a
+        # recovered turn reads it back off its execution row.
+        profile_id: nil,
         tool_policy: %{},
         history: Conversations.history(conv),
         # System notes (approval outcomes) written while a turn runs — merged
@@ -342,17 +361,20 @@ defmodule Aqua.ConversationRunner do
         turn_seq: conv.turn_seq || 0,
         # Turns waiting behind the running one.
         queue: [],
-        # The athanor's orchestrator names, cached (mention detection).
-        orchestrators: [],
-        orchestrators_at: 0,
-        # Display names of members, cached for the group prefix.
+        # Display names of members, cached for the group prefix. Safe to
+        # cache: a name is the same whoever is asking, unlike a roster.
         names: %{},
         idle_ref: nil
       }
 
       state =
         if conv.execution_id do
-          send(self(), {:recover, conv.execution_id, conv.orchestrator, @recover_attempts})
+          send(
+            self(),
+            {:recover, conv.execution_id, {conv.orchestrator, conv.orchestrator_owner},
+             @recover_attempts}
+          )
+
           state
         else
           state
@@ -379,12 +401,16 @@ defmodule Aqua.ConversationRunner do
       text == "" and attachments == [] ->
         {:reply, {:error, :empty}, state}
 
+      byte_size(text) > @max_message_bytes ->
+        # Nothing is written; the sender keeps the draft. Rows, the PubSub
+        # fan-out to every viewer, and the stored history all ride on this
+        # bound once a sender can be a machine.
+        {:reply, {:error, :message_too_long}, state}
+
       (refusal = standing(ctx, state)) != :ok ->
         {:reply, refusal, state}
 
       true ->
-        state = refresh_orchestrators(state, opts)
-
         case addressing(state, ctx, text, opts) do
           {:error, reason} ->
             {:reply, {:error, reason}, state}
@@ -453,7 +479,7 @@ defmodule Aqua.ConversationRunner do
            Conversations.resolve_approval(ctx, message_id, "pending", "declined", %{
              resolution: %{"reason" => reason, "summary" => summary, "scope" => scope}
            }) do
-      if scope == :never, do: drop_from_policy(ctx, msg)
+      state = if scope == :never, do: deny_standing(state, ctx, msg), else: state
       approval_telemetry(state, ctx, msg, :declined, scope, reason)
       notify_resolved(state, msg)
       state = state |> append_history(system_text) |> broadcast({:message_updated, msg})
@@ -466,8 +492,33 @@ defmodule Aqua.ConversationRunner do
   def handle_call({:revoke_grant, ctx, tool, action}, _from, state) do
     case standing(ctx, state) do
       :ok ->
-        state = %{state | grants: MapSet.delete(state.grants, {tool, action})}
-        {:reply, :ok, broadcast(state, {:grants, state.grants})}
+        # Withdraw the row, not just this process's copy of it — a grant
+        # that survives a restart has to be revocable the same way. The
+        # agent-scope arm's foreign-agent refusal is discarded on purpose:
+        # for a borrowed agent the only row that can exist HERE is
+        # conversation-scope (writes narrow), and its agent-scope rows are
+        # revoked where they live — the owner's estate.
+        name = orchestrator_name(state.orchestrator)
+
+        state =
+          if is_binary(name) do
+            for scope <- ["conversation", "agent"] do
+              Aqua.ToolGrants.revoke(ctx, %{
+                scope: scope,
+                conversation_id: state.id,
+                agent_athanor_id: agent_owner(state),
+                agent_name: name,
+                tool: tool,
+                action: action
+              })
+            end
+
+            refresh_grants(state, ctx, name)
+          else
+            state
+          end
+
+        {:reply, :ok, state}
 
       refusal ->
         {:reply, refusal, state}
@@ -564,22 +615,47 @@ defmodule Aqua.ConversationRunner do
   defp attachment_payload(refs) when is_list(refs), do: %{"attachments" => refs}
 
   # What a message means for AQUA: `:post` (people talking), or a turn for
-  # an orchestrator. A person's athanor addresses AQUA with every message;
-  # a group only when the text mentions an orchestrator, unless the group
-  # answers everything.
+  # an orchestrator.
+  #
+  # An estate with exactly one human addresses its agent with every
+  # message — there is nobody else the message could be for. Any other
+  # estate requires a mention, every time. There is deliberately no
+  # "follow-up" rule that keeps addressing the last agent: once sticky, a
+  # person who said `@tom` could not say anything to the people in the room
+  # without starting a turn, and there is no un-mention. Nothing is lost by
+  # it — `task_of/2` carries every human line since the last turn, so a
+  # bare follow-up reaches the agent on the next mention.
+  #
+  # This used to read a stored `answer_mode` and the athanor's `kind`. Both
+  # are derivable, and `"all"` stopped meaning anything once an agent could
+  # belong to a person: whose agent answers every line?
   defp addressing(state, _ctx, text, opts) do
-    {_message, mentioned} = AquaTurn.parse_mention(text, state.orchestrators)
+    roster = Keyword.get(opts, :orchestrators, [])
+    {_message, mentioned} = AquaTurn.parse_mention(text, roster)
 
-    addressed? = state.kind == "person" or state.answer_mode == "all" or not is_nil(mentioned)
-
-    if addressed? do
-      case pick_orchestrator(state, mentioned, opts) do
+    if solo_human?(state) or not is_nil(mentioned) do
+      case pick_orchestrator(state, roster, mentioned, opts) do
         {:ok, orchestrator} -> {:turn, orchestrator}
         {:error, reason} -> {:error, reason}
       end
     else
       :post
     end
+  end
+
+  defp solo_human?(state), do: Members.solo?(state.athanor_id)
+
+  # Several people speak here, so the task prefixes each line with a name
+  # and the prompt says so. The same derivation as `solo_human?/1` —
+  # "whose message is this?" and "does the agent need to be told who is
+  # talking?" are one fact, and they used to be two stored ones.
+  defp multi_author?(rows) do
+    rows |> Enum.map(& &1.author) |> Enum.uniq() |> length() > 1
+  end
+
+  defp attributed(acc, row, text) do
+    {name, acc} = name_of(acc, row.author)
+    {"#{name}: #{text}", acc}
   end
 
   defp after_persist(state, _ctx, _row, :post, _opts), do: touch(state)
@@ -590,7 +666,11 @@ defmodule Aqua.ConversationRunner do
       orchestrator: orchestrator,
       seq: row.seq,
       message_id: row.id,
-      model: Keyword.get(opts, :model)
+      model: Keyword.get(opts, :model),
+      # This sender's roster, carried with the message it belongs to. A
+      # queued turn may start long after the send, and it must still strip
+      # the mention against the roster of whoever wrote that line.
+      roster: Keyword.get(opts, :orchestrators, [])
     }
 
     if state.running do
@@ -662,19 +742,22 @@ defmodule Aqua.ConversationRunner do
     # re-reads messages a finished turn already consumed.
     seq = max(seq, state.turn_seq || 0)
     rows = window_rows(state, seq)
-    {task, state} = task_of(state, rows)
+    {task, state} = task_of(state, rows, seq, entry.roster)
     turn_attachments = Attachments.attachments_of(rows)
     conv_id = state.id
 
     Conversations.update(state.system_ctx, state.id, %{
       turn_seq: seq,
-      orchestrator: orchestrator_name(orchestrator)
+      orchestrator: orchestrator_name(orchestrator),
+      # The owner rides along so a restart resolves the same agent from the
+      # same tree — a bare name would re-read out of the estate in focus.
+      orchestrator_owner: orchestrator_owner_of(orchestrator)
     })
 
     ref = make_ref()
     runner = self()
     history = state.history
-    group? = state.kind == "group"
+    group? = not solo_human?(state)
     turn = state.turn
 
     spawned =
@@ -684,23 +767,63 @@ defmodule Aqua.ConversationRunner do
             # A name-only pick resolves its run-time detail here, in the
             # task — the MCP call this costs must never run inside the
             # runner's handle_call.
-            with %{} = orchestrator <- resolve_orchestrator(ctx, orchestrator) do
+            # Pin, compose, run. The profile is resolved FIRST because both
+            # of the other two need it: the run must name it rather than
+            # re-select, and (once the composer takes an authority) the
+            # prompt must describe what this authority actually grants.
+            with %{} = orchestrator <- resolve_orchestrator(ctx, orchestrator),
+                 {:ok, authority} <- turn.pin_profile(ctx) do
               attachments = Attachments.load(ctx, conv_id, turn_attachments)
 
-              %{input: input, tool_policy: policy} =
+              # The owner comes off THIS turn's resolved agent, never off
+              # runner state: the previous turn may have run a different
+              # agent, and a first turn has no previous at all — either
+              # would key the grants below (and the prompt's owner) to the
+              # wrong estate. The `||` repeats `Turn.orchestrator/3`'s own
+              # ownerless default.
+              agent_owner_id = orchestrator["owner"] || ctx.athanor_id
+
+              # Declared policy is the agent's markdown; the standing
+              # answers a person already gave are rows. The turn runs on
+              # the composition, so a "never" from three weeks ago is not
+              # re-offered as a card and a restart does not forget a
+              # "for this conversation".
+              grants =
+                Aqua.ToolGrants.for_conversation(
+                  ctx,
+                  conv_id,
+                  agent_owner_id,
+                  orchestrator["name"]
+                )
+
+              orchestrator =
+                Map.put(
+                  orchestrator,
+                  "tool_policy",
+                  Aqua.ToolGrants.resolve(orchestrator["tool_policy"] || %{}, grants)
+                )
+
+              build =
                 AquaTurn.build_input(ctx, orchestrator, task,
                   history: history,
                   attachments: attachments,
                   model: entry.model,
-                  group: group?
+                  group: group?,
+                  # The prompt describes what THIS authority grants, so it
+                  # has to be composed after the pin, not before it.
+                  authority: authority,
+                  owner: agent_owner_id,
+                  focus: ctx.athanor_id
                 )
 
-              case turn.start(ctx, input) do
-                {:ok, eid} -> {:ok, eid, policy, orchestrator}
-                {:error, reason} -> {:error, reason}
+              with {:ok, %{input: input, tool_policy: policy}} <- build,
+                   {:ok, eid} <- turn.start(ctx, input, authority.profile_id) do
+                {:ok, eid, policy, orchestrator, authority.profile_id,
+                 Aqua.ToolGrants.allowed_keys(grants)}
               end
             else
               nil -> {:error, :no_orchestrator}
+              {:error, reason} -> {:error, reason}
             end
           rescue
             e -> {:error, Exception.message(e)}
@@ -779,17 +902,33 @@ defmodule Aqua.ConversationRunner do
     |> elem(0)
   end
 
-  defp task_of(state, rows) do
+  # The turn's task: every human line since the last cursor.
+  #
+  # Only the TRIGGERING line has its mention stripped, and only against the
+  # roster of the person who wrote it. Its `@tom` is routing metadata that
+  # `addressing/4` already consumed; everyone else's is content, and the
+  # model should see who Bob was addressing. Stripping the whole window
+  # against one sender's roster would delete Bob's `@tom` because Alice
+  # happens to have a Tom.
+  defp task_of(state, rows, trigger_seq, roster) do
+    # Attribute when this task carries more than one voice, or when there
+    # is more than one person here to carry a second. Reading the ROWS and
+    # not just the roster matters: a member can leave between writing a
+    # line and the turn that consumes it, and their words still need a
+    # name on them.
+    attribute? = multi_author?(rows) or not solo_human?(state)
+
     {lines, state} =
       Enum.map_reduce(rows, state, fn row, acc ->
-        {text, _mention} = AquaTurn.parse_mention(row.content || "", acc.orchestrators)
+        text =
+          if row.seq == trigger_seq do
+            {stripped, _mention} = AquaTurn.parse_mention(row.content || "", roster)
+            stripped
+          else
+            row.content || ""
+          end
 
-        if acc.kind == "group" do
-          {name, acc} = name_of(acc, row.author)
-          {"#{name}: #{text}", acc}
-        else
-          {text, acc}
-        end
+        if attribute?, do: attributed(acc, row, text), else: {text, acc}
       end)
 
     {Enum.join(lines, "\n"), state}
@@ -807,58 +946,77 @@ defmodule Aqua.ConversationRunner do
   end
 
   # `@name` in the text wins, then an explicit option, then the
-  # orchestrator of the previous turn, then the athanor's first. Only the
-  # NAME is decided here (against the cached roster — no network in
+  # orchestrator of the previous turn, then the athanor's first (the roster
+  # sorts estate entries ahead, so "first" is the estate's). Only the NAME
+  # is decided here (against the cached roster — no network in
   # handle_call); the run-time detail resolves inside the turn-start task.
-  defp pick_orchestrator(state, mentioned, opts) do
-    name =
-      mentioned || Keyword.get(opts, :orchestrator) ||
-        (state.orchestrator && state.orchestrator["name"]) ||
-        (List.first(state.orchestrators) || %{})["name"]
+  # `roster` is THIS sender's, resolved for this message. The fallback to
+  # the turn's last orchestrator is a name-resolution convenience once a
+  # message is already addressed — it never decides that a bare line IS
+  # addressed, which is `addressing/4`'s job alone.
+  #
+  # A pick carries the OWNER as well as the name: an agent belongs to the
+  # tree it lives in, and the turn has to read it back from that tree
+  # rather than from whichever estate happens to be in focus.
+  defp pick_orchestrator(state, roster, mentioned, opts) do
+    picked =
+      cond do
+        is_map(mentioned) -> mentioned
+        entry = entry_named(roster, Keyword.get(opts, :orchestrator)) -> entry
+        state.orchestrator -> state.orchestrator
+        true -> List.first(roster)
+      end
 
     cond do
-      is_nil(name) ->
+      is_nil(picked) ->
         {:error, :no_orchestrator}
 
-      state.orchestrator && state.orchestrator["name"] == name && is_nil(mentioned) &&
+      state.orchestrator && same_agent?(state.orchestrator, picked) && is_nil(mentioned) &&
           is_nil(Keyword.get(opts, :orchestrator)) ->
         {:ok, state.orchestrator}
 
       true ->
-        # Name only; the turn-start task resolves (and thereby validates)
-        # the detail — an unknown name fails the turn there rather than
-        # holding the send hostage to a 60s roster cache.
-        {:ok, {:by_name, name}}
+        # Name and owner only; the turn-start task resolves (and thereby
+        # validates) the detail — an unknown name fails the turn there
+        # rather than holding the send hostage to a catalog read.
+        {:ok, {:by_name, picked["name"], picked["owner"]}}
     end
   end
 
-  defp orchestrator_name({:by_name, name}), do: name
+  # The explicit option: a roster entry (the picker hands the whole map,
+  # owner included), or a bare name for older callers — matched with the
+  # ESTATE winning a collision, the same rule a bare mention follows. An
+  # unknown name still picks, ownerless; the turn-start task is where it
+  # fails.
+  defp entry_named(_roster, nil), do: nil
+  defp entry_named(_roster, %{"name" => _} = entry), do: entry
+
+  defp entry_named(roster, name) when is_binary(name) do
+    Enum.find(roster, &(&1["name"] == name and &1["estate?"])) ||
+      Enum.find(roster, &(&1["name"] == name)) ||
+      %{"name" => name}
+  end
+
+  defp same_agent?(a, b), do: a["name"] == b["name"] and a["owner"] == b["owner"]
+
+  defp orchestrator_name({:by_name, name, _owner}), do: name
   defp orchestrator_name(%{} = orchestrator), do: orchestrator["name"]
 
+  defp orchestrator_owner_of({:by_name, _name, owner}), do: owner
+  defp orchestrator_owner_of(%{} = orchestrator), do: orchestrator["owner"]
+
   defp resolve_orchestrator(_ctx, %{} = orchestrator), do: orchestrator
-  defp resolve_orchestrator(ctx, {:by_name, name}), do: AquaTurn.orchestrator(ctx, name)
+
+  defp resolve_orchestrator(ctx, {:by_name, name, owner}),
+    do: AquaTurn.orchestrator(ctx, name, owner)
 
   # Until the task reports the resolved detail, the previous turn's
   # orchestrator stands in for display; a full map replaces it at once.
   defp resolved_or_previous(%{} = orchestrator, _previous), do: orchestrator
-  defp resolved_or_previous({:by_name, _}, previous), do: previous
+  defp resolved_or_previous({:by_name, _, _}, previous), do: previous
 
   defp pre_policy(%{} = orchestrator), do: orchestrator["tool_policy"] || %{}
-  defp pre_policy({:by_name, _}), do: %{}
-
-  # The athanor's orchestrator names, prefetched by the sender (an MCP
-  # call, kept out of this process); adopted only when the cache is stale.
-  defp refresh_orchestrators(state, opts) do
-    now = System.monotonic_time(:millisecond)
-    roster = Keyword.get(opts, :orchestrators)
-
-    if is_list(roster) and
-         (state.orchestrators == [] or now - state.orchestrators_at > @orchestrators_ttl_ms) do
-      %{state | orchestrators: roster, orchestrators_at: now}
-    else
-      state
-    end
-  end
+  defp pre_policy({:by_name, _, _}), do: %{}
 
   # ---------------------------------------------------------------------------
   # Turn events
@@ -869,8 +1027,16 @@ defmodule Aqua.ConversationRunner do
     state = %{state | starting: nil}
 
     case result do
-      {:ok, eid, policy, orchestrator} ->
-        state = %{state | execution_id: eid, tool_policy: policy, orchestrator: orchestrator}
+      {:ok, eid, policy, orchestrator, profile_id, grants} ->
+        state = %{
+          state
+          | execution_id: eid,
+            tool_policy: policy,
+            orchestrator: orchestrator,
+            profile_id: profile_id,
+            grants: grants
+        }
+
         Conversations.update(state.system_ctx, state.id, %{execution_id: eid})
 
         if state.cancel_requested do
@@ -892,6 +1058,17 @@ defmodule Aqua.ConversationRunner do
 
           {:noreply, state}
         end
+
+      # The catalyst refusal gets its own sentence: "this estate has no
+      # such model" is actionable, where the generic render of the tuple
+      # is not. Deliberately fail-closed — see `Aqua.Turn.build_input/4`.
+      {:error, {:catalyst_not_in_estate, ref}} ->
+        {:noreply,
+         fail_turn(
+           state,
+           "The agent's model#{ref_note(ref)} is not installed in this estate — " <>
+             "install its catalyst here, or address another agent."
+         )}
 
       {:error, reason} ->
         safe = Aqua.MCPHelpers.render_refusal(reason)
@@ -945,12 +1122,12 @@ defmodule Aqua.ConversationRunner do
     {:noreply, complete_approval(state, ctx, message_id, outcome, payload)}
   end
 
-  def handle_info({:recover, execution_id, orchestrator_name, attempts}, state) do
-    {:noreply, recover(state, execution_id, orchestrator_name, attempts)}
+  def handle_info({:recover, execution_id, {_name, _owner} = orchestrator_ref, attempts}, state) do
+    {:noreply, recover(state, execution_id, orchestrator_ref, attempts)}
   end
 
-  # The athanor changed (a rename, a settings patch such as the answer
-  # mode, an archive): re-read what the runner keeps of it. An archive ends
+  # The athanor changed (a rename, a settings patch, an archive): re-read
+  # what the runner keeps of it. An archive ends
   # the runner — the turn is interrupted and recorded, the queue dropped —
   # so an already-open chat cannot keep running turns in a closed furnace.
   # Every other notify on the athanor's topic — approvals, executions,
@@ -965,8 +1142,8 @@ defmodule Aqua.ConversationRunner do
 
         {:stop, :normal, state}
 
-      {:ok, athanor} ->
-        {:noreply, %{state | answer_mode: Athanors.answer_mode(athanor), orchestrators_at: 0}}
+      {:ok, _athanor} ->
+        {:noreply, state}
 
       _ ->
         {:noreply, state}
@@ -988,6 +1165,9 @@ defmodule Aqua.ConversationRunner do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
+
+  defp ref_note(ref) when is_binary(ref) and ref != "", do: " (#{ref})"
+  defp ref_note(_), do: ""
 
   # One gate for every execution event, live or replayed: a finished turn
   # takes no more events, and an event delivered twice (buffered AND live)
@@ -1430,16 +1610,29 @@ defmodule Aqua.ConversationRunner do
         # is the outcome.
         complete_approval(state, ctx, msg.id, :approved, %{result: %{status: "ok"}})
 
+      %{} when not is_binary(state.profile_id) ->
+        # No pin means the turn's authority is unknown — a runner that
+        # recovered an execution written before the column, or a row the
+        # read could not reach. Refuse: rooting a freshly-selected profile
+        # here is exactly the substitution the pin exists to prevent.
+        complete_approval(state, ctx, msg.id, :error, %{
+          reason: "the turn's profile is unknown — send the message again"
+        })
+
       %{} ->
         runner = self()
         id = msg.id
         turn = state.turn
+        # The turn's own profile, not a fresh selection: a human decision
+        # unblocks a call, it never chooses the authority the call runs
+        # under.
+        profile_id = state.profile_id
 
         spawned =
           start_task(fn ->
             result =
               try do
-                turn.run_approved(proposal, ctx)
+                turn.run_approved(proposal, ctx, profile_id)
               rescue
                 e -> {:error, Exception.message(e)}
               catch
@@ -1477,11 +1670,8 @@ defmodule Aqua.ConversationRunner do
     end
   end
 
-  # `:always` writes "auto" into the athanor's SHARED agent allowlist —
-  # every member's future runs stop asking — and `:conversation` grants the
-  # pair for the rest of a long-lived, multi-member chat (the fast path in
-  # `complete_turn/1` auto-runs a matching proposal with no second
-  # confirmation). Both are standing grants, so both are refused for
+  # `:conversation` and `:always` are both STANDING grants — they answer
+  # for calls nobody has seen yet — so both are refused for
   # destructive/external actions; only `:once` may approve those. The card
   # hides these buttons, but the card is a client; the rule is decided
   # here, on the kind the intent already carries.
@@ -1497,45 +1687,111 @@ defmodule Aqua.ConversationRunner do
 
   defp scope_permitted(_msg, _scope), do: :ok
 
-  # `:conversation` remembers the pair for the rest of this chat; `:always`
-  # also writes `"auto"` for it into the athanor's agent allowlist.
+  # A standing approval is a row now, not a `MapSet` that a restart
+  # discards and not an edit to the agent's authored markdown.
+  # `:conversation` reaches this thread, `:always` every thread the agent
+  # runs in — and `Aqua.ToolGrants` refuses the latter for an agent this
+  # estate does not own.
   defp apply_scope(state, ctx, msg, %{tool: tool, action: action}, scope)
        when scope in [:conversation, :always] do
-    grants = MapSet.put(state.grants, {tool, action})
-    state = %{state | grants: grants} |> broadcast({:grants, grants})
-
-    if scope == :always do
-      case approval_orchestrator(msg) do
-        nil ->
-          :ok
-
-        name ->
-          case Aqua.AgentConfig.set_tool_auto(ctx, name, "#{tool}.#{action}") do
-            :ok ->
-              :ok
-
-            {:error, reason} ->
-              Logger.warning(
-                "[Aqua.ConversationRunner] could not persist always for #{tool}.#{action}: " <>
-                  inspect(reason)
-              )
-          end
-      end
-    end
-
-    state
+    write_grant(state, ctx, msg, {tool, action}, grant_scope(scope), "allow")
   end
 
   defp apply_scope(state, _ctx, _msg, _proposal, _scope), do: state
 
-  # Decline "never": the proposed action leaves the agent's allowlist.
-  defp drop_from_policy(ctx, msg) do
-    with %{tool: tool, action: action} <- proposal_of(approval_intent(msg)),
-         name when is_binary(name) <- approval_orchestrator(msg) do
-      Aqua.AgentConfig.drop_tool(ctx, name, "#{tool}.#{action}")
-    end
+  # Decline "never": a standing DENY, which the resolver drops from the
+  # policy outright. It used to delete the key from the agent's markdown —
+  # the same file the agents page edits, so a decline in a chat quietly
+  # rewrote the agent's definition for everyone.
+  defp deny_standing(state, ctx, msg) do
+    case proposal_of(approval_intent(msg)) do
+      %{tool: tool, action: action} ->
+        write_grant(state, ctx, msg, {tool, action}, "agent", "deny")
 
-    :ok
+      _ ->
+        state
+    end
+  end
+
+  defp grant_scope(:conversation), do: "conversation"
+  defp grant_scope(:always), do: "agent"
+
+  # One write path for both effects: resolve the agent, record the row,
+  # then re-read the conversation's standing grants so the runner's fast
+  # path and the chat's display come from the store rather than a
+  # separately-maintained set. An agent-scope answer for a borrowed agent
+  # comes back NARROWED to this conversation — recorded, and said out loud
+  # in the thread, never a silent no-op the person mistakes for a standing
+  # answer.
+  defp write_grant(state, ctx, msg, {tool, action}, scope, effect) do
+    case approval_orchestrator(msg) do
+      name when is_binary(name) ->
+        attrs = %{
+          scope: scope,
+          effect: effect,
+          conversation_id: state.id,
+          agent_athanor_id: agent_owner(state),
+          agent_name: name,
+          tool: tool,
+          action: action
+        }
+
+        case Aqua.ToolGrants.put(ctx, attrs) do
+          {:ok, %{narrowed?: true}} ->
+            state
+            |> append_and_broadcast(%{
+              author: "system",
+              kind: "system",
+              content: narrowed_note(effect, name)
+            })
+            |> refresh_grants(ctx, name)
+
+          {:ok, _} ->
+            refresh_grants(state, ctx, name)
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Aqua.ConversationRunner] could not record #{effect} for #{tool}.#{action}: " <>
+                inspect(reason)
+            )
+
+            state
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp narrowed_note("allow", name),
+    do:
+      "\"Always\" was recorded for this conversation only — #{name} belongs to " <>
+        "another estate, so a standing answer made here cannot follow it home."
+
+  defp narrowed_note("deny", name),
+    do:
+      "\"Never\" was recorded for this conversation only — #{name} belongs to " <>
+        "another estate, so a standing answer made here cannot follow it home."
+
+  # Which estate owns the agent this turn is running. A personal crew
+  # member belongs to its person's tree even while working in a group, and
+  # a grant recorded against it has to name that tree — otherwise "always
+  # for Tom" would be filed under whichever estate Tom happened to be in.
+  # Valid only once `state.orchestrator` is THIS turn's resolved map (the
+  # write paths, which run after `{:turn_start_result}` installs it) —
+  # turn start and recovery read the owner off their own resolved agent
+  # instead, because here the previous turn's would answer.
+  defp agent_owner(state) do
+    (state.orchestrator && state.orchestrator["owner"]) || state.athanor_id
+  end
+
+  defp refresh_grants(state, ctx, agent_name) do
+    grants =
+      ctx
+      |> Aqua.ToolGrants.for_conversation(state.id, agent_owner(state), agent_name)
+      |> Aqua.ToolGrants.allowed_keys()
+
+    %{state | grants: grants} |> broadcast({:grants, grants})
   end
 
   defp complete_approval(state, ctx, message_id, outcome, payload) do
@@ -1653,7 +1909,10 @@ defmodule Aqua.ConversationRunner do
   # up yet, wait for it; if the execution is still running, follow it again
   # (its buffered events replay through the same handlers); if it finished
   # meanwhile, close the turn off with what the buffer still holds.
-  defp recover(state, execution_id, orchestrator_name, attempts) do
+  # `orchestrator_ref` is `{name, owner}` off the conversation row — the
+  # owner is what keeps a restart from resolving a personal agent's name
+  # out of the estate's tree.
+  defp recover(state, execution_id, {orchestrator_name, orchestrator_owner} = ref, attempts) do
     ctx = state.system_ctx
     turn = state.turn
 
@@ -1664,7 +1923,7 @@ defmodule Aqua.ConversationRunner do
       not turn.engine_available?() and attempts > 0 ->
         Process.send_after(
           self(),
-          {:recover, execution_id, orchestrator_name, attempts - 1},
+          {:recover, execution_id, ref, attempts - 1},
           @recover_retry_ms
         )
 
@@ -1686,7 +1945,33 @@ defmodule Aqua.ConversationRunner do
         # instead of an empty allowlist that would drop them all.
         orchestrator =
           state.orchestrator ||
-            (orchestrator_name && AquaTurn.orchestrator(ctx, orchestrator_name))
+            (orchestrator_name &&
+               AquaTurn.orchestrator(ctx, orchestrator_name, orchestrator_owner))
+
+        # Standing grants are rows, so a recovered turn reads them back
+        # rather than resuming with an empty set — the whole point of
+        # moving them out of process memory. Keyed by the RESOLVED agent's
+        # owner (a borrowed agent's rows live in its own estate), and
+        # composed into the policy exactly as `start_turn/2` composes it:
+        # a recovered completion must not treat a denied pair as callable
+        # again just because the runner restarted.
+        {grants, tool_policy} =
+          case orchestrator do
+            %{"name" => name} = resolved when is_binary(name) ->
+              rows =
+                Aqua.ToolGrants.for_conversation(
+                  ctx,
+                  state.id,
+                  resolved["owner"] || state.athanor_id,
+                  name
+                )
+
+              {Aqua.ToolGrants.allowed_keys(rows),
+               Aqua.ToolGrants.resolve(resolved["tool_policy"] || %{}, rows)}
+
+            _ ->
+              {state.grants, %{}}
+          end
 
         state = %{
           state
@@ -1695,7 +1980,13 @@ defmodule Aqua.ConversationRunner do
             last_event_seq: -1,
             turn_ctx: ctx,
             orchestrator: orchestrator,
-            tool_policy: (orchestrator || %{})["tool_policy"] || %{}
+            grants: grants,
+            tool_policy: tool_policy,
+            # The pin is on the execution row precisely so a turn that
+            # outlived its runner can still answer "under which consent?".
+            # An approval decided after a restart roots the same profile
+            # the turn did, not whatever a fresh selection would pick.
+            profile_id: state.profile_id || pinned_profile(ctx, execution_id)
         }
 
         state = replay(state, events)
@@ -1712,6 +2003,17 @@ defmodule Aqua.ConversationRunner do
             turn.unsubscribe(execution_id, ctx)
             interrupted(state, execution_id, "the server restarted")
         end
+    end
+  end
+
+  # The profile a running execution rooted under, off its own row. Nil when
+  # the read fails or the row predates the column: `run_approval/4` then
+  # refuses the approval rather than rooting a re-selected authority, which
+  # is the whole point of pinning.
+  defp pinned_profile(ctx, execution_id) do
+    case Cyfr.Execution.get(ctx, execution_id) do
+      {:ok, %{profile_id: id}} when is_binary(id) -> id
+      _ -> nil
     end
   end
 
@@ -1764,8 +2066,8 @@ defmodule Aqua.ConversationRunner do
       orchestrator: state.orchestrator,
       turn_user: turn_user(state),
       queued: length(state.queue),
-      kind: state.kind,
-      answer_mode: state.answer_mode
+      # Derived, not stored: whether this estate needs a mention.
+      solo_human: solo_human?(state)
     }
   end
 

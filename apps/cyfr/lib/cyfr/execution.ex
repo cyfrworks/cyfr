@@ -14,15 +14,16 @@ defmodule Cyfr.Execution do
   translation; a worker split changes the implementation, not the callers.
   """
 
+  alias Sanctum.Authority.RootSelect
   alias Sanctum.Context
 
   @type impl :: module()
 
-  @callback run_root(Context.t(), term(), String.t(), map(), keyword()) ::
+  @callback run_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
               {:ok, map()} | {:error, term()}
   @callback run_root_edge(Context.t(), String.t(), String.t(), map(), keyword()) ::
               {:ok, map()} | {:error, term()}
-  @callback authority_for(Context.t(), term(), String.t(), keyword()) ::
+  @callback authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
               {:ok, term()} | {:error, term()}
   # The second argument is anything carrying an `:athanor_id` — a
   # `Sanctum.Context` OR the execution record itself, which is the natural
@@ -64,7 +65,7 @@ defmodule Cyfr.Execution do
     end
   end
 
-  @spec run_root(Context.t(), term(), String.t(), map(), keyword()) ::
+  @spec run_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_root(ctx, profile_selector, reference, input, opts \\ []),
     do: call(:run_root, [ctx, profile_selector, reference, input, opts])
@@ -74,7 +75,7 @@ defmodule Cyfr.Execution do
   def run_root_edge(ctx, source_ref, reference, input, opts \\ []),
     do: call(:run_root_edge, [ctx, source_ref, reference, input, opts])
 
-  @spec authority_for(Context.t(), term(), String.t(), keyword()) ::
+  @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def authority_for(ctx, profile_selector, reference, opts \\ []),
     do: call(:authority_for, [ctx, profile_selector, reference, opts])

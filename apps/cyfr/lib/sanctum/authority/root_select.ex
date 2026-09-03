@@ -15,7 +15,34 @@ defmodule Sanctum.Authority.RootSelect do
       credentials the caller happens to present — a valid owner cookie on
       a public URL must not upgrade the request. Authentication is only a
       precondition of protected routes.
+
+  ## The selector vocabulary
+
+  This module owns `t:selector/0` — the one spelling of "which profile".
+  It used to be `String.t() | nil`, where `nil` meant "the single active
+  owner". That default was invisible at every call site, and it is only
+  ever *correct* while a source ref has exactly one owner profile: the
+  active-identity index is `(athanor_id, source_ref, label, kind)`, so a
+  second owner label already turns the default into `{:ambiguous, _}`.
+  Naming it `:default` makes the intent greppable and refusable where a
+  caller must pin instead.
+
+  `{:id, _}` and `{:label, _}` are strict — a stored id matches an id and
+  nothing else. `decode/1` is the one place a caller-supplied string
+  becomes one of them, by the `prof_` prefix; `valid_label?/1` is what
+  keeps that decode total, and the profile surfaces hold labels to it.
   """
+
+  @id_prefix "prof_"
+
+  @typedoc """
+  Which profile roots an execution.
+
+    * `:default` — the single active owner profile, or a refusal
+    * `{:id, id}` — that exact profile id
+    * `{:label, label}` — that exact label, among the candidates given
+  """
+  @type selector :: :default | {:id, String.t()} | {:label, String.t()}
 
   @type status :: :active | :needs_consent | :revoked
 
@@ -34,15 +61,54 @@ defmodule Sanctum.Authority.RootSelect do
           | {:profile_unavailable, :needs_consent | :revoked}
 
   @doc """
-  Select the root profile: by explicit selector (profile id or label), or —
-  with no selector — the single active owner profile.
+  Whether `value` is a profile id rather than a label.
+
+  Discriminating by prefix is sound because `valid_label?/1` refuses a
+  label that would look like one — the same trick, and the same
+  obligation, as `Sanctum.Tenancy.Athanors.athanor_id?/1`.
+  """
+  @spec profile_id?(term()) :: boolean()
+  def profile_id?(value), do: is_binary(value) and String.starts_with?(value, @id_prefix)
+
+  @doc """
+  Whether `label` may be stored as a profile label.
+
+  Refuses the empty string and anything id-shaped. A label free to be
+  `"prof_x"` would make `decode/1` a guess, and the profile surfaces would
+  have no way to tell an operator which of the two they had named.
+  """
+  @spec valid_label?(term()) :: boolean()
+  def valid_label?(label),
+    do: is_binary(label) and label != "" and not String.starts_with?(label, @id_prefix)
+
+  @doc """
+  A caller-supplied string as a selector: id-shaped becomes `{:id, _}`,
+  everything else `{:label, _}`. Blank and non-binary become `:default`.
+
+  The one decode: wire surfaces take a single "profile" string because a
+  person naming their grant should not have to know which of the two they
+  are holding.
+  """
+  @spec decode(term()) :: selector()
+  def decode(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> :default
+      trimmed -> if profile_id?(trimmed), do: {:id, trimmed}, else: {:label, trimmed}
+    end
+  end
+
+  def decode(_), do: :default
+
+  @doc """
+  Select the root profile: by explicit id or label, or — with `:default` —
+  the single active owner profile.
 
   An inactive match is reported as unavailable, never silently skipped in
   favor of another profile.
   """
-  @spec select([profile_summary()], String.t() | nil) ::
+  @spec select([profile_summary()], selector()) ::
           {:ok, profile_summary()} | {:error, select_error()}
-  def select(candidates, nil) when is_list(candidates) do
+  def select(candidates, :default) when is_list(candidates) do
     owners = Enum.filter(candidates, &(&1.kind == :owner))
 
     case Enum.filter(owners, &(&1.status == :active)) do
@@ -52,9 +118,10 @@ defmodule Sanctum.Authority.RootSelect do
     end
   end
 
-  def select(candidates, selector) when is_list(candidates) and is_binary(selector) do
-    case Enum.filter(candidates, &(&1.id == selector or &1.label == selector)) do
-      [] -> {:error, {:not_found, selector}}
+  def select(candidates, {field, value})
+      when is_list(candidates) and field in [:id, :label] and is_binary(value) do
+    case Enum.filter(candidates, &(Map.fetch!(&1, field) == value)) do
+      [] -> {:error, {:not_found, value}}
       [%{status: :active} = one] -> {:ok, one}
       [%{status: status}] -> {:error, {:profile_unavailable, status}}
       many -> {:error, {:ambiguous, ids(many)}}
@@ -83,7 +150,7 @@ defmodule Sanctum.Authority.RootSelect do
   end
 
   def select_for_route(candidates, :protected, true) when is_list(candidates) do
-    select(candidates, nil)
+    select(candidates, :default)
   end
 
   def select_for_route(candidates, :protected, false) when is_list(candidates) do

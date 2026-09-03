@@ -25,6 +25,7 @@ defmodule Sanctum.MCPDispatchContractTest do
       "list",
       "get",
       "create",
+      "pair",
       "rename",
       "archive",
       "unarchive",

@@ -83,17 +83,22 @@ defmodule Sanctum.ProvisioningTest do
     user
   end
 
-  test "a group is provisioned when created: seeded, registered, consented, marked",
+  test "a group is filled at first need: seeded, registered, consented, marked",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
 
+    # The mint is a row and a seat — no registry round trip, so opening a
+    # chat with someone cannot fail on the network.
     assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Provisioned #{n}")
-    assert group.provisioned_at
+    refute group.provisioned_at
     assert Members.member?(ctx.user_id, group.id)
 
     in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.ensure_provisioned(in_group)
+    {:ok, group} = Athanors.get(group.id)
+    assert group.provisioned_at
     {:ok, [row]} = Arca.ComponentStorage.list_components(in_group, publisher: "local")
     assert row.name == "foo"
 
@@ -147,6 +152,7 @@ defmodule Sanctum.ProvisioningTest do
 
     {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Sync #{n}")
     in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.ensure_provisioned(in_group)
 
     # A member edited foo and reverted the edit by hand — a materialized,
     # byte-identical copy that costs quota and no longer tracks releases.
@@ -204,16 +210,18 @@ defmodule Sanctum.ProvisioningTest do
 
     on_exit(fn -> :telemetry.detach(handler) end)
 
-    # The row is answered even so — the group exists; the failure rides on it.
+    # The mint answers a bare row; the failure surfaces at first need.
     assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Unpullable #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.ensure_provisioned(in_group)
 
     assert_receive {:failed, %{step: :closure, athanor_id: id}}
     assert id == group.id
+    {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at == nil
     assert Athanors.settings(group)["provisioning_error"]["step"] == "closure"
 
     # the seed itself landed; only the closure is missing, and a retry says so again
-    in_group = %{ctx | athanor_id: group.id}
     {:ok, [_row]} = Arca.ComponentStorage.list_components(in_group, publisher: "local")
     assert {:error, {:provisioning_failed, :closure, _}} = Provisioning.provision(group, in_group)
   end
@@ -223,6 +231,9 @@ defmodule Sanctum.ProvisioningTest do
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
 
     assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "No bundle #{n}")
+    :ok = Provisioning.ensure_provisioned(%{ctx | athanor_id: group.id})
+
+    {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at == nil
     assert Athanors.settings(group)["provisioning_error"]["step"] == "seed"
 

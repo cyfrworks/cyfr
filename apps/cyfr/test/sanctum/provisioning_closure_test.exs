@@ -130,10 +130,17 @@ defmodule Sanctum.ProvisioningClosureTest do
         authenticated: true
       )
 
+    # The mint is a bare row now; filling it is the first read of its
+    # bundle. `ensure_provisioned/1` is that hook, and the tools that read
+    # the bundle call it for real.
     assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Closure #{n}")
-    assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
+    refute group.provisioned_at
 
     in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.ensure_provisioned(in_group)
+
+    {:ok, group} = Athanors.get(group.id)
+    assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
 
     # every provider catalyst the bundle depends on is now a row in the athanor
     for name <- @providers do
@@ -173,6 +180,7 @@ defmodule Sanctum.ProvisioningClosureTest do
 
     assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Resync #{n}")
     in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.ensure_provisioned(in_group)
 
     # A transient registry outage at the previous sync leaves one dep of
     # the closure unpulled — dropping its row is exactly that state.

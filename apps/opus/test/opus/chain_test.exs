@@ -210,7 +210,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_root_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.run_root(ctx, nil, "#{@root_node}:0.1.0", %{"a" => 1},
+        Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
           execution_id: execution_id,
           type: :reagent
         )
@@ -232,7 +232,7 @@ defmodule Opus.ChainTest do
 
     test "no profile refuses instead of guessing", %{ctx: ctx} do
       assert {:error, :no_profile} =
-               Opus.run_root(ctx, nil, "#{@root_node}:0.1.0", %{}, type: :reagent)
+               Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{}, type: :reagent)
     end
 
     test "two active owner profiles are ambiguous without a selector", %{ctx: ctx, root: root} do
@@ -240,7 +240,7 @@ defmodule Opus.ChainTest do
       seed(ctx, profile_summary(%{id: "prof-chain-2", label: "work"}), consent(root))
 
       assert {:error, {:ambiguous, ids}} =
-               Opus.run_root(ctx, nil, "#{@root_node}:0.1.0", %{}, type: :reagent)
+               Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{}, type: :reagent)
 
       assert Enum.sort(ids) == ["prof-chain", "prof-chain-2"]
 
@@ -248,7 +248,7 @@ defmodule Opus.ChainTest do
       attach_witness()
 
       _result =
-        Opus.run_root(ctx, "work", "#{@root_node}:0.1.0", %{},
+        Opus.run_root(ctx, {:label, "work"}, "#{@root_node}:0.1.0", %{},
           type: :reagent,
           execution_id: "exec_chain_sel_#{System.unique_integer([:positive])}"
         )
@@ -262,7 +262,7 @@ defmodule Opus.ChainTest do
       seed(ctx, profile_summary(), drifted)
 
       assert {:error, {:consent_required, payload}} =
-               Opus.run_root(ctx, nil, "#{@root_node}:0.1.0", %{}, type: :reagent)
+               Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{}, type: :reagent)
 
       assert payload.profile_id == "prof-chain"
       assert payload.current_revision == 1
@@ -284,7 +284,7 @@ defmodule Opus.ChainTest do
       assert ctx.authenticated
 
       _result =
-        Opus.run_root(ctx, nil, "#{@root_node}:0.1.0", %{},
+        Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{},
           type: :reagent,
           route: :public,
           execution_id: "exec_chain_pub_#{System.unique_integer([:positive])}"
@@ -600,7 +600,7 @@ defmodule Opus.ChainTest do
       attach_witness()
 
       _result =
-        Opus.run_root(ctx, nil, "#{cat_node}:0.1.0", %{},
+        Opus.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
           type: :catalyst,
           execution_id: "exec_chain_cat_#{System.unique_integer([:positive])}"
         )
@@ -744,7 +744,7 @@ defmodule Opus.ChainTest do
       attach_witness()
       seed(ctx, profile_summary(), consent(root))
 
-      assert {:ok, %Authority{} = auth} = Opus.Chain.authority_for(ctx, nil, @root_node)
+      assert {:ok, %Authority{} = auth} = Opus.Chain.authority_for(ctx, :default, @root_node)
       assert auth.profile_id == "prof-chain"
       assert auth.cursor == {:bound, @root_node}
       # Nothing ran.

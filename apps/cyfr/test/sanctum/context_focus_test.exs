@@ -57,6 +57,26 @@ defmodule Sanctum.ContextFocusTest do
     assert {:error, :archived} = Context.focus(ctx.(alice, nil, false), archived)
   end
 
+  test "refocus is focus for a person, and an archive-checked crossing for the system plane",
+       %{a: a, b: b, alice: alice, ctx: ctx} do
+    # A person's refocus IS focus: member in, non-member out.
+    c = ctx.(alice, nil, false)
+    assert {:ok, %{athanor_id: id}} = Context.refocus(c, a.id)
+    assert id == a.id
+    assert {:error, :not_member} = Context.refocus(c, b.id)
+
+    # The system plane crosses tenants by design (recovery resolving a
+    # stored agent has no member to speak as) — but a closed furnace stays
+    # closed to it too.
+    sys = Sanctum.internal_context(user_id: "_test", athanor_id: a.id, scope: :athanor)
+    assert {:ok, %{athanor_id: bid, scope: :athanor}} = Context.refocus(sys, b.id)
+    assert bid == b.id
+
+    {:ok, _} = Athanors.archive(b)
+    assert {:error, :archived} = Context.refocus(sys, b.id)
+    assert {:error, :not_found} = Context.refocus(sys, "ath_nope")
+  end
+
   test "a platform admin may open any athanor — audited, still :athanor scope",
        %{b: b, ops: ops, ctx: ctx} do
     handler = "focus-test-#{System.unique_integer([:positive])}"

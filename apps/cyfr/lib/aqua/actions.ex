@@ -14,8 +14,10 @@ defmodule Aqua.Actions do
       ```
 
   Cyfr's host (`Aqua.ConversationRunner`) parses + strips the block on
-  stream complete; `PrismWeb.ConversationLive` `push_event/3`s the validated
-  client intents to the `Conversation` JS hook for dispatch.
+  stream complete and broadcasts the validated intents to the turn's
+  sender as a `{:intents, intents, user_id}` conversation event — live
+  UI steering, not part of the durable tape. The console `push_event/3`s
+  them to its JS hook; a cursor-replaying wire client never sees them.
 
   ## Public API
 

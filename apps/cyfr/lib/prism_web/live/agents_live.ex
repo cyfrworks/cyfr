@@ -34,6 +34,7 @@ defmodule PrismWeb.AgentsLive do
       |> assign(:tool_actions, nil)
       |> assign(:consent_sheet_ref, nil)
       |> assign(:model_status, %{})
+      |> assign(:personal_source, nil)
 
     socket =
       if connected?(socket) and socket.assigns[:context],
@@ -48,8 +49,12 @@ defmodule PrismWeb.AgentsLive do
   # ============================================================================
 
   @impl true
-  def handle_event("editor_create_orchestrator", %{"name" => name}, socket) when name != "" do
-    ctx = socket.assigns.context
+  def handle_event("editor_create_orchestrator", %{"name" => name} = params, socket)
+      when name != "" do
+    # A create targets the tree the form picked — yours or the estate's.
+    # `owner_ctx/3` honors the stamp only against this page's own sources,
+    # and a form without the picker (one tree) creates where you are.
+    ctx = owner_ctx(socket, name, params["owner"])
 
     case call_aqua(ctx, %{
            "action" => "create",
@@ -68,9 +73,16 @@ defmodule PrismWeb.AgentsLive do
 
   def handle_event("editor_create_orchestrator", _params, socket), do: {:noreply, socket}
 
-  def handle_event("editor_create_sub_agent", %{"parent" => parent, "name" => name}, socket)
+  def handle_event(
+        "editor_create_sub_agent",
+        %{"parent" => parent, "name" => name} = params,
+        socket
+      )
       when name != "" do
-    ctx = socket.assigns.context
+    # A child belongs to its parent's tree: creating a sub-agent on YOUR
+    # orchestrator while focused on a group must materialize in your
+    # athanor, not the group's.
+    ctx = owner_ctx(socket, parent, params["owner"])
 
     case call_aqua(ctx, %{
            "action" => "create",
@@ -104,11 +116,11 @@ defmodule PrismWeb.AgentsLive do
 
   def handle_event(
         "editor_update_field",
-        %{"name" => name, "field" => field, "value" => value},
+        %{"name" => name, "field" => field, "value" => value} = params,
         socket
       )
       when field in @editable_fields do
-    ctx = socket.assigns.context
+    ctx = owner_ctx(socket, name, params["owner"])
     args = Map.merge(%{field => value}, %{"action" => "update", "name" => name})
 
     case call_aqua(ctx, args) do
@@ -123,8 +135,8 @@ defmodule PrismWeb.AgentsLive do
 
   def handle_event("editor_update_field", _params, socket), do: {:noreply, socket}
 
-  def handle_event("editor_delete", %{"name" => name}, socket) do
-    ctx = socket.assigns.context
+  def handle_event("editor_delete", %{"name" => name} = params, socket) do
+    ctx = owner_ctx(socket, name, params["owner"])
 
     case call_aqua(ctx, %{
            "action" => "delete",
@@ -147,22 +159,25 @@ defmodule PrismWeb.AgentsLive do
   # ever shown. A key that resolves to no known action is refused.
   def handle_event(
         "editor_toggle_capability",
-        %{"name" => agent_name, "key" => key},
+        %{"name" => agent_name, "key" => key} = params,
         socket
       ) do
-    agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
+    owner = params["owner"]
+    agent = find_agent(socket, agent_name, owner)
     current = (agent && agent["tool_policy"]) || %{}
 
     cond do
       Map.has_key?(current, key) ->
-        {:noreply, update_agent_tool_policy(socket, agent_name, Map.delete(current, key))}
+        {:noreply, update_agent_tool_policy(socket, agent_name, owner, Map.delete(current, key))}
 
       resolved_kind(key) == nil ->
         {:noreply, put_flash(socket, :error, "Unknown capability: #{key}")}
 
       true ->
         default = if resolved_kind(key) == :read, do: "auto", else: "ask"
-        {:noreply, update_agent_tool_policy(socket, agent_name, Map.put(current, key, default))}
+
+        {:noreply,
+         update_agent_tool_policy(socket, agent_name, owner, Map.put(current, key, default))}
     end
   end
 
@@ -172,24 +187,26 @@ defmodule PrismWeb.AgentsLive do
   # for a destructive or external action is refused whatever the client sent.
   def handle_event(
         "editor_set_capability_mode",
-        %{"name" => agent_name, "key" => key, "mode" => mode},
+        %{"name" => agent_name, "key" => key, "mode" => mode} = params,
         socket
       )
       when mode in ["ask", "auto"] do
     if mode == "auto" and not auto_permitted?(key) do
       {:noreply, put_flash(socket, :error, "#{key} always asks — it cannot be set to auto")}
     else
-      agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
+      owner = params["owner"]
+      agent = find_agent(socket, agent_name, owner)
       current = (agent && agent["tool_policy"]) || %{}
-      {:noreply, update_agent_tool_policy(socket, agent_name, Map.put(current, key, mode))}
+      {:noreply, update_agent_tool_policy(socket, agent_name, owner, Map.put(current, key, mode))}
     end
   end
 
   # Toggle the provider-native search grant. It is an ordinary policy key
   # that coexists with the rest of the allowlist; the formula appends the
   # native tool when the key is "auto".
-  def handle_event("editor_toggle_native", %{"name" => agent_name}, socket) do
-    agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
+  def handle_event("editor_toggle_native", %{"name" => agent_name} = params, socket) do
+    owner = params["owner"]
+    agent = find_agent(socket, agent_name, owner)
     current = (agent && agent["tool_policy"]) || %{}
 
     new_policy =
@@ -197,16 +214,19 @@ defmodule PrismWeb.AgentsLive do
         do: Map.delete(current, "native_search"),
         else: Map.put(current, "native_search", "auto")
 
-    {:noreply, update_agent_tool_policy(socket, agent_name, new_policy)}
+    {:noreply, update_agent_tool_policy(socket, agent_name, owner, new_policy)}
   end
 
-  def handle_event("editor_edit_prompt", %{"name" => name}, socket) do
-    agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == name))
+  def handle_event("editor_edit_prompt", %{"name" => name} = params, socket) do
+    owner = params["owner"]
+    agent = find_agent(socket, name, owner)
     content = if agent, do: agent["content"] || "", else: ""
 
     {:noreply,
      socket
-     |> assign(:editor_editing_prompt, name)
+     # Name AND owner: the save must land in the tree the prompt was read
+     # from, and two trees can hold the same name.
+     |> assign(:editor_editing_prompt, %{"name" => name, "owner" => owner})
      |> assign(:editor_prompt_content, content)}
   end
 
@@ -215,8 +235,8 @@ defmodule PrismWeb.AgentsLive do
   end
 
   def handle_event("editor_save_prompt", %{"content" => content}, socket) do
-    ctx = socket.assigns.context
-    name = socket.assigns.editor_editing_prompt
+    %{"name" => name, "owner" => owner} = socket.assigns.editor_editing_prompt
+    ctx = owner_ctx(socket, name, owner)
 
     case call_aqua(ctx, %{
            "action" => "update",
@@ -232,8 +252,8 @@ defmodule PrismWeb.AgentsLive do
     end
   end
 
-  def handle_event("editor_set_model", %{"name" => agent_name, "value" => value}, socket) do
-    ctx = socket.assigns.context
+  def handle_event("editor_set_model", %{"name" => agent_name, "value" => value} = params, socket) do
+    ctx = owner_ctx(socket, agent_name, params["owner"])
 
     result =
       case Catalog.decode_model_choice(value) do
@@ -349,8 +369,8 @@ defmodule PrismWeb.AgentsLive do
   # Destructive and external actions always ask; an unknown kind refuses.
   defp auto_permitted?(key), do: resolved_kind(key) in [:read, :write, :execute]
 
-  defp update_agent_tool_policy(socket, agent_name, new_policy) do
-    case call_aqua(socket.assigns.context, %{
+  defp update_agent_tool_policy(socket, agent_name, owner, new_policy) do
+    case call_aqua(owner_ctx(socket, agent_name, owner), %{
            "action" => "update",
            "name" => agent_name,
            "tool_policy" => new_policy
@@ -370,30 +390,32 @@ defmodule PrismWeb.AgentsLive do
     # One call: list with detail carries every field this editor shows.
     # The get-per-guide loop this replaces was an N+1 fired from eight
     # handlers — renaming a title cost 1+N tool calls.
+    # Your crew and the estate's, each tagged with the tree it lives in.
+    # The tag is what every write here reads back to reach the right tree:
+    # editing your Tom while focused on a group must not materialize
+    # `tom.md` into the group's overlay.
     agents =
-      case ctx && call_aqua(ctx, %{"action" => "list", "detail" => true}) do
-        {:ok, result} ->
-          for g <- result["guides"] || [],
-              g["type"] in ["orchestrator", "sub-agent"] do
-            %{
-              "name" => g["name"],
-              "title" => g["title"] || g["name"],
-              "type" => g["type"],
-              "parent" => g["parent"],
-              "description" => g["description"] || "",
-              "model" => g["model"],
-              "catalyst_ref" => g["catalyst_ref"],
-              "tool_policy" => g["tool_policy"] || %{},
-              "content" => g["content"] || ""
-            }
-          end
-
-        _ ->
-          []
+      for owner <- agent_sources(ctx),
+          g <- agents_of(ctx, owner),
+          g["type"] in ["orchestrator", "sub-agent"] do
+        %{
+          "name" => g["name"],
+          "owner" => owner,
+          "mine?" => owner != ctx.athanor_id,
+          "title" => g["title"] || g["name"],
+          "type" => g["type"],
+          "parent" => g["parent"],
+          "description" => g["description"] || "",
+          "model" => g["model"],
+          "catalyst_ref" => g["catalyst_ref"],
+          "tool_policy" => g["tool_policy"] || %{},
+          "content" => g["content"] || ""
+        }
       end
 
     socket
     |> assign(:editor_agents, agents)
+    |> assign(:personal_source, ctx |> agent_sources() |> Enum.find(&(&1 != ctx.athanor_id)))
     |> assign(:model_status, Aqua.AgentConfig.model_status(ctx, agents))
     |> ensure_tool_actions_loaded()
   end
@@ -467,6 +489,15 @@ defmodule PrismWeb.AgentsLive do
             required
             class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 focus:border-blue-500 w-44 font-mono"
           />
+          <select
+            :if={@personal_source}
+            name="owner"
+            title="Which tree the new orchestrator lives in — yours follows you into every estate"
+            class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-300 focus:border-blue-500"
+          >
+            <option value={@context.athanor_id}>in this estate</option>
+            <option value={@personal_source}>in your athanor</option>
+          </select>
           <button
             type="submit"
             class="rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 text-xs font-medium text-white"
@@ -489,7 +520,11 @@ defmodule PrismWeb.AgentsLive do
       </div>
 
       <%= for orch <- Enum.filter(@editor_agents, &(&1["type"] == "orchestrator")) do %>
-        <% sub_agents = Enum.filter(@editor_agents, &(&1["parent"] == orch["name"])) %>
+        <% sub_agents =
+          Enum.filter(
+            @editor_agents,
+            &(&1["parent"] == orch["name"] and &1["owner"] == orch["owner"])
+          ) %>
         <.agent_card
           agent={orch}
           models_by_provider={@models_by_provider}
@@ -511,20 +546,21 @@ defmodule PrismWeb.AgentsLive do
 
         <div class="ml-6 pl-4">
           <button
-            :if={@editor_creating_sub_for != orch["name"]}
+            :if={@editor_creating_sub_for != "#{orch["owner"]}/#{orch["name"]}"}
             type="button"
             phx-click="editor_toggle_sub_form"
-            phx-value-parent={orch["name"]}
+            phx-value-parent={"#{orch["owner"]}/#{orch["name"]}"}
             class="text-[11px] text-blue-400 hover:text-blue-300"
           >
             + Add sub-agent
           </button>
           <form
-            :if={@editor_creating_sub_for == orch["name"]}
+            :if={@editor_creating_sub_for == "#{orch["owner"]}/#{orch["name"]}"}
             phx-submit="editor_create_sub_agent"
             class="flex items-center gap-2"
           >
             <input type="hidden" name="parent" value={orch["name"]} />
+            <input type="hidden" name="owner" value={orch["owner"]} />
             <input
               type="text"
               name="name"
@@ -543,7 +579,7 @@ defmodule PrismWeb.AgentsLive do
             <button
               type="button"
               phx-click="editor_toggle_sub_form"
-              phx-value-parent={orch["name"]}
+              phx-value-parent={"#{orch["owner"]}/#{orch["name"]}"}
               class="text-[11px] text-gray-500 hover:text-gray-300"
             >
               Cancel
@@ -579,7 +615,8 @@ defmodule PrismWeb.AgentsLive do
         >
           <div class="flex items-center justify-between border-b border-gray-800 px-4 py-3">
             <h3 class="text-sm font-medium text-gray-200">
-              Edit prompt — <code class="font-mono text-blue-400">{@editor_editing_prompt}</code>
+              Edit prompt —
+              <code class="font-mono text-blue-400">{@editor_editing_prompt["name"]}</code>
             </h3>
             <button
               type="button"
@@ -637,6 +674,7 @@ defmodule PrismWeb.AgentsLive do
         <div class="flex-1 min-w-0">
           <form phx-change="editor_update_field" class="space-y-1">
             <input type="hidden" name="name" value={@agent["name"]} />
+            <input type="hidden" name="owner" value={@agent["owner"]} />
             <input type="hidden" name="field" value="title" />
             <input
               type="text"
@@ -657,6 +695,13 @@ defmodule PrismWeb.AgentsLive do
               {if @is_orchestrator, do: "orchestrator", else: "sub-agent"}
             </span>
             <code class="text-[11px] text-gray-500 font-mono">{@agent["name"]}</code>
+            <span
+              :if={@agent["mine?"]}
+              class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-900/40 text-emerald-300"
+              title="Lives in your own athanor — edits here follow it, not this estate"
+            >
+              yours
+            </span>
             <code :if={@agent["parent"]} class="text-[11px] text-gray-600 font-mono">
               ↳ parent: {@agent["parent"]}
             </code>
@@ -667,6 +712,7 @@ defmodule PrismWeb.AgentsLive do
             type="button"
             phx-click="editor_edit_prompt"
             phx-value-name={@agent["name"]}
+            phx-value-owner={@agent["owner"]}
             class="rounded px-2 py-1 text-[11px] text-blue-400 hover:bg-gray-800 hover:text-blue-300"
           >
             Edit prompt
@@ -675,6 +721,7 @@ defmodule PrismWeb.AgentsLive do
             type="button"
             phx-click="editor_delete"
             phx-value-name={@agent["name"]}
+            phx-value-owner={@agent["owner"]}
             data-confirm={"Delete agent '#{@agent["name"]}'?"}
             class="rounded px-2 py-1 text-[11px] text-gray-500 hover:bg-red-900/40 hover:text-red-300"
           >
@@ -685,6 +732,7 @@ defmodule PrismWeb.AgentsLive do
 
       <form :if={!@is_orchestrator} phx-change="editor_update_field" class="space-y-1">
         <input type="hidden" name="name" value={@agent["name"]} />
+        <input type="hidden" name="owner" value={@agent["owner"]} />
         <input type="hidden" name="field" value="description" />
         <label class="block text-[10px] uppercase tracking-wider text-gray-500">Description</label>
         <input
@@ -723,6 +771,7 @@ defmodule PrismWeb.AgentsLive do
 
       <form phx-change="editor_set_model">
         <input type="hidden" name="name" value={@agent["name"]} />
+        <input type="hidden" name="owner" value={@agent["owner"]} />
         <label class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Model</label>
         <select
           name="value"
@@ -790,6 +839,7 @@ defmodule PrismWeb.AgentsLive do
                         checked={val != nil}
                         phx-click="editor_toggle_capability"
                         phx-value-name={@agent["name"]}
+                        phx-value-owner={@agent["owner"]}
                         phx-value-key={key}
                         class="rounded bg-gray-900 border-gray-600"
                       />
@@ -805,7 +855,12 @@ defmodule PrismWeb.AgentsLive do
                       <% kind == :destructive -> %>
                         <span class="text-[10px] text-gray-500">always asks</span>
                       <% true -> %>
-                        <.auto_ask_toggle agent={@agent["name"]} key={key} value={val} />
+                        <.auto_ask_toggle
+                          agent={@agent["name"]}
+                          owner={@agent["owner"]}
+                          key={key}
+                          value={val}
+                        />
                     <% end %>
                   </div>
                 <% end %>
@@ -819,6 +874,7 @@ defmodule PrismWeb.AgentsLive do
             checked={Map.has_key?(@tool_policy, "native_search")}
             phx-click="editor_toggle_native"
             phx-value-name={@agent["name"]}
+            phx-value-owner={@agent["owner"]}
             class="rounded bg-gray-900 border-gray-600"
           /> Native search (model-side web grounding) — runs inside the provider without asking
         </label>
@@ -828,6 +884,7 @@ defmodule PrismWeb.AgentsLive do
   end
 
   attr :agent, :string, required: true
+  attr :owner, :string, default: nil
   attr :key, :string, required: true
   attr :value, :string, required: true
 
@@ -840,6 +897,7 @@ defmodule PrismWeb.AgentsLive do
         type="button"
         phx-click="editor_set_capability_mode"
         phx-value-name={@agent}
+        phx-value-owner={@owner}
         phx-value-key={@key}
         phx-value-mode={mode}
         class={[
@@ -859,6 +917,78 @@ defmodule PrismWeb.AgentsLive do
 
   # One owner for the aqua call and its key normalization.
   defp call_aqua(ctx, args), do: Aqua.AgentConfig.call_aqua(ctx, args)
+
+  # Whose `aqua/` trees this page shows: the person's own, then the estate
+  # in focus. One tree when they are the same.
+  defp agent_sources(nil), do: []
+
+  defp agent_sources(%Sanctum.Context{} = ctx) do
+    [personal_athanor(ctx), ctx.athanor_id] |> Enum.filter(&is_binary/1) |> Enum.uniq()
+  end
+
+  defp personal_athanor(%Sanctum.Context{user_id: user_id}) when is_binary(user_id) do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, %{personal_athanor_id: id}} -> id
+      _ -> nil
+    end
+  end
+
+  defp personal_athanor(_), do: nil
+
+  defp agents_of(ctx, owner) do
+    with {:ok, read_ctx} <- Sanctum.Context.refocus(ctx, owner),
+         {:ok, result} <- call_aqua(read_ctx, %{"action" => "list", "detail" => true}) do
+      result["guides"] || []
+    else
+      _ -> []
+    end
+  end
+
+  # The context a write to `name` must run under: the tree that agent lives
+  # in. `owner` arrives stamped on the event by the card (or create form)
+  # that named the agent — and is honored ONLY when it is one of this
+  # page's own sources (your personal athanor, the estate in focus), so a
+  # forged event cannot name an arbitrary athanor. Without a stamp, the
+  # loaded roster answers, the focused estate's entry winning a name
+  # collision; a name the page does not know falls back to focus.
+  defp owner_ctx(socket, name, owner) do
+    ctx = socket.assigns.context
+
+    target =
+      cond do
+        is_binary(owner) and owner != "" and owner in agent_sources(ctx) ->
+          owner
+
+        match?(%{"owner" => o} when is_binary(o), find_agent(socket, name, nil)) ->
+          find_agent(socket, name, nil)["owner"]
+
+        true ->
+          nil
+      end
+
+    with true <- is_binary(target),
+         {:ok, refocused} <- Sanctum.Context.refocus(ctx, target) do
+      refocused
+    else
+      _ -> ctx
+    end
+  end
+
+  # One agent out of the loaded roster, by identity — name AND owner. With
+  # no owner, the focused estate's entry wins a collision, mirroring what a
+  # bare `@mention` means.
+  defp find_agent(socket, name, owner) do
+    agents = socket.assigns[:editor_agents] || []
+
+    if is_binary(owner) and owner != "" do
+      Enum.find(agents, &(&1["name"] == name and &1["owner"] == owner))
+    else
+      focus = socket.assigns.context && socket.assigns.context.athanor_id
+
+      Enum.find(agents, &(&1["name"] == name and &1["owner"] == focus)) ||
+        Enum.find(agents, &(&1["name"] == name))
+    end
+  end
 
   # Count of capabilities the agent runs without asking that *aren't* reads —
   # i.e. the write/execute actions the user has blanket-approved ("auto").

@@ -186,6 +186,14 @@ defmodule Sanctum.Tenancy.Members do
 
   def add(%{kind: "person"}, _target, _added_by), do: {:error, :person_athanor}
 
+  # A frozen estate took its members at birth and never gains another —
+  # that is what makes a DM a DM. Guarded here, beside the person clause,
+  # so BOTH the `user_id:` and `email:` arms are covered: a rule enforced
+  # on one arm is a rule an invitation walks around. Growing the room is a
+  # different act — mint an open estate with the three of them, and the
+  # pair stays as it was.
+  def add(%{roster: "frozen"}, _target, _added_by), do: {:error, :frozen_roster}
+
   def add(%{id: athanor_id, status: "active"} = athanor, [user_id: user_id], added_by)
       when is_binary(user_id) do
     opts = [scope: "athanor", athanor_id: athanor_id, added_by: added_by]
@@ -392,6 +400,7 @@ defmodule Sanctum.Tenancy.Members do
 
   def remove_member(%{id: athanor_id} = athanor, user_id: user_id) when is_binary(user_id) do
     with {:ok, row} <- find(user_id, "athanor", athanor_id),
+         :ok <- end_if_frozen(athanor),
          {:ok, _} <- remove(row) do
       # The established-context memo would otherwise serve the removed
       # member their cached, athanor-focused context on the stateless
@@ -420,23 +429,54 @@ defmodule Sanctum.Tenancy.Members do
   they leave it. A failure is reported: the caller is ejecting someone and
   must not answer "done" while rows survive.
   """
-  @spec remove_all_for_user(String.t()) :: :ok | {:error, :database_error}
+  @spec remove_all_for_user(String.t()) :: :ok | {:error, term()}
   def remove_all_for_user(user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.remove_all_for_user", fn ->
       rows = Arca.Repo.all(from(m in Membership, where: m.user_id == ^user_id))
-      Arca.Repo.delete_all(from(m in Membership, where: m.user_id == ^user_id))
 
-      for %{athanor_id: athanor_id} <- rows, is_binary(athanor_id) do
-        broadcast_change(user_id, athanor_id, :left)
-        Sanctum.Notify.member_changed(athanor_id)
+      # Frozen estates end when ANYONE leaves — archived BEFORE the rows
+      # go, for the same reason `remove_member/2` orders it that way: a
+      # failure must abort while the memberships still exist, or the husk
+      # could never be re-attempted and its pair_key would stand forever.
+      with :ok <- end_frozen_estates(rows) do
+        Arca.Repo.delete_all(from(m in Membership, where: m.user_id == ^user_id))
 
-        case Athanors.get(athanor_id) do
-          {:ok, athanor} -> archive_when_empty(athanor)
-          _ -> :ok
+        for %{athanor_id: athanor_id} <- rows, is_binary(athanor_id) do
+          broadcast_change(user_id, athanor_id, :left)
+          Sanctum.Notify.member_changed(athanor_id)
+
+          case Athanors.get(athanor_id) do
+            {:ok, athanor} -> archive_when_empty(athanor)
+            _ -> :ok
+          end
         end
-      end
 
-      :ok
+        :ok
+      end
+    end)
+  end
+
+  defp end_frozen_estates(rows) do
+    rows
+    |> Enum.map(& &1.athanor_id)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+    |> Enum.reduce_while(:ok, fn athanor_id, :ok ->
+      case Athanors.get(athanor_id) do
+        {:ok, athanor} ->
+          case end_if_frozen(athanor) do
+            :ok -> {:cont, :ok}
+            {:error, _} = err -> {:halt, err}
+          end
+
+        # A membership naming no live athanor row has nothing to end; a
+        # store fault must abort — "unreadable" is not "not frozen".
+        {:error, :not_found} ->
+          {:cont, :ok}
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
     end)
   end
 
@@ -509,6 +549,64 @@ defmodule Sanctum.Tenancy.Members do
     end)
   end
 
+  @doc """
+  Whether two people currently sit together in at least one ACTIVE estate.
+
+  The DM reachability rule: a pair can be minted only with someone already
+  in a room with you. Home is not a directory (its members are the
+  operators), so this is what keeps `athanor.pair` from being one — a user
+  id you cannot see on any members list is a user id you cannot pair with,
+  and probing one answers exactly what probing an unknown one does. Home
+  is deliberately NOT excluded from the query: operators sit together in
+  Home and may DM each other through it — but a deployment that seats
+  ordinary users in Home has thereby made everyone mutually reachable.
+
+  Active memberships in active athanors only: an invitation is not a seat,
+  and an archived room is not a room. Fails toward "no", like `solo?/1` —
+  an unanswerable read must not open a door.
+  """
+  @spec shared_estate?(String.t(), String.t()) :: boolean()
+  def shared_estate?(user_a, user_b) when is_binary(user_a) and is_binary(user_b) do
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.shared_estate?", false, fn ->
+      from(a in Membership,
+        join: b in Membership,
+        on: a.athanor_id == b.athanor_id,
+        join: ath in Arca.Schemas.Athanor,
+        on: ath.id == a.athanor_id,
+        where:
+          a.user_id == ^user_a and b.user_id == ^user_b and
+            a.scope == "athanor" and b.scope == "athanor" and
+            a.status == "active" and b.status == "active" and
+            ath.status == "active",
+        select: count(a.id)
+      )
+      |> Arca.Repo.one()
+      |> Kernel.>(0)
+    end)
+  end
+
+  def shared_estate?(_, _), do: false
+
+  @doc """
+  Whether exactly one human is in this estate.
+
+  The one derivation of "is there anybody else here?", which two questions
+  turn on: whether a message addresses the agent without naming it, and
+  whether the turn's task prefixes each line with who said it. Both used to
+  read stored state — an `answer_mode` setting and the athanor's `kind` —
+  which said nothing true once an agent could belong to a person rather
+  than an estate.
+
+  Active memberships only: an `invited` row is a seat nobody is sitting in.
+  Fails toward "several", so an unanswerable count costs an `@` rather than
+  starting turns nobody addressed.
+  """
+  @spec solo?(String.t() | nil) :: boolean()
+  def solo?(athanor_id) when is_binary(athanor_id),
+    do: match?({:ok, 1}, count_by_athanor(athanor_id))
+
+  def solo?(_), do: false
+
   # Every seat the athanor has handed out — active members and pending
   # invitations — which is what the member cap bounds; an invitation is a
   # seat someone will take.
@@ -540,6 +638,26 @@ defmodule Sanctum.Tenancy.Members do
   def broadcast_change(_user_id, _athanor_id, _change), do: :ok
 
   # ---- internal --------------------------------------------------------------
+
+  # A frozen estate ends when ANYONE leaves, not when the last person does.
+  # Waiting for empty would leave a one-member pair standing: a second You
+  # that the person who stayed can still open, whose `pair_key` still
+  # hashes both ids — so the two could never be paired again, because the
+  # husk holds the key. Ending it releases the key; clicking the name later
+  # mints a new tape rather than reopening this one.
+  #
+  # Archived BEFORE the membership row goes, and the result is the leave's
+  # to report: with the row already gone, a failed archive could never be
+  # retried (`find/3` answers :not_found), and the husk's `pair_key` would
+  # block those two pairing forever. `Athanors.archive/2` re-reads and is
+  # idempotent on an archived row, so both failure orders self-heal — a
+  # failed archive leaves everything as it was, and a failed row removal
+  # after it retries straight through.
+  defp end_if_frozen(%{kind: "group", roster: "frozen"} = athanor) do
+    with {:ok, _} <- Athanors.archive(athanor, reason: :empty), do: :ok
+  end
+
+  defp end_if_frozen(_athanor), do: :ok
 
   defp archive_when_empty(%{id: id, kind: "group"} = athanor) do
     # Only a verified zero archives. A store failure aborts: archiving is

@@ -18,7 +18,7 @@ defmodule Opus do
       reference = "catalyst:local.my-tool:0.1.0"
       input = %{"a" => 5, "b" => 10}
 
-      {:ok, result} = Opus.run_root(ctx, nil, reference, input)
+      {:ok, result} = Opus.run_root(ctx, :default, reference, input)
 
   ## Component Types
 
@@ -45,7 +45,13 @@ defmodule Opus do
   Root an execution chain under a profile's consent — the external-ingress
   entry of the root/child split. See `Opus.Chain.run_root/5`.
   """
-  @spec run_root(Context.t(), String.t() | nil, String.t(), map(), keyword()) ::
+  @spec run_root(
+          Context.t(),
+          Sanctum.Authority.RootSelect.selector(),
+          String.t(),
+          map(),
+          keyword()
+        ) ::
           {:ok, map()} | {:error, term()}
   @impl Cyfr.Execution
   defdelegate run_root(ctx, profile_selector, reference, input, opts \\ []), to: Opus.Chain
@@ -65,7 +71,7 @@ defmodule Opus do
   Derive (without executing) the authority a `run_root` for this selector
   and reference would run under. See `Opus.Chain.authority_for/4`.
   """
-  @spec authority_for(Context.t(), String.t() | nil, String.t(), keyword()) ::
+  @spec authority_for(Context.t(), Sanctum.Authority.RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Sanctum.Authority.t()} | {:error, term()}
   @impl Cyfr.Execution
   defdelegate authority_for(ctx, profile_selector, reference, opts \\ []), to: Opus.Chain

@@ -40,18 +40,20 @@ defmodule Opus.Chain do
   @doc """
   Root an execution chain under a profile's consent.
 
+  `profile_selector` is a `t:Sanctum.Authority.RootSelect.selector/0`:
+  `{:id, _}` or `{:label, _}` to pin, `:default` for the single active
+  owner profile — which fails on ambiguity rather than choosing.
+
   ## Options
 
-  - `:profile` is the explicit selector (id or label); nil selects the
-    single active owner profile and fails on ambiguity.
   - `:route` — `:public` or `:protected` for routed ingresses; public
-    selection ignores authentication entirely.
+    selection ignores authentication entirely and the selector is unused.
   - `:consent_source`, `:ceiling`, `:live_shape_digest` — see
     `Sanctum.Consent.Loader`.
 
   Remaining options pass through to `Opus.Executor.run/4`.
   """
-  @spec run_root(Context.t(), String.t() | nil, String.t(), map(), keyword()) ::
+  @spec run_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_root(%Context{} = ctx, profile_selector, reference, input, opts \\ []) do
     source = Keyword.get(opts, :consent_source, Source.impl())
@@ -70,7 +72,12 @@ defmodule Opus.Chain do
           activation_stamp: stamp,
           # The flat digest also rides along so the formula closure can
           # thread the chain's activation identity to every descendant row.
-          activation_digest: stamp.activation_digest
+          activation_digest: stamp.activation_digest,
+          # And the profile this root resolved to, so the row records which
+          # consent it ran under instead of leaving a later caller to
+          # re-select one — a selection that is only unambiguous while the
+          # ref has a single owner profile.
+          profile_id: profile.id
         )
 
       Opus.Executor.run(ctx, reference, input, exec_opts)
@@ -362,8 +369,14 @@ defmodule Opus.Chain do
   may only unblock a call, never supply authority, so the approved call
   runs under the same consented authority the conversation's executions
   do.
+
+  It is also the *first* step of a turn: `Aqua.Turn` resolves and pins the
+  profile here, composes the system prompt from what the authority
+  actually grants, and only then calls `run_root/5` with `{:id, pinned}`.
+  A prompt composed before the authority is known is a prompt that can
+  advertise tools the edge does not grant.
   """
-  @spec authority_for(Context.t(), String.t() | nil, String.t(), keyword()) ::
+  @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Authority.t()} | {:error, term()}
   def authority_for(%Context{} = ctx, profile_selector, reference, opts \\ []) do
     source = Keyword.get(opts, :consent_source, Source.impl())

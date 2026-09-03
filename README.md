@@ -92,7 +92,7 @@ open http://localhost:4000
 
 ## Prism — the web face
 
-**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your conversation with your own AQUA — the same thread on your phone and your laptop; a group athanor is a group chat every member sees, with the group's AQUA in it answering when `@mentioned` (or to everything, a group setting) and approval cards any member can decide. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
+**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your conversation with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts the agent is derived, never configured: an estate with one person in it answers every message, and any room with two or more — Home included — answers only an `@mention`, so people can talk to people. Your own agents travel with you (`@tom` runs the estate's Tom where names collide; `@your-slug.tom` always reaches yours), a DM is a small frozen estate minted by clicking a name on any members list you share (it ends when either person leaves — clicking again starts a new, empty one), following a topic decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
 Around the chat:
 
@@ -137,6 +137,7 @@ your-project/
             │   └── tinctures/   # Bundled example tinctures + your own
             ├── aqua/       # The athanor's own AQUA agent definitions
             ├── conversations/  # Chat attachment files
+            ├── memory/     # Notes kept out of a conversation — host-only, no guest scope
             ├── guest/      # Files WASM components store (their `data/` scope)
             └── meta/       # Tenant-reserved: overlay origin marks, system-written
 ```

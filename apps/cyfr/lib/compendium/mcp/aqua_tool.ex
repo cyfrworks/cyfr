@@ -186,6 +186,7 @@ defmodule Compendium.MCP.AquaTool do
   # --- list ---
 
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
+    ensure_bundle(ctx)
     type_filter = Map.get(args, "type")
 
     doc_guides = [
@@ -272,6 +273,8 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "get", "name" => name}) do
+    ensure_bundle(ctx)
+
     with :ok <- validate_name(name),
          {:ok, agent} <- AquaAgent.get(ctx, name) do
       {:ok,
@@ -622,6 +625,17 @@ defmodule Compendium.MCP.AquaTool do
       AquaAgent.parse_frontmatter(binary)
     end
   end
+
+  # First need. A group estate is minted as a row and filled the first time
+  # something actually reads its bundle, so clicking a person's name opens
+  # a chat instead of waiting on a registry round trip that can fail.
+  #
+  # This tool is where every agent read lands — the roster, one agent's
+  # detail, and therefore a turn, which resolves its orchestrator through
+  # here before it runs. Hooking it once covers all three, and keeps the
+  # reach inside the namespace that already reads the bundle rather than
+  # spreading a tenancy call into the harness.
+  defp ensure_bundle(%Context{} = ctx), do: Sanctum.Provisioning.ensure_provisioned(ctx)
 
   defp validate_name(name) do
     if AquaPath.valid_name?(name),

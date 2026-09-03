@@ -71,11 +71,35 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     end
   end
 
+  test "a pinned profile id from another estate is not found, not rooted", %{ctx: ctx} do
+    {:ok, %{profile_id: profile_id}} =
+      Cyfr.Execution.authority_for(ctx, :default, @probe_node)
+
+    # The one place an agent-authored string selects an authority is the
+    # approved `execution.run`/`run_stream` arm, which forwards
+    # args["profile"] verbatim. The containment is that candidates load
+    # for the CALLER's focused estate — so a profile id minted elsewhere
+    # answers not-found instead of rooting a foreign authority.
+    elsewhere = %{ctx | athanor_id: "ath_b"}
+
+    assert {:error, {:not_found, ^profile_id}} =
+             Cyfr.Execution.authority_for(elsewhere, {:id, profile_id}, @probe_node)
+
+    # At home the same id resolves: the refusal above is scoping, not the
+    # id's form.
+    assert {:ok, %{profile_id: ^profile_id}} =
+             Cyfr.Execution.authority_for(ctx, {:id, profile_id}, @probe_node)
+  end
+
   test "a self-invoking chain rides D2: every level keeps the consented authority", %{ctx: ctx} do
     attach_witness()
 
     {:ok, run_result} =
-      Opus.run_root(ctx, nil, Probe.probe_ref(), %{"op" => "chain", "depth" => 2, "leaf" => nil})
+      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
+        "op" => "chain",
+        "depth" => 2,
+        "leaf" => nil
+      })
 
     assert run_result.status == :completed
 
@@ -121,7 +145,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
   test "guest emits are attributed: origin and emitting node in the envelope", %{ctx: ctx} do
     {:ok, run_result} =
-      Opus.run_root(ctx, nil, Probe.probe_ref(), %{
+      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "emit",
         "events" => [%{"note" => "one"}]
       })
@@ -146,7 +170,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     # expanded the manifest allowlist), the action is in-chain-annotated,
     # and the caller identity holds the permission — all three legs.
     {:ok, run_result} =
-      Opus.run_root(ctx, nil, Probe.probe_ref(), %{
+      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "call",
         "request" => %{
           "tool" => "component",
@@ -167,7 +191,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     # its verdict reaches the guest as an encoded error naming the
     # authority denial.
     {:ok, run_result} =
-      Opus.run_root(ctx, nil, Probe.probe_ref(), %{
+      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "call",
         "request" => %{"tool" => "webhook", "action" => "list", "args" => %{}}
       })

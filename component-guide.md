@@ -30,6 +30,7 @@ your-project/
         │   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
         ├── aqua/          # The athanor's AQUA agent definitions
         ├── conversations/ # Chat attachment files
+        ├── memory/        # Notes kept out of a conversation — host-only, never a guest scope
         ├── guest/         # Files WASM components store — their `data/` scope
         └── meta/          # Overlay origin marks — system-plane only, never yours to write
 ```

@@ -66,23 +66,45 @@ defmodule Arca.ConversationStorage do
     end)
   end
 
-  @doc "Open a new conversation in the context's athanor, attributed to its user."
+  @doc """
+  Open a new conversation in the context's athanor, attributed to its user.
+
+  The creator starts out following it — a thread unfollowed by its own
+  author would be born invisible — and everyone else follows it
+  themselves. There is deliberately no subscriber list to pass: a client
+  must not follow other members.
+  """
   @spec create(Context.t(), map()) ::
           {:ok, Conversation.t()} | {:error, Ecto.Changeset.t() | :database_error}
   def create(%Context{} = ctx, attrs \\ %{}) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.create", fn ->
       Context.require_tenant!(ctx)
 
-      %Conversation{}
-      |> Conversation.changeset(%{
-        id: attrs[:id] || Cyfr.UUID7.generate_id("conv"),
-        athanor_id: ctx.athanor_id,
-        title: attrs[:title] || @default_title,
-        created_by: ctx.user_id || "system"
-      })
-      |> Repo.insert()
+      result =
+        %Conversation{}
+        |> Conversation.changeset(%{
+          id: attrs[:id] || Cyfr.UUID7.generate_id("conv"),
+          athanor_id: ctx.athanor_id,
+          title: attrs[:title] || @default_title,
+          created_by: ctx.user_id || "system"
+        })
+        |> Repo.insert()
+
+      with {:ok, conv} <- result do
+        subscribe_creator(ctx, conv)
+        {:ok, conv}
+      end
     end)
   end
+
+  # Best effort: a topic that exists but is in nobody's sidebar is a
+  # recoverable annoyance (follow it), where failing the create over it
+  # would lose the thread itself.
+  defp subscribe_creator(%Context{user_id: creator} = ctx, conv) when is_binary(creator) do
+    Arca.TopicSubscriptionStorage.follow(ctx, conv.id, creator)
+  end
+
+  defp subscribe_creator(_ctx, _conv), do: :ok
 
   @doc """
   Update a conversation's title, history, running execution, orchestrator
@@ -100,6 +122,7 @@ defmodule Arca.ConversationStorage do
             :history,
             :execution_id,
             :orchestrator,
+            :orchestrator_owner,
             :turn_seq,
             :last_message_at
           ])
@@ -127,19 +150,44 @@ defmodule Arca.ConversationStorage do
   defp do_delete(ctx, id) do
     with {:ok, conv} <- get(ctx, id),
          :ok <- delete_blobs(ctx, conv.id) do
-      # arca:unscoped-ok the messages are scoped transitively — `get(ctx, id)`
-      # above already proved this conversation is the caller's athanor's, and
-      # a message belongs to exactly one conversation.
+      # arca:unscoped-ok the rows are scoped transitively — `get(ctx, id)`
+      # above already proved this conversation is the caller's athanor's,
+      # and a message, a follow, or a conversation-scope grant belongs to
+      # exactly one conversation.
       #
       # Messages cascade through the FK; delete them explicitly as well so
       # SQLite files opened without foreign_keys=ON cannot leave orphans.
+      # Follows and this thread's grants go with the thread — until the
+      # athanor's own destroy they had nothing else to reclaim them, so a
+      # deleted topic left rows behind that named it forever.
       Repo.transaction(fn ->
         Repo.delete_all(from(m in Message, where: m.conversation_id == ^conv.id))
+        delete_conversation_satellites([conv.id])
         Repo.delete!(conv)
       end)
 
       :ok
     end
+  end
+
+  # What rides with a conversation besides its messages: who followed it,
+  # and what its members already answered about tool calls in it.
+  # Agent-scope grants are untouched — they belong to the agent, not the
+  # thread.
+  #
+  # arca:unscoped-ok scoped transitively — every id comes from a read the
+  # caller already tenant-proved (do_delete's `get`, delete_before's
+  # `where_athanor`), and each row names exactly one conversation.
+  defp delete_conversation_satellites(ids) do
+    Repo.delete_all(from(s in Arca.Schemas.TopicSubscription, where: s.conversation_id in ^ids))
+
+    Repo.delete_all(
+      from(g in Arca.Schemas.ToolGrant,
+        where: g.scope == "conversation" and g.conversation_id in ^ids
+      )
+    )
+
+    :ok
   end
 
   @doc """
@@ -553,10 +601,13 @@ defmodule Arca.ConversationStorage do
       {:ok, 0}
     else
       # One transaction, like `do_delete/2`: a crash between the two
-      # deletes otherwise left an empty conversation row behind.
+      # deletes otherwise left an empty conversation row behind. The
+      # satellites (follows, conversation-scope grants) sweep with the
+      # rows, same as a hand delete.
       {:ok, count} =
         Repo.transaction(fn ->
           Repo.delete_all(from(m in Message, where: m.conversation_id in ^deletable))
+          delete_conversation_satellites(deletable)
           {count, _} = Repo.delete_all(from(c in Conversation, where: c.id in ^deletable))
           count
         end)

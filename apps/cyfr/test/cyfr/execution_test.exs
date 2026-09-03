@@ -41,7 +41,10 @@ defmodule Cyfr.ExecutionTest do
     Application.delete_env(:cyfr, :execution_impl)
     refute Cyfr.Execution.available?()
     ctx = Sanctum.TestContext.local()
-    assert {:error, :execution_unavailable} = Cyfr.Execution.run_root(ctx, nil, "f:local.x", %{})
+
+    assert {:error, :execution_unavailable} =
+             Cyfr.Execution.run_root(ctx, :default, "f:local.x", %{})
+
     assert {:error, :execution_unavailable} = Cyfr.Execution.cancel(ctx, "exec_1")
     assert Cyfr.Execution.events_since("exec_1", 0, ctx.athanor_id) == []
   end
@@ -52,7 +55,7 @@ defmodule Cyfr.ExecutionTest do
     ctx = Sanctum.TestContext.local()
 
     assert {:ok, %{ref: "f:local.x", opts: [route: :protected]}} =
-             Cyfr.Execution.run_root(ctx, "prof", "f:local.x", %{}, route: :protected)
+             Cyfr.Execution.run_root(ctx, {:label, "prof"}, "f:local.x", %{}, route: :protected)
 
     assert {:ok, "exec_1"} = Cyfr.Execution.cancel(ctx, "exec_1")
     assert [%{seq: 1}] = Cyfr.Execution.events_since("exec_1", 0, ctx.athanor_id)

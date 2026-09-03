@@ -87,6 +87,133 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
+  @doc """
+  The pair of `user_a` and `user_b` — found if it exists, minted if not.
+
+  A DM is a **frozen** group estate: it takes both members at birth and
+  `Sanctum.Tenancy.Members.add/3` refuses it another forever. That is what
+  lets two people talk without a second tenancy primitive beside the
+  athanor — they get a vault, storage, schedules and an audit trail like
+  any other estate, and the door is simply closed.
+
+  Find-or-create runs in a transaction keyed on `pair_key`, and a losing
+  racer reads the winner rather than reporting a conflict (the
+  `or_read_the_winner/1` shape `ensure_home/0` uses). Two people
+  double-clicking each other's names get one tape.
+
+  The row only — it is deliberately **not** provisioned here. A pair that
+  owns nothing needs no registry pull, no component scan and no consent
+  bootstrap to exist; `Sanctum.Provisioning.ensure_provisioned/1` fills it
+  at first need instead, so clicking a name opens a chat immediately
+  instead of waiting on the network.
+  """
+  @spec create_pair(String.t(), String.t()) :: {:ok, Athanor.t()} | {:error, term()}
+  def create_pair(user_a, user_b)
+      when is_binary(user_a) and is_binary(user_b) and user_a != user_b do
+    key = pair_key(user_a, user_b)
+
+    case get_by_pair_key(key) do
+      {:ok, athanor} -> {:ok, athanor}
+      {:error, :not_found} -> mint_pair(key, user_a, user_b)
+      {:error, _} = err -> err
+    end
+  end
+
+  def create_pair(_, _), do: {:error, :invalid_pair}
+
+  @doc """
+  The canonical key for a set of people: order-independent, so
+  `{alice, bob}` and `{bob, alice}` name the same estate.
+  """
+  @spec pair_key([String.t()] | String.t(), String.t() | nil) :: String.t()
+  def pair_key(user_a, user_b) when is_binary(user_a) and is_binary(user_b),
+    do: pair_key([user_a, user_b], nil)
+
+  def pair_key(user_ids, nil) when is_list(user_ids) do
+    user_ids
+    |> Enum.sort()
+    |> Enum.join("\n")
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
+  end
+
+  @doc "The active frozen estate with this canonical key, if there is one."
+  @spec get_by_pair_key(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | :database_error}
+  def get_by_pair_key(key) when is_binary(key) do
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.get_by_pair_key", fn ->
+      case Arca.Repo.one(
+             from(a in Athanor, where: a.pair_key == ^key and a.status == "active", limit: 1)
+           ) do
+        nil -> {:error, :not_found}
+        athanor -> {:ok, athanor}
+      end
+    end)
+  end
+
+  defp mint_pair(key, user_a, user_b) do
+    name = pair_name(user_a, user_b)
+
+    result =
+      Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.mint_pair", fn ->
+        Arca.Repo.transaction(fn ->
+          with {:ok, slug} <- resolve_slug(nil, name),
+               {:ok, athanor} <-
+                 create(%{
+                   kind: "group",
+                   roster: "frozen",
+                   pair_key: key,
+                   name: name,
+                   slug: slug,
+                   created_by: user_a
+                 }),
+               {:ok, _} <- seat(athanor, user_a),
+               {:ok, _} <- seat(athanor, user_b) do
+            athanor
+          else
+            {:error, reason} -> Arca.Repo.rollback(reason)
+          end
+        end)
+      end)
+
+    case result do
+      {:ok, athanor} ->
+        for user_id <- [user_a, user_b],
+            do: Sanctum.Tenancy.Members.broadcast_change(user_id, athanor.id, :joined)
+
+        {:ok, athanor}
+
+      # The unique index is the arbiter: a concurrent double-click loses
+      # here and reads the tape the winner made. Anything else is a real
+      # failure and keeps its reason — a bare `:pair_not_created` would
+      # report "could not open the chat" for a slug clash, a cap, and a
+      # database outage alike.
+      {:error, reason} ->
+        case get_by_pair_key(key) do
+          {:ok, athanor} -> {:ok, athanor}
+          _ -> {:error, reason}
+        end
+    end
+  end
+
+  defp seat(athanor, user_id) do
+    Sanctum.Tenancy.Members.create(%{
+      user_id: user_id,
+      scope: "athanor",
+      athanor_id: athanor.id,
+      added_by: user_id
+    })
+  end
+
+  # Both display names, so the estate reads as the two people in it. The
+  # slug's own collision fallback handles two pairs of same-named people.
+  defp pair_name(user_a, user_b) do
+    [user_a, user_b]
+    |> Enum.map(&Sanctum.Tenancy.Users.display_name/1)
+    |> Enum.sort()
+    |> Enum.join(" & ")
+    |> String.slice(0, 80)
+  end
+
   @spec get(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | :database_error}
   def get(id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.get", fn ->
@@ -287,7 +414,7 @@ defmodule Sanctum.Tenancy.Athanors do
   # A retired Home hands its address to its successor: the row keeps the flag
   # and the name for the record, under the next free `<slug>-N`.
   defp retired_slug(slug) do
-    base = String.slice(slug, 0, 36)
+    base = suffixable(slug)
 
     Enum.find_value(2..50, slug, fn n ->
       candidate = "#{base}-#{n}"
@@ -566,38 +693,6 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  @answer_modes ~w(mentioned all)
-
-  @doc """
-  When the group's AQUA answers: `"mentioned"` (a message that `@`-names an
-  orchestrator) or `"all"` (every message) — `settings["aqua"]["answer_mode"]`
-  when set, otherwise the default for that kind of athanor. A person's own
-  athanor always answers; the runner reads the kind first.
-
-  Home defaults to `"all"` and every other group to `"mentioned"`. Home is
-  the server's own furnace, not a group of colleagues: someone who opens it
-  and types has nobody else in mind, where in a group the other members are
-  the point. Derived from the `home` flag rather than written into the row at
-  birth, because Home is born in two places — the baseline migration seeds
-  one, and `ensure_home/0` mints its successor when the last member leaves —
-  and a default copied into both is a default that can differ. Either way
-  `put_settings/2` still moves it.
-  """
-  @spec answer_mode(Athanor.t()) :: String.t()
-  def answer_mode(%Athanor{} = athanor) do
-    case get_in(settings(athanor), ["aqua", "answer_mode"]) do
-      mode when mode in @answer_modes -> mode
-      _ -> default_answer_mode(athanor)
-    end
-  end
-
-  defp default_answer_mode(%Athanor{home: true}), do: "all"
-  defp default_answer_mode(%Athanor{}), do: "mentioned"
-
-  @doc "The recognised answer modes."
-  @spec answer_modes() :: [String.t()]
-  def answer_modes, do: @answer_modes
-
   @doc """
   Merge `patch` into the athanor's settings document, one level deep: a map
   under a key merges into the map already there (so `%{"aqua" => %{"answer_mode"
@@ -700,7 +795,8 @@ defmodule Sanctum.Tenancy.Athanors do
         {:error, :invalid_name}
 
       base ->
-        candidates = [base | Enum.map(2..50, &"#{String.slice(base, 0, 36)}-#{&1}")]
+        stem = suffixable(base)
+        candidates = [base | Enum.map(2..50, &"#{stem}-#{&1}")]
 
         case Enum.find(candidates, &slug_free?/1) do
           nil -> {:error, :slug_taken_or_invalid}
@@ -709,6 +805,15 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
+  # The stem a numeric suffix is appended to: truncated to leave room, and
+  # with any trailing hyphen removed. Cutting a slug at a fixed width lands
+  # on a hyphen often enough, and `"...-" <> "-2"` is a double hyphen —
+  # which the slug grammar (single hyphens only) then rejects, so the mint
+  # fails with a format error rather than taking the next free name. Long
+  # names hit this: a pair estate named from two email-derived display
+  # names is over the limit before it starts.
+  defp suffixable(base), do: base |> String.slice(0, 36) |> String.trim_trailing("-")
+
   # Deliberately checks only the "group" kind: the unique index is
   # `[kind, slug]`, so a group slug never collides with a person's. Group
   # slugs are the only ones minted here (a person's slug IS their cyfr.run
@@ -716,12 +821,18 @@ defmodule Sanctum.Tenancy.Athanors do
   # check against the "person" kind.
   defp slug_free?(slug), do: match?({:error, :not_found}, get_by_slug("group", slug))
 
+  # Only the groups a person deliberately made. A frozen pair is a
+  # conversation, not a group they created, and counting DMs against
+  # `CYFR_MAX_GROUPS_PER_PERSON` would make the cap mean "how many people
+  # may you talk to" — which is not what an operator setting it intends.
   defp count_groups_created_by(user_id) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.count_groups_created_by", fn ->
       {:ok,
        Arca.Repo.one(
          from(a in Athanor,
-           where: a.kind == "group" and a.created_by == ^user_id and a.status == "active",
+           where:
+             a.kind == "group" and a.roster == "open" and
+               a.created_by == ^user_id and a.status == "active",
            select: count(a.id)
          )
        ) || 0}

@@ -18,6 +18,11 @@ defmodule Sanctum.MCP.AthanorTool do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members}
 
+  # `pair` is not here although it is a person's act: its
+  # `consent: :interactive` annotation makes the registry's dispatch gate
+  # refuse an API key before this handler runs, with the typed
+  # consent_class_required code — a second arm here would only answer in a
+  # second vocabulary for a call that can never arrive.
   @person_only ~w(create rename archive unarchive settings provision purge destroy)
 
   # An `athanor` argument names the athanor an action works on: an id, a
@@ -38,7 +43,9 @@ defmodule Sanctum.MCP.AthanorTool do
       title: "Athanors",
       description:
         "The athanors you belong to — your own and your groups. Create a group " <>
-          "(you are its first member), rename it, archive it, patch its settings. " <>
+          "(you are its first member), rename it, archive it, patch its settings — " <>
+          "or pair: open a DM with someone you already share an estate with, a " <>
+          "frozen two-person athanor that ends when either of you leaves. " <>
           "A person's own athanor is minted at sign-in; a group is archived, never deleted.",
       annotations: %{
         readOnlyHint: false,
@@ -47,6 +54,10 @@ defmodule Sanctum.MCP.AthanorTool do
           "list" => %{kind: :read, planes: [:external]},
           "get" => %{kind: :read, planes: [:external]},
           "create" => %{kind: :write, planes: [:external]},
+          # A pair is minted BY a person, WITH a person — interactive on
+          # the annotation so dispatch, discovery and the typed refusal all
+          # read one declaration; no standing credential mints a DM.
+          "pair" => %{kind: :write, planes: [:external], consent: :interactive},
           "rename" => %{kind: :write, planes: [:external]},
           "archive" => %{kind: :destructive, planes: [:external]},
           "unarchive" => %{kind: :write, planes: [:external]},
@@ -65,6 +76,7 @@ defmodule Sanctum.MCP.AthanorTool do
               "list",
               "get",
               "create",
+              "pair",
               "rename",
               "archive",
               "unarchive",
@@ -81,6 +93,12 @@ defmodule Sanctum.MCP.AthanorTool do
           },
           "athanor" => @athanor_arg,
           "name" => %{"type" => "string", "description" => "Group name (create, rename)"},
+          "user" => %{
+            "type" => "string",
+            "description" =>
+              "pair: the other person's user id — someone you already share an active " <>
+                "estate with"
+          },
           "slug" => %{
             "type" => "string",
             "description" => "Optional slug for create; derived from the name when absent"
@@ -138,6 +156,42 @@ defmodule Sanctum.MCP.AthanorTool do
 
   def handle(_ctx, %{"action" => "create"}),
     do: {:error, {:invalid_argument, "Missing required argument: name"}}
+
+  # The DM verb: find-or-mint the frozen pair of the caller and `user`.
+  # Reachability is "we already share an active estate" — checked here, not
+  # only drawn in the UI, so the wire cannot be a directory: a user id you
+  # cannot see on any members list answers exactly like one that does not
+  # exist. The row is minted lazily (no provisioning) and the caller opens
+  # its chat by focusing it, like any estate.
+  def handle(%Context{} = ctx, %{"action" => "pair", "user" => other} = _args)
+      when is_binary(other) and other != "" do
+    cond do
+      other == ctx.user_id ->
+        {:error, {:invalid_argument, "A pair is two people — you are already with yourself"}}
+
+      not Members.shared_estate?(ctx.user_id, other) ->
+        {:error,
+         {:invalid_argument,
+          "You can only open a DM with someone you already share an estate with"}}
+
+      true ->
+        case Athanors.create_pair(ctx.user_id, other) do
+          {:ok, athanor} ->
+            broadcast_athanors_changed(ctx, athanor)
+            {:ok, render(athanor)}
+
+          {:error, {:limit_reached, key, cap}} ->
+            {:error, {:invalid_argument, "Limit reached: #{key} = #{cap}"}}
+
+          {:error, reason} ->
+            Logger.error("[AthanorTool] athanor.pair failed: #{inspect(reason)}")
+            {:error, {:unavailable, "Storage"}}
+        end
+    end
+  end
+
+  def handle(_ctx, %{"action" => "pair"}),
+    do: {:error, {:invalid_argument, "Missing required argument: user"}}
 
   def handle(%Context{} = ctx, %{"action" => "rename", "name" => name} = args)
       when is_binary(name) do
@@ -408,6 +462,9 @@ defmodule Sanctum.MCP.AthanorTool do
     %{
       id: athanor.id,
       kind: athanor.kind,
+      # "open" or "frozen" — a frozen two-person group is a DM, and a
+      # client renders it as one.
+      roster: athanor.roster,
       name: athanor.name,
       slug: athanor.slug,
       route: Athanors.route_slug(athanor),

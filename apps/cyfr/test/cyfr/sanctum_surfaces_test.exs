@@ -35,10 +35,17 @@ defmodule Cyfr.SanctumSurfacesTest do
       Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.Notify
       Sanctum.Sanitizer Sanctum.Tenancy
     ),
+    # `Sanctum.Provisioning` is `Compendium.MCP.AquaTool` and
+    # `ComponentTool`'s list action alone — the first-need hook. A group
+    # estate is now minted as a bare row and filled the first time
+    # something reads its bundle, because clicking a person's name to open
+    # a DM must not wait on a registry round trip that can fail. These two
+    # tools ARE the bundle's readers, so the hook lives where the read is
+    # rather than in every caller that might trigger one.
     "compendium" => ~w(
       Sanctum.Cipher Sanctum.CipherAAD Sanctum.ComponentRef Sanctum.Consent
-      Sanctum.Context Sanctum.JCS Sanctum.Namespace Sanctum.Sanitizer
-      Sanctum.SignIn Sanctum.ToolPattern Sanctum.VaultReader
+      Sanctum.Context Sanctum.JCS Sanctum.Namespace Sanctum.Provisioning
+      Sanctum.Sanitizer Sanctum.SignIn Sanctum.ToolPattern Sanctum.VaultReader
     ),
     # `Sanctum.Cipher` is here for `Cyfr.Release` alone: boot tells an
     # operator with no explicit keyring that rotating their secret orphans
@@ -51,9 +58,15 @@ defmodule Cyfr.SanctumSurfacesTest do
       Sanctum.OAuth Sanctum.Provisioning Sanctum.ProvisioningSupervisor
       Sanctum.PubSub Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy
     ),
+    # `Sanctum.Tenancy` is `Emissary.MCP.MemoryTool` alone: a note is kept
+    # either in the estate you are working in or in your own, and resolving
+    # "your own" is a read of `users.personal_athanor_id`. That choice is
+    # the tool's whole consent question, so it cannot be pushed to a
+    # caller — and a note filed in the wrong estate is the mistake worth
+    # spending a namespace to prevent.
     "emissary" => ~w(
       Sanctum.Atoms Sanctum.Authority Sanctum.ComponentRef Sanctum.Consent
-      Sanctum.Context Sanctum.Sanitizer Sanctum.ToolPattern
+      Sanctum.Context Sanctum.Sanitizer Sanctum.Tenancy Sanctum.ToolPattern
       Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.UnauthorizedError
       Sanctum.VaultReader
     ),

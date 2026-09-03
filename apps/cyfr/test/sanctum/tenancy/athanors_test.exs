@@ -127,6 +127,24 @@ defmodule Sanctum.Tenancy.AthanorsTest do
                })
     end
 
+    test "a long name whose truncation lands on a hyphen still takes the next free slug" do
+      # `resolve_slug/2` truncates to 36 characters before appending `-N`.
+      # When the cut falls on a hyphen the result was `"...--2"`, a double
+      # hyphen the slug grammar rejects — so the SECOND athanor with a long
+      # name failed on a format error instead of taking the next name.
+      # Reached by any name over the limit; a pair estate named from two
+      # email-derived display names is over it before it starts.
+      n = System.unique_integer([:positive])
+      name = "alice-#{n}@example.com & bob-#{n}@example.com"
+
+      assert {:ok, first} = Athanors.create_group("user_a_#{n}", name)
+      assert {:ok, second} = Athanors.create_group("user_b_#{n}", name)
+
+      assert second.slug != first.slug
+      refute second.slug =~ "--"
+      assert second.slug =~ Sanctum.ComponentRef.personal_slug_regex()
+    end
+
     test "one person, one personal athanor" do
       owner = "github|https://github.com|#{System.unique_integer([:positive])}"
 
@@ -184,28 +202,6 @@ defmodule Sanctum.Tenancy.AthanorsTest do
                })
 
       assert %{home: [_ | _]} = errors_on(changeset)
-    end
-
-    test "Home answers a bare message; every other group waits to be named" do
-      # The household furnace: someone who opens Home and types has nobody
-      # else in mind. `@aqua` is what a group of colleagues needs.
-      assert Athanors.answer_mode(Athanors.home!()) == "all"
-      assert Athanors.answer_mode(group!()) == "mentioned"
-    end
-
-    test "the default follows the flag, not the row: no settings written, toggle still moves it" do
-      home = Athanors.home!()
-
-      # Derived, so a Home seeded by the baseline migration and a Home minted
-      # by `ensure_home/0` cannot disagree — neither writes the setting.
-      assert Athanors.settings(home) == %{}
-      assert Athanors.answer_mode(home) == "all"
-
-      {:ok, home} = Athanors.put_settings(home, %{"aqua" => %{"answer_mode" => "mentioned"}})
-      assert Athanors.answer_mode(home) == "mentioned"
-
-      {:ok, home} = Athanors.put_settings(home, %{"aqua" => %{"answer_mode" => nil}})
-      assert Athanors.answer_mode(home) == "all"
     end
   end
 

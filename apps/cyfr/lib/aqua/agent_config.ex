@@ -14,49 +14,14 @@ defmodule Aqua.AgentConfig do
 
   alias Sanctum.Context
 
-  # The agent's `tool_policy` is the athanor's own — one allowlist for every
-  # member, edited in place. A chat decision that outlives the turn ("always
-  # approve", "never") is a policy edit, not a private overlay: the
-  # conversation is shared, and so is what the agent may do in it.
-
-  @doc """
-  Mark `key` (`"tool.action"`) `"auto"` in `agent_name`'s allowlist — the
-  agent no longer asks before that action, for every member.
-  """
-  @spec set_tool_auto(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def set_tool_auto(%Context{} = ctx, agent_name, key)
-      when is_binary(agent_name) and is_binary(key) do
-    update_tool_policy(ctx, agent_name, &Map.put(&1, key, "auto"))
-  end
-
-  @doc """
-  Drop `key` (`"tool.action"`) from `agent_name`'s allowlist — absence from
-  the allowlist is what makes an action uncallable.
-  """
-  @spec drop_tool(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def drop_tool(%Context{} = ctx, agent_name, key)
-      when is_binary(agent_name) and is_binary(key) do
-    update_tool_policy(ctx, agent_name, &Map.delete(&1, key))
-  end
-
-  defp update_tool_policy(ctx, agent_name, fun) do
-    # A get→modify→update over the SHARED allowlist: two simultaneous
-    # editors (two members deciding "always" in different chats) each
-    # read, merged and wrote — and the second silently dropped the first.
-    # The whole read-modify-write rides the per-key mutex the overlay uses
-    # for unit replacement; the key is this athanor's policy for this
-    # agent, so unrelated edits never queue behind it.
-    Arca.Overlay.UnitLock.with_lock({ctx.athanor_id, {:agent_policy, agent_name}}, fn ->
-      with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => agent_name}),
-           policy = fun.(guide["tool_policy"] || %{}),
-           {:ok, _} <-
-             call_aqua(ctx, %{"action" => "update", "name" => agent_name, "tool_policy" => policy}) do
-        :ok
-      else
-        {:error, reason} -> {:error, reason}
-      end
-    end)
-  end
+  # The agent's `tool_policy` is DECLARED policy — what the agent's author
+  # says it may do, edited on the agents page. A chat decision ("always
+  # approve", "never ask again") is not an edit to it: those are
+  # `Aqua.ToolGrants` rows, composed over this at use time. The two used to
+  # share this storage, so clicking a button in one conversation rewrote
+  # the agent's definition for every conversation and every member — and
+  # once agents belong to people rather than estates, it would have
+  # followed a borrowed agent home.
 
   @doc """
   Load full config for an orchestrator (prompt content + resolved catalyst).
@@ -89,11 +54,19 @@ defmodule Aqua.AgentConfig do
   @doc """
   Build sub-agent definitions for formula input.
 
-  Fetches all sub-agents via the aqua tool and resolves per-role
-  catalyst/model (inheriting from the orchestrator when not set).
+  `orchestrator` is the resolved parent (its `"owner"` names the tree the
+  crew lives in). The GUIDES are read from that owner's tree — a personal
+  agent brings its own crew wherever it works, and reading the focused
+  estate instead would find the estate's children of the same parent name,
+  usually none. The CATALYSTS still resolve against `ctx` — components
+  belong to the estate the turn runs in, not to the agent's owner.
   """
-  def sub_agent_definitions(%Context{} = ctx, agent_name, fallback_catalyst, fallback_model) do
-    with {:ok, list_result} <- call_aqua(ctx, %{"action" => "list", "type" => "sub-agent"}) do
+  def sub_agent_definitions(%Context{} = ctx, orchestrator, fallback_catalyst, fallback_model)
+      when is_map(orchestrator) do
+    agent_name = orchestrator["name"]
+    read_ctx = owner_read_ctx(ctx, orchestrator["owner"])
+
+    with {:ok, list_result} <- call_aqua(read_ctx, %{"action" => "list", "type" => "sub-agent"}) do
       guides = extract_guides(list_result)
 
       # Filter to sub-agents belonging to this orchestrator
@@ -115,7 +88,7 @@ defmodule Aqua.AgentConfig do
       parent_agents
       |> Enum.map(fn g ->
         name = g["name"]
-        build_sub_agent(ctx, listing, name, fallback_catalyst, fallback_model)
+        build_sub_agent(read_ctx, listing, name, fallback_catalyst, fallback_model)
       end)
       |> Enum.reject(&is_nil/1)
     else
@@ -127,6 +100,22 @@ defmodule Aqua.AgentConfig do
 
   # --- Private helpers ---
 
+  # The agent's own tree, when it names one — through the refocus
+  # chokepoint (membership/archive checked), the same narrowing
+  # `Aqua.Prompt` makes for the parent's base prompt. An unreachable owner
+  # falls back to the focus read: an empty crew, never a refused turn.
+  defp owner_read_ctx(ctx, owner) when is_binary(owner) do
+    case Context.refocus(ctx, owner) do
+      {:ok, read_ctx} -> read_ctx
+      {:error, _} -> ctx
+    end
+  end
+
+  defp owner_read_ctx(ctx, _), do: ctx
+
+  # `ctx` here is the OWNER read context — the guide comes from the tree
+  # the crew lives in; `listing` was resolved by the caller in the working
+  # estate.
   defp build_sub_agent(ctx, listing, name, fallback_catalyst, fallback_model) do
     with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => name}) do
       content = guide["content"] || ""
@@ -310,14 +299,15 @@ defmodule Aqua.AgentConfig do
 
   Falls back to a generic prompt if the aqua lookup fails — keeps the
   agent usable while AQUA configuration is still being set up.
+
+  The AUTHORED prompt only. What a turn is finally told — the runtime
+  section, the approval prelude, whose estate it is working in — is
+  `Aqua.Prompt.compose/2`'s, so exactly one place decides what the model is
+  claimed to be able to do.
   """
-  @spec build_system_prompt(Context.t(), String.t()) :: String.t()
-  def build_system_prompt(%Context{} = ctx, orchestrator_name \\ "aqua") do
-    # `build_dynamic_context/1` always answers at least the current date, so
-    # the runtime section is never optional. The `if dynamic != ""` that
-    # stood here read as though it could be, and its else branch was dead.
-    base = fetch_base_prompt(ctx, orchestrator_name)
-    base <> "\n\n---\n\n## Runtime Context\n\n" <> build_dynamic_context(ctx)
+  @spec base_prompt(Context.t(), String.t()) :: String.t()
+  def base_prompt(%Context{} = ctx, orchestrator_name \\ "aqua") do
+    fetch_base_prompt(ctx, orchestrator_name)
   end
 
   defp fetch_base_prompt(ctx, orchestrator_name) do
@@ -335,29 +325,5 @@ defmodule Aqua.AgentConfig do
 
         "You are an agent inside CYFR, a secure personal foundry that forges brilliance into reality."
     end
-  end
-
-  defp build_dynamic_context(_ctx) do
-    now = DateTime.utc_now()
-    day_name = Calendar.strftime(now, "%A")
-    date_str = Calendar.strftime(now, "%Y-%m-%d")
-    time_str = Calendar.strftime(now, "%H:%M UTC")
-
-    "Current date: #{date_str}, #{day_name}, #{time_str}\n" <> guest_scope_line()
-  end
-
-  # Derived from the layout SSOT (`Arca.Storage.guest_scopes/0`), so a
-  # renamed or added guest scope moves the prompt with it instead of the
-  # model describing scopes the runtime refuses. The descriptions stay
-  # prose per scope; an undescribed new scope still appears, generically.
-  defp guest_scope_line do
-    descriptions = %{"data" => "user storage", "components" => "installed components"}
-
-    scopes = Arca.Storage.guest_scopes() |> Map.keys() |> Enum.sort(:desc)
-
-    "File paths: " <>
-      Enum.map_join(scopes, ", ", fn scope ->
-        "#{scope}/ for #{Map.get(descriptions, scope, "guest storage")}"
-      end)
   end
 end

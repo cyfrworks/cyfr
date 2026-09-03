@@ -38,9 +38,10 @@ defmodule Aqua.ConversationRunnerTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
-    # `ath_a` is a seeded group; alice and bob are its members, and — for the
-    # bulk of these tests — the group answers everything, so a plain message
-    # is a turn. The addressing tests set the mode themselves.
+    # `ath_a` is a seeded group with two members, so a message has to name
+    # the agent to be a turn — `start_turn/3` mentions it. Addressing is
+    # derived from how many people are here, not configured: a one-person
+    # estate answers a bare line because nobody else could have meant it.
     alice = user_ctx("local|idp|alice")
     bob = user_ctx("local|idp|bob")
     {:ok, group} = Sanctum.Tenancy.Athanors.get("ath_a")
@@ -50,8 +51,16 @@ defmodule Aqua.ConversationRunnerTest do
 
     {:ok, _} = Sanctum.Tenancy.Members.ensure(bob.user_id, scope: "athanor", athanor_id: group.id)
 
-    {:ok, group} =
-      Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "all"}})
+    # The seeded agent names a catalyst this sandbox does not hold, and a
+    # named ref that does not resolve now refuses the turn (deliberately).
+    # These tests drive the fake engine, not a model — so the agent pins
+    # none, which is the engine-default path.
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(alice, %{
+        "action" => "update",
+        "name" => "aqua",
+        "catalyst_ref" => ""
+      })
 
     {:ok, conv} = Conversations.create(alice)
     ConversationRunner.subscribe(conv.id, conv.athanor_id)
@@ -86,11 +95,16 @@ defmodule Aqua.ConversationRunnerTest do
     send(runner, {:execution_event, %{execution_id: eid, type: "complete", data: %{}}})
   end
 
+  # Two people are in `ath_a`, so a turn is addressed explicitly. The
+  # mention is stripped from the task, which is why callers assert on the
+  # bare text.
   defp start_turn(ctx, conv, text) do
-    :ok = ConversationRunner.send_message(ctx, conv.id, text)
-    assert_receive {:conversation, _, {:message, %{author: author, content: ^text}}}, 5_000
+    addressed = "@aqua " <> text
+    :ok = ConversationRunner.send_message(ctx, conv.id, addressed)
+
+    assert_receive {:conversation, _, {:message, %{author: author, content: ^addressed}}}, 5_000
     assert author == ctx.user_id
-    assert_receive {:fake_start, eid, _ctx, input}, 10_000
+    assert_receive {:fake_start, eid, _ctx, input, _profile}, 10_000
     assert_receive {:fake_subscribe, ^eid, runner}, 5_000
     assert_receive {:conversation, _, {:turn_started, ^eid}}, 5_000
     {eid, runner, input}
@@ -104,7 +118,7 @@ defmodule Aqua.ConversationRunnerTest do
     # names who said it; the runner writes no separate author key.
     assert input["task"] =~ ~r/: hello there$/
     refute Map.has_key?(input, "author")
-    assert input["system"] =~ "group conversation"
+    assert input["system"] =~ "Several people are talking here"
     assert is_map(input["tool_policy"])
 
     {:ok, row} = Conversations.get(alice, conv.id)
@@ -161,11 +175,14 @@ defmodule Aqua.ConversationRunnerTest do
 
     # Bob's message lands in the thread immediately; AQUA answers it after
     # the running turn — the queue says one is waiting.
-    :ok = ConversationRunner.send_message(bob, conv.id, "me too")
-    assert_receive {:conversation, _, {:message, %{author: bob_id, content: "me too"}}}, 5_000
+    :ok = ConversationRunner.send_message(bob, conv.id, "@aqua me too")
+
+    assert_receive {:conversation, _, {:message, %{author: bob_id, content: "@aqua me too"}}},
+                   5_000
+
     assert bob_id == bob.user_id
     assert_receive {:conversation, _, {:queued, 1}}, 5_000
-    refute_receive {:fake_start, _, _, _}, 200
+    refute_receive {:fake_start, _, _, _, _}, 200
     assert ConversationRunner.state(conv.id, conv.athanor_id).queued == 1
 
     emit(runner, "text_delta", %{"content" => "partial"})
@@ -180,7 +197,7 @@ defmodule Aqua.ConversationRunnerTest do
     assert content =~ "partial"
     assert content =~ "cancelled"
     assert_receive {:conversation, _, {:turn_finished}}, 5_000
-    refute_receive {:fake_start, _, _, _}, 300
+    refute_receive {:fake_start, _, _, _, _}, 300
 
     {:ok, row} = Conversations.get(alice, conv.id)
     assert row.execution_id == nil
@@ -196,9 +213,9 @@ defmodule Aqua.ConversationRunnerTest do
        %{alice: alice, bob: bob, conv: conv} do
     {_eid, runner, _} = start_turn(alice, conv, "first question")
 
-    :ok = ConversationRunner.send_message(bob, conv.id, "second question")
+    :ok = ConversationRunner.send_message(bob, conv.id, "@aqua second question")
     assert_receive {:conversation, _, {:queued, 1}}, 5_000
-    :ok = ConversationRunner.send_message(alice, conv.id, "and a third")
+    :ok = ConversationRunner.send_message(alice, conv.id, "@aqua and a third")
     assert_receive {:conversation, _, {:queued, 2}}, 5_000
 
     emit(runner, "conversation_complete", %{"messages" => [%{"role" => "user", "content" => "x"}]})
@@ -209,7 +226,7 @@ defmodule Aqua.ConversationRunnerTest do
     # The next turn's task carries the second question only: the third is
     # a later turn of its own (each queued message is a turn).
     assert_receive {:conversation, _, {:queued, 1}}, 5_000
-    assert_receive {:fake_start, eid2, ctx2, input2}, 10_000
+    assert_receive {:fake_start, eid2, ctx2, input2, _profile}, 10_000
     assert ctx2.user_id == bob.user_id
     assert input2["task"] =~ "second question"
     refute input2["task"] =~ "and a third"
@@ -217,7 +234,7 @@ defmodule Aqua.ConversationRunnerTest do
 
     complete(runner2)
     assert_receive {:conversation, _, {:queued, 0}}, 5_000
-    assert_receive {:fake_start, _eid3, ctx3, input3}, 10_000
+    assert_receive {:fake_start, _eid3, ctx3, input3, _profile}, 10_000
     assert ctx3.user_id == alice.user_id
     assert input3["task"] =~ "and a third"
   end
@@ -227,31 +244,28 @@ defmodule Aqua.ConversationRunnerTest do
     {_eid, _runner, _} = start_turn(alice, conv, "go")
 
     for n <- 1..8 do
-      :ok = ConversationRunner.send_message(bob, conv.id, "q#{n}")
+      :ok = ConversationRunner.send_message(bob, conv.id, "@aqua q#{n}")
       assert_receive {:conversation, _, {:queued, ^n}}, 5_000
     end
 
-    assert {:error, :busy} = ConversationRunner.send_message(bob, conv.id, "one too many")
+    assert {:error, :busy} = ConversationRunner.send_message(bob, conv.id, "@aqua one too many")
     refute Enum.any?(Conversations.messages(alice, conv.id), &(&1.content == "one too many"))
   end
 
-  test "in a group that answers when mentioned, people talk freely and the next @turn hears it all",
-       %{alice: alice, bob: bob, conv: conv, group: group} do
-    {:ok, _} =
-      Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "mentioned"}})
-
-    assert ConversationRunner.state(conv.id, conv.athanor_id).answer_mode == "mentioned"
+  test "with several people here, they talk freely and the next @turn hears it all",
+       %{alice: alice, bob: bob, conv: conv} do
+    refute ConversationRunner.state(conv.id, conv.athanor_id).solo_human
 
     :ok = ConversationRunner.send_message(alice, conv.id, "shall we go out tonight?")
     :ok = ConversationRunner.send_message(bob, conv.id, "sure, where?")
     assert_receive {:conversation, _, {:message, %{content: "shall we go out tonight?"}}}, 5_000
     assert_receive {:conversation, _, {:message, %{content: "sure, where?"}}}, 5_000
-    refute_receive {:fake_start, _, _, _}, 300
+    refute_receive {:fake_start, _, _, _, _}, 300
     refute ConversationRunner.state(conv.id, conv.athanor_id).running
 
     :ok = ConversationRunner.send_message(alice, conv.id, "@aqua suggest a place")
     assert_receive {:conversation, _, {:message, %{content: "@aqua suggest a place"}}}, 5_000
-    assert_receive {:fake_start, _eid, ctx, input}, 10_000
+    assert_receive {:fake_start, _eid, ctx, input, _profile}, 10_000
     assert ctx.user_id == alice.user_id
 
     # every human line since the last turn, each attributed, the mention stripped
@@ -267,20 +281,25 @@ defmodule Aqua.ConversationRunnerTest do
     assert row.orchestrator == "aqua"
   end
 
-  test "flipping the group's answer mode reaches the running runner",
-       %{alice: alice, conv: conv, group: group} do
-    _ = ConversationRunner.state(conv.id, conv.athanor_id)
-    assert ConversationRunner.state(conv.id, conv.athanor_id).answer_mode == "all"
-
-    {:ok, _} =
-      Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "mentioned"}})
-
-    # the settings write is broadcast on the athanor's notify topic
-    Process.sleep(50)
-    assert ConversationRunner.state(conv.id, conv.athanor_id).answer_mode == "mentioned"
+  test "a bare line in a shared estate is talk, not a turn — there is no setting to change that",
+       %{alice: alice, bob: bob, conv: conv} do
+    # Addressing follows the roster: two people are here, so a message has
+    # to say who it is for. This replaced a stored `answer_mode` whose
+    # `"all"` could not answer "whose agent?" once an agent could belong to
+    # a person rather than an estate.
+    refute ConversationRunner.state(conv.id, conv.athanor_id).solo_human
 
     :ok = ConversationRunner.send_message(alice, conv.id, "just chatting")
-    refute_receive {:fake_start, _, _, _}, 300
+    refute_receive {:fake_start, _, _, _, _}, 300
+
+    # And it follows the roster as the roster CHANGES: with Bob gone,
+    # Alice is talking to nobody but the agent.
+    {:ok, group} = Sanctum.Tenancy.Athanors.get(conv.athanor_id)
+    :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: bob.user_id)
+
+    assert ConversationRunner.state(conv.id, conv.athanor_id).solo_human
+    :ok = ConversationRunner.send_message(alice, conv.id, "still there?")
+    assert_receive {:fake_start, _, _, _, _}, 10_000
   end
 
   test "a person's own athanor addresses AQUA with every message, unprefixed" do
@@ -298,11 +317,20 @@ defmodule Aqua.ConversationRunnerTest do
 
     {:ok, _} = Sanctum.Tenancy.Members.ensure(owner, scope: "athanor", athanor_id: personal.id)
     ctx = %{user_ctx(owner) | athanor_id: personal.id}
+
+    # Same as the shared setup: unpin the seed catalyst this sandbox lacks.
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "catalyst_ref" => ""
+      })
+
     {:ok, conv} = Conversations.create(ctx)
     ConversationRunner.subscribe(conv.id, conv.athanor_id)
 
     :ok = ConversationRunner.send_message(ctx, conv.id, "hello me")
-    assert_receive {:fake_start, _eid, _ctx, input}, 10_000
+    assert_receive {:fake_start, _eid, _ctx, input, _profile}, 10_000
     assert input["task"] == "hello me"
     refute input["system"] =~ "group conversation"
   end
@@ -310,7 +338,7 @@ defmodule Aqua.ConversationRunnerTest do
   test "a sender who left the athanor is refused, and a queued turn of theirs is dropped",
        %{alice: alice, bob: bob, conv: conv, group: group} do
     {_eid, runner, _} = start_turn(alice, conv, "go")
-    :ok = ConversationRunner.send_message(bob, conv.id, "me next")
+    :ok = ConversationRunner.send_message(bob, conv.id, "@aqua me next")
     assert_receive {:conversation, _, {:queued, 1}}, 5_000
 
     :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: bob.user_id)
@@ -319,7 +347,7 @@ defmodule Aqua.ConversationRunnerTest do
     complete(runner)
     assert_receive {:conversation, _, {:message, %{kind: "system", content: dropped}}}, 5_000
     assert dropped =~ "no longer a member"
-    refute_receive {:fake_start, _, _, _}, 300
+    refute_receive {:fake_start, _, _, _, _}, 300
   end
 
   test "an approval is a row any member decides — once", %{alice: alice, bob: bob, conv: conv} do
@@ -363,18 +391,30 @@ defmodule Aqua.ConversationRunnerTest do
                       tool: "component",
                       action: "pull",
                       args: %{"reference" => "catalyst:local.x"}
-                    }, run_ctx},
+                    }, run_ctx, approved_profile},
                    5_000
 
     assert run_ctx.user_id == bob.user_id
+
+    # The approved call roots the profile the TURN pinned, not one selected
+    # afresh at approval time. A human decision unblocks a call; it never
+    # chooses the authority the call runs under — and a fresh selection is
+    # only unambiguous while the agent formula has a single owner profile.
+    assert approved_profile == Aqua.FakeTurn.fake_profile_id()
 
     assert_receive {:conversation, _, {:message_updated, %{status: "approved"} = done}}, 5_000
     assert Conversations.resolution(done)["summary"] =~ "wh_fake"
     assert Conversations.resolution(done)["scope"] == "conversation"
 
-    # "for this chat" is remembered by the runner and shown to everyone.
+    # "for this chat" is remembered and shown to everyone.
     assert_receive {:conversation, _, {:grants, grants}}, 5_000
     assert MapSet.member?(grants, {"component", "pull"})
+
+    # And it is a ROW, not this process's memory. A `:conversation` grant
+    # used to live in a `MapSet` that a deploy, a crash or an idle timeout
+    # discarded — reverting an explicit human decision with nothing said.
+    assert [%{scope: "conversation", effect: "allow", tool: "component", action: "pull"}] =
+             Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
 
     # The outcome is in the history the next turn will carry.
     {:ok, row} = Conversations.get(alice, conv.id)
@@ -429,6 +469,49 @@ defmodule Aqua.ConversationRunnerTest do
       # This one action, this one time, remains every member's to give.
       :ok = ConversationRunner.approve(bob, conv.id, apr.id, :once)
     end
+
+    # And no standing row was written by either refusal.
+    assert [] = Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
+  end
+
+  test "a standing decline denies the pair and outranks a declared auto", %{
+    alice: alice,
+    bob: bob,
+    conv: conv
+  } do
+    {_eid, _runner, _} = start_turn(alice, conv, "do things")
+
+    {:ok, apr} =
+      Conversations.append(alice, conv.id, %{
+        author: "aqua",
+        kind: "approval",
+        status: "pending",
+        content: "Pull it",
+        payload: %{
+          "orchestrator" => "aqua",
+          "intent" => %{
+            "kind" => "request_approval",
+            "title" => "Pull it",
+            "action_kind" => "write",
+            "proposal" => %{"tool" => "component", "action" => "pull", "args" => %{}}
+          }
+        }
+      })
+
+    :ok = ConversationRunner.decline(bob, conv.id, apr.id, "never", :never)
+
+    # "Never" is a deny ROW now. It used to delete the key from the agent's
+    # authored markdown — the same file the agents page edits — so a
+    # decline in one chat quietly rewrote the agent for everyone.
+    assert [%{scope: "agent", effect: "deny", tool: "component", action: "pull"}] =
+             Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
+
+    # And it beats a declared "auto": the pair leaves the surface entirely,
+    # so the agent cannot call it and is not asked about it again.
+    assert Aqua.ToolGrants.resolve(
+             %{"component.pull" => "auto"},
+             Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
+           ) == %{}
   end
 
   test "decline records the reason; a proposal outside policy is a tripwire", %{
@@ -460,12 +543,13 @@ defmodule Aqua.ConversationRunnerTest do
     :ok = ConversationRunner.decline(alice, conv.id, apr.id, "not now")
     assert_receive {:conversation, _, {:message_updated, %{status: "declined"} = declined}}, 5_000
     assert Conversations.resolution(declined)["reason"] == "not now"
-    refute_receive {:fake_run_approved, _, _}, 200
+    refute_receive {:fake_run_approved, _, _, _}, 200
   end
 
   test "an engine that will not start the turn leaves an error row", %{alice: alice, conv: conv} do
     defmodule RefusingTurn do
-      def start(_ctx, _input), do: {:error, :no_catalyst}
+      def pin_profile(_ctx), do: {:ok, %{profile_id: "prof_stub"}}
+      def start(_ctx, _input, _profile), do: {:error, :no_catalyst}
       def engine_available?, do: true
       def subscribe(_, _), do: :ok
       def unsubscribe(_, _), do: :ok
@@ -473,13 +557,43 @@ defmodule Aqua.ConversationRunnerTest do
       def cancel_for_restart(_, _, _), do: :ok
       def events_since(_, _), do: []
       def running?(_, _), do: false
-      def run_approved(_, _), do: {:error, :nope}
+      def run_approved(_, _, _), do: {:error, :nope}
     end
 
     Application.put_env(:cyfr, :aqua_turn, RefusingTurn)
-    :ok = ConversationRunner.send_message(alice, conv.id, "hi")
+    :ok = ConversationRunner.send_message(alice, conv.id, "@aqua hi")
     assert_receive {:conversation, _, {:message, %{kind: "error", content: err}}}, 10_000
     assert err =~ "no_catalyst"
+    assert_receive {:conversation, _, {:turn_finished}}, 5_000
+    refute ConversationRunner.state(conv.id, conv.athanor_id).running
+  end
+
+  test "an ambiguous profile refuses the turn rather than picking one", %{
+    alice: alice,
+    conv: conv
+  } do
+    # Two active owner labels on the agent formula. `RootSelect.select/2`
+    # answers `{:ambiguous, ids}` for `:default`, and a turn must surface
+    # that instead of running under whichever one a re-selection lands on:
+    # the profile decides the vault, the egress and the tool surface.
+    defmodule AmbiguousTurn do
+      def pin_profile(_ctx), do: {:error, {:ambiguous, ["prof_a", "prof_b"]}}
+      def start(_ctx, _input, _profile), do: raise("must not start an unpinned turn")
+      def engine_available?, do: true
+      def subscribe(_, _), do: :ok
+      def unsubscribe(_, _), do: :ok
+      def cancel(_, _), do: :ok
+      def cancel_for_restart(_, _, _), do: :ok
+      def events_since(_, _), do: []
+      def running?(_, _), do: false
+      def run_approved(_, _, _), do: {:error, :nope}
+    end
+
+    Application.put_env(:cyfr, :aqua_turn, AmbiguousTurn)
+    :ok = ConversationRunner.send_message(alice, conv.id, "@aqua hi")
+
+    assert_receive {:conversation, _, {:message, %{kind: "error", content: err}}}, 10_000
+    assert err =~ "ambiguous"
     assert_receive {:conversation, _, {:turn_finished}}, 5_000
     refute ConversationRunner.state(conv.id, conv.athanor_id).running
   end
@@ -508,7 +622,8 @@ defmodule Aqua.ConversationRunnerTest do
   test "a recovered turn keeps its orchestrator's policy, so its approvals are not dropped",
        %{alice: alice, conv: conv} do
     defmodule StillRunningTurn do
-      def start(_ctx, _input), do: {:error, :unused}
+      def pin_profile(_ctx), do: {:ok, %{profile_id: "prof_stub"}}
+      def start(_ctx, _input, _profile), do: {:error, :unused}
       def engine_available?, do: true
 
       def subscribe(execution_id, _ctx),
@@ -519,7 +634,7 @@ defmodule Aqua.ConversationRunnerTest do
       def cancel_for_restart(_, _, _), do: :ok
       def events_since(_, _), do: []
       def running?(_, _), do: true
-      def run_approved(_, _), do: {:ok, %{}}
+      def run_approved(_, _, _), do: {:ok, %{}}
     end
 
     Process.register(self(), :recover_probe)
@@ -545,6 +660,288 @@ defmodule Aqua.ConversationRunnerTest do
     complete(runner)
     assert_receive {:conversation, _, {:message, %{kind: "approval", status: "pending"}}}, 5_000
     refute_receive {:conversation, _, {:message, %{kind: "error"}}}, 300
+  end
+
+  test "a message over the byte bound is refused whole — nothing written, the draft kept",
+       %{alice: alice, conv: conv} do
+    long = String.duplicate("a", 32 * 1024 + 1)
+
+    assert {:error, :message_too_long} =
+             ConversationRunner.send_message(alice, conv.id, long)
+
+    assert Conversations.messages(alice, conv.id) == []
+  end
+
+  test "recovery resolves the orchestrator from its stored owner's tree, not the estate in focus",
+       %{alice: alice, conv: conv} do
+    defmodule StillRunningOwnedTurn do
+      def pin_profile(_ctx), do: {:ok, %{profile_id: "prof_stub"}}
+      def start(_ctx, _input, _profile), do: {:error, :unused}
+      def engine_available?, do: true
+
+      def subscribe(execution_id, _ctx),
+        do: send(:owner_recover_probe, {:owner_subscribed, execution_id, self()})
+
+      def unsubscribe(_, _), do: :ok
+      def cancel(_, _), do: :ok
+      def cancel_for_restart(_, _, _), do: :ok
+      def events_since(_, _), do: []
+      def running?(_, _), do: true
+      def run_approved(_, _, _), do: {:ok, %{}}
+    end
+
+    # A personal tree beside the estate: the row remembers WHOSE `aqua`
+    # ran, and a restart must resume that one — a bare name re-read from
+    # the estate in focus was the restart bug.
+    n = System.unique_integer([:positive])
+
+    {:ok, mine} =
+      Sanctum.Tenancy.Athanors.create(%{
+        kind: "person",
+        name: "Me",
+        slug: "me-r#{n}",
+        owner_user_id: alice.user_id,
+        created_by: alice.user_id
+      })
+
+    Process.register(self(), :owner_recover_probe)
+    Application.put_env(:cyfr, :aqua_turn, StillRunningOwnedTurn)
+
+    {:ok, _} =
+      Conversations.update(alice, conv.id, %{
+        execution_id: "exec_owned",
+        orchestrator: "aqua",
+        orchestrator_owner: mine.id
+      })
+
+    {:ok, _pid} = ConversationRunner.ensure(conv.id, conv.athanor_id)
+    assert_receive {:owner_subscribed, "exec_owned", _}, 10_000
+
+    live = ConversationRunner.state(conv.id, conv.athanor_id)
+    assert live.running
+    assert live.orchestrator["name"] == "aqua"
+    assert live.orchestrator["owner"] == mine.id
+  end
+
+  # A personal tree for Alice with an agent in it — the borrowed-agent
+  # setup tests below share. Seats, users row and personal pointer as
+  # production mints them.
+  defp personal_tom(alice) do
+    n = System.unique_integer([:positive])
+
+    {:ok, mine} =
+      Sanctum.Tenancy.Athanors.create(%{
+        kind: "person",
+        name: "Me",
+        slug: "me-g#{n}",
+        owner_user_id: alice.user_id,
+        created_by: alice.user_id
+      })
+
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(alice.user_id, scope: "athanor", athanor_id: mine.id)
+
+    {:ok, mine_ctx} = Context.focus(alice, mine.id)
+
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(mine_ctx, %{
+        "action" => "create",
+        "name" => "tom",
+        "title" => "Tom",
+        "content" => "# Tom",
+        "tool_policy" => %{"record.list" => "auto", "record.get" => "ask"}
+      })
+
+    entry = %{
+      "name" => "tom",
+      "title" => "Tom",
+      "owner" => mine.id,
+      "owner_slug" => mine.slug,
+      "estate?" => false
+    }
+
+    {mine, mine_ctx, entry}
+  end
+
+  test "a borrowed agent's first turn reads the standing answers from its owner's estate",
+       %{alice: alice, conv: conv} do
+    {mine, mine_ctx, entry} = personal_tom(alice)
+
+    # "Never" answered at home, before this thread existed. On the first
+    # turn there is no previous orchestrator on runner state — the owner
+    # must come off the turn's own resolved agent, or this row is read
+    # from the wrong estate and the declared "auto" runs anyway.
+    {:ok, %{narrowed?: false}} =
+      Aqua.ToolGrants.put(mine_ctx, %{
+        scope: "agent",
+        effect: "deny",
+        agent_athanor_id: mine.id,
+        agent_name: "tom",
+        tool: "record",
+        action: "list"
+      })
+
+    :ok = ConversationRunner.send_message(alice, conv.id, "@tom hi", orchestrators: [entry])
+    assert_receive {:fake_start, _eid, _ctx, input, _profile}, 10_000
+
+    # The deny drops the declared auto from the surface; the rest of the
+    # declared policy still flows.
+    refute Map.has_key?(input["tool_policy"], "record.list")
+    assert input["tool_policy"]["record.get"] == "ask"
+  end
+
+  test "switching orchestrators does not carry the previous agent's standing answers",
+       %{alice: alice, conv: conv} do
+    {mine, _mine_ctx, personal} = personal_tom(alice)
+
+    # An estate agent of the SAME name — the collision that makes a stale
+    # owner read the wrong agent's rows.
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(alice, %{
+        "action" => "create",
+        "name" => "tom",
+        "title" => "Estate Tom",
+        "content" => "# Tom"
+      })
+
+    estate = %{
+      "name" => "tom",
+      "title" => "Estate Tom",
+      "owner" => conv.athanor_id,
+      "owner_slug" => "estate",
+      "estate?" => true
+    }
+
+    # Turn 1 runs Alice's Tom.
+    :ok = ConversationRunner.send_message(alice, conv.id, "@tom hi", orchestrators: [personal])
+    assert_receive {:fake_start, _eid, _ctx, _input, _profile}, 10_000
+    assert_receive {:fake_subscribe, _eid2, runner}, 5_000
+    complete(runner)
+    assert_receive {:conversation, _, {:turn_finished}}, 5_000
+
+    # "Always for this conversation" — answered for ALICE's Tom.
+    {:ok, %{narrowed?: false}} =
+      Aqua.ToolGrants.put(alice, %{
+        scope: "conversation",
+        effect: "allow",
+        conversation_id: conv.id,
+        agent_athanor_id: mine.id,
+        agent_name: "tom",
+        tool: "record",
+        action: "list"
+      })
+
+    # Turn 2 runs the ESTATE's Tom. Its policy must not inherit the allow
+    # recorded against Alice's — the runner state still points at hers.
+    :ok = ConversationRunner.send_message(alice, conv.id, "@tom again", orchestrators: [estate])
+    assert_receive {:fake_start, _eid3, _ctx, input, _profile}, 10_000
+    refute Map.get(input["tool_policy"], "record.list") == "auto"
+  end
+
+  test "an approval on a turn with no pinned profile is refused, never re-rooted", %{
+    alice: alice,
+    conv: conv
+  } do
+    defmodule StillRunningUnpinnedTurn do
+      def pin_profile(_ctx), do: {:ok, %{profile_id: "prof_stub"}}
+      def start(_ctx, _input, _profile), do: {:error, :unused}
+      def engine_available?, do: true
+
+      def subscribe(execution_id, _ctx),
+        do: send(:unpinned_probe, {:unpinned_subscribed, execution_id, self()})
+
+      def unsubscribe(_, _), do: :ok
+      def cancel(_, _), do: :ok
+      def cancel_for_restart(_, _, _), do: :ok
+      def events_since(_, _), do: []
+      def running?(_, _), do: true
+      def run_approved(_, _, _), do: raise("an unpinned approval must not run")
+    end
+
+    Process.register(self(), :unpinned_probe)
+    Application.put_env(:cyfr, :aqua_turn, StillRunningUnpinnedTurn)
+
+    # The execution row predates the pin column (no row to read back), so
+    # the recovered turn holds no profile. Deciding a card must refuse —
+    # rooting a fresh selection here is the substitution the pin exists
+    # to prevent.
+    {:ok, _} =
+      Conversations.update(alice, conv.id, %{execution_id: "exec_unpinned", orchestrator: "aqua"})
+
+    {:ok, _pid} = ConversationRunner.ensure(conv.id, conv.athanor_id)
+    assert_receive {:unpinned_subscribed, "exec_unpinned", _}, 10_000
+
+    {:ok, apr} =
+      Conversations.append(alice, conv.id, %{
+        author: "aqua",
+        kind: "approval",
+        status: "pending",
+        content: "Do it",
+        payload: %{
+          "orchestrator" => "aqua",
+          "intent" => %{
+            "kind" => "request_approval",
+            "title" => "Do it",
+            "action_kind" => "write",
+            "proposal" => %{"tool" => "component", "action" => "pull", "args" => %{}}
+          }
+        }
+      })
+
+    :ok = ConversationRunner.approve(alice, conv.id, apr.id, :once)
+
+    assert_receive {:conversation, _, {:message_updated, %{status: "error"} = updated}}, 5_000
+    assert Conversations.resolution(updated)["reason"] =~ "profile is unknown"
+  end
+
+  test "recovery composes standing denies into the recovered policy", %{
+    alice: alice,
+    conv: conv
+  } do
+    defmodule StillRunningDeniedTurn do
+      def pin_profile(_ctx), do: {:ok, %{profile_id: "prof_stub"}}
+      def start(_ctx, _input, _profile), do: {:error, :unused}
+      def engine_available?, do: true
+
+      def subscribe(execution_id, _ctx),
+        do: send(:deny_recover_probe, {:deny_subscribed, execution_id, self()})
+
+      def unsubscribe(_, _), do: :ok
+      def cancel(_, _), do: :ok
+      def cancel_for_restart(_, _, _), do: :ok
+      def events_since(_, _), do: []
+      def running?(_, _), do: true
+      def run_approved(_, _, _), do: {:ok, %{}}
+    end
+
+    # "Never" for the estate's own agent, recorded before the restart. The
+    # recovered policy must be the same COMPOSITION a fresh start builds —
+    # restoring the raw declared markdown would put the denied pair back
+    # on the surface until the next turn.
+    {:ok, %{narrowed?: false}} =
+      Aqua.ToolGrants.put(alice, %{
+        scope: "agent",
+        effect: "deny",
+        agent_athanor_id: conv.athanor_id,
+        agent_name: "aqua",
+        tool: "component",
+        action: "pull"
+      })
+
+    Process.register(self(), :deny_recover_probe)
+    Application.put_env(:cyfr, :aqua_turn, StillRunningDeniedTurn)
+
+    {:ok, _} =
+      Conversations.update(alice, conv.id, %{execution_id: "exec_denied", orchestrator: "aqua"})
+
+    {:ok, _pid} = ConversationRunner.ensure(conv.id, conv.athanor_id)
+    assert_receive {:deny_subscribed, "exec_denied", runner}, 10_000
+
+    # The denied pair is off the surface; the rest of the declared policy
+    # was read and survives — the composition ran, not a raw restore.
+    state = :sys.get_state(runner)
+    refute Map.has_key?(state.tool_policy, "component.pull")
+    assert Map.has_key?(state.tool_policy, "component.list")
   end
 
   test "a shutdown mid-turn writes the interruption and clears the running turn; a crash keeps it",
@@ -574,7 +971,7 @@ defmodule Aqua.ConversationRunnerTest do
   test "archiving the athanor ends the runner: the turn is interrupted, the queue dropped, later sends refused",
        %{alice: alice, bob: bob, conv: conv, group: group} do
     {eid, runner, _} = start_turn(alice, conv, "long question")
-    :ok = ConversationRunner.send_message(bob, conv.id, "me next")
+    :ok = ConversationRunner.send_message(bob, conv.id, "@aqua me next")
     assert_receive {:conversation, _, {:queued, 1}}, 5_000
 
     ref = Process.monitor(runner)
@@ -588,7 +985,7 @@ defmodule Aqua.ConversationRunnerTest do
     assert row.execution_id == nil
 
     # Nothing queued runs, and no member can start a turn in a closed furnace.
-    refute_receive {:fake_start, _, _, _}, 300
+    refute_receive {:fake_start, _, _, _, _}, 300
     assert {:error, :archived} = ConversationRunner.send_message(alice, conv.id, "hello?")
   end
 
@@ -615,11 +1012,11 @@ defmodule Aqua.ConversationRunnerTest do
     assert {:error, :not_member} = ConversationRunner.approve(bob, conv.id, apr.id, :always)
     assert {:error, :not_member} = ConversationRunner.decline(bob, conv.id, apr.id, "no")
     assert {:error, :not_member} = ConversationRunner.stop_turn(bob, conv.id)
-    refute_receive {:fake_run_approved, _, _}, 200
+    refute_receive {:fake_run_approved, _, _, _}, 200
 
     # Alice is still a member, so the card is still hers to decide.
     :ok = ConversationRunner.approve(alice, conv.id, apr.id, :once)
-    assert_receive {:fake_run_approved, _, _}, 5_000
+    assert_receive {:fake_run_approved, _, _, _}, 5_000
   end
 
   defp approval_block do
@@ -687,7 +1084,8 @@ defmodule Aqua.ConversationRunnerTest do
   # Exits are not exceptions: uncaught, the start task died silently and
   # the runner held `running: true` forever.
   defmodule ExitingStartTurn do
-    def start(_ctx, _input), do: exit({:timeout, {GenServer, :call, [:engine, :start]}})
+    def pin_profile(_ctx), do: {:ok, %{profile_id: "prof_stub"}}
+    def start(_ctx, _input, _profile), do: exit({:timeout, {GenServer, :call, [:engine, :start]}})
     defdelegate engine_available?, to: Aqua.FakeTurn
     defdelegate subscribe(eid, ctx), to: Aqua.FakeTurn
     defdelegate unsubscribe(eid, ctx), to: Aqua.FakeTurn
@@ -695,7 +1093,7 @@ defmodule Aqua.ConversationRunnerTest do
     defdelegate running?(ctx, eid), to: Aqua.FakeTurn
     defdelegate cancel(ctx, eid), to: Aqua.FakeTurn
     defdelegate cancel_for_restart(ctx, eid, payload), to: Aqua.FakeTurn
-    defdelegate run_approved(proposal, ctx), to: Aqua.FakeTurn
+    defdelegate run_approved(proposal, ctx, profile_id), to: Aqua.FakeTurn
   end
 
   # A turn whose execution failed so fast its terminal event broadcast
@@ -703,14 +1101,15 @@ defmodule Aqua.ConversationRunnerTest do
   # The payload key is `:error`, the shape every producer writes
   # (`Opus.ExecutionEventBuffer.push_terminal/5` callers).
   defmodule FastFailTurn do
-    defdelegate start(ctx, input), to: Aqua.FakeTurn
+    defdelegate pin_profile(ctx), to: Aqua.FakeTurn
+    defdelegate start(ctx, input, profile_id), to: Aqua.FakeTurn
     defdelegate engine_available?, to: Aqua.FakeTurn
     defdelegate subscribe(eid, ctx), to: Aqua.FakeTurn
     defdelegate unsubscribe(eid, ctx), to: Aqua.FakeTurn
     defdelegate running?(ctx, eid), to: Aqua.FakeTurn
     defdelegate cancel(ctx, eid), to: Aqua.FakeTurn
     defdelegate cancel_for_restart(ctx, eid, payload), to: Aqua.FakeTurn
-    defdelegate run_approved(proposal, ctx), to: Aqua.FakeTurn
+    defdelegate run_approved(proposal, ctx, profile_id), to: Aqua.FakeTurn
 
     def events_since(eid, _athanor_id) do
       [
@@ -734,7 +1133,7 @@ defmodule Aqua.ConversationRunnerTest do
     # twice) and drop the consumed task from the agent's memory.
     {eid, runner, _input} = start_turn(alice, conv, "remember this ask")
 
-    :ok = ConversationRunner.send_message(bob, conv.id, "me too")
+    :ok = ConversationRunner.send_message(bob, conv.id, "@aqua me too")
     assert_receive {:conversation, _, {:queued, 1}}, 5_000
 
     send(runner, {:execution_event, %{execution_id: eid, type: "error", data: %{error: "boom"}}})
@@ -802,14 +1201,14 @@ defmodule Aqua.ConversationRunnerTest do
   } do
     Application.put_env(:cyfr, :aqua_turn, ExitingStartTurn)
 
-    :ok = ConversationRunner.send_message(alice, conv.id, "boom")
+    :ok = ConversationRunner.send_message(alice, conv.id, "@aqua boom")
 
     assert_receive {:conversation, _, {:message, %{kind: "error", content: content}}}, 5_000
     assert content =~ "Execution failed to start"
     assert_receive {:conversation, _, {:turn_finished}}, 5_000
 
     # Not wedged: the next send is accepted rather than answered :busy.
-    :ok = ConversationRunner.send_message(alice, conv.id, "again")
+    :ok = ConversationRunner.send_message(alice, conv.id, "@aqua again")
     assert_receive {:conversation, _, {:message, %{kind: "error"}}}, 5_000
   end
 
@@ -819,8 +1218,8 @@ defmodule Aqua.ConversationRunnerTest do
   } do
     Application.put_env(:cyfr, :aqua_turn, FastFailTurn)
 
-    :ok = ConversationRunner.send_message(alice, conv.id, "fail fast")
-    assert_receive {:fake_start, eid, _ctx, _input}, 10_000
+    :ok = ConversationRunner.send_message(alice, conv.id, "@aqua fail fast")
+    assert_receive {:fake_start, eid, _ctx, _input, _profile}, 10_000
     assert_receive {:fake_subscribe, ^eid, _runner}, 5_000
 
     # No live event is ever sent; the buffered terminal error must land —

@@ -53,6 +53,8 @@ defmodule Arca.TenantTables do
     "profiles",
     "vault_entries",
     "consent_proofs",
+    "tool_grants",
+    "topic_subscriptions",
     "messages",
     "conversations",
     "webhooks",
