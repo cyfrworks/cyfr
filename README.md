@@ -32,7 +32,7 @@ Formulas support **execution event streaming** — long-running formulas (like a
 CYFR exposes two surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
-- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy) and installable as a PWA: each athanor's chat with **AQUA** — your friendly assistant — (a shared thread every member sees, with approvals any member can decide), its Agents page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, MCP servers, tinctures.
+- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy) and installable as a PWA: the chat with **AQUA** — your friendly assistant — one zone across every estate you belong to (a shared thread every member of an estate sees, with approvals any member can decide), your own AQUA in a panel on every page, each estate's AQUA page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, MCP servers, tinctures.
 
 ## Quick Start
 
@@ -88,7 +88,7 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, WIT interface definitions, the `aqua/` orchestrator prompts, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -97,7 +97,7 @@ open http://localhost:4000
 Around the chat:
 
 - **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
-- **The drawer** — off the chat, on every screen size: **Apps** (tinctures), **Members**, **Vault**, **Agents**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **Agents** — the grant sheet binds a sealed vault entry to the model's catalyst — no developer view needed.
+- **The drawer** — off the chat, on every screen size: **AQUA**, **Apps** (tinctures), **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the grant sheet binds a sealed vault entry to the model's catalyst — no developer view needed.
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
@@ -122,7 +122,7 @@ your-project/
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── aqua/                   # AQUA agent template (agents/ role prompts) every athanor is given
+├── aqua/                   # The AQUA template every athanor is given: aqua.md (the soul), roles/, skills/
 └── data/                   # ALL runtime state — one directory, .gitignored
     ├── cyfr.db             # Vault entries, consents, execution records
     ├── cache/              # Immutable cached artifacts (OCI blobs)
@@ -135,7 +135,7 @@ your-project/
             │   ├── reagents/    # Your local reagents
             │   ├── formulas/    # Bundled formulas: list-models, aqua
             │   └── tinctures/   # Bundled example tinctures + your own
-            ├── aqua/       # The athanor's own AQUA agent definitions
+            ├── aqua/       # The athanor's own AQUA: the soul, its roles, its scrolls
             ├── conversations/  # Chat attachment files
             ├── notes/      # What was kept out of a conversation — host-only, no guest scope
             ├── guest/      # Files WASM components store (their `data/` scope)
@@ -534,7 +534,7 @@ own tmp roots):
 CYFR_DATA_PATH=data                     # the one storage root
 CYFR_SEED_PATH=seed                     # the seed tree, read in place: the
                                         # component bundle under components/ and
-                                        # the AQUA agent template under aqua/
+                                        # the AQUA template under aqua/
                                         # (the image points it at /app/seed)
 CYFR_DATABASE_PATH=data/cyfr.db         # the SQLite file; defaults to
                                         # cyfr.db inside the storage root
@@ -674,7 +674,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 |---------|-------------|
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
-| `cyfr aqua list/get` | Access AQUA agents, prompts, and documentation guides `[i]` |
+| `cyfr aqua list/get` | Read the AQUA soul, roles, scrolls and guides `[i]` |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
 | `cyfr registry probe` | Force a re-probe against cyfr.run (re-mints push tokens) |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |

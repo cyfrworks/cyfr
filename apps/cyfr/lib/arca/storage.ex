@@ -263,7 +263,7 @@ defmodule Arca.Storage do
   - `system` — server-internal scratch (the storage health probe) under
     `data/system/`
 
-  AQUA agent and skill definitions (`aqua/agents/*.md`,
+  The AQUA soul, roles and scrolls (`aqua/aqua.md`, `aqua/roles/*.md`,
   `aqua/skills/*/SKILL.md`) are the athanor's own — an ordinary tenant
   path, served through the seed overlay like `components/`: the shipped
   template shows through until a file is edited.

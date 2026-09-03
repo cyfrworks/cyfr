@@ -8,8 +8,8 @@ defmodule Aqua.AgentConfig do
   Builds agent configuration for formula input by querying the `aqua` MCP tool.
 
   All prompt and metadata access goes through the aqua tool, which reads the
-  athanor's `aqua/agents/` tree at runtime. This ensures a single canonical
-  API for both internal and external harnesses.
+  athanor's `aqua/` tree — the soul and its roles — at runtime. This ensures
+  a single canonical API for both internal and external harnesses.
   """
 
   alias Sanctum.Context

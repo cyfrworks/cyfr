@@ -7,11 +7,12 @@ defmodule Compendium.MCP.AquaTool do
   (orchestrators, sub-agents, prompts), the skills tree, and documentation
   guides.
 
-  Agent definitions are the athanor's own: one frontmatter-markdown file
-  per agent under `aqua/agents/` (`Compendium.AquaAgent` is the format,
-  the directory is the roster), served through the seed overlay — shipped
-  agents read through until edited, edited ones shadow only themselves,
-  and deleting an edited copy reverts it to shipped. Skills follow the
+  The soul and its roles are the athanor's own: one frontmatter-markdown
+  file each — `aqua/aqua.md` and `aqua/roles/<name>.md`
+  (`Compendium.AquaAgent` is the format, `Compendium.AquaPath` the
+  layout) — served through the seed overlay: shipped files read through
+  until edited, edited ones shadow only themselves, and deleting an
+  edited copy reverts it to shipped. Skills follow the
   open Agent Skills convention under `aqua/skills/<name>/SKILL.md`.
   """
 

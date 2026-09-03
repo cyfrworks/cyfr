@@ -65,7 +65,7 @@ defmodule PrismWeb.FocusIntentTest do
       assert {:ok, %{kind: "navigate", to: path}} =
                Aqua.Actions.validate(Map.put(unquote(Macro.escape(args)), "kind", unquote(kind)))
 
-      # `Aqua.Actions` mints the page-relative path; `ConversationLive`
+      # `Aqua.Actions` mints the page-relative path; `ConversationPaneLive`
       # prefixes the athanor in focus before handing it to the client, the
       # same split `PrismWeb.ActiveContext.strip_focus/1` undoes. Routing
       # the bare path would 404, so the test follows the real pipeline.

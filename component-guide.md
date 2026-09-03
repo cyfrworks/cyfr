@@ -28,7 +28,7 @@ your-project/
         │   ├── catalysts/local/   #   name/version/catalyst.wasm + cyfr-manifest.json + src/
         │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
         │   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
-        ├── aqua/          # The athanor's AQUA agent definitions
+        ├── aqua/          # The athanor's AQUA: the soul, its roles, its scrolls
         ├── conversations/ # Chat attachment files
         ├── notes/         # What was kept out of a conversation — host-only, never a guest scope
         ├── guest/         # Files WASM components store — their `data/` scope

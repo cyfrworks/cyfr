@@ -142,8 +142,8 @@ defmodule Compendium.AquaAgent do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Every agent under `aqua/agents/` — the overlay union, so shipped and
-  member-created agents list alike. Disabled agents are included (flagged);
+  The soul and every role under `aqua/` — the overlay union, so shipped and
+  member-created roles list alike. Disabled agents are included (flagged);
   the callers that build a surface drop them. A file that fails to parse
   is skipped with its error in the second element — one broken role must
   not take the roster down. The soul comes first when the tree has one,
