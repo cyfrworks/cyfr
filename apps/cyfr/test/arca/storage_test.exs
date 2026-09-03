@@ -240,16 +240,16 @@ defmodule Arca.StorageTest do
 
     test "an unknown first segment is refused for every context" do
       ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
-      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["notes", "hello.txt"])
+      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["scratch", "hello.txt"])
       assert {:error, :forbidden} = Storage.authorize_path(ctx, ["data", "x.txt"])
-      assert {:error, :forbidden} = Storage.authorize_path(Sanctum.system_context(), ["notes"])
+      assert {:error, :forbidden} = Storage.authorize_path(Sanctum.system_context(), ["scratch"])
     end
   end
 
   describe "classify/1 and tenant_roots/0" do
     test "the tenant roster is closed, and every scope classifies" do
       assert Storage.tenant_roots() ==
-               ~w(aqua components conversations memory guest meta)
+               ~w(aqua components conversations notes guest meta)
 
       for root <- Storage.tenant_roots() do
         assert Storage.classify([root, "x"]) == :tenant
@@ -259,13 +259,13 @@ defmodule Arca.StorageTest do
       assert Storage.classify(["seed", "components"]) == :seed
       assert Storage.classify(["cache", "oci"]) == :global
       assert Storage.classify(["system", "health"]) == :global
-      assert Storage.classify(["notes", "x"]) == :invalid
+      assert Storage.classify(["scratch", "x"]) == :invalid
       assert Storage.classify(["data", "x"]) == :invalid
     end
 
     test "physical_segments refuses an unknown root instead of minting a subtree" do
       assert_raise ArgumentError, ~r/unknown storage root/, fn ->
-        Storage.physical_segments(ath_ctx(), ["notes", "hello.txt"])
+        Storage.physical_segments(ath_ctx(), ["scratch", "hello.txt"])
       end
     end
 
@@ -283,7 +283,7 @@ defmodule Arca.StorageTest do
       # Every roster is derived from @layout; these pin the derived values
       # so an edited row cannot silently reshape a roster.
       assert Enum.sort(Storage.tenant_roots()) ==
-               ~w(aqua components conversations guest memory meta)
+               ~w(aqua components conversations guest meta notes)
 
       assert Enum.sort(Storage.global_prefixes()) == ~w(cache system)
       assert Enum.sort(Storage.seed_roots()) == ~w(aqua components)

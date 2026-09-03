@@ -46,6 +46,16 @@ defmodule Aqua.ToolGrants do
   kind derived from the registry annotation, the same source the card
   shows. A standing **deny** stands: "never do this" is exactly the
   standing answer a destructive action should be able to take.
+
+  ## An action may say how far a standing allow reaches
+
+  A tool declares `standing:` beside `kind:` on an action. `false` means
+  no standing allow at any scope (a pinned page, read into every turn, is
+  changed one click at a time); `:conversation` means a standing allow for
+  one conversation and never agent scope (a filed note follows the thread
+  it was kept from, not the agent). Absent means either scope. The same
+  declaration is minted into the approval intent the runner checks, so
+  the two gates cannot disagree.
   """
 
   alias Arca.ToolGrantStorage
@@ -144,7 +154,7 @@ defmodule Aqua.ToolGrants do
       when scope in @scopes and effect in @effects do
     agent_athanor_id = Map.fetch!(attrs, :agent_athanor_id)
 
-    with :ok <- check_kind(attrs, effect) do
+    with :ok <- check_standing(attrs, scope, effect) do
       case authorize_scope(ctx, scope, agent_athanor_id) do
         :ok ->
           write(ctx, attrs, scope, false)
@@ -199,13 +209,26 @@ defmodule Aqua.ToolGrants do
   # same here, and only the second could otherwise write a standing allow
   # for something destructive. A deny needs no kind — "never do this" is
   # always recordable.
-  defp check_kind(_attrs, "deny"), do: :ok
+  #
+  # Past the kind, the action's own `standing:` declaration has the last
+  # word — `false` refuses every standing allow, `:conversation` refuses
+  # the agent scope — read through `Aqua.Actions.standing_for/2`, the
+  # sibling of the kind classifier, so the card and this write agree.
+  defp check_standing(_attrs, _scope, "deny"), do: :ok
 
-  defp check_kind(%{tool: tool, action: action}, "allow")
+  defp check_standing(%{tool: tool, action: action}, scope, "allow")
        when is_binary(tool) and is_binary(action) do
     case Aqua.Actions.kind_for(tool, action) do
       k when k in [:destructive, :external] -> {:error, {:scope_not_permitted, k}}
       nil -> {:error, {:scope_not_permitted, :unknown_kind}}
+      _ -> check_declared_standing(tool, action, scope)
+    end
+  end
+
+  defp check_declared_standing(tool, action, scope) do
+    case Aqua.Actions.standing_for(tool, action) do
+      false -> {:error, {:scope_not_permitted, :never_standing}}
+      :conversation when scope == "agent" -> {:error, {:scope_not_permitted, :conversation_only}}
       _ -> :ok
     end
   end

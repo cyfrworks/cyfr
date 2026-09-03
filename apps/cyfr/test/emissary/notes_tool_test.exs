@@ -1,0 +1,306 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Emissary.MCP.NotesToolTest do
+  # Notes are not the transcript. These pin the difference, and the rule
+  # that makes "whose notes" a fact about where you are rather than an
+  # argument: a note lands in the estate in focus.
+  use ExUnit.Case, async: false
+
+  alias Emissary.MCP.NotesTool, as: Tool
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    test_path = Path.join(System.tmp_dir!(), "notes_#{:rand.uniform(1_000_000)}")
+    original = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, test_path)
+
+    on_exit(fn ->
+      File.rm_rf!(test_path)
+
+      if original,
+        do: Application.put_env(:cyfr, :base_path, original),
+        else: Application.delete_env(:cyfr, :base_path)
+    end)
+
+    n = System.unique_integer([:positive])
+    user = "local|idp|note-#{n}"
+
+    {:ok, mine} =
+      Sanctum.Tenancy.Athanors.create(%{
+        kind: "person",
+        name: "Me",
+        slug: "me#{n}",
+        owner_user_id: user,
+        created_by: user
+      })
+
+    {:ok, _} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: user, provider: "local"})
+    {:ok, u} = Sanctum.Tenancy.Users.get(user)
+    {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
+    # The owner's seat in their own athanor — production mints it in
+    # `ensure_personal_athanor/1`, and `Context.focus/2` (the "mine" read)
+    # checks it.
+    {:ok, _} = Sanctum.Tenancy.Members.create(%{user_id: user, athanor_id: mine.id})
+    {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
+
+    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: estate.id}
+    {:ok, home} = Sanctum.Context.focus(ctx, mine.id)
+    {:ok, ctx: ctx, home: home, mine: mine, estate: estate}
+  end
+
+  defp call(ctx, args), do: Tool.handle("notes", ctx, args)
+
+  test "a note lands in the estate you are working in, and nowhere else", %{
+    ctx: ctx,
+    home: home,
+    mine: mine,
+    estate: estate
+  } do
+    {:ok, kept} = call(ctx, %{"action" => "keep", "name" => "decided", "content" => "Lisbon"})
+    assert kept.athanor_id == estate.id
+
+    {:ok, at_home} = call(home, %{"action" => "keep", "name" => "flight", "content" => "BA117"})
+    assert at_home.athanor_id == mine.id
+
+    # Where you are is what you see by default.
+    assert {:ok, %{notes: [%{name: "decided", athanor_id: id}]}} =
+             call(ctx, %{"action" => "list"})
+
+    assert id == estate.id
+
+    assert {:ok, %{notes: [%{name: "flight"}]}} = call(home, %{"action" => "list"})
+    refute estate.id == mine.id
+  end
+
+  test "a write names no estate", %{ctx: ctx} do
+    for args <- [
+          %{"action" => "keep", "name" => "x", "content" => "y", "scope" => "mine"},
+          %{"action" => "pin", "name" => "about-us", "content" => "y", "scope" => "estate"},
+          %{"action" => "forget", "name" => "x", "scope" => "mine"}
+        ] do
+      assert {:error, {:invalid_argument, msg}} = call(ctx, args)
+      assert msg =~ "scope"
+    end
+  end
+
+  test "your own notes are read from anywhere you are, and only by you", %{
+    ctx: ctx,
+    home: home,
+    mine: mine
+  } do
+    {:ok, _} = call(home, %{"action" => "keep", "name" => "flight", "content" => "BA117"})
+
+    # From the trip, "mine" reaches home — through `Context.focus/2`, so
+    # membership is checked on the way.
+    assert {:ok, %{notes: [%{name: "flight", athanor_id: id}]}} =
+             call(ctx, %{"action" => "list", "scope" => "mine"})
+
+    assert id == mine.id
+
+    assert {:ok, %{content: "BA117", athanor_id: ^id}} =
+             call(ctx, %{"action" => "read", "name" => "flight", "scope" => "mine"})
+
+    # The estate's own pile does not hold it.
+    assert {:ok, %{notes: []}} = call(ctx, %{"action" => "list"})
+
+    assert {:error, {:not_found, "note", "flight"}} =
+             call(ctx, %{"action" => "read", "name" => "flight"})
+  end
+
+  test "a group's notes are readable by its members", %{ctx: ctx} do
+    {:ok, _} = call(ctx, %{"action" => "keep", "name" => "decided", "content" => "Lisbon"})
+
+    other = %{ctx | user_id: "local|idp|somebody-else"}
+
+    {:ok, _} =
+      Sanctum.Tenancy.Members.create(%{user_id: other.user_id, athanor_id: ctx.athanor_id})
+
+    # No private notes in a shared estate — the invariant is a fact here,
+    # not a sentence in a docstring.
+    assert {:ok, %{notes: [%{name: "decided"}]}} = call(other, %{"action" => "list"})
+    assert {:ok, %{content: "Lisbon"}} = call(other, %{"action" => "read", "name" => "decided"})
+  end
+
+  test "forgetting removes it", %{ctx: ctx} do
+    {:ok, _} = call(ctx, %{"action" => "keep", "name" => "temp", "content" => "x"})
+    {:ok, %{forgot: "temp"}} = call(ctx, %{"action" => "forget", "name" => "temp"})
+
+    assert {:ok, %{notes: []}} = call(ctx, %{"action" => "list"})
+
+    assert {:error, {:not_found, "note", "temp"}} =
+             call(ctx, %{"action" => "read", "name" => "temp"})
+
+    assert {:error, {:not_found, "note", "temp"}} =
+             call(ctx, %{"action" => "forget", "name" => "temp"})
+  end
+
+  test "a pinned page is short, and pinning nothing clears it", %{ctx: ctx} do
+    {:ok, %{pinned: "about-us"}} =
+      call(ctx, %{"action" => "pin", "name" => "about-us", "content" => "We are planning a trip."})
+
+    assert {:ok, %{content: "We are planning a trip."}} =
+             call(ctx, %{"action" => "read", "name" => "about-us"})
+
+    # Over the cap is refused, never truncated — a page read into every
+    # turn is trimmed by a person, not by the tool.
+    long = String.duplicate("x", Aqua.Notes.pin_max_bytes() + 1)
+
+    assert {:error, {:invalid_argument, msg}} =
+             call(ctx, %{"action" => "pin", "name" => "about-us", "content" => long})
+
+    assert msg =~ "bytes"
+
+    assert {:ok, %{content: "We are planning a trip."}} =
+             call(ctx, %{"action" => "read", "name" => "about-us"})
+
+    {:ok, %{cleared: "about-us"}} =
+      call(ctx, %{"action" => "pin", "name" => "about-us", "content" => "  "})
+
+    assert {:error, {:not_found, "note", "about-us"}} =
+             call(ctx, %{"action" => "read", "name" => "about-us"})
+
+    # Only the two pinned names take a pin.
+    assert {:error, {:invalid_argument, msg}} =
+             call(ctx, %{"action" => "pin", "name" => "flight", "content" => "BA117"})
+
+    assert msg =~ "about-you, about-us"
+  end
+
+  test "pinned names are protected from keep and forget", %{ctx: ctx} do
+    {:ok, _} = call(ctx, %{"action" => "pin", "name" => "about-us", "content" => "A trip."})
+
+    assert {:error, {:invalid_argument, msg}} =
+             call(ctx, %{"action" => "keep", "name" => "about-us", "content" => "overwrite"})
+
+    assert msg =~ "pin"
+
+    assert {:error, {:invalid_argument, msg}} =
+             call(ctx, %{"action" => "forget", "name" => "about-us"})
+
+    assert msg =~ "pin"
+
+    assert {:ok, %{content: "A trip."}} = call(ctx, %{"action" => "read", "name" => "about-us"})
+  end
+
+  test "a note carries who kept it and when, and the body is only the body", %{ctx: ctx} do
+    {:ok, _} = call(ctx, %{"action" => "keep", "name" => "decided", "content" => "Lisbon\n"})
+
+    assert {:ok, note} = call(ctx, %{"action" => "read", "name" => "decided"})
+    assert note.content == "Lisbon"
+    assert note.kept_by == ctx.user_id
+    assert {:ok, _, 0} = DateTime.from_iso8601(note.kept_at)
+    assert is_nil(note.conversation)
+    assert is_nil(note.execution)
+  end
+
+  test "search finds a note by content or name, across every estate you belong to", %{
+    ctx: ctx,
+    home: home,
+    mine: mine,
+    estate: estate
+  } do
+    {:ok, _} =
+      call(ctx, %{"action" => "keep", "name" => "decided", "content" => "We go to Lisbon in May."})
+
+    {:ok, _} =
+      call(home, %{"action" => "keep", "name" => "porto-hotel", "content" => "Booked, room 4."})
+
+    assert {:ok, %{matches: [%{name: "decided", snippet: "We go to Lisbon in May."}]}} =
+             call(ctx, %{"action" => "search", "query" => "lisbon"})
+
+    # A name matches too, and the snippet is then the first line.
+    assert {:ok, %{matches: [%{name: "porto-hotel", athanor_id: id}]}} =
+             call(ctx, %{"action" => "search", "query" => "PORTO", "scope" => "everywhere"})
+
+    assert id == mine.id
+
+    {:ok, %{matches: everywhere}} =
+      call(ctx, %{"action" => "search", "query" => "o", "scope" => "everywhere"})
+
+    assert Enum.map(everywhere, & &1.athanor_id) |> Enum.sort() == Enum.sort([estate.id, mine.id])
+
+    # Read is not a place to guess which estate held a hit.
+    assert {:error, {:invalid_argument, msg}} =
+             call(ctx, %{"action" => "read", "name" => "decided", "scope" => "everywhere"})
+
+    assert msg =~ "search"
+  end
+
+  test "an agent cannot write notes — the root is host-only" do
+    # `Arca.Storage`'s layout gives `notes/` no guest name, so it does not
+    # exist at the guest boundary at all. Keeping something is a person's
+    # act — or a person's click on what an agent proposed.
+    refute Map.has_key?(Arca.Storage.guest_scopes(), "notes")
+    assert "notes" in Arca.Storage.tenant_roots()
+
+    for {name, spec} <- Tool.definition().annotations.actions do
+      assert spec.planes == [:external], "#{name} is reachable in-chain"
+      assert spec.consent == :interactive, "#{name} is reachable by a standing credential"
+    end
+  end
+
+  test "the annotations say what a person may pre-answer" do
+    actions = Tool.definition().annotations.actions
+
+    # A filed note follows the thread it was kept from, never the agent;
+    # a pinned page is changed one click at a time; forget is destructive
+    # and already takes no standing allow.
+    assert actions["keep"].standing == :conversation
+    assert actions["pin"].standing == false
+    assert actions["forget"].kind == :destructive
+
+    for name <- ~w(forget list read search) do
+      refute Map.has_key?(actions[name], :standing), "#{name} declares a standing rule"
+    end
+  end
+
+  test "a standing credential cannot keep, read or forget notes", %{ctx: ctx} do
+    # The host-only root stops the guest; this stops the credential. A key
+    # scoped to an estate must not reach the creator's personal tree
+    # through "mine" — or the estate's notes through anything.
+    star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
+
+    assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
+             Emissary.MCP.ToolRegistry.call_external("notes", star, %{
+               "action" => "keep",
+               "name" => "sneak",
+               "content" => "x"
+             })
+
+    assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
+             Emissary.MCP.ToolRegistry.call_external("notes", star, %{
+               "action" => "list",
+               "scope" => "mine"
+             })
+
+    # Discovery agrees with dispatch: the key is not shown the tool.
+    shown =
+      Emissary.MCP.ToolVisibility.filter_for_context(
+        Emissary.MCP.ToolRegistry.list_tools(),
+        star
+      )
+
+    refute Enum.any?(shown, &(&1["name"] == "notes"))
+  end
+
+  test "an archived personal athanor cannot be read into", %{ctx: ctx, mine: mine} do
+    # "mine" goes through `Context.focus/2`, so it inherits the archive
+    # refusal a raw struct update would have skipped.
+    {:ok, _} = Sanctum.Tenancy.Athanors.archive(mine, force: true)
+
+    assert {:error, {:invalid_argument, msg}} =
+             call(ctx, %{"action" => "list", "scope" => "mine"})
+
+    assert msg =~ "archived"
+  end
+
+  test "a note name is held to a grammar", %{ctx: ctx} do
+    assert {:error, {:invalid_argument, _}} =
+             call(ctx, %{"action" => "keep", "name" => "../escape", "content" => "x"})
+
+    assert {:error, {:invalid_argument, _}} = call(ctx, %{"action" => "read", "name" => "a/b"})
+  end
+end

@@ -107,10 +107,10 @@ defmodule Arca.StorageAuthorizePathTest do
   end
 
   test "an unknown first segment is refused, never minted as a new subtree", %{a: a} do
-    assert {:error, :forbidden} = Arca.put(a, ["notes", "hello.txt"], "hi")
-    assert {:error, :forbidden} = Arca.get(a, ["notes", "hello.txt"])
+    assert {:error, :forbidden} = Arca.put(a, ["scratch", "hello.txt"], "hi")
+    assert {:error, :forbidden} = Arca.get(a, ["scratch", "hello.txt"])
     assert {:error, :forbidden} = Arca.list_recursive(a, ["data", "x"])
-    refute Arca.exists?(a, ["notes", "hello.txt"])
+    refute Arca.exists?(a, ["scratch", "hello.txt"])
   end
 
   test "multi-level string segments name the same object as their split spelling", %{a: a} do

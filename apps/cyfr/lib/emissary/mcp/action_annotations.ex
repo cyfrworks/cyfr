@@ -70,6 +70,13 @@ defmodule Emissary.MCP.ActionAnnotations do
   @spec scope(source(), String.t() | nil) :: atom() | nil
   def scope(source, action), do: field(source, action, :scope)
 
+  @doc """
+  The action's standing rule — `:conversation`, `false`, or nil when the
+  action declares none (any standing scope).
+  """
+  @spec standing(source(), String.t() | nil) :: :conversation | false | nil
+  def standing(source, action), do: field(source, action, :standing)
+
   defp field(source, action, key) do
     case annotation(source, action) do
       %{} = annotation -> Map.get(annotation, key)

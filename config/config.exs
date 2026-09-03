@@ -28,9 +28,9 @@ config :cyfr,
     # Chat on the wire, so Prism is a client of the agent runtime rather
     # than the only way to reach it.
     Emissary.MCP.ConversationTool,
-    # Notes kept out of a conversation — a separate object from the tape,
+    # What was kept out of a conversation — a separate object from the tape,
     # which is what lets a thread be erased honestly.
-    Emissary.MCP.MemoryTool,
+    Emissary.MCP.NotesTool,
     # Domain services
     Opus.MCP,
     Opus.CronMCP,

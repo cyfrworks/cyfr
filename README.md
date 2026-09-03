@@ -137,7 +137,7 @@ your-project/
             │   └── tinctures/   # Bundled example tinctures + your own
             ├── aqua/       # The athanor's own AQUA agent definitions
             ├── conversations/  # Chat attachment files
-            ├── memory/     # Notes kept out of a conversation — host-only, no guest scope
+            ├── notes/      # What was kept out of a conversation — host-only, no guest scope
             ├── guest/      # Files WASM components store (their `data/` scope)
             └── meta/       # Tenant-reserved: overlay origin marks, system-written
 ```

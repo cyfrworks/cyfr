@@ -843,6 +843,7 @@ defmodule Emissary.MCP.ToolRegistry do
   @valid_auth [:anonymous, :signed_in, :required]
   @valid_consent [:interactive, :staging]
   @valid_scopes [:platform]
+  @valid_standing [:conversation, false]
 
   defp audit_action(%{} = annotation) do
     kind = Map.get(annotation, :kind)
@@ -851,6 +852,7 @@ defmodule Emissary.MCP.ToolRegistry do
     permission = Map.get(annotation, :permission)
     consent = Map.get(annotation, :consent)
     scope = Map.get(annotation, :scope)
+    standing = Map.get(annotation, :standing)
 
     cond do
       is_nil(kind) or not is_atom(kind) -> {:error, :missing_kind}
@@ -860,6 +862,7 @@ defmodule Emissary.MCP.ToolRegistry do
       not (is_nil(permission) or known_permission?(permission)) -> {:error, :invalid_permission}
       not (is_nil(consent) or consent in @valid_consent) -> {:error, :invalid_consent}
       not (is_nil(scope) or scope in @valid_scopes) -> {:error, :invalid_scope}
+      not (is_nil(standing) or standing in @valid_standing) -> {:error, :invalid_standing}
       # An operator-only action is an external-plane act; nothing in a chain is one.
       scope == :platform and planes != [:external] -> {:error, :invalid_scope}
       true -> :ok

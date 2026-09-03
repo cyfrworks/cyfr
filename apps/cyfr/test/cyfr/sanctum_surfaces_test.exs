@@ -58,15 +58,13 @@ defmodule Cyfr.SanctumSurfacesTest do
       Sanctum.OAuth Sanctum.Provisioning Sanctum.ProvisioningSupervisor
       Sanctum.PubSub Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy
     ),
-    # `Sanctum.Tenancy` is `Emissary.MCP.MemoryTool` alone: a note is kept
-    # either in the estate you are working in or in your own, and resolving
-    # "your own" is a read of `users.personal_athanor_id`. That choice is
-    # the tool's whole consent question, so it cannot be pushed to a
-    # caller — and a note filed in the wrong estate is the mistake worth
-    # spending a namespace to prevent.
+    # The notes tool no longer reaches `Sanctum.Tenancy`: reading "your
+    # own" notes resolves `users.personal_athanor_id`, and that read lives
+    # with the domain (`Aqua.Notes`, under the `aqua` surface) rather than
+    # the door.
     "emissary" => ~w(
       Sanctum.Atoms Sanctum.Authority Sanctum.ComponentRef Sanctum.Consent
-      Sanctum.Context Sanctum.Sanitizer Sanctum.Tenancy Sanctum.ToolPattern
+      Sanctum.Context Sanctum.Sanitizer Sanctum.ToolPattern
       Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.UnauthorizedError
       Sanctum.VaultReader
     ),

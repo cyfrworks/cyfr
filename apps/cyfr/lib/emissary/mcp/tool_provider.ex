@@ -104,6 +104,12 @@ defmodule Emissary.MCP.ToolProvider do
     (`Sanctum.Context.platform_admin`): the door verbs, and the one
     semaphore action that releases every athanor's slots. Everyone else is
     refused and does not see the action listed.
+  - `:standing` — whether a person may pre-answer this action for calls
+    nobody has seen yet. Absent means any standing scope a runner offers;
+    `:conversation` means a standing allow for one conversation and no
+    wider; `false` means never — every call is a click. `Aqua.ToolGrants`
+    reads it at the grant write and the runner reads it off the approval
+    intent, so both gates answer from this one declaration.
   """
   @type action_annotation :: %{
           required(:kind) => action_kind(),
@@ -111,7 +117,8 @@ defmodule Emissary.MCP.ToolProvider do
           optional(:auth) => :anonymous | :signed_in | :required,
           optional(:permission) => atom(),
           optional(:consent) => :interactive | :staging,
-          optional(:scope) => :platform
+          optional(:scope) => :platform,
+          optional(:standing) => :conversation | false
         }
 
   @type tool_definition :: %{

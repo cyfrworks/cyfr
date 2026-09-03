@@ -46,6 +46,18 @@ defmodule Aqua.MCPHelpers do
     end
   end
 
+  @doc """
+  The registry's `standing` annotation for `tool`/`action` — `:conversation`,
+  `false`, or nil when the action declares none or the tool is unknown.
+  """
+  @spec action_standing(String.t(), String.t()) :: :conversation | false | nil
+  def action_standing(tool, action) do
+    case Emissary.MCP.ToolRegistry.get_tool(tool) do
+      {:ok, tool_def} -> Emissary.MCP.ActionAnnotations.standing(tool_def, action)
+      _ -> nil
+    end
+  end
+
   @doc "Whether a running chain would refuse `tool`/`action` (external-only plane)."
   @spec in_chain_refused?(String.t(), String.t()) :: boolean()
   def in_chain_refused?(tool, action),

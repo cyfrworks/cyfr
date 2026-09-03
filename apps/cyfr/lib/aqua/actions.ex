@@ -378,6 +378,21 @@ defmodule Aqua.Actions do
 
   defp lookup_internal_kind(tool, action), do: Aqua.MCPHelpers.action_kind(tool, action)
 
+  # The standing rule of a tool.action, from the same declaration `kind_for/2`
+  # reads. The virtual catalog and the external namespace declare none, so
+  # both keep the default (any standing scope); an internal tool answers
+  # from its registry annotation.
+  @spec standing_for(String.t(), String.t()) :: :conversation | false | nil
+  def standing_for(tool, action) when is_binary(tool) and is_binary(action) do
+    cond do
+      Aqua.VirtualTools.virtual_tool?(tool) -> nil
+      String.contains?(tool, ":") -> nil
+      true -> Aqua.MCPHelpers.action_standing(tool, action)
+    end
+  end
+
+  def standing_for(_, _), do: nil
+
   defp ensure_object(value, _label) when is_map(value), do: :ok
   defp ensure_object(_, label), do: {:error, "#{label}: must be a JSON object"}
 

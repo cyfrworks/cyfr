@@ -137,10 +137,10 @@ defmodule Aqua.ToolGrantsTest do
     test "a standing allow for a destructive or external action is refused at the write", %{
       ctx: ctx
     } do
-      # `memory.forget` is `kind: :destructive` in the live registry — the
+      # `notes.forget` is `kind: :destructive` in the live registry — the
       # same source the approval card derives its risk from.
       assert {:error, {:scope_not_permitted, :destructive}} =
-               grant(ctx, %{tool: "memory", action: "forget"})
+               grant(ctx, %{tool: "notes", action: "forget"})
 
       # An external server's tool is external by its namespace.
       assert {:error, {:scope_not_permitted, :external}} =
@@ -148,8 +148,32 @@ defmodule Aqua.ToolGrantsTest do
 
       # A standing DENY stands for both — "never do this" is exactly the
       # standing answer a destructive action should be able to take.
-      assert {:ok, _} = grant(ctx, %{tool: "memory", action: "forget", effect: "deny"})
+      assert {:ok, _} = grant(ctx, %{tool: "notes", action: "forget", effect: "deny"})
       assert {:ok, _} = grant(ctx, %{tool: "srv:thing", action: "do", effect: "deny"})
+    end
+
+    test "an action that never stands takes no standing allow at any scope, and a deny stands",
+         %{ctx: ctx} do
+      # `notes.pin` is `kind: :write` — the kind alone would admit it. Its
+      # `standing: false` declaration is what refuses it here.
+      assert {:error, {:scope_not_permitted, :never_standing}} =
+               grant(ctx, %{tool: "notes", action: "pin"})
+
+      assert {:error, {:scope_not_permitted, :never_standing}} =
+               grant(ctx, %{scope: "agent", tool: "notes", action: "pin"})
+
+      assert {:ok, _} = grant(ctx, %{tool: "notes", action: "pin", effect: "deny"})
+    end
+
+    test "a conversation-only action takes a conversation allow and refuses the agent scope",
+         %{ctx: ctx} do
+      # `notes.keep` declares `standing: :conversation`: a filed note
+      # follows the thread it was kept from, never the agent — so an
+      # agent-scope allow is refused outright rather than narrowed.
+      assert {:ok, %{narrowed?: false}} = grant(ctx, %{tool: "notes", action: "keep"})
+
+      assert {:error, {:scope_not_permitted, :conversation_only}} =
+               grant(ctx, %{scope: "agent", tool: "notes", action: "keep"})
     end
 
     test "an allow whose kind nothing can answer is refused; a deny stands", %{

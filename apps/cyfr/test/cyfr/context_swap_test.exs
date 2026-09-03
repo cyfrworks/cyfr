@@ -26,7 +26,7 @@ defmodule Cyfr.ContextSwapTest do
   @scanned [
     "apps/cyfr/lib/aqua",
     "apps/cyfr/lib/emissary/mcp/conversation_tool.ex",
-    "apps/cyfr/lib/emissary/mcp/memory_tool.ex",
+    "apps/cyfr/lib/emissary/mcp/notes_tool.ex",
     "apps/cyfr/lib/prism_web/live/agents_live.ex",
     "apps/cyfr/lib/sanctum"
   ]

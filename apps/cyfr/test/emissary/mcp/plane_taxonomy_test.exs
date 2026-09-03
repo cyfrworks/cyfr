@@ -19,6 +19,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest.Probes do
   def planes_only, do: [tool(%{planes: [:external]})]
   def invalid_plane, do: [tool(%{kind: :read, planes: [:sideways]})]
   def empty_planes, do: [tool(%{kind: :read, planes: []})]
+  def invalid_standing, do: [tool(%{kind: :write, planes: [:external], standing: :conversaton})]
   def unannotated, do: [tool(nil)]
 
   # One provider module per probe: the audit takes its roster as an
@@ -41,6 +42,11 @@ defmodule Emissary.MCP.PlaneTaxonomyTest.Probes do
   defmodule EmptyPlanes do
     @moduledoc false
     def tools, do: Emissary.MCP.PlaneTaxonomyTest.Probes.empty_planes()
+  end
+
+  defmodule InvalidStanding do
+    @moduledoc false
+    def tools, do: Emissary.MCP.PlaneTaxonomyTest.Probes.invalid_standing()
   end
 
   defmodule Unannotated do
@@ -110,6 +116,8 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
             {Probes.PlanesOnly, :missing_kind},
             {Probes.InvalidPlane, :invalid_planes},
             {Probes.EmptyPlanes, :missing_planes},
+            # A misspelt standing rule would otherwise ship as "any scope".
+            {Probes.InvalidStanding, :invalid_standing},
             {Probes.Unannotated, :missing_annotation}
           ] do
         assert {:error, [%{reason: ^reason}]} = ToolRegistry.audit_action_kinds([probe]),

@@ -223,19 +223,18 @@ defmodule Arca.Storage do
     {"aqua", :tenant, nil, :overlay},
     {"components", :tenant, "components", :overlay},
     {"conversations", :tenant, nil, nil},
-    # What an agent extracted FOR someone, as opposed to the transcript it
-    # extracted it from. A tape is a record of what was said and can be
-    # erased; memory is what a person kept, and it survives that erasure —
-    # which is the whole reason it is a separate root rather than a
-    # compaction of `conversations/`.
+    # What somebody kept out of a conversation, as opposed to the
+    # transcript it was kept from. A tape is a record of what was said and
+    # can be erased; a note survives that erasure — which is the whole
+    # reason it is a separate root rather than a compaction of
+    # `conversations/`.
     #
-    # Host-only (`nil` guest name), deliberately. Extraction is a
-    # consent moment — the one question it asks is "into whose notes,
-    # mine or this estate's?", and that is a person's answer, not something
-    # a model decides mid-turn. A guest scope would make memory something
-    # an agent writes to itself; host-only makes it something someone
-    # chose to keep.
-    {"memory", :tenant, nil, nil},
+    # Host-only (`nil` guest name), deliberately. A note lands in the
+    # estate in focus and nowhere else, and it lands because a person kept
+    # it or approved keeping it — never because a guest wrote to a path. A
+    # guest scope would make notes something an agent writes to itself;
+    # host-only makes them something someone chose to keep.
+    {"notes", :tenant, nil, nil},
     {"guest", :tenant, "data", nil},
     {"meta", :tenant_reserved, nil, nil},
     {"cache", :global, nil, nil},
