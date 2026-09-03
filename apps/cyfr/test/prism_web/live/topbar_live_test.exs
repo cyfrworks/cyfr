@@ -37,7 +37,7 @@ defmodule PrismWeb.TopbarLiveTest do
     |> render_submit()
 
     [group] = Enum.filter(Athanors.list_for_user(alice.user_id), &(&1.name =~ "Garden"))
-    assert_redirect(bar, PrismWeb.Focus.path(group, ""))
+    assert_redirect(bar, PrismWeb.ChatLive.chat_path(Athanors.route_slug(group)))
   end
 
   test "two athanors: a list with You and the group, badged by notifies for the one not in focus",

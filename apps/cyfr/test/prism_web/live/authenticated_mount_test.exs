@@ -117,11 +117,11 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert render(view) =~ "Your own athanor"
   end
 
-  test "the root lands in the session's athanor", %{conn: conn} do
+  test "the root lands in the chat, on the session's athanor", %{conn: conn} do
     conn = log_in_user(conn, test_user())
     home = Sanctum.Tenancy.Athanors.home!()
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/")
-    assert to == PrismWeb.Focus.path(home, "")
+    assert to == PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(home))
   end
 
   test "lite mode hides the developer views and speaks the everyday words", %{conn: conn} do

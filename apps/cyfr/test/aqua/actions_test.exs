@@ -57,6 +57,16 @@ defmodule Aqua.ActionsTest do
       assert result.drops == []
     end
 
+    test "ui.navigate: a global page is allowed as it is" do
+      # The chat has no estate in its address; it is in the allowlist by
+      # its own path and is pushed without the focus prefix.
+      input = "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/chat\"}]\n```"
+      result = AquaActions.parse(input, @policy)
+
+      assert result.intents == [%{kind: "navigate", to: "/chat"}]
+      assert result.drops == []
+    end
+
     test "ui.navigate: disallowed path is dropped, block still stripped" do
       input = "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/etc/passwd\"}]\n```"
       result = AquaActions.parse(input, @policy)

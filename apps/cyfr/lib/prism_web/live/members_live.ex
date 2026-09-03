@@ -87,23 +87,6 @@ defmodule PrismWeb.MembersLive do
     end
   end
 
-  # Click a name → the frozen pair of the two of you, found or minted, and
-  # its chat opens. Reachability is decided in the tool ("you already share
-  # an active estate"), which is true of anyone on this list.
-  def handle_event("open_dm", %{"user-id" => user_id}, socket) do
-    with {:ok, %{id: id}} <- call_tool(socket, "athanor/pair", %{"user" => user_id}),
-         {:ok, %{athanor: %{route: route}}} <-
-           call_tool(socket, "session/use", %{"athanor" => id}) do
-      {:noreply, push_navigate(socket, to: PrismWeb.Focus.path(route, ""))}
-    else
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not open a DM: #{error_message(reason)}")}
-
-      _ ->
-        {:noreply, put_flash(socket, :error, "Could not open a DM.")}
-    end
-  end
-
   # Growing a DM is a NEW open group with the three of you — the pair's
   # door stays closed and its history stays where it was said. The partner
   # is seated by user id (an active seat at once); the new person arrives
@@ -311,17 +294,6 @@ defmodule PrismWeb.MembersLive do
             <:col :let={m} label="Since">{m[:since] || "-"}</:col>
             <:col :let={m} label="Actions">
               <div :if={@athanor && @athanor.kind == "group"} class="flex gap-2">
-                <.button
-                  :if={
-                    m[:status] == "active" && m[:user_id] != @context.user_id &&
-                      not frozen?(@athanor)
-                  }
-                  variant="ghost"
-                  phx-click="open_dm"
-                  phx-value-user-id={m[:user_id]}
-                >
-                  Message
-                </.button>
                 <.button
                   :if={
                     m[:status] == "active" && m[:user_id] != @context.user_id &&

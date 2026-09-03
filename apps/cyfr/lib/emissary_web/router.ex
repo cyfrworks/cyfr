@@ -397,9 +397,15 @@ defmodule EmissaryWeb.Router do
       ] do
       live "/", RootRedirectLive, :index
       live "/a", RootRedirectLive, :index
+      # The chat is one zone across every estate the person belongs to; it
+      # names its estate in the query, not the path, and mounts under the
+      # session's default (`PrismWeb.Focus` passes a bare mount through).
+      live "/chat", ChatLive, :index
 
       scope "/a/:athanor" do
-        live "/", ConversationLive, :index
+        # An athanor's chat used to live here; it forwards to the chat zone
+        # with the estate named.
+        live "/", ChatRedirectLive, :index
         live "/agents", AgentsLive, :index
         # /activities: unified activities feed (mcp_log + execution fan-out).
         live "/activities", ActivitiesLive, :index

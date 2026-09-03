@@ -150,11 +150,12 @@ defmodule PrismWeb.TopbarLive do
   end
 
   # The one create the chat list offers: a group, born with its creator as
-  # the only member. The new athanor opens; the topbar remounts with it.
+  # the only member. The chat opens on the new estate — named in the
+  # address, since the session's default is still the previous one.
   def handle_event("create_group", %{"name" => name}, socket) do
     case call_tool(socket, "athanor/create", %{"name" => String.trim(name)}) do
       {:ok, %{route: route}} when is_binary(route) ->
-        {:noreply, push_navigate(socket, to: PrismWeb.Focus.path(route, ""))}
+        {:noreply, push_navigate(socket, to: PrismWeb.ChatLive.chat_path(route))}
 
       {:ok, _} ->
         {:noreply, socket |> assign(:open_popover, nil) |> load_athanors(socket.assigns.context)}
@@ -561,7 +562,7 @@ defmodule PrismWeb.TopbarLive do
             <ul :if={length(@athanors) > 1} class="space-y-0.5 text-sm">
               <li :for={a <- @athanors}>
                 <.link
-                  navigate={PrismWeb.Focus.path(a, "")}
+                  navigate={PrismWeb.Focus.path(a, "/agents")}
                   class={[
                     "flex items-center justify-between rounded-md px-2 py-1.5",
                     if(a.id == @context.athanor_id,

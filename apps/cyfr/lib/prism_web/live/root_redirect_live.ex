@@ -3,16 +3,22 @@
 
 defmodule PrismWeb.RootRedirectLive do
   @moduledoc """
-  `/` and `/a` land in the session's athanor — its chat
-  (`PrismWeb.ConversationLive` at `/a/<athanor>`).
+  `/` and `/a` land in the chat (`PrismWeb.ChatLive` at `/chat`), with the
+  session's athanor selected.
   """
 
   use PrismWeb, :live_view
 
   def mount(_params, _session, socket) do
     case socket.assigns[:athanor] do
-      nil -> {:ok, redirect(socket, to: "/login?error=no_athanor")}
-      athanor -> {:ok, push_navigate(socket, to: PrismWeb.Focus.path(athanor, ""))}
+      nil ->
+        {:ok, redirect(socket, to: "/login?error=no_athanor")}
+
+      athanor ->
+        {:ok,
+         push_navigate(socket,
+           to: PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor))
+         )}
     end
   end
 

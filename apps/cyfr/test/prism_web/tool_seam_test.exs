@@ -78,13 +78,12 @@ defmodule PrismWeb.ToolSeamTest do
     # surfaces that do not. Same functions, two doors —
     # `PrismWeb.MCPHelpers` states the rule.
     {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex", "Arca.ConversationStorage.create"},
-    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.ConversationStorage.delete"},
+    {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.ConversationStorage.delete"},
     # Following is the person's own sidebar and notify roster — the rows
     # the `conversation.follow`/`unfollow` verbs write for a headless
     # client, written directly for the same reason as create/delete above.
-    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.TopicSubscriptionStorage.follow"},
-    {"apps/cyfr/lib/prism_web/live/conversation_live.ex",
-     "Arca.TopicSubscriptionStorage.unfollow"},
+    {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.TopicSubscriptionStorage.follow"},
+    {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.TopicSubscriptionStorage.unfollow"},
     # Withdrawing an approval the person was shown. The grant belongs to the
     # click that made it; the runner is told, not asked.
     {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex",

@@ -659,7 +659,7 @@ defmodule PrismWeb.ConversationPaneLive do
 
   # Navigate intents are page paths (`/activities`); the athanor this pane
   # is on is added here, so the agent never addresses another athanor's
-  # pages.
+  # pages. A global page (the chat) is its own address.
   defp push_intents(socket, []), do: socket
 
   defp push_intents(socket, intents) do
@@ -671,8 +671,13 @@ defmodule PrismWeb.ConversationPaneLive do
 
     intents =
       Enum.map(intents, fn
-        %{kind: "navigate", to: to} = intent -> %{intent | to: PrismWeb.Focus.path(route, to)}
-        intent -> intent
+        %{kind: "navigate", to: to} = intent ->
+          if Cyfr.GlobalPages.global?(to),
+            do: intent,
+            else: %{intent | to: PrismWeb.Focus.path(route, to)}
+
+        intent ->
+          intent
       end)
 
     push_event(socket, "aqua:intents", %{intents: intents})
@@ -685,8 +690,7 @@ defmodule PrismWeb.ConversationPaneLive do
     base = to |> String.split("?", parts: 2) |> hd()
 
     Enum.any?(PrismWeb.Nav.items(mode), fn %{path: path} ->
-      (path == "" and base == "") or
-        (path != "" and (base == path or String.starts_with?(base, path <> "/")))
+      base == path or String.starts_with?(base, path <> "/")
     end)
   end
 

@@ -40,7 +40,7 @@ defmodule PrismWeb.Layouts do
               <.nav_link
                 :for={item <- items}
                 id={Nav.dom_id("nav", item.key)}
-                href={PrismWeb.Focus.path(@athanor_route, item.path)}
+                href={Nav.href(item, @athanor_route)}
                 icon={item.icon}
                 label={item.label}
                 active={@active_nav == item.key}
@@ -99,7 +99,7 @@ defmodule PrismWeb.Layouts do
             <.link
               :for={item <- items}
               id={Nav.dom_id("drawer-nav", item.key)}
-              navigate={PrismWeb.Focus.path(@athanor_route, item.path)}
+              navigate={Nav.href(item, @athanor_route)}
               class={[
                 "flex items-center gap-3 rounded-md px-3 py-2 text-sm",
                 if(@active_nav == item.key,

@@ -60,15 +60,17 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     {:noreply, socket |> assign(:query, query) |> refilter()}
   end
 
-  # Every target is a page of the athanor in focus: the palette speaks in
-  # page paths and the focus prefix is added here, once. `@athanor_route`
-  # is already in assigns — `Focus.route_of/1` re-read it from the DB on
-  # every pick.
+  # Every target is a page path: an athanor page gets the focus prefix
+  # added here, once, and a global page (the chat) is its own address.
+  # `@athanor_route` is already in assigns — `Focus.route_of/1` re-read it
+  # from the DB on every pick.
   def handle_event("pick", %{"to" => path}, socket) when is_binary(path) do
-    {:noreply,
-     socket
-     |> close()
-     |> push_navigate(to: PrismWeb.Focus.path(socket.assigns.athanor_route, path))}
+    to =
+      if PrismWeb.Nav.global?(path),
+        do: path,
+        else: PrismWeb.Focus.path(socket.assigns.athanor_route, path)
+
+    {:noreply, socket |> close() |> push_navigate(to: to)}
   end
 
   def handle_event("pick", _params, socket), do: {:noreply, close(socket)}
@@ -124,7 +126,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     %{
       kind: :nav,
       label: label,
-      hint: if(path == "", do: "/", else: path),
+      hint: path,
       to: path,
       icon: icon,
       keywords: [label, path] |> Enum.join(" ") |> String.downcase()

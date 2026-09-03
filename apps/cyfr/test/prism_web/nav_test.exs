@@ -49,10 +49,26 @@ defmodule PrismWeb.NavTest do
       |> MapSet.new()
 
     for item <- Nav.items("dev") do
-      expected = "/a/:athanor" <> item.path
+      expected = if item.scope == :global, do: item.path, else: "/a/:athanor" <> item.path
 
       assert MapSet.member?(route_paths, expected),
              "nav item #{item.key} points at #{item.path}, but no route serves #{expected}"
     end
+  end
+
+  test "a link is focused on the athanor unless the page is global — the chat is" do
+    chat = Enum.find(Nav.items("lite"), &(&1.key == "chat"))
+    agents = Enum.find(Nav.items("lite"), &(&1.key == "agents"))
+
+    assert chat.scope == :global
+    assert Nav.href(chat, "home") == "/chat"
+    assert agents.scope == :athanor
+    assert Nav.href(agents, "home") == "/a/home/agents"
+
+    assert Nav.global?("/chat")
+    assert Nav.global?("/chat?a=home&c=conv_1")
+    refute Nav.global?("/agents")
+    # The engine reads the same list from the glue namespace.
+    assert Nav.global_paths() == Cyfr.GlobalPages.paths()
   end
 end

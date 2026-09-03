@@ -449,8 +449,10 @@ defmodule Aqua.Actions do
 
   # The Prism page paths — the router's routes under `/a/:athanor/…` with
   # the focus prefix stripped (an intent addresses a page; the athanor in
-  # focus is added when it is pushed) — minus the exclusions. Memoized,
-  # since the router's route table is fixed for the VM lifetime.
+  # focus is added when it is pushed), plus the global pages, which have no
+  # estate in their address and are pushed as they are — minus the
+  # exclusions. Memoized, since the router's route table is fixed for the
+  # VM lifetime.
   @focus_prefix "/a/:athanor"
 
   defp allowed_routes do
@@ -463,6 +465,7 @@ defmodule Aqua.Actions do
           )
           |> Enum.map(&String.replace_prefix(&1.path, @focus_prefix, ""))
           |> Enum.reject(&String.contains?(&1, ":"))
+          |> Kernel.++(Cyfr.GlobalPages.paths())
           |> Enum.uniq()
           |> Kernel.--(@excluded_routes)
 

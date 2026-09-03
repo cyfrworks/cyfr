@@ -72,6 +72,7 @@ defmodule Cyfr.RouteAuthInventoryTest do
     # is `/a/<athanor>/…`, the athanor in focus is the URL's.
     {:get, "/"} => :browser_authenticated,
     {:get, "/a"} => :browser_authenticated,
+    {:get, "/chat"} => :browser_authenticated,
     {:get, "/a/:athanor"} => :browser_authenticated,
     {:get, "/a/:athanor/agents"} => :browser_authenticated,
     {:get, "/a/:athanor/activities"} => :browser_authenticated,

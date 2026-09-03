@@ -156,11 +156,17 @@ defmodule PrismWeb.ConnCase do
 
   @doc """
   The page path for an athanor: `/a/<route>` + `suffix`. Defaults to Home,
-  where `log_in_user/3` seats the person.
+  where `log_in_user/3` seats the person. The empty suffix is the athanor's
+  chat, which lives in the chat zone (`/chat?a=<route>`).
   """
   def athanor_path(suffix, athanor \\ nil) do
     athanor = athanor || Sanctum.Tenancy.Athanors.home!()
-    PrismWeb.Focus.path(athanor, suffix)
+
+    case suffix do
+      "" -> PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor))
+      "?c=" <> id -> PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), id)
+      _ -> PrismWeb.Focus.path(athanor, suffix)
+    end
   end
 
   @doc """
