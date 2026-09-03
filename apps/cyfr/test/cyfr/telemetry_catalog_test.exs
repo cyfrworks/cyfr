@@ -98,6 +98,17 @@ defmodule Cyfr.TelemetryCatalogTest do
     assert metric_events == Catalog.consumed_by(:metrics)
   end
 
+  test "the schedule-notes handler attaches exactly the catalog's :notes roster" do
+    assert Catalog.consumed_by(:notes) == [Cyfr.ScheduleNotes.event()]
+
+    for event <- Catalog.consumed_by(:notes) do
+      ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+
+      assert Enum.any?(ids, &String.starts_with?(&1, "notes-")),
+             "no notes handler attached for #{inspect(event)}"
+    end
+  end
+
   test "the dedicated log attaches cover the catalog's :log roster" do
     for event <- Catalog.consumed_by(:log) do
       ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)

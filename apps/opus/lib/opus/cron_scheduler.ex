@@ -620,11 +620,32 @@ defmodule Opus.CronScheduler do
                    :millisecond
                  )
 
+               output = Map.get(result, :output, result)
+
                Emissary.MCP.RequestLog.safe_log_completed(ctx, request_id, %{
-                 output: Map.get(result, :output, result),
+                 output: output,
                  duration_ms: duration_ms,
                  routed_to: "opus"
                })
+
+               # What `:fired` carried, plus the outcome and the row's own
+               # metadata as stored — a consumer that keeps the outcome
+               # (`Cyfr.ScheduleNotes`) reads `keep_outcome` off it without
+               # a second read of the row.
+               :telemetry.execute(
+                 [:cyfr, :opus, :schedule, :completed],
+                 %{system_time: System.system_time(), duration_ms: duration_ms},
+                 %{
+                   request_id: request_id,
+                   schedule_id: schedule_id,
+                   reference: exec_reference,
+                   execution_id: execution_id,
+                   athanor_id: ctx.athanor_id,
+                   user_id: ctx.user_id,
+                   output: output,
+                   metadata: schedule.metadata
+                 }
+               )
 
                Logger.debug("[CronScheduler] schedule #{schedule_id} completed (#{execution_id})")
 

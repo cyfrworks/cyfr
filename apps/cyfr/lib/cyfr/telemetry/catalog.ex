@@ -20,6 +20,8 @@ defmodule Cyfr.Telemetry.Catalog do
   - `:metrics` — `EmissaryWeb.Telemetry` metric definitions. Pinned equal
     by test.
   - `:log` — a dedicated Logger attach (`Cyfr.Application`).
+  - `:notes` — `Cyfr.ScheduleNotes`, which files a completed schedule's
+    outcome as a note when the schedule asked for it. Pinned by test.
   - `:operator` — consciously unconsumed by shipped machinery: kept for an
     operator's own monitoring attach, or pinned by tests. The `note` says
     why it earns its place; no event is orphaned silently.
@@ -177,6 +179,10 @@ defmodule Cyfr.Telemetry.Catalog do
 
     # ——— schedules ———
     [:cyfr, :opus, :schedule, :fired] => %{consumers: [:bridge]},
+    [:cyfr, :opus, :schedule, :completed] => %{
+      consumers: [:notes],
+      note: "a schedule with `keep_outcome` in its metadata files the run's output as a note"
+    },
     [:cyfr, :opus, :schedule, :failed] => %{consumers: [:bridge]},
     [:cyfr, :opus, :cron_scheduler, :load_failed] => %{
       consumers: [:operator],

@@ -108,17 +108,11 @@ defmodule Aqua.RoomExcerpt do
 
       cond do
         bytes + size <= @max_bytes -> {:cont, {[line | acc], bytes + size}}
-        acc == [] -> {:halt, {[cut(line, @max_bytes - 2)], @max_bytes}}
+        acc == [] -> {:halt, {[Cyfr.Text.cut(line, @max_bytes - 3)], @max_bytes}}
         true -> {:halt, {acc, bytes}}
       end
     end)
     |> elem(0)
     |> Enum.join("\n")
   end
-
-  defp cut(text, max) when byte_size(text) <= max, do: text
-  defp cut(text, max), do: whole(binary_part(text, 0, max)) <> "…"
-
-  defp whole(bin),
-    do: if(String.valid?(bin), do: bin, else: whole(binary_part(bin, 0, byte_size(bin) - 1)))
 end

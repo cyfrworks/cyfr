@@ -86,7 +86,10 @@ defmodule Opus.CronMCP do
             },
             "metadata" => %{
               "type" => "object",
-              "description" => "Optional metadata (create/update)"
+              "description" =>
+                "Optional metadata (create/update). `keep_outcome: true` files every " <>
+                  "completed run's output as a note in the schedule's estate, named by " <>
+                  "`note_name` or after the schedule's reference."
             },
             "schedule_id" => %{
               "type" => "string",

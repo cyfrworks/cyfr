@@ -68,6 +68,7 @@ defmodule Cyfr.Application do
     # detaching `"webhook-verify-failed-log"` if they prefer an alternative
     # sink (e.g. forwarding to SIEM via a Telemetry Metrics consumer).
     attach_webhook_verify_failed_logger()
+    Cyfr.ScheduleNotes.attach()
 
     infra_children = [
       # Arca storage layer

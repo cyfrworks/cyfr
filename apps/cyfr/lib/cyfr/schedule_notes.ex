@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Cyfr.ScheduleNotes do
+  @moduledoc """
+  A schedule that asked to keep what it did. `keep_outcome: true` in a
+  schedule's metadata (`Opus.CronMCP`) files every completed run's output
+  as a note in the schedule's estate (`Aqua.Notes`) — named by the
+  metadata's `note_name`, else after the schedule's reference — with the
+  schedule and the execution as provenance, capped so one run cannot
+  fill a ledger.
+
+  A telemetry consumer of `[:cyfr, :opus, :schedule, :completed]`,
+  attached at boot. The write runs under the server's own context
+  refocused on the schedule's athanor — the estate the run itself ran
+  in — and an archived athanor's schedule writes nothing. The handler
+  runs inside the scheduler and never raises into it: a note that cannot
+  be kept is logged, and the run stands.
+  """
+
+  require Logger
+
+  alias Sanctum.Context
+
+  @event [:cyfr, :opus, :schedule, :completed]
+  @handler_id "notes-schedule-completed"
+  @max_bytes 64 * 1024
+  @marker "\n\n[cut — the outcome was longer than 64 KiB]"
+
+  @doc "The event this module consumes."
+  @spec event() :: [atom()]
+  def event, do: @event
+
+  @doc "Attach at boot; detaching first keeps a restart from attaching twice."
+  @spec attach() :: :ok | {:error, :already_exists}
+  def attach do
+    _ = :telemetry.detach(@handler_id)
+    :telemetry.attach(@handler_id, @event, &__MODULE__.handle_event/4, nil)
+  end
+
+  @doc false
+  def handle_event(@event, _measurements, metadata, _config) do
+    case wanted(metadata) do
+      {:ok, name} -> keep(metadata, name)
+      :skip -> :ok
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[ScheduleNotes] note not kept for schedule #{inspect(metadata[:schedule_id])}: " <>
+          Exception.message(e)
+      )
+
+      :ok
+  end
+
+  # `keep_outcome` true in the row's metadata, which rides the event as the
+  # JSON the row holds. Anything else — absent, false, unreadable — is a
+  # run nobody asked to keep.
+  defp wanted(metadata) do
+    case decode(metadata[:metadata]) do
+      %{"keep_outcome" => true} = wants -> {:ok, name(wants["note_name"], metadata)}
+      _ -> :skip
+    end
+  end
+
+  defp decode(%{} = decoded), do: decoded
+
+  defp decode(raw) do
+    case Cyfr.Json.decode_or(raw, %{}, "Cyfr.ScheduleNotes") do
+      %{} = decoded -> decoded
+      _ -> %{}
+    end
+  end
+
+  defp name(note_name, _metadata) when is_binary(note_name) and note_name != "", do: note_name
+
+  defp name(_none, metadata),
+    do: "schedule-" <> to_string(metadata[:reference] || metadata[:schedule_id])
+
+  defp keep(metadata, name) do
+    internal = Context.internal(user_id: metadata[:user_id] || "system")
+
+    with {:ok, ctx} <- Context.refocus(internal, metadata[:athanor_id]),
+         {:ok, _} <-
+           Aqua.Notes.keep(ctx, name, body(metadata[:output]),
+             kept_by: "schedule:" <> to_string(metadata[:schedule_id]),
+             execution: metadata[:execution_id]
+           ) do
+      :ok
+    else
+      # The furnace closed between the fire and the finish: nothing to keep.
+      {:error, :archived} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[ScheduleNotes] note not kept for schedule #{inspect(metadata[:schedule_id])}: " <>
+            inspect(reason)
+        )
+
+        :ok
+    end
+  end
+
+  defp body(output) when is_binary(output), do: Cyfr.Text.cut(output, @max_bytes, @marker)
+
+  defp body(output), do: output |> Cyfr.Json.safe_encode() |> Cyfr.Text.cut(@max_bytes, @marker)
+end
