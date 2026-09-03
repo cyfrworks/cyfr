@@ -223,7 +223,7 @@ defmodule Aqua.ConversationRunner do
     # after Alice spoke, Bob's `@tom` resolved against Alice's roster.
     # Harmless while every member shares one estate-wide roster; a
     # cross-wiring the moment agents belong to people.
-    opts = Keyword.put_new_lazy(opts, :orchestrators, fn -> AquaTurn.orchestrators(ctx) end)
+    opts = Keyword.put_new_lazy(opts, :orchestrators, fn -> AquaTurn.roster(ctx) end)
     call(ctx, conversation_id, {:send, ctx, text, opts})
   end
 

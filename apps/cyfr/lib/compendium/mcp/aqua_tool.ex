@@ -71,16 +71,16 @@ defmodule Compendium.MCP.AquaTool do
       name: "aqua",
       title: "AQUA Agent System",
       description:
-        "Manage the AQUA agent system — orchestrators, sub-agents, prompts, scrolls, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, 'create'/'update'/'delete' to manage agents (pass type=orchestrator|sub-agent on create; docs are read-only), 'status' to see which files are shipped/modified/own, 'skill_list'/'skill_get' to read the estate's scrolls (procedures kept as Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the estate made, or 'reset' to revert edited copies of shipped files (member-created agents and scrolls are kept unless all=true).",
+        "The estate's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it clones into, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the estate made, or 'reset' to revert edited copies of shipped files (member-created roles and scrolls are kept unless all=true).",
       annotations: %{
         readOnlyHint: false,
         destructiveHint: true,
         actions: %{
-          # Agent definitions are the athanor's own. Reading them is open
-          # to any authenticated caller, a running chain included; editing
-          # them — the roster, the prompts, the `tool_policy` that decides
-          # what a chain may call — is a member's act from outside, never
-          # something a chain can do to itself.
+          # The soul and the roles are the athanor's own. Reading them is
+          # open to any authenticated caller, a running chain included;
+          # editing them — the closet, the prompts, the `tool_policy` that
+          # decides what a chain may call — is a member's act from
+          # outside, never something a chain can do to itself.
           "list" => %{kind: :read, planes: [:external, :in_chain]},
           "get" => %{kind: :read, planes: [:external, :in_chain]},
           "status" => %{kind: :read, planes: [:external, :in_chain]},
@@ -143,27 +143,18 @@ defmodule Compendium.MCP.AquaTool do
               "skill_delete"
             ],
             "description" =>
-              "Action: list/get agents and guides, create/update/delete to manage agents (for create, pass type=orchestrator|sub-agent to choose the agent kind; docs are read-only), status for per-file provenance (bundled/bundled_modified/user), skill_list/skill_get to read scrolls, skill_create/skill_update to write one (name, description, content), skill_delete to remove one the estate made, or reset to revert edited copies of shipped files (member-created agents and scrolls are kept unless all=true)."
+              "Action: list/get the soul ('aqua'), roles and guides; create/update/delete to manage roles (the soul is edited with update and never created or deleted; docs are read-only); status for per-file provenance (bundled/bundled_modified/user); skill_list/skill_get to read scrolls, skill_create/skill_update to write one (name, description, content), skill_delete to remove one the estate made; or reset to revert edited copies of shipped files (member-created roles and scrolls are kept unless all=true)."
           },
           "name" => %{
             "type" => "string",
             "description" =>
-              "Agent, guide, or scroll name (for get/update/delete and the skill_* actions)"
-          },
-          "type" => %{
-            "type" => "string",
-            "enum" => ["orchestrator", "sub-agent"],
-            "description" => "Filter by type (for list action)"
+              "Soul ('aqua'), role, guide, or scroll name (for get/update/delete and the skill_* actions)"
           },
           "detail" => %{
             "type" => "boolean",
             "description" =>
               "For list: include each agent's full fields (model, tool_policy, " <>
                 "catalyst_ref, content) — one call instead of a get per agent"
-          },
-          "parent" => %{
-            "type" => "string",
-            "description" => "Parent orchestrator name (for create sub-agent action)"
           },
           "title" => %{
             "type" => "string",
@@ -172,7 +163,7 @@ defmodule Compendium.MCP.AquaTool do
           "description" => %{
             "type" => "string",
             "description" =>
-              "Agent description shown to LLM (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
+              "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
           },
           "content" => %{
             "type" => "string",
@@ -196,12 +187,12 @@ defmodule Compendium.MCP.AquaTool do
           "disabled" => %{
             "type" => "boolean",
             "description" =>
-              "Take an agent out of the roster without deleting its file (for update; shipped agents cannot be deleted — disable them instead)"
+              "Take a role out of the closet without deleting its file (for update; shipped roles cannot be deleted — disable them instead)"
           },
           "all" => %{
             "type" => "boolean",
             "description" =>
-              "For reset: also DELETE member-created agents and skills, so the tree becomes exactly the shipped set (default false keeps them)"
+              "For reset: also DELETE member-created roles and scrolls, so the tree becomes exactly the shipped set (default false keeps them)"
           }
         },
         "required" => ["action"]
@@ -213,7 +204,6 @@ defmodule Compendium.MCP.AquaTool do
 
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
     ensure_bundle(ctx)
-    type_filter = Map.get(args, "type")
 
     doc_guides = [
       %{
@@ -252,11 +242,9 @@ defmodule Compendium.MCP.AquaTool do
             base = %{
               name: agent.name,
               title: agent.title,
-              type: type_name(agent.role),
+              type: agent_type(agent),
               description: agent.description
             }
-
-            base = if agent.parent, do: Map.put(base, :parent, agent.parent), else: base
 
             if detail? do
               Map.merge(base, %{
@@ -274,14 +262,10 @@ defmodule Compendium.MCP.AquaTool do
           []
       end
 
-    all = doc_guides ++ agent_guides
+    # The soul first, then the roles, then the guides.
+    all = agent_guides ++ doc_guides
 
-    filtered =
-      if type_filter,
-        do: Enum.filter(all, &(&1.type == type_filter)),
-        else: all
-
-    {:ok, %{guides: filtered, count: length(filtered)}}
+    {:ok, %{guides: all, count: length(all)}}
   end
 
   # --- get ---
@@ -308,8 +292,7 @@ defmodule Compendium.MCP.AquaTool do
          name: agent.name,
          format: "markdown",
          content: agent.prompt,
-         type: type_name(agent.role),
-         parent: agent.parent,
+         type: agent_type(agent),
          title: agent.title,
          description: agent.description,
          tool_policy: agent.tool_policy,
@@ -319,7 +302,7 @@ defmodule Compendium.MCP.AquaTool do
        }}
     else
       {:error, :not_found} ->
-        {:error, {:not_found, "Agent or guide", name}}
+        {:error, {:not_found, "Soul, role or guide", name}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -334,19 +317,15 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   # --- create ---
-  # Dispatches by the `type` arg (orchestrator | sub-agent). When `type` is
-  # absent, infers from presence of `parent`: parent → sub-agent, no parent →
-  # orchestrator.
+  # A role, flat in the closet. The soul is never created: its name is
+  # reserved, it ships with the server, and `update` is how it changes.
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
     with :ok <- validate_name(name),
+         :ok <- refute_reserved(name),
          :ok <- validate_tool_policy(args["tool_policy"]),
          :ok <- refute_name_taken(ctx, name) do
-      case inferred_aqua_create_type(args) do
-        "sub-agent" -> create_agent(ctx, name, args, :sub_agent)
-        "orchestrator" -> create_agent(ctx, name, args, :orchestrator)
-        other -> {:error, {:invalid_argument, "Unsupported aqua create type: #{inspect(other)}"}}
-      end
+      create_role(ctx, name, args)
     end
   end
 
@@ -365,7 +344,7 @@ defmodule Compendium.MCP.AquaTool do
       {:ok, %{updated: name}}
     else
       {:error, :not_found} ->
-        {:error, {:not_found, "Agent", name}}
+        {:error, {:not_found, "Soul or role", name}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -380,10 +359,11 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   # --- delete ---
-  # A shipped, unedited agent cannot be deleted (the athanor does not own
-  # it) — disabling is the roster-removal verb. Deleting an EDITED copy of
-  # a shipped agent reverts it to shipped; deleting a member-created agent
-  # deletes it outright.
+  # A shipped, unedited role cannot be deleted (the athanor does not own
+  # it) — disabling is the closet-removal verb. Deleting an EDITED copy of
+  # a shipped role reverts it to shipped; deleting a member-created role
+  # deletes it outright. The soul takes the same verb: an edited soul
+  # reverts, and the shipped one refuses with its own sentence.
 
   def handle(%Context{} = ctx, %{"action" => "delete", "name" => name}) do
     # One call: the overlay's drop verb owns the whole disposition — the
@@ -399,13 +379,10 @@ defmodule Compendium.MCP.AquaTool do
           {:ok, %{deleted: name}}
 
         {:error, :bundled} ->
-          {:error,
-           {:invalid_argument,
-            "Agent '#{name}' ships with the server and cannot be deleted — " <>
-              "disable it instead (update name=#{name} disabled=true)"}}
+          {:error, {:invalid_argument, bundled_delete_message(name)}}
 
         {:error, :not_found} ->
-          {:error, {:not_found, "Agent", name}}
+          {:error, {:not_found, "Soul or role", name}}
 
         {:error, reason} ->
           Logger.error("[AquaTool] aqua.delete #{name} failed: #{inspect(reason)}")
@@ -651,68 +628,54 @@ defmodule Compendium.MCP.AquaTool do
     end
   end
 
-  defp type_name(:orchestrator), do: "orchestrator"
-  defp type_name(:sub_agent), do: "sub-agent"
+  defp agent_type(agent), do: if(AquaAgent.soul?(agent), do: "soul", else: "role")
 
-  defp inferred_aqua_create_type(%{"type" => type}) when is_binary(type) and type != "", do: type
-
-  defp inferred_aqua_create_type(%{"parent" => parent}) when is_binary(parent) and parent != "",
-    do: "sub-agent"
-
-  defp inferred_aqua_create_type(_args), do: "orchestrator"
-
-  defp create_agent(ctx, name, args, role) do
-    with {:ok, parent} <- checked_parent(ctx, args, role) do
-      agent = %{
-        name: name,
-        title: Map.get(args, "title", name),
-        description: Map.get(args, "description", ""),
-        role: role,
-        parent: parent,
-        default: false,
-        disabled: false,
-        catalyst_ref: args["catalyst_ref"],
-        model: args["model"],
-        tool_policy: args["tool_policy"] || %{},
-        prompt: Map.get(args, "content", "")
-      }
-
-      # An agent is a file unit: the one atomic put IS the unit commit —
-      # no sentinel, no rollback needed, the overlay's file CoW applies.
-      case Arca.put(ctx, AquaPath.agent_file(name), AquaAgent.serialize(agent)) do
-        :ok ->
-          base = %{created: name, type: type_name(role)}
-          {:ok, if(parent, do: Map.put(base, :parent, parent), else: base)}
-
-        {:error, reason} ->
-          Logger.error("[AquaTool] aqua.create #{name} failed: #{inspect(reason)}")
-          {:error, {:unavailable, "Storage"}}
-      end
-    end
-  end
-
-  defp checked_parent(_ctx, _args, :orchestrator), do: {:ok, nil}
-
-  defp checked_parent(ctx, args, :sub_agent) do
-    case args["parent"] do
-      parent when is_binary(parent) and parent != "" ->
-        case AquaAgent.get(ctx, parent) do
-          {:ok, %{role: :orchestrator}} -> {:ok, parent}
-          {:ok, _} -> {:error, {:invalid_argument, "'#{parent}' is not an orchestrator"}}
-          {:error, _} -> {:error, {:not_found, "Parent orchestrator", parent}}
-        end
-
-      _ ->
+  defp refute_reserved(name) do
+    if AquaPath.soul?(name),
+      do:
         {:error,
-         {:invalid_argument, "Missing required argument: parent (required for type=sub-agent)"}}
+         {:invalid_argument,
+          "'#{name}' is the soul — it ships with the server and is edited with update, never created"}},
+      else: :ok
+  end
+
+  defp bundled_delete_message(name) do
+    if AquaPath.soul?(name),
+      do: "The soul ships with the server and cannot be deleted — edit it, or reset",
+      else:
+        "Role '#{name}' ships with the server and cannot be deleted — " <>
+          "disable it instead (update name=#{name} disabled=true)"
+  end
+
+  defp create_role(ctx, name, args) do
+    role = %{
+      name: name,
+      title: Map.get(args, "title", name),
+      description: Map.get(args, "description", ""),
+      disabled: false,
+      catalyst_ref: args["catalyst_ref"],
+      model: args["model"],
+      tool_policy: args["tool_policy"] || %{},
+      prompt: Map.get(args, "content", "")
+    }
+
+    # A role is a file unit: the one atomic put IS the unit commit —
+    # no sentinel, no rollback needed, the overlay's file CoW applies.
+    case Arca.put(ctx, AquaPath.role_file(name), AquaAgent.serialize(role)) do
+      :ok ->
+        {:ok, %{created: name, type: "role"}}
+
+      {:error, reason} ->
+        Logger.error("[AquaTool] aqua.create #{name} failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Storage"}}
     end
   end
 
-  # The union answers for shipped and member-created agents alike — a name
+  # The union answers for shipped and member-created roles alike — a name
   # either kind holds is taken.
   defp refute_name_taken(ctx, name) do
     if Arca.exists?(ctx, AquaPath.agent_file(name)),
-      do: {:error, {:invalid_argument, "Agent '#{name}' already exists"}},
+      do: {:error, {:invalid_argument, "Role '#{name}' already exists"}},
       else: :ok
   end
 

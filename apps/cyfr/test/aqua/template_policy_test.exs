@@ -16,12 +16,11 @@ defmodule Prism.AquaTemplatePolicyTest do
   alias Emissary.MCP.ToolRegistry
   alias Aqua.VirtualTools, as: AquaVirtualTools
 
-  @agents_dir Path.expand("../../../../seed/aqua/agents", __DIR__)
+  @seed Path.expand("../../../../seed/aqua", __DIR__)
 
   test "every tool_policy key in the shipped template is reachable from a chat" do
     unreachable =
-      @agents_dir
-      |> policies()
+      policies()
       |> Enum.flat_map(fn {agent, policy} ->
         for {key, _mode} <- policy, refused?(key), do: "#{agent}: #{key}"
       end)
@@ -49,11 +48,20 @@ defmodule Prism.AquaTemplatePolicyTest do
     refute Map.has_key?(catalog, "member")
   end
 
-  defp policies(dir) do
-    for file <- File.ls!(dir),
-        String.ends_with?(file, ".md"),
-        name = String.trim_trailing(file, ".md"),
-        {:ok, agent} = Compendium.AquaAgent.parse(name, File.read!(Path.join(dir, file))),
+  # The soul at the root, then every role in the closet.
+  defp policies do
+    roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
+
+    files =
+      [Path.join(@seed, "aqua.md")] ++
+        (roles
+         |> File.ls!()
+         |> Enum.filter(&String.ends_with?(&1, ".md"))
+         |> Enum.map(&Path.join(roles, &1)))
+
+    for path <- files,
+        name = Path.basename(path, ".md"),
+        {:ok, agent} = Compendium.AquaAgent.parse(name, File.read!(path)),
         map_size(agent.tool_policy) > 0,
         do: {agent.name, agent.tool_policy}
   end

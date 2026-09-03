@@ -52,30 +52,23 @@ defmodule Aqua.AgentConfig do
   end
 
   @doc """
-  Build sub-agent definitions for formula input.
+  The role definitions a turn hands the formula — the whole closet of the
+  tree the running agent lives in, flat: a role has no roles of its own,
+  and a soul spawns every role its estate keeps.
 
-  `orchestrator` is the resolved parent (its `"owner"` names the tree the
-  crew lives in). The GUIDES are read from that owner's tree — a personal
-  agent brings its own crew wherever it works, and reading the focused
-  estate instead would find the estate's children of the same parent name,
-  usually none. The CATALYSTS still resolve against `ctx` — components
-  belong to the estate the turn runs in, not to the agent's owner.
+  `orchestrator` is the resolved agent (its `"owner"` names the tree). The
+  GUIDES are read from that owner's tree, which is the focus for an
+  estate's soul and the person's own athanor for their own — an estate's
+  soul can never clone into a role that lives in someone's private tree.
+  The CATALYSTS still resolve against `ctx` — components belong to the
+  estate the turn runs in, not to the agent's owner.
   """
-  def sub_agent_definitions(%Context{} = ctx, orchestrator, fallback_catalyst, fallback_model)
+  def role_definitions(%Context{} = ctx, orchestrator, fallback_catalyst, fallback_model)
       when is_map(orchestrator) do
-    agent_name = orchestrator["name"]
     read_ctx = owner_read_ctx(ctx, orchestrator["owner"])
 
-    with {:ok, list_result} <- call_aqua(read_ctx, %{"action" => "list", "type" => "sub-agent"}) do
-      guides = extract_guides(list_result)
-
-      # Filter to sub-agents belonging to this orchestrator
-      parent_agents =
-        guides
-        |> Enum.filter(fn g ->
-          parent = g["parent"]
-          parent == agent_name
-        end)
+    with {:ok, list_result} <- call_aqua(read_ctx, %{"action" => "list"}) do
+      roles = list_result |> extract_guides() |> Enum.filter(&(&1["type"] == "role"))
 
       listing =
         case catalyst_listing(ctx) do
@@ -85,15 +78,14 @@ defmodule Aqua.AgentConfig do
           _ -> []
         end
 
-      parent_agents
+      roles
       |> Enum.map(fn g ->
-        name = g["name"]
-        build_sub_agent(read_ctx, listing, name, fallback_catalyst, fallback_model)
+        build_role(read_ctx, listing, g["name"], fallback_catalyst, fallback_model)
       end)
       |> Enum.reject(&is_nil/1)
     else
-      # Fail-open by choice: a broken aqua tool reads as "no sub-agents",
-      # not as a refused turn — the parent still runs.
+      # Fail-open by choice: a broken aqua tool reads as "no roles", not
+      # as a refused turn — the soul still runs.
       _ -> []
     end
   end
@@ -116,7 +108,7 @@ defmodule Aqua.AgentConfig do
   # `ctx` here is the OWNER read context — the guide comes from the tree
   # the crew lives in; `listing` was resolved by the caller in the working
   # estate.
-  defp build_sub_agent(ctx, listing, name, fallback_catalyst, fallback_model) do
+  defp build_role(ctx, listing, name, fallback_catalyst, fallback_model) do
     with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => name}) do
       content = guide["content"] || ""
       description = guide["description"] || ""
@@ -190,7 +182,7 @@ defmodule Aqua.AgentConfig do
       end
 
     agents
-    |> Enum.filter(&(&1["type"] == "orchestrator"))
+    |> Enum.filter(&(&1["type"] == "soul"))
     |> Enum.map(& &1["catalyst_ref"])
     |> Enum.filter(&(is_binary(&1) and &1 != ""))
     |> Enum.uniq()

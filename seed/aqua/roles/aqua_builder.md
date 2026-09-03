@@ -1,7 +1,6 @@
 ---
 title: Builder
 description: "Spawn a Builder specialist to create, fix, or improve WASM components (catalysts, reagents, formulas). Handles Rust/WASM development, WIT interfaces, compilation, manifest work. NOT for tinctures — use aqua_artisan or aqua_arcade."
-parent: aqua
 catalyst_ref: catalyst:moonmoon69.claude
 model: claude-sonnet-4-6
 tool_policy:

@@ -397,8 +397,8 @@ defmodule Arca.Storage do
 
   ## Examples
 
-      iex> Arca.Storage.seed_logical(["seed", "aqua", "agents", "aqua.md"])
-      ["aqua", "agents", "aqua.md"]
+      iex> Arca.Storage.seed_logical(["seed", "aqua", "aqua.md"])
+      ["aqua", "aqua.md"]
 
   """
   @spec seed_logical(path()) :: path()

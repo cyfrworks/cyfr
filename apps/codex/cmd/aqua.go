@@ -22,13 +22,13 @@ var aquaCmd = &cobra.Command{
 	Use:     "aqua",
 	Short:   "AQUA agent system",
 	GroupID: "admin",
-	Long:    "Manage the AQUA agent system — orchestrators, sub-agents, prompts, and documentation guides.",
+	Long:    "Manage the estate's AQUA — its soul, its roles, their prompts, and the documentation guides.",
 }
 
 var aquaListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List available agents and guides",
-	Long:  "List all available AQUA agents and documentation guides.",
+	Short: "List the soul, roles and guides",
+	Long:  "List the estate's AQUA soul and roles, and the documentation guides.",
 	Example: `  cyfr aqua list
   cyfr aqua list --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {

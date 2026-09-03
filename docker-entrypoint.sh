@@ -11,11 +11,13 @@ set -e
 #
 # FIRST start only: the mount is the operator's to edit, so a copy that ran
 # every boot would revert their changes to the shipped files. The guard is
-# the agents/ directory the v3 template is made of. It used to be
+# the soul file, the one thing every shipped tree has. It used to be
 # agent.json, which is the v2 shape Compendium.AquaTemplate.seed_check/0
 # rejects — never present, so the condition was always true and every
-# restart overwrote the mount.
-if [ -d /app/aqua-defaults ] && [ ! -d /app/seed/aqua/agents ]; then
+# restart overwrote the mount. The copy is additive: a mount still shaped
+# around an older agents/ directory gets the shipped tree beside it and
+# nothing removed.
+if [ -d /app/aqua-defaults ] && [ ! -f /app/seed/aqua/aqua.md ]; then
     mkdir -p /app/seed/aqua
     cp -r /app/aqua-defaults/. /app/seed/aqua/
 fi

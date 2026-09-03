@@ -8,7 +8,7 @@ defmodule PrismWeb.AgentsLive do
   athanor's own (`Compendium.AquaTemplate` seeds them); every member edits
   the same ones, through the `aqua` tool.
 
-  This is also where a person connects a model: an orchestrator's catalyst
+  This is also where a person connects a model: the soul's catalyst
   needs an API key bound to it before AQUA can answer, and "Connect a
   model" opens the consent sheet for that catalyst — reachable in `lite`,
   so a box that never opens `dev` still gets its key in.
@@ -27,7 +27,6 @@ defmodule PrismWeb.AgentsLive do
       |> assign(:editor_agents, [])
       |> assign(:editor_editing_prompt, nil)
       |> assign(:editor_prompt_content, "")
-      |> assign(:editor_creating_sub_for, nil)
       |> assign(:models_by_provider, %{})
       |> assign(:catalyst_refs, %{})
       |> assign(:models_loaded, false)
@@ -49,18 +48,20 @@ defmodule PrismWeb.AgentsLive do
   # ============================================================================
 
   @impl true
-  def handle_event("editor_create_orchestrator", %{"name" => name} = params, socket)
+  def handle_event("editor_create_role", %{"name" => name} = params, socket)
       when name != "" do
     # A create targets the tree the form picked — yours or the estate's.
     # `owner_ctx/3` honors the stamp only against this page's own sources,
-    # and a form without the picker (one tree) creates where you are.
+    # and a form without the picker (one tree) creates where you are. A
+    # role is flat in the closet; the soul is never created here.
     ctx = owner_ctx(socket, name, params["owner"])
 
     case call_aqua(ctx, %{
            "action" => "create",
            "name" => name,
            "title" => name,
-           "content" => "# #{name}\n\nYou are #{name}."
+           "description" => "Clone into #{name} for…",
+           "content" => "# #{name}\n\nYou are AQUA in the #{name} role."
          }) do
       {:ok, _} ->
         send(self(), :editor_refresh)
@@ -71,42 +72,7 @@ defmodule PrismWeb.AgentsLive do
     end
   end
 
-  def handle_event("editor_create_orchestrator", _params, socket), do: {:noreply, socket}
-
-  def handle_event(
-        "editor_create_sub_agent",
-        %{"parent" => parent, "name" => name} = params,
-        socket
-      )
-      when name != "" do
-    # A child belongs to its parent's tree: creating a sub-agent on YOUR
-    # orchestrator while focused on a group must materialize in your
-    # athanor, not the group's.
-    ctx = owner_ctx(socket, parent, params["owner"])
-
-    case call_aqua(ctx, %{
-           "action" => "create",
-           "parent" => parent,
-           "name" => name,
-           "title" => name,
-           "description" => "Spawn a #{name} specialist.",
-           "content" => "# #{name}\n\nYou are the #{name} agent."
-         }) do
-      {:ok, _} ->
-        send(self(), :editor_refresh)
-        {:noreply, assign(socket, :editor_creating_sub_for, nil)}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Create failed: #{error_message(reason)}")}
-    end
-  end
-
-  def handle_event("editor_create_sub_agent", _params, socket), do: {:noreply, socket}
-
-  def handle_event("editor_toggle_sub_form", %{"parent" => parent}, socket) do
-    next = if socket.assigns.editor_creating_sub_for == parent, do: nil, else: parent
-    {:noreply, assign(socket, :editor_creating_sub_for, next)}
-  end
+  def handle_event("editor_create_role", _params, socket), do: {:noreply, socket}
 
   # `field` names exactly what the forms edit — never an arbitrary map key.
   # An unconstrained key could shadow the "action" verb (a later duplicate
@@ -390,21 +356,20 @@ defmodule PrismWeb.AgentsLive do
     # One call: list with detail carries every field this editor shows.
     # The get-per-guide loop this replaces was an N+1 fired from eight
     # handlers — renaming a title cost 1+N tool calls.
-    # Your crew and the estate's, each tagged with the tree it lives in.
+    # Your closet and the estate's, each tagged with the tree it lives in.
     # The tag is what every write here reads back to reach the right tree:
-    # editing your Tom while focused on a group must not materialize
-    # `tom.md` into the group's overlay.
+    # editing your soul while focused on a group must not materialize
+    # `aqua.md` into the group's overlay.
     agents =
       for owner <- agent_sources(ctx),
           g <- agents_of(ctx, owner),
-          g["type"] in ["orchestrator", "sub-agent"] do
+          g["type"] in ["soul", "role"] do
         %{
           "name" => g["name"],
           "owner" => owner,
           "mine?" => owner != ctx.athanor_id,
           "title" => g["title"] || g["name"],
           "type" => g["type"],
-          "parent" => g["parent"],
           "description" => g["description"] || "",
           "model" => g["model"],
           "catalyst_ref" => g["catalyst_ref"],
@@ -475,16 +440,16 @@ defmodule PrismWeb.AgentsLive do
     <div class="space-y-6">
       <div class="flex items-center justify-between">
         <div>
-          <h3 class="text-sm font-medium text-gray-200">Agents</h3>
+          <h3 class="text-sm font-medium text-gray-200">AQUA</h3>
           <p class="text-[11px] text-gray-500 mt-0.5">
-            Orchestrators are top-level guides. Sub-agents inherit context from their parent and are spawned on demand.
+            One assistant — the soul — and the roles it clones into: a stance and a set of hands for one kind of work.
           </p>
         </div>
-        <form phx-submit="editor_create_orchestrator" class="flex items-center gap-2">
+        <form phx-submit="editor_create_role" class="flex items-center gap-2">
           <input
             type="text"
             name="name"
-            placeholder="new-orchestrator"
+            placeholder="new-role"
             pattern="[a-z0-9_-]+"
             required
             class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 focus:border-blue-500 w-44 font-mono"
@@ -492,7 +457,7 @@ defmodule PrismWeb.AgentsLive do
           <select
             :if={@personal_source}
             name="owner"
-            title="Which tree the new orchestrator lives in — yours follows you into every estate"
+            title="Which closet the new role lives in — yours follows you into every estate"
             class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-300 focus:border-blue-500"
           >
             <option value={@context.athanor_id}>in this estate</option>
@@ -502,93 +467,48 @@ defmodule PrismWeb.AgentsLive do
             type="submit"
             class="rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 text-xs font-medium text-white"
           >
-            + New orchestrator
+            + New role
           </button>
         </form>
       </div>
 
       <.live_loading
         :if={@editor_agents == [] and not @models_loaded}
-        message="Loading agents…"
+        message="Loading AQUA…"
       />
 
       <div
         :if={@editor_agents == [] and @models_loaded}
         class="text-xs text-gray-500 py-8 text-center border border-dashed border-gray-800 rounded"
       >
-        No agents configured. Create your first orchestrator above.
+        No assistant here. The soul ships with the server — reset the AQUA tree to restore it.
       </div>
 
-      <%= for orch <- Enum.filter(@editor_agents, &(&1["type"] == "orchestrator")) do %>
-        <% sub_agents =
-          Enum.filter(
-            @editor_agents,
-            &(&1["parent"] == orch["name"] and &1["owner"] == orch["owner"])
-          ) %>
+      <.agent_card
+        :for={soul <- Enum.filter(@editor_agents, &(&1["type"] == "soul"))}
+        agent={soul}
+        models_by_provider={@models_by_provider}
+        tool_actions={@tool_actions || []}
+        is_soul={true}
+        model_status={Map.get(@model_status, soul["catalyst_ref"])}
+        athanor={@athanor}
+      />
+
+      <div
+        :if={Enum.any?(@editor_agents, &(&1["type"] == "role"))}
+        class="space-y-3 border-l border-gray-800 pl-4 ml-2"
+      >
         <.agent_card
-          agent={orch}
+          :for={role <- Enum.filter(@editor_agents, &(&1["type"] == "role"))}
+          agent={role}
           models_by_provider={@models_by_provider}
           tool_actions={@tool_actions || []}
-          is_orchestrator={true}
-          model_status={Map.get(@model_status, orch["catalyst_ref"])}
+          is_soul={false}
           athanor={@athanor}
         />
-        <div :if={sub_agents != []} class="ml-6 space-y-3 border-l border-gray-800 pl-4">
-          <.agent_card
-            :for={sub <- sub_agents}
-            agent={sub}
-            models_by_provider={@models_by_provider}
-            tool_actions={@tool_actions || []}
-            is_orchestrator={false}
-            athanor={@athanor}
-          />
-        </div>
-
-        <div class="ml-6 pl-4">
-          <button
-            :if={@editor_creating_sub_for != "#{orch["owner"]}/#{orch["name"]}"}
-            type="button"
-            phx-click="editor_toggle_sub_form"
-            phx-value-parent={"#{orch["owner"]}/#{orch["name"]}"}
-            class="text-[11px] text-blue-400 hover:text-blue-300"
-          >
-            + Add sub-agent
-          </button>
-          <form
-            :if={@editor_creating_sub_for == "#{orch["owner"]}/#{orch["name"]}"}
-            phx-submit="editor_create_sub_agent"
-            class="flex items-center gap-2"
-          >
-            <input type="hidden" name="parent" value={orch["name"]} />
-            <input type="hidden" name="owner" value={orch["owner"]} />
-            <input
-              type="text"
-              name="name"
-              placeholder="sub-agent-name"
-              pattern="[a-z0-9_-]+"
-              required
-              autofocus
-              class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 font-mono w-48"
-            />
-            <button
-              type="submit"
-              class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] text-white"
-            >
-              Create
-            </button>
-            <button
-              type="button"
-              phx-click="editor_toggle_sub_form"
-              phx-value-parent={"#{orch["owner"]}/#{orch["name"]}"}
-              class="text-[11px] text-gray-500 hover:text-gray-300"
-            >
-              Cancel
-            </button>
-          </form>
-        </div>
-      <% end %>
+      </div>
       
-    <!-- Consent sheet: bind a vault entry to an orchestrator's model -->
+    <!-- Consent sheet: bind a vault entry to the soul's model -->
       <div :if={@consent_sheet_ref} class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-black/60"></div>
         <div class="relative w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-lg border border-gray-800 bg-gray-900 p-4 shadow-xl">
@@ -603,7 +523,7 @@ defmodule PrismWeb.AgentsLive do
         </div>
       </div>
       
-    <!-- Prompt editor modal — shared by orchestrators and sub-agents -->
+    <!-- Prompt editor modal — shared by the soul and the roles -->
       <div
         :if={@editor_editing_prompt}
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
@@ -658,7 +578,7 @@ defmodule PrismWeb.AgentsLive do
   attr :agent, :map, required: true
   attr :models_by_provider, :map, required: true
   attr :tool_actions, :list, required: true
-  attr :is_orchestrator, :boolean, default: false
+  attr :is_soul, :boolean, default: false
   attr :model_status, :any, default: nil
   attr :athanor, :any, default: nil
 
@@ -687,12 +607,12 @@ defmodule PrismWeb.AgentsLive do
           <div class="flex items-center gap-2 mt-0.5">
             <span class={[
               "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium",
-              if(@is_orchestrator,
+              if(@is_soul,
                 do: "bg-purple-900/40 text-purple-300",
                 else: "bg-blue-900/40 text-blue-300"
               )
             ]}>
-              {if @is_orchestrator, do: "orchestrator", else: "sub-agent"}
+              {if @is_soul, do: "soul", else: "role"}
             </span>
             <code class="text-[11px] text-gray-500 font-mono">{@agent["name"]}</code>
             <span
@@ -702,9 +622,6 @@ defmodule PrismWeb.AgentsLive do
             >
               yours
             </span>
-            <code :if={@agent["parent"]} class="text-[11px] text-gray-600 font-mono">
-              ↳ parent: {@agent["parent"]}
-            </code>
           </div>
         </div>
         <div class="flex items-center gap-1 shrink-0">
@@ -730,7 +647,7 @@ defmodule PrismWeb.AgentsLive do
         </div>
       </div>
 
-      <form :if={!@is_orchestrator} phx-change="editor_update_field" class="space-y-1">
+      <form :if={!@is_soul} phx-change="editor_update_field" class="space-y-1">
         <input type="hidden" name="name" value={@agent["name"]} />
         <input type="hidden" name="owner" value={@agent["owner"]} />
         <input type="hidden" name="field" value="description" />
@@ -740,13 +657,13 @@ defmodule PrismWeb.AgentsLive do
           name="value"
           value={@agent["description"]}
           phx-debounce="500"
-          placeholder="One-line description shown to the orchestrator…"
+          placeholder="One line the soul reads when choosing this role…"
           class="w-full rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
         />
       </form>
 
       <div
-        :if={@is_orchestrator and @model_status}
+        :if={@is_soul and @model_status}
         class="flex flex-wrap items-center gap-2 text-[11px]"
       >
         <span :if={match?({:ready, _}, @model_status)} class="text-emerald-400">

@@ -1,7 +1,6 @@
 ---
 title: Artisan
 description: "Spawn an Artisan specialist to create, fix, or improve tincture apps and dashboards. Handles frontends for data displays, viewers, readers, tools. Chooses vanilla or React based on complexity. NOT for games or 3D — use aqua_arcade."
-parent: aqua
 catalyst_ref: catalyst:moonmoon69.claude
 model: claude-sonnet-4-6
 tool_policy:

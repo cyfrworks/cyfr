@@ -78,23 +78,17 @@ defmodule PrismWeb.AgentsLiveTest do
     {:ok, detail} = Aqua.AgentConfig.call_aqua(mine_ctx, %{"action" => "get", "name" => "tom"})
     assert detail["title"] == "My Tom"
 
-    # Grow MY crew from the estate's page: the child materializes in You,
-    # and Acme's tree stays untouched.
+    # Add a role to MY closet from the estate's page: the file materializes
+    # in You, and Acme's tree stays untouched.
     view
-    |> element("button[phx-value-parent='#{mine.id}/tom']")
-    |> render_click()
-
-    view
-    |> form("form[phx-submit=editor_create_sub_agent]", %{"name" => "scout"})
+    |> form("form[phx-submit=editor_create_role]", %{"name" => "scout", "owner" => mine.id})
     |> render_submit()
 
     {:ok, %{files: mine_files_after}} = Arca.usage(mine_ctx, ["aqua"])
     assert mine_files_after > mine_files_before
     assert {:ok, %{files: 0}} = Arca.usage(group_ctx, ["aqua"])
 
-    {:ok, listed} =
-      Aqua.AgentConfig.call_aqua(mine_ctx, %{"action" => "list", "type" => "sub-agent"})
-
-    assert Enum.any?(listed["guides"] || [], &(&1["name"] == "scout" and &1["parent"] == "tom"))
+    {:ok, listed} = Aqua.AgentConfig.call_aqua(mine_ctx, %{"action" => "list"})
+    assert Enum.any?(listed["guides"] || [], &(&1["name"] == "scout" and &1["type"] == "role"))
   end
 end

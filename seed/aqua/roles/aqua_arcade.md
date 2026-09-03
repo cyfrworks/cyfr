@@ -1,7 +1,6 @@
 ---
 title: Arcade
 description: Spawn an Arcade specialist to create, fix, or improve game tinctures and 3D visualizations. Knows Canvas 2D for simple games and picks the best-fit library (Three.js, Babylon.js, Pixi.js, Phaser, etc.) for complex games. Handles game loops, physics, input, particles.
-parent: aqua
 catalyst_ref: catalyst:moonmoon69.claude
 model: claude-sonnet-4-6
 tool_policy:

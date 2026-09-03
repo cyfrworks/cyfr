@@ -106,8 +106,10 @@ defmodule Cyfr.StackShapeTest do
     # The guard has to name something the shipped tree actually contains —
     # it once tested for `agent.json`, which is the v2 shape
     # `Compendium.AquaTemplate.seed_check/0` REJECTS, so it was never there
-    # and the copy ran on every restart.
-    agents = Compendium.AquaPath.agents_dirname()
+    # and the copy ran on every restart. The soul file is the one thing
+    # every shipped tree has.
+    soul = Compendium.AquaPath.soul_file() |> Enum.drop(1) |> Enum.join("/")
+    roles = Compendium.AquaPath.roles_dirname()
 
     code =
       entrypoint
@@ -115,9 +117,10 @@ defmodule Cyfr.StackShapeTest do
       |> Enum.reject(&String.starts_with?(String.trim(&1), "#"))
       |> Enum.join("\n")
 
-    assert code =~ "[ ! -d /app/seed/aqua/#{agents} ]"
+    assert code =~ "[ ! -f /app/seed/aqua/#{soul} ]"
     refute code =~ "agent.json"
-    assert File.dir?(Path.join(@root, "seed/aqua/#{agents}"))
+    assert File.regular?(Path.join(@root, "seed/aqua/#{soul}"))
+    assert File.dir?(Path.join(@root, "seed/aqua/#{roles}"))
 
     # WIT rides in the BUILD context (Compendium.WITSource embeds it — an
     # absent tree fails the compile), and the runtime image no longer

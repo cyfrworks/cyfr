@@ -432,7 +432,7 @@ defmodule Emissary.MCP.ConversationTool do
     do: {:invalid_argument, "the turn queue is full — send again after the current turn"}
 
   defp translate(:no_orchestrator, _id),
-    do: {:invalid_argument, "this estate has no agent to address — create an orchestrator first"}
+    do: {:invalid_argument, "this estate has no assistant to address — reset its AQUA tree"}
 
   defp translate(:empty, _id), do: {:invalid_argument, "send requires a non-empty 'message'"}
 

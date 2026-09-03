@@ -37,70 +37,40 @@ defmodule Aqua.Turn do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The orchestrators this person can address here: **their own crew, and the
-  estate's**.
+  Who can be addressed on this tape: the estate's soul first, then its
+  roles — the tree in focus and no other.
 
-  Agents belong to whoever owns the tree they live in. Yours travel with
-  you — the same Tom, wherever you are working — while an estate may also
-  keep agents of its own (the trip's assistant, the company's). Each entry
-  carries `"owner"`, the athanor whose `aqua/` tree it came from, so a
-  later resolve reads it from the right place and a rename cannot make the
-  stored name point somewhere else — and `"estate?"`, whether that owner is
-  the estate in focus.
+  A room's tape is the room's. `@aqua` reaches the room's soul, and a
+  role mention (`@aqua_builder`) runs that role directly for one turn; a
+  person's own assistant lives in their own athanor and rides along in
+  its own panel, never on a shared tape. Each entry carries `"owner"`, the
+  athanor whose `aqua/` tree it came from — always the focus here, kept
+  on the entry because everything downstream (the persisted pick, the
+  recovery read, the standing-grant key) is written in terms of it — and
+  `"estate?"`, true for every entry this roster builds.
 
-  A name collision keeps BOTH entries. The roster is identity, not
-  precedence: which one a bare `@aqua` means is `parse_mention/2`'s rule
-  (the estate's wins; the personal one stays reachable as
-  `@your-slug.aqua`). A roster that deduplicated here once made the
-  qualified grammar unreachable in exactly the case it exists for.
-  Estate entries sort first, so "the athanor's first orchestrator" and the
-  picker's top row are the estate's.
+  `parse_mention/2` still speaks the qualified `@slug.name` grammar over
+  any roster it is handed, and `orchestrator/3` still reads an agent from
+  a named owner's tree: the machinery for an agent borrowed across
+  estates stays correct, and dormant, because this roster never offers
+  one.
   """
-  @spec orchestrators(Context.t()) :: [map()]
-  def orchestrators(%Context{} = ctx) do
-    focus = ctx.athanor_id
+  @spec roster(Context.t()) :: [map()]
+  def roster(%Context{} = ctx) do
+    owner = ctx.athanor_id
 
-    for owner <- roster_sources(ctx), entry <- orchestrators_of(ctx, owner) do
-      Map.put(entry, "estate?", owner == focus)
-    end
-    |> Enum.sort_by(&{!&1["estate?"], &1["name"]})
+    Enum.map(roster_in(ctx, owner), &Map.put(&1, "estate?", true))
   end
 
-  # Whose trees to read, in precedence order: the person's own, then the
-  # estate in focus. One athanor when they are the same — a person working
-  # in their own estate reads one tree, as before.
-  defp roster_sources(%Context{} = ctx) do
-    [personal_athanor(ctx), ctx.athanor_id]
-    |> Enum.filter(&is_binary/1)
-    |> Enum.uniq()
-  end
-
-  defp personal_athanor(%Context{user_id: user_id}) when is_binary(user_id) do
-    case Sanctum.Tenancy.Users.get(user_id) do
-      {:ok, %{personal_athanor_id: id}} -> id
-      _ -> nil
-    end
-  end
-
-  defp personal_athanor(_), do: nil
-
-  defp orchestrators_of(ctx, owner) do
-    case Context.refocus(ctx, owner) do
-      {:ok, read_ctx} -> orchestrators_in(read_ctx, owner)
-      # An unreachable tree contributes nothing — the same fail-open the
-      # catalog read below chooses.
-      {:error, _} -> []
-    end
-  end
-
-  defp orchestrators_in(ctx, owner) do
+  defp roster_in(ctx, owner) do
     # Resolved once per roster build, not once per entry per message:
     # `parse_mention/2` is a pure function over the roster it is handed.
     slug = owner_slug(owner)
 
-    case Aqua.AgentConfig.call_aqua(ctx, %{"action" => "list", "type" => "orchestrator"}) do
+    case Aqua.AgentConfig.call_aqua(ctx, %{"action" => "list"}) do
       {:ok, result} ->
         (result["guides"] || [])
+        |> Enum.filter(&(&1["type"] in ["soul", "role"]))
         |> Enum.map(fn g ->
           %{
             "name" => g["name"],
@@ -111,19 +81,19 @@ defmodule Aqua.Turn do
         end)
         |> Enum.reject(fn g -> is_nil(g["name"]) end)
 
-      # Fail-open BY CHOICE: a broken aqua tool reads as "no orchestrators"
-      # — the chat still renders, which beats refusing the whole
+      # Fail-open BY CHOICE: a broken aqua tool reads as "nobody here" —
+      # the chat still renders, which beats refusing the whole
       # conversation for a catalog read. (A SEND with an empty roster and
-      # no prior orchestrator is still refused `:no_orchestrator` by the
-      # runner; the generic fallback prompt covers only a name that
-      # resolves but whose content read fails.)
+      # no prior pick is still refused `:no_orchestrator` by the runner;
+      # the generic fallback prompt covers only a name that resolves but
+      # whose content read fails.)
       _ ->
         []
     end
   end
 
   @doc """
-  One orchestrator's run-time detail, or `nil`.
+  One agent's run-time detail — the soul or a role — or `nil`.
 
   `owner` is the athanor whose tree holds it — from the roster entry, never
   guessed. Reading an agent from the estate in focus when it belongs to the
@@ -138,7 +108,7 @@ defmodule Aqua.Turn do
     owner_id = owner || ctx.athanor_id
 
     with {:ok, read_ctx} <- reach(ctx, owner),
-         {:ok, %{"type" => "orchestrator"} = detail} <-
+         {:ok, %{"type" => type} = detail} when type in ["soul", "role"] <-
            Aqua.AgentConfig.call_aqua(read_ctx, %{"action" => "get", "name" => name}) do
       %{
         "name" => name,
@@ -153,7 +123,7 @@ defmodule Aqua.Turn do
         "tool_policy" => detail["tool_policy"] || %{}
       }
     else
-      # Same deliberate fail-open as orchestrators/1: nil means "run on
+      # Same deliberate fail-open as roster/1: nil means "run on
       # the fallback prompt", never "refuse the turn" — and an owner tree
       # the caller cannot reach reads as no agent at all.
       _ -> nil
@@ -273,7 +243,7 @@ defmodule Aqua.Turn do
     case resolve_or_pass(ctx, orchestrator["catalyst_ref"]) do
       {:ok, resolved_catalyst} ->
         sub_agents =
-          Aqua.AgentConfig.sub_agent_definitions(
+          Aqua.AgentConfig.role_definitions(
             ctx,
             orchestrator,
             resolved_catalyst,

@@ -1,7 +1,6 @@
 ---
 title: Web
 description: "Spawn a Web specialist for direct HTTP interactions. Reads pages as Markdown, sends webhooks/POST requests, discovers links, extracts metadata. Uses the local HTTP catalyst — works with any URL including localhost and internal services."
-parent: aqua
 tool_policy:
   http.delete: auto
   http.get: auto

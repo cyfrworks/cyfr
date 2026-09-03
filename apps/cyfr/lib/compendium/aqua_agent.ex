@@ -3,25 +3,25 @@
 
 defmodule Compendium.AquaAgent do
   @moduledoc """
-  The AQUA agent file format and roster: one frontmatter-markdown file per
-  agent under `aqua/agents/` — the directory IS the roster, served through
-  the seed overlay like every other aqua path, so an unedited agent tracks
-  the shipped seed and an edited one shadows only itself.
+  The AQUA agent file format and the tree's roster: the soul at
+  `aqua/aqua.md` and one frontmatter-markdown file per role under
+  `aqua/roles/`, served through the seed overlay like every other aqua
+  path, so an unedited file tracks the shipped seed and an edited one
+  shadows only itself.
 
   The format is deliberately portable — the shape Claude Code speaks for
   its subagents (`.claude/agents/*.md`): YAML frontmatter carrying the
   metadata, the system prompt as the markdown body. CYFR's additions are
   `catalyst_ref` (which LLM catalyst executes the agent — defaultable),
-  `tool_policy` (the per-action allowlist, richer than a flat tools list),
-  `role: orchestrator` / `parent:` (the orchestration relationship
-  `agent.json` used to nest), `default: true` (the orchestrator a
-  conversation starts on), and `disabled: true` (how a shipped agent is
-  taken out of the roster — shipped files revert, they don't delete).
+  `tool_policy` (the per-action allowlist, richer than a flat tools list)
+  and `disabled: true` (how a shipped role is taken out of the roster —
+  shipped files revert, they don't delete). Which file is the soul and
+  which are roles is the tree's to say (`Compendium.AquaPath`), never the
+  frontmatter's.
 
       ---
       title: Arcade
       description: Spawn an Arcade specialist …
-      parent: aqua
       catalyst_ref: catalyst:moonmoon69.claude
       model: claude-sonnet-4-6
       tool_policy:
@@ -33,23 +33,18 @@ defmodule Compendium.AquaAgent do
   The frontmatter grammar is restricted on purpose: string and boolean
   scalars plus the one flat string→string map (`tool_policy`) — enough for
   portability, small enough that `serialize/1` can emit it byte-stably.
-  `parse_frontmatter/1` is shared with the skills tree (`SKILL.md` files
-  under `aqua/skills/` follow the open Agent Skills convention: `name` +
+  `parse_frontmatter/1` is shared with the scrolls (`SKILL.md` files under
+  `aqua/skills/` follow the open Agent Skills convention: `name` +
   `description` frontmatter, instructions as the body).
   """
 
   alias Compendium.AquaPath
   alias Sanctum.Context
 
-  @type role :: :orchestrator | :sub_agent
-
   @type t :: %{
           name: String.t(),
           title: String.t(),
           description: String.t(),
-          role: role(),
-          parent: String.t() | nil,
-          default: boolean(),
           disabled: boolean(),
           catalyst_ref: String.t() | nil,
           model: String.t() | nil,
@@ -63,22 +58,17 @@ defmodule Compendium.AquaAgent do
 
   @doc """
   Parse one agent file. The name comes from the filename (`<name>.md`),
-  never from the frontmatter — the directory is the roster.
+  never from the frontmatter — the tree is the roster.
   """
   @spec parse(String.t(), binary()) :: {:ok, t()} | {:error, term()}
   def parse(name, binary) when is_binary(name) and is_binary(binary) do
     with {:ok, meta, body} <- parse_frontmatter(binary),
          {:ok, policy} <- checked_tool_policy(meta["tool_policy"]) do
-      role = if meta["role"] == "orchestrator", do: :orchestrator, else: :sub_agent
-
       {:ok,
        %{
          name: name,
          title: string_or(meta["title"], name),
          description: string_or(meta["description"], ""),
-         role: role,
-         parent: if(is_binary(meta["parent"]) and meta["parent"] != "", do: meta["parent"]),
-         default: meta["default"] == true,
          disabled: meta["disabled"] == true,
          catalyst_ref: blank_to_nil(meta["catalyst_ref"]),
          model: blank_to_nil(meta["model"]),
@@ -95,9 +85,6 @@ defmodule Compendium.AquaAgent do
       [
         {"title", agent.title},
         {"description", blank_to_nil(agent.description)},
-        {"role", if(agent.role == :orchestrator, do: "orchestrator")},
-        {"default", if(agent.default, do: true)},
-        {"parent", agent.parent},
         {"catalyst_ref", agent.catalyst_ref},
         {"model", agent.model},
         {"disabled", if(agent.disabled, do: true)}
@@ -157,18 +144,20 @@ defmodule Compendium.AquaAgent do
   @doc """
   Every agent under `aqua/agents/` — the overlay union, so shipped and
   member-created agents list alike. Disabled agents are included (flagged);
-  `roster/1` is the view that drops them. A file that fails to parse is
-  skipped with its error in the second element — one broken agent must not
-  take the roster down.
+  the callers that build a surface drop them. A file that fails to parse
+  is skipped with its error in the second element — one broken role must
+  not take the roster down. The soul comes first when the tree has one,
+  then the roles by name.
   """
   @spec list(Context.t()) :: {:ok, [t()], [{String.t(), term()}]} | {:error, term()}
   def list(%Context{} = ctx) do
-    case Arca.list_typed(ctx, AquaPath.agents_root()) do
+    case Arca.list_typed(ctx, AquaPath.roles_root()) do
       {:ok, entries} ->
-        {agents, errors} =
+        {roles, errors} =
           entries
           |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
           |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
+          |> Enum.reject(&AquaPath.soul?/1)
           |> Enum.reduce({[], []}, fn name, {ok, errs} ->
             case get(ctx, name) do
               {:ok, agent} -> {[agent | ok], errs}
@@ -176,7 +165,14 @@ defmodule Compendium.AquaAgent do
             end
           end)
 
-        {:ok, Enum.sort_by(agents, & &1.name), Enum.reverse(errors)}
+        {soul, errors} =
+          case get(ctx, AquaPath.soul_name()) do
+            {:ok, agent} -> {[agent], errors}
+            {:error, :not_found} -> {[], errors}
+            {:error, reason} -> {[], [{AquaPath.soul_name(), reason} | errors]}
+          end
+
+        {:ok, soul ++ Enum.sort_by(roles, & &1.name), Enum.reverse(errors)}
 
       {:error, :not_found} ->
         {:ok, [], []}
@@ -186,49 +182,15 @@ defmodule Compendium.AquaAgent do
     end
   end
 
-  @doc "One agent by name, through the overlay union."
+  @doc "Whether this agent is the estate's soul, by the one reserved name."
+  @spec soul?(t()) :: boolean()
+  def soul?(%{name: name}), do: AquaPath.soul?(name)
+
+  @doc "One agent by name — the soul or a role, whichever the name is — through the overlay union."
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get(%Context{} = ctx, name) when is_binary(name) do
     with {:ok, binary} <- Arca.get(ctx, AquaPath.agent_file(name)) do
       parse(name, binary)
-    end
-  end
-
-  @doc """
-  The validated, active roster: disabled agents dropped, then — at least
-  one orchestrator; exactly one default (a single orchestrator IS the
-  default, flag or no flag — portable files need no CYFR field; several
-  need exactly one `default: true`); every sub-agent's parent must name an
-  orchestrator.
-  """
-  @spec roster(Context.t()) ::
-          {:ok, %{agents: [t()], orchestrators: [t()], default: t()}} | {:error, term()}
-  def roster(%Context{} = ctx) do
-    with {:ok, all, _errors} <- list(ctx) do
-      agents = Enum.reject(all, & &1.disabled)
-      orchestrators = Enum.filter(agents, &(&1.role == :orchestrator))
-      names = MapSet.new(orchestrators, & &1.name)
-
-      bad_parent =
-        Enum.find(agents, fn a ->
-          a.role == :sub_agent and not is_nil(a.parent) and not MapSet.member?(names, a.parent)
-        end)
-
-      cond do
-        orchestrators == [] ->
-          {:error, :no_orchestrator}
-
-        bad_parent != nil ->
-          {:error, {:unknown_parent, bad_parent.name, bad_parent.parent}}
-
-        true ->
-          case {orchestrators, Enum.filter(orchestrators, & &1.default)} do
-            {[only], _} -> {:ok, %{agents: agents, orchestrators: orchestrators, default: only}}
-            {_, [one]} -> {:ok, %{agents: agents, orchestrators: orchestrators, default: one}}
-            {_, []} -> {:error, :no_default_orchestrator}
-            {_, _many} -> {:error, :multiple_default_orchestrators}
-          end
-      end
     end
   end
 

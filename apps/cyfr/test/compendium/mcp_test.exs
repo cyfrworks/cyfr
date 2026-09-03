@@ -28,9 +28,6 @@ defmodule Compendium.MCPTest do
             name: name,
             title: name,
             description: "",
-            role: :sub_agent,
-            parent: "aqua",
-            default: false,
             disabled: false,
             catalyst_ref: nil,
             model: nil,
@@ -43,7 +40,7 @@ defmodule Compendium.MCPTest do
       :ok =
         Arca.put(
           Sanctum.TestContext.local(),
-          ["aqua", "agents", name <> ".md"],
+          Compendium.AquaPath.agent_file(name),
           Compendium.AquaAgent.serialize(agent)
         )
     end
@@ -52,13 +49,10 @@ defmodule Compendium.MCPTest do
       "aqua",
       %{
         title: "A.Q.U.A.",
-        role: :orchestrator,
-        parent: nil,
-        default: true,
         catalyst_ref: "catalyst:moonmoon69.claude",
         model: "claude-opus-4-6"
       },
-      "# A.Q.U.A.\n\n## Routing Rules\n\nYou are A.Q.U.A."
+      "# A.Q.U.A.\n\nYou are A.Q.U.A."
     )
 
     write.(
@@ -1293,7 +1287,7 @@ defmodule Compendium.MCPTest do
     test "list returns available guides", %{ctx: ctx} do
       {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list"})
 
-      # 3 doc guides + 1 orchestrator + 6 sub-agents = 10
+      # the soul + 6 roles + 3 doc guides = 10
       assert result.count == 10
       assert length(result.guides) == 10
 
@@ -1320,21 +1314,19 @@ defmodule Compendium.MCPTest do
       end
     end
 
-    test "list with type filter returns only matching guides", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list", "type" => "sub-agent"})
+    test "list types the roles as roles, flat", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list"})
+      roles = Enum.filter(result.guides, &(&1.type == "role"))
 
-      assert result.count == 6
-
-      for guide <- result.guides do
-        assert guide.type == "sub-agent"
-      end
+      assert length(roles) == 6
+      refute Enum.any?(roles, &Map.has_key?(&1, :parent))
     end
 
-    test "list with orchestrator filter", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list", "type" => "orchestrator"})
+    test "list puts the soul first", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list"})
 
-      assert result.count == 1
-      assert hd(result.guides).name == "aqua"
+      assert [%{name: "aqua", type: "soul"} | _] = result.guides
+      assert Enum.count(result.guides, &(&1.type == "soul")) == 1
     end
   end
 
@@ -1369,25 +1361,25 @@ defmodule Compendium.MCPTest do
       assert result.content =~ "Integration Guide"
     end
 
-    test "get aqua returns orchestrator prompt with metadata", %{ctx: ctx} do
+    test "get aqua returns the soul with metadata", %{ctx: ctx} do
       {:ok, result} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
 
       assert result.name == "aqua"
-      assert result.type == "orchestrator"
+      assert result.type == "soul"
       assert result.format == "markdown"
-      assert result.content =~ "Routing Rules"
+      assert result.content =~ "You are A.Q.U.A."
       assert result.catalyst_ref == "catalyst:moonmoon69.claude"
       assert result.model == "claude-opus-4-6"
     end
 
-    test "get aqua_builder returns sub-agent prompt with metadata", %{ctx: ctx} do
+    test "get aqua_builder returns a role with metadata", %{ctx: ctx} do
       {:ok, result} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
 
       assert result.name == "aqua_builder"
-      assert result.type == "sub-agent"
-      assert result.parent == "aqua"
+      assert result.type == "role"
+      refute Map.has_key?(result, :parent)
       assert result.format == "markdown"
       assert result.content =~ "Builder Agent"
       assert is_map(result.tool_policy)
@@ -1460,39 +1452,39 @@ defmodule Compendium.MCPTest do
       assert result.tool_policy["native_search"] == "auto"
     end
 
-    test "get aqua_artisan returns sub-agent prompt", %{ctx: ctx} do
+    test "get aqua_artisan returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_artisan"})
 
       assert result.name == "aqua_artisan"
-      assert result.type == "sub-agent"
+      assert result.type == "role"
       assert result.content =~ "Artisan Agent"
     end
 
-    test "get aqua_arcade returns sub-agent prompt", %{ctx: ctx} do
+    test "get aqua_arcade returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_arcade"})
 
       assert result.name == "aqua_arcade"
-      assert result.type == "sub-agent"
+      assert result.type == "role"
       assert result.content =~ "Arcade Agent"
     end
 
-    test "get aqua_web returns sub-agent prompt", %{ctx: ctx} do
+    test "get aqua_web returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_web"})
 
       assert result.name == "aqua_web"
-      assert result.type == "sub-agent"
+      assert result.type == "role"
       assert result.content =~ "Web Agent"
     end
 
-    test "get aqua_planner returns sub-agent prompt", %{ctx: ctx} do
+    test "get aqua_planner returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_planner"})
 
       assert result.name == "aqua_planner"
-      assert result.type == "sub-agent"
+      assert result.type == "role"
       assert result.content =~ "Planner Agent"
     end
 
@@ -1500,7 +1492,7 @@ defmodule Compendium.MCPTest do
       {:error, msg} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "nonexistent"})
 
-      assert err_msg(msg) =~ "Agent or guide not found"
+      assert err_msg(msg) =~ "role or guide not found"
       assert err_msg(msg) =~ "nonexistent"
     end
 
@@ -1612,7 +1604,7 @@ defmodule Compendium.MCPTest do
       {:ok, %{files: files}} = MCP.handle("aqua", ctx, %{"action" => "status"})
 
       assert %{state: "bundled_modified"} =
-               Enum.find(files, &(&1.path == "aqua/agents/aqua.md"))
+               Enum.find(files, &(&1.path == "aqua/aqua.md"))
 
       assert %{state: "bundled"} =
                Enum.find(files, &(&1.path == "aqua/skills/capability-acquisition"))
@@ -1622,8 +1614,8 @@ defmodule Compendium.MCPTest do
       :ok =
         Arca.put(
           ctx,
-          ["aqua", "agents", "keeper.md"],
-          "---\ntitle: Keeper\nparent: aqua\n---\n\nkeeper\n"
+          ["aqua", "roles", "keeper.md"],
+          "---\ntitle: Keeper\n---\n\nkeeper\n"
         )
 
       {:ok, %{created: "pdf"}} =
@@ -1637,15 +1629,15 @@ defmodule Compendium.MCPTest do
       {:ok, %{reset: true, reverted: reverted, kept: kept}} =
         MCP.handle("aqua", ctx, %{"action" => "reset"})
 
-      assert "aqua/agents/keeper.md" in kept
+      assert "aqua/roles/keeper.md" in kept
       assert "aqua/skills/pdf" in kept
-      assert "aqua/agents/aqua_web.md" in reverted
-      assert Arca.exists?(ctx, ["aqua", "agents", "keeper.md"])
+      assert "aqua/roles/aqua_web.md" in reverted
+      assert Arca.exists?(ctx, ["aqua", "roles", "keeper.md"])
 
       {:ok, %{reset: true, kept: []}} =
         MCP.handle("aqua", ctx, %{"action" => "reset", "all" => true})
 
-      refute Arca.exists?(ctx, ["aqua", "agents", "keeper.md"])
+      refute Arca.exists?(ctx, ["aqua", "roles", "keeper.md"])
       refute Arca.exists?(ctx, ["aqua", "skills", "pdf", "SKILL.md"])
     end
 
@@ -1816,12 +1808,35 @@ defmodule Compendium.MCPTest do
       assert got.disabled == true
     end
 
-    test "a member-created agent deletes outright", %{ctx: ctx} do
+    test "the soul is edited, never created or deleted", %{ctx: ctx} do
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{"action" => "create", "name" => "aqua", "content" => "x"})
+
+      assert msg =~ "soul"
+
+      # The fixture materialized the soul; deleting that copy reveals the
+      # shipped one, and deleting the shipped one is refused with its own
+      # sentence.
+      {:ok, %{deleted: "aqua", restored: "shipped"}} =
+        MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua"})
+
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua"})
+
+      assert msg =~ "soul ships with the server"
+
+      {:ok, %{updated: "aqua"}} =
+        MCP.handle("aqua", ctx, %{"action" => "update", "name" => "aqua", "title" => "Mine"})
+
+      assert {:ok, %{type: "soul", title: "Mine"}} =
+               MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
+    end
+
+    test "a member-created role deletes outright", %{ctx: ctx} do
       {:ok, _} =
         MCP.handle("aqua", ctx, %{
           "action" => "create",
           "name" => "my_agent",
-          "parent" => "aqua",
           "content" => "You are mine."
         })
 
@@ -1831,7 +1846,7 @@ defmodule Compendium.MCPTest do
       refute Map.has_key?(result, :restored)
 
       {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "my_agent"})
-      assert err_msg(msg) =~ "Agent or guide not found"
+      assert err_msg(msg) =~ "role or guide not found"
     end
   end
 

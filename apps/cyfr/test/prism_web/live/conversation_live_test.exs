@@ -376,11 +376,11 @@ defmodule PrismWeb.ConversationLiveTest do
     assert to in ["/", "/login?error=no_athanor"]
   end
 
-  test "the Agents page mounts with the athanor's orchestrators, and opens the grant sheet for a model",
+  test "the Agents page mounts with the athanor's soul and roles, and opens the grant sheet for a model",
        %{conn: conn} do
     conn = log_in_user(conn, test_user())
     {view, _html} = mount_athanor(conn, "/agents")
-    assert render(view) =~ "orchestrator"
+    assert render(view) =~ "soul"
     assert has_element?(view, "code", "aqua")
 
     # "Connect a model" is the lite path to a key: the consent sheet for the

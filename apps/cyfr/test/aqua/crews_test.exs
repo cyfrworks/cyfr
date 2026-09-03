@@ -110,14 +110,17 @@ defmodule Aqua.CrewsTest do
       {:ok, mine: mine, theirs: theirs, base: Sanctum.TestContext.local()}
     end
 
-    test "the production roster keeps a shadowed personal agent addressable", %{
+    test "the shared roster is the estate's tree alone — its soul first, then its roles", %{
       mine: mine,
       theirs: theirs,
       base: base
     } do
-      # Through `orchestrators/1`, not a hand-built list: the roster build
-      # itself once deduplicated by name, which made the qualified grammar
-      # unreachable in exactly the case it exists for.
+      # Through `roster/1`, not a hand-built list. A room's tape is the
+      # room's: a person's own agents live in their own athanor and never
+      # appear on a shared roster, so a same-named personal agent is not a
+      # collision here — it is simply absent. The qualified grammar stays
+      # a pure function over any roster it is handed (the tests above),
+      # which is what "dormant, not deleted" means.
       user = mine.owner_user_id
       {:ok, _} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: user, provider: "local"})
       {:ok, u} = Sanctum.Tenancy.Users.get(user)
@@ -140,39 +143,35 @@ defmodule Aqua.CrewsTest do
           })
       end
 
-      roster = Turn.orchestrators(theirs_ctx)
-      toms = Enum.filter(roster, &(&1["name"] == "tom"))
+      roster = Turn.roster(theirs_ctx)
 
-      assert Enum.sort_by(toms, & &1["owner"]) |> Enum.map(&{&1["owner"], &1["estate?"]}) ==
-               Enum.sort([{mine.id, false}, {theirs.id, true}])
+      assert Enum.all?(roster, &(&1["owner"] == theirs.id and &1["estate?"]))
+      assert [%{"name" => "tom"}] = Enum.filter(roster, &(&1["name"] == "tom"))
 
-      # Estate entries sort first, so the solo default and the picker's top
-      # row are the estate's.
-      assert List.first(roster)["estate?"]
+      # The soul first: the solo default and the thread's first agent.
+      assert List.first(roster)["name"] == "aqua"
 
-      # Bare mention → the estate's Tom; qualified → yours, still here.
+      # A bare mention reaches the estate's Tom; the qualified spelling of
+      # yours resolves to nothing here, because yours is not on this tape.
       assert {_, %{"owner" => owner}} = Turn.parse_mention("@tom hi", roster)
       assert owner == theirs.id
+      assert {_, nil} = Turn.parse_mention("@#{mine.slug}.tom hi", roster)
 
-      assert {_, %{"owner" => personal_owner}} =
-               Turn.parse_mention("@#{mine.slug}.tom hi", roster)
-
-      assert personal_owner == mine.id
+      # Your own roster, in your own athanor, is yours alone.
+      assert Enum.all?(Turn.roster(mine_ctx), &(&1["owner"] == mine.id))
     end
 
-    test "a personal crew travels: sub-agents come from the owner's tree", %{
-      mine: mine,
-      theirs: theirs,
-      base: base
-    } do
+    test "an agent brings its own closet, and an estate's soul never clones into someone else's",
+         %{mine: mine, theirs: theirs, base: base} do
       # The owner-tree reads refocus through membership — seat the user as
       # production does at mint.
       user = mine.owner_user_id
       {:ok, _} = Sanctum.Tenancy.Members.ensure(user, scope: "athanor", athanor_id: mine.id)
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(user, scope: "athanor", athanor_id: theirs.id)
       base = %{base | user_id: user}
       mine_ctx = %{base | athanor_id: mine.id}
 
-      # Parent and child live in MY tree only; the estate has neither.
+      # Tom and a role live in MY tree only; the estate has neither.
       {:ok, _} =
         Aqua.AgentConfig.call_aqua(mine_ctx, %{
           "action" => "create",
@@ -184,7 +183,6 @@ defmodule Aqua.CrewsTest do
       {:ok, _} =
         Aqua.AgentConfig.call_aqua(mine_ctx, %{
           "action" => "create",
-          "parent" => "tom",
           "name" => "scout",
           "title" => "Scout",
           "description" => "scouts",
@@ -192,14 +190,25 @@ defmodule Aqua.CrewsTest do
         })
 
       theirs_ctx = %{base | athanor_id: theirs.id}
-      orchestrator = Turn.orchestrator(theirs_ctx, "tom", mine.id)
-      assert orchestrator["owner"] == mine.id
+      tom = Turn.orchestrator(theirs_ctx, "tom", mine.id)
+      assert tom["owner"] == mine.id
 
-      # Tom runs in the OTHER estate and still brings his crew — the guides
-      # are read from the owner's tree, where reading focus instead found
-      # the estate's (nonexistent) children and quietly ran Tom alone.
-      assert {:ok, %{input: input}} = Turn.build_input(theirs_ctx, orchestrator, "hi")
-      assert [%{"name" => "scout"}] = input["sub_agents"]
+      # Read from a named owner's tree, Tom still brings that tree's whole
+      # closet — the machinery for an agent borrowed across estates stays
+      # correct even though no shared roster offers one any more.
+      assert {:ok, %{input: input}} = Turn.build_input(theirs_ctx, tom, "hi")
+      assert Enum.any?(input["sub_agents"], &(&1["name"] == "scout"))
+
+      # The estate's own soul spawns the estate's roles only: a role that
+      # lives in a member's private tree is not on its spawn surface.
+      soul = Turn.orchestrator(theirs_ctx, "aqua", theirs.id)
+      assert soul["owner"] == theirs.id
+      # The shipped soul pins a catalyst this test estate does not hold;
+      # unpinned, it rides through to the engine's default (the test below).
+      unpinned = Map.put(soul, "catalyst_ref", nil)
+      assert {:ok, %{input: input}} = Turn.build_input(theirs_ctx, unpinned, "hi")
+      refute Enum.any?(input["sub_agents"], &(&1["name"] == "scout"))
+      assert Enum.any?(input["sub_agents"], &(&1["name"] == "aqua_builder"))
     end
 
     test "a named catalyst the working estate lacks refuses the turn", %{

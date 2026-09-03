@@ -3,9 +3,9 @@
 
 defmodule Compendium.AquaAgentTest do
   @moduledoc """
-  The agent file format: frontmatter round-trips byte-stably, the roster
-  validates orchestration (one default, parents resolve), and disabled
-  agents leave the roster without leaving the tree.
+  The agent file format: frontmatter round-trips byte-stably, and a
+  disabled role leaves the closet without leaving the tree. Which file is
+  the soul is the tree's to say, never the frontmatter's.
   """
 
   use ExUnit.Case, async: true
@@ -18,9 +18,6 @@ defmodule Compendium.AquaAgentTest do
         name: "scribe",
         title: "Scribe",
         description: "writes things — carefully: with \"quotes\" and colons",
-        role: :sub_agent,
-        parent: "aqua",
-        default: false,
         disabled: false,
         catalyst_ref: "catalyst:moonmoon69.claude",
         model: "claude-sonnet-4-6",
@@ -36,11 +33,10 @@ defmodule Compendium.AquaAgentTest do
     assert {:ok, parsed} = AquaAgent.parse("scribe", AquaAgent.serialize(original))
     assert parsed == original
 
-    orchestrator =
-      agent(%{name: "aqua", role: :orchestrator, parent: nil, default: true, disabled: true})
+    soul = agent(%{name: "aqua", disabled: true})
 
-    assert {:ok, parsed} = AquaAgent.parse("aqua", AquaAgent.serialize(orchestrator))
-    assert parsed == orchestrator
+    assert {:ok, parsed} = AquaAgent.parse("aqua", AquaAgent.serialize(soul))
+    assert parsed == soul
   end
 
   test "serialization is stable — a second round-trip is byte-identical" do
@@ -59,7 +55,6 @@ defmodule Compendium.AquaAgentTest do
 
     assert {:ok, parsed} = AquaAgent.parse("min", minimal)
     assert parsed.title == "min"
-    assert parsed.role == :sub_agent
     assert parsed.tool_policy == %{}
     assert parsed.prompt == "You are minimal."
   end

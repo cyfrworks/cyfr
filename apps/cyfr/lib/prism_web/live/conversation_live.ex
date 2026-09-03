@@ -77,7 +77,7 @@ defmodule PrismWeb.ConversationLive do
       if connected?(socket) and ctx do
         Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(ctx.athanor_id))
 
-        orchestrators = Aqua.Turn.orchestrators(ctx)
+        orchestrators = Aqua.Turn.roster(ctx)
 
         socket
         |> assign(:orchestrators, orchestrators)
@@ -413,14 +413,6 @@ defmodule PrismWeb.ConversationLive do
           {:noreply, put_flash(socket, :error, "Delete failed: #{error_message(reason)}")}
       end
     end
-  end
-
-  # The option value is `owner/name` — two rosters can hold the same name
-  # (yours and the estate's), so a bare name cannot say which tree to read.
-  def handle_event("select_orchestrator", %{"name" => value}, socket) do
-    ctx = socket.assigns.context
-    {name, owner} = split_orchestrator_value(value)
-    {:noreply, assign(socket, :orchestrator, Aqua.Turn.orchestrator(ctx, name, owner))}
   end
 
   def handle_event("select_model", %{"model" => model}, socket) do
@@ -770,7 +762,7 @@ defmodule PrismWeb.ConversationLive do
          |> redirect(to: "/")}
 
       {:error, :no_orchestrator} ->
-        {:noreply, put_flash(socket, :error, "No orchestrator configured — see Agents.")}
+        {:noreply, put_flash(socket, :error, "This estate has no assistant — see Agents.")}
 
       {:error, :storage_full} ->
         {:noreply, put_flash(socket, :error, "This athanor's storage is full.")}
@@ -877,11 +869,11 @@ defmodule PrismWeb.ConversationLive do
   defp athanor_label(%{name: name}), do: name
   defp athanor_label(_), do: "this athanor"
 
-  # What a message would address, and what to call it: the orchestrator in
-  # focus, or the shipped default when the athanor has none yet. A personal
-  # agent working in another estate is addressed QUALIFIED — the incantation
-  # the placeholder teaches must be the one that resolves here, and the bare
-  # name may mean the estate's own agent instead.
+  # What a message would address, and what to call it: the agent the
+  # thread is on, or the roster's first — the estate's soul — before any
+  # turn has run. An agent from another tree would be addressed QUALIFIED;
+  # the roster no longer offers one, but the incantation the placeholder
+  # teaches stays the one that would resolve.
   defp orchestrator_handle(%{"name" => name} = o, athanor)
        when is_binary(name) and name != "" do
     focus = athanor && athanor.id
@@ -895,39 +887,18 @@ defmodule PrismWeb.ConversationLive do
   end
 
   # No roster entry at all: teach nothing rather than a handle that does
-  # not resolve — the "No orchestrator configured" note beside the picker
-  # is the honest sentence.
+  # not resolve — the "no assistant" note in the header is the honest
+  # sentence.
   defp orchestrator_handle(_, _athanor), do: nil
 
-  # What the composer and picker treat as current before any explicit
-  # selection: the roster's first entry — the estate's, the same default
-  # `pick_orchestrator/4` falls back to when nothing else picks. Before
-  # this, a fresh estate taught `@aqua` even when its only agent was
-  # named something else, and no picker row rendered selected.
+  # What the composer treats as current before any turn has run: the
+  # roster's first entry — the estate's soul, the same default
+  # `pick_orchestrator/4` falls back to when nothing else picks.
   defp current_orchestrator(nil, roster), do: List.first(roster)
   defp current_orchestrator(%{} = orchestrator, _roster), do: orchestrator
 
-  defp same_entry?(%{} = a, o), do: a["name"] == o["name"] and a["owner"] == o["owner"]
-  defp same_entry?(_, _o), do: false
-
   defp agent_label(%{} = o), do: o["title"] || o["name"]
   defp agent_label(_), do: "your agent"
-
-  # The picker names a personal agent by its qualified handle so two
-  # same-named rows read as two agents, not a duplicate.
-  defp option_label(%{"estate?" => false, "owner_slug" => slug} = o) when is_binary(slug),
-    do: "#{o["title"]} (@#{slug}.#{o["name"]})"
-
-  defp option_label(o), do: o["title"]
-
-  # `owner/name` back apart. A value with no slash is a bare name from an
-  # older client render — resolved ownerless, in the estate in focus.
-  defp split_orchestrator_value(value) when is_binary(value) do
-    case String.split(value, "/", parts: 2) do
-      [owner, name] -> {name, owner}
-      [name] -> {name, nil}
-    end
-  end
 
   # A group's orchestrator can be renamed or replaced from Agents, so the
   # incantation the placeholder teaches has to be the one that works here.
@@ -1105,23 +1076,15 @@ defmodule PrismWeb.ConversationLive do
             >
               DM
             </span>
-            <select
+            <span
               :if={@orchestrators != []}
-              phx-change="select_orchestrator"
-              name="name"
-              class="bg-transparent text-xs text-gray-400 hover:text-gray-200 border-none focus:ring-0 focus:outline-none cursor-pointer max-w-[14rem] truncate"
-              title="Switch orchestrator"
+              class="text-xs text-gray-400 max-w-[14rem] truncate"
+              title="The agent this thread is on"
             >
-              <option
-                :for={o <- @orchestrators}
-                value={"#{o["owner"]}/#{o["name"]}"}
-                selected={same_entry?(current_orchestrator(@orchestrator, @orchestrators), o)}
-              >
-                {option_label(o)}
-              </option>
-            </select>
+              {agent_label(current_orchestrator(@orchestrator, @orchestrators))}
+            </span>
             <span :if={@orchestrators == []} class="text-xs text-amber-400">
-              No orchestrator configured
+              No assistant here
             </span>
             <span
               :if={@queued > 0}

@@ -4,7 +4,7 @@
 defmodule Compendium.AquaTemplateTest do
   @moduledoc """
   The shipped AQUA tree through the seed overlay: no copies at provision,
-  per-file shadowing (an edited agent shadows only itself, an unedited one
+  per-file shadowing (an edited role shadows only itself, an unedited one
   tracks the operator's mount live), whole-skill copy-on-write, `reset/2`
   reverting edited copies while keeping member work (`all: true` for the
   exact shipped set), and `seed_check/0` failing loud on a v2 or empty
@@ -39,24 +39,22 @@ defmodule Compendium.AquaTemplateTest do
   end
 
   defp write_seed!(template, marker) do
-    agents = Path.join(template, "agents")
-    File.mkdir_p!(agents)
+    roles = Path.join(template, "roles")
+    File.mkdir_p!(roles)
 
-    File.write!(Path.join(agents, "aqua.md"), """
+    File.write!(Path.join(template, "aqua.md"), """
     ---
     title: A.Q.U.A.
-    role: orchestrator
     model: model-#{marker}
     ---
 
-    orchestrator prompt #{marker}
+    soul prompt #{marker}
     """)
 
-    File.write!(Path.join(agents, "scribe.md"), """
+    File.write!(Path.join(roles, "scribe.md"), """
     ---
     title: Scribe
     description: writes things
-    parent: aqua
     ---
 
     scribe prompt #{marker}
@@ -82,10 +80,10 @@ defmodule Compendium.AquaTemplateTest do
   test "the shipped tree reads through with zero copies", %{ctx: ctx} do
     assert :ok = AquaTemplate.seed_check()
 
-    assert {:ok, %{default: %{name: "aqua"}, agents: agents}} = AquaAgent.roster(ctx)
+    assert {:ok, agents, []} = AquaAgent.list(ctx)
     assert Enum.map(agents, & &1.name) == ["aqua", "scribe"]
 
-    assert {:ok, %{prompt: "orchestrator prompt v1"}} = AquaAgent.get(ctx, "aqua")
+    assert {:ok, %{prompt: "soul prompt v1"}} = AquaAgent.get(ctx, "aqua")
 
     # Complete through the facade, empty on disk.
     assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
@@ -108,7 +106,7 @@ defmodule Compendium.AquaTemplateTest do
     # agent follows it, the edited one keeps the members' work.
     write_seed!(template, "v2")
 
-    assert {:ok, %{prompt: "orchestrator prompt v2"}} = AquaAgent.get(ctx, "aqua")
+    assert {:ok, %{prompt: "soul prompt v2"}} = AquaAgent.get(ctx, "aqua")
     assert {:ok, %{prompt: "ours"}} = AquaAgent.get(ctx, "scribe")
 
     # Deleting the edited copy reverts it to shipped.
@@ -144,9 +142,9 @@ defmodule Compendium.AquaTemplateTest do
 
     assert {:ok,
             [
-              %{path: "aqua/agents/aqua.md", state: :bundled},
-              %{path: "aqua/agents/mine.md", state: :user},
-              %{path: "aqua/agents/scribe.md", state: :bundled_modified},
+              %{path: "aqua/aqua.md", state: :bundled},
+              %{path: "aqua/roles/mine.md", state: :user},
+              %{path: "aqua/roles/scribe.md", state: :bundled_modified},
               %{path: "aqua/skills/pdf", state: :bundled}
             ]} = AquaTemplate.status(ctx)
   end
@@ -164,7 +162,7 @@ defmodule Compendium.AquaTemplateTest do
     :ok =
       Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
 
-    assert {:ok, %{reverted: ["aqua/agents/scribe.md"], kept: ["aqua/agents/mine.md"]}} =
+    assert {:ok, %{reverted: ["aqua/roles/scribe.md"], kept: ["aqua/roles/mine.md"]}} =
              AquaTemplate.reset(ctx)
 
     assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
@@ -187,7 +185,7 @@ defmodule Compendium.AquaTemplateTest do
       Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
 
     assert {:ok, %{reverted: reverted, kept: []}} = AquaTemplate.reset(ctx, all: true)
-    assert Enum.sort(reverted) == ["aqua/agents/mine.md", "aqua/agents/scribe.md"]
+    assert Enum.sort(reverted) == ["aqua/roles/mine.md", "aqua/roles/scribe.md"]
 
     assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
     assert {:error, :not_found} = AquaAgent.get(ctx, "mine")
@@ -219,8 +217,8 @@ defmodule Compendium.AquaTemplateTest do
     assert {:error, :seed_is_v2_shaped} = AquaTemplate.seed_check()
     File.rm!(Path.join(template, "agent.json"))
 
-    # A roster without an orchestrator refuses too.
-    File.rm!(Path.join([template, "agents", "aqua.md"]))
-    assert {:error, :no_orchestrator} = AquaTemplate.seed_check()
+    # A tree without a soul is no template at all.
+    File.rm!(Path.join([template, "aqua.md"]))
+    assert {:error, :template_missing} = AquaTemplate.seed_check()
   end
 end

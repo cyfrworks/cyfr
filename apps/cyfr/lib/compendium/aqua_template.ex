@@ -9,18 +9,18 @@ defmodule Compendium.AquaTemplate do
   mount in Docker.
 
   Provisioning copies nothing: the athanor's `aqua/` is served through the
-  seed overlay (`Arca.Overlay`, per-file shadow units), so every agent and
-  skill the seed ships is visible immediately, an edited file shadows only
-  itself, an unedited one tracks the operator's mount live, and deleting an
-  edited copy reverts it to shipped. Upgrades are therefore per-file and
-  automatic — the digest-stamp machinery this module used to carry is gone
-  with the copies it compared.
+  seed overlay (`Arca.Overlay`, per-file shadow units), so the soul, every
+  role and every scroll the seed ships is visible immediately, an edited
+  file shadows only itself, an unedited one tracks the operator's mount
+  live, and deleting an edited copy reverts it to shipped. Upgrades are
+  therefore per-file and automatic — the digest-stamp machinery this
+  module used to carry is gone with the copies it compared.
 
   What remains here is the seed-side surface: `seed_check/0` (is the
-  install's template well-formed — provisioning fails loud on a v2 or
-  empty mount), `files/0` (what the seed ships), `status/1` (each unit's
+  install's template well-formed — provisioning fails loud on a mount
+  with no soul), `files/0` (what the seed ships), `status/1` (each unit's
   drift, from the overlay), and `reset/2` (revert edited copies of
-  shipped units; member-created agents and skills are kept unless
+  shipped units; member-created roles and scrolls are kept unless
   `all: true` deletes the whole upper layer).
   """
 
@@ -35,12 +35,11 @@ defmodule Compendium.AquaTemplate do
   def seed_prefix, do: @seed_prefix
 
   @doc """
-  Whether the install ships a well-formed v3 template: an `agents/`
-  directory whose files parse and pass roster validation (at least one
-  orchestrator, one default, parents resolve). Fails loud with a reason —
-  a v2-shaped mount (`agent.json` at the root) gets a pointed message, so
-  an operator who mounted an old tree learns it at boot, not from an
-  empty roster.
+  Whether the install ships a well-formed template: a soul file that
+  parses, and roles (optional) that each parse. Fails loud with a reason
+  — an older shape (`agents/` with no soul beside it, or a v2 `agent.json`)
+  gets a pointed message, so an operator who mounted an old tree learns it
+  at boot, not from an empty roster.
   """
   @spec seed_check() :: :ok | {:error, term()}
   def seed_check do
@@ -51,19 +50,31 @@ defmodule Compendium.AquaTemplate do
         {:error, :seed_is_v2_shaped}
 
       true ->
-        case seed_roster() do
-          {:ok, _roster} -> :ok
-          {:error, reason} -> {:error, reason}
+        with {:ok, _soul} <- seed_soul(ctx),
+             {:ok, _roles} <- seed_roles(ctx) do
+          :ok
         end
     end
   end
 
-  @doc "The files the seed ships, as paths relative to the aqua root."
+  @doc """
+  The files the seed ships, as paths relative to the aqua root — only what
+  the tree's grammar recognises as a unit (the soul, `roles/*.md`, the
+  scrolls). A mount that still carries an older shape beside the shipped
+  one is not what the seed ships.
+  """
   @spec files() :: [[String.t()]]
   def files do
     case Arca.list_recursive(Sanctum.system_context(), @seed_prefix) do
-      {:ok, leaves} -> Enum.map(leaves, &Enum.drop(&1, length(@seed_prefix)))
-      {:error, _} -> []
+      {:ok, leaves} ->
+        leaves
+        |> Enum.map(&Enum.drop(&1, length(@seed_prefix)))
+        |> Enum.filter(fn rel ->
+          hd(rel) != "agents" and AquaPath.locate(AquaPath.root() ++ rel) != :above_unit
+        end)
+
+      {:error, _} ->
+        []
     end
   end
 
@@ -149,48 +160,47 @@ defmodule Compendium.AquaTemplate do
     end
   end
 
-  # The seed's own roster, parsed and validated exactly the way the
-  # athanor's union roster is — same format module, same rules.
-  defp seed_roster do
-    ctx = Sanctum.system_context()
-
-    case Arca.list_typed(ctx, @seed_prefix ++ [AquaPath.agents_dirname()]) do
-      {:ok, entries} ->
-        agents =
-          entries
-          |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
-          |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
-          |> Enum.reduce_while({:ok, []}, fn name, {:ok, acc} ->
-            with {:ok, binary} <-
-                   Arca.get(ctx, @seed_prefix ++ [AquaPath.agents_dirname(), name <> ".md"]),
-                 {:ok, agent} <- AquaAgent.parse(name, binary) do
-              {:cont, {:ok, [agent | acc]}}
-            else
-              {:error, reason} -> {:halt, {:error, {:seed_agent_invalid, name, reason}}}
-            end
-          end)
-
-        with {:ok, list} <- agents do
-          validate_seed_roster(Enum.reject(list, & &1.disabled))
+  # The seed's soul and roles, parsed with the same format module the
+  # athanor's union reads them with. No roster rule beyond "each file
+  # parses": there is one soul by construction, and a role has no parent
+  # to resolve.
+  defp seed_soul(ctx) do
+    case Arca.get(ctx, @seed_prefix ++ [List.last(AquaPath.soul_file())]) do
+      {:ok, binary} ->
+        case AquaAgent.parse(AquaPath.soul_name(), binary) do
+          {:ok, soul} -> {:ok, soul}
+          {:error, reason} -> {:error, {:seed_soul_invalid, reason}}
         end
 
-      {:error, _} ->
+      {:error, :not_found} ->
         {:error, :template_missing}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp validate_seed_roster([]), do: {:error, :template_missing}
+  defp seed_roles(ctx) do
+    case Arca.list_typed(ctx, @seed_prefix ++ [AquaPath.roles_dirname()]) do
+      {:ok, entries} ->
+        entries
+        |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
+        |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
+        |> Enum.reduce_while({:ok, []}, fn name, {:ok, acc} ->
+          with {:ok, binary} <-
+                 Arca.get(ctx, @seed_prefix ++ [AquaPath.roles_dirname(), name <> ".md"]),
+               {:ok, role} <- AquaAgent.parse(name, binary) do
+            {:cont, {:ok, [role | acc]}}
+          else
+            {:error, reason} -> {:halt, {:error, {:seed_role_invalid, name, reason}}}
+          end
+        end)
 
-  defp validate_seed_roster(agents) do
-    orchestrators = Enum.filter(agents, &(&1.role == :orchestrator))
-    defaults = Enum.filter(orchestrators, & &1.default)
+      {:error, :not_found} ->
+        {:ok, []}
 
-    cond do
-      orchestrators == [] -> {:error, :no_orchestrator}
-      length(orchestrators) == 1 -> {:ok, agents}
-      length(defaults) == 1 -> {:ok, agents}
-      defaults == [] -> {:error, :no_default_orchestrator}
-      true -> {:error, :multiple_default_orchestrators}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 end

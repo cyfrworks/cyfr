@@ -522,11 +522,11 @@ defmodule Arca.OverlayTest do
       # sides of an edited agent as empty — pristine — and boot-time
       # collapse deleted the member's edits. Shape now comes from the
       # locator, and the file unit compares actual bytes.
-      agents = Path.join(seed, "aqua/agents")
+      agents = Path.join(seed, "aqua/roles")
       File.mkdir_p!(agents)
       File.write!(Path.join(agents, "a.md"), "shipped body")
 
-      file = ["aqua", "agents", "a.md"]
+      file = ["aqua", "roles", "a.md"]
       :ok = Arca.put(ctx, file, "edited body")
 
       assert {:ok, %{added: [], removed: [], changed: [[]]}} = Arca.Overlay.diff_unit(ctx, file)
@@ -609,14 +609,14 @@ defmodule Arca.OverlayTest do
     end
 
     test "a file-shaped copy reverts by a single delete", %{ctx: ctx, seed_dir: seed} do
-      agents = Path.join(seed, "aqua/agents")
+      agents = Path.join(seed, "aqua/roles")
       File.mkdir_p!(agents)
       File.write!(Path.join(agents, "a.md"), "shipped")
 
-      :ok = Arca.put(ctx, ["aqua", "agents", "a.md"], "edited")
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "a.md"]) == {:ok, :materialized}
-      assert :ok = Arca.Overlay.revert_copy(ctx, ["aqua", "agents", "a.md"])
-      assert {:ok, "shipped"} = Arca.get(ctx, ["aqua", "agents", "a.md"])
+      :ok = Arca.put(ctx, ["aqua", "roles", "a.md"], "edited")
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "roles", "a.md"]) == {:ok, :materialized}
+      assert :ok = Arca.Overlay.revert_copy(ctx, ["aqua", "roles", "a.md"])
+      assert {:ok, "shipped"} = Arca.get(ctx, ["aqua", "roles", "a.md"])
     end
   end
 
@@ -665,26 +665,26 @@ defmodule Arca.OverlayTest do
 
     test "file-shaped units: editing a shipped agent is :materialized, own-then-shipped shadows",
          %{ctx: ctx, seed_dir: seed} do
-      agents = Path.join(seed, "aqua/agents")
+      agents = Path.join(seed, "aqua/roles")
       File.mkdir_p!(agents)
       File.write!(Path.join(agents, "shipped.md"), "shipped body")
 
       # Editing the shipped agent is the file-shaped copy-on-write: the
       # single put shadows the seed file and records its mark.
-      :ok = Arca.put(ctx, ["aqua", "agents", "shipped.md"], "edited body")
+      :ok = Arca.put(ctx, ["aqua", "roles", "shipped.md"], "edited body")
 
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "shipped.md"]) ==
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "roles", "shipped.md"]) ==
                {:ok, :materialized}
 
       # An agent the athanor wrote first stays its own when a release
       # later ships the same name — and deleting it surfaces the seed's.
-      :ok = Arca.put(ctx, ["aqua", "agents", "mine.md"], "my body")
+      :ok = Arca.put(ctx, ["aqua", "roles", "mine.md"], "my body")
       File.write!(Path.join(agents, "mine.md"), "shipped later")
 
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "mine.md"]) == {:ok, :own_shadowing}
-      assert :ok = Arca.delete(ctx, ["aqua", "agents", "mine.md"])
-      assert {:ok, "shipped later"} = Arca.get(ctx, ["aqua", "agents", "mine.md"])
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "mine.md"]) == {:ok, :seed}
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "roles", "mine.md"]) == {:ok, :own_shadowing}
+      assert :ok = Arca.delete(ctx, ["aqua", "roles", "mine.md"])
+      assert {:ok, "shipped later"} = Arca.get(ctx, ["aqua", "roles", "mine.md"])
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "roles", "mine.md"]) == {:ok, :seed}
     end
 
     test "concurrent materializations keep both marks — no lost update", %{
@@ -963,20 +963,20 @@ defmodule Arca.OverlayTest do
     end
 
     test "deleting a subtree clears the marks beneath it", %{ctx: ctx, seed_dir: seed} do
-      agents = Path.join(seed, "aqua/agents")
+      agents = Path.join(seed, "aqua/roles")
       File.mkdir_p!(agents)
       File.write!(Path.join(agents, "a.md"), "shipped")
 
       # Materialize the agent — its mark exists, status :materialized.
-      :ok = Arca.put(ctx, ["aqua", "agents", "a.md"], "edited")
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "a.md"]) == {:ok, :materialized}
+      :ok = Arca.put(ctx, ["aqua", "roles", "a.md"], "edited")
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "roles", "a.md"]) == {:ok, :materialized}
 
       # A whole-scope delete (reset all: true's shape) clears the marks
       # with the bytes: re-completing the same unit without the overlay's
       # own copy machinery must NOT read as :materialized.
       assert :ok = Arca.delete_tree(ctx, ["aqua"])
-      :ok = lay_raw(ctx, ["aqua", "agents", "a.md"], "recreated by hand")
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "a.md"]) == {:ok, :own_shadowing}
+      :ok = lay_raw(ctx, ["aqua", "roles", "a.md"], "recreated by hand")
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "roles", "a.md"]) == {:ok, :own_shadowing}
     end
   end
 
@@ -1191,7 +1191,7 @@ defmodule Arca.OverlayTest do
 
     test "a file unit is one plain put — sentinel/origin refused, CoW mark untouched",
          %{ctx: ctx} do
-      agent = ["aqua", "agents", "mine.md"]
+      agent = ["aqua", "roles", "mine.md"]
 
       assert {:ok, [[]]} =
                Arca.Overlay.commit_unit(ctx, agent, {:files, [{[], "# mine"}]}, cap: :exempt)
