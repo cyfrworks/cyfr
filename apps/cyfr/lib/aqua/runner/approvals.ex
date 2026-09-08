@@ -309,7 +309,7 @@ defmodule Aqua.Runner.Approvals do
     why =
       case reason do
         {:scope_not_permitted, _} -> Aqua.ToolGrants.refusal_message(reason)
-        other -> Aqua.MCPHelpers.render_refusal(other)
+        other -> Aqua.Ops.render_refusal(other)
       end
 
     "#{standing_answer(scope, effect)} was not recorded for #{tool}.#{action} — #{why}"

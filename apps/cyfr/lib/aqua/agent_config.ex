@@ -222,7 +222,7 @@ defmodule Aqua.AgentConfig do
   defp catalyst_status(ctx, listing, ref) do
     with {:ok, resolved} <- find_matching_catalyst(listing, ref),
          {:ok, plan} <-
-           Aqua.MCPHelpers.call_tool("component", ctx, %{
+           Aqua.Ops.call_tool("component", ctx, %{
              "action" => "setup_plan",
              "reference" => resolved
            }) do
@@ -255,7 +255,7 @@ defmodule Aqua.AgentConfig do
   @spec catalyst_listing(Context.t()) :: {:ok, [map()]} | {:error, :catalyst_lookup_failed}
   def catalyst_listing(%Context{} = ctx) do
     result =
-      Aqua.MCPHelpers.call_tool("component", ctx, %{
+      Aqua.Ops.call_tool("component", ctx, %{
         "action" => "list",
         "type" => "catalyst"
       })
@@ -301,7 +301,7 @@ defmodule Aqua.AgentConfig do
   """
   @spec call_aqua(Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_aqua(ctx, args) do
-    case Aqua.MCPHelpers.call_tool("aqua", ctx, args) do
+    case Aqua.Ops.call_tool("aqua", ctx, args) do
       {:ok, result} -> {:ok, stringify_deep(result)}
       other -> other
     end

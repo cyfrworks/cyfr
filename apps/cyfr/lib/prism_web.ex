@@ -32,7 +32,7 @@ defmodule PrismWeb do
       use Phoenix.LiveView,
         layout: {PrismWeb.Layouts, :app}
 
-      import PrismWeb.MCPHelpers
+      import PrismWeb.Ops
       import PrismWeb.DisplayHelpers
 
       use PrismWeb.LiveDefaults
@@ -45,7 +45,7 @@ defmodule PrismWeb do
     quote do
       use Phoenix.LiveComponent
 
-      import PrismWeb.MCPHelpers
+      import PrismWeb.Ops
       import PrismWeb.DisplayHelpers
 
       use PrismWeb.LiveDefaults

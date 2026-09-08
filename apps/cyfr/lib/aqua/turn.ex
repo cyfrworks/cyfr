@@ -429,7 +429,7 @@ defmodule Aqua.Turn do
   def start(%Context{} = ctx, input, profile_id)
       when is_map(input) and is_binary(profile_id) do
     result =
-      Aqua.MCPHelpers.call_tool("execution", ctx, %{
+      Aqua.Ops.call_tool("execution", ctx, %{
         "action" => "run_stream",
         "reference" => @agent_ref,
         "input" => input,
@@ -626,7 +626,7 @@ defmodule Aqua.Turn do
           |> Map.put("action", action)
           |> Map.drop(["parent_execution_id", "root_execution_id"])
 
-        Aqua.MCPHelpers.call_tool("execution", ctx, launch_args)
+        Aqua.Ops.call_tool("execution", ctx, launch_args)
     end
   end
 
@@ -640,7 +640,7 @@ defmodule Aqua.Turn do
       if Aqua.VirtualTools.virtual_tool?(tool),
         do: run_virtual(proposal, ctx, authority),
         else:
-          Aqua.MCPHelpers.call_in_chain(
+          Aqua.Ops.call_in_chain(
             tool,
             Context.enter_guest(ctx),
             Map.put(args || %{}, "action", action),

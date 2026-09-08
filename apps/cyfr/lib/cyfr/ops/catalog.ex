@@ -203,8 +203,13 @@ defmodule Cyfr.Ops.Catalog do
   `call_in_chain/5`; there is deliberately no plane-ambiguous entry point —
   a new call site must choose, at compile time.
 
-  The work runs in a task registered under `ctx.request_id`, so a transport
-  whose caller disconnects can stop it (`Emissary.MCP.RunningTasks`).
+  How the handler is run is the adapter's choice (`:runner`): `:inline`
+  (the default) is a function call on the caller's own process — the
+  gate, the contract and the handler, nothing else — for the console and
+  the assistant, which already hold an authenticated context and a
+  process of their own; `:supervised` runs it in a task under a timeout,
+  registered under `ctx.request_id` so a transport whose caller
+  disconnects can stop it (`Emissary.MCP.RunningTasks`), for the wire.
   """
   def call_external(name, ctx, args, opts \\ [])
 
@@ -233,13 +238,16 @@ defmodule Cyfr.Ops.Catalog do
   transition step and releases it when the synchronous dispatch returns.
 
   Options: `:guest_fn` (`:call` | `:spawn`, default `:call`), plus
-  `call_external/4`'s options.
+  `call_external/4`'s options. The runner defaults to `:supervised` here:
+  the handler runs on a guest's behalf, and a crash or a hang inside it
+  must not take the chain's host process with it.
   """
   def call_in_chain(name, ctx, args, authority, opts \\ [])
 
   def call_in_chain(name, %Context{} = ctx, args, %Sanctum.Authority{} = authority, opts)
       when is_map(args) do
     guest_fn = Keyword.get(opts, :guest_fn, :call)
+    opts = Keyword.put_new(opts, :runner, :supervised)
 
     args =
       args
@@ -603,7 +611,7 @@ defmodule Cyfr.Ops.Catalog do
   # The tool's declared `inputSchema`, applied on every path into a handler.
   #
   # `Emissary.MCP.Router` validates before dispatch, so `POST /mcp` was already
-  # held to it; the console (`PrismWeb.MCPHelpers` → `call_external/4`) and the
+  # held to it; the console (`PrismWeb.Ops` → `call_external/4`) and the
   # other in-process callers were not, and LiveView event params are as
   # client-controlled as a request body. A handler should not have to defend
   # twice, and the two ingresses should not disagree about what is a valid
@@ -990,7 +998,36 @@ defmodule Cyfr.Ops.Catalog do
   # outright, returning a bare 500 instead of a JSON-RPC error. A signal is not
   # catchable by try/rescue, so the crash clauses below could never have fired for
   # that case. Without a link, a crash arrives as `{:exit, reason}` from `yield/2`.
-  defp execute_tool_call(name, ctx, _opts, execute_fn) do
+  # The adapter's runner. Inline is the in-process call: the handler on the
+  # caller's own process, with a raised authorization refusal answered as
+  # the refusal it is and any other crash contained to this call.
+  defp execute_tool_call(name, ctx, opts, execute_fn) do
+    case Keyword.get(opts, :runner, :inline) do
+      :inline -> run_inline(name, execute_fn)
+      :supervised -> run_supervised(name, ctx, execute_fn)
+    end
+  end
+
+  defp run_inline(name, execute_fn) do
+    execute_fn.()
+  rescue
+    refusal in Sanctum.UnauthorizedError ->
+      {:error, refusal.reason}
+
+    exception ->
+      Logger.error(
+        "[Cyfr.Ops.Catalog] Tool #{name} crashed: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      {:error, {:crashed, "Tool #{name} crashed"}}
+  catch
+    :exit, reason ->
+      Logger.error("[Cyfr.Ops.Catalog] Tool #{name} exited: #{inspect(reason)}")
+      {:error, {:exit, "Tool #{name} exited unexpectedly"}}
+  end
+
+  defp run_supervised(name, ctx, execute_fn) do
     # Registered under the server-minted request id, which is also the key
     # `Emissary.MCP.Progress` uses — one identity per request across both
     # subsystems. The transport cancels through this when its caller hangs up;

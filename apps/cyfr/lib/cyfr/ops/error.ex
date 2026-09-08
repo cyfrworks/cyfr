@@ -33,7 +33,7 @@ defmodule Cyfr.Ops.Error do
   consumers of a provider's error all render it:
 
     * `Emissary.MCP.Router.format_error_reason/1` (the external wire)
-    * `PrismWeb.MCPHelpers.error_message/1` (the console)
+    * `PrismWeb.Ops.error_message/1` (the console)
     * `Opus.FormulaHandler.stringify_reason/1` (the in-chain guest view)
 
   The §4.3 consent signals are their own vocabulary

@@ -469,7 +469,7 @@ defmodule Aqua.Actions do
 
   def kind_for(_, _), do: nil
 
-  defp lookup_internal_kind(tool, action), do: Aqua.MCPHelpers.action_kind(tool, action)
+  defp lookup_internal_kind(tool, action), do: Aqua.Ops.action_kind(tool, action)
 
   @auto_kinds [:read, :write, :execute]
 
@@ -494,7 +494,7 @@ defmodule Aqua.Actions do
   def actions_of(tool) when is_binary(tool) do
     if Aqua.VirtualTools.virtual_tool?(tool),
       do: Aqua.VirtualTools.actions_of(tool),
-      else: Aqua.MCPHelpers.actions_of(tool)
+      else: Aqua.Ops.actions_of(tool)
   end
 
   def actions_of(_tool), do: []
@@ -515,7 +515,7 @@ defmodule Aqua.Actions do
     cond do
       Aqua.VirtualTools.virtual_tool?(tool) -> nil
       String.contains?(tool, ":") -> nil
-      true -> Aqua.MCPHelpers.action_standing(tool, action)
+      true -> Aqua.Ops.action_standing(tool, action)
     end
   end
 
@@ -753,7 +753,7 @@ defmodule Aqua.Actions do
     if Aqua.VirtualTools.virtual_tool?(tool) do
       is_nil(Aqua.VirtualTools.kind_for(tool, action))
     else
-      Aqua.MCPHelpers.in_chain_refused?(tool, action)
+      Aqua.Ops.in_chain_refused?(tool, action)
     end
   end
 end

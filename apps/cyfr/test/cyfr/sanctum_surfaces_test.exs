@@ -28,7 +28,7 @@ defmodule Cyfr.SanctumSurfacesTest do
   #     `emissary` — domain code whose Sanctum reach should stay vocabulary
   #     and the tenancy carrier.
   @surfaces %{
-    # `Sanctum.Authority` is `Aqua.MCPHelpers` alone: the in-chain call an
+    # `Sanctum.Authority` is `Aqua.Ops` alone: the in-chain call an
     # approved proposal runs under carries the chain's authority, and the
     # seam's contract names its type. `Sanctum.Provisioning` is
     # `Aqua.AgentConfig`'s two in-process agent reads alone — the first-need

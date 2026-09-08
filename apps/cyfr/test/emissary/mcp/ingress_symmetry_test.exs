@@ -7,7 +7,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
 
   `Emissary.MCP.Router` validates `arguments` against the tool's
   `inputSchema` before dispatch; `Catalog.call_external/4` — the console's
-  path, through `PrismWeb.MCPHelpers` — did not. So a `phx-click` (or a
+  path, through `PrismWeb.Ops` — did not. So a `phx-click` (or a
   crafted channel frame, since event params are client-controlled) reached a
   handler with arguments `POST /mcp` would have refused `-32602`, and every
   handler had to defend twice. `tool_registry.ex`'s own comment named the gap

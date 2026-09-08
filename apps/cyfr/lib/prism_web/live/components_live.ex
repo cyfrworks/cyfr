@@ -977,7 +977,7 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  # Built-in tool results are atom-keyed by contract (`PrismWeb.MCPHelpers`);
+  # Built-in tool results are atom-keyed by contract (`PrismWeb.Ops`);
   # the registry client atomizes remote search entries at its decode
   # boundary, so the string fallback this helper carried is gone.
   defp comp_field(c, key) when is_map(c), do: c[key]

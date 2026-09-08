@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Aqua.MCPHelpers do
+defmodule Aqua.Ops do
   @moduledoc """
-  The seam between the assistant plane and the MCP tool surface — Aqua's
-  `PrismWeb.MCPHelpers`.
+  The assistant's adapter onto the operation catalog — Aqua's
+  `PrismWeb.Ops`.
 
   Aqua was the one domain namespace with a live tool-dispatch dependency
   and neither a helper nor a roster for it: `Aqua.Turn`,

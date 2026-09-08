@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.ToolSeamTest do
   @moduledoc """
-  `PrismWeb.MCPHelpers` is the console's seam onto the MCP tool surface —
+  `PrismWeb.Ops` is the console's seam onto the MCP tool surface —
   one place that splits `"tool/action"`, one `error_message/1` vocabulary.
 
   Eight console call sites reached past it and spelled
@@ -38,7 +38,7 @@ defmodule PrismWeb.ToolSeamTest do
     assert offenders == [],
            """
            These console modules call the tool registry directly instead of
-           `PrismWeb.MCPHelpers.call_tool/3`:
+           `PrismWeb.Ops.call_tool/3`:
 
            #{Enum.map_join(offenders, "\n", &"  #{&1}")}
 
@@ -75,7 +75,7 @@ defmodule PrismWeb.ToolSeamTest do
     # rather than a caller of its own tool: the LiveView already holds an
     # authenticated member context, and the registry gate exists for
     # surfaces that do not. Same functions, two doors —
-    # `PrismWeb.MCPHelpers` states the rule.
+    # `PrismWeb.Ops` states the rule.
     {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex", "Arca.ConversationStorage.create"},
     {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.ConversationStorage.delete"},
     # Following is the person's own sidebar and notify roster — the rows
@@ -217,13 +217,13 @@ defmodule PrismWeb.ToolSeamTest do
 
     # An unknown tool is refused by the registry rather than raising, which
     # is enough to show the name/action split happened before dispatch.
-    assert {:error, _} = PrismWeb.MCPHelpers.call_tool(ctx, "no-such-tool/list", %{})
+    assert {:error, _} = PrismWeb.Ops.call_tool(ctx, "no-such-tool/list", %{})
 
     socket = %Phoenix.LiveView.Socket{assigns: %{context: ctx, __changed__: %{}}}
-    assert {:error, _} = PrismWeb.MCPHelpers.call_tool(socket, "no-such-tool/list", %{})
+    assert {:error, _} = PrismWeb.Ops.call_tool(socket, "no-such-tool/list", %{})
 
     assert {:error, :no_context} =
-             PrismWeb.MCPHelpers.call_tool(
+             PrismWeb.Ops.call_tool(
                %Phoenix.LiveView.Socket{assigns: %{__changed__: %{}}},
                "component/list",
                %{}

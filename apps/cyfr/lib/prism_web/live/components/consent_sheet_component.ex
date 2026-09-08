@@ -15,7 +15,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   use PrismWeb, :live_component
 
-  alias PrismWeb.MCPHelpers
+  alias PrismWeb.Ops
 
   @impl true
   def mount(socket) do
@@ -154,7 +154,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   # The socket carries the operator's :oidc context, which is what makes
   # this surface able to consent at all (§4.1).
   defp call(socket, tool_action, args) do
-    MCPHelpers.call_tool(socket, tool_action, args)
+    Ops.call_tool(socket, tool_action, args)
   end
 
   # ---------------------------------------------------------------------------

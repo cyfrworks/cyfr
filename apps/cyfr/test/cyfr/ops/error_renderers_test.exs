@@ -7,7 +7,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
 
   `Cyfr.Ops.Error`'s moduledoc names the three consumers that must
   agree: the wire (`Emissary.MCP.Router`), the console
-  (`PrismWeb.MCPHelpers`) and the in-chain guest view
+  (`PrismWeb.Ops`) and the in-chain guest view
   (`Opus.FormulaHandler`). `ToolRegistry` mints a fourth vocabulary of its own
   for a crashed, exited or timed-out tool — and only the router knew it. The
   console showed "The request failed — try again." for all three, losing the
@@ -35,7 +35,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
       for reason <- @crash_vocabulary do
         expected = Error.message(reason)
 
-        assert PrismWeb.MCPHelpers.error_message(reason) == expected,
+        assert PrismWeb.Ops.error_message(reason) == expected,
                "the console disagrees about #{inspect(reason)}"
 
         assert Opus.FormulaHandler.render_reason(reason) == expected,
@@ -44,8 +44,8 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
     end
 
     test "keeps the distinction the console used to lose" do
-      timeout = PrismWeb.MCPHelpers.error_message({:timeout, "Tool x timed out after 1ms"})
-      crash = PrismWeb.MCPHelpers.error_message({:crashed, "Tool x crashed: boom"})
+      timeout = PrismWeb.Ops.error_message({:timeout, "Tool x timed out after 1ms"})
+      crash = PrismWeb.Ops.error_message({:crashed, "Tool x crashed: boom"})
 
       assert timeout =~ "timed out"
       assert crash =~ "crashed"

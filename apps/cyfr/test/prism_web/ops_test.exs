@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.MCPHelpersTest do
+defmodule PrismWeb.OpsTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog
-  alias PrismWeb.MCPHelpers
+  alias PrismWeb.Ops
 
   defmodule ListProvider do
     def handle("helper_list_probe", _ctx, %{"action" => "wrapped"}),
@@ -39,29 +39,29 @@ defmodule PrismWeb.MCPHelpersTest do
 
   test "call_tool splits tool/action and requires a context", %{socket: socket} do
     assert {:ok, %{items: [%{id: 1}]}} =
-             MCPHelpers.call_tool(socket, "helper_list_probe/wrapped")
+             Ops.call_tool(socket, "helper_list_probe/wrapped")
 
-    assert {:error, :no_context} = MCPHelpers.call_tool(%{assigns: %{}}, "key/list")
+    assert {:error, :no_context} = Ops.call_tool(%{assigns: %{}}, "key/list")
   end
 
   test "fetch_list unwraps both list shapes to one", %{socket: socket} do
-    assert {:ok, [%{id: 1}]} = MCPHelpers.fetch_list(socket, "helper_list_probe/wrapped", :items)
-    assert {:ok, [%{id: 2}]} = MCPHelpers.fetch_list(socket, "helper_list_probe/bare", :items)
+    assert {:ok, [%{id: 1}]} = Ops.fetch_list(socket, "helper_list_probe/wrapped", :items)
+    assert {:ok, [%{id: 2}]} = Ops.fetch_list(socket, "helper_list_probe/bare", :items)
   end
 
   test "anything else becomes one failure vocabulary", %{socket: socket} do
     assert {:error, "The request failed — try again."} =
-             MCPHelpers.fetch_list(socket, "helper_list_probe/shapeless", :items)
+             Ops.fetch_list(socket, "helper_list_probe/shapeless", :items)
 
     assert {:error, "Not allowed."} =
-             MCPHelpers.fetch_list(socket, "helper_list_probe/refused", :items)
+             Ops.fetch_list(socket, "helper_list_probe/refused", :items)
 
     assert {:error, "Not signed in."} =
-             MCPHelpers.fetch_list(%{assigns: %{}}, "helper_list_probe/wrapped", :items)
+             Ops.fetch_list(%{assigns: %{}}, "helper_list_probe/wrapped", :items)
   end
 
   test "error_message passes refusal sentences and hides raw terms" do
-    assert MCPHelpers.error_message("Unauthorized: nope") == "Unauthorized: nope"
-    assert MCPHelpers.error_message({:weird, :term}) == "The request failed — try again."
+    assert Ops.error_message("Unauthorized: nope") == "Unauthorized: nope"
+    assert Ops.error_message({:weird, :term}) == "The request failed — try again."
   end
 end

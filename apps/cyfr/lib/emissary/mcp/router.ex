@@ -183,7 +183,7 @@ defmodule Emissary.MCP.Router do
               else
                 has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
-                case Catalog.call_external(name, ctx, arguments) do
+                case Catalog.call_external(name, ctx, arguments, runner: :supervised) do
                   {:ok, result} ->
                     text =
                       case Jason.encode(result) do

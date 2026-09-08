@@ -640,7 +640,7 @@ defmodule Aqua.ConversationRunner do
          )}
 
       {:error, reason} ->
-        safe = Aqua.MCPHelpers.render_refusal(reason)
+        safe = Aqua.Ops.render_refusal(reason)
 
         {:noreply, Aqua.Runner.Stream.fail_turn(state, "Execution failed to start: #{safe}")}
     end

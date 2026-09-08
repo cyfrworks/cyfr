@@ -18,7 +18,16 @@ defmodule Cyfr.Ops.CatalogTest.BlockingProvider do
   @moduledoc false
   # A provider that stays in flight. It announces its own pid to the test
   # process first, so a test can assert on the dispatcher's bookkeeping while
-  # the call is provably still running instead of guessing at a delay.
+  # the call is provably still running instead of guessing at a delay. Asked
+  # to, it answers at once with the process it ran on, crashes, or raises
+  # the refusal a handler's tenant gate raises.
+  def handle(_tool, _ctx, %{crash: true}), do: raise("boom from provider")
+
+  def handle(_tool, _ctx, %{refuse: true}),
+    do: raise(Sanctum.UnauthorizedError, reason: :missing_tenant)
+
+  def handle(_tool, _ctx, %{release: true}), do: {:ok, %{ran_on: self()}}
+
   def handle(_tool, _ctx, args) do
     send(Map.fetch!(args, :reply_to), {:handler_running, self()})
     Process.sleep(:infinity)
@@ -431,7 +440,8 @@ defmodule Cyfr.Ops.CatalogTest do
     # The transport cancels a request by request id when its caller closes the
     # response stream, so in-flight work has to be findable under that same id.
     # It used to be registered under the *client-supplied* JSON-RPC id, which
-    # two callers can trivially pick the same value for.
+    # two callers can trivially pick the same value for. The supervised run
+    # is the wire's choice: an in-process caller runs the handler itself.
     test "in-flight work is registered under the context's request id, and cancellable" do
       register_blocking_tool()
       ctx = %{Sanctum.TestContext.local() | request_id: "req_tracked"}
@@ -439,7 +449,11 @@ defmodule Cyfr.Ops.CatalogTest do
 
       spawn(fn ->
         args = %{"action" => "block", :reply_to => caller}
-        send(caller, {:result, Catalog.call_external(@blocking_tool, ctx, args)})
+
+        send(
+          caller,
+          {:result, Catalog.call_external(@blocking_tool, ctx, args, runner: :supervised)}
+        )
       end)
 
       # The handler reports its pid and then blocks, so the call is provably
@@ -463,10 +477,47 @@ defmodule Cyfr.Ops.CatalogTest do
     test "the entry is cleaned up when the work finishes on its own" do
       ctx = %{Sanctum.TestContext.local() | request_id: "req_finished"}
 
-      {:ok, _} = Catalog.call_external("system", ctx, %{"action" => "status"})
+      {:ok, _} =
+        Catalog.call_external("system", ctx, %{"action" => "status"}, runner: :supervised)
 
       :sys.get_state(Emissary.MCP.RunningTasks)
       assert {:error, :not_found} = Emissary.MCP.RunningTasks.cancel("req_finished")
+    end
+
+    # The in-process runner: the console and the assistant hold an
+    # authenticated context and a process of their own, so the gate, the
+    # contract and the handler run right there — no task, no timeout, and
+    # nothing registered for a transport to cancel.
+    test "the default runner is inline: the handler runs on the caller's process, unregistered" do
+      register_blocking_tool()
+      ctx = %{Sanctum.TestContext.local() | request_id: "req_inline"}
+      caller = self()
+
+      args = %{"action" => "block", :reply_to => caller, :release => true}
+      assert {:ok, %{ran_on: pid}} = Catalog.call_external(@blocking_tool, ctx, args)
+      assert pid == self()
+      assert [] = :ets.lookup(Emissary.MCP.RunningTasks, "req_inline")
+    end
+
+    test "the inline runner contains a crash and answers a raised refusal as the refusal" do
+      register_blocking_tool()
+      ctx = Sanctum.TestContext.local()
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:crashed, message}} =
+                   Catalog.call_external(@blocking_tool, ctx, %{
+                     "action" => "block",
+                     :crash => true
+                   })
+
+          assert message =~ "crashed"
+        end)
+
+      assert log =~ "crashed"
+
+      assert {:error, :missing_tenant} =
+               Catalog.call_external(@blocking_tool, ctx, %{"action" => "block", :refuse => true})
     end
   end
 

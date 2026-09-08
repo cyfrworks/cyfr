@@ -70,7 +70,7 @@ defmodule PrismWeb.ModelCatalog do
       Cyfr.LoggerContext.restore(logger_metadata)
 
       result =
-        PrismWeb.MCPHelpers.call_tool(ctx, "execution/run", %{
+        PrismWeb.Ops.call_tool(ctx, "execution/run", %{
           "reference" => @list_models_ref,
           "input" => %{}
         })

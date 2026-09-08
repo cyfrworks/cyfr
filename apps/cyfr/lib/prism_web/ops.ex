@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.MCPHelpers do
+defmodule PrismWeb.Ops do
   @moduledoc """
-  The seam between LiveViews and the MCP tool surface.
+  The console's adapter onto the operation catalog.
 
   All tool invocations go through `Cyfr.Ops.Catalog.call_external/3`
-  using the `Sanctum.Context` stored in socket assigns.
+  using the `Sanctum.Context` stored in socket assigns — in-process: the
+  gate, the contract and the handler on the LiveView's own process, with
+  no task, timeout or wire encoding between them.
 
   ## Two planes, and which one a mutation belongs to
 
@@ -113,7 +115,7 @@ defmodule PrismWeb.MCPHelpers do
     # showed the generic sentence for all three, losing the distinction.
     case Cyfr.Ops.Error.render(reason) do
       nil ->
-        Logger.warning("[MCPHelpers] tool call failed: #{inspect(reason)}")
+        Logger.warning("[PrismWeb.Ops] tool call failed: #{inspect(reason)}")
         "The request failed — try again."
 
       message ->

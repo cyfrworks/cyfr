@@ -29,7 +29,7 @@ defmodule Aqua do
     for the turn as quoted material.
   - `Aqua.Attachments` — chat attachment refs and blobs.
   - `Aqua.ConversationCompactor` — bounds a history to the model window.
-  - `Aqua.MCPHelpers` — the single seam to `Emissary.MCP.*`
+  - `Aqua.Ops` — the single seam to `Emissary.MCP.*`
     (`Aqua.ToolSeamTest` keeps it the only one).
 
   This is domain, not console: it drives `PrismWeb`'s chat through PubSub

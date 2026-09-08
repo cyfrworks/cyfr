@@ -3,7 +3,7 @@
 
 defmodule Aqua.ToolSeamTest do
   @moduledoc """
-  `Aqua.MCPHelpers` is the assistant plane's seam onto the MCP tool
+  `Aqua.Ops` is the assistant plane's seam onto the MCP tool
   surface — the same contract `PrismWeb.ToolSeamTest` pins for the
   console.
 
@@ -36,7 +36,7 @@ defmodule Aqua.ToolSeamTest do
           do: "#{rel}:#{n}: #{String.trim(line)}"
 
     assert offenders == [],
-           "aqua reaches Emissary.MCP past its seam — go through Aqua.MCPHelpers " <>
+           "aqua reaches Emissary.MCP past its seam — go through Aqua.Ops " <>
              "(or grow the helper), never the registry directly:\n" <>
              Enum.join(offenders, "\n")
   end

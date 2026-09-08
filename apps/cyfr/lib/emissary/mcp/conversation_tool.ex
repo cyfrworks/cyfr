@@ -24,7 +24,7 @@ defmodule Emissary.MCP.ConversationTool do
   `Emissary.MCP.Tools.RecordsProvider` does: the tool surface is the
   transport's, and it calls *into* a domain. `Aqua.ToolSeamTest` keeps the
   arrow pointing this way — the assistant reaches MCP only through
-  `Aqua.MCPHelpers`, never by owning a provider.
+  `Aqua.Ops`, never by owning a provider.
 
   ## Why this is not `execution.run_stream`
 

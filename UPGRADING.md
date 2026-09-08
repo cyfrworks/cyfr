@@ -4,6 +4,28 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## The operation catalog lives under `Cyfr.Ops`; the wire is one adapter
+
+The modules that define an operation — the provider behaviour, the
+registry, the action annotations, the visibility rules, the error
+vocabulary, the input contract and the service roster — are
+`Cyfr.Ops.{Provider, Catalog, Annotations, Visibility, Error, Contract,
+Services}`; they were `Emissary.MCP.*`. A provider module in
+`:tool_providers` implements `Cyfr.Ops.Provider` now. The wire
+(`Emissary.MCP`: router, protocol, sessions, SSE, external servers), the
+console (`PrismWeb.Ops`, formerly `PrismWeb.MCPHelpers`) and the
+assistant (`Aqua.Ops`, formerly `Aqua.MCPHelpers`) are adapters over
+the one catalog and its one gate.
+
+How a handler is run is the adapter's choice. An in-process caller — the
+console, the assistant — gets the gate, the contract and the handler as
+a function call on its own process: no task, no timeout, no wire
+encoding. The wire and an in-chain call from a running component ask
+for the supervised run (`runner: :supervised`): a task under the tool
+timeout, registered under the request id so a transport whose caller
+disconnects can cancel it, and a crash contained to the call. Every
+dispatch still files its request-log row.
+
 ## One establish recipe, and no permission bag on a session
 
 `Sanctum.Caller.establish/2` is the only builder of an authenticated
