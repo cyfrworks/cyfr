@@ -92,6 +92,11 @@ defmodule EmissaryWeb.Plugs.Authenticate do
         # API key valid but the owner has no resolved tenant/membership.
         missing_tenant_error_response(conn, errors)
 
+      {:error, :auth_provider_error} ->
+        # The key store could not answer: a 503, never a 401 — the
+        # credential was not judged.
+        auth_provider_error_response(conn, errors)
+
       {:error, reason} ->
         # API key provided but invalid
         error_response(conn, reason, errors)
@@ -280,35 +285,17 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   # creator's membership; revocation is the control. An athanor-less key is
   # rejected by the tenant gate (the same gate context_from_session/1
   # applies).
+  # The one recipe establishes the key; this surface maps its refusals to
+  # the wire. An archived athanor or a denied creator answers exactly like
+  # a revoked key, so nothing about either leaks.
   defp validate_api_key(conn, key) do
-    client_ip = Sanctum.ClientIp.resolve(conn)
-
-    case Sanctum.ApiKey.validate(key, client_ip: client_ip) do
-      {:ok, metadata} ->
-        ctx = Sanctum.ApiKey.context_from_metadata(metadata)
-
-        case Context.tenant_ok(ctx) do
-          :ok -> {:ok, ctx}
-          {:error, :missing_tenant} -> {:error, :missing_tenant}
-        end
-
-      {:error, :invalid_key} ->
-        {:error, :invalid_api_key}
-
-      {:error, :revoked} ->
-        {:error, :api_key_revoked}
-
-      # The athanor is archived or the creator is denied on this server —
-      # answered exactly like a revoked key, so nothing about either leaks.
-      {:error, :channel_closed} ->
-        {:error, :api_key_revoked}
-
-      {:error, :ip_not_allowed} ->
-        {:error, :ip_not_allowed}
-
-      {:error, reason} ->
-        Logger.warning("[Authenticate] API key validation failed: #{inspect(reason)}")
-        {:error, :api_key_validation_failed}
+    case Sanctum.Caller.establish({:api_key, key}, client_ip: Sanctum.ClientIp.resolve(conn)) do
+      {:ok, ctx} -> {:ok, ctx}
+      {:error, :no_athanor} -> {:error, :missing_tenant}
+      {:error, :invalid_credential} -> {:error, :invalid_api_key}
+      {:error, :revoked} -> {:error, :api_key_revoked}
+      {:error, :ip_not_allowed} -> {:error, :ip_not_allowed}
+      {:error, :unavailable} -> {:error, :auth_provider_error}
     end
   end
 
@@ -329,7 +316,4 @@ defmodule EmissaryWeb.Plugs.Authenticate do
 
   defp error_response(conn, :ip_not_allowed, errors),
     do: errors.halt(conn, 403, :insufficient_permissions, "Request IP not in API key allowlist")
-
-  defp error_response(conn, _reason, errors),
-    do: errors.halt(conn, 401, :auth_invalid, "API key validation failed")
 end

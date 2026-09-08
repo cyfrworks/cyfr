@@ -114,7 +114,7 @@ defmodule Emissary.MCP.ToolProvider do
     probe, claim, legal acceptance); the default `:required` needs a
     claimed, authenticated caller.
   - `:permission` — a `Sanctum.Atoms` permission atom, enforced through
-    `Sanctum.Context.require_permission_for_plane/2`. Absent means any
+    `Sanctum.Context.require_permission/3`. Absent means any
     authenticated caller.
   - `:consent` — the consent surface class (`Sanctum.Consent.Authz`):
     `:interactive` admits interactive OIDC sessions only, `:staging` also

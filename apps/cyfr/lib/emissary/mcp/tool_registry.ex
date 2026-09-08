@@ -661,7 +661,7 @@ defmodule Emissary.MCP.ToolRegistry do
   defp check_permission(ctx, annotation) do
     case Map.get(annotation, :permission) do
       nil -> :ok
-      permission -> Context.require_permission_for_plane(ctx, permission)
+      permission -> Context.require_permission(ctx, permission, :in_chain)
     end
   end
 

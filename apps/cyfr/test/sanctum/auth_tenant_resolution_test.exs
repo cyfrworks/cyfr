@@ -4,7 +4,7 @@
 defmodule Sanctum.AuthTenantResolutionTest do
   @moduledoc """
   Regression: every auth path that produces a `Sanctum.Context` from a fresh
-  login must call `Sanctum.Tenancy.resolve_into/2` with `force: true` so the
+  login must call `Sanctum.Tenancy.resolve_status/2` with `force: true` so the
   caller's scope/athanor is resolved from their memberships before any
   tenant-scoped operation runs.
 
@@ -20,7 +20,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
   alias Sanctum.Tenancy.Members
 
   setup do
-    # Isolate from other tests' committed membership rows: resolve_into reads
+    # Isolate from other tests' committed membership rows: resolve_status reads
     # the memberships table.
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -44,7 +44,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
     :ok
   end
 
-  describe "resolve_into/2 with force: true" do
+  describe "resolve_status/2 with force: true" do
     test "resolves a freshly-built (athanor-less) context via the resolver" do
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
 
@@ -53,7 +53,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
       ctx = oauth_shaped_context()
       assert ctx.athanor_id == nil, "Context.build/1 should leave athanor_id unresolved"
 
-      result = Tenancy.resolve_into(ctx, force: true)
+      {:ok, result} = Tenancy.resolve_status(ctx, force: true)
       assert result.athanor_id == "ath_other"
     end
 
@@ -63,7 +63,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
       # A context whose athanor was already resolved at session-create time.
       ctx = %{oauth_shaped_context() | athanor_id: "ath_acme"}
 
-      result = Tenancy.resolve_into(ctx)
+      {:ok, result} = Tenancy.resolve_status(ctx)
       assert result.athanor_id == "ath_acme"
     end
 
@@ -71,11 +71,11 @@ defmodule Sanctum.AuthTenantResolutionTest do
       Application.delete_env(:cyfr, :tenancy_resolver_override)
 
       ctx = oauth_shaped_context()
-      result = Tenancy.resolve_into(ctx, force: true)
+      {:ok, result} = Tenancy.resolve_status(ctx, force: true)
       assert result.athanor_id == nil
     end
 
-    test "OAuth.authenticate/1 force-resolves before returning" do
+    test "OAuth.authenticate/1 names the identity and nothing more: the athanor comes after the door" do
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
       configure_github_test_credentials!()
 
@@ -87,7 +87,8 @@ defmodule Sanctum.AuthTenantResolutionTest do
       }
 
       assert {:ok, %Context{} = ctx} = Sanctum.Auth.OAuth.authenticate(auth_params)
-      assert ctx.athanor_id == "ath_other"
+      assert ctx.user_id == Sanctum.Auth.Identity.builtin_key(:github, "12345")
+      assert ctx.athanor_id == nil
     end
   end
 
@@ -97,7 +98,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
       Application.put_env(:cyfr, :platform_admin_emails, [String.downcase(ctx.email)])
 
       # Resolution alone mints nothing.
-      assert Tenancy.resolve_into(ctx, force: true).platform_admin == false
+      assert {:ok, %{platform_admin: false}} = Tenancy.resolve_status(ctx, force: true)
       assert rows!(Members.list_by_user(ctx.user_id)) == []
 
       # The door admits the operator; sign-in records it; resolution reads it.
@@ -110,7 +111,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
                )
 
       # From admission on the person is named by their own id.
-      result = Tenancy.resolve_into(%{ctx | user_id: user.id}, force: true)
+      {:ok, result} = Tenancy.resolve_status(%{ctx | user_id: user.id}, force: true)
       assert result.platform_admin
       assert result.scope == :athanor
       assert Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "platform"))
@@ -120,7 +121,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
       # :platform_admin_emails is [] (setup) and no membership exists for this user.
       ctx = oauth_shaped_context()
 
-      result = Tenancy.resolve_into(ctx, force: true)
+      {:ok, result} = Tenancy.resolve_status(ctx, force: true)
 
       assert result.athanor_id == nil
       assert rows!(Members.list_by_user(ctx.user_id)) == []

@@ -108,7 +108,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     segments = String.split(path, "/") |> Enum.reject(&(&1 == ""))
 
     with :ok <- Context.require_permission(ctx, :storage_read),
-         :ok <- tenant_gate(ctx),
+         :ok <- Context.tenant_ok(ctx),
          :ok <- storage_ctx_gate(ctx),
          :ok <- validate_segments(segments) do
       case Arca.get(ctx, segments) do
@@ -330,7 +330,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("record", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       case Arca.Execution.get_tenant(ctx, id) do
         nil ->
           {:error, {:not_found, "Execution", id}}
@@ -358,7 +358,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("record", ctx, %{"action" => "list"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -389,7 +389,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("mcp_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       case Arca.McpLog.get_tenant(ctx, id) do
         nil ->
           {:error, {:not_found, "MCP log", id}}
@@ -412,7 +412,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -434,7 +434,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", %Context{} = ctx, %{"action" => "correlate", "request_id" => request_id}) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       mcp_logs =
         case Arca.McpLog.list(request_id: request_id, limit: 100, athanor_id: ctx.athanor_id) do
           {:ok, rows} -> Enum.map(rows, &mcp_log_to_map/1)
@@ -483,7 +483,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # queries.
   def handle("mcp_log", %Context{} = ctx, %{"action" => "fan_outs", "request_ids" => ids})
       when is_list(ids) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       ids = Enum.filter(ids, &is_binary/1)
 
       # `count_by_request/2` refuses rather than defaulting, so an outage
@@ -504,7 +504,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", ctx, %{"action" => "stats"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       since_hours = args["since_hours"] || 1
 
       since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
@@ -541,7 +541,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       record =
         Arca.PolicyLog.get_tenant(ctx, id) || Arca.PolicyLog.get_by_request_id_tenant(ctx, id)
 
@@ -560,7 +560,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("policy_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -582,7 +582,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         "action" => "correlate",
         "request_id" => request_id
       }) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       opts =
         [
           request_id: request_id,
@@ -613,7 +613,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("retention", %Context{} = ctx, %{"action" => "get"}) do
-    with :ok <- tenant_gate(ctx),
+    with :ok <- Context.tenant_ok(ctx),
          {:ok, settings} <- Cyfr.Retention.get_settings(ctx) do
       {:ok, %{action: "get", settings: settings}}
     else
@@ -628,7 +628,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   def handle("retention", %Context{} = ctx, %{"action" => "set", "settings" => settings})
       when is_map(settings) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       case Cyfr.Retention.set_settings(ctx, settings) do
         :ok ->
           {:ok, new_settings} = Cyfr.Retention.get_settings(ctx)
@@ -653,7 +653,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("retention", %Context{} = ctx, %{"action" => "cleanup"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
 
@@ -790,10 +790,6 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       :keep -> "Newest records kept per athanor"
       :days -> "Days of records kept per athanor"
     end
-  end
-
-  defp tenant_gate(ctx) do
-    Context.tenant_ok(ctx)
   end
 
   defp action_enum(tool) do

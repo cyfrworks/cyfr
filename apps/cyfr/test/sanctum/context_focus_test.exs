@@ -158,13 +158,13 @@ defmodule Sanctum.ContextFocusTest do
     assert Base.decode64!(content) == "b's bytes"
   end
 
-  test "resolve_into gives an admin the capability, an :athanor scope, and their own athanor",
+  test "resolve_status gives an admin the capability, an :athanor scope, and their own athanor",
        %{ops: ops} do
     home = Athanors.home!()
     {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: home.id)
 
-    resolved =
-      Sanctum.Tenancy.resolve_into(
+    {:ok, resolved} =
+      Sanctum.Tenancy.resolve_status(
         %Context{user_id: ops, athanor_id: nil, permissions: MapSet.new()},
         force: true
       )

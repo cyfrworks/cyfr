@@ -376,14 +376,17 @@ defmodule Sanctum.Context do
   def enter_guest(%__MODULE__{} = ctx), do: %{ctx | plane: :guest}
 
   @doc """
-  Require permission, returning `{:error, message}` if missing.
+  The one permission gate, which takes the plane the CALL is on.
 
   Used by MCP tool handlers in `with` chains.
 
-  Fails closed on guest-plane contexts regardless of permissions — even a
-  `:*` wildcard: a context inside a WASM closure never authorizes an
-  external-plane call. In-chain operations are authorized by the current
-  `Sanctum.Authority`, with `has_permission?/2` as the identity conjunct.
+  An `:external` call (the default) never authorizes from inside a WASM
+  closure — a guest-planed context is refused regardless of permissions,
+  even a `:*` wildcard. An `:in_chain` call is authorized by the chain's
+  authority **and** the caller's identity: the authority conjunct is
+  applied at the dispatch chokepoint before any provider runs, so here
+  only the identity conjunct is checked, for a guest-planed context and an
+  external one alike.
 
   ## Examples
 
@@ -392,54 +395,22 @@ defmodule Sanctum.Context do
       :ok
 
   """
-  @spec require_permission(t(), atom()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
-  def require_permission(%__MODULE__{plane: :guest}, permission) do
+  @spec require_permission(t(), atom(), :external | :in_chain) ::
+          :ok | {:error, Sanctum.Unauthorized.reason()}
+  def require_permission(ctx, permission, plane \\ :external)
+
+  def require_permission(%__MODULE__{plane: :guest}, permission, :external) do
     {:error, {:guest_plane, permission}}
   end
 
-  def require_permission(%__MODULE__{} = ctx, permission) do
+  def require_permission(%__MODULE__{} = ctx, permission, plane)
+      when plane in [:external, :in_chain] do
     if has_permission?(ctx, permission) do
       :ok
     else
       {:error, {:missing_permission, permission}}
     end
   end
-
-  @doc """
-  The identity half of the in-chain authorization conjunction.
-
-  An in-chain operation is authorized by the chain's authority **and** the
-  caller's identity; the authority conjunct is applied at the dispatch
-  chokepoint before any provider runs, so the provider's identity check
-  must not re-refuse the guest plane — that would make in-chain calls
-  unauthorizable by construction. This is the one sanctioned way for a
-  gate to serve a guest-planed context, and it never applies to
-  external-plane callers, who keep the fail-closed `require_permission/2`.
-  """
-  @spec require_identity_permission(t(), atom()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
-  def require_identity_permission(%__MODULE__{} = ctx, permission) do
-    if has_permission?(ctx, permission) do
-      :ok
-    else
-      {:error, {:missing_permission, permission}}
-    end
-  end
-
-  @doc """
-  Plane-aware permission gate — the one gate an MCP tool provider calls.
-
-  Guest-planed callers get the identity conjunct (`require_identity_permission/2`),
-  because the authority conjunct was already applied at the dispatch chokepoint;
-  external-plane callers keep the fail-closed `require_permission/2`. Providers
-  call this instead of hand-rolling the two-clause shim, so the rule lives in one
-  place and cannot drift between them.
-  """
-  @spec require_permission_for_plane(t(), atom()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
-  def require_permission_for_plane(%__MODULE__{plane: :guest} = ctx, permission),
-    do: require_identity_permission(ctx, permission)
-
-  def require_permission_for_plane(%__MODULE__{} = ctx, permission),
-    do: require_permission(ctx, permission)
 
   @doc """
   Enforce that a tenant-scoped operation has a resolved tenant.
@@ -636,7 +607,7 @@ defmodule Sanctum.Context do
     permission = action_to_permission(action)
 
     with :ok <- require_permission(ctx, permission),
-         :ok <- require_tenant_scope(ctx) do
+         :ok <- tenant_ok(ctx) do
       :ok
     else
       {:error, _} = err ->
@@ -715,16 +686,6 @@ defmodule Sanctum.Context do
   # the record's athanor to equal the context's.
   defp verify_tenant(%__MODULE__{} = ctx, record) do
     Sanctum.TenantPolicy.verify(ctx, record)
-  end
-
-  # Tenant-scope gate for the resource-less / fallback authorize paths.
-  # Same chokepoint as `require_tenant!/1` (via `tenant_gate/1`); only the
-  # failure shape differs — `authorize/3` refuses with the vocabulary term.
-  defp require_tenant_scope(%__MODULE__{} = ctx) do
-    case tenant_gate(ctx) do
-      :ok -> :ok
-      {:error, _} -> {:error, :missing_tenant}
-    end
   end
 
   # Callers pass real permission atoms (the Sanctum.Atoms vocabulary), not

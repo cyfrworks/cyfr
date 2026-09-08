@@ -5,22 +5,43 @@ defmodule Sanctum.Caller do
   @moduledoc """
   One verb that establishes who is calling and where they work.
 
-  `Session.load/2` answers "which session is this"; what a surface needs
-  is the finished Context — membership resolved, namespace present, the
-  tenant gate passed, optionally focused on an athanor. Seven consumers
-  used to hand-assemble their own subsets of that recipe, and none could
-  tell from the load's interface which steps it had already done: the
-  resolve is a no-op on one path and load-bearing on another, the
-  namespace refresh likewise. The recipe lives here; a caller gets a
-  Context or a named refusal its adapter maps to a halt, a redirect, or
-  a status code.
+  A credential names a caller; what a surface needs is the finished
+  Context — the principal named, its standing checked, the tenant gate
+  passed, optionally focused on an athanor. This is the only builder of
+  an authenticated Context: every surface hands its credential here and
+  gets a Context or a named refusal its adapter maps to a halt, a
+  redirect, or a status code.
+
+  Credentials, and the standing each is held to:
+
+    * `{:session, token}` — a person's session (the bare token is the
+      same credential). Memberships resolve the athanor, the users row
+      supplies the namespace, and a person the door no longer admits is
+      `{:denied, ctx}`.
+    * `{:api_key, raw}` — an athanor's key (`client_ip:` for its
+      allowlist). The athanor is the key row's, never the creator's
+      current membership; the key stands while the athanor is open and
+      its creator is not denied.
+    * `{:tincture_token, token}` — the short-lived `?_t=` token one
+      tincture is opened with (`tincture: {publisher, name}` names the
+      one the request is for; `{nil, nil}` on a route that names none).
+      Held to the standing of what minted it: a person's, or a key's.
+    * `{:webhook, webhook}` — a verified webhook row (`request_id:`).
+      Stands while its athanor is open and its creator is not denied.
 
   Refusals:
 
     * `:unauthenticated` — no token, or not a session this server issued.
+    * `:invalid_credential` / `:expired_credential` — a key or token that
+      is not one of this server's, or one past its life.
+    * `:revoked` / `:ip_not_allowed` — a key the store or its allowlist
+      refuses.
     * `{:denied, ctx}` — a session whose person the door no longer
       admits. The context rides along for surfaces that forward it to the
       anonymous surface rather than halting.
+    * `:not_standing` — a token or webhook whose principal no longer
+      stands where it was minted.
+    * `:wrong_tincture` — a tincture token presented to another tincture.
     * `:no_athanor` — authenticated, but no athanor resolved.
     * `:not_member` / `:archived` / `:not_found` — the requested focus
       refused.
@@ -36,12 +57,24 @@ defmodule Sanctum.Caller do
 
   @type refusal ::
           :unauthenticated
+          | :invalid_credential
+          | :expired_credential
+          | :revoked
+          | :ip_not_allowed
           | {:denied, Context.t()}
+          | :not_standing
+          | :wrong_tincture
           | :no_athanor
           | :not_member
           | :archived
           | :not_found
           | :unavailable
+
+  @type credential ::
+          {:session, String.t() | nil}
+          | {:api_key, String.t()}
+          | {:tincture_token, String.t()}
+          | {:webhook, Arca.Schemas.Webhook.t()}
 
   @doc """
   Establish the caller behind a session token.
@@ -56,12 +89,17 @@ defmodule Sanctum.Caller do
       supervisor, no refresh. Callers pass their own so the write never
       blocks the hot path and test sandboxes see a known process.
   """
-  @spec establish(String.t() | nil, keyword()) :: {:ok, Context.t()} | {:error, refusal()}
-  def establish(token, opts \\ [])
+  @spec establish(credential() | String.t() | nil, keyword()) ::
+          {:ok, Context.t()} | {:error, refusal()}
+  def establish(credential, opts \\ [])
 
-  def establish(token, _opts) when token in [nil, ""], do: {:error, :unauthenticated}
+  # A bare token is a session token: what the browser cookie and the CLI carry.
+  def establish(token, opts) when is_binary(token) or is_nil(token),
+    do: establish({:session, token}, opts)
 
-  def establish(token, opts) when is_binary(token) do
+  def establish({:session, token}, _opts) when token in [nil, ""], do: {:error, :unauthenticated}
+
+  def establish({:session, token}, opts) when is_binary(token) do
     ttl = Application.get_env(:cyfr, :establish_cache_ms, 2_000)
 
     if ttl > 0 do
@@ -87,6 +125,102 @@ defmodule Sanctum.Caller do
       end
     else
       do_establish(token, opts)
+    end
+  end
+
+  def establish({:api_key, raw}, opts) when is_binary(raw) do
+    case Sanctum.ApiKey.validate(raw, client_ip: Keyword.get(opts, :client_ip)) do
+      {:ok, metadata} ->
+        ctx = Sanctum.ApiKey.context_from_metadata(metadata)
+        with :ok <- tenant_ok(ctx), do: {:ok, ctx}
+
+      {:error, reason} ->
+        {:error, api_key_refusal(reason)}
+    end
+  end
+
+  def establish({:tincture_token, token}, opts) when is_binary(token) do
+    with {:ok, payload} <- Sanctum.TinctureAuth.verify_access_token(token),
+         :ok <- names_tincture(payload, Keyword.get(opts, :tincture)) do
+      Context.build(
+        user_id: payload.u,
+        namespace: payload.n,
+        athanor_id: payload.a,
+        permissions: [:execute],
+        scope: :athanor,
+        auth_method: :tincture,
+        authenticated: true
+      )
+      |> standing(payload.a, Map.get(payload, :m, :person))
+    end
+  end
+
+  def establish({:webhook, %Arca.Schemas.Webhook{} = webhook}, opts) do
+    # The stored row must not remain a standing execution channel once its
+    # athanor is archived or its creator denied here.
+    if Sanctum.Tenancy.channel_active?(webhook.athanor_id, webhook.created_by) do
+      # namespace is identity-only (not path-bearing): the creator's, for
+      # attribution; nil if the webhook is orphaned.
+      namespace =
+        case webhook.created_by do
+          user_id when is_binary(user_id) and user_id != "" -> Sanctum.Namespace.lookup(user_id)
+          _ -> nil
+        end
+
+      ctx =
+        Context.build(
+          user_id: "webhook:#{webhook.slug}",
+          namespace: namespace,
+          permissions: [:execute],
+          athanor_id: webhook.athanor_id,
+          auth_method: :webhook,
+          # A webhook is not anonymous: the hook is operator-created and
+          # consented (profile_id is required at create), so its bound
+          # executions may read their vault material.
+          authenticated: true,
+          anonymous: false,
+          request_id: Keyword.get(opts, :request_id)
+        )
+
+      with :ok <- tenant_ok(ctx), do: {:ok, ctx}
+    else
+      {:error, :not_standing}
+    end
+  end
+
+  # The key store's answers, in this module's vocabulary. A malformed key
+  # and an unknown one read alike, as the store already takes care they do.
+  defp api_key_refusal(reason) when reason in [:invalid_key_format, :invalid_key],
+    do: :invalid_credential
+
+  defp api_key_refusal(reason) when reason in [:revoked, :channel_closed], do: :revoked
+  defp api_key_refusal(:ip_not_allowed), do: :ip_not_allowed
+  defp api_key_refusal(:database_error), do: :unavailable
+
+  # The token opens the tincture it was minted for and no other. A route
+  # that names none (the access-token mint) has nothing to compare.
+  defp names_tincture(_payload, nil), do: :ok
+  defp names_tincture(_payload, {nil, nil}), do: :ok
+  defp names_tincture(%{p: publisher, t: name}, {publisher, name}), do: :ok
+  defp names_tincture(_payload, _tincture), do: {:error, :wrong_tincture}
+
+  # A signature says who minted the token, not what they may still do. A
+  # token exchanged for a person's session is held to that person's standing
+  # — the door and their seat here — exactly as a session load is, so a deny
+  # or a removal stops it rather than being outlived by the hour. One
+  # exchanged for an API key is held to the key's own rule: the athanor is
+  # open and the creator is not denied, but a key outlives its creator's
+  # membership on purpose.
+  defp standing(%Context{} = ctx, athanor_id, :api_key) do
+    if Sanctum.Tenancy.channel_active?(athanor_id, ctx.user_id),
+      do: {:ok, ctx},
+      else: {:error, :not_standing}
+  end
+
+  defp standing(%Context{} = ctx, athanor_id, _person) do
+    case Sanctum.Tenancy.revalidate(ctx) do
+      %Context{authenticated: true, athanor_id: ^athanor_id} = current -> {:ok, current}
+      _ -> {:error, :not_standing}
     end
   end
 

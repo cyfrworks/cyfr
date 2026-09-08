@@ -5,12 +5,13 @@ defmodule Sanctum.Tenancy do
   @moduledoc """
   Tenant resolution from memberships.
 
-  `resolve_into/2` is the single chokepoint every auth path flows through to
-  attach the caller's athanor and capabilities to their Context. It reads
-  the user's membership rows: an athanor row grants that athanor; a platform
-  row makes the caller a platform admin (`platform_admin: true`), which is a
-  capability the context carries, never a wider scope — every request works
-  inside one athanor.
+  `resolve_status/2` is the single chokepoint the one establish recipe
+  (`Sanctum.Caller`) flows through to attach the caller's athanor and
+  capabilities to their Context. It reads the user's membership rows: an
+  athanor row grants that athanor; a platform row makes the caller a
+  platform admin (`platform_admin: true`), which is a capability the
+  context carries, never a wider scope — every request works inside one
+  athanor.
 
   There is no deployment "mode". A fresh install with no auth configured never
   reaches here (requests run as the unauthenticated public context). With
@@ -35,36 +36,19 @@ defmodule Sanctum.Tenancy do
   Merge the caller's athanor and capabilities into the context.
 
   Without `force: true`, no-ops when the context already carries an
-  `athanor_id` (the per-request safety-net usage in plugs: the stored value
-  was resolved at session-create time and re-querying every request is
-  wasteful). Auth paths that produce a Context *before* membership has been
-  resolved — `Sanctum.Auth.OAuth`, `Sanctum.Auth.DeviceFlow`,
-  `Sanctum.Auth.OIDC` — pass `force: true`.
+  `athanor_id` (the stored value was resolved at session-create time and
+  re-querying every request is wasteful). The sign-in paths, which mint a
+  session for a Context that has just been admitted, pass `force: true`.
 
   The athanor chosen is, in order: the one the context already names when a
   membership still grants it, the person's own athanor, the first athanor
   a membership grants, and for a platform admin with none of those, Home.
-  Resolution failure logs and returns the context unchanged — a context with
-  no resolved athanor is rejected downstream by the tenant gate
-  (`Sanctum.Context.tenant_ok/1`).
-  """
-  @spec resolve_into(Context.t(), keyword()) :: Context.t()
-  def resolve_into(ctx, opts \\ []) do
-    ctx |> resolve_status(opts) |> unwrap(ctx)
-  end
 
-  @doc """
-  `resolve_into/2`, but distinguishes a membership read that FAILED from a
-  person who genuinely belongs to no athanor.
-
-  Both leave the context athanor-less, and the tenant gate refuses both —
-  so a database blip rendered as `403 "User has no athanor. Contact your
-  administrator."`, a permanent-sounding answer to a transient fault, and
-  the person is told to ask an operator about something no operator can
-  fix. `Sanctum.Caller` has `:unavailable` in its refusal vocabulary for
-  exactly this, and `PrismWeb.AuthHelpers.disposition/1` already says a
-  transient read must never read as signed-out; this is the read that
-  could not say so.
+  A membership read that FAILED is `{:error, :unavailable}`, distinct from
+  a person who genuinely belongs to no athanor (`{:ok, ctx}` with no
+  athanor, which the tenant gate refuses): a database blip must never read
+  as "you belong nowhere, contact your administrator" — a permanent-
+  sounding answer to a transient fault no operator can see.
   """
   @spec resolve_status(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, :unavailable}
   def resolve_status(ctx, opts \\ [])
@@ -75,11 +59,6 @@ defmodule Sanctum.Tenancy do
   end
 
   def resolve_status(%Context{} = ctx, _opts), do: do_resolve(ctx)
-
-  # The Context-returning contract most callers want: a failed read leaves
-  # the context as it was, and the tenant gate downstream still refuses it.
-  defp unwrap({:ok, ctx}, _fallback), do: ctx
-  defp unwrap({:error, :unavailable}, fallback), do: fallback
 
   @doc """
   The athanors the context may work in — the rows behind the caller's own

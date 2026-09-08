@@ -9,7 +9,7 @@ defmodule Arca.SessionStorage do
   It's called by `Sanctum.Session` which handles token hashing.
 
   Tokens are stored as SHA-256 hashes for indexed lookups.
-  Session metadata (user_id, email, provider, permissions) is stored as plaintext.
+  Session metadata (user_id, email, provider) is stored as plaintext.
   """
 
   import Ecto.Query
@@ -35,7 +35,6 @@ defmodule Arca.SessionStorage do
         user_id: attrs.user_id,
         email: attrs[:email],
         provider: attrs.provider,
-        permissions: attrs.permissions,
         # A nil athanor is a real state: the session exists from sign-in on,
         # before the caller's athanor is resolved. Membership re-resolution
         # runs on the next load; nothing is coerced.
@@ -70,7 +69,6 @@ defmodule Arca.SessionStorage do
             :user_id,
             :email,
             :provider,
-            :permissions,
             :athanor_id,
             :expires_at,
             :inserted_at

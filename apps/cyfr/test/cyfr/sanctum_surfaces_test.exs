@@ -83,7 +83,7 @@ defmodule Cyfr.SanctumSurfacesTest do
     "emissary_web" => ~w(
       Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
       Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Limits
-      Sanctum.Namespace Sanctum.Sanitizer Sanctum.Session Sanctum.SignIn
+      Sanctum.Sanitizer Sanctum.Session Sanctum.SignIn
       Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.TinctureAuth
       Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault
       Sanctum.Webhook

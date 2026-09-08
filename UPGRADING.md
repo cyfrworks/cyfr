@@ -4,6 +4,34 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## One establish recipe, and no permission bag on a session
+
+`Sanctum.Caller.establish/2` is the only builder of an authenticated
+context. It takes the credential — a session token, an API key
+(`{:api_key, raw}`), a tincture access token (`{:tincture_token, t}`) or a
+verified webhook row (`{:webhook, row}`) — names the principal, holds it
+to its standing and passes the tenant gate; the MCP plug, the tincture
+surface and the webhook controller map its refusals to the wire. The
+shipped sign-in providers answer an identity and nothing more: nothing
+resolves memberships before the door, the dead session-token arms of
+their `authenticate/1` and the `conn.assigns[:session_token]` branch are
+gone, and their `current_user/1` is `nil` — a session or key on a request
+is established once, by the recipe, never loaded a second time. A key
+store that cannot answer is a 503, not a 401. `Sanctum.Tenancy.resolve_into/2`
+is gone; `resolve_status/2` is the one resolver.
+
+`sessions.permissions` is dropped (migration `20260913000000`). A session
+is a person's, and what they may do is decided by their memberships, the
+estate's consents and the policy on every request; a key carries its
+scope on its own row. `Sanctum.Context.require_permission/3` is the one
+permission gate and takes the plane of the call (`:external`, the
+default, refuses a guest-planed context outright; `:in_chain` checks the
+identity conjunct, the authority having been applied at dispatch);
+`require_permission_for_plane/2` and `require_identity_permission/2` are
+gone. Platform-admin revocation was already immediate — the operator
+list at sign-in, the boot reconcile and `door.remove` all revoke the
+sessions with the row — and stays so.
+
 ## A person has an id of this server's; identities are rows of their own
 
 A `users` row's id is now minted here (`usr_…`) and is the `user_id` every

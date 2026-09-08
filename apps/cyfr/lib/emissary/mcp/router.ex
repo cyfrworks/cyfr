@@ -21,7 +21,7 @@ defmodule Emissary.MCP.Router do
   annotation (`auth`, `permission`, `consent`) at dispatch, and handlers keep
   only the residual checks an annotation cannot express (tenant presence,
   ownership, definition authority, the domain's finer consent arms) — via
-  `Context.require_permission_for_plane/2` and friends, never a second copy
+  `Context.require_permission/3` and friends, never a second copy
   of the permission gate.
 
   Authentication itself happens earlier, in `EmissaryWeb.Plugs.Authenticate`.

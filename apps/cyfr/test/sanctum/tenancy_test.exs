@@ -23,7 +23,7 @@ defmodule Sanctum.TenancyTest do
     athanor
   end
 
-  describe "resolve_into/2 — override seam" do
+  describe "resolve_status/2 — override seam" do
     setup do
       original = Application.get_env(:cyfr, :tenancy_resolver_override)
 
@@ -38,26 +38,26 @@ defmodule Sanctum.TenancyTest do
 
     test "is a no-op when ctx already carries an athanor_id" do
       ctx = %Context{user_id: "u1", athanor_id: "ath_acme"}
-      assert Tenancy.resolve_into(ctx) == ctx
+      assert Tenancy.resolve_status(ctx) == {:ok, ctx}
     end
 
     test "merges resolver result when ctx has no athanor_id" do
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
 
       ctx = %Context{user_id: "u1", athanor_id: nil}
-      result = Tenancy.resolve_into(ctx)
+      {:ok, result} = Tenancy.resolve_status(ctx)
       assert result.athanor_id == "ath_other"
       assert result.scope == :athanor
     end
 
-    test "logs and returns ctx unchanged when the override resolver errors" do
+    test "logs and refuses as unavailable when the override resolver errors" do
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.FailingResolver)
 
       ctx = %Context{user_id: "u1", athanor_id: nil}
 
       log =
         capture_log(fn ->
-          assert Tenancy.resolve_into(ctx) == ctx
+          assert Tenancy.resolve_status(ctx) == {:error, :unavailable}
         end)
 
       assert log =~ "[Sanctum.Tenancy] resolve override failed"
@@ -65,7 +65,7 @@ defmodule Sanctum.TenancyTest do
     end
   end
 
-  describe "resolve_into/2 — membership resolution" do
+  describe "resolve_status/2 — membership resolution" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -85,7 +85,7 @@ defmodule Sanctum.TenancyTest do
 
     test "no membership leaves athanor_id unresolved" do
       ctx = %Context{user_id: "nobody-#{System.unique_integer([:positive])}", athanor_id: nil}
-      assert Tenancy.resolve_into(ctx, force: true).athanor_id == nil
+      assert {:ok, %{athanor_id: nil}} = Tenancy.resolve_status(ctx, force: true)
     end
 
     test "an athanor membership resolves scope and athanor" do
@@ -93,7 +93,7 @@ defmodule Sanctum.TenancyTest do
       athanor = group!("home-a")
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
 
-      result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil}, force: true)
+      {:ok, result} = Tenancy.resolve_status(%Context{user_id: uid, athanor_id: nil}, force: true)
       assert result.scope == :athanor
       assert result.athanor_id == athanor.id
     end
@@ -104,7 +104,7 @@ defmodule Sanctum.TenancyTest do
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
       {:ok, _} = Members.ensure(uid, scope: "platform")
 
-      result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil}, force: true)
+      {:ok, result} = Tenancy.resolve_status(%Context{user_id: uid, athanor_id: nil}, force: true)
       assert result.scope == :athanor
       assert result.platform_admin
       assert result.athanor_id == athanor.id
@@ -114,7 +114,7 @@ defmodule Sanctum.TenancyTest do
       uid = "u-plat-only-#{System.unique_integer([:positive])}"
       {:ok, _} = Members.ensure(uid, scope: "platform")
 
-      result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil}, force: true)
+      {:ok, result} = Tenancy.resolve_status(%Context{user_id: uid, athanor_id: nil}, force: true)
       assert result.scope == :athanor
       assert result.platform_admin
       assert result.athanor_id == Athanors.home!().id
@@ -125,7 +125,7 @@ defmodule Sanctum.TenancyTest do
       uid = "u-admin-#{System.unique_integer([:positive])}"
 
       ctx = %Context{user_id: uid, athanor_id: nil, email: "admin@example.com"}
-      result = Tenancy.resolve_into(ctx, force: true)
+      {:ok, result} = Tenancy.resolve_status(ctx, force: true)
 
       refute result.platform_admin
       assert rows!(Members.list_by_user(uid)) == []
@@ -139,7 +139,9 @@ defmodule Sanctum.TenancyTest do
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: b.id})
       {:ok, _} = Athanors.archive(a)
 
-      result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: a.id}, force: true)
+      {:ok, result} =
+        Tenancy.resolve_status(%Context{user_id: uid, athanor_id: a.id}, force: true)
+
       assert result.athanor_id == b.id
     end
   end

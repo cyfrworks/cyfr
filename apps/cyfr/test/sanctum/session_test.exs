@@ -64,11 +64,12 @@ defmodule Sanctum.SessionTest do
       assert session1.token != session2.token
     end
 
-    test "preserves permissions", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+    test "carries no permission bag: a person's session holds every permission", %{ctx: ctx} do
+      {:ok, session} = Session.create(%{ctx | permissions: MapSet.new([:read])})
+      refute Map.has_key?(session, :permissions)
 
-      assert "execute" in session.permissions or :execute in session.permissions
-      assert "read" in session.permissions or :read in session.permissions
+      assert {:ok, %{permissions: permissions}} = Session.load(session.token, surface: :console)
+      assert MapSet.member?(permissions, :*)
     end
   end
 

@@ -18,7 +18,6 @@ defmodule Arca.Schemas.Session do
     field :user_id, :string
     field :email, :string
     field :provider, :string
-    field :permissions, :string
     field :expires_at, :utc_datetime_usec
     field :athanor_id, :string
     timestamps(type: :utc_datetime_usec, updated_at: false)
