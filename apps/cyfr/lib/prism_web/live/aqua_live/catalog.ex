@@ -81,7 +81,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   end
 
   defp reachable?(name, action) when is_binary(name),
-    do: Cyfr.Ops.Catalog.in_chain_reachable?(name, action)
+    do: Cyfr.Ops.Catalog.chain_reachable?(name, action)
 
   defp reachable?(_name, _action), do: false
 

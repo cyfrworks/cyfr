@@ -257,10 +257,23 @@ defmodule Opus.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "run" => %{kind: :execute, planes: [:external, :in_chain], permission: :execute},
+            # External-plane only, and `host: :intercepted`: a running
+            # component's execution request never reaches the catalog — the
+            # formula host intercepts it and runs it as a CHILD of the
+            # chain's authority (`Opus.Chain.run_child/5`), and an approved
+            # card's is run the same way by the assistant. The annotation
+            # says so, and every surface that offers actions to a chain
+            # reads it from here.
+            "run" => %{
+              kind: :execute,
+              planes: [:external],
+              host: :intercepted,
+              permission: :execute
+            },
             "run_stream" => %{
               kind: :execute,
-              planes: [:external, :in_chain],
+              planes: [:external],
+              host: :intercepted,
               permission: :execute
             },
             "list" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},

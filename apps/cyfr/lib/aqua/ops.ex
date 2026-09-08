@@ -86,10 +86,19 @@ defmodule Aqua.Ops do
 
   def actions_of(_tool), do: []
 
-  @doc "Whether a running chain would refuse `tool`/`action` (external-only plane)."
+  @doc "Whether a running chain would refuse `tool`/`action` (nothing a chain can run)."
   @spec in_chain_refused?(String.t(), String.t()) :: boolean()
   def in_chain_refused?(tool, action),
     do: Cyfr.Ops.Catalog.in_chain_refused?(tool, action)
+
+  @doc """
+  Whether an approved `tool`/`action` is an execution the assistant runs
+  as a CHILD of the card's authority rather than a catalog call: the host
+  intercepts it for a running chain, and the assistant does the same for
+  a card (`Aqua.Turn`).
+  """
+  @spec child_execution?(String.t(), String.t()) :: boolean()
+  def child_execution?(tool, action), do: Cyfr.Ops.Catalog.host_intercepted?(tool, action)
 
   @doc """
   One sentence for a refusal: the shared renderer first (crafted binaries,

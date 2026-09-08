@@ -31,12 +31,4 @@ defmodule Aqua.ApprovalScopeTest do
              :always
            ]
   end
-
-  test "an action's standing declaration meets in one shape" do
-    assert ApprovalScope.standing(:conversation) == :conversation
-    assert ApprovalScope.standing("conversation") == :conversation
-    assert ApprovalScope.standing(false) == false
-    assert ApprovalScope.standing(nil) == nil
-    assert ApprovalScope.standing("anything else") == nil
-  end
 end

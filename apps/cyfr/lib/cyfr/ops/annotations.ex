@@ -52,6 +52,15 @@ defmodule Cyfr.Ops.Annotations do
     end
   end
 
+  @doc """
+  Whether a running chain reaches the action through the HOST rather than
+  the catalog: the formula host intercepts the request and runs it under
+  the chain's authority itself, so the catalog never dispatches it
+  in-chain and yet a chain can run it.
+  """
+  @spec host_intercepted?(source(), String.t() | nil) :: boolean()
+  def host_intercepted?(source, action), do: field(source, action, :host) == :intercepted
+
   @doc "The action's auth requirement; `:required` when undeclared."
   @spec auth(source(), String.t() | nil) :: atom()
   def auth(source, action) do
@@ -76,6 +85,28 @@ defmodule Cyfr.Ops.Annotations do
   """
   @spec standing(source(), String.t() | nil) :: :conversation | false | nil
   def standing(source, action), do: field(source, action, :standing)
+
+  @doc """
+  The one codec for a `standing` value as it travels: the annotation's
+  atom, the wire's string, or nothing. `standing/1` decodes any spelling
+  to `:conversation` (a standing allow for one conversation only),
+  `false` (none at all) or `nil` (either scope); `standing_to_wire/1` is
+  the string the intent carries.
+  """
+  @spec standing(term()) :: :conversation | false | nil
+  def standing(:conversation), do: :conversation
+  def standing("conversation"), do: :conversation
+  def standing(false), do: false
+  def standing(_), do: nil
+
+  @spec standing_to_wire(term()) :: String.t() | false | nil
+  def standing_to_wire(value) do
+    case standing(value) do
+      :conversation -> "conversation"
+      false -> false
+      nil -> nil
+    end
+  end
 
   defp field(source, action, key) do
     case annotation(source, action) do

@@ -637,9 +637,14 @@ defmodule Aqua.Turn do
       )
       when is_binary(tool) and is_binary(action) and is_binary(profile_id) do
     with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, {:id, profile_id}, @agent_ref) do
-      if Aqua.VirtualTools.virtual_tool?(tool),
-        do: run_virtual(proposal, ctx, authority),
-        else:
+      cond do
+        Aqua.VirtualTools.virtual_tool?(tool) ->
+          run_virtual(proposal, ctx, authority)
+
+        Aqua.Ops.child_execution?(tool, action) ->
+          run_child_execution(proposal, ctx, authority)
+
+        true ->
           Aqua.Ops.call_in_chain(
             tool,
             Context.enter_guest(ctx),
@@ -647,6 +652,37 @@ defmodule Aqua.Turn do
             authority,
             lineage: registry_lineage(proposal)
           )
+      end
+    end
+  end
+
+  # An approved execution runs as a CHILD of the card's pinned authority
+  # — the way the formula host runs one for a chain — with the card's own
+  # execution as lineage, never through the catalog from a guest-planed
+  # context.
+  defp run_child_execution(%{args: args} = proposal, ctx, authority) do
+    args = args || %{}
+
+    case Map.get(args, "reference") do
+      reference when is_binary(reference) and reference != "" ->
+        lineage = Map.get(proposal, :lineage) || %{}
+        execution_id = lineage[:execution_id] || lineage["execution_id"]
+
+        opts =
+          [ctx: Context.enter_guest(ctx)]
+          |> Arca.QueryHelpers.maybe_put(:parent_execution_id, execution_id)
+          |> Arca.QueryHelpers.maybe_put(:root_execution_id, execution_id)
+
+        Cyfr.Execution.run_child(
+          authority,
+          reference,
+          Map.get(args, "need"),
+          Map.get(args, "input") || %{},
+          opts
+        )
+
+      _ ->
+        {:error, {:invalid_argument, "execution.run needs a reference"}}
     end
   end
 

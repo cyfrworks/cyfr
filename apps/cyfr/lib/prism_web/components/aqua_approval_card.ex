@@ -326,7 +326,7 @@ defmodule PrismWeb.AquaApprovalCard do
     do: false
 
   defp standing_offered?(kind, standing, scope),
-    do: standing_offered(kind, Aqua.ApprovalScope.standing(standing), scope)
+    do: standing_offered(kind, Cyfr.Ops.Annotations.standing(standing), scope)
 
   defp standing_offered(_kind, false, _scope), do: false
   defp standing_offered(_kind, :conversation, :always), do: false

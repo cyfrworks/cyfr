@@ -276,7 +276,7 @@ defmodule Aqua.Actions do
          # `"conversation"`, `false`, or nil for either scope. Spelled as
          # it survives the row's JSON round trip, because the runner reads
          # it back from there.
-         standing: wire_standing(standing),
+         standing: Cyfr.Ops.Annotations.standing_to_wire(standing),
          hinted_risk: hinted_risk,
          action_description: action_description,
          proposal: proposal
@@ -285,10 +285,6 @@ defmodule Aqua.Actions do
   end
 
   defp validate_kind(kind, _obj, _policy), do: {:error, "unknown kind: #{inspect(kind)}"}
-
-  defp wire_standing(:conversation), do: "conversation"
-  defp wire_standing(false), do: false
-  defp wire_standing(_), do: nil
 
   # Pure-confirmation card with no executable proposal. Used when the agent
   # wants explicit user buy-in before continuing freeform reasoning. Kind is

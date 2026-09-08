@@ -60,7 +60,7 @@ defmodule Aqua.SeedContractTest do
     refused =
       for key <- granted,
           {tool, action} = split(key),
-          Catalog.in_chain_refused?(tool, action),
+          not Catalog.chain_reachable?(tool, action),
           do: key
 
     assert refused == [], "caps grant actions a chain cannot reach: #{inspect(refused)}"

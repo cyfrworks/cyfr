@@ -179,10 +179,10 @@ defmodule Aqua.Runner.Approvals do
       intent["action_kind"] in ["destructive", "external"] ->
         {:error, {:scope_not_permitted, intent["action_kind"]}}
 
-      Aqua.ApprovalScope.standing(intent["standing"]) == false ->
+      Cyfr.Ops.Annotations.standing(intent["standing"]) == false ->
         {:error, {:scope_not_permitted, :never_standing}}
 
-      Aqua.ApprovalScope.standing(intent["standing"]) == :conversation and scope == :always ->
+      Cyfr.Ops.Annotations.standing(intent["standing"]) == :conversation and scope == :always ->
         {:error, {:scope_not_permitted, :conversation_only}}
 
       true ->

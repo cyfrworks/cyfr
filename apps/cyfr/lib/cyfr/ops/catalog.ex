@@ -324,10 +324,32 @@ defmodule Cyfr.Ops.Catalog do
   end
 
   @doc """
-  Whether this registry *knows* `tool.action` and says a chain may not reach
-  it — the answer a surface needs before refusing to offer something.
+  Whether a running chain can run `tool.action` at all: through the
+  catalog (`in_chain_reachable?/2`), or through the host — an action
+  annotated `host: :intercepted`, which the formula host runs under the
+  chain's authority before any catalog call.
+  """
+  @spec chain_reachable?(String.t(), String.t() | nil) :: boolean()
+  def chain_reachable?(name, action) when is_binary(name) do
+    in_chain_reachable?(name, action) or host_intercepted?(name, action)
+  end
 
-  Distinct from `not in_chain_reachable?/2`: a tool the registry has never
+  @doc "Whether the host, not the catalog, runs `tool.action` for a chain."
+  @spec host_intercepted?(String.t(), String.t() | nil) :: boolean()
+  def host_intercepted?(name, action) when is_binary(name) do
+    case lookup(name) do
+      {:ok, {_module, meta}} -> Annotations.host_intercepted?(meta, action)
+      :miss -> false
+    end
+  end
+
+  def host_intercepted?(_name, _action), do: false
+
+  @doc """
+  Whether this registry *knows* `tool.action` and says a chain may not run
+  it at all — the answer a surface needs before refusing to offer something.
+
+  Distinct from `not chain_reachable?/2`: a tool the registry has never
   heard of (a cold cache, a virtual tool the formula dispatches itself, an
   external `server:tool`) is not refused here, it is simply not this
   registry's to judge.
@@ -336,7 +358,7 @@ defmodule Cyfr.Ops.Catalog do
   def in_chain_refused?(name, action) when is_binary(name) do
     not String.contains?(name, ":") and
       match?({:ok, _}, lookup(name)) and
-      not in_chain_reachable?(name, action)
+      not chain_reachable?(name, action)
   end
 
   def in_chain_refused?(_name, _action), do: false
@@ -868,6 +890,7 @@ defmodule Cyfr.Ops.Catalog do
   end
 
   @valid_planes [:external, :in_chain]
+  @valid_host [:intercepted]
   @valid_auth [:anonymous, :signed_in, :required]
   @valid_consent [:interactive, :staging]
   @valid_scopes [:platform]
@@ -881,11 +904,15 @@ defmodule Cyfr.Ops.Catalog do
     consent = Map.get(annotation, :consent)
     scope = Map.get(annotation, :scope)
     standing = Map.get(annotation, :standing)
+    host = Map.get(annotation, :host)
 
     cond do
       is_nil(kind) or not is_atom(kind) -> {:error, :missing_kind}
       not is_list(planes) or planes == [] -> {:error, :missing_planes}
       not Enum.all?(planes, &(&1 in @valid_planes)) -> {:error, :invalid_planes}
+      not (is_nil(host) or host in @valid_host) -> {:error, :invalid_host}
+      # The host intercepts what the catalog never dispatches in-chain.
+      host == :intercepted and :in_chain in planes -> {:error, :invalid_host}
       auth not in @valid_auth -> {:error, :invalid_auth}
       not (is_nil(permission) or known_permission?(permission)) -> {:error, :invalid_permission}
       not (is_nil(consent) or consent in @valid_consent) -> {:error, :invalid_consent}

@@ -10,8 +10,8 @@ defmodule Aqua.ApprovalScope do
   The wire, the card, the pane and the runner all carry the answer as a
   string somewhere, and each used to decode it on its own — one of them
   without `never`, which turned a "never" into a "once". This is the one
-  codec, and the one place the standing annotation's two spellings
-  (`:conversation` | `"conversation"` | `false` | `nil`) meet.
+  codec. (An action's `standing` declaration has its own, in
+  `Cyfr.Ops.Annotations.standing/1`.)
   """
 
   @type t :: :once | :conversation | :always | :never
@@ -39,16 +39,4 @@ defmodule Aqua.ApprovalScope do
   @doc "Whether a scope is a STANDING answer — one that answers for calls nobody has seen yet."
   @spec standing?(t()) :: boolean()
   def standing?(scope), do: scope in [:conversation, :always]
-
-  @doc """
-  An action's `standing:` declaration as it arrives from any surface —
-  the annotation's atom, the row's JSON string, or nothing — as one of
-  `:conversation` (a standing allow for one conversation only), `false`
-  (none at all) or `nil` (either scope).
-  """
-  @spec standing(term()) :: :conversation | false | nil
-  def standing(:conversation), do: :conversation
-  def standing("conversation"), do: :conversation
-  def standing(false), do: false
-  def standing(_), do: nil
 end
