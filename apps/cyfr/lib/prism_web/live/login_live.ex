@@ -145,18 +145,6 @@ defmodule PrismWeb.LoginLive do
     {:noreply, socket}
   end
 
-  defp finish_poll(socket, {:ok, %{status: "complete", outcome: {:reauthenticate, _}}}) do
-    {:noreply,
-     assign_idle(
-       socket,
-       "Your login session expired during setup. Please try again."
-     )}
-  end
-
-  defp finish_poll(socket, {:ok, %{status: "complete", outcome: {:unavailable, reason}}}) do
-    {:noreply, assign_idle(socket, browser_unavailable(reason))}
-  end
-
   defp finish_poll(socket, {:ok, %{status: "complete", session_token: token} = result})
        when is_binary(token) do
     ticket = mint_ticket(result, socket.assigns.browser_binding)
@@ -210,11 +198,6 @@ defmodule PrismWeb.LoginLive do
     Arca.Cache.put({:login_device_ticket, ticket}, payload, @ticket_ttl_ms)
     ticket
   end
-
-  # Browser copy for a registry outage — the CLI's sentences say to run
-  # `cyfr login`, which is not this surface. One owner for the words.
-  defp browser_unavailable(reason),
-    do: PrismWeb.SignInResponse.unavailable_copy(reason) |> elem(1)
 
   defp assign_idle(socket, error) do
     socket

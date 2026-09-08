@@ -279,6 +279,20 @@ defmodule Sanctum.Tenancy.Athanors do
     end)
   end
 
+  @doc """
+  A person's own athanor, by its owner. At most one exists per person
+  (a partial unique index on `owner_user_id` where `kind = 'person'`).
+  """
+  @spec get_by_owner(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | term()}
+  def get_by_owner(user_id) when is_binary(user_id) do
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.get_by_owner", fn ->
+      case Arca.Repo.get_by(Athanor, kind: "person", owner_user_id: user_id) do
+        nil -> {:error, :not_found}
+        athanor -> {:ok, athanor}
+      end
+    end)
+  end
+
   @doc "Find an athanor by kind and slug."
   @spec get_by_slug(String.t(), String.t()) ::
           {:ok, Athanor.t()} | {:error, :not_found | :database_error}
@@ -473,7 +487,7 @@ defmodule Sanctum.Tenancy.Athanors do
 
     Enum.find_value(2..50, slug, fn n ->
       candidate = "#{base}-#{n}"
-      if slug_free?(candidate), do: candidate
+      if slug_free?("group", candidate), do: candidate
     end)
   end
 
@@ -846,12 +860,29 @@ defmodule Sanctum.Tenancy.Athanors do
   # A slug given explicitly must be valid and free; one derived from the name
   # gets a numeric suffix when taken.
   defp resolve_slug(explicit, _name) when is_binary(explicit) do
-    if Sanctum.Slug.valid?(explicit) and slug_free?(explicit),
+    if Sanctum.Slug.valid?(explicit) and slug_free?("group", explicit),
       do: {:ok, explicit},
       else: {:error, :slug_taken_or_invalid}
   end
 
-  defp resolve_slug(nil, name) do
+  defp resolve_slug(nil, name), do: derived_slug("group", name)
+
+  @doc """
+  A free slug for a person's own athanor: `hint` (their cyfr.run namespace,
+  when they have one) if it is valid and free, else one derived from
+  `name` with a numeric suffix. A person's athanor is minted at sign-in,
+  before any namespace exists, so the slug is this server's — an address,
+  not an identity — and a hint another person's athanor already holds is
+  no refusal, it just is not the address.
+  """
+  @spec person_slug(String.t() | nil, String.t()) :: {:ok, String.t()} | {:error, term()}
+  def person_slug(hint, name) do
+    if is_binary(hint) and Sanctum.Slug.valid?(hint) and slug_free?("person", hint),
+      do: {:ok, hint},
+      else: derived_slug("person", name)
+  end
+
+  defp derived_slug(kind, name) do
     case Sanctum.Slug.from_name(name) do
       nil ->
         {:error, :invalid_name}
@@ -860,7 +891,7 @@ defmodule Sanctum.Tenancy.Athanors do
         stem = suffixable(base)
         candidates = [base | Enum.map(2..50, &"#{stem}-#{&1}")]
 
-        case Enum.find(candidates, &slug_free?/1) do
+        case Enum.find(candidates, &slug_free?(kind, &1)) do
           nil -> {:error, :slug_taken_or_invalid}
           slug -> {:ok, slug}
         end
@@ -876,12 +907,9 @@ defmodule Sanctum.Tenancy.Athanors do
   # names is over the limit before it starts.
   defp suffixable(base), do: base |> String.slice(0, 36) |> String.trim_trailing("-")
 
-  # Deliberately checks only the "group" kind: the unique index is
-  # `[kind, slug]`, so a group slug never collides with a person's. Group
-  # slugs are the only ones minted here (a person's slug IS their cyfr.run
-  # namespace, claimed elsewhere); a person-slug caller would need its own
-  # check against the "person" kind.
-  defp slug_free?(slug), do: match?({:error, :not_found}, get_by_slug("group", slug))
+  # Per kind: the unique index is `[kind, slug]`, so a group slug never
+  # collides with a person's and each is checked against its own kind.
+  defp slug_free?(kind, slug), do: match?({:error, :not_found}, get_by_slug(kind, slug))
 
   # Only the groups a person deliberately made. A frozen pair is a
   # conversation, not a group they created, and counting DMs against

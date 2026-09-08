@@ -483,6 +483,13 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       # Stateless auth: the credential travels on the request itself, so no
       # server-side MCP session is created and nothing is cached.
       ctx = Sanctum.TestContext.local()
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id,
+          scope: "athanor",
+          athanor_id: Sanctum.Tenancy.Athanors.home!().id
+        )
+
       {:ok, session} = Sanctum.Session.create(ctx)
 
       conn =
@@ -493,8 +500,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       refute conn.halted
       assert conn.assigns[:auth_method] == :session_token
       assert conn.assigns[:context].user_id == ctx.user_id
-      # `authenticated` additionally depends on the user having claimed a
-      # personal namespace, which is a separate gate from bearer auth.
+      assert conn.assigns[:context].authenticated
     end
 
     test "a destroyed session token stops authenticating immediately", %{conn: conn} do

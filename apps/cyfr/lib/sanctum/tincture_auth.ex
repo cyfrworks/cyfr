@@ -240,26 +240,15 @@ defmodule Sanctum.TinctureAuth do
   end
 
   # A session token goes through the one door — `Sanctum.Caller.establish/2`
-  # — so the memo, the door/claim/denied refusal mapping and the tenant
-  # resolve are the same ones every other surface uses (the `:tincture`
-  # surface stamps auth_method `:session` in the loader). Two arms read
-  # differently from the console:
-  #
-  #   * `claim_pending` — a valid session whose person has not claimed a
-  #     namespace yet. Tincture access is not tenant administration and is
-  #     deliberately granted on the session's athanor (documented at the
-  #     loader's `:not_claimed` arm), so the pre-claim context is upgraded
-  #     to the tincture shape here — the ONE deliberate exception, no
-  #     longer a blanket upgrade of whatever loaded.
-  #   * `denied` — the door stopped admitting this person after the session
-  #     was minted. Refused; the old blanket upgrade re-authenticated it.
+  # — so the memo, the door/denied refusal mapping and the tenant resolve
+  # are the same ones every other surface uses (the `:tincture` surface
+  # stamps auth_method `:session` in the loader). `denied` — the door
+  # stopped admitting this person after the session was minted — is
+  # refused; nothing here upgrades what loaded.
   defp try_sanctum_session(token) do
     case Sanctum.Caller.establish(token, surface: :tincture, refresh: false) do
       {:ok, %Context{} = ctx} ->
         {:ok, ctx}
-
-      {:error, {:claim_pending, %Context{} = pre}} ->
-        {:ok, %{pre | auth_method: :session, scope: :athanor, authenticated: true}}
 
       {:error, {:denied, _ctx}} ->
         {:error, :denied}

@@ -114,7 +114,7 @@ defmodule Sanctum.ProvisioningTest do
     assert at == group.provisioned_at
   end
 
-  test "a person's own athanor is minted once, from their namespace, and recorded",
+  test "a person's own athanor is minted once, under their namespace when it is free, and recorded",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
@@ -137,10 +137,41 @@ defmodule Sanctum.ProvisioningTest do
     assert [_] = Enum.filter(Athanors.list_for_user(user.id), &(&1.kind == "person"))
   end
 
-  test "a person without a namespace yet is pending, not minted" do
-    user = person(System.unique_integer([:positive]))
-    assert :pending = Provisioning.after_sign_in(user.id)
-    assert {:error, :no_namespace} = Provisioning.ensure_personal_athanor(user)
+  test "a person without a namespace is minted one under a slug of their own", %{
+    bundle_dir: bundle_dir
+  } do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    user = person(n)
+
+    assert {:ok, personal} = Provisioning.after_sign_in(user.id)
+    assert personal.kind == "person"
+    assert personal.slug == "prov-#{n}"
+    assert personal.owner_user_id == user.id
+    assert {:ok, %{personal_athanor_id: pid}} = Users.get(user.id)
+    assert pid == personal.id
+
+    # A namespace recorded later is a credential, not a new address.
+    {:ok, user} = Users.set_namespace(user, "late#{n}")
+    assert {:ok, %{id: same, slug: slug}} = Provisioning.ensure_personal_athanor(user)
+    assert same == personal.id
+    assert slug == "prov-#{n}"
+  end
+
+  test "a namespace another person's athanor already holds is not a refusal, just not the address",
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    first = person(n)
+    assert {:ok, %{slug: taken}} = Provisioning.ensure_personal_athanor(first)
+    assert taken == "prov-#{n}"
+
+    # The second person's namespace is the first person's address here.
+    second = person(n + 1)
+    {:ok, second} = Users.set_namespace(second, "prov-#{n}")
+    assert {:ok, other} = Provisioning.ensure_personal_athanor(second)
+    assert other.owner_user_id == second.id
+    assert other.slug == "prov-#{n + 1}"
   end
 
   test "sync_seeds registers, consents, and collapses pristine copies", %{

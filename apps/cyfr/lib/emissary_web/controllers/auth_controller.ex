@@ -133,16 +133,15 @@ defmodule EmissaryWeb.AuthController do
   @doc """
   Handles the OAuth callback from the provider — the browser sign-in.
 
-  Door → what sign-in records → the one decision (`Sanctum.SignIn.complete/3`)
-  → a session and a redirect. Every outcome is a redirect or a page; the
-  session token travels in the cookie and nowhere else.
+  Door → what sign-in records → the registry courtesy
+  (`Sanctum.SignIn.complete/3`) → a session and a redirect. Every outcome
+  is a redirect or a page; the session token travels in the cookie and
+  nowhere else.
 
-  - proceed → session, cookie, `/`
-  - policy acceptance required → session, cookie, `/legal/accept`
-  - claim required → session (loads unauthenticated until the claim), cookie,
-    `/claim-namespace`
-  - IdP token refused → no session, back through `/login`
-  - a first-time person and no registry answer → no session, a page saying so
+  - admitted → session, cookie, `/` (the IdP token rides in the probe
+    cookie for ten minutes when a publisher namespace is still theirs to
+    claim)
+  - a membership read failed while minting → no session, a page saying so
   - refused at the door → 403 page, no session, no cyfr.run call
   """
   def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
@@ -151,29 +150,22 @@ defmodule EmissaryWeb.AuthController do
 
     with {:ok, ctx} <- authenticate_with_provider(auth),
          {:ok, ctx, user} <- admit(ctx, auth) do
-      case Sanctum.SignIn.complete(user, provider, access_token) do
-        {:proceed, user, report} ->
-          # The athanor may have been minted a moment ago: resolve again so
-          # the session names it. A failed read here answers 503 with no
-          # session — not a session whose tenant gate 403s every request.
-          case Sanctum.Tenancy.resolve_status(%{ctx | namespace: user.namespace}, force: true) do
-            {:ok, ctx} ->
-              SignInResponse.respond(conn, {:proceed, report}, session: {:mint, ctx})
+      {:proceed, user, report} = Sanctum.SignIn.complete(user, provider, access_token)
 
-            {:error, :unavailable} ->
-              SignInResponse.respond(conn, {:unavailable, :membership_read},
-                session: {:mint, ctx},
-                retry_path: "/login"
-              )
-          end
-
-        outcome ->
-          # The IdP token travels for the claim or the policy acceptance
-          # that still needs it; the responder stashes it only on those arms.
-          SignInResponse.respond(conn, outcome,
+      # The athanor may have been minted a moment ago: resolve again so the
+      # session names it. A failed read here answers 503 with no session —
+      # not a session whose tenant gate 403s every request.
+      case Sanctum.Tenancy.resolve_status(%{ctx | namespace: user.namespace}, force: true) do
+        {:ok, ctx} ->
+          SignInResponse.respond(conn, {:proceed, report},
             session: {:mint, ctx},
-            access_token: access_token,
-            reauth_flash: true
+            access_token: if(is_nil(user.namespace), do: access_token)
+          )
+
+        {:error, :unavailable} ->
+          SignInResponse.respond(conn, {:unavailable, :membership_read},
+            session: {:mint, ctx},
+            retry_path: "/login"
           )
       end
     else
@@ -233,11 +225,11 @@ defmodule EmissaryWeb.AuthController do
   @doc """
   Post-legal-accept landing handler. The person just submitted /legal/accept
   and the probe re-runs with the still-valid IdP access_token (stashed in
-  `_cyfr_pending_probe`): the same decision as the callback, from a session
+  `_cyfr_pending_probe`): the same courtesy as the callback, from a session
   that already exists.
 
   Closes the loop:
-    probe → 412 → /legal/accept → /auth/post-legal-accept → probe → ok
+    probe → policy required → /legal/accept → /auth/post-legal-accept → probe → ok
   """
   def post_legal_accept(conn, _params) do
     case PrismWeb.PendingProbe.pop(conn) do
@@ -261,26 +253,13 @@ defmodule EmissaryWeb.AuthController do
         with {:ok, peeked} <- Sanctum.Caller.peek(session_token),
              {:ok, user} <- Sanctum.Tenancy.Users.get(peeked.user_id) do
           provider = peeked.provider || "github"
+          {:proceed, user, report} = Sanctum.SignIn.complete(user, provider, access_token)
 
-          case Sanctum.SignIn.complete(user, provider, access_token) do
-            {:proceed, _user, report} ->
-              SignInResponse.respond(conn, {:proceed, report}, session: :existing)
-
-            {:reauthenticate, _reason} = outcome ->
-              SignInResponse.respond(conn, outcome,
-                session: :existing,
-                teardown: {:destroy_and_drop, session_token}
-              )
-
-            outcome ->
-              # needs_legal loops back to /legal/accept (a version bump
-              # between accept and re-probe); no token travels — the probe
-              # cookie already holds it.
-              SignInResponse.respond(conn, outcome,
-                session: :existing,
-                retry_path: "/auth/post-legal-accept"
-              )
-          end
+          # The token stays for the claim that may follow the acceptance.
+          SignInResponse.respond(conn, {:proceed, report},
+            session: :existing,
+            access_token: if(is_nil(user.namespace), do: access_token)
+          )
         else
           _ -> conn |> redirect(to: "/login")
         end

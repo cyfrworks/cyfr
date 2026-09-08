@@ -314,6 +314,10 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
     {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Switch #{n}"})
 
+    # A seat where the session starts, so the repoint is observable.
+    {:ok, _} =
+      Members.ensure(alice, scope: "athanor", athanor_id: Sanctum.TestContext.athanor_id())
+
     {:ok, session} = Sanctum.Session.create(a)
     {:ok, loaded} = Sanctum.Session.load(session.token, surface: :console)
     with_hash = %{a | session_token_hash: Sanctum.Session.token_hash(session.token)}

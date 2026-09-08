@@ -34,11 +34,11 @@ defmodule Sanctum.Provisioning do
   alias Sanctum.Tenancy.{Athanors, Caps, Members, Users}
 
   @doc """
-  Called once the person is admitted and whenever their namespace is
-  recorded (`Sanctum.SignIn.record_namespace/2`): mints their own athanor,
-  and retries any group of theirs whose provisioning failed earlier. A
-  person without a namespace yet (the claim gate is ahead of them) gets
-  theirs on the next call.
+  Called once the person is admitted, and again whenever their namespace
+  is recorded (`Sanctum.SignIn.record_namespace/2`): mints their own
+  athanor if they have none, and retries any group of theirs whose
+  provisioning failed earlier. Admission is enough — a person needs no
+  registry, no namespace and no claim to have a furnace of their own.
   """
   @spec after_sign_in(String.t()) ::
           {:ok, Arca.Schemas.Athanor.t()} | {:error, term()} | :pending
@@ -46,11 +46,7 @@ defmodule Sanctum.Provisioning do
     case Users.get(user_id) do
       {:ok, user} ->
         retry_groups_async(user_id)
-
-        case user.namespace do
-          nil -> :pending
-          _ -> ensure_personal_athanor(user)
-        end
+        ensure_personal_athanor(user)
 
       {:error, :not_found} ->
         :pending
@@ -61,16 +57,16 @@ defmodule Sanctum.Provisioning do
   end
 
   @doc """
-  The person's own athanor: created (kind person, slug = namespace, the
-  person its only member) if missing, provisioned if not yet, and recorded
-  on the `users` row. Idempotent.
+  The person's own athanor: the one their `users` row records, else a
+  fresh one (kind person, a slug of this server's — their namespace when
+  they have one and it is free, otherwise derived from their name — the
+  person its only member), provisioned if not yet, and recorded on the
+  row. Idempotent.
   """
   @spec ensure_personal_athanor(Arca.Schemas.User.t()) ::
           {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
-  def ensure_personal_athanor(%{namespace: nil}), do: {:error, :no_namespace}
-
-  def ensure_personal_athanor(%{id: user_id, namespace: namespace} = user) do
-    with {:ok, athanor} <- find_or_create_personal(user_id, namespace, user.display_name),
+  def ensure_personal_athanor(%{id: user_id} = user) do
+    with {:ok, athanor} <- find_or_create_personal(user),
          {:ok, _} <- Members.ensure(user_id, scope: "athanor", athanor_id: athanor.id),
          {:ok, _} <- record_personal(user, athanor) do
       row_after(provision(athanor, person_ctx(user_id, athanor.id)), athanor)
@@ -290,27 +286,48 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  defp find_or_create_personal(user_id, namespace, display_name) do
-    case Athanors.get_by_slug("person", namespace) do
-      {:ok, %{owner_user_id: ^user_id} = athanor} ->
-        {:ok, athanor}
+  # One personal athanor per owner is the store's invariant, so the owner
+  # is the lookup; a person with none yet is minted one. The slug is an
+  # address on this server, never an identity: the namespace is only a
+  # hint for it.
+  defp find_or_create_personal(%{id: user_id} = user) do
+    case Athanors.get_by_owner(user_id) do
+      {:ok, athanor} -> {:ok, athanor}
+      {:error, :not_found} -> mint_personal(user)
+      {:error, _} = err -> err
+    end
+  end
 
-      {:ok, _other_owner} ->
-        {:error, :namespace_owned_by_another_identity}
+  defp mint_personal(%{id: user_id} = user) do
+    name = personal_name(user)
 
-      {:error, :not_found} ->
-        with :ok <- mint_allowed() do
-          Athanors.create(%{
-            kind: "person",
-            name: display_name || namespace,
-            slug: namespace,
-            owner_user_id: user_id,
-            created_by: user_id
-          })
-        end
+    with :ok <- mint_allowed(),
+         {:ok, slug} <- Athanors.person_slug(user.namespace, name) do
+      Athanors.create(%{
+        kind: "person",
+        name: name,
+        slug: slug,
+        owner_user_id: user_id,
+        created_by: user_id
+      })
+    end
+  end
 
-      {:error, _} = err ->
-        err
+  # What the athanor is called: the person's screen name, else the
+  # address's local part, else the namespace, else a plain word.
+  defp personal_name(user) do
+    cond do
+      is_binary(user.display_name) and String.trim(user.display_name) != "" ->
+        String.trim(user.display_name)
+
+      is_binary(user.email) and String.contains?(user.email, "@") ->
+        user.email |> String.split("@") |> hd()
+
+      is_binary(user.namespace) ->
+        user.namespace
+
+      true ->
+        "Me"
     end
   end
 

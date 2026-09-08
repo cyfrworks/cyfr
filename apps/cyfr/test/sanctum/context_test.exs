@@ -553,7 +553,7 @@ defmodule Sanctum.ContextTest do
       assert ctx.authenticated
     end
 
-    test "allows nil namespace when authenticated: false (pre-claim transient state)" do
+    test "allows nil namespace when authenticated: false (a denied session's shape)" do
       ctx = Context.build(user_id: "u1", scope: :athanor, authenticated: false)
       assert ctx.namespace == nil
       refute ctx.authenticated

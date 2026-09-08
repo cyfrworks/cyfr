@@ -13,6 +13,26 @@ defmodule Compendium.RegistryHost do
   @default_oci_host "registry.cyfr.run"
   @default_rest_host "cyfr.run"
 
+  # `CYFR_REGISTRY_URL=none`: this deployment talks to no registry at all.
+  # The accessors still answer a string — the host is interpolated into
+  # messages and credential keys all over the tree — and the two network
+  # seams (`Compendium.Registry.Transport`, `validate_host/1`) refuse
+  # before any I/O. Personhood does not depend on it (`Sanctum.SignIn`);
+  # publishing and pulling do, and say so.
+  @none "none"
+
+  @doc """
+  Whether a remote registry is configured at all. An appliance that runs
+  only what it ships sets `CYFR_REGISTRY_URL=none` and every registry
+  client answers `:registry_unconfigured` instead of dialling.
+  """
+  @spec configured?() :: boolean()
+  def configured?, do: canonical_rest_host() != @none
+
+  @doc "The sentinel that means no registry."
+  @spec none() :: String.t()
+  def none, do: @none
+
   @doc """
   Canonical OCI Distribution host for this deployment.
 
@@ -43,10 +63,15 @@ defmodule Compendium.RegistryHost do
   def validate_host(host) do
     canonical = canonical_host()
 
-    if host == canonical do
-      :ok
-    else
-      {:error, "This deployment only supports #{canonical}, got: #{host}."}
+    cond do
+      not configured?() ->
+        {:error, "No registry is configured on this server (CYFR_REGISTRY_URL=none)."}
+
+      host == canonical ->
+        :ok
+
+      true ->
+        {:error, "This deployment only supports #{canonical}, got: #{host}."}
     end
   end
 end

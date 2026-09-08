@@ -195,6 +195,18 @@ defmodule Compendium.OCI.Errors do
     connection_error("cyfr.run", reason)
   end
 
+  @doc "The refusal every registry client answers when no registry is configured."
+  @spec unconfigured() :: t()
+  def unconfigured do
+    %__MODULE__{
+      reason: :registry_unconfigured,
+      message: "No registry is configured on this server (CYFR_REGISTRY_URL=none)",
+      registry: Compendium.RegistryHost.none(),
+      status: nil,
+      detail: nil
+    }
+  end
+
   @doc """
   The `required_version` a `:policy_version_mismatch` (412) names, or `nil`.
 

@@ -36,11 +36,8 @@ defmodule EmissaryWeb.AuthControllerTest do
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
 
       # Point the cyfr.run REST client at an unreachable address so the
-      # post-session probe fails with `:registry_unavailable` (generic
-      # transient error) rather than a real network 401 against the public
-      # cyfr.run (which would correctly trigger the `:invalid_access_token`
-      # reauth redirect). Tests that specifically cover the reauth redirect
-      # live separately.
+      # post-session probe fails fast with a transient error rather than
+      # reaching the public cyfr.run.
       original_registry = Application.get_env(:cyfr, :registry_url)
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
@@ -152,9 +149,10 @@ defmodule EmissaryWeb.AuthControllerTest do
       }
     end
 
-    test "a first-time person whom cyfr.run cannot place gets a page, no session, no cookie",
+    test "a first-time person signs in on their own athanor even with cyfr.run unreachable",
          %{conn: conn} do
       uid = "first-#{System.unique_integer([:positive])}"
+      user_id = "github|https://github.com|#{uid}"
 
       conn =
         conn
@@ -162,15 +160,13 @@ defmodule EmissaryWeb.AuthControllerTest do
         |> assign(:ueberauth_auth, github_auth(uid, "test@example.com"))
         |> EmissaryWeb.AuthController.callback(%{})
 
-      assert conn.status == 503
-      assert conn.resp_body =~ "cyfr.run could not be reached"
-      assert conn.resp_body =~ "Try again"
-      refute Plug.Conn.get_session(conn, :sanctum_session_token)
-      refute Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
-      refute Enum.any?(Plug.Conn.get_resp_header(conn, "content-type"), &(&1 =~ "json"))
-      # Nothing was set up: no users row is left carrying a namespace.
-      assert {:ok, %{namespace: nil}} =
-               Sanctum.Tenancy.Users.get("github|https://github.com|#{uid}")
+      assert redirected_to(conn) == "/"
+      assert is_binary(Plug.Conn.get_session(conn, :sanctum_session_token))
+
+      assert {:ok, %{namespace: nil, personal_athanor_id: pid}} =
+               Sanctum.Tenancy.Users.get(user_id)
+
+      assert {:ok, %{kind: "person", owner_user_id: ^user_id}} = Sanctum.Tenancy.Athanors.get(pid)
     end
 
     test "a returning person signs in and lands in the chat even with cyfr.run unreachable",
@@ -318,10 +314,11 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert {:ok, %{authenticated: true, namespace: ^ns} = loaded} =
                Sanctum.Session.load(session_of(conn), surface: :console)
 
-      # ...and it names the athanor that was just minted for them, not the
-      # Home seat a platform admin picks up a moment earlier.
+      # ...and it names their own athanor, not the Home seat a platform
+      # admin picks up a moment earlier. Minted at admission, its address
+      # is the namespace only when the namespace was known first.
       assert {:ok, %{id: personal_id, kind: "person"}} =
-               Sanctum.Tenancy.Athanors.get_by_slug("person", ns)
+               Sanctum.Tenancy.Athanors.get_by_owner(user_id)
 
       assert loaded.athanor_id == personal_id
     end
@@ -377,10 +374,10 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       assert redirected_to(conn) == "/"
 
-      # The Home seat is minted before the namespace is known, so it is the
-      # only membership at that moment; the session must still name the
-      # athanor the sign-in went on to mint.
-      assert {:ok, %{id: personal_id}} = Sanctum.Tenancy.Athanors.get_by_slug("person", "ops#{n}")
+      # The Home seat and their own athanor are both minted at admission;
+      # the session must name their own.
+      assert {:ok, %{id: personal_id}} =
+               Sanctum.Tenancy.Athanors.get_by_owner("github|https://github.com|#{uid}")
 
       assert {:ok, %{athanor_id: ^personal_id, platform_admin: true}} =
                Sanctum.Session.load(session_of(conn), surface: :console)
@@ -391,7 +388,7 @@ defmodule EmissaryWeb.AuthControllerTest do
              )
     end
 
-    test "unclaimed path: no personal → session, IdP token stashed, redirect to /claim-namespace",
+    test "no personal namespace: signed in on their own athanor, IdP token kept for the claim",
          %{conn: conn, bypass: bypass} do
       uid = "auth_cb_unclaimed_#{System.unique_integer([:positive])}"
       user_id = "github|https://github.com|#{uid}"
@@ -402,20 +399,23 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       conn = callback(conn, verified_github_auth(uid))
 
-      assert redirected_to(conn) == "/claim-namespace"
+      assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
       assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
-      # A session ahead of its claim is not a working one yet, and it names no
-      # athanor: the person's own does not exist until the claim mints it, and
-      # a session pinned to something else now would outlast that.
-      assert {:ok, %{authenticated: false, namespace: nil, athanor_id: nil}} =
+
+      assert {:ok, %{personal_athanor_id: pid}} = Sanctum.Tenancy.Users.get(user_id)
+      assert is_binary(pid)
+
+      assert {:ok, %{authenticated: true, namespace: nil, athanor_id: ^pid}} =
                Sanctum.Session.load(session_of(conn), surface: :console)
 
       assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
     end
 
-    test "412: session, IdP token stashed, redirect to /legal/accept",
-         %{conn: conn, bypass: bypass} do
+    test "412: signed in, the policy owed at publish, IdP token kept", %{
+      conn: conn,
+      bypass: bypass
+    } do
       uid = "auth_cb_412_#{System.unique_integer([:positive])}"
 
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
@@ -423,13 +423,16 @@ defmodule EmissaryWeb.AuthControllerTest do
       end)
 
       conn = callback(conn, verified_github_auth(uid))
-      assert redirected_to(conn) == "/legal/accept"
+      assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
       assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "updated its policy"
     end
 
-    test "probe 401 for a first-time person: no session, bounce to /login",
-         %{conn: conn, bypass: bypass} do
+    test "probe 401: signed in, the refusal flashed, nothing cached", %{
+      conn: conn,
+      bypass: bypass
+    } do
       uid = "auth_cb_401_#{System.unique_integer([:positive])}"
       user_id = "github|https://github.com|#{uid}"
 
@@ -439,12 +442,13 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       conn = callback(conn, verified_github_auth(uid, token: "expired_token"))
 
-      assert redirected_to(conn) == "/login"
-      refute session_of(conn)
+      assert redirected_to(conn) == "/"
+      assert is_binary(session_of(conn))
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "refused the sign-in token"
       assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
     end
 
-    test "probe 5xx: a first-time person gets the page and no session; a returning one signs in",
+    test "probe 5xx: a first-time person and a returning one both sign in",
          %{conn: conn, bypass: bypass} do
       Bypass.expect(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 500, %{"error" => "internal"})
@@ -452,9 +456,9 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       uid = "auth_cb_5xx_#{System.unique_integer([:positive])}"
       conn1 = callback(conn, verified_github_auth(uid))
-      assert conn1.status == 503
-      refute session_of(conn1)
-      refute Map.has_key?(conn1.resp_cookies, "_cyfr_pending_probe")
+      assert redirected_to(conn1) == "/"
+      assert is_binary(session_of(conn1))
+      assert Phoenix.Flash.get(conn1.assigns.flash, :error) =~ "couldn't be reached"
 
       n = System.unique_integer([:positive])
       back = "auth_cb_5xx_back_#{n}"
@@ -515,10 +519,10 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       uid = "auth_cb_nojson_#{System.unique_integer([:positive])}"
 
-      # A first-time person: the registry down, and the IdP giving no token.
+      # The registry down, and the IdP giving no token: a redirect each time.
       for auth <- [verified_github_auth(uid), verified_github_auth(uid, token: nil)] do
         conn = callback(conn, auth)
-        assert conn.status == 503
+        assert conn.status == 302
         refute Enum.any?(Plug.Conn.get_resp_header(conn, "content-type"), &(&1 =~ "json"))
         refute conn.resp_body =~ "session_token"
       end
@@ -669,23 +673,6 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert redirected_to(conn) == "/"
       assert Plug.Conn.get_session(conn, :sanctum_session_token) == session.token
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "didn't fully sync"
-    end
-
-    test "a needs_claim ticket lands on the claim page with the suggestion", %{conn: conn} do
-      session = mint_session()
-
-      ticket =
-        mint_ticket(%{
-          session_token: session.token,
-          access_token: "idp-token",
-          outcome: {:needs_claim, "alice"}
-        })
-
-      conn = get(browser_conn(conn), "/auth/device/complete/#{ticket}")
-
-      assert redirected_to(conn) == "/claim-namespace"
-      assert Plug.Conn.get_session(conn, :claim_suggested_username) == "alice"
-      assert Plug.Conn.get_session(conn, :sanctum_session_token) == session.token
     end
 
     # Without this, the ticket is a bearer credential for someone else's

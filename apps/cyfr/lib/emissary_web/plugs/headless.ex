@@ -12,7 +12,7 @@ defmodule EmissaryWeb.Plugs.Headless do
 
   Routes are compiled into the router; refusing them in the pipeline is
   the one place a runtime flag can act. First in the pipeline, so nothing
-  else (a session, a claim gate) runs for a request that will not be served.
+  else (a session, a redirect) runs for a request that will not be served.
   """
 
   import Plug.Conn

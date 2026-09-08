@@ -3,10 +3,12 @@
 
 defmodule PrismWeb.ClaimNamespaceController do
   @moduledoc """
-  Handles the personal-namespace claim gate for web-browser sessions.
+  The publisher-namespace claim for web-browser sessions: a person who
+  wants to publish to cyfr.run claims their namespace here, whenever they
+  choose. Signing in never depends on it.
 
   - `GET /claim-namespace` — renders a form prompting the user for a slug
-    (default = suggested username from the OAuth provider login).
+    (default = a suggestion from their screen name or email).
   - `POST /claim-namespace/submit` — reads the pending-probe cookie
     (`PrismWeb.PendingProbe`), invokes
     `Compendium.Registry.Client.claim_personal_namespace/4`,
@@ -26,8 +28,7 @@ defmodule PrismWeb.ClaimNamespaceController do
   alias PrismWeb.PendingProbe
 
   def show(conn, _params) do
-    suggested = get_session(conn, :claim_suggested_username) || ""
-    page(conn, 200, suggested, nil)
+    page(conn, 200, suggestion(conn), nil)
   end
 
   def submit(conn, %{"username" => raw_username} = params) when is_binary(raw_username) do
@@ -81,7 +82,6 @@ defmodule PrismWeb.ClaimNamespaceController do
 
           conn
           |> PendingProbe.clear()
-          |> delete_session(:claim_suggested_username)
           |> PrismWeb.SafeRedirect.post_login()
 
         {:error, reason} ->
@@ -170,6 +170,16 @@ defmodule PrismWeb.ClaimNamespaceController do
 
       msg ->
         msg
+    end
+  end
+
+  defp suggestion(conn) do
+    with {:ok, %{user_id: id, provider: provider}} when is_binary(id) <-
+           Sanctum.Caller.peek(get_session(conn, PrismWeb.SignInResponse.session_key())),
+         {:ok, user} <- Sanctum.Tenancy.Users.get(id) do
+      Sanctum.SignIn.suggested_slug(user, provider || "github") || ""
+    else
+      _ -> ""
     end
   end
 

@@ -3,9 +3,8 @@
 
 defmodule PrismWeb.AuthenticatedMountTest do
   @moduledoc """
-  The harness contract: a signed-in test user (claimed namespace, membership,
-  session) mounts an authenticated LiveView; a session without a claimed
-  namespace is sent to the claim gate.
+  The harness contract: a signed-in test user (membership, session) mounts
+  an authenticated LiveView, with or without a publisher namespace.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -74,11 +73,11 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/settings"))
   end
 
-  test "a session without a claimed namespace is sent to the claim gate", %{conn: conn} do
+  test "a session without a publisher namespace mounts like any other", %{conn: conn} do
     conn = log_in_user(conn, test_user(), claim: false)
 
-    assert {:error, {:redirect, %{to: to}}} = live(conn, athanor_path("/settings"))
-    assert to =~ "/claim-namespace"
+    assert {:ok, _view, html} = live(conn, athanor_path("/settings"))
+    assert html =~ "Settings"
   end
 
   test "focus is the URL: a member mounts their group, a stranger is sent home, an unknown slug too",

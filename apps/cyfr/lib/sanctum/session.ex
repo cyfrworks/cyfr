@@ -431,24 +431,9 @@ defmodule Sanctum.Session do
   defp row_to_context(row, surface) do
     permissions = row |> decode_permissions() |> Enum.map(&safe_to_atom/1)
 
-    case Sanctum.Namespace.lookup_status(row.user_id) do
-      :not_claimed ->
-        # Session valid, but the person's users row records no namespace yet
-        # (the claim is ahead of them) — keep the context unauthenticated so
-        # the claim gate forwards them before any tenant-scoped operation
-        # runs; the actions annotated `auth: :signed_in` still serve it.
-        # The session's athanor rides along: it is a fact of the sign-in, not
-        # of the claim, and tincture access (which is not tenant
-        # administration) is granted on it.
-        {:ok,
-         Context.build(
-           user_id: row.user_id,
-           email: row.email,
-           provider: row.provider,
-           athanor_id: row.athanor_id,
-           authenticated: false
-         )}
-
+    # A namespace is a publishing credential, not identity: a person
+    # without one is as signed in as anyone, with `namespace: nil`.
+    case namespace_of(row.user_id) do
       {:ok, ns} ->
         ctx =
           Context.build(
@@ -476,11 +461,18 @@ defmodule Sanctum.Session do
         {:ok, ctx}
 
       {:error, _reason} ->
-        # The users row could not be read — distinct from "not claimed".
+        # The users row could not be read — distinct from "no namespace".
         # Surface a retryable error so the caller returns 503 rather than
-        # silently downgrading a valid person to unauthenticated and wedging
-        # them at /claim-namespace (re-claim then 409s).
+        # signing a valid person in as someone with no publisher namespace.
         {:error, :namespace_unavailable}
+    end
+  end
+
+  defp namespace_of(user_id) do
+    case Sanctum.Namespace.lookup_status(user_id) do
+      {:ok, ns} -> {:ok, ns}
+      :not_claimed -> {:ok, nil}
+      {:error, _} = err -> err
     end
   end
 

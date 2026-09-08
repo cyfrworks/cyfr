@@ -18,12 +18,9 @@ defmodule Sanctum.Caller do
   Refusals:
 
     * `:unauthenticated` — no token, or not a session this server issued.
-    * `{:claim_pending, ctx}` — a valid session whose person has not
-      claimed a namespace yet. The pre-claim context rides along because
-      the claim flow needs its fields; nothing tenant-gated may act on it.
-    * `{:denied, ctx}` — a namespace-holding session whose person the
-      door no longer admits. The context rides along for surfaces that
-      forward it to the anonymous surface rather than halting.
+    * `{:denied, ctx}` — a session whose person the door no longer
+      admits. The context rides along for surfaces that forward it to the
+      anonymous surface rather than halting.
     * `:no_athanor` — authenticated, but no athanor resolved.
     * `:not_member` / `:archived` / `:not_found` — the requested focus
       refused.
@@ -39,7 +36,6 @@ defmodule Sanctum.Caller do
 
   @type refusal ::
           :unauthenticated
-          | {:claim_pending, Context.t()}
           | {:denied, Context.t()}
           | :no_athanor
           | :not_member
@@ -115,19 +111,14 @@ defmodule Sanctum.Caller do
   configured auth provider synthesized (which never went through
   `Session.load/2`, so nothing about it can be assumed done).
 
-  A pre-claim context (`authenticated: false`, no namespace) comes back
-  as `{:error, {:claim_pending, ctx}}` with its namespace refreshed; an
-  unauthenticated context that holds a namespace is `{:denied, ctx}` —
-  the door stopped admitting its person after the session was minted.
+  An unauthenticated context is `{:denied, ctx}` — the door stopped
+  admitting its person after the session was minted.
   """
   @spec establish_context(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, refusal()}
   def establish_context(ctx, opts \\ [])
 
   def establish_context(%Context{authenticated: false} = ctx, _opts) do
-    case ensure_namespace(ctx) do
-      %Context{namespace: nil} = ctx -> {:error, {:claim_pending, ctx}}
-      %Context{} = ctx -> {:error, {:denied, ctx}}
-    end
+    {:error, {:denied, ensure_namespace(ctx)}}
   end
 
   def establish_context(%Context{} = ctx, opts) do
@@ -152,10 +143,10 @@ defmodule Sanctum.Caller do
   end
 
   @doc """
-  A light look at who a session belongs to — the identity fields and
-  whether the claim is still pending — with none of the establish work.
-  For surfaces that need only the person (the claim and legal flows),
-  not a working Context.
+  A light look at who a session belongs to — the identity fields and the
+  publisher namespace, if any — with none of the establish work. For
+  surfaces that need only the person (the claim and legal flows), not a
+  working Context.
   """
   @spec peek(String.t() | nil) ::
           {:ok,
@@ -163,7 +154,7 @@ defmodule Sanctum.Caller do
              user_id: String.t() | nil,
              provider: String.t() | nil,
              email: String.t() | nil,
-             claim_pending?: boolean()
+             namespace: String.t() | nil
            }}
           | {:error, :unauthenticated | :unavailable}
   def peek(token) when token in [nil, ""], do: {:error, :unauthenticated}
@@ -176,7 +167,7 @@ defmodule Sanctum.Caller do
            user_id: ctx.user_id,
            provider: ctx.provider,
            email: ctx.email,
-           claim_pending?: not ctx.authenticated and is_nil(ctx.namespace)
+           namespace: ctx.namespace
          }}
 
       {:error, reason} when reason in [:namespace_unavailable, :database_error] ->
@@ -223,9 +214,9 @@ defmodule Sanctum.Caller do
   defp focus(ctx, nil), do: {:ok, ctx}
   defp focus(ctx, coordinate), do: Context.focus(ctx, coordinate)
 
-  # `Session.load/2` populates the namespace on its authenticated path, but
-  # a provider-synthesized Context never saw the load, and the pre-claim
-  # row carries none — refresh from the users row when it is missing.
+  # `Session.load/2` populates the namespace from the users row, but a
+  # provider-synthesized Context never saw the load — refresh from the
+  # row when it is missing.
   defp ensure_namespace(%Context{namespace: ns} = ctx) when is_binary(ns) and ns != "", do: ctx
 
   defp ensure_namespace(%Context{} = ctx),

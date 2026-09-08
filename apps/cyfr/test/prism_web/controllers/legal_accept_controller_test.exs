@@ -35,8 +35,7 @@ defmodule PrismWeb.LegalAcceptControllerTest do
     assert body =~ "/assets/app.css"
   end
 
-  test "the page is ahead of the claim gate: an unclaimed session is not bounced to /claim-namespace",
-       %{conn: conn} do
+  test "a session without a publisher namespace reaches the page", %{conn: conn} do
     conn = log_in_user(conn, test_user(), claim: false)
     conn = get(conn, "/legal/accept")
     assert conn.status == 502

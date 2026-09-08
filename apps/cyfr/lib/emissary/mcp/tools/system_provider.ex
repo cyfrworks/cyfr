@@ -319,13 +319,19 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   defp probe_registry_health do
-    if Application.get_env(:cyfr, :registry_health_probe, true) do
-      do_probe_registry_health()
-    else
-      # The test env turns the probe off: a real DNS + TLS round-trip with
-      # a 3s timeout inside a test is 3s of wall clock and a straggling
-      # socket at test exit, and the answer means nothing there.
-      "unknown"
+    cond do
+      not Compendium.RegistryHost.configured?() ->
+        # No registry is not a registry that is down.
+        "disabled"
+
+      Application.get_env(:cyfr, :registry_health_probe, true) ->
+        do_probe_registry_health()
+
+      true ->
+        # The test env turns the probe off: a real DNS + TLS round-trip with
+        # a 3s timeout inside a test is 3s of wall clock and a straggling
+        # socket at test exit, and the answer means nothing there.
+        "unknown"
     end
   end
 

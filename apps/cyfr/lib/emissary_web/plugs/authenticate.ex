@@ -76,8 +76,8 @@ defmodule EmissaryWeb.Plugs.Authenticate do
             # their token is dead, which is indistinguishable from success.
             #
             # `user_id: nil` is the discriminator: a provider bearer that DID
-            # identify someone who is merely pre-claim or door-denied yields
-            # an unauthenticated context WITH identity fields, and
+            # identify someone who is door-denied yields an unauthenticated
+            # context WITH identity fields, and
             # `context_from_session/1` documents that shape as forwarded, not
             # halted — the same person's session token already forwards it.
             error_response(conn, :invalid_bearer, errors)
@@ -181,16 +181,12 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   end
 
   # `Sanctum.Caller` owns the establish recipe; this surface's mapping: a
-  # pre-claim or door-denied context is forwarded rather than halted — it
-  # reaches only the anonymous surface, and the claim flow downstream
-  # needs its fields.
+  # door-denied context is forwarded rather than halted — it reaches only
+  # the anonymous surface, which needs its fields to say who was refused.
   defp context_from_session(%Context{} = ctx) do
     case Sanctum.Caller.establish_context(ctx) do
       {:ok, established} ->
         established
-
-      {:error, {:claim_pending, pre_claim}} ->
-        pre_claim
 
       {:error, {:denied, denied}} ->
         denied
@@ -248,10 +244,6 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     case Sanctum.Caller.establish(token, refresh: false) do
       {:ok, ctx} ->
         {:ok, stamp_token_hash(ctx, token), :session_token}
-
-      {:error, {:claim_pending, pre_claim}} ->
-        # Forwarded to the claim flow downstream, not tenant-gated here.
-        {:ok, stamp_token_hash(pre_claim, token), :session_token}
 
       {:error, {:denied, denied}} ->
         # No standing at the door: only the anonymous surface answers.

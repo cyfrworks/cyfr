@@ -8,8 +8,7 @@ defmodule PrismWeb.LiveAuth do
   Loads the session token from the cookie session (the one this origin
   has, written by the auth callback), authenticates it via Sanctum, and
   assigns `:context` (a Context) to the socket. Redirects to /login
-  if unauthenticated and to the claim gate if the person has no namespace
-  yet.
+  if unauthenticated.
 
   A mounted socket also lets go when the person's standing changes: their
   sessions are revoked (server-denied, or a platform admin ejected them),
@@ -47,13 +46,11 @@ defmodule PrismWeb.LiveAuth do
          |> attach_hook(:sanctum_standing, :handle_info, &standing_changed/2)}
 
       # The decision table lives in AuthHelpers.disposition/1; this gate
-      # renders each disposition as a redirect. The HTTP plug sends the
-      # first GET to the claim gate; the LiveView socket never passes the
-      # router, so the connected mount is gated here too.
+      # renders each disposition as a redirect. The LiveView socket never
+      # passes the router, so the connected mount is gated here.
       {:error, refusal} ->
         path =
           case PrismWeb.AuthHelpers.disposition(refusal) do
-            :claim -> PrismWeb.AuthHelpers.claim_path()
             :sign_in -> PrismWeb.AuthHelpers.sign_in_path()
             :no_workspace -> PrismWeb.AuthHelpers.sign_in_path() <> "?error=no_athanor"
             :unavailable -> PrismWeb.AuthHelpers.sign_in_path() <> "?error=unavailable"

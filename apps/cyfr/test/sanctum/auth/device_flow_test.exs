@@ -211,66 +211,29 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       assert wired.probe_error == "probe_failed"
     end
 
-    test "needs_legal" do
-      assert DeviceFlow.wire(%{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               access_token: "at",
-               outcome: {:needs_legal, "v2"}
-             }) == %{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               needs_policy_acceptance: true,
-               required_policy_version: "v2",
-               needs_personal_namespace: false,
-               access_token: "at"
-             }
-    end
-
-    test "needs_claim" do
-      assert DeviceFlow.wire(%{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               access_token: "at",
-               outcome: {:needs_claim, "alice"}
-             }) == %{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               needs_personal_namespace: true,
-               suggested_username: "alice",
-               access_token: "at"
-             }
-    end
-
-    test "reauthenticate carries no session token" do
-      assert DeviceFlow.wire(%{
-               status: "complete",
-               user: @user,
-               outcome: {:reauthenticate, :idp_expired}
-             }) == %{
-               status: "complete",
-               user: @user,
-               reauthenticate: true,
-               probe_error: "invalid_access_token",
-               needs_personal_namespace: true
-             }
-    end
-
-    test "unavailable becomes the registry_unavailable status" do
-      wired =
+    test "a policy owed or a namespace conflict is a probe error on a signed-in result" do
+      owed =
         DeviceFlow.wire(%{
           status: "complete",
           user: @user,
-          outcome: {:unavailable, :registry_unreachable}
+          session_token: "tok",
+          outcome: {:proceed, %{unsynced: [], probe: :legal_required}}
         })
 
-      assert wired.status == "registry_unavailable"
-      assert is_binary(wired.message)
-      refute Map.has_key?(wired, :user)
+      assert owed.session_token == "tok"
+      assert owed.needs_personal_namespace == false
+      assert owed.probe_error == "policy_acceptance_required"
+
+      conflict =
+        DeviceFlow.wire(%{
+          status: "complete",
+          user: @user,
+          session_token: "tok",
+          outcome: {:proceed, %{unsynced: [], probe: :namespace_conflict}}
+        })
+
+      assert conflict.probe_error == "namespace_conflict"
+      refute Map.has_key?(conflict, :access_token)
     end
 
     test "outcome-less statuses pass through untouched" do

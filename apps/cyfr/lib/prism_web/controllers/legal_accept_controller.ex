@@ -86,11 +86,8 @@ defmodule PrismWeb.LegalAcceptController do
          {:ok, _body} <-
            Client.accept_policies(provider, access_token, nil, version) do
       # Acceptance recorded server-side. Route to /auth/post-legal-accept
-      # so AuthController re-runs probe_and_store with the still-valid
-      # access_token (cookie not cleared) and dispatches to /claim-namespace
-      # or the dashboard based on the new probe result. This single
-      # post-accept landing handles both the probe-gated and claim-gated
-      # paths uniformly.
+      # so AuthController re-probes with the still-valid access_token
+      # (cookie not cleared) and lands the person back in the console.
       popped |> redirect(to: "/auth/post-legal-accept")
     else
       {:expired, conn} ->

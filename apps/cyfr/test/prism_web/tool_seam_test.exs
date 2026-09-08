@@ -58,10 +58,9 @@ defmodule PrismWeb.ToolSeamTest do
     # invalidation, not persistence.
     {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Arca.Cache.delete_match"},
     # The one transcription of a sign-in outcome to a browser response —
-    # it mints and retires the person's OWN session, before any console
-    # exists for them. Door placement is pinned by Sanctum.DoorPlacementTest.
+    # it mints the person's OWN session, before any console exists for
+    # them. Door placement is pinned by Sanctum.DoorPlacementTest.
     {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.create"},
-    {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.destroy"},
     # Signing out: the same act as above, from the browser's own form post.
     # A person retiring their OWN session, with no agent equivalent.
     {"apps/cyfr/lib/prism_web/controllers/session_controller.ex", "Sanctum.Session.destroy"},

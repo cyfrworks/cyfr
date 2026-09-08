@@ -38,8 +38,6 @@ defmodule PrismWeb.AuthHelpers do
   a nested layout LiveView that renders on every page and cannot
   meaningfully redirect — degrades to its signed-out shape.
 
-    * `:claim` — a valid session whose person has not claimed a
-      namespace: the claim gate comes before everything else.
     * `:sign_in` — no session, or one denied or revoked since it was
       minted: back through the door.
     * `:no_workspace` — signed in, but nowhere to work.
@@ -47,8 +45,7 @@ defmodule PrismWeb.AuthHelpers do
       say so; never bounce them into a claim or sign-in they did not
       earn.
   """
-  @spec disposition(Caller.refusal()) :: :claim | :sign_in | :no_workspace | :unavailable
-  def disposition({:claim_pending, _ctx}), do: :claim
+  @spec disposition(Caller.refusal()) :: :sign_in | :no_workspace | :unavailable
   def disposition({:denied, _ctx}), do: :sign_in
   def disposition(:unavailable), do: :unavailable
 
@@ -87,7 +84,4 @@ defmodule PrismWeb.AuthHelpers do
 
   @doc "The one spelling of the sign-in path."
   def sign_in_path, do: "/login"
-
-  @doc "The one spelling of the claim-gate path."
-  def claim_path, do: "/claim-namespace"
 end

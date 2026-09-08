@@ -231,7 +231,7 @@ defmodule Cyfr.DocsDriftTest do
     # published `registry`, `aqua` and `component` reads as needing no auth
     # when all three need a credential, so a client written from it got
     # `-33001` on its first call. `auth: :signed_in` is NOT public — it
-    # serves a live session that has not claimed a namespace yet.
+    # serves a live session, with or without an athanor to work in.
     overclaimed =
       for {tool, row} <- rows,
           [_, action] <- Regex.scan(~r/`(\w+)`/, row),

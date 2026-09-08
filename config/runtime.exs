@@ -583,6 +583,9 @@ if config_env() != :test do
     # cyfr.run issues per-user push tokens automatically via
     # `/v1/identity/probe` after login, so there is no static
     # username/password to configure at deploy time.
+    # `none` means no registry: an appliance that runs only what it ships.
+    # Sign-in never needs one (`Sanctum.SignIn`); pulls and publishing refuse
+    # with a typed error (`Compendium.RegistryHost`).
     registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
     config :cyfr, :registry_url, registry_url_config
 
@@ -593,7 +596,10 @@ if config_env() != :test do
     config :cyfr, :public_url, env_str.("CYFR_PUBLIC_URL", nil)
 
     oci_registry_url_config =
-      env_str.("CYFR_OCI_REGISTRY_URL", "registry.#{registry_url_config}")
+      env_str.(
+        "CYFR_OCI_REGISTRY_URL",
+        if(registry_url_config == "none", do: "none", else: "registry.#{registry_url_config}")
+      )
 
     config :cyfr, :oci_registry_url, oci_registry_url_config
 

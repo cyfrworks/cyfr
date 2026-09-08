@@ -73,7 +73,7 @@ defmodule Sanctum.SessionTest do
   end
 
   describe "load/1" do
-    test "returns context for valid session (unclaimed namespace stays unauthenticated)",
+    test "returns context for a valid session; no publisher namespace is still signed in",
          %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
       {:ok, retrieved_ctx} = Session.load(session.token, surface: :console)
@@ -81,10 +81,9 @@ defmodule Sanctum.SessionTest do
       assert retrieved_ctx.user_id == "user_123"
       assert retrieved_ctx.email == "test@example.com"
       assert retrieved_ctx.provider == "github"
-      # Test fixture user has no claimed personal namespace, so the session
-      # row reconstructs to authenticated: false. RequirePersonalNamespace
-      # plug then forwards them to /claim-namespace.
-      assert retrieved_ctx.authenticated == false
+      # The fixture person has no namespace: a publishing credential, not
+      # identity, so the session is as authenticated as anyone's.
+      assert retrieved_ctx.authenticated == true
       assert retrieved_ctx.namespace == nil
     end
 

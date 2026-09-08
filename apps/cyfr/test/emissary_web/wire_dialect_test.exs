@@ -29,9 +29,6 @@ defmodule EmissaryWeb.WireDialectTest do
     "plugs/cors.ex" => "204 empty preflight body",
     # A browser hitting a headless node reads a sentence, not JSON.
     "plugs/headless.ex" => "browser surface: plain-text explainer on a headless node",
-    # The browser claim-gate flow: its other arms redirect; the 503 stays
-    # in the same human dialect.
-    "plugs/require_personal_namespace.ex" => "browser flow: plain-text 503 beside redirects",
     # The duplicate-delivery answer is a 200 SUCCESS body (JSON), not an
     # error — a renderer would mislabel it.
     "plugs/webhook_idempotency.ex" => "duplicate answer is a 200 success body"

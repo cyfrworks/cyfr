@@ -71,11 +71,9 @@ defmodule Sanctum.TinctureAuthTest do
   # bearer branch is now the only route a session token takes — which makes it
   # worth asserting directly rather than only through a controller.
   describe "authenticate/1 — session-token path" do
-    test "a bearer session token authenticates once the namespace is claimed",
+    test "a bearer session token authenticates, carrying the recorded namespace",
          %{ctx: ctx} do
-      # `Session.load` resolves through the namespace on the users row, and a
-      # person with none loads as unauthenticated by design — the claim gate
-      # runs before anything tenant-scoped.
+      # `Session.load` reads the namespace from the users row.
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
           id: ctx.user_id,
@@ -104,19 +102,24 @@ defmodule Sanctum.TinctureAuthTest do
       assert out.authenticated
     end
 
-    # Deliberate, and documented in `try_sanctum_session/1`: a user who has not
-    # yet claimed a namespace loads as unauthenticated for the console, because
-    # the claim gate must run first — but tincture access is not tenant
-    # administration and is granted anyway, athanor-scoped. What the resulting
-    # context can then *do* is decided by its permissions, not by this branch.
-    test "an unclaimed user still authenticates, athanor-scoped", %{ctx: ctx} do
-      {:ok, session} = Sanctum.Session.create(ctx)
+    # A publisher namespace is not identity: a person without one goes
+    # through the same establish as anyone, on the athanor their membership
+    # grants.
+    test "a person without a namespace authenticates like anyone else, athanor-scoped", %{
+      ctx: ctx
+    } do
+      home = Sanctum.Tenancy.Athanors.home!()
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: home.id)
+
+      {:ok, session} = Sanctum.Session.create(%{ctx | namespace: nil, athanor_id: home.id})
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(session.token))
       assert out.scope == :athanor
-      # The session's persisted athanor rides along — it is what lets the
-      # tenant gate pass for a user who has not claimed a namespace yet.
-      assert out.athanor_id == ctx.athanor_id
+      assert out.authenticated
+      assert out.namespace == nil
+      assert out.athanor_id == home.id
     end
   end
 

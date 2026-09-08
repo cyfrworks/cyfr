@@ -10,10 +10,10 @@ defmodule EmissaryWeb.Router do
   # whole file (`RouteAuthInventoryTest` exists because it did).
   # ==========================================================================
 
-  # The browser pipeline serves the Prism LiveViews and the auth pages. The
-  # claim gate plug answers HTTP GETs; LiveView mounts are gated again in
-  # `PrismWeb.LiveAuth`, because the LiveView socket is handled by the
-  # endpoint before the router and never passes through here.
+  # The browser pipeline serves the Prism LiveViews and the auth pages.
+  # LiveView mounts are gated in `PrismWeb.LiveAuth`, because the LiveView
+  # socket is handled by the endpoint before the router and never passes
+  # through here.
   pipeline :browser do
     # First: a headless node serves none of this (CYFR_HEADLESS).
     plug EmissaryWeb.Plugs.Headless
@@ -24,7 +24,6 @@ defmodule EmissaryWeb.Router do
     plug :protect_from_forgery
     plug :put_secure_browser_headers
     plug EmissaryWeb.Plugs.BrowserCSP
-    plug EmissaryWeb.Plugs.RequirePersonalNamespace
   end
 
   pipeline :api do
@@ -85,7 +84,7 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
-  # Submit path on the claim gate: defends against username enumeration
+  # Submit path on the claim page: defends against username enumeration
   # (cyfr.run's 409 distinguishes SLUG_TAKEN / ALREADY_CLAIMED) and
   # claim-spam DOS.
   pipeline :claim_submit_throttle do
@@ -281,9 +280,9 @@ defmodule EmissaryWeb.Router do
     end
   end
 
-  # Personal-namespace claim gate (web flow).
-  # Hit automatically by AuthController when post-login probe returns no
-  # personal namespace; blocks dashboard access until the user claims a slug.
+  # The publisher-namespace claim (web flow): a person who wants to publish
+  # to cyfr.run claims their namespace here, whenever they choose. Signing
+  # in never depends on it.
   scope "/claim-namespace", PrismWeb do
     pipe_through :browser
 

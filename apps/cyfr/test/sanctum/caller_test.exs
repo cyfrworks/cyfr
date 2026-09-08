@@ -37,6 +37,25 @@ defmodule Sanctum.CallerTest do
     user
   end
 
+  # A signed-in person with no publisher namespace and a seat in Home.
+  defp known!(user) do
+    {:ok, _} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: user.user_id,
+        provider: "github",
+        email: user.email,
+        verified: true
+      })
+
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(user.user_id,
+        scope: "athanor",
+        athanor_id: Sanctum.Tenancy.Athanors.home!().id
+      )
+
+    user
+  end
+
   defp session_for(user, attrs \\ []) do
     ctx =
       Context.build(
@@ -100,13 +119,15 @@ defmodule Sanctum.CallerTest do
                Caller.establish(session.token, focus: "ath_does_not_exist")
     end
 
-    test "a pre-claim session is claim_pending, with its context riding along" do
-      user = new_user()
+    test "a session whose person has no publisher namespace is established like any other" do
+      user = new_user() |> known!()
       session = session_for(user, namespace: nil)
 
-      assert {:error, {:claim_pending, %Context{} = ctx}} = Caller.establish(session.token)
+      assert {:ok, %Context{} = ctx} = Caller.establish(session.token)
       assert ctx.user_id == user.user_id
-      refute ctx.authenticated
+      assert ctx.authenticated
+      assert ctx.namespace == nil
+      assert ctx.athanor_id == Sanctum.Tenancy.Athanors.home!().id
     end
 
     test "no token, a blank token, and an unknown token are unauthenticated" do
@@ -143,7 +164,7 @@ defmodule Sanctum.CallerTest do
       assert {:error, {:denied, %Context{}}} = Caller.establish_context(ctx)
     end
 
-    test "an unclaimed unauthenticated context is claim_pending" do
+    test "an unauthenticated context without a namespace is denied just the same" do
       user = new_user()
 
       ctx =
@@ -154,7 +175,7 @@ defmodule Sanctum.CallerTest do
           authenticated: false
         )
 
-      assert {:error, {:claim_pending, _ctx}} = Caller.establish_context(ctx)
+      assert {:error, {:denied, _ctx}} = Caller.establish_context(ctx)
     end
   end
 
@@ -163,7 +184,7 @@ defmodule Sanctum.CallerTest do
       user = new_user()
       session = session_for(user, namespace: nil)
 
-      assert {:ok, %{user_id: user_id, provider: "github", claim_pending?: true}} =
+      assert {:ok, %{user_id: user_id, provider: "github", namespace: nil}} =
                Caller.peek(session.token)
 
       assert user_id == user.user_id

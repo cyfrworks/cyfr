@@ -66,7 +66,8 @@ defmodule Sanctum.SignInTest do
 
     assert {:ok, _} = SignIn.admitted(i, :admin)
     refute_receive {:bootstrap, _}
-    assert length(rows!(Members.list_by_user(i.id))) == 2
+    # the platform row, the Home seat, and the seat in their own athanor
+    assert length(rows!(Members.list_by_user(i.id))) == 3
   end
 
   test "an email dropped from the operator list loses the platform row on the next sign-in" do
@@ -120,15 +121,17 @@ defmodule Sanctum.SignInTest do
     refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
   end
 
-  test "record_namespace/2 lands the claim on the users row, mints the athanor, and refuses a slug another identity holds" do
+  test "record_namespace/2 lands the claim on the users row and refuses a slug another identity holds" do
     i = info(6)
-    assert {:ok, _} = SignIn.admitted(i, :allowed)
+    assert {:ok, %{personal_athanor_id: pid}} = SignIn.admitted(i, :allowed)
 
     assert {:ok, user} = SignIn.record_namespace(i.id, "user6ns")
     assert user.namespace == "user6ns"
     assert {:ok, %{id: id}} = Users.get_by_namespace("user6ns")
     assert id == i.id
-    assert {:ok, %{kind: "person"}} = Athanors.get_by_slug("person", "user6ns")
+    # the athanor was theirs since admission; the claim does not re-address it
+    assert {:ok, %{personal_athanor_id: ^pid}} = Users.get(i.id)
+    assert {:ok, %{kind: "person"}} = Athanors.get(pid)
     assert Sanctum.Namespace.lookup(i.id) == "user6ns"
 
     # Idempotent; a different slug from the registry keeps the recorded one.
@@ -156,12 +159,10 @@ defmodule Sanctum.SignInTest do
     assert {:ok, verdict} = Sanctum.Door.admit(i.id, i.email, true)
     assert verdict == :allowed
 
-    assert {:ok, _} = SignIn.admitted(i, verdict)
+    assert {:ok, %{personal_athanor_id: pid}} = SignIn.admitted(i, verdict)
     assert {:ok, user} = SignIn.record_namespace(i.id, "stranger#{n}")
 
-    assert {:ok, %{kind: "person", owner_user_id: owner}} =
-             Athanors.get_by_slug("person", "stranger#{n}")
-
+    assert {:ok, %{kind: "person", owner_user_id: owner}} = Athanors.get(pid)
     assert owner == user.id
 
     rows = rows!(Members.list_by_user(user.id))
