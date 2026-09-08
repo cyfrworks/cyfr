@@ -45,6 +45,9 @@ services:
       - CYFR_TRUSTED_PROXY_HOPS=${CYFR_TRUSTED_PROXY_HOPS:-1}
       # The private hosts outbound calls may reach; the bridge is one.
       - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-mcp-bridge}
+    networks:
+      - default
+      - builder
     restart: unless-stopped
     # The endpoints drain connections for up to 30s on shutdown; compose's
     # default 10s grace would SIGKILL mid-drain.
@@ -86,6 +89,12 @@ services:
     environment:
       - CYFR_BUILDER_LISTEN=true
       - CYFR_BUILDER_TOKEN=${CYFR_BUILDER_TOKEN:-}
+    # Only cyfr can reach the builder: it sits on its own network, which
+    # cyfr also joins; the bridge and caddy never see port 4100. The
+    # network is not `internal` — cargo and npm need crates.io and the
+    # registry — so the isolation is who is attached, not egress.
+    networks:
+      - builder
     # No /data mount, read-only root: the builder holds no tenant state —
     # sources arrive in the request, artifacts leave in the response, and
     # the only writable surface is its own build scratch.
@@ -122,14 +131,14 @@ services:
     # restart_backend and per failed download, until the container hit its
     # PID limit. Docker's own init is the reaper, and forwards signals.
     init: true
-    # The bridge's other knobs (MCP_BRIDGE_ALLOW_INSECURE, _DATA,
-    # _RPC_TIMEOUT_MS, _INIT_TIMEOUT_MS, _MAX_IN_FLIGHT, _MAX_BACKENDS) and
-    # CYFR_LOG_FORMAT are documented in .env.example but had no way in:
-    # this service passed exactly one variable and read no env file, so the
-    # documented ALLOW_INSECURE escape hatch and the JSON logging the
-    # bridge implements for this compose stack were both dead.
+    # The bridge reads ONLY .env.bridge (copy .env.bridge.example to set its
+    # knobs). It runs `sh -c` for any backend a member registers, and while
+    # it read the project .env its children inherited the app's keyring,
+    # key base, database URL and OAuth secrets. The builder profile follows
+    # the same rule. MCP_BRIDGE_TOKEN is forwarded from the project .env
+    # below so one value serves both ends.
     env_file:
-      - path: .env
+      - path: .env.bridge
         required: false
     environment:
       # /mcp requires `Authorization: Bearer <token>`. `cyfr init` generates
@@ -203,6 +212,11 @@ services:
       resources:
         limits:
           memory: 256M
+
+networks:
+  default: {}
+  # cyfr <-> builder only (see the builder service).
+  builder: {}
 
 volumes:
   caddy_data:

@@ -39,7 +39,9 @@ defmodule Emissary.MCP.ToolErrorAdoptionTest do
     "apps/opus/lib/opus/mcp.ex" => 14,
     "apps/cyfr/lib/emissary/mcp/tools/system_provider.ex" => 12,
     "apps/cyfr/lib/sanctum/mcp/key_tool.ex" => 11,
-    "apps/locus/lib/locus/mcp.ex" => 9,
+    # The tenth is the CYFR_BUILDS=false refusal: a configuration this
+    # server chose, not a resource that is missing, invalid or briefly away.
+    "apps/locus/lib/locus/mcp.ex" => 10,
     "apps/cyfr/lib/sanctum/mcp/profile_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp/component_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp.ex" => 7,

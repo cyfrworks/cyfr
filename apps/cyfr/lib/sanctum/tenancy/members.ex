@@ -273,12 +273,16 @@ defmodule Sanctum.Tenancy.Members do
 
   def add(_athanor, _target, _added_by), do: {:error, :athanor_archived}
 
-  # The door decided who may be here; what a member's invitation needs is
-  # that the provider did not *deny* the address. An issuer that never
-  # claims verification (many enterprise IdPs) must not make invitations
-  # impossible; one that says `false` still refuses.
+  # Seating by email is a grant keyed on the address alone, so it takes the
+  # proof the door and `activate_invited/1` take: the provider said `true`.
+  # A known person whose issuer never asserts verification is not refused —
+  # they fall through to an invited row that activates the moment a sign-in
+  # proves the address — but they are not seated on the spot: that was an
+  # active membership handed out on an unverified claim. An issuer that
+  # omits the claim wants `user_id:`, not `email:`. One that says `false`
+  # still refuses.
   defp known_and_active?(%User{} = user),
-    do: user.email_verified != false and user.status == "active"
+    do: user.email_verified == true and user.status == "active"
 
   defp invite(athanor_id, email, added_by) do
     case find_invited(email, athanor_id) do

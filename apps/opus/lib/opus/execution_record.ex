@@ -92,7 +92,12 @@ defmodule Opus.ExecutionRecord do
     :resolver_digest,
     :activation_digest,
     :activation_graph,
-    :profile_id
+    :profile_id,
+    # The fence this attempt writes the row with (`Arca.Execution`).
+    :attempt,
+    # The invoking component's reference for a child (`Opus.Chain`); nil for
+    # a root. Not a column — it decides what of the output is persisted.
+    :parent_reference
   ]
 
   @doc """
@@ -138,7 +143,9 @@ defmodule Opus.ExecutionRecord do
       # Which consent rooted this run. `Opus.Chain.run_root/5` resolves the
       # profile before anything executes and passes its id here, so the row
       # records the authority rather than leaving it to be re-derived.
-      profile_id: Keyword.get(opts, :profile_id)
+      profile_id: Keyword.get(opts, :profile_id),
+      attempt: Cyfr.UUID7.generate_id("att"),
+      parent_reference: Keyword.get(opts, :parent_reference)
     }
   end
 
@@ -235,6 +242,15 @@ defmodule Opus.ExecutionRecord do
   Write execution start record BEFORE execution begins.
 
   This must be called before starting WASM execution to ensure crash resilience.
+
+  The row carries an ENVELOPE of the input, never the input: the reference,
+  a digest, sizes, the top-level keys and the attachments' digests. The
+  assistant's root turn used to persist its whole composed prompt, the
+  compacted history, every attachment as base64 and the room excerpt the
+  guest was told was transient — and every model call, the full provider
+  request — unredacted, ten thousand rows deep per athanor. Conversation
+  content lives in `messages`; a component's input is the caller's to
+  keep.
   """
   @spec write_started(t()) :: :ok | {:error, term()}
   def write_started(%__MODULE__{} = record) do
@@ -242,14 +258,14 @@ defmodule Opus.ExecutionRecord do
            id: record.id,
            request_id: record.request_id,
            reference: encode_reference(record.reference),
-           input_hash: nil,
+           input_hash: Arca.Execution.hash_input(record.input),
            user_id: record.user_id,
            athanor_id: record.athanor_id,
            component_type: to_string(record.component_type),
            component_digest: record.component_digest,
            started_at: record.started_at,
            status: "running",
-           input: encode_json(record.input || %{}),
+           input: encode_json(input_envelope(record)),
            host_policy: encode_json(record.host_policy),
            parent_execution_id: record.parent_execution_id,
            root_execution_id: record.root_execution_id,
@@ -257,6 +273,7 @@ defmodule Opus.ExecutionRecord do
            activation_digest: record.activation_digest,
            activation_graph: record.activation_graph,
            profile_id: record.profile_id,
+           attempt: record.attempt,
            runner_id: runner_id(),
            lease_until: lease_until()
          }) do
@@ -273,24 +290,41 @@ defmodule Opus.ExecutionRecord do
   @doc "How long one lease renewal is good for."
   def lease_seconds, do: @lease_seconds
 
-  @doc "This runner's name on an execution row."
-  def runner_id, do: Atom.to_string(node())
+  @doc """
+  This boot's name on an execution row (`Cyfr.Boot`), never `node()`:
+  distribution is not configured, so every node was `nonode@nohost` and
+  the sweeper could not tell its own lapsed lease from another node's
+  crash. A restart is a different runner, which is what the sweeper needs.
+  """
+  @spec runner_id() :: String.t()
+  def runner_id, do: Cyfr.Boot.id()
 
   @doc "A fresh lease expiry from now."
   def lease_until, do: DateTime.add(DateTime.utc_now(), @lease_seconds, :second)
 
-  @doc "Renew the lease of a running execution."
-  @spec renew_lease(String.t()) :: :ok
-  def renew_lease(execution_id) when is_binary(execution_id) do
-    Arca.Execution.renew_lease(execution_id, lease_until())
-    :ok
+  @doc """
+  Renew the lease this attempt holds on its running row.
+
+  `{:ok, until}` is the new expiry the row now carries. `:lost` means the
+  row is no longer this attempt's to renew — it finished, the sweeper
+  failed it, or the store could not answer — and the runner must stop
+  authorized work once the lease it last held lapses.
+  """
+  @spec renew_lease(String.t(), String.t() | nil) :: {:ok, DateTime.t()} | :lost
+  def renew_lease(execution_id, attempt) when is_binary(execution_id) do
+    until = lease_until()
+
+    case Arca.Execution.renew_lease(execution_id, until, attempt: attempt, runner_id: runner_id()) do
+      1 -> {:ok, until}
+      _ -> :lost
+    end
   rescue
     e ->
       Logger.warning(
         "[ExecutionRecord] lease renewal failed for #{execution_id}: #{Exception.message(e)}"
       )
 
-      :ok
+      :lost
   end
 
   @doc """
@@ -300,12 +334,17 @@ defmodule Opus.ExecutionRecord do
   def write_completed(%__MODULE__{status: :completed} = record) do
     ctx = record_to_ctx(record)
 
-    case Arca.Execution.record_complete(ctx, record.id, %{
-           completed_at: record.completed_at,
-           duration_ms: record.duration_ms,
-           status: "completed",
-           output: encode_json(record.output)
-         }) do
+    case Arca.Execution.record_complete(
+           ctx,
+           record.id,
+           %{
+             completed_at: record.completed_at,
+             duration_ms: record.duration_ms,
+             status: "completed",
+             output: encode_json(persisted_output(record))
+           },
+           attempt: record.attempt
+         ) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -322,12 +361,17 @@ defmodule Opus.ExecutionRecord do
   def write_failed(%__MODULE__{status: status} = record) when status in [:failed, :cancelled] do
     ctx = record_to_ctx(record)
 
-    case Arca.Execution.record_complete(ctx, record.id, %{
-           completed_at: record.completed_at,
-           duration_ms: record.duration_ms,
-           status: Atom.to_string(status),
-           error_message: record.error
-         }) do
+    case Arca.Execution.record_complete(
+           ctx,
+           record.id,
+           %{
+             completed_at: record.completed_at,
+             duration_ms: record.duration_ms,
+             status: Atom.to_string(status),
+             error_message: record.error
+           },
+           attempt: record.attempt
+         ) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -496,6 +540,79 @@ defmodule Opus.ExecutionRecord do
   defp encode_json(value) when is_binary(value), do: value
 
   defp encode_json(value), do: Cyfr.Json.safe_encode(value)
+
+  # What the row keeps of the input: enough to say what ran and to tell
+  # two inputs apart, nothing of what they said.
+  defp input_envelope(%__MODULE__{} = record) do
+    input = record.input || %{}
+    encoded = Jason.encode!(input)
+
+    %{
+      "envelope" => "v1",
+      "reference" => encode_reference(record.reference),
+      "input_hash" => Arca.Execution.hash_input(input),
+      "bytes" => byte_size(encoded),
+      "keys" => input |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
+    }
+    |> put_attachment_digests(input)
+  end
+
+  defp put_attachment_digests(envelope, %{"attachments" => attachments})
+       when is_list(attachments) do
+    digests =
+      for %{} = attachment <- attachments do
+        data = attachment["data"] || attachment[:data] || ""
+
+        %{
+          "filename" => attachment["filename"] || attachment[:filename],
+          "media_type" => attachment["media_type"] || attachment[:media_type],
+          "bytes" => byte_size(data),
+          "digest" => Cyfr.Digest.sha256(data)
+        }
+      end
+
+    Map.put(envelope, "attachments", digests)
+  end
+
+  defp put_attachment_digests(envelope, _input), do: envelope
+
+  # The assistant's own executions carry conversation content in their
+  # OUTPUT too: the root turn returns the whole message array (the runner
+  # reads it from the completion event, never from the row), and each
+  # model call returns the provider's reply. Neither is the row's to keep:
+  # the root keeps everything but the messages, a model call keeps a
+  # digest, its size and the usage the planner needs. Every other
+  # component's output is the caller's result and stays.
+  @assistant_ref_prefix "formula:local.aqua"
+
+  defp persisted_output(%__MODULE__{} = record) do
+    cond do
+      assistant_ref?(record.reference) and is_map(record.output) ->
+        Map.drop(record.output, ["messages", :messages])
+
+      assistant_ref?(record.parent_reference) and not is_nil(record.output) ->
+        encoded = Jason.encode!(record.output)
+
+        %{
+          "envelope" => "v1",
+          "output_hash" => Cyfr.Digest.sha256(encoded),
+          "bytes" => byte_size(encoded),
+          "usage" => usage_of(record.output)
+        }
+
+      true ->
+        record.output
+    end
+  end
+
+  defp assistant_ref?(ref) when is_binary(ref),
+    do: String.starts_with?(ref, @assistant_ref_prefix)
+
+  defp assistant_ref?(_), do: false
+
+  defp usage_of(%{"usage" => usage}), do: usage
+  defp usage_of(%{usage: usage}), do: usage
+  defp usage_of(_), do: nil
 
   # The row's shape has one owner: the Ecto schema. The read map carries
   # every schema column except the lease mechanics, which belong to the

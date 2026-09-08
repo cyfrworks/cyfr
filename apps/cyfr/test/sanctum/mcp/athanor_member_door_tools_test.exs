@@ -196,8 +196,10 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
                "user_id" => "oidc|https://idp.example|unv-#{n}"
              })
 
-    # An issuer that simply never claims verification is not a refusal: the
-    # door admitted them, and a member's invitation seats them by address.
+    # An issuer that simply never claims verification is not a refusal, but
+    # it is not proof either: the address holds an invited seat that the
+    # first sign-in proving it claims — never an active membership handed
+    # out on an unverified claim. By user id they are seatable at once.
     silent = "silent#{n}@example.com"
 
     {:ok, _} =
@@ -211,7 +213,12 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:ok, %{state: "added"}} =
              call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => silent})
 
-    assert Members.member?("oidc|https://idp.example|silent-#{n}", group.id)
+    refute Members.member?("oidc|https://idp.example|silent-#{n}", group.id)
+
+    assert Enum.any?(
+             rows!(Members.list_by_athanor(group.id)),
+             &(&1.status == "invited" and &1.email == silent)
+           )
   end
 
   test "an API key cannot create groups or add members", %{alice: alice, ctx: ctx} do

@@ -63,6 +63,11 @@ defmodule Opus.HostSurfaceTest do
     "Sanctum.Tenancy",
 
     # Shared primitives — glue, by construction available to any node.
+    # This boot's name on every execution row (the lease's runner id).
+    "Cyfr.Boot",
+    # Whether this boot still owns the control plane — the engine admits
+    # nothing when it does not.
+    "Cyfr.ControlPlane",
     "Cyfr.Digest",
     "Cyfr.Execution",
     "Cyfr.Json",

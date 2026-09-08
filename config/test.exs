@@ -143,6 +143,14 @@ config :cyfr, provisioning_inline: true
 # exercises sweep logic directly.
 config :cyfr, execution_sweeper_enabled: false
 
+# The control-plane claim is the same shape again (a permanent GenServer
+# renewing a DB lease); `Cyfr.ControlPlane.Claim` is exercised directly.
+config :cyfr, control_plane_claim_enabled: false
+
+# The keyring fingerprint check reads and writes a server row at boot,
+# outside any sandbox; `Cyfr.KeyringFingerprint` is exercised directly.
+config :cyfr, keyring_fingerprint_check_enabled: false
+
 # Default storage roots for tests (individual tests may override), two
 # throwaway SIBLING roots — the topology dev and prod use ("two trees, two
 # lifetimes", Arca.Storage): `base_path` holds all tenant storage, and the

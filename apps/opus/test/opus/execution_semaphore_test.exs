@@ -833,9 +833,9 @@ defmodule Opus.ExecutionSemaphoreTest do
       for _ <- 1..threshold do
         Task.async(fn ->
           :ok = ExecutionSemaphore.acquire(5_000, :root, tenant)
-          # Ordered before the release cast from this same process, so the
-          # holder entry still names the tenant when it lands.
-          ExecutionSemaphore.note_unreaped()
+          # Acknowledged before the release: the note names the tenant, so
+          # the order of the release and its :DOWN cannot lose it.
+          :ok = ExecutionSemaphore.note_unreaped(tenant)
           ExecutionSemaphore.release()
         end)
         |> Task.await()
@@ -865,9 +865,24 @@ defmodule Opus.ExecutionSemaphoreTest do
       ExecutionSemaphore.release()
     end
 
-    test "note_unreaped from a non-holder is a no-op" do
+    test "a cancel's note charges the tenant without the canceller holding a slot" do
+      # The cancel path runs in the canceller's process, never the holder's.
+      # Named by tenant, N cancels of a spinning guest trip the penalty box
+      # exactly as N timeouts do.
+      tenant = "ath_cancelled_#{System.unique_integer([:positive])}"
+      threshold = max(2, div(ExecutionSemaphore.status().tenant_max, 2))
+
+      for _ <- 1..threshold, do: :ok = ExecutionSemaphore.note_unreaped(tenant)
+
+      assert {:error, :tenant_unreaped_limit} =
+               ExecutionSemaphore.acquire(1_000, :root, tenant)
+
+      ExecutionSemaphore.force_release_all()
+    end
+
+    test "a note with no tenant charges nobody" do
       before = ExecutionSemaphore.status().unreaped
-      ExecutionSemaphore.note_unreaped()
+      assert :ok = ExecutionSemaphore.note_unreaped(nil)
       assert ExecutionSemaphore.status().unreaped == before
     end
   end

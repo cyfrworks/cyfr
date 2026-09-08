@@ -298,6 +298,8 @@ defmodule Opus.Chain do
         # Which edge authorized this hop, for the §4.5 audit line.
         |> Arca.QueryHelpers.maybe_put(:dep_ref, decision.reference)
         |> Arca.QueryHelpers.maybe_put(:need, decision.need)
+        # Who invoked this child, for what the row keeps of its output.
+        |> Arca.QueryHelpers.maybe_put(:parent_reference, Keyword.get(opts, :parent_reference))
 
       Opus.Executor.run(ctx, decision.reference, input, exec_opts)
     end

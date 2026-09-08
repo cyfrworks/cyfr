@@ -258,16 +258,23 @@ defmodule Sanctum.Tenancy do
   def revalidate(%Context{} = ctx), do: ctx
 
   @doc """
-  Whether a standing channel (a webhook, a cron schedule, an API key) may
-  still fire: its athanor is active and its creator has not been denied on
+  Whether a standing channel (a webhook, an API key, a tincture token) may
+  still act: its athanor is active and its creator has not been denied on
   this server.
 
   Channels are athanor-owned: a creator who merely leaves the group leaves
   the channel running for the members who remain. `created_by` may be nil or
   a synthetic principal (`webhook:<slug>`, `_seed`, `system`) — those are
-  never denied. On a transient read error the check FAILS OPEN (active),
-  matching `revalidate/1`'s posture — a DB blip must not silently kill every
-  schedule; the read is retried on the next firing.
+  never denied. A real person's id has the IdP shape
+  `provider|issuer|subject`, and that row is read.
+
+  Every caller is a credential path, so a store that cannot answer FAILS
+  CLOSED: the firing is refused and the sender's own retry asks again. A
+  person the store has never seen is not a denied one — `users` rows are
+  never deleted, only marked denied, so an unknown id is a creator who was
+  never a signed-in person here (a fixture, an imported row), and the
+  channel is the athanor's regardless. Schedules do not consult this
+  check — the cron row's claim is theirs.
   """
   @spec channel_active?(String.t() | nil, String.t() | nil) :: boolean()
   def channel_active?(athanor_id, created_by) do
@@ -285,19 +292,41 @@ defmodule Sanctum.Tenancy do
       {:error, reason} ->
         Logger.warning(
           "[Sanctum.Tenancy] athanor read failed during channel re-check for " <>
-            "athanor=#{athanor_id}: #{inspect(reason)} — allowing this firing"
+            "athanor=#{athanor_id}: #{inspect(reason)} — refusing this firing"
         )
 
-        true
+        false
     end
   end
 
   defp athanor_active?(_), do: false
 
-  defp creator_not_denied?(user_id) when is_binary(user_id) and user_id != "" do
-    case Users.get(user_id) do
-      {:ok, %{status: "denied"}} -> false
-      _ -> true
+  # The IdP composite every `users` row carries (`Sanctum.Auth.Identity.user_id/3`);
+  # the server's synthetic principals never have this shape.
+  @person_id ~r/^[^|]+\|[^|]+\|.+$/
+
+  defp creator_not_denied?(user_id) when is_binary(user_id) do
+    if Regex.match?(@person_id, user_id) do
+      case Users.get(user_id) do
+        {:ok, %{status: "denied"}} ->
+          false
+
+        {:ok, _} ->
+          true
+
+        {:error, :not_found} ->
+          true
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Sanctum.Tenancy] creator read failed during channel re-check for " <>
+              "user=#{user_id}: #{inspect(reason)} — refusing this firing"
+          )
+
+          false
+      end
+    else
+      true
     end
   end
 

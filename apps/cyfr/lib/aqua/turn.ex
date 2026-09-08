@@ -185,7 +185,8 @@ defmodule Aqua.Turn do
     # engine's default.
     with {:ok, roster} <- roster_for(ctx, Keyword.get(opts, :roster)),
          listing = catalyst_listing_or_empty(ctx),
-         {:ok, resolved_catalyst} <- resolve_or_pass(listing, orchestrator["catalyst_ref"]) do
+         {:ok, resolved_catalyst} <- resolve_or_pass(listing, orchestrator["catalyst_ref"]),
+         {:ok, _protocol} <- Aqua.ModelCatalyst.protocol(resolved_catalyst) do
       # One composer owns the whole prompt — including the aqua-actions
       # protocol, which is an orchestrator's alone (sub-agents are scoped
       # task-runners and never emit UI intents). The authored prompt comes
@@ -223,6 +224,11 @@ defmodule Aqua.Turn do
       {:ok, %{input: input, tool_policy: tool_policy}}
     else
       {:error, {:unavailable, _}} = refusal ->
+        refusal
+
+      # A model this table does not know: refused here, not sent a
+      # Claude-shaped request with every tool silently dropped.
+      {:error, {:unsupported_model_catalyst, _}} = refusal ->
         refusal
 
       {:error, _catalyst_miss} ->

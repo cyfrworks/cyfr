@@ -77,6 +77,8 @@ defmodule EmissaryWeb.Endpoint do
 
   plug(EmissaryWeb.MetricsPlug)
   plug(Plug.RequestId)
+  # A boot that lost the control plane serves nothing but health.
+  plug(EmissaryWeb.Plugs.ControlPlaneOwnership)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
   # Plug.Parsers behind the wrapper that answers /mcp parser failures in

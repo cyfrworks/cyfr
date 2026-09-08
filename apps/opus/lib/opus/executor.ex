@@ -67,6 +67,19 @@ defmodule Opus.Executor do
   @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def run(%Context{} = ctx, reference, input, opts \\ [])
       when is_binary(reference) and is_map(input) do
+    # Every road into the engine — root, child, cron, webhook — passes here,
+    # so a boot that lost the control plane admits nothing.
+    case Cyfr.ControlPlane.assert_owner() do
+      :ok ->
+        admitted_run(ctx, reference, input, opts)
+
+      {:error, :control_plane_lost} ->
+        {:error,
+         "control plane ownership lost; execution refused until this node reclaims the database"}
+    end
+  end
+
+  defp admitted_run(ctx, reference, input, opts) do
     # Ensure request_id exists — MCP callers already have one from ToolRegistry,
     # but direct callers (tincture invoke, cron, etc.) may not.
     ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Cyfr.UUID7.request_id()}
@@ -500,6 +513,7 @@ defmodule Opus.Executor do
         component_ref: p.component_ref,
         ctx: p.ctx,
         execution_id: p.record.id,
+        execution_attempt: p.record.attempt,
         root_execution_id: p.opts[:root_execution_id],
         reference: p.reference,
         digest: digest,
@@ -1251,36 +1265,56 @@ defmodule Opus.Executor do
     else
       # If we consumed the full timeout waiting for cleanup_refs, kill immediately
       nil ->
+        # The kill frees the BEAM process, not the component call's native
+        # thread (no epoch interruption) — the semaphore records the
+        # liability first, acknowledged, so the tenant's unreaped count
+        # gates its next acquisition whatever order the release lands in.
+        Opus.ExecutionSemaphore.note_unreaped(tenant_of(runtime_opts))
         # Unlink first so the :killed EXIT signal doesn't propagate back and
         # terminate this process before handle_failure can write the DB record.
         Process.unlink(pid)
         Process.exit(pid, :kill)
-        # The kill frees the BEAM process, not the component call's native
-        # thread (no epoch interruption) — tell the semaphore before the
-        # `after` block releases this slot, so the tenant's unreaped count
-        # gates its next acquisition.
-        Opus.ExecutionSemaphore.note_unreaped()
         {:error, "Execution timeout after #{timeout_ms}ms"}
 
       {:refs, _} ->
-        await_result(
-          ref,
-          pid,
-          cleanup_refs,
-          remaining_ms,
-          timeout_ms,
-          Keyword.get(runtime_opts, :execution_id)
-        )
+        await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, lease_watch(runtime_opts))
     end
   end
 
   # Lease renewals while a long execution runs: every minute the row's
   # lease is pushed out, so the sweeper knows a slow execution from a dead
-  # runner. Renewal is a bounded update_all; a failure only shortens the
-  # lease.
+  # runner. A renewal that does not land is not ignored: the runner keeps
+  # working only while the lease it LAST held is still good, and stops
+  # the moment that lapses — past it the row may be the sweeper's, and
+  # any result this attempt produced would be refused by the fence.
   @lease_tick_ms 60_000
 
-  defp await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, execution_id) do
+  # What `await_result/6` watches between ticks: the row, the attempt that
+  # owns it, the tenant to charge an unreaped kill to, and the expiry the
+  # attempt last renewed to.
+  defp lease_watch(runtime_opts) do
+    case Keyword.get(runtime_opts, :execution_id) do
+      nil ->
+        nil
+
+      execution_id ->
+        %{
+          execution_id: execution_id,
+          attempt: Keyword.get(runtime_opts, :execution_attempt),
+          tenant: tenant_of(runtime_opts),
+          until: Opus.ExecutionRecord.lease_until()
+        }
+    end
+  end
+
+  defp tenant_of(runtime_opts) do
+    case Keyword.get(runtime_opts, :ctx) do
+      %Context{athanor_id: athanor_id} -> athanor_id
+      _ -> nil
+    end
+  end
+
+  defp await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, watch) do
     wait_ms = min(remaining_ms, @lease_tick_ms)
 
     receive do
@@ -1292,32 +1326,61 @@ defmodule Opus.Executor do
         error
     after
       wait_ms ->
-        if remaining_ms > wait_ms do
-          if execution_id, do: Opus.ExecutionRecord.renew_lease(execution_id)
-          await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, execution_id)
-        else
-          Process.unlink(pid)
-          Process.exit(pid, :kill)
-          # See the handshake-timeout kill above: the native thread survives
-          # this kill, so the semaphore counts it against the tenant.
-          Opus.ExecutionSemaphore.note_unreaped()
-          # Clean up resources the dead process can't clean up
-          if cleanup_refs[:stream_exec_ref],
-            do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
+        cond do
+          remaining_ms <= wait_ms ->
+            kill_unreaped(pid, cleanup_refs, watch && watch.tenant)
+            {:error, "Execution timeout after #{timeout_ms}ms"}
 
-          if cleanup_refs[:formula_tracker_pid],
-            do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
+          is_nil(watch) ->
+            await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, watch)
 
-          # The dispensed OAuth tokens are NOT drained here. This error
-          # travels to `handle_failure/2`, which masks it with
-          # `ExecutionPipeline.secrets/1` — and that drains the tracker.
-          # Collecting first threw the tokens away (collect is
-          # collect-and-delete) and left the masker with an empty set for
-          # the rest of the execution. Undrained rows are swept on TTL, so
-          # the only thing a bare call bought was the disarming.
-          {:error, "Execution timeout after #{timeout_ms}ms"}
+          true ->
+            case renew_watch(watch) do
+              {:ok, watch} ->
+                await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, watch)
+
+              :lapsed ->
+                kill_unreaped(pid, cleanup_refs, watch.tenant)
+                {:error, "Execution lease lost: the row is no longer this attempt's to finish"}
+            end
         end
     end
+  end
+
+  defp renew_watch(watch) do
+    case Opus.ExecutionRecord.renew_lease(watch.execution_id, watch.attempt) do
+      {:ok, until} ->
+        {:ok, %{watch | until: until}}
+
+      :lost ->
+        # Still inside the lease this attempt last held: the store may
+        # merely be slow, and the next tick asks again. Past it, stop.
+        if DateTime.compare(DateTime.utc_now(), watch.until) == :lt,
+          do: {:ok, watch},
+          else: :lapsed
+    end
+  end
+
+  # A kill that leaves the component call's native thread running (no
+  # epoch interruption). The liability is recorded and acknowledged
+  # BEFORE the kill, then the resources the dead process cannot release
+  # are cleaned up. The dispensed OAuth tokens are NOT drained here: the
+  # error travels to `handle_failure/2`, which masks it with
+  # `ExecutionPipeline.secrets/1` — and that drains the tracker.
+  # Collecting first threw the tokens away (collect is collect-and-delete)
+  # and left the masker with an empty set for the rest of the execution.
+  defp kill_unreaped(pid, cleanup_refs, tenant) do
+    Opus.ExecutionSemaphore.note_unreaped(tenant)
+    Process.unlink(pid)
+    Process.exit(pid, :kill)
+
+    if cleanup_refs[:stream_exec_ref],
+      do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
+
+    if cleanup_refs[:formula_tracker_pid],
+      do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
+
+    :ok
   end
 
   # Emit a setup_required event on the parent execution's event stream
@@ -1453,7 +1516,7 @@ defmodule Opus.Executor do
     # authorize-before-act ordering the SSE read path uses.)
     case ExecutionRecord.cancel(ctx, execution_id) do
       {:ok, record} ->
-        kill_running_process(execution_id)
+        kill_running_process(execution_id, record.athanor_id)
 
         # Route with the record's own athanor (like every other producer) —
         # a platform-scoped canceller may carry a different athanor than the
@@ -1503,13 +1566,22 @@ defmodule Opus.Executor do
   # Kill the running BEAM process for an execution (if one is still registered)
   # and tear down its async tracker so spawned child tasks die too. Only called
   # after the tenant-scoped cancel above has authorized the operation.
-  defp kill_running_process(execution_id) do
+  defp kill_running_process(execution_id, tenant) do
     case Registry.lookup(Opus.ExecutionRegistry, execution_id) do
       [{pid, meta}] ->
         # Extract tracker PID before killing — needed to stop child tasks.
         tracker_pid = if is_map(meta), do: meta[:tracker_pid], else: nil
         runner_pid = if is_map(meta), do: meta[:runner_pid], else: nil
         stream_exec_ref = if is_map(meta), do: meta[:stream_exec_ref], else: nil
+
+        # A cancel kills the component call exactly as a timeout does, and
+        # leaves the same unreapable native thread behind (no epoch
+        # interruption). Recorded and acknowledged BEFORE the kill, and
+        # charged to the tenant by name: the old cast named the canceller's
+        # pid, which never held a slot, so the note was dropped and a
+        # tenant could cycle cancels to accumulate spinning cores without
+        # ever tripping the penalty box.
+        Opus.ExecutionSemaphore.note_unreaped(tenant)
 
         # The runner FIRST, and by name. It traps exits, so the kill of its
         # parent below reaches it as an ordinary message and it would keep
@@ -1532,12 +1604,6 @@ defmodule Opus.Executor do
         # stop it. The timeout path has always done this; cancel is the same
         # kill and owes the same cleanup.
         if stream_exec_ref, do: Opus.HttpStreamHandler.cleanup_registry(stream_exec_ref)
-
-        # A cancel kills the component call exactly as a timeout does, and
-        # leaves the same unreapable native thread behind (no epoch
-        # interruption). Counting only timeouts let a tenant cycle cancels to
-        # accumulate spinning cores without ever tripping the penalty box.
-        Opus.ExecutionSemaphore.note_unreaped()
 
         :ok
 
@@ -1623,11 +1689,11 @@ defmodule Opus.Executor do
       error_msg = "Parent execution (#{parent_id}) terminated"
 
       {count, _} =
-        Arca.Execution.mark_failed_if_running(child.id, %{
-          completed_at: now,
-          duration_ms: duration_ms,
-          error_message: error_msg
-        })
+        Arca.Execution.mark_failed_if_running(
+          child.id,
+          %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
+          attempt: child.attempt
+        )
 
       if count > 0 do
         component_type =

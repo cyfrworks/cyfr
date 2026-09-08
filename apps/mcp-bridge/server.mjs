@@ -188,20 +188,59 @@ const ADMIN_TOOLS = [
 // Stdio MCP client (one per child)
 // ============================================================================
 
+// What a child may inherit from the bridge's own environment: a toolchain
+// path, a home, locale, proxies and CA bundles, npm's own config. Nothing
+// else. The bridge used to hand every backend the whole process environment
+// minus its own three variables, and in the shipped compose stack that
+// environment was the project .env — so the app's keyring, key base,
+// database URL and OAuth secrets went to any `npx` package a member
+// registered. A backend is `sh -c <command>`; what it is entitled to comes
+// from its own `env` block, and that block can never carry the bridge's
+// admin bearer (an inherited bearer re-enters /mcp as an administrator) or
+// its data path (the 0600 backends.json holding every OTHER backend's keys).
+const CHILD_ENV_INHERITED = new Set([
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "SHELL",
+  "USER",
+  "LOGNAME",
+  "NODE_ENV",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+]);
+const CHILD_ENV_NEVER = ["MCP_BRIDGE_TOKEN", "MCP_BRIDGE_DATA", "MCP_BRIDGE_ALLOW_INSECURE"];
+
+function childEnvironment(env) {
+  const inherited = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (CHILD_ENV_INHERITED.has(name) || name.startsWith("npm_config_")) inherited[name] = value;
+  }
+  const childEnv = { ...inherited, ...(env || {}) };
+  for (const name of CHILD_ENV_NEVER) delete childEnv[name];
+  return childEnv;
+}
+
 function spawnBackend(name, command, env) {
   validateBackendName(name);
 
-  // Children never see the bridge's own admin bearer: any npx backend that
-  // inherited it could re-enter /mcp as an administrator. Nor its own
-  // configuration — MCP_BRIDGE_DATA points at the 0600 backends.json the
-  // child's uid owns, so passing it through handed every backend the
-  // third-party API keys in every OTHER backend's `env` block, which is
-  // exactly what that file mode is for. Everything else passes through
-  // (PATH, HOME, npm caches).
-  const childEnv = { ...process.env, ...(env || {}) };
-  delete childEnv.MCP_BRIDGE_TOKEN;
-  delete childEnv.MCP_BRIDGE_DATA;
-  delete childEnv.MCP_BRIDGE_ALLOW_INSECURE;
+  const childEnv = childEnvironment(env);
 
   const proc = spawn("sh", ["-c", command], {
     env: childEnv,

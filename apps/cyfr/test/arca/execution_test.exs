@@ -369,7 +369,7 @@ defmodule Arca.ExecutionTest do
   end
 
   describe "list_stale_running/2 and renew_lease/2" do
-    defp running!(lease_until) do
+    defp running!(lease_until, opts \\ []) do
       id = "exec_lease_#{System.unique_integer([:positive])}"
 
       {:ok, _} =
@@ -382,7 +382,8 @@ defmodule Arca.ExecutionTest do
           status: "running",
           component_type: "catalyst",
           runner_id: "node@test",
-          lease_until: lease_until
+          lease_until: lease_until,
+          attempt: Keyword.get(opts, :attempt)
         })
 
       id
@@ -398,6 +399,59 @@ defmodule Arca.ExecutionTest do
       id = running!(DateTime.add(DateTime.utc_now(), 120, :second))
       stale_ids = Execution.list_stale_running(DateTime.utc_now()) |> Enum.map(& &1.id)
       refute id in stale_ids
+    end
+
+    test "the sweep is fenced on what it observed: a renewal in between wins" do
+      # The race the fence exists for: the sweeper lists a lapsed row, the
+      # runner renews, the sweeper writes. Without the fence the write
+      # matched `status = running` and failed a live execution — whose real
+      # result `record_complete/4` then refused. With it, the observed
+      # `lease_until` no longer matches and nothing is written.
+      lapsed = DateTime.add(DateTime.utc_now(), -60, :second)
+      id = running!(lapsed, attempt: "att_live")
+
+      [observed] = Enum.filter(Execution.list_stale_running(DateTime.utc_now()), &(&1.id == id))
+      assert observed.attempt == "att_live"
+
+      renewed_until = DateTime.add(DateTime.utc_now(), 180, :second)
+
+      assert 1 =
+               Execution.renew_lease(id, renewed_until,
+                 attempt: "att_live",
+                 runner_id: "node@test"
+               )
+
+      assert {0, _} =
+               Execution.mark_failed_if_running(
+                 id,
+                 %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},
+                 attempt: observed.attempt,
+                 lease_until: observed.lease_until
+               )
+
+      # A stale attempt can neither renew nor finish the row…
+      assert 0 =
+               Execution.renew_lease(id, renewed_until,
+                 attempt: "att_stale",
+                 runner_id: "node@test"
+               )
+
+      assert {:error, :not_running} =
+               Execution.record_complete(
+                 Sanctum.TestContext.local(),
+                 id,
+                 %{completed_at: DateTime.utc_now(), duration_ms: 1, status: "completed"},
+                 attempt: "att_stale"
+               )
+
+      # …and the live one still can.
+      assert {:ok, _} =
+               Execution.record_complete(
+                 Sanctum.TestContext.local(),
+                 id,
+                 %{completed_at: DateTime.utc_now(), duration_ms: 1, status: "completed"},
+                 attempt: "att_live"
+               )
     end
 
     test "a renewed lease takes an execution out of the sweep" do

@@ -294,6 +294,10 @@ defmodule Sanctum.TenancyTest do
       assert Tenancy.channel_active?(athanor.id, "webhook:abc")
       assert Tenancy.channel_active?(athanor.id, nil)
 
+      # a person the store never saw is not a denied one: rows are never
+      # deleted, so an unknown id was never a signed-in person here
+      assert Tenancy.channel_active?(athanor.id, "github|https://github.com|never-seen")
+
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
       refute Tenancy.channel_active?(athanor.id, uid)
 

@@ -221,14 +221,21 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @doc """
-  Note that the calling holder's execution was timeout-killed with its
-  native thread unreaped (see the moduledoc). Called by the executor
-  BEFORE its `release/0`, from the same process, so the holder entry —
-  and with it the tenant — is still present when this arrives.
+  Note that an execution of `tenant`'s was killed with its native thread
+  unreaped (see the moduledoc): a timeout, or a cancel. Synchronous, and
+  charged to the tenant by name rather than looked up from the caller's
+  slot: the caller need not be the holder (a cancel runs in the
+  canceller's process), and the note is acknowledged before the kill it
+  precedes, so no ordering between this and the holder's release — or its
+  `:DOWN` — can lose it. A nil tenant charges nobody.
   """
-  @spec note_unreaped() :: :ok
-  def note_unreaped do
-    GenServer.cast(__MODULE__, {:unreaped, self()})
+  @spec note_unreaped(String.t() | nil) :: :ok
+  def note_unreaped(nil), do: :ok
+
+  def note_unreaped(tenant) when is_binary(tenant) do
+    GenServer.call(__MODULE__, {:unreaped, tenant})
+  catch
+    :exit, _ -> :ok
   end
 
   @doc """
@@ -454,33 +461,25 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @impl true
-  def handle_cast({:release, pid}, state) do
-    {:noreply, do_release(state, pid)}
+  def handle_call({:unreaped, tenant}, _from, state) when is_binary(tenant) do
+    expiry = System.monotonic_time(:millisecond) + @unreaped_ttl_ms
+
+    entries = [expiry | prune_unreaped(Map.get(state.tenant_unreaped, tenant, []))]
+
+    Logger.warning(
+      "[Opus.ExecutionSemaphore] Unreaped kill noted for tenant " <>
+        "#{inspect(tenant)} (#{length(entries)}/#{state.unreaped_max} " <>
+        "in the decay window)"
+    )
+
+    Opus.Telemetry.unreaped_kill(tenant, length(entries))
+
+    {:reply, :ok, %{state | tenant_unreaped: Map.put(state.tenant_unreaped, tenant, entries)}}
   end
 
-  # Casts from one process arrive in order, so the holder entry (and its
-  # tenant) is still in `monitors` when this lands ahead of the release.
   @impl true
-  def handle_cast({:unreaped, pid}, state) do
-    case Map.get(state.monitors, pid) do
-      {_ref, _acquired_at, tenant, _class} when not is_nil(tenant) ->
-        expiry = System.monotonic_time(:millisecond) + @unreaped_ttl_ms
-
-        entries = [expiry | prune_unreaped(Map.get(state.tenant_unreaped, tenant, []))]
-
-        Logger.warning(
-          "[Opus.ExecutionSemaphore] Unreaped timeout kill noted for tenant " <>
-            "#{inspect(tenant)} (#{length(entries)}/#{state.unreaped_max} " <>
-            "in the decay window)"
-        )
-
-        Opus.Telemetry.unreaped_kill(tenant, length(entries))
-
-        {:noreply, %{state | tenant_unreaped: Map.put(state.tenant_unreaped, tenant, entries)}}
-
-      _ ->
-        {:noreply, state}
-    end
+  def handle_cast({:release, pid}, state) do
+    {:noreply, do_release(state, pid)}
   end
 
   # A caller that timed out of `acquire/3` dequeues itself. If the hand-off

@@ -147,6 +147,22 @@ defmodule Cyfr.RuntimeConfig do
   @spec release?() :: boolean()
   def release?, do: System.get_env("RELEASE_ROOT") != nil
 
+  @doc "Whether this server builds components (`CYFR_BUILDS`, default true)."
+  @spec builds_enabled?() :: boolean()
+  def builds_enabled?, do: Application.get_env(:cyfr, :builds_enabled, true) == true
+
+  @doc "The builder container's URL (`CYFR_BUILDER_URL`), or nil for in-process builds."
+  @spec builder_url() :: String.t() | nil
+  def builder_url, do: Application.get_env(:cyfr, :builder_url)
+
+  @doc """
+  Whether the operator accepted in-process builds on a hosted server
+  (`CYFR_ALLOW_IN_PROCESS_BUILDS`). Read by the boot guard only.
+  """
+  @spec allow_in_process_builds?() :: boolean()
+  def allow_in_process_builds?,
+    do: Application.get_env(:cyfr, :allow_in_process_builds, false) == true
+
   @doc "The consent-proof store module (default: the DB store)."
   @spec consent_proof_store() :: module()
   def consent_proof_store,

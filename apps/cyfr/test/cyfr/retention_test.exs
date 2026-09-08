@@ -386,7 +386,14 @@ defmodule Cyfr.RetentionTest do
         })
 
       ctx = Sanctum.internal_context(user_id: "system", athanor_id: athanor.id, scope: :athanor)
-      :ok = Retention.set_settings(ctx, %{"executions" => 2, "builds" => 2})
+      # The fixtures are dated 2025; the age bound is pushed out so this
+      # test exercises the count bound alone.
+      :ok =
+        Retention.set_settings(ctx, %{
+          "executions" => 2,
+          "builds" => 2,
+          "execution_days" => 10_000
+        })
 
       # Two different users in the SAME athanor: retention keeps N per
       # athanor, members are interchangeable.

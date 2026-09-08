@@ -227,8 +227,88 @@ defmodule Opus.ExecutionRecordTest do
       # Reference is stored as a plain string (not JSON)
       assert db_record.reference == "reagent:local.test:0.1.0"
 
+      # The row keeps an envelope of the input, never the input: what ran,
+      # a digest to tell inputs apart, sizes and keys.
       {:ok, input} = Jason.decode(db_record.input)
-      assert input == %{"a" => 1}
+      assert input["envelope"] == "v1"
+      assert input["reference"] == "reagent:local.test:0.1.0"
+      assert input["keys"] == ["a"]
+      assert input["bytes"] == byte_size(Jason.encode!(%{"a" => 1}))
+      assert input["input_hash"] == Arca.Execution.hash_input(%{"a" => 1})
+      assert db_record.input_hash == input["input_hash"]
+      refute Map.has_key?(input, "a")
+    end
+
+    test "attachments persist as digests, never as bytes", %{ctx: ctx} do
+      data = Base.encode64("secret bytes")
+
+      record =
+        ExecutionRecord.new(ctx, "formula:local.aqua:1.0.6", %{
+          "task" => "look at this",
+          "attachments" => [
+            %{"filename" => "a.txt", "media_type" => "text/plain", "data" => data}
+          ]
+        })
+
+      :ok = ExecutionRecord.write_started(record)
+      {:ok, input} = Jason.decode(Arca.Repo.get(Arca.Execution, record.id).input)
+
+      assert [%{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => _, "digest" => _}] =
+               input["attachments"]
+
+      refute String.contains?(Jason.encode!(input), data)
+      refute String.contains?(Jason.encode!(input), "look at this")
+    end
+
+    test "the assistant's root turn keeps its output minus the message array", %{ctx: ctx} do
+      record = ExecutionRecord.new(ctx, "formula:local.aqua:1.0.6", %{"task" => "hi"})
+      :ok = ExecutionRecord.write_started(record)
+
+      completed =
+        ExecutionRecord.complete(record, %{
+          "content" => "hello",
+          "messages" => [%{"role" => "user", "content" => "hi"}],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 1}
+        })
+
+      :ok = ExecutionRecord.write_completed(completed)
+      {:ok, output} = Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
+
+      assert output["content"] == "hello"
+      assert output["usage"]["input_tokens"] == 3
+      refute Map.has_key?(output, "messages")
+    end
+
+    test "a model call the assistant made keeps a digest, its size and the usage", %{ctx: ctx} do
+      root = ExecutionRecord.new(ctx, "formula:local.aqua:1.0.6", %{"task" => "hi"})
+
+      child =
+        ExecutionRecord.new(ctx, "catalyst:moonmoon69.claude:1.0.0", %{"messages" => []},
+          parent_execution_id: root.id,
+          parent_reference: "formula:local.aqua:1.0.6"
+        )
+
+      :ok = ExecutionRecord.write_started(child)
+
+      reply = %{
+        "content" => [%{"type" => "text", "text" => "the reply"}],
+        "usage" => %{"input_tokens" => 9}
+      }
+
+      :ok = ExecutionRecord.write_completed(ExecutionRecord.complete(child, reply))
+      {:ok, output} = Jason.decode(Arca.Repo.get(Arca.Execution, child.id).output)
+
+      assert output["envelope"] == "v1"
+      assert output["usage"] == %{"input_tokens" => 9}
+      assert output["output_hash"] == Cyfr.Digest.sha256(Jason.encode!(reply))
+      refute String.contains?(Jason.encode!(output), "the reply")
+    end
+
+    test "any other component's output is the caller's result and stays", %{ctx: ctx} do
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      :ok = ExecutionRecord.write_started(record)
+      :ok = ExecutionRecord.write_completed(ExecutionRecord.complete(record, %{"sum" => 2}))
+      assert {:ok, %{"sum" => 2}} = Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
     end
 
     test "includes component_type in record", %{ctx: ctx} do

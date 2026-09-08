@@ -102,6 +102,19 @@ if config_env() != :test do
     # keyring an operator put in .env alongside everything else.
     config :cyfr, :crypto_keyring_json, env_str.("CYFR_CRYPTO_KEYRING", nil)
 
+    # Accept a keyring whose primary differs from the one this database was
+    # sealed with, by naming its fingerprint — one boot, on purpose. See
+    # `Cyfr.KeyringFingerprint`: accepting records the change, it does not
+    # restore decryptability.
+    config :cyfr,
+           :crypto_keyring_fingerprint_accept,
+           env_str.("CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT", nil)
+
+    # Several control planes share this database by design (a cell of
+    # nodes). Off, a second live claimant refuses to boot
+    # (`Cyfr.ControlPlane`).
+    config :cyfr, :cluster, env_bool.("CYFR_CLUSTER", false)
+
     # Device label attached to registry credentials (unset = hostname).
     config :cyfr, :device_label, env_str.("CYFR_DEVICE_LABEL", nil)
 
@@ -138,6 +151,16 @@ if config_env() != :test do
   config :cyfr, :builder_token, env_str.("CYFR_BUILDER_TOKEN", nil)
   config :cyfr, :builder_listen, env_bool.("CYFR_BUILDER_LISTEN", false)
   config :cyfr, :builder_port, env_int.("CYFR_BUILDER_PORT", 4100)
+
+  # Whether this server builds components at all — `build.compile` on every
+  # surface. An appliance that only runs what it pulled turns it off, and
+  # then needs no builder container to boot with authentication on.
+  config :cyfr, :builds_enabled, env_bool.("CYFR_BUILDS", true)
+
+  # A hosted server builds in the builder container: with an auth provider
+  # configured, builds on and no CYFR_BUILDER_URL, boot refuses unless the
+  # operator explicitly accepts cargo/npm running as this service user.
+  config :cyfr, :allow_in_process_builds, env_bool.("CYFR_ALLOW_IN_PROCESS_BUILDS", false)
 
   if release_name != "builder" do
     # A headless node (default: false) serves the API, MCP and public tinctures

@@ -80,12 +80,25 @@ process.stdin.on("data", (chunk) => {
     }
 
     if (msg.method === "tools/call") {
+      // `env-probe` reports what this child can see of its environment —
+      // the bridge's secrets must not be in it, its own `env` block must.
+      const text =
+        mode === "env-probe"
+          ? JSON.stringify({
+              keyring: process.env.CYFR_CRYPTO_KEYRING ?? null,
+              dsn: process.env.CYFR_DATABASE_URL ?? null,
+              token: process.env.MCP_BRIDGE_TOKEN ?? null,
+              own: process.env.PROBE_OWN ?? null,
+              path: Boolean(process.env.PATH),
+            })
+          : "pong";
+
       // Echo the id back as a STRING. Legal, and emitted by more than one
       // stdio server; a strict Map lookup dropped it and hung the call.
       send({
         jsonrpc: "2.0",
         id: String(msg.id),
-        result: { content: [{ type: "text", text: "pong" }] },
+        result: { content: [{ type: "text", text }] },
       });
       continue;
     }

@@ -100,7 +100,10 @@ defmodule Arca.TenantTables do
   # delete: a registry token belongs to the person and their namespace,
   # keyed `(user_id, registry, namespace_slug)`. It outlives any one
   # athanor, exactly as an API key outlives its creator's membership.
-  @not_athanor_scoped ["registry_tokens"]
+  #
+  # `server_meta` is the server's own facts — the keyring fingerprint, the
+  # control-plane owner — one row per key and no tenant at all.
+  @not_athanor_scoped ["registry_tokens", "server_meta"]
 
   @doc "The closed roster, children first."
   @spec roster() :: [String.t()]

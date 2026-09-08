@@ -51,6 +51,7 @@ defmodule Cyfr.Retention do
 
   @kinds [
     Cyfr.Retention.Executions,
+    Cyfr.Retention.ExecutionsAge,
     Cyfr.Retention.Builds,
     Cyfr.Retention.McpLogs,
     Cyfr.Retention.PolicyLogs,

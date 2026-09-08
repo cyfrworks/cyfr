@@ -19,7 +19,7 @@ ITEMS=(
   # the compose file without them broke `docker compose --profile builder up`
   # in scaffolded projects.
   docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/
-  Dockerfile.builder .env.builder.example
+  Dockerfile.builder .env.builder.example .env.bridge.example
 )
 FOUND=()
 for item in "${ITEMS[@]}"; do

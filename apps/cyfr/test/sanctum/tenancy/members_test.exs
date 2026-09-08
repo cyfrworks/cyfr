@@ -180,6 +180,46 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
   end
 
+  describe "add/3 by email" do
+    test "a proved address is seated, an unproven one is invited, a denied one is refused",
+         %{athanor: athanor} do
+      # Seating by email is a grant keyed on the address alone. `true` seats
+      # the known person; `nil` (an issuer that never asserts the claim)
+      # holds an invited row that a proving sign-in claims; `false` refuses.
+      for {claim, expected} <- [{true, :seated}, {nil, :invited}, {false, :refused}] do
+        n = System.unique_integer([:positive])
+        email = "claim#{n}@example.com"
+
+        {:ok, user} =
+          Sanctum.Tenancy.Users.upsert_from_provider(%{
+            id: "oidcc|https://idp.example|claim-#{n}",
+            provider: "oidcc",
+            email: email,
+            verified: claim
+          })
+
+        case expected do
+          :seated ->
+            assert {:ok, _} = Members.add(athanor, [email: email], "system")
+            assert Members.member?(user.id, athanor.id)
+
+          :invited ->
+            assert {:ok, :invited} = Members.add(athanor, [email: email], "system")
+            refute Members.member?(user.id, athanor.id)
+
+            assert Enum.any?(
+                     rows!(Members.list_by_athanor(athanor.id)),
+                     &(&1.status == "invited" and &1.email == email)
+                   )
+
+          :refused ->
+            assert {:error, :email_unverified} = Members.add(athanor, [email: email], "system")
+            refute Members.member?(user.id, athanor.id)
+        end
+      end
+    end
+  end
+
   describe "activate_invited/1" do
     test "activates every invitation for the verified email in one pass and consumes the email",
          %{athanor: athanor} do

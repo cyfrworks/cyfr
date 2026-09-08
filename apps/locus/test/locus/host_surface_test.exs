@@ -50,6 +50,9 @@ defmodule Locus.HostSurfaceTest do
     # The builder client's outbound HTTP, classified separately from the
     # pinned OCI path because it talks to an operator-configured sibling.
     "Cyfr.Network",
+    # Whether this server builds at all (`CYFR_BUILDS`): an application-env
+    # read, answered by a loaded cyfr as well as a started one.
+    "Cyfr.RuntimeConfig",
 
     # ——— Product plane: `Locus.MCP` only, and needs a STARTED cyfr ———
     # These are why the builder release must never route MCP traffic: each

@@ -235,8 +235,10 @@ defmodule Aqua.ConversationRunner do
     # after Alice spoke, Bob's `@tom` resolved against Alice's roster.
     # Harmless while every member shares one estate-wide roster; a
     # cross-wiring the moment agents belong to people.
-    opts = Keyword.put_new_lazy(opts, :orchestrators, fn -> AquaTurn.roster(ctx) end)
-    call(ctx, conversation_id, {:send, ctx, text, opts})
+    with :ok <- Cyfr.ControlPlane.assert_owner() do
+      opts = Keyword.put_new_lazy(opts, :orchestrators, fn -> AquaTurn.roster(ctx) end)
+      call(ctx, conversation_id, {:send, ctx, text, opts})
+    end
   end
 
   @doc "Stop the running turn; the partial reply is kept as a cancelled message."
@@ -626,6 +628,15 @@ defmodule Aqua.ConversationRunner do
            state,
            "The agent's model#{Aqua.Runner.Stream.ref_note(ref)} is not installed in this estate — " <>
              "install its catalyst here, or address another agent."
+         )}
+
+      {:error, {:unsupported_model_catalyst, ref}} ->
+        {:noreply,
+         Aqua.Runner.Stream.fail_turn(
+           state,
+           "The agent's model#{Aqua.Runner.Stream.ref_note(ref)} is not a model catalyst this " <>
+             "assistant can speak to (#{Enum.join(Aqua.ModelCatalyst.names(), ", ")}) — pin one " <>
+             "of those, or address another agent."
          )}
 
       {:error, reason} ->

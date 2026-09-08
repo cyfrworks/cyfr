@@ -119,7 +119,8 @@ defmodule Locus.MCP do
 
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
-    with {:ok, build_id} <- settle_build_id(ctx, args["build_id"]) do
+    with :ok <- builds_enabled(),
+         {:ok, build_id} <- settle_build_id(ctx, args["build_id"]) do
       if args["async"] == true do
         start_async_compile(ctx, reference, build_id)
       else
@@ -156,6 +157,15 @@ defmodule Locus.MCP do
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
+  end
+
+  # `CYFR_BUILDS=false`: this server does not build. Refused in the one
+  # handler every surface reaches — wire, console and in-chain — so a
+  # toggle meant for an appliance cannot be walked around through a door.
+  defp builds_enabled do
+    if Cyfr.RuntimeConfig.builds_enabled?(),
+      do: :ok,
+      else: {:error, "builds are disabled on this server (CYFR_BUILDS=false)"}
   end
 
   defp do_validate(wasm_base64) do

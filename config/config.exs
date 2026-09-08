@@ -181,6 +181,8 @@ config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 config :cyfr, Cyfr.Retention,
   # Newest N executions kept per athanor.
   executions: 10_000,
+  # Days an execution record is kept, whatever the count.
+  execution_days: 90,
   # Newest N build records kept per athanor.
   builds: 100,
   # Days of policy-enforcement log kept.

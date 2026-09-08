@@ -196,6 +196,8 @@ defmodule Arca.UnscopedQuerySeamTest do
     "Arca.Schemas.User" => "a person, addressed by IdP subject; people are not tenant-owned",
     "Arca.Schemas.RegistryToken" => "keyed by user_id — the identity plane, not a tenant's",
     "Arca.Schemas.ServerAllowlistEntry" => "the door: who may sign in at all, before any tenant",
+    "Arca.Schemas.ServerMeta" =>
+      "the server's own facts (keyring fingerprint, control-plane owner) — one row per key, no tenant",
     "Arca.Schemas.WebhookDelivery" =>
       "an idempotency claim keyed by a webhooks FK (on_delete: :delete_all), so it is " <>
         "reachable only through its tenant-owned parent and cascade-deleted with it; the " <>

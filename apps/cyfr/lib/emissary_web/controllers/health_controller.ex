@@ -86,6 +86,10 @@ defmodule EmissaryWeb.HealthController do
       tool_registry: check_process(Emissary.MCP.ToolRegistry),
       resource_registry: check_process(Emissary.MCP.ResourceRegistry),
       progress: check_process(Emissary.MCP.Progress.Registry),
+      # A boot that lost its control-plane lease is not ready: the endpoint
+      # answers 503 to everything but this probe until the claim is won back.
+      control_plane:
+        if(Cyfr.ControlPlane.owner?(), do: :ok, else: {:error, "control plane ownership lost"}),
       # Degrading, never failing: a control-plane node without the engine
       # still serves everything else, and the probe says so instead of
       # flapping the container.

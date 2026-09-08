@@ -107,12 +107,17 @@ defmodule Opus.ExecutionSweeper do
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
     error_msg = "Execution terminated: runner stopped without cleanup"
 
+    # Fenced on what this sweep observed: the attempt that owns the row and
+    # the exact lease it saw lapse. A renewal that landed between the scan
+    # and this write changed `lease_until`, and the update matches nothing —
+    # a live execution is never failed by a stale observation.
     {count, _} =
-      Arca.Execution.mark_failed_if_running(record.id, %{
-        completed_at: now,
-        duration_ms: duration_ms,
-        error_message: error_msg
-      })
+      Arca.Execution.mark_failed_if_running(
+        record.id,
+        %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
+        attempt: record.attempt,
+        lease_until: record.lease_until
+      )
 
     if count > 0 do
       Logger.info(

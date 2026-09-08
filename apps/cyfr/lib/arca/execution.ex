@@ -69,6 +69,13 @@ defmodule Arca.Execution do
     field :activation_graph, :string
     field :runner_id, :string
     field :lease_until, :utc_datetime_usec
+    # The fence. Minted with the row and carried by the one runner attempt
+    # that opened it; every later write — renewal, completion, the sweep —
+    # names it, so a runner that lost the row (its lease lapsed and the
+    # sweeper failed it, or another attempt took it) cannot write over the
+    # current owner. Two rows can share an id across restarts of this
+    # process; they never share an attempt.
+    field :attempt, :string
     # Which consent this execution rooted under: stamped by every root —
     # `run_root/5` and a `run_root_edge/5` tincture ingress alike — and nil
     # for a child row, which walks its parent's authority rather than
@@ -100,6 +107,7 @@ defmodule Arca.Execution do
     :activation_graph,
     :runner_id,
     :lease_until,
+    :attempt,
     :profile_id
   ]
 
@@ -161,8 +169,12 @@ defmodule Arca.Execution do
   the wire), or a finished run stamped `cancelled` and its output
   discarded. A row that already left `running` answers
   `{:error, :not_running}` and the caller keeps its hands off the wire.
+
+  `fence` narrows the write to the attempt that owns the row (see
+  `fenced/2`): a finisher whose attempt is no longer the row's is refused
+  the same way.
   """
-  def record_complete(%Sanctum.Context{} = ctx, id, attrs) do
+  def record_complete(%Sanctum.Context{} = ctx, id, attrs, fence \\ []) do
     Arca.Repo.Errors.with_db_rescue("Execution.record_complete", fn ->
       case get_tenant(ctx, id) do
         nil ->
@@ -182,6 +194,7 @@ defmodule Arca.Execution do
             sets = Map.to_list(changeset.changes)
 
             from(e in __MODULE__, where: e.id == ^id, where: e.status == "running")
+            |> fenced(fence)
             |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
             |> Arca.Repo.update_all(set: sets)
             |> case do
@@ -340,6 +353,40 @@ defmodule Arca.Execution do
     end)
   end
 
+  @doc """
+  Deletes an athanor's executions that started more than `days` ago, the
+  age bound beside the count bound above. A row still "running" is never
+  stale, for the reasons `stale_query/2` gives.
+  """
+  @spec delete_older_than_days(pos_integer(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
+  def delete_older_than_days(days, opts) when is_integer(days) and days > 0 and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Execution.delete_older_than_days", fn ->
+      {count, _} = Arca.Repo.delete_all(aged_query(days, opts))
+      {:ok, count}
+    end)
+  end
+
+  @doc "How many rows `delete_older_than_days/2` would remove — the dry-run count."
+  @spec count_older_than_days(pos_integer(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
+  def count_older_than_days(days, opts) when is_integer(days) and days > 0 and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Execution.count_older_than_days", fn ->
+      {:ok, Arca.Repo.aggregate(aged_query(days, opts), :count)}
+    end)
+  end
+
+  defp aged_query(days, opts) do
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
+    cutoff = DateTime.add(DateTime.utc_now(), -days, :day)
+
+    from(e in __MODULE__,
+      where: e.started_at < ^cutoff,
+      where: e.status != "running"
+    )
+    |> Arca.QueryHelpers.where_athanor(athanor_id)
+  end
+
   @doc "How many rows `delete_older_than/2` would remove — the dry-run count."
   @spec count_stale(non_neg_integer(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
@@ -406,7 +453,7 @@ defmodule Arca.Execution do
   `Opus.ExecutionSweeper` GC's own scan — never from caller-supplied input. Do
   not call it with an id taken straight from a request.
   """
-  def mark_failed_if_running(id, attrs) do
+  def mark_failed_if_running(id, attrs, fence \\ []) do
     # Fail-open default: a row the store could not fail stays running; the sweep retries next tick.
     Arca.Repo.Errors.with_db_rescue("Execution.mark_failed_if_running", {0, nil}, fn ->
       # arca:unscoped-ok the id comes from trusted runtime state (the
@@ -416,6 +463,7 @@ defmodule Arca.Execution do
         where: e.id == ^id,
         where: e.status == "running"
       )
+      |> fenced(fence)
       |> Arca.Repo.update_all(
         set: [
           status: "failed",
@@ -429,20 +477,39 @@ defmodule Arca.Execution do
 
   @doc """
   Renew a running execution's lease: the runner is alive and the row is
-  still its. Returns the number of rows touched (0 once the execution has
-  finished or been failed by the sweeper).
+  still its. Returns the number of rows touched — 0 once the execution has
+  finished, been failed by the sweeper, or (with a fence) left this
+  attempt's hands. A store that cannot answer also renews nothing, and the
+  runner treats an unrenewed lease as one that lapses.
   """
-  @spec renew_lease(String.t(), DateTime.t()) :: non_neg_integer()
+  @spec renew_lease(String.t(), DateTime.t(), keyword()) :: non_neg_integer()
   # arca:unscoped-ok the runner renews the lease on the row it is running;
   # the id comes from trusted runtime state, never from a request.
-  def renew_lease(id, %DateTime{} = until) do
-    # Fail-open default: a lease the store could not renew lapses; the sweeper only reaps well past it.
+  def renew_lease(id, %DateTime{} = until, fence \\ []) do
+    # Fail-closed by shape: 0 rows, and the runner stops once its lease lapses.
     Arca.Repo.Errors.with_db_rescue("Execution.renew_lease", 0, fn ->
       {count, _} =
         from(e in __MODULE__, where: e.id == ^id and e.status == "running")
+        |> fenced(fence)
         |> Arca.Repo.update_all(set: [lease_until: until])
 
       count
+    end)
+  end
+
+  # The fence a writer proves it still owns the row with. `attempt` is the
+  # id minted when the row was opened; `runner_id` the boot the attempt
+  # runs on; `lease_until` the exact value the sweeper observed — a
+  # renewal in between changes it, and the sweep then matches nothing,
+  # which is the whole point. A nil value is "no fence on this key": a
+  # caller that does not know the attempt (a person's cancel of a row
+  # opened before the column existed) fences on the status alone.
+  defp fenced(query, fence) do
+    Enum.reduce(fence, query, fn
+      {_key, nil}, q -> q
+      {:attempt, attempt}, q -> where(q, [e], e.attempt == ^attempt)
+      {:runner_id, runner}, q -> where(q, [e], e.runner_id == ^runner)
+      {:lease_until, %DateTime{} = seen}, q -> where(q, [e], e.lease_until == ^seen)
     end)
   end
 
