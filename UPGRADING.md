@@ -4,6 +4,23 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## A turn has a row, and the grant migrations are collapsed
+
+Migration `20260914000000` adds the durable shape of a turn as
+bookkeeping: `turns` (accepted work in a conversation and how it ended),
+`turn_steps`, `approvals` and `execution_events`, every one with
+`athanor_id NOT NULL` and a composite key to its parent, plus
+`executions.turn_id` and `executions.schedule_id`. The runner writes a
+`turns` row when it accepts a turn and closes it as completed, failed or
+cancelled; the other tables wait for the loop that will own them, and
+`conversations.history` stays until then. `messages.kind` gains
+`tool_call`, `tool_result` and `turn_aborted`.
+
+The add-then-drop pair of post-baseline migrations (`20260907000000`,
+`20260909000000`) is collapsed into `20260904000000`, which now creates
+`tool_grants` in its final shape. A database that ran the pair already
+has that shape; a fresh one gets it directly.
+
 ## Consent reads the catalog through a port; a provider that cannot load refuses the boot
 
 `Sanctum.Catalog` is the port a consent shape learns the servable

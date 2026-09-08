@@ -124,6 +124,13 @@ defmodule Aqua.ConversationRunnerTest do
     {:ok, row} = Conversations.get(alice, conv.id)
     assert row.execution_id == eid
 
+    # The turn's own row: accepted, running as this execution, asked for
+    # by the person who sent the message.
+    assert {:ok, [%{status: "accepted", execution_id: ^eid, orchestrator: "aqua"} = turn_row]} =
+             Arca.TurnStorage.list(alice, conv.id)
+
+    assert turn_row.requested_by == alice.user_id
+
     emit(runner, "text_delta", %{"content" => "Hi "})
     emit(runner, "text_delta", %{"content" => "Alice"})
     assert_receive {:conversation, _, {:delta, "Hi "}}, 5_000
@@ -156,6 +163,10 @@ defmodule Aqua.ConversationRunnerTest do
     {:ok, row} = Conversations.get(alice, conv.id)
     assert row.execution_id == nil
     assert [%{"role" => "user"}, %{"role" => "assistant"}] = Conversations.history(row)
+
+    # ...and the turn row is closed the way the turn ended.
+    assert {:ok, [%{status: "completed", ended_at: %DateTime{}, error: nil}]} =
+             Arca.TurnStorage.list(alice, conv.id)
 
     # A member joining now sees the same thread from the rows and the
     # runner's live state.

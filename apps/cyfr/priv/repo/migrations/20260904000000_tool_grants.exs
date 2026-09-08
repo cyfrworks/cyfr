@@ -34,14 +34,14 @@ defmodule Arca.Repo.Migrations.ToolGrants do
   # `effect` is deliberately NOT part of either key: flipping allow ↔ deny
   # updates the row in place rather than accumulating a contradictory pair.
   #
-  # ## Two athanors, on purpose
+  # ## One athanor
   #
-  # `athanor_id` is the tenancy — where the grant applies, and what
-  # `Arca.TenantTables.delete_all_for/1` reclaims. `agent_athanor_id` is
-  # who owns the agent it is about. They are equal today and stay equal for
-  # agent scope (that rule is enforced in `Aqua.ToolGrants`), but a
-  # conversation-scope grant on an agent borrowed into another estate has
-  # them differ — which is the case personal crews introduce.
+  # An agent belongs to the estate whose `aqua/` tree holds it, and a
+  # shared tape runs that estate's soul and roles alone, so `athanor_id`
+  # is both the tenancy — where the grant applies, and what
+  # `Arca.TenantTables.delete_all_for/1` reclaims — and the agent's owner.
+  # An agent-scope answer is unique per estate and agent, a
+  # conversation-scope one per conversation and agent.
   def up do
     create table(:tool_grants, primary_key: false) do
       add :id, :string, primary_key: true
@@ -49,7 +49,6 @@ defmodule Arca.Repo.Migrations.ToolGrants do
       add :scope, :string, null: false
       add :effect, :string, null: false
       add :conversation_id, :string
-      add :agent_athanor_id, :string, null: false
       add :agent_name, :string, null: false
       add :tool, :string, null: false
       add :action, :string, null: false
@@ -64,14 +63,14 @@ defmodule Arca.Repo.Migrations.ToolGrants do
     # the constraint under both spellings.
     create unique_index(
              :tool_grants,
-             [:conversation_id, :agent_athanor_id, :agent_name, :tool, :action],
+             [:conversation_id, :agent_name, :tool, :action],
              where: "scope = 'conversation'",
              name: :tool_grants_conversation_scope_index
            )
 
     create unique_index(
              :tool_grants,
-             [:agent_athanor_id, :agent_name, :tool, :action],
+             [:athanor_id, :agent_name, :tool, :action],
              where: "scope = 'agent'",
              name: :tool_grants_agent_scope_index
            )
@@ -83,11 +82,11 @@ defmodule Arca.Repo.Migrations.ToolGrants do
   def down do
     drop index(:tool_grants, [:athanor_id, :agent_name])
 
-    drop index(:tool_grants, [:agent_athanor_id, :agent_name, :tool, :action],
+    drop index(:tool_grants, [:athanor_id, :agent_name, :tool, :action],
            name: :tool_grants_agent_scope_index
          )
 
-    drop index(:tool_grants, [:conversation_id, :agent_athanor_id, :agent_name, :tool, :action],
+    drop index(:tool_grants, [:conversation_id, :agent_name, :tool, :action],
            name: :tool_grants_conversation_scope_index
          )
 

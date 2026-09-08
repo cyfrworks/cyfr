@@ -48,6 +48,10 @@ defmodule Arca.TenantTables do
   # checks this against the live schema, so a new athanor-scoped table
   # fails the boot rather than surviving erasure silently.
   @roster [
+    "execution_events",
+    "approvals",
+    "turn_steps",
+    "turns",
     "consent_vault_refs",
     "consents",
     "profiles",

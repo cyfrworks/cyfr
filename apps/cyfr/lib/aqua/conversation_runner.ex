@@ -599,6 +599,21 @@ defmodule Aqua.ConversationRunner do
 
         Conversations.update(state.system_ctx, state.id, %{execution_id: eid})
 
+        # The turn's own row: accepted, and running as this execution.
+        # Bookkeeping never fails the turn — a store hiccup is logged.
+        case Arca.TurnStorage.accept(state.system_ctx, %{
+               conversation_id: state.id,
+               execution_id: eid,
+               orchestrator: started.orchestrator && started.orchestrator.name,
+               requested_by: Aqua.Runner.Shared.turn_user(state)
+             }) do
+          {:ok, _} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("[Aqua.ConversationRunner] turn not recorded: #{inspect(reason)}")
+        end
+
         if state.cancel_requested do
           {:noreply, Aqua.Runner.Stream.cancel_turn(state, state.turn_ctx)}
         else
