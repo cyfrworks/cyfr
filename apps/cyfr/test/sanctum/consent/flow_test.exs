@@ -156,6 +156,35 @@ defmodule Sanctum.Consent.FlowTest do
     end
   end
 
+  describe "labels" do
+    test "an id-shaped label is refused on the sheet by every verb, with the insert's shape",
+         %{ctx: ctx} do
+      publish!(ctx, "flow-label")
+      ref = "reagent:local.flow-label"
+      sneaky = %{ref: ref, label: "prof_sneaky"}
+
+      assert {:error, {:invalid_label, "prof_sneaky"}} = Plan.plan(ctx, sneaky)
+      assert {:error, {:invalid_label, "prof_sneaky"}} = Commit.preview(ctx, sneaky)
+
+      # A commit that was planned and previewed honestly, then handed the
+      # bad label at the last step: refused on the label before any token
+      # is consumed.
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      {:ok, preview} = Commit.preview(ctx, %{ref: ref})
+
+      assert {:error, {:invalid_label, "prof_sneaky"}} =
+               Commit.commit(ctx, %{
+                 decisions: sneaky,
+                 plan_token: plan.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+
+      assert {:ok, []} = Source.DB.profiles(ctx, ref)
+    end
+  end
+
   describe "conflicts" do
     test "a plan staged against a superseded revision is stale", %{ctx: ctx} do
       publish!(ctx, "flow-stale")

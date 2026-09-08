@@ -109,7 +109,7 @@ defmodule PrismWeb.ToolSeamTest do
   # be indirection without a gate behind it.
   # `follow`/`unfollow` joined for the same reason as `scan`: they write
   # rows and read as innocuous verbs, so they slipped past the roster.
-  # Exact names, not `follow\w*` — `followed`/`followers` are reads, and
+  # Exact names, not `follow\w*` — `followed`/`follows?` are reads, and
   # reads stay outside this seam.
   @mutating_verb ~r/^(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|scan\w*|save\w*|destroy\w*|add_\w+|store\w*|discard\w*|follow|unfollow)$/
 

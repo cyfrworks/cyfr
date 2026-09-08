@@ -133,7 +133,7 @@ defmodule Sanctum.ProvisioningClosureTest do
     # The mint is a bare row now; filling it is the first read of its
     # bundle. `ensure_provisioned/1` is that hook, and the tools that read
     # the bundle call it for real.
-    assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Closure #{n}")
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Closure #{n}")
     refute group.provisioned_at
 
     in_group = %{ctx | athanor_id: group.id}
@@ -178,7 +178,7 @@ defmodule Sanctum.ProvisioningClosureTest do
         authenticated: true
       )
 
-    assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Resync #{n}")
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Resync #{n}")
     in_group = %{ctx | athanor_id: group.id}
     :ok = Provisioning.ensure_provisioned(in_group)
 

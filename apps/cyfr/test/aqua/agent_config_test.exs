@@ -49,7 +49,6 @@ defmodule Aqua.AgentConfigTest do
       Aqua.ToolGrants.put(ctx, %{
         scope: "agent",
         effect: "allow",
-        agent_athanor_id: ctx.athanor_id,
         agent_name: "aqua",
         tool: "component",
         action: "pull"

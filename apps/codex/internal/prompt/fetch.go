@@ -135,6 +135,18 @@ func FetchGuides(ctx context.Context, client *mcp.Client) ([]Option, error) {
 	return extractOptions(result, "guides", "name", "name")
 }
 
+// FetchScrolls calls aqua skill_list and returns the scrolls as options
+// for selection.
+func FetchScrolls(ctx context.Context, client *mcp.Client) ([]Option, error) {
+	result, err := client.CallTool(ctx, "aqua", map[string]any{
+		"action": "skill_list",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch scrolls: %w", err)
+	}
+	return extractOptions(result, "skills", "name", "name")
+}
+
 // extractOptions pulls an array from an MCP response map and builds Option slices.
 // It looks for result[listKey] as a []any of map[string]any, then extracts
 // labelKey and valueKey from each entry.

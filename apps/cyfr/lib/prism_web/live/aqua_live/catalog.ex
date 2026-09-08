@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.AquaLive.Catalog do
   @moduledoc """
-  Pure data transforms behind the Agents page: the tool/action catalog the
+  Pure data transforms behind the AQUA page: the tool/action catalog the
   capability matrix renders, kind classification, and the model-picker
   value codec. No `socket`, no markup.
   """

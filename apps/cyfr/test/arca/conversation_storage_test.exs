@@ -215,6 +215,23 @@ defmodule Arca.ConversationStorageTest do
     assert updated.turn_seq == 3 and updated.orchestrator == "aqua"
   end
 
+  test "the reserved authors are the schema's, and neither titles a thread", %{ctx: ctx} do
+    # Rows persist with these values, so the spelling is pinned as well as
+    # the fact that every writer reads it from one place.
+    assert Arca.Schemas.Message.agent_author() == "aqua"
+    assert Arca.Schemas.Message.system_author() == "system"
+
+    {:ok, conv} = Conversations.create(ctx)
+
+    for author <- [Arca.Schemas.Message.agent_author(), Arca.Schemas.Message.system_author()] do
+      {:ok, _} =
+        Conversations.append(ctx, conv.id, %{author: author, kind: "text", content: "not a title"})
+    end
+
+    {:ok, still} = Conversations.get(ctx, conv.id)
+    refute still.title == "not a title"
+  end
+
   test "the title drops a leading @mention but the row keeps the text as typed", %{ctx: ctx} do
     {:ok, conv} = Conversations.create(ctx)
 

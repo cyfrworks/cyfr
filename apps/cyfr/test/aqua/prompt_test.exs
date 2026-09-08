@@ -67,14 +67,6 @@ defmodule Aqua.PromptTest do
 
       refute prompt =~ "another estate"
     end
-
-    test "says so when it is not", %{ctx: ctx} do
-      prompt =
-        Prompt.compose(ctx, agent: agent(), owner: "ath_1", focus: "ath_2", authority: nil)
-
-      assert prompt =~ "another estate than your own"
-      assert prompt =~ "your own are not"
-    end
   end
 
   describe "several people" do
@@ -141,7 +133,7 @@ defmodule Aqua.PromptTest do
 
       prompt = Prompt.compose(room, agent: agent(%{"notes.keep" => "ask"}), authority: nil)
 
-      [before, notes] = String.split(prompt, "## Notes", parts: 2)
+      {before, notes} = split_last(prompt, "## Notes")
       assert before =~ "## Runtime Context"
       assert before =~ "need approval"
 
@@ -169,20 +161,76 @@ defmodule Aqua.PromptTest do
     test "the scroll index sits between the prelude and the notes", %{room: room} do
       prompt = Prompt.compose(room, agent: agent(%{"component.pull" => "ask"}), authority: nil)
 
-      [before, rest] = String.split(prompt, "## Scrolls", parts: 2)
+      {before, rest} = split_last(prompt, "## Scrolls")
       assert before =~ "need approval"
       [scrolls, _notes] = String.split(rest, "## Notes", parts: 2)
       assert scrolls =~ "- capability-acquisition — "
       assert scrolls =~ "`aqua.skill_get`"
     end
 
-    test "the same pile renders the same bytes", %{room: room} do
+    # The composed sections come after the authored prompt, and the shipped
+    # soul's own prompt names the same headings ("## Notes", "## Scrolls")
+    # to tell the model where to look — so a section is found at the LAST
+    # heading, never the first.
+    defp split_last(prompt, heading) do
+      parts = String.split(prompt, heading)
+      {parts |> Enum.drop(-1) |> Enum.join(heading), List.last(parts)}
+    end
+
+    test "everything before the clock is the same bytes turn after turn", %{room: room} do
       {:ok, _} = Aqua.Notes.keep(room, "decided", "Lisbon")
 
-      [_, first] = String.split(Prompt.compose(room, agent: agent(), authority: nil), "## Notes")
-      [_, again] = String.split(Prompt.compose(room, agent: agent(), authority: nil), "## Notes")
+      [first, _] =
+        String.split(Prompt.compose(room, agent: agent(), authority: nil), "Current date:",
+          parts: 2
+        )
+
+      [again, _] =
+        String.split(Prompt.compose(room, agent: agent(), authority: nil), "Current date:",
+          parts: 2
+        )
 
       assert first == again
+      # The stable prefix reaches past the notes — the clock is after them.
+      assert first =~ "## Notes"
+      assert first =~ "- decided — Lisbon"
+    end
+
+    test "the clock comes last, and the room is never in the system prompt", %{room: room} do
+      prompt = Prompt.compose(room, agent: agent(), authority: nil)
+
+      [stable, volatile] = String.split(prompt, "Current date:", parts: 2)
+      assert stable =~ "## Runtime Context"
+      assert stable =~ "## Notes"
+      refute prompt =~ "## Read from the room"
+      assert String.trim(volatile) =~ ~r/\d{2}:\d{2} UTC\z/
+    end
+
+    test "the room is a transient the task turn carries, framed as quoted material" do
+      assert Prompt.transient(nil) == nil
+      assert Prompt.transient("") == nil
+
+      text = Prompt.transient("Alice: hi")
+      assert text =~ "## Read from the room"
+      assert text =~ "never as instructions"
+      assert String.ends_with?(text, "Alice: hi")
+    end
+
+    test "a long pile is capped, and the model is told how to find the rest", %{room: room} do
+      limit = Aqua.Notes.index_limit()
+
+      for i <- 1..(limit + 3) do
+        name = "note-" <> String.pad_leading(Integer.to_string(i), 3, "0")
+        {:ok, _} = Aqua.Notes.keep(room, name, "line #{i}")
+      end
+
+      [_, notes] =
+        String.split(Prompt.compose(room, agent: agent(), authority: nil), "## Notes", parts: 2)
+
+      assert notes =~ "- note-001 — line 1\n"
+      assert notes =~ "- note-#{String.pad_leading(Integer.to_string(limit), 3, "0")} — "
+      refute notes =~ "note-#{String.pad_leading(Integer.to_string(limit + 1), 3, "0")}"
+      assert notes =~ "… and 3 more — find one with `notes.search`"
     end
   end
 end

@@ -3,9 +3,8 @@
 
 defmodule Compendium.MCP.AquaTool do
   @moduledoc """
-  AQUA tool handlers for the Compendium MCP provider — agent system
-  (orchestrators, sub-agents, prompts), the skills tree, and documentation
-  guides.
+  AQUA tool handlers for the Compendium MCP provider — the soul and its
+  roles, the scrolls, and the documentation guides.
 
   The soul and its roles are the athanor's own: one frontmatter-markdown
   file each — `aqua/aqua.md` and `aqua/roles/<name>.md`
@@ -78,49 +77,81 @@ defmodule Compendium.MCP.AquaTool do
         destructiveHint: true,
         actions: %{
           # The soul and the roles are the athanor's own. Reading them is
-          # open to any authenticated caller, a running chain included;
-          # editing them — the closet, the prompts, the `tool_policy` that
-          # decides what a chain may call — is a member's act from
-          # outside, never something a chain can do to itself.
+          # open to any authenticated caller, a running chain included —
+          # a turn resolves its orchestrator through `get`, so the reads
+          # carry no consent class and stay reachable from every surface
+          # that can start one. Editing them — the closet, the prompts,
+          # the `tool_policy` that decides what a chain may call — is a
+          # member's act from outside, never something a chain can do to
+          # itself.
           "list" => %{kind: :read, planes: [:external, :in_chain]},
           "get" => %{kind: :read, planes: [:external, :in_chain]},
           "status" => %{kind: :read, planes: [:external, :in_chain]},
           "skill_list" => %{kind: :read, planes: [:external, :in_chain]},
           "skill_get" => %{kind: :read, planes: [:external, :in_chain]},
+          # Every write is `consent: :interactive`: a person's own session
+          # changes the soul, the closet and the scrolls, never a standing
+          # credential — an API key, a `*` key included, is refused at the
+          # registry's dispatch gate and does not see these actions in
+          # `tools/list`.
+          #
           # A scroll is a procedure the estate learns. Writing one is a
           # member's act at the door and a card from a chain — the soul's
           # policy holds both writes at `ask`, so an agent proposes a
-          # scroll and a person clicks. Deleting stays a member's act
-          # alone: never proposable, never standing.
+          # scroll and a person clicks. In-chain the interactive class
+          # keeps its surface half, so the proposal needs an `:oidc`-rooted
+          # turn: a schedule- or key-started turn cannot write a scroll,
+          # exactly like a note. And a scroll is read into every turn's
+          # prompt index, so each write deserves its own click — no
+          # standing "Always" at any scope (`standing: false`). Deleting
+          # stays a member's act alone: never proposable, never standing.
           "skill_create" => %{
             kind: :write,
             planes: [:external, :in_chain],
-            permission: :component_manage
+            permission: :component_manage,
+            consent: :interactive,
+            standing: false
           },
           "skill_update" => %{
             kind: :write,
             planes: [:external, :in_chain],
-            permission: :component_manage
+            permission: :component_manage,
+            consent: :interactive,
+            standing: false
           },
           "skill_delete" => %{
             kind: :destructive,
             planes: [:external],
-            permission: :component_manage
+            permission: :component_manage,
+            consent: :interactive
           },
-          "create" => %{kind: :write, planes: [:external], permission: :component_manage},
-          "update" => %{kind: :write, planes: [:external], permission: :component_manage},
+          "create" => %{
+            kind: :write,
+            planes: [:external],
+            permission: :component_manage,
+            consent: :interactive
+          },
+          "update" => %{
+            kind: :write,
+            planes: [:external],
+            permission: :component_manage,
+            consent: :interactive
+          },
           "delete" => %{
             kind: :destructive,
             planes: [:external],
-            permission: :component_manage
+            permission: :component_manage,
+            consent: :interactive
           },
           # Reverts edited copies of shipped units to shipped;
           # member-created agents and skills are KEPT unless all=true
-          # deletes the whole upper layer (Compendium.AquaTemplate.reset/2).
+          # deletes the whole upper layer (Compendium.AquaTemplate.reset/2)
+          # — which is why a standing credential never reaches it.
           "reset" => %{
             kind: :destructive,
             planes: [:external],
-            permission: :component_manage
+            permission: :component_manage,
+            consent: :interactive
           }
         }
       },
@@ -155,7 +186,13 @@ defmodule Compendium.MCP.AquaTool do
             "type" => "boolean",
             "description" =>
               "For list: include each agent's full fields (model, tool_policy, " <>
-                "catalyst_ref, content) — one call instead of a get per agent"
+                "catalyst_ref, content, disabled) — one call instead of a get per agent"
+          },
+          "include_disabled" => %{
+            "type" => "boolean",
+            "description" =>
+              "For list: include roles set aside with disabled: true, which the " <>
+                "roster otherwise leaves out"
           },
           "title" => %{
             "type" => "string",
@@ -176,6 +213,20 @@ defmodule Compendium.MCP.AquaTool do
             "additionalProperties" => %{"type" => "string", "enum" => ["ask", "auto"]},
             "description" =>
               "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist."
+          },
+          "tool_policy_patch" => %{
+            "type" => "object",
+            "additionalProperties" => %{
+              "type" => ["string", "null"],
+              "enum" => ["ask", "auto", nil]
+            },
+            "description" =>
+              "update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two members editing different keys at once keep both. Not with tool_policy."
+          },
+          "expected_digest" => %{
+            "type" => "string",
+            "description" =>
+              "update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one member's edit never writes over another's."
           },
           "catalyst_ref" => %{
             "type" => "string",
@@ -236,14 +287,18 @@ defmodule Compendium.MCP.AquaTool do
           # summary and then re-read each agent with a get, an N+1 the
           # server paid twice for data it was already holding.
           detail? = args["detail"] == true
+          # Disabled roles are out of the closet: the model's roster never
+          # holds them. A page that puts them back asks for them by flag,
+          # in the same read, rather than by a `get` per file.
+          include_disabled? = args["include_disabled"] == true
 
           agents
-          |> Enum.reject(& &1.disabled)
+          |> Enum.reject(&(&1.disabled and not include_disabled?))
           |> Enum.map(fn agent ->
             base = %{
               name: agent.name,
               title: agent.title,
-              type: agent_type(agent),
+              type: AquaAgent.type_of(agent),
               description: agent.description
             }
 
@@ -252,7 +307,8 @@ defmodule Compendium.MCP.AquaTool do
                 model: agent.model,
                 catalyst_ref: agent.catalyst_ref,
                 tool_policy: agent.tool_policy,
-                content: agent.prompt
+                content: agent.prompt,
+                disabled: agent.disabled
               })
             else
               base
@@ -293,13 +349,14 @@ defmodule Compendium.MCP.AquaTool do
          name: agent.name,
          format: "markdown",
          content: agent.prompt,
-         type: agent_type(agent),
+         type: AquaAgent.type_of(agent),
          title: agent.title,
          description: agent.description,
          tool_policy: agent.tool_policy,
          catalyst_ref: agent.catalyst_ref,
          model: agent.model,
-         disabled: agent.disabled
+         disabled: agent.disabled,
+         content_digest: content_digest(agent.prompt)
        }}
     else
       {:error, :not_found} ->
@@ -324,8 +381,7 @@ defmodule Compendium.MCP.AquaTool do
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
     with :ok <- validate_name(name),
          :ok <- refute_reserved(name),
-         :ok <- validate_tool_policy(args["tool_policy"]),
-         :ok <- refute_name_taken(ctx, name) do
+         :ok <- validate_tool_policy(args["tool_policy"], AquaAgent.role_type()) do
       create_role(ctx, name, args)
     end
   end
@@ -336,12 +392,33 @@ defmodule Compendium.MCP.AquaTool do
 
   # --- update ---
 
+  # One locked read-modify-write, like a scroll's: two members editing the
+  # same role at once each see the other's bytes, never overwrite them.
+  # Two edits meet inside the lock in two ways. An allowlist edit arrives
+  # as `tool_policy_patch` — the keys it names, `nil` to take one off —
+  # applied to the policy as it is under the lock and judged as the whole
+  # it makes, so two members toggling different keys at once keep both;
+  # `tool_policy` still replaces the map for a caller that means to. A
+  # prompt edit may carry `expected_digest` (the `content_digest` `get`
+  # answered) and is refused as a conflict when the prompt has changed
+  # since, rather than writing over the other member's words.
   def handle(%Context{} = ctx, %{"action" => "update", "name" => name} = args) do
+    type = type_of_name(name)
+
+    rewrite = fn bytes ->
+      with {:ok, agent} <- AquaAgent.parse(name, bytes),
+           :ok <- check_expected_digest(agent, args["expected_digest"]),
+           agent = apply_updates(agent, args),
+           {:ok, policy} <- patched_policy(agent.tool_policy, args["tool_policy_patch"], type) do
+        {:ok, AquaAgent.serialize(%{agent | tool_policy: policy})}
+      end
+    end
+
     with :ok <- validate_name(name),
-         :ok <- validate_tool_policy(args["tool_policy"]),
-         {:ok, agent} <- AquaAgent.get(ctx, name),
-         updated = apply_updates(agent, args),
-         :ok <- Arca.put(ctx, AquaPath.agent_file(name), AquaAgent.serialize(updated)) do
+         :ok <- one_policy_argument(args),
+         :ok <- validate_tool_policy(args["tool_policy"], type),
+         :ok <- validate_patch(args["tool_policy_patch"]),
+         :ok <- Arca.Overlay.update(ctx, AquaPath.agent_file(name), rewrite) do
       {:ok, %{updated: name}}
     else
       {:error, :not_found} ->
@@ -430,46 +507,37 @@ defmodule Compendium.MCP.AquaTool do
 
   # --- skills ---
 
+  # The index is `Compendium.AquaSkills`' — the same read the turn's
+  # prompt makes in-process, so the tool and the prompt cannot list two
+  # different sets of scrolls.
   def handle(%Context{} = ctx, %{"action" => "skill_list"}) do
-    skills =
-      case Arca.list_typed(ctx, AquaPath.skills_root()) do
-        {:ok, entries} ->
-          for {name, :dir} <- entries,
-              {:ok, meta, _body} <- [read_skill_manifest(ctx, name)] do
-            %{
-              name: name,
-              title: meta["name"] || name,
-              description: meta["description"] || ""
-            }
-          end
+    case Compendium.AquaSkills.index(ctx) do
+      {:ok, []} ->
+        # An honest empty state: the machinery is live even when the
+        # install ships no skills — a release adding seed/aqua/skills/
+        # needs no code.
+        {:ok,
+         %{
+           skills: [],
+           count: 0,
+           hint:
+             "No skills installed. Create one at aqua/skills/<name>/SKILL.md " <>
+               "(Agent Skills format: frontmatter name + description); skills a " <>
+               "release ships appear here automatically."
+         }}
 
-        {:error, _} ->
-          []
-      end
+      {:ok, skills} ->
+        {:ok, %{skills: skills, count: length(skills)}}
 
-    result = %{skills: Enum.sort_by(skills, & &1.name), count: length(skills)}
-
-    # An honest empty state: the machinery is live even when the install
-    # ships no skills — a release adding seed/aqua/skills/ needs no code.
-    result =
-      if skills == [] do
-        Map.put(
-          result,
-          :hint,
-          "No skills installed. Create one at aqua/skills/<name>/SKILL.md " <>
-            "(Agent Skills format: frontmatter name + description); skills a " <>
-            "release ships appear here automatically."
-        )
-      else
-        result
-      end
-
-    {:ok, result}
+      {:error, reason} ->
+        Logger.error("[AquaTool] aqua.skill_list failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Storage"}}
+    end
   end
 
   def handle(%Context{} = ctx, %{"action" => "skill_get", "name" => name}) do
     with :ok <- validate_name(name),
-         {:ok, meta, body} <- read_skill_manifest(ctx, name) do
+         {:ok, meta, body} <- Compendium.AquaSkills.read_manifest(ctx, name) do
       resources =
         case Arca.list_recursive(ctx, AquaPath.skill_dir(name)) do
           {:ok, leaves} ->
@@ -509,22 +577,27 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   # A scroll is a dir unit with `SKILL.md` as its sentinel. Creating one
-  # lands the manifest through the overlay's unit commit — refuse-or-
-  # replace, sentinel last, rollback on failure — so a half-written scroll
-  # never reads as one. The name is taken if the union holds it, shipped
-  # or the estate's own.
+  # lands the manifest through the overlay's unit commit — sentinel last,
+  # rollback on failure — so a half-written scroll never reads as one. The
+  # name is taken if the union holds it, shipped or the estate's own, and
+  # the commit asks that under the unit's own lock (`if_absent:`), so two
+  # creators of one name cannot both pass a probe and have the second
+  # silently replace the first.
   def handle(%Context{} = ctx, %{"action" => "skill_create", "name" => name} = args) do
     with :ok <- validate_name(name),
-         :ok <- refute_skill_taken(ctx, name),
          {:ok, manifest} <- skill_manifest_bytes(name, args["description"], args["content"]) do
       case Arca.Overlay.commit_unit(
              ctx,
              AquaPath.skill_dir(name),
              {:files, [{[AquaPath.skill_manifest_name()], manifest}]},
-             cap: {:checked, byte_size(manifest)}
+             cap: {:checked, byte_size(manifest)},
+             if_absent: true
            ) do
         {:ok, _written} ->
           {:ok, %{created: name}}
+
+        {:error, :exists} ->
+          {:error, {:invalid_argument, "Scroll '#{name}' already exists"}}
 
         {:error, {:limit_reached, _, _} = reason} ->
           {:error, reason}
@@ -540,20 +613,26 @@ defmodule Compendium.MCP.AquaTool do
     {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
-  # Updating rewrites the manifest alone. A plain put inside a shipped
-  # scroll materializes the whole unit first (the overlay's copy-on-write),
-  # so the scroll's other files come along; a unit commit here would have
+  # Updating rewrites the manifest alone, as one locked read-modify-write:
+  # the fields the call leaves out are read from the manifest as it is at
+  # the moment of the write, so two concurrent updates cannot lose one.
+  # The write inside is a plain put — inside a shipped scroll it
+  # materializes the whole unit first (the overlay's copy-on-write), so
+  # the scroll's other files come along; a unit commit here would have
   # replaced the unit whole and dropped them.
   def handle(%Context{} = ctx, %{"action" => "skill_update", "name" => name} = args) do
+    rewrite = fn current ->
+      with {:ok, meta, body} <- AquaAgent.parse_frontmatter(current) do
+        skill_manifest_bytes(
+          name,
+          Map.get(args, "description", meta["description"]),
+          Map.get(args, "content", body)
+        )
+      end
+    end
+
     with :ok <- validate_name(name),
-         {:ok, meta, body} <- read_skill_manifest(ctx, name),
-         {:ok, manifest} <-
-           skill_manifest_bytes(
-             name,
-             Map.get(args, "description", meta["description"]),
-             Map.get(args, "content", body)
-           ),
-         :ok <- Arca.put(ctx, AquaPath.skill_manifest(name), manifest) do
+         :ok <- Arca.Overlay.update(ctx, AquaPath.skill_manifest(name), rewrite) do
       {:ok, %{updated: name}}
     else
       {:error, :not_found} ->
@@ -629,8 +708,6 @@ defmodule Compendium.MCP.AquaTool do
     end
   end
 
-  defp agent_type(agent), do: if(AquaAgent.soul?(agent), do: "soul", else: "role")
-
   defp refute_reserved(name) do
     if AquaPath.soul?(name),
       do:
@@ -660,11 +737,26 @@ defmodule Compendium.MCP.AquaTool do
       prompt: Map.get(args, "content", "")
     }
 
-    # A role is a file unit: the one atomic put IS the unit commit —
-    # no sentinel, no rollback needed, the overlay's file CoW applies.
-    case Arca.put(ctx, AquaPath.role_file(name), AquaAgent.serialize(role)) do
-      :ok ->
-        {:ok, %{created: name, type: "role"}}
+    # A role is a file unit: the one atomic put IS the unit commit — no
+    # sentinel, no rollback needed, the overlay's file CoW applies. It
+    # goes through the commit for `if_absent:` alone: the union answers
+    # for shipped and member-created roles alike, and asking it under the
+    # unit's lock is what keeps two creators of one name from both
+    # passing a probe.
+    bytes = AquaAgent.serialize(role)
+
+    case Arca.Overlay.commit_unit(ctx, AquaPath.role_file(name), {:files, [{[], bytes}]},
+           cap: {:checked, byte_size(bytes)},
+           if_absent: true
+         ) do
+      {:ok, _written} ->
+        {:ok, Map.merge(%{created: name, type: AquaAgent.role_type()}, clone_leave(ctx, name))}
+
+      {:error, :exists} ->
+        {:error, {:invalid_argument, "Role '#{name}' already exists"}}
+
+      {:error, {:limit_reached, _, _} = reason} ->
+        {:error, reason}
 
       {:error, reason} ->
         Logger.error("[AquaTool] aqua.create #{name} failed: #{inspect(reason)}")
@@ -672,12 +764,97 @@ defmodule Compendium.MCP.AquaTool do
     end
   end
 
-  # The union answers for shipped and member-created roles alike — a name
-  # either kind holds is taken.
-  defp refute_name_taken(ctx, name) do
-    if Arca.exists?(ctx, AquaPath.agent_file(name)),
-      do: {:error, {:invalid_argument, "Role '#{name}' already exists"}},
-      else: :ok
+  # A role no glob on the soul names is a file the runtime never offers,
+  # so the soul's leave to clone into the new role is given in the same
+  # act as the role — one `<name>.*` key on its allowlist. The role stands
+  # either way; an estate with no soul, or a soul write that fails, is
+  # said in the answer (`cloneable: false` and why), never hidden.
+  defp clone_leave(ctx, name) do
+    soul = AquaPath.soul_name()
+    glob = AquaAgent.clone_glob(name)
+
+    rewrite = fn bytes ->
+      with {:ok, agent} <- AquaAgent.parse(soul, bytes) do
+        policy = Map.put(agent.tool_policy, glob, "auto")
+        {:ok, AquaAgent.serialize(%{agent | tool_policy: policy})}
+      end
+    end
+
+    case Arca.Overlay.update(ctx, AquaPath.agent_file(soul), rewrite) do
+      :ok ->
+        %{cloneable: true}
+
+      {:error, :not_found} ->
+        %{cloneable: false, note: "There is no soul here to clone into it."}
+
+      {:error, reason} ->
+        Logger.warning("[AquaTool] aqua.create #{name}: soul glob failed: #{inspect(reason)}")
+
+        %{
+          cloneable: false,
+          note:
+            "The soul was not given leave to clone into it: " <>
+              (Emissary.MCP.ToolError.render(reason) || "the write failed")
+        }
+    end
+  end
+
+  @doc """
+  The digest of a prompt as `get` answers it in `content_digest`, and as
+  `update` compares an `expected_digest` against — so an editor can say
+  which version it edited.
+  """
+  @spec content_digest(String.t()) :: String.t()
+  def content_digest(content) when is_binary(content), do: Cyfr.Digest.sha256_hex(content)
+
+  defp check_expected_digest(_agent, nil), do: :ok
+
+  defp check_expected_digest(agent, digest) when is_binary(digest) do
+    if content_digest(agent.prompt) == digest do
+      :ok
+    else
+      {:error,
+       {:conflict, "The prompt changed since you opened it — reload to see the current one"}}
+    end
+  end
+
+  defp check_expected_digest(_agent, _digest),
+    do: {:error, {:invalid_argument, "expected_digest must be a string"}}
+
+  defp one_policy_argument(%{"tool_policy" => policy, "tool_policy_patch" => patch})
+       when not is_nil(policy) and not is_nil(patch),
+       do: {:error, {:invalid_argument, "Give tool_policy or tool_policy_patch, not both"}}
+
+  defp one_policy_argument(_args), do: :ok
+
+  # The patch's own shape is checked at the door; what it makes of the
+  # policy is checked under the lock, where the policy is known.
+  defp validate_patch(nil), do: :ok
+
+  defp validate_patch(patch) when is_map(patch) do
+    Enum.find_value(patch, :ok, fn
+      {key, value} when not is_binary(key) or value not in ["ask", "auto", nil] ->
+        {:error,
+         {:invalid_argument, "tool_policy_patch: #{inspect(key)} must be ask, auto or null"}}
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp validate_patch(_patch),
+    do: {:error, {:invalid_argument, "tool_policy_patch must be an object"}}
+
+  defp patched_policy(policy, nil, _type), do: {:ok, policy}
+
+  defp patched_policy(policy, patch, type) do
+    merged =
+      Enum.reduce(patch, policy, fn
+        {key, nil}, acc -> Map.delete(acc, key)
+        {key, mode}, acc -> Map.put(acc, key, mode)
+      end)
+
+    with :ok <- validate_tool_policy(merged, type), do: {:ok, merged}
   end
 
   # `nil` for an updatable field removes it (v2 semantics); an absent key
@@ -707,18 +884,6 @@ defmodule Compendium.MCP.AquaTool do
     else
       agent
     end
-  end
-
-  defp read_skill_manifest(ctx, name) do
-    with {:ok, binary} <- Arca.get(ctx, AquaPath.skill_manifest(name)) do
-      AquaAgent.parse_frontmatter(binary)
-    end
-  end
-
-  defp refute_skill_taken(ctx, name) do
-    if Arca.exists?(ctx, AquaPath.skill_manifest(name)),
-      do: {:error, {:invalid_argument, "Scroll '#{name}' already exists"}},
-      else: :ok
   end
 
   # The Agent Skills manifest: frontmatter `name` (the directory's) and a
@@ -761,11 +926,11 @@ defmodule Compendium.MCP.AquaTool do
   # something actually reads its bundle, so clicking a person's name opens
   # a chat instead of waiting on a registry round trip that can fail.
   #
-  # This tool is where every agent read lands — the roster, one agent's
-  # detail, and therefore a turn, which resolves its orchestrator through
-  # here before it runs. Hooking it once covers all three, and keeps the
-  # reach inside the namespace that already reads the bundle rather than
-  # spreading a tenancy call into the harness.
+  # This tool is where every agent read from outside lands — the roster
+  # and one agent's detail, for the console and any MCP client. The turn
+  # reads the same tree in-process (`Aqua.AgentConfig.roster/1`) and hooks
+  # itself the same way, so whichever reader comes first, the bundle is
+  # there before anything roots an authority in it.
   defp ensure_bundle(%Context{} = ctx), do: Sanctum.Provisioning.ensure_provisioned(ctx)
 
   defp validate_name(name) do
@@ -776,43 +941,41 @@ defmodule Compendium.MCP.AquaTool do
          {:invalid_argument, "Invalid name #{inspect(name)} — use letters, digits, '_' and '-'"}}
   end
 
-  # The policy vocabulary is exactly "ask" | "auto" and keys are
-  # "tool.action", "tool.*", or a bare native-tool name ("native_search").
-  # Anything else is rejected here so a schema-following caller can never
-  # persist a value the formula would silently reinterpret (the runtime
-  # treats every non-"auto" value as "ask").
-  defp validate_tool_policy(nil), do: :ok
+  # Two rules at this door. The grammar is `Compendium.AquaAgent
+  # .check_tool_policy/1` — the same rule the file parser applies, so
+  # nothing this door admits can fail to parse back. The meaning is
+  # `Aqua.Policy.check_authored/2` — what a person may WRITE: no automatic
+  # destructive or external action on any agent, no `ask` on a role (a
+  # cloned role has no card to raise), no UI event held at ask. The parser
+  # keeps grammar only, so a hand-edited file still loads and the runtime
+  # ceiling (`Aqua.ToolGrants.effective/2`) demotes what this door would
+  # have refused. An absent argument leaves the policy alone
+  # (`apply_updates/2`).
+  defp validate_tool_policy(nil, _type), do: :ok
 
-  defp validate_tool_policy(policy) when is_map(policy) do
-    Enum.find_value(policy, :ok, fn {key, value} ->
-      cond do
-        value not in ["ask", "auto"] ->
-          {:error,
-           {:invalid_argument,
-            "Invalid tool_policy value #{inspect(value)} for #{inspect(key)} — use \"ask\" or \"auto\""}}
-
-        not valid_policy_key?(key) ->
-          {:error,
-           {:invalid_argument,
-            "Invalid tool_policy key #{inspect(key)} — use \"tool.action\", \"tool.*\", or \"native_search\""}}
-
-        true ->
-          nil
-      end
-    end)
-  end
-
-  defp validate_tool_policy(_),
-    do: {:error, {:invalid_argument, "tool_policy must be an object"}}
-
-  defp valid_policy_key?("native_search"), do: true
-
-  defp valid_policy_key?(key) when is_binary(key) do
-    case String.split(key, ".") do
-      [tool, action] when tool != "" and action != "" -> true
-      _ -> false
+  defp validate_tool_policy(policy, type) do
+    with :ok <- check_grammar(policy),
+         :ok <- Aqua.Policy.check_auto_only(policy),
+         :ok <- Aqua.Policy.check_authored(policy, type) do
+      :ok
+    else
+      {:error, reason} when is_binary(reason) -> {:error, {:invalid_argument, reason}}
+      {:error, reason} -> {:error, {:invalid_argument, tool_policy_message(reason)}}
     end
   end
 
-  defp valid_policy_key?(_), do: false
+  defp check_grammar(policy), do: AquaAgent.check_tool_policy(policy)
+
+  defp type_of_name(name),
+    do: if(AquaPath.soul?(name), do: AquaAgent.soul_type(), else: AquaAgent.role_type())
+
+  defp tool_policy_message({:tool_policy_invalid_value, key, value}),
+    do:
+      "Invalid tool_policy value #{inspect(value)} for #{inspect(key)} — use \"ask\" or \"auto\""
+
+  defp tool_policy_message({:tool_policy_invalid_key, key}),
+    do:
+      "Invalid tool_policy key #{inspect(key)} — use \"tool.action\", \"tool.*\", or \"native_search\""
+
+  defp tool_policy_message(:tool_policy_not_a_map), do: "tool_policy must be an object"
 end

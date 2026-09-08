@@ -30,10 +30,16 @@ defmodule Cyfr.SanctumSurfacesTest do
   @surfaces %{
     # `Sanctum.Authority` is `Aqua.MCPHelpers` alone: the in-chain call an
     # approved proposal runs under carries the chain's authority, and the
-    # seam's contract names its type.
+    # seam's contract names its type. `Sanctum.Provisioning` is
+    # `Aqua.AgentConfig`'s two in-process agent reads alone — the first-need
+    # hook: a turn reads its estate's tree in-process now rather than
+    # through the `aqua` tool, and the bundle a group estate is filled
+    # with on first read has to be there before the turn roots an
+    # authority in it. The tool keeps the same hook for readers outside
+    # the harness.
     "aqua" => ~w(
       Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.Notify
-      Sanctum.Sanitizer Sanctum.Tenancy
+      Sanctum.Provisioning Sanctum.Sanitizer Sanctum.Tenancy
     ),
     # `Sanctum.Provisioning` is `Compendium.MCP.AquaTool` and
     # `ComponentTool`'s list action alone — the first-need hook. A group
@@ -42,10 +48,16 @@ defmodule Cyfr.SanctumSurfacesTest do
     # a DM must not wait on a registry round trip that can fail. These two
     # tools ARE the bundle's readers, so the hook lives where the read is
     # rather than in every caller that might trigger one.
+    # `Sanctum.Limits` is here for `Compendium.Manifest.Caps` alone: a
+    # manifest's `limits` block is that module's vocabulary, and the caps
+    # reader matches the keys against its closed field list rather than
+    # trusting `String.to_existing_atom/1` to find atoms some other module
+    # happened to load first.
     "compendium" => ~w(
       Sanctum.Cipher Sanctum.CipherAAD Sanctum.ComponentRef Sanctum.Consent
-      Sanctum.Context Sanctum.JCS Sanctum.Namespace Sanctum.Provisioning
-      Sanctum.Sanitizer Sanctum.SignIn Sanctum.ToolPattern Sanctum.VaultReader
+      Sanctum.Context Sanctum.JCS Sanctum.Limits Sanctum.Namespace
+      Sanctum.Provisioning Sanctum.Sanitizer Sanctum.SignIn Sanctum.ToolPattern
+      Sanctum.VaultReader
     ),
     # `Sanctum.Cipher` is here for `Cyfr.Release` alone: boot tells an
     # operator with no explicit keyring that rotating their secret orphans

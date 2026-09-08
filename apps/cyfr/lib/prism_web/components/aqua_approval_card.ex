@@ -14,13 +14,20 @@ defmodule PrismWeb.AquaApprovalCard do
   Approve carries a *scope*:
 
     - `:once`         — run it this once (default)
-    - `:conversation` — run it, and auto-approve the same `tool.action` for the
-      rest of this conversation (ephemeral; gone on reload / new conversation)
-    - `:always`       — run it, and write `"auto"` for that `tool.action` into
-      the agent's `tool_policy` allowlist so it never asks again (not offered
-      for `:destructive` / `:external` actions). The allowlist belongs to the
-      athanor, not to whoever clicks: in a group the control says so, because
-      one member is deciding for everyone.
+    - `:conversation` — run it, and record a standing allow for the same
+      `tool.action` in this conversation (a `tool_grants` row; it survives
+      a restart and ends with the thread)
+    - `:always`       — run it, and record the standing allow for the agent
+      wherever it works (an agent-scope row in its home estate). The row
+      belongs to the athanor, not to whoever clicks: in a group the control
+      says so, because one member is deciding for everyone.
+
+  Which of the two are offered follows the action's own declaration, the
+  same one the runner and the grant store enforce: none for a
+  `:destructive` / `:external` action, none for an action declared
+  `standing: false`, only "for this chat" for one declared
+  `standing: :conversation`. The refusal the runner would post is the
+  backstop for a race, not the outcome of a visible button.
 
   Risk visualization derives from the action's `kind` (read/write/execute/
   destructive/external). The colour weight scales with the kind so the common
@@ -41,6 +48,7 @@ defmodule PrismWeb.AquaApprovalCard do
     assigns =
       assigns
       |> Map.put(:kind, action_kind(assigns.payload))
+      |> Map.put(:standing, standing(assigns.payload))
       |> Map.put(:proposal, assigns.payload[:proposal] || assigns.payload["proposal"])
 
     ~H"""
@@ -141,7 +149,7 @@ defmodule PrismWeb.AquaApprovalCard do
                 phx-click="approval:decline_never"
                 phx-target={@myself}
                 class="rounded px-2 py-1 text-[11px] text-gray-500 hover:bg-gray-800 hover:text-gray-300"
-                title="Decline and remove this capability from the agent's allowlist"
+                title="Decline and remove this action from AQUA's allowlist"
               >
                 decline &amp; remove
               </button>
@@ -174,6 +182,7 @@ defmodule PrismWeb.AquaApprovalCard do
             >
               <span>remember:</span>
               <button
+                :if={standing_offered?(@kind, @standing, :conversation)}
                 type="button"
                 phx-click="approval:approve"
                 phx-value-scope="conversation"
@@ -183,7 +192,7 @@ defmodule PrismWeb.AquaApprovalCard do
                 for this chat
               </button>
               <button
-                :if={@kind not in [:destructive, :external]}
+                :if={standing_offered?(@kind, @standing, :always)}
                 type="button"
                 phx-click="approval:approve"
                 phx-value-scope="always"
@@ -278,17 +287,15 @@ defmodule PrismWeb.AquaApprovalCard do
   # is a decision taken on behalf of everyone in it, and the control should
   # not read as a personal preference.
   defp always_title(nil),
-    do: "Stop asking — adds this action to the agent's allowlist as auto-approved"
+    do: "Stop asking — adds this action to AQUA's allowlist as auto-approved"
 
   defp always_title(name),
-    do: "Stop asking — adds this action to #{name}'s agent allowlist, for every member"
+    do: "Stop asking — adds this action to #{name}'s AQUA allowlist, for every member"
 
   defp always_confirm(name),
     do: "Stop asking for this action in #{name}? It applies to every member, not just you."
 
-  defp parse_scope("conversation"), do: :conversation
-  defp parse_scope("always"), do: :always
-  defp parse_scope(_), do: :once
+  defp parse_scope(scope), do: Aqua.ApprovalScope.parse(scope)
 
   defp status(:pending), do: :pending
   defp status(:running), do: :running
@@ -308,6 +315,22 @@ defmodule PrismWeb.AquaApprovalCard do
   defp action_kind(%{"action_kind" => k}) when is_binary(k), do: safe_atom(k)
   defp action_kind(%{action_kind: k}) when is_binary(k), do: safe_atom(k)
   defp action_kind(_), do: nil
+
+  # The action's standing rule as the intent carries it: `false` (never),
+  # `"conversation"` (this thread only) or absent (either scope).
+  defp standing(%{"standing" => standing}), do: standing
+  defp standing(%{standing: standing}), do: standing
+  defp standing(_), do: nil
+
+  defp standing_offered?(kind, _standing, _scope) when kind in [:destructive, :external],
+    do: false
+
+  defp standing_offered?(kind, standing, scope),
+    do: standing_offered(kind, Aqua.ApprovalScope.standing(standing), scope)
+
+  defp standing_offered(_kind, false, _scope), do: false
+  defp standing_offered(_kind, :conversation, :always), do: false
+  defp standing_offered(_kind, _standing, _scope), do: true
 
   defp safe_atom(s), do: PrismWeb.AquaLive.Catalog.existing_atom(s)
 

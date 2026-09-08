@@ -136,12 +136,16 @@ defmodule Sanctum.Consent.Authz do
   @doc """
   The interactive arm for a call already inside a running chain.
 
-  An approved proposal runs guest-planed: the chain's authority was applied
-  at the dispatch chokepoint and the card the person clicked is the consent
-  moment, so the plane is not asked again. The surface half stays — only an
-  `:oidc` session's chain reaches an interactive action. A key- or
-  schedule-started run of the same formula is refused here exactly as it
-  is at the door.
+  Every in-chain call runs guest-planed, so the plane conjunct of
+  `authorize_interactive/1` is dropped here for all of them — not only for
+  an approved card. What stands in for it is the chain's own gate: the
+  authority's tool grant, minted from the caps a person consented to, was
+  applied at the dispatch chokepoint before this runs. An action the
+  agent's policy holds at `ask` reaches here through the card the person
+  clicked; one held at `auto` reaches here on the strength of that consent
+  alone. The surface half stays — only an `:oidc` session's chain gets
+  through, so a key- or schedule-started run of the same formula is
+  refused here exactly as it is at the door.
   """
   @spec authorize_interactive_in_chain(Context.t()) :: {:ok, :interactive} | {:error, refusal()}
   def authorize_interactive_in_chain(%Context{} = ctx) do

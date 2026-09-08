@@ -591,11 +591,16 @@ if config_env() != :test do
     config :cyfr, :platform_admin_emails, platform_admins
 
     # The public-door caps (Sanctum.Tenancy.Caps). Unset means off: a private
-    # box needs none of them; a server whose door is `*` sets them.
+    # box needs none of them; a server whose door is `*` sets them. The one
+    # exception is the pair cap, on by default (`0` turns it off): a DM is
+    # minted from the wire against anyone the caller shares a room with, so
+    # a ceiling per person is a default, not an opt-in.
     config :cyfr, :caps,
       max_athanors: env_int.("CYFR_MAX_ATHANORS", nil),
       max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", nil),
+      max_pairs_per_person: env_int.("CYFR_MAX_PAIRS_PER_PERSON", 200),
       max_members_per_group: env_int.("CYFR_MAX_MEMBERS_PER_GROUP", nil),
+      max_conversations_per_athanor: env_int.("CYFR_MAX_CONVERSATIONS_PER_ATHANOR", 1000),
       mint_per_hour: env_int.("CYFR_MINT_PER_HOUR", nil),
       athanor_storage_bytes: env_int.("CYFR_ATHANOR_STORAGE_BYTES", nil)
 

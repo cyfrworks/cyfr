@@ -41,8 +41,29 @@ defmodule Aqua.FakeTurn do
   @doc "The profile id `pin_profile/1` answers."
   def fake_profile_id, do: "prof_fake"
 
+  # A started turn has an execution row carrying its pin — the runner reads
+  # a card's profile back from the card's own execution — so the fake
+  # records one exactly as the engine would, under the turn's tenant.
   def start(ctx, input, profile_id) do
     eid = "exec_fake_" <> Integer.to_string(System.unique_integer([:positive]))
+
+    recorded =
+      Arca.Execution.record_start(%{
+        id: eid,
+        reference: "formula:local.aqua",
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        started_at: DateTime.utc_now(),
+        status: "running",
+        component_type: "formula",
+        profile_id: profile_id
+      })
+
+    case recorded do
+      {:ok, _} -> :ok
+      {:error, reason} -> raise "the fake turn could not record an execution: #{inspect(reason)}"
+    end
+
     report({:fake_start, eid, ctx, input, profile_id})
     {:ok, eid}
   end

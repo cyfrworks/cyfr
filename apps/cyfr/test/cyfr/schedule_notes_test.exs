@@ -37,7 +37,9 @@ defmodule Cyfr.ScheduleNotesTest do
       %{
         request_id: "req_1",
         schedule_id: "sched_#{System.unique_integer([:positive])}",
-        reference: "daily-report",
+        # What the scheduler really carries: the pinned component reference,
+        # which the ledger's name grammar would refuse as a note name.
+        reference: "formula:local.daily-report:1.2.3",
         execution_id: "exec_1",
         athanor_id: estate.id,
         user_id: user,
@@ -50,34 +52,57 @@ defmodule Cyfr.ScheduleNotesTest do
 
   defp fire(metadata), do: ScheduleNotes.handle_event(ScheduleNotes.event(), %{}, metadata, nil)
 
-  test "a completed run that asked to be kept files a note with the run as provenance",
+  test "a completed run that asked to be kept files a note, named by the schedule's id, with the run as provenance",
        %{estate: estate, user: user, ctx: ctx} do
     metadata = completed(estate, user)
     assert :ok = fire(metadata)
 
-    assert {:ok, note} = Aqua.Notes.read(ctx, "schedule-daily-report")
+    assert {:ok, note} = Aqua.Notes.read(ctx, metadata.schedule_id)
     assert note.content =~ "42 rows reconciled"
     assert note.kept_by == "schedule:" <> metadata.schedule_id
     assert note.execution == "exec_1"
+  end
+
+  test "the next run replaces the note before it", %{estate: estate, user: user, ctx: ctx} do
+    metadata = completed(estate, user)
+    assert :ok = fire(metadata)
+    assert :ok = fire(%{metadata | output: %{"summary" => "43 rows reconciled"}})
+
+    assert {:ok, note} = Aqua.Notes.read(ctx, metadata.schedule_id)
+    assert note.content =~ "43 rows"
+    refute note.content =~ "42 rows"
+    assert {:ok, %{notes: [_]}} = Aqua.Notes.list(ctx)
   end
 
   test "note_name names the note; a string output is kept as it is; a long one is cut with a marker",
        %{estate: estate, user: user, ctx: ctx} do
     long = String.duplicate("é", 40_000)
 
-    assert :ok =
-             fire(
-               completed(estate, user, %{
-                 output: long,
-                 metadata: ~s({"keep_outcome": true, "note_name": "reconciliation"})
-               })
-             )
+    metadata =
+      completed(estate, user, %{
+        output: long,
+        metadata: ~s({"keep_outcome": true, "note_name": "reconciliation"})
+      })
+
+    assert :ok = fire(metadata)
 
     assert {:ok, note} = Aqua.Notes.read(ctx, "reconciliation")
     assert String.valid?(note.content)
     assert String.ends_with?(note.content, "longer than 64 KiB]")
     assert byte_size(note.content) <= 64 * 1024 + 100
-    assert {:error, _} = Aqua.Notes.read(ctx, "schedule-daily-report")
+    assert {:error, _} = Aqua.Notes.read(ctx, metadata.schedule_id)
+  end
+
+  test "a note_name the ledger's grammar refuses writes nothing, and the id is not used instead",
+       %{estate: estate, user: user, ctx: ctx} do
+    assert :ok =
+             fire(
+               completed(estate, user, %{
+                 metadata: ~s({"keep_outcome": true, "note_name": "nightly: sync"})
+               })
+             )
+
+    assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
   end
 
   test "a run nobody asked to keep, or with unreadable metadata, writes nothing",
@@ -85,7 +110,7 @@ defmodule Cyfr.ScheduleNotesTest do
     assert :ok = fire(completed(estate, user, %{metadata: nil}))
     assert :ok = fire(completed(estate, user, %{metadata: ~s({"keep_outcome": false})}))
     assert :ok = fire(completed(estate, user, %{metadata: "not json"}))
-    assert {:ok, []} = Aqua.Notes.list(ctx)
+    assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
   end
 
   test "a name the ledger refuses is logged, not raised, and the run stands",
@@ -97,13 +122,35 @@ defmodule Cyfr.ScheduleNotesTest do
                })
              )
 
-    assert {:ok, []} = Aqua.Notes.list(ctx)
+    assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+  end
+
+  test "an event that names no athanor is logged, not raised", %{estate: estate, user: user} do
+    assert :ok = fire(completed(estate, user, %{athanor_id: nil}))
+  end
+
+  test "a failure inside the handler does not detach it", %{estate: estate, user: user} do
+    # Through `:telemetry.execute/3`, which detaches a handler that fails
+    # in any class: an athanor that is not even a string makes the
+    # crossing raise deep inside, and the handler must still be listed
+    # afterwards. Exits and throws share the same catch.
+    before = ScheduleNotes.event() |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+    assert "notes-schedule-completed" in before
+
+    :telemetry.execute(
+      ScheduleNotes.event(),
+      %{},
+      completed(estate, user, %{athanor_id: :nowhere})
+    )
+
+    after_ = ScheduleNotes.event() |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+    assert "notes-schedule-completed" in after_
   end
 
   test "an archived athanor's schedule writes nothing", %{estate: estate, user: user, ctx: ctx} do
     {:ok, _} = Sanctum.Tenancy.Athanors.archive(estate)
     assert :ok = fire(completed(estate, user))
-    assert {:ok, []} = Aqua.Notes.list(ctx)
+    assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
   end
 
   test "the handler is attached at boot, once" do

@@ -118,15 +118,33 @@ defmodule Emissary.MCP.NotesTool do
                 "athanor, or every estate you belong to. Writes take none; a note " <>
                 "lands where you are."
           },
+          "athanor_id" => %{
+            "type" => "string",
+            "description" =>
+              "read: the estate a search answered for the note — reads it there, " <>
+                "under your own seat."
+          },
+          "limit" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "maximum" => Notes.page_max(),
+            "description" => "list, search: how many to answer at most (default 100)."
+          },
+          "after" => %{
+            "type" => "string",
+            "description" => "list, search: the `next` cursor a previous page answered."
+          },
           "conversation" => %{
             "type" => "string",
             "description" =>
-              "keep, pin: provenance — the conversation the note was kept from. " <>
-                "Supplied by the host when a card is approved."
+              "keep, pin, at the door: provenance — the conversation the note was kept " <>
+                "from. In a chain the host stamps it and this is ignored."
           },
           "execution" => %{
             "type" => "string",
-            "description" => "keep, pin: provenance — the execution the note was kept from."
+            "description" =>
+              "keep, pin, at the door: provenance — the execution the note was kept from. " <>
+                "In a chain the host stamps it and this is ignored."
           }
         },
         "required" => ["action"]
@@ -151,14 +169,14 @@ defmodule Emissary.MCP.NotesTool do
 
   defp dispatch(ctx, %{"action" => "keep", "name" => name, "content" => content} = args)
        when is_binary(name) and is_binary(content),
-       do: Notes.keep(ctx, name, content, provenance(args))
+       do: Notes.keep(ctx, name, content, provenance(args, ctx))
 
   defp dispatch(_ctx, %{"action" => "keep"}),
     do: {:error, {:invalid_argument, "keep requires 'name' and 'content'"}}
 
   defp dispatch(ctx, %{"action" => "pin", "name" => name, "content" => content} = args)
        when is_binary(name) and is_binary(content),
-       do: Notes.pin(ctx, name, content, provenance(args))
+       do: Notes.pin(ctx, name, content, provenance(args, ctx))
 
   defp dispatch(_ctx, %{"action" => "pin"}),
     do: {:error, {:invalid_argument, "pin requires 'name' and 'content' (empty content clears)"}}
@@ -170,20 +188,20 @@ defmodule Emissary.MCP.NotesTool do
     do: {:error, {:invalid_argument, "forget requires 'name'"}}
 
   defp dispatch(ctx, %{"action" => "list"} = args) do
-    with {:ok, notes} <- Notes.list(ctx, scope(args)) do
-      {:ok, %{notes: notes, scope: scope(args)}}
+    with {:ok, page} <- Notes.list(ctx, scope(args), page(args)) do
+      {:ok, Map.put(page, :scope, scope(args))}
     end
   end
 
   defp dispatch(ctx, %{"action" => "read", "name" => name} = args) when is_binary(name),
-    do: Notes.read(ctx, name, scope(args))
+    do: Notes.read(ctx, name, scope(args), athanor_id: args["athanor_id"])
 
   defp dispatch(_ctx, %{"action" => "read"}),
     do: {:error, {:invalid_argument, "read requires 'name'"}}
 
   defp dispatch(ctx, %{"action" => "search", "query" => query} = args) when is_binary(query) do
-    with {:ok, matches} <- Notes.search(ctx, query, scope(args)) do
-      {:ok, %{matches: matches, scope: scope(args)}}
+    with {:ok, %{notes: matches} = page} <- Notes.search(ctx, query, scope(args), page(args)) do
+      {:ok, page |> Map.delete(:notes) |> Map.merge(%{matches: matches, scope: scope(args)})}
     end
   end
 
@@ -195,14 +213,22 @@ defmodule Emissary.MCP.NotesTool do
 
   defp scope(args), do: Map.get(args, "scope", "estate")
 
-  # Where a note was kept from. The runner stamps the conversation and the
-  # execution onto an approved call's arguments — it is the one party that
-  # knows both — and a chain's host-supplied lineage names the execution
-  # too; a call from the door carries whatever the person chose to say.
-  defp provenance(args) do
+  defp page(args), do: [limit: args["limit"], after: args["after"]]
+
+  # Where a note was kept from. In a chain the registry stamps the
+  # execution and the conversation onto the call as host-only keys
+  # (`Emissary.MCP.ToolRegistry`'s lineage), and those are the only
+  # provenance read there — a value the model put under `conversation` or
+  # `execution` is ignored, never recorded. At the door a person says
+  # what they choose to.
+  defp provenance(args, %Context{plane: :guest}) do
     [
-      conversation: args["conversation"],
-      execution: args["execution"] || args["root_execution_id"] || args["parent_execution_id"]
+      conversation: args["conversation_id"],
+      execution: args["root_execution_id"] || args["parent_execution_id"]
     ]
+  end
+
+  defp provenance(args, _ctx) do
+    [conversation: args["conversation"], execution: args["execution"]]
   end
 end

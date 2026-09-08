@@ -44,7 +44,7 @@ var initCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack (cyfr + mcp-bridge, plus optional caddy) with "cyfr up".
 
-Downloads docker-compose.yml, Caddyfile, .env.example, and the bundled scaffold (component/tincture/integration guides, wit/ definitions, aqua/ prompts) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; and derives .env from .env.example — a fresh CYFR_SECRET_KEY_BASE is generated and you're prompted for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email. Run with --no-interactive to take the defaults silently.
+Downloads docker-compose.yml, Caddyfile, .env.example, and the bundled scaffold (component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; and derives .env from .env.example — a fresh CYFR_SECRET_KEY_BASE is generated and you're prompted for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email. Run with --no-interactive to take the defaults silently.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml, .env, and .env.example are kept if they already exist. Use --force to re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml (--force never touches .env / .env.example).`,
 	Example: `  cyfr init
@@ -208,7 +208,7 @@ database_path: ./data/cyfr.db
 			}
 			fmt.Println("  component-guide.md / tincture-guide.md / integration-guide.md downloaded")
 			fmt.Println("  wit/ interface definitions downloaded")
-			fmt.Println("  aqua/ orchestrator prompts downloaded")
+			fmt.Println("  aqua/ soul, roles and scrolls downloaded")
 		}
 		if configCreated {
 			fmt.Println("  cyfr.yaml created")

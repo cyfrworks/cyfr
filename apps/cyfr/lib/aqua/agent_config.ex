@@ -5,17 +5,30 @@ defmodule Aqua.AgentConfig do
   require Logger
 
   @moduledoc """
-  Builds agent configuration for formula input by querying the `aqua` MCP tool.
+  The soul's and the roles' definitions, as a turn reads them.
 
-  All prompt and metadata access goes through the aqua tool, which reads the
-  athanor's `aqua/` tree — the soul and its roles — at runtime. This ensures
-  a single canonical API for both internal and external harnesses.
+  Reads are in-process: `roster/1` and `agent/2` read the athanor's
+  `aqua/` tree through `Compendium.AquaAgent` — the same files the `aqua`
+  tool serves, without the tool's round trip — and answer string-keyed
+  maps in the tool's own projection, so a consumer reads one key spelling
+  whether a definition came from here or over the wire. Every write, and
+  every read made from outside the harness, still goes through the tool:
+  `call_aqua/2` is the MCP door, kept for those.
+
+  One turn used to make a dozen tool calls to compose itself — the
+  orchestrator twice, the roster, the catalyst listing three times, the
+  scroll index, and one `get` per role — each minting a request-log row.
+  Now the tree is read once (`roster/1`), the catalyst listing once
+  (`catalyst_listing/1`), and the roles are built from the roster in hand
+  (`role_definitions/4`).
   """
 
+  alias Compendium.AquaAgent
+  alias Compendium.AquaPath
   alias Sanctum.Context
 
   # The agent's `tool_policy` is DECLARED policy — what the agent's author
-  # says it may do, edited on the agents page. A chat decision ("always
+  # says it may do, edited on the AQUA page. A chat decision ("always
   # approve", "never ask again") is not an edit to it: those are
   # `Aqua.ToolGrants` rows, composed over this at use time. The two used to
   # share this storage, so clicking a button in one conversation rewrote
@@ -23,116 +36,130 @@ defmodule Aqua.AgentConfig do
   # once agents belong to people rather than estates, it would have
   # followed a borrowed agent home.
 
-  @doc """
-  Load full config for an orchestrator (prompt content + resolved catalyst).
-
-  Uses the aqua tool to fetch prompt content and metadata. Resolves the
-  versionless catalyst_ref to the latest installed version.
-  """
-  def orchestrator_config(%Context{} = ctx, agent_name \\ "aqua") do
-    name = agent_name || "aqua"
-
-    with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => name}),
-         content when is_binary(content) <- guide["content"],
-         catalyst_ref_raw <- guide["catalyst_ref"],
-         {:ok, catalyst_ref} <- resolve_catalyst(ctx, catalyst_ref_raw) do
-      {:ok,
-       %{
-         name: name,
-         title: guide["title"],
-         content: content,
-         catalyst_ref: catalyst_ref,
-         model: guide["model"],
-         tool_policy: guide["tool_policy"] || %{}
-       }}
-    else
-      nil -> {:error, :no_content}
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  # What a storage fault reads as on the tape: the adapter's term is for
+  # the log, the person gets the one sentence every storage-backed answer
+  # gives.
+  @unavailable {:unavailable, "The estate's AQUA tree"}
 
   @doc """
-  The role definitions a turn hands the formula — the whole closet of the
-  tree the running agent lives in, flat: a role has no roles of its own,
-  and a soul spawns every role its estate keeps.
+  The estate's agents, read once: the soul first, then the roles by name,
+  disabled ones dropped — each as the string-keyed map the `aqua` tool's
+  `list` with `detail` answers (`"name"`, `"title"`, `"description"`,
+  `"type"`, `"content"`, `"tool_policy"`, `"catalyst_ref"`, `"model"`).
 
-  `orchestrator` is the resolved agent (its `"owner"` names the tree). The
-  GUIDES are read from that owner's tree, which is the focus for an
-  estate's soul and the person's own athanor for their own — an estate's
-  soul can never clone into a role that lives in someone's private tree.
-  The CATALYSTS still resolve against `ctx` — components belong to the
-  estate the turn runs in, not to the agent's owner.
+  Fails as it reads: a tree that cannot be listed is
+  `{:error, {:unavailable, _}}`, never an empty roster a turn would
+  quietly run without a crew. A single file that fails to parse is skipped
+  and logged — one broken role must not take the soul down
+  (`Compendium.AquaAgent.list/1`).
+
+  The read is also where an estate gets its bundle on first need
+  (`Sanctum.Provisioning.ensure_provisioned/1`): a group estate is minted
+  as a bare row and filled the first time something reads it, and a turn
+  roots an authority in that bundle right after this read. The `aqua`
+  tool hooks its own reads the same way for callers outside the harness.
   """
-  def role_definitions(%Context{} = ctx, orchestrator, fallback_catalyst, fallback_model)
-      when is_map(orchestrator) do
-    read_ctx = owner_read_ctx(ctx, orchestrator["owner"])
+  @spec roster(Context.t()) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
+  def roster(%Context{} = ctx) do
+    Sanctum.Provisioning.ensure_provisioned(ctx)
 
-    with {:ok, list_result} <- call_aqua(read_ctx, %{"action" => "list"}) do
-      roles = list_result |> extract_guides() |> Enum.filter(&(&1["type"] == "role"))
+    case AquaAgent.list(ctx) do
+      {:ok, agents, errors} ->
+        Enum.each(errors, fn {name, reason} ->
+          Logger.warning(
+            "[Aqua.AgentConfig] agent #{inspect(name)} skipped — it does not parse: " <>
+              inspect(reason)
+          )
+        end)
 
-      listing =
-        case catalyst_listing(ctx) do
-          {:ok, components} -> components
-          # Fail-open by choice: no listing means sub-agents fall back to
-          # the parent's catalyst rather than the roster refusing to build.
-          _ -> []
-        end
+        {:ok, agents |> Enum.reject(& &1.disabled) |> Enum.map(&project/1)}
 
-      roles
-      |> Enum.map(fn g ->
-        build_role(read_ctx, listing, g["name"], fallback_catalyst, fallback_model)
-      end)
-      |> Enum.reject(&is_nil/1)
+      {:error, reason} ->
+        Logger.error("[Aqua.AgentConfig] the aqua tree could not be listed: #{inspect(reason)}")
+        {:error, @unavailable}
+    end
+  end
+
+  @doc """
+  One agent by name — the soul or a role — in the same projection as
+  `roster/1`. `{:error, :not_found}` for a name the tree does not hold,
+  and for one outside the name grammar: a name becomes a path segment, so
+  it is checked here as the tool checks it at its door.
+  """
+  @spec agent(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def agent(%Context{} = ctx, name) when is_binary(name) do
+    if AquaPath.valid_name?(name) do
+      Sanctum.Provisioning.ensure_provisioned(ctx)
+
+      with {:ok, agent} <- AquaAgent.get(ctx, name), do: {:ok, project(agent)}
     else
-      # Fail-open by choice: a broken aqua tool reads as "no roles", not
-      # as a refused turn — the soul still runs.
-      _ -> []
+      {:error, :not_found}
     end
   end
 
-  # --- Private helpers ---
-
-  # The agent's own tree, when it names one — through the refocus
-  # chokepoint (membership/archive checked), the same narrowing
-  # `Aqua.Prompt` makes for the parent's base prompt. An unreachable owner
-  # falls back to the focus read: an empty crew, never a refused turn.
-  defp owner_read_ctx(ctx, owner) when is_binary(owner) do
-    case Context.refocus(ctx, owner) do
-      {:ok, read_ctx} -> read_ctx
-      {:error, _} -> ctx
-    end
+  # The tool's `list detail: true` / `get` projection, string-keyed — the
+  # one spelling this module's consumers read.
+  defp project(agent) do
+    %{
+      "name" => agent.name,
+      "title" => agent.title,
+      "description" => agent.description,
+      "type" => AquaAgent.type_of(agent),
+      "content" => agent.prompt,
+      "tool_policy" => agent.tool_policy,
+      "catalyst_ref" => agent.catalyst_ref,
+      "model" => agent.model,
+      "disabled" => agent.disabled
+    }
   end
 
-  defp owner_read_ctx(ctx, _), do: ctx
+  @doc """
+  The role definitions a turn hands the formula — every role in `roster`
+  (the tree the running agent lives in, read once by the caller), flat: a
+  role has no roles of its own, and a soul spawns every role its estate
+  keeps. An estate's soul reads its own tree and a person's agent theirs,
+  so an estate's soul can never clone into a role that lives in someone's
+  private tree.
 
-  # `ctx` here is the OWNER read context — the guide comes from the tree
-  # the crew lives in; `listing` was resolved by the caller in the working
-  # estate.
-  defp build_role(ctx, listing, name, fallback_catalyst, fallback_model) do
-    with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => name}) do
-      content = guide["content"] || ""
-      description = guide["description"] || ""
-      title = guide["title"] || name
-      tool_policy = guide["tool_policy"] || %{}
-      raw_catalyst = guide["catalyst_ref"]
-      raw_model = guide["model"]
+  `listing` is the WORKING estate's catalyst listing
+  (`catalyst_listing/1`): components belong to the estate the turn runs
+  in, not to the agent's owner, so a role's own catalyst resolves against
+  it and falls back to the parent's when it does not.
 
-      # Resolve per-role catalyst, falling back to orchestrator's
+  `role_grants` is `%{role_name => rows}` (`Aqua.ToolGrants.for_agents/4`):
+  a role's definition carries its EFFECTIVE policy — its authored one with
+  the standing decisions made for that role and the kind ceiling applied
+  (`Aqua.ToolGrants.resolve/2`), exactly as the soul's is composed — never
+  the file as written. A "never" answered for the Builder holds when the
+  soul clones into it.
+  """
+  @spec role_definitions([map()], [map()], String.t() | nil, String.t() | nil, map()) :: [map()]
+  def role_definitions(roster, listing, fallback_catalyst, fallback_model, role_grants \\ %{})
+      when is_list(roster) and is_list(listing) and is_map(role_grants) do
+    role_type = AquaAgent.role_type()
+
+    for %{"type" => ^role_type, "name" => name} = role <- roster do
       {catalyst_ref, model} =
-        resolve_role_model(listing, raw_catalyst, raw_model, fallback_catalyst, fallback_model)
+        resolve_role_model(
+          listing,
+          role["catalyst_ref"],
+          role["model"],
+          fallback_catalyst,
+          fallback_model
+        )
+
+      effective =
+        Aqua.ToolGrants.resolve(role["tool_policy"] || %{}, Map.get(role_grants, name, []))
 
       %{
         "name" => name,
-        "title" => title,
-        "description" => description,
-        "prompt" => content,
-        "tool_policy" => tool_policy,
+        "title" => role["title"] || name,
+        "description" => role["description"] || "",
+        "prompt" => role["content"] || "",
         "catalyst_ref" => catalyst_ref,
         "model" => model
       }
-      |> put_formula_tool_surface(tool_policy)
-    else
-      _ -> nil
+      |> put_formula_tool_surface(effective)
     end
   end
 
@@ -143,9 +170,10 @@ defmodule Aqua.AgentConfig do
   The policy is the ONLY tool surface: it is always attached (an empty map
   when the agent carries none — the empty allowlist is the fail-closed
   default, never omission). The formula filters each tool's `action` enum to
-  its directly-callable verbs (read-kind or `"auto"`), routes `"ask"` actions
-  through the system-prompt approval prelude, and derives the provider-native
-  search tool from a bare `"native_search"` policy key.
+  its directly-callable verbs (exactly those held at `"auto"`, whatever the
+  kind), routes `"ask"` actions through the system-prompt approval prelude,
+  and derives the provider-native search tool from a bare `"native_search"`
+  policy key.
   """
   @spec put_formula_tool_surface(map(), map() | nil) :: map()
   def put_formula_tool_surface(input, tool_policy) when is_map(input) do
@@ -169,7 +197,7 @@ defmodule Aqua.AgentConfig do
   | :missing, resolved_ref}}`.
 
   A model with no key is the one thing that keeps a fresh athanor's AQUA
-  silent, so both the Agents page and the chat's own empty state ask here.
+  silent, so both the AQUA page and the chat's own empty state ask here.
   """
   @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
   def model_status(nil, _agents), do: %{}
@@ -181,8 +209,10 @@ defmodule Aqua.AgentConfig do
         _ -> []
       end
 
+    soul_type = AquaAgent.soul_type()
+
     agents
-    |> Enum.filter(&(&1["type"] == "soul"))
+    |> Enum.filter(&(&1["type"] == soul_type))
     |> Enum.map(& &1["catalyst_ref"])
     |> Enum.filter(&(is_binary(&1) and &1 != ""))
     |> Enum.uniq()
@@ -202,18 +232,28 @@ defmodule Aqua.AgentConfig do
     end
   end
 
-  @doc false
-  def resolve_catalyst(%Context{} = ctx, versionless_ref) when is_binary(versionless_ref) do
-    with {:ok, components} <- catalyst_listing(ctx) do
-      find_matching_catalyst(components, versionless_ref)
-    end
-  end
+  @doc """
+  The installed release a versionless catalyst ref resolves to in
+  `listing` — the newest by semver precedence, never lexicographic max
+  ("10.0.0" outranks "9.0.0").
+  """
+  @spec resolve_catalyst([map()], String.t() | nil) ::
+          {:ok, String.t()} | {:error, :catalyst_not_found | :no_catalyst_ref}
+  def resolve_catalyst(listing, versionless_ref)
+      when is_list(listing) and is_binary(versionless_ref),
+      do: find_matching_catalyst(listing, versionless_ref)
 
-  def resolve_catalyst(_ctx, nil), do: {:error, :no_catalyst_ref}
+  def resolve_catalyst(_listing, nil), do: {:error, :no_catalyst_ref}
 
-  # One listing for a whole pass: sub-agent resolution and model_status
-  # used to fetch the full catalyst listing once per agent.
-  defp catalyst_listing(ctx) do
+  @doc """
+  The working estate's installed catalysts, as `component.list` answers
+  them — read once per turn and handed to `resolve_catalyst/2` and
+  `role_definitions/4`, which used to fetch it each. Still a tool call:
+  components are the registry's, and this is the registry's own read of
+  them, one per turn.
+  """
+  @spec catalyst_listing(Context.t()) :: {:ok, [map()]} | {:error, :catalyst_lookup_failed}
+  def catalyst_listing(%Context{} = ctx) do
     result =
       Aqua.MCPHelpers.call_tool("component", ctx, %{
         "action" => "list",
@@ -249,12 +289,15 @@ defmodule Aqua.AgentConfig do
   end
 
   @doc """
-  Call the `aqua` tool and normalize its result to string keys.
+  Call the `aqua` tool and normalize its result to string keys — the MCP
+  door, for every write and for reads made from outside the harness (the
+  console's AQUA page). A turn's own reads are in-process
+  (`roster/1`, `agent/2`).
 
   Every aqua call goes through here so guide maps arrive with ONE key
   spelling: in-process results are atom-keyed, wire round-trips
   string-keyed, and consumers must not carry `m[:k] || m["k"]` pairs. The
-  console's agents page had a byte-identical private copy of this.
+  console's AQUA page had a byte-identical private copy of this.
   """
   @spec call_aqua(Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_aqua(ctx, args) do
@@ -277,45 +320,37 @@ defmodule Aqua.AgentConfig do
   def stringify_deep(list) when is_list(list), do: Enum.map(list, &stringify_deep/1)
   def stringify_deep(other), do: other
 
-  defp extract_guides(%{"guides" => guides}) when is_list(guides), do: guides
-  defp extract_guides(_), do: []
-
   # ============================================================================
   # System prompt composition
   # ============================================================================
 
+  @generic_prompt "You are an agent inside CYFR, a secure personal foundry that forges brilliance into reality."
+
   @doc """
-  Build the full system prompt for an orchestrator: base prompt fetched
-  via the aqua tool, plus a runtime-context block (date, key paths)
-  appended after a separator.
+  The AUTHORED prompt of one agent, read from the tree `ctx` is focused
+  on. What a turn is finally told — the runtime section, the approval
+  prelude, whose estate it is working in — is `Aqua.Prompt.compose/2`'s,
+  so exactly one place decides what the model is claimed to be able to
+  do; a turn that already holds the roster hands the composer the prompt
+  and never comes here.
 
-  Falls back to a generic prompt if the aqua lookup fails — keeps the
-  agent usable while AQUA configuration is still being set up.
-
-  The AUTHORED prompt only. What a turn is finally told — the runtime
-  section, the approval prelude, whose estate it is working in — is
-  `Aqua.Prompt.compose/2`'s, so exactly one place decides what the model is
-  claimed to be able to do.
+  Falls back to a generic prompt if the agent has no readable instructions
+  — an agent without instructions still runs — but never silently: the
+  substitution is an operator-visible fact.
   """
   @spec base_prompt(Context.t(), String.t()) :: String.t()
-  def base_prompt(%Context{} = ctx, orchestrator_name \\ "aqua") do
-    fetch_base_prompt(ctx, orchestrator_name)
-  end
-
-  defp fetch_base_prompt(ctx, orchestrator_name) do
-    case orchestrator_config(ctx, orchestrator_name) do
-      {:ok, %{content: content}} ->
+  def base_prompt(%Context{} = ctx, name) when is_binary(name) do
+    case agent(ctx, name) do
+      {:ok, %{"content" => content}} when is_binary(content) ->
         content
 
       _ ->
-        # Fail-open by design — an agent without instructions still runs —
-        # but never silently: the substitution is an operator-visible fact.
         Logger.error(
-          "[Aqua.AgentConfig] orchestrator #{inspect(orchestrator_name)} has no readable " <>
+          "[Aqua.AgentConfig] the soul or role #{inspect(name)} has no readable " <>
             "instructions — running on the generic fallback prompt"
         )
 
-        "You are an agent inside CYFR, a secure personal foundry that forges brilliance into reality."
+        @generic_prompt
     end
   end
 end

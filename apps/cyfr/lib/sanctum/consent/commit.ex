@@ -21,6 +21,7 @@ defmodule Sanctum.Consent.Commit do
 
   require Logger
 
+  alias Arca.Schemas.Profile
   alias Sanctum.Consent.Authz
   alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.CommitDigest
@@ -206,7 +207,7 @@ defmodule Sanctum.Consent.Commit do
     scope = Map.get(decisions, :scope, :versionless)
     invoke_mode = Map.get(decisions, :invoke_mode, default_invoke_mode(kind))
 
-    with :ok <- Plan.check_label(label),
+    with :ok <- Profile.check_label(label),
          {:ok, source_ref} <- Plan.name_ref(Map.get(decisions, :ref, "")),
          {:ok, component} <- Plan.fetch_component(ctx, source_ref),
          {:ok, activation} <- resolve_activation(ctx, component),

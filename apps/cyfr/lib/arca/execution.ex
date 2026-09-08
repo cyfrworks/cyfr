@@ -69,12 +69,12 @@ defmodule Arca.Execution do
     field :activation_graph, :string
     field :runner_id, :string
     field :lease_until, :utc_datetime_usec
-    # Which consent this execution rooted under. Nil for a child row (it
-    # walks its parent's authority rather than rooting one) and for a
-    # `run_root_edge` tincture ingress. The row is the SSOT: a caller that
-    # needs the turn's authority again — an approval, an audit — reads it
-    # here instead of re-deriving a selection that may since have become
-    # ambiguous.
+    # Which consent this execution rooted under: stamped by every root —
+    # `run_root/5` and a `run_root_edge/5` tincture ingress alike — and nil
+    # for a child row, which walks its parent's authority rather than
+    # rooting one. The row is the SSOT: a caller that needs the turn's
+    # authority again — an approval, an audit — reads it here instead of
+    # re-deriving a selection that may since have become ambiguous.
     field :profile_id, :string
   end
 

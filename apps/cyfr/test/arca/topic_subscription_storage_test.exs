@@ -38,7 +38,7 @@ defmodule Arca.TopicSubscriptionStorageTest do
     {:ok, conv} = Conversations.create(alice, %{title: "Ours", subscribers: [bob.user_id]})
 
     refute MapSet.member?(Subs.followed(bob, bob.user_id), conv.id)
-    assert Subs.followers(alice, conv.id) == [alice.user_id]
+    assert MapSet.member?(Subs.followed(alice, alice.user_id), conv.id)
   end
 
   test "someone not picked can still READ it — following is not an ACL", %{
@@ -60,7 +60,7 @@ defmodule Arca.TopicSubscriptionStorageTest do
 
     :ok = Subs.follow(bob, conv.id, bob.user_id)
     :ok = Subs.follow(bob, conv.id, bob.user_id)
-    assert Subs.followers(alice, conv.id) |> Enum.count(&(&1 == bob.user_id)) == 1
+    assert Subs.follows?(bob.athanor_id, conv.id, bob.user_id)
 
     :ok = Subs.unfollow(bob, conv.id, bob.user_id)
     :ok = Subs.unfollow(bob, conv.id, bob.user_id)
@@ -83,6 +83,32 @@ defmodule Arca.TopicSubscriptionStorageTest do
     elsewhere = %{alice | athanor_id: "ath_elsewhere"}
 
     refute MapSet.member?(Subs.followed(elsewhere, alice.user_id), conv.id)
+  end
+
+  test "unfollow_all/2 drops one person's follows in one estate and nothing else", %{
+    alice: alice,
+    bob: bob
+  } do
+    {:ok, a} = Conversations.create(alice, %{title: "A"})
+    {:ok, b} = Conversations.create(alice, %{title: "B"})
+    :ok = Subs.follow(bob, a.id, bob.user_id)
+
+    # Bob's follow of the same topic id in another estate is that
+    # estate's row, not this one's.
+    elsewhere = %{bob | athanor_id: "ath_other"}
+    :ok = Subs.follow(elsewhere, a.id <> "-other", bob.user_id)
+
+    :ok = Subs.unfollow_all(alice.athanor_id, bob.user_id)
+
+    assert Subs.followed(bob, bob.user_id) == MapSet.new()
+    assert MapSet.member?(Subs.followed(elsewhere, bob.user_id), a.id <> "-other")
+
+    followed = Subs.followed(alice, alice.user_id)
+    assert MapSet.member?(followed, a.id)
+    assert MapSet.member?(followed, b.id)
+
+    # Idempotent, like its siblings.
+    assert :ok = Subs.unfollow_all(alice.athanor_id, bob.user_id)
   end
 
   test "deleting a thread sweeps its follows and its conversation-scope grants", %{
@@ -109,7 +135,6 @@ defmodule Arca.TopicSubscriptionStorageTest do
         scope: "conversation",
         effect: "allow",
         conversation_id: conv.id,
-        agent_athanor_id: alice.athanor_id,
         agent_name: "aqua",
         tool: "component",
         action: "pull"
@@ -121,7 +146,6 @@ defmodule Arca.TopicSubscriptionStorageTest do
         scope: "agent",
         effect: "allow",
         conversation_id: conv.id,
-        agent_athanor_id: alice.athanor_id,
         agent_name: "aqua",
         tool: "component",
         action: "inspect"
@@ -131,10 +155,10 @@ defmodule Arca.TopicSubscriptionStorageTest do
 
     # Until the athanor's own destroy, nothing else reclaimed these — a
     # deleted topic left rows naming it forever.
-    assert Subs.followers(alice, conv.id) == []
+    refute Subs.follows?(alice.athanor_id, conv.id, alice.user_id)
     refute MapSet.member?(Subs.followed(bob, bob.user_id), conv.id)
 
-    remaining = Aqua.ToolGrants.for_conversation(alice, conv.id, alice.athanor_id, "aqua")
-    assert [%{scope: "agent", action: "inspect"}] = remaining
+    remaining = Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
+    assert {:ok, [%{scope: "agent", action: "inspect"}]} = remaining
   end
 end

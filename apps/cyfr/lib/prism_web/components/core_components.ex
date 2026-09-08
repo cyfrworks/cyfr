@@ -538,9 +538,17 @@ defmodule PrismWeb.CoreComponents do
   # Modal
   # ============================================================================
 
+  # The backdrop is a SIBLING of the content, never its ancestor: LiveView
+  # resolves a click to the closest `phx-click` ancestor, so a cancel
+  # binding on a wrapper around the content would fire from a click into a
+  # textarea. Escape is the dialog's own — bound to its root, which holds
+  # focus when it opens — so a dialog on a page under another dialog keeps
+  # its Escape. `size="wide"` is for an editor: wider, tall, the content
+  # laying itself out (no padding of its own).
   attr :id, :string, required: true
   attr :show, :boolean, default: false
   attr :on_cancel, JS, default: %JS{}
+  attr :size, :string, default: "default", values: ~w(default wide)
   slot :inner_block, required: true
 
   def modal(assigns) do
@@ -549,10 +557,17 @@ defmodule PrismWeb.CoreComponents do
       :if={@show}
       id={@id}
       class="fixed inset-0 z-50 flex items-center justify-center"
-      phx-mounted={JS.transition({"ease-out duration-200", "opacity-0", "opacity-100"})}
+      phx-mounted={JS.transition({"ease-out duration-200", "opacity-0", "opacity-100"}) |> JS.focus()}
+      phx-keydown={@on_cancel}
+      phx-key="Escape"
+      tabindex="-1"
     >
       <div class="fixed inset-0 bg-black/60" phx-click={@on_cancel} />
-      <div class="relative z-10 w-full max-w-lg rounded-lg bg-gray-900 border border-gray-800 shadow-xl p-6">
+      <div class={[
+        "relative z-10 w-full rounded-lg bg-gray-900 border border-gray-800 shadow-xl",
+        @size == "wide" && "max-w-2xl max-h-[80vh] flex flex-col",
+        @size == "default" && "max-w-lg p-6"
+      ]}>
         {render_slot(@inner_block)}
       </div>
     </div>

@@ -23,7 +23,18 @@ defmodule Opus.BootstrapFirstRunTest do
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.1"]
-  @pull_gated ["formulas/local/list-models/0.6.1", "formulas/local/aqua/1.0.6"]
+  # The AQUA formula at its newest shipped version, found rather than
+  # pinned: a release bump must not leave this naming a directory that no
+  # longer ships.
+  @shipped_aqua [@seed_root, "components/formulas/local/aqua/*"]
+                |> Path.join()
+                |> Path.wildcard()
+                |> Enum.sort_by(fn path ->
+                  path |> Path.basename() |> String.split(".") |> Enum.map(&String.to_integer/1)
+                end)
+                |> List.last()
+                |> Path.relative_to(Path.join(@seed_root, "components"))
+  @pull_gated ["formulas/local/list-models/0.6.1", @shipped_aqua]
 
   setup do
     Arca.Cache.init()

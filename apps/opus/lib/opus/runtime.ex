@@ -133,7 +133,8 @@ defmodule Opus.Runtime do
         ctx,
         execution_id,
         root_execution_id,
-        authority_info
+        authority_info,
+        input
       )
 
     # Notify caller of cleanup_refs so they can clean up on timeout kill
@@ -225,7 +226,8 @@ defmodule Opus.Runtime do
          ctx,
          execution_id,
          root_execution_id,
-         authority_info
+         authority_info,
+         input
        ) do
     vault_imports =
       if component_type == :catalyst do
@@ -289,7 +291,12 @@ defmodule Opus.Runtime do
           authority: authority_info.authority,
           declared_needs: authority_info.declared_needs,
           activation_digest: authority_info.activation_digest,
-          secrets: Map.values(preloaded_fields)
+          secrets: Map.values(preloaded_fields),
+          # What this formula was started as and with: a child of the same
+          # formula is admitted only as a delegate its roster lists, with
+          # the roster's own configuration (`Opus.FormulaHandler`).
+          parent_reference: component_ref,
+          parent_roster: Opus.FormulaHandler.roster_of(input)
         )
       else
         {%{}, nil}

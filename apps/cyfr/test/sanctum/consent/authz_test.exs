@@ -33,6 +33,31 @@ defmodule Sanctum.Consent.AuthzTest do
   # Who may consent
   # ============================================================================
 
+  describe "interactive, in-chain" do
+    # Inside a running chain every call is guest-planed, so the plane
+    # conjunct is dropped for all of them; the surface conjunct is what
+    # keeps a key- or schedule-started run of the same formula out.
+    test "an :oidc session's chain gets through, guest plane and all" do
+      assert Authz.authorize_interactive_in_chain(ctx(auth_method: :oidc, plane: :guest)) ==
+               {:ok, :interactive}
+    end
+
+    test "a key, a schedule and the system plane are refused exactly as at the door" do
+      for method <- [:api_key, :scheduled, :system] do
+        assert {:error, {:surface_not_permitted, ^method}} =
+                 Authz.authorize_interactive_in_chain(
+                   ctx(auth_method: method, plane: :guest, api_key_type: :admin)
+                 )
+      end
+    end
+
+    test "the door still asks the plane; the chain does not" do
+      guest = ctx(auth_method: :oidc, plane: :guest)
+      assert {:error, _} = Authz.authorize_interactive(guest)
+      assert {:ok, :interactive} = Authz.authorize_interactive_in_chain(guest)
+    end
+  end
+
   describe "interactive" do
     test "a capability without an expiry is refused, never eternal" do
       no_expiry = %{commit_digest: @digest}

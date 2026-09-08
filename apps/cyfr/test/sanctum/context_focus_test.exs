@@ -75,6 +75,11 @@ defmodule Sanctum.ContextFocusTest do
     {:ok, _} = Athanors.archive(b)
     assert {:error, :archived} = Context.refocus(sys, b.id)
     assert {:error, :not_found} = Context.refocus(sys, "ath_nope")
+
+    # No athanor at all — an id read off a record that had none — is the
+    # spec's refusal, not a clause error.
+    assert {:error, :not_found} = Context.refocus(sys, nil)
+    assert {:error, :not_found} = Context.refocus(c, nil)
   end
 
   test "a platform admin may open any athanor — audited, still :athanor scope",

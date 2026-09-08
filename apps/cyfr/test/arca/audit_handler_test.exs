@@ -156,23 +156,21 @@ defmodule Arca.AuditHandlerTest do
     # so anything escaping handle_event/4 would end auditing for that event
     # for the life of the node. The per-sink rescue does not cover the work
     # around the sinks.
-    test "a raise outside the sinks does not escape the handler" do
+    test "a failure outside the sinks does not escape the handler, nor detach it" do
       # A sink list that is not a list of modules makes the dispatch itself
-      # raise, outside the per-sink try/rescue.
+      # raise, outside the per-sink try/rescue. Emitted through
+      # `:telemetry.execute/3` — the path that detaches a handler that
+      # fails in any class — and the handler must still be attached after.
       Application.put_env(:cyfr, :audit_sinks, :not_a_list)
+      event = [:cyfr, :sanctum, :auth]
+      before = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+      ours = &Arca.AuditHandler.handle_event/4
+      assert Enum.any?(:telemetry.list_handlers(event), &(&1.function == ours))
 
-      log =
-        capture_log(fn ->
-          assert :ok =
-                   Arca.AuditHandler.handle_event(
-                     [:cyfr, :sanctum, :auth],
-                     %{count: 1},
-                     %{user_id: "u1"},
-                     nil
-                   )
-        end)
+      log = capture_log(fn -> :telemetry.execute(event, %{count: 1}, %{user_id: "u1"}) end)
 
-      assert log =~ "handler raised"
+      assert log =~ "handler failed"
+      assert event |> :telemetry.list_handlers() |> Enum.map(& &1.id) == before
     end
   end
 

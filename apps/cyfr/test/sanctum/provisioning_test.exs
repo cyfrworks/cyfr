@@ -91,7 +91,7 @@ defmodule Sanctum.ProvisioningTest do
 
     # The mint is a row and a seat — no registry round trip, so opening a
     # chat with someone cannot fail on the network.
-    assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Provisioned #{n}")
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Provisioned #{n}")
     refute group.provisioned_at
     assert Members.member?(ctx.user_id, group.id)
 
@@ -150,7 +150,7 @@ defmodule Sanctum.ProvisioningTest do
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|sync-#{n}"}
 
-    {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Sync #{n}")
+    {:ok, group} = Athanors.create_group(ctx.user_id, "Sync #{n}")
     in_group = %{ctx | athanor_id: group.id}
     :ok = Provisioning.ensure_provisioned(in_group)
 
@@ -211,7 +211,7 @@ defmodule Sanctum.ProvisioningTest do
     on_exit(fn -> :telemetry.detach(handler) end)
 
     # The mint answers a bare row; the failure surfaces at first need.
-    assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Unpullable #{n}")
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Unpullable #{n}")
     in_group = %{ctx | athanor_id: group.id}
     :ok = Provisioning.ensure_provisioned(in_group)
 
@@ -226,11 +226,44 @@ defmodule Sanctum.ProvisioningTest do
     assert {:error, {:provisioning_failed, :closure, _}} = Provisioning.provision(group, in_group)
   end
 
+  test "a first need that finds another caller filling the estate answers promptly" do
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
+    {:ok, group} = Athanors.create_group(ctx.user_id, "Held #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+
+    # Another caller holds the estate's provisioning lock for the whole
+    # test — the shape of two people opening a fresh estate at once.
+    parent = self()
+
+    holder =
+      spawn_link(fn ->
+        Arca.Overlay.UnitLock.with_lock({group.id, :provisioning}, fn ->
+          send(parent, :held)
+          receive do: (:release -> :ok)
+        end)
+      end)
+
+    assert_receive :held
+
+    started = System.monotonic_time(:millisecond)
+    assert :ok = Provisioning.ensure_provisioned(in_group)
+    # The first-need wait is a few seconds; the lock's own default is 30 s.
+    # The bound sits between the two — a LiveView mount is waiting on this
+    # — with room for a loaded box, where the short wait has taken 13 s.
+    assert System.monotonic_time(:millisecond) - started < 20_000
+
+    # Nothing was provisioned by this caller — the holder never let go.
+    {:ok, group} = Athanors.get(group.id)
+    refute group.provisioned_at
+    send(holder, :release)
+  end
+
   test "an install without a bundle cannot provision" do
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
 
-    assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "No bundle #{n}")
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "No bundle #{n}")
     :ok = Provisioning.ensure_provisioned(%{ctx | athanor_id: group.id})
 
     {:ok, group} = Athanors.get(group.id)

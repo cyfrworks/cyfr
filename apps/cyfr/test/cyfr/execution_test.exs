@@ -18,6 +18,7 @@ defmodule Cyfr.ExecutionTest do
     def subscribe_events(_id, _ctx), do: :ok
     def unsubscribe_events(_id, _ctx), do: :ok
     def events_since(_id, _seq, _athanor), do: [%{seq: 1}]
+    def run_child(_authority, ref, _need, input, _opts), do: {:ok, %{child: ref, input: input}}
     def cancel(_ctx, id), do: {:ok, id}
     def cancel_for_restart(_ctx, _id, _payload), do: :ok
     def get(_ctx, id), do: {:ok, %{id: id}}

@@ -68,5 +68,21 @@ defmodule PrismWeb.MembersLiveTest do
     assert Members.member?(alice.user_id, group.id)
   end
 
+  test "a DM is named by the other person, and your own seat reads as You", %{conn: conn} do
+    alice = test_user()
+    bob = test_user()
+    conn = log_in_user(conn, alice)
+    claim_namespace!(bob)
+    {:ok, pair} = Athanors.create_pair(alice.user_id, bob.user_id)
+
+    {view, html} = mount_athanor(conn, "/members", pair)
+
+    # The heading is who you are talking to, not the stored "A & B".
+    assert has_element?(view, "h3", bob.email)
+    refute html =~ pair.name
+    assert has_element?(view, "td", "You")
+    assert has_element?(view, "td", bob.email)
+  end
+
   defp rows!({:ok, rows}), do: rows
 end

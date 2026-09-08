@@ -29,7 +29,9 @@ defmodule Aqua.ConversationCompactor do
   @doc """
   Compact a conversation history list to fit within the token budget.
 
-  Handles all three provider message formats:
+  Handles the canonical shape the providers write back and the three
+  native ones a history may still carry:
+  - Canonical: `%{"role" => "tool_results", "results" => [%{"content" => ...}]}`
   - Claude: `%{"role" => "user", "content" => [%{"type" => "tool_result", ...}]}`
   - OpenAI: `%{"role" => "tool", "content" => "..."}`
   - Gemini: `%{"role" => "user", "parts" => [%{"functionResponse" => ...}]}`
@@ -153,56 +155,76 @@ defmodule Aqua.ConversationCompactor do
   # ---------------------------------------------------------------------------
 
   defp truncate_tool_results(%{"role" => "tool", "content" => content} = msg)
-       when is_binary(content) and byte_size(content) > @truncated_result_chars do
+       when is_binary(content),
+       do: %{msg | "content" => cut(content)}
+
+  # The canonical shape every provider writes back into the history: one
+  # message carrying every result of the assistant turn before it. Without
+  # this arm the compactor could only drop such a message whole.
+  defp truncate_tool_results(%{"role" => "tool_results", "results" => results} = msg)
+       when is_list(results),
+       do: %{msg | "results" => Enum.map(results, &truncate_result/1)}
+
+  defp truncate_tool_results(%{"role" => "user", "content" => content} = msg)
+       when is_list(content),
+       do: %{msg | "content" => Enum.map(content, &truncate_block/1)}
+
+  # Gemini's native spelling, should a history still carry one.
+  defp truncate_tool_results(%{"role" => "user", "parts" => parts} = msg)
+       when is_list(parts) do
     %{
       msg
-      | "content" => String.byte_slice(content, 0, @truncated_result_chars) <> "... [truncated]"
+      | "parts" =>
+          Enum.map(parts, fn
+            %{"functionResponse" => %{"response" => response} = call} = part ->
+              %{part | "functionResponse" => %{call | "response" => cut_value(response)}}
+
+            other ->
+              other
+          end)
     }
   end
 
-  defp truncate_tool_results(%{"role" => "user", "content" => content} = msg)
-       when is_list(content) do
-    updated =
-      Enum.map(content, fn
-        %{"type" => "tool_result", "content" => text} = part when is_binary(text) ->
-          if byte_size(text) > @truncated_result_chars do
-            %{
-              part
-              | "content" =>
-                  String.byte_slice(text, 0, @truncated_result_chars) <> "... [truncated]"
-            }
-          else
-            part
-          end
+  defp truncate_tool_results(msg), do: msg
 
-        %{"type" => "tool_result", "content" => nested} = part when is_list(nested) ->
-          truncated_nested =
-            Enum.map(nested, fn
-              %{"type" => "text", "text" => text} = inner when is_binary(text) ->
-                if byte_size(text) > @truncated_result_chars do
-                  %{
-                    inner
-                    | "text" =>
-                        String.byte_slice(text, 0, @truncated_result_chars) <> "... [truncated]"
-                  }
-                else
-                  inner
-                end
+  # A `tool_result` content block; every other block in a user message is
+  # the person's own and stays whole.
+  defp truncate_block(%{"type" => "tool_result", "content" => content} = part)
+       when is_binary(content) or is_list(content),
+       do: %{part | "content" => cut_value(content)}
 
-              other ->
-                other
-            end)
+  defp truncate_block(other), do: other
 
-          %{part | "content" => truncated_nested}
+  # One entry of a canonical `results` list.
+  defp truncate_result(%{"content" => content} = result),
+    do: %{result | "content" => cut_value(content)}
 
-        other ->
-          other
-      end)
+  defp truncate_result(other), do: other
 
-    %{msg | "content" => updated}
+  # Text is cut; a list of blocks has its text blocks cut one by one; a
+  # structured value is cut as its JSON when that is what is large.
+  defp cut_value(text) when is_binary(text), do: cut(text)
+
+  defp cut_value(blocks) when is_list(blocks) do
+    Enum.map(blocks, fn
+      %{"type" => "text", "text" => text} = inner when is_binary(text) ->
+        %{inner | "text" => cut(text)}
+
+      other ->
+        other
+    end)
   end
 
-  defp truncate_tool_results(msg), do: msg
+  defp cut_value(%{} = value) do
+    case Jason.encode(value) do
+      {:ok, json} when byte_size(json) > @truncated_result_chars -> %{"content" => cut(json)}
+      _ -> value
+    end
+  end
+
+  defp cut_value(other), do: other
+
+  defp cut(text), do: Cyfr.Text.cut(text, @truncated_result_chars, "... [truncated]")
 
   # ---------------------------------------------------------------------------
   # Size estimation

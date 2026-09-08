@@ -11,7 +11,7 @@ on:
       # TestRenderEnvFileShippedTemplate binds `cyfr init` to the shipped
       # template, TestSharedFixtureVerdicts binds internal/ref to the
       # shared component-ref fixture, and TestBundledPromptsMatchSeed binds
-      # the scaffold's managed-prompt roster to seed/aqua/agents — an edit
+      # the scaffold's role and scroll rosters to seed/aqua — an edit
       # to any of them must run the Go tests.
       - '.env.example'
       - 'tests/fixtures/**'

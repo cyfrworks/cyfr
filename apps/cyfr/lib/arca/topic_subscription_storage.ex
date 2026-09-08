@@ -94,16 +94,23 @@ defmodule Arca.TopicSubscriptionStorage do
 
   def follows?(_, _, _), do: false
 
-  @doc "Who follows this topic — the notify roster."
-  @spec followers(Context.t(), String.t()) :: [String.t()]
-  def followers(%Context{} = ctx, conversation_id) when is_binary(conversation_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TopicSubscriptionStorage.followers", [], fn ->
-      from(s in TopicSubscription,
-        where: s.athanor_id == ^Context.athanor!(ctx) and s.conversation_id == ^conversation_id,
-        select: s.user_id,
-        order_by: [asc: s.joined_at]
-      )
-      |> Arca.Repo.all()
+  @doc """
+  Drop every follow this person holds in the athanor — what leaving it
+  owes this table. A follow names nothing that outlives the seat; left
+  standing, it would resume the moment the person is re-added.
+
+  Takes the athanor id directly (tenant first), like `follows?/3`: the
+  caller is the membership removal, which holds no context focused on the
+  athanor being left. Strict — the leave reports a sweep the store could
+  not do rather than answering "done" over surviving rows.
+  """
+  @spec unfollow_all(String.t(), String.t()) :: :ok | {:error, term()}
+  def unfollow_all(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TopicSubscriptionStorage.unfollow_all", fn ->
+      from(s in TopicSubscription, where: s.athanor_id == ^athanor_id and s.user_id == ^user_id)
+      |> Arca.Repo.delete_all()
+
+      :ok
     end)
   end
 end

@@ -137,6 +137,39 @@ defmodule Emissary.MCP.ConversationToolTest do
                call(ctx, %{"action" => "events", "conversation" => conv.id})
     end
 
+    test "an approval row carries its intent on the wire, so a client decides what it can see",
+         %{ctx: ctx, conv: conv} do
+      intent = %{
+        "kind" => "request_approval",
+        "title" => "Pull component",
+        "action_kind" => "write",
+        "proposal" => %{"tool" => "component", "action" => "pull", "args" => %{"ref" => "x"}}
+      }
+
+      {:ok, apr} =
+        Conversations.append(ctx, conv.id, %{
+          author: "aqua",
+          kind: "approval",
+          status: "pending",
+          content: "Pull component",
+          payload: %{"orchestrator" => "aqua", "intent" => intent}
+        })
+
+      assert {:ok, %{messages: rows}} =
+               call(ctx, %{"action" => "events", "conversation" => conv.id})
+
+      assert %{intent: ^intent} = Enum.find(rows, &(&1.id == apr.id))
+
+      # A line that is not a card carries no intent key at all.
+      {:ok, line} =
+        Conversations.append(ctx, conv.id, %{author: ctx.user_id, kind: "text", content: "hi"})
+
+      assert {:ok, %{messages: rows}} =
+               call(ctx, %{"action" => "events", "conversation" => conv.id})
+
+      refute Map.has_key?(Enum.find(rows, &(&1.id == line.id)), :intent)
+    end
+
     test "refusals are the typed vocabulary, not sentences", %{ctx: ctx, conv: conv} do
       assert {:error, {:invalid_argument, _}} =
                call(ctx, %{"action" => "send", "conversation" => conv.id})
@@ -158,6 +191,69 @@ defmodule Emissary.MCP.ConversationToolTest do
       assert {:error, {:invalid_argument, _}} = call(ctx, %{"action" => "events"})
     end
 
+    test "a refused standing answer is a sentence a person can read, not the runner's atom", %{
+      ctx: ctx,
+      conv: conv
+    } do
+      # Deciding a card is held to a member's standing, like a send.
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id,
+          scope: "athanor",
+          athanor_id: ctx.athanor_id
+        )
+
+      card = fn intent ->
+        {:ok, apr} =
+          Conversations.append(ctx, conv.id, %{
+            author: Arca.Schemas.Message.agent_author(),
+            kind: "approval",
+            status: "pending",
+            content: "Do a thing",
+            payload: %{"orchestrator" => "aqua", "intent" => intent}
+          })
+
+        apr
+      end
+
+      destructive =
+        card.(%{
+          "kind" => "request_approval",
+          "title" => "Wipe it",
+          "action_kind" => "destructive",
+          "proposal" => %{"tool" => "component", "action" => "delete", "args" => %{}}
+        })
+
+      assert {:error, {:invalid_argument, msg}} =
+               call(ctx, %{
+                 "action" => "approve",
+                 "conversation" => conv.id,
+                 "message_id" => destructive.id,
+                 "scope" => "always"
+               })
+
+      assert msg == Aqua.ToolGrants.refusal_message({:scope_not_permitted, "destructive"})
+
+      one_click =
+        card.(%{
+          "kind" => "request_approval",
+          "title" => "Pin it",
+          "action_kind" => "write",
+          "standing" => false,
+          "proposal" => %{"tool" => "notes", "action" => "pin", "args" => %{}}
+        })
+
+      assert {:error, {:invalid_argument, msg}} =
+               call(ctx, %{
+                 "action" => "approve",
+                 "conversation" => conv.id,
+                 "message_id" => one_click.id,
+                 "scope" => "conversation"
+               })
+
+      assert msg == Aqua.ToolGrants.refusal_message({:scope_not_permitted, :never_standing})
+      refute msg =~ "never_standing"
+    end
+
     test "another athanor's conversation is not found", %{ctx: ctx, conv: conv} do
       elsewhere = %{ctx | athanor_id: "ath_elsewhere"}
 
@@ -173,6 +269,25 @@ defmodule Emissary.MCP.ConversationToolTest do
 
       assert {:ok, %{conversations: rows}} = call(ctx, %{"action" => "list"})
       assert Enum.any?(rows, &(&1.id == id))
+    end
+
+    test "the estate's thread count is held to the operator's cap", %{ctx: ctx} do
+      # The setup already minted one thread; a cap of one refuses the next.
+      original = Application.get_env(:cyfr, :caps, [])
+      Application.put_env(:cyfr, :caps, Keyword.put(original, :max_conversations_per_athanor, 1))
+      on_exit(fn -> Application.put_env(:cyfr, :caps, original) end)
+
+      assert {:error, {:limit_reached, :max_conversations_per_athanor, 1}} =
+               call(ctx, %{"action" => "create", "title" => "One too many"})
+
+      # Another estate's count is its own.
+      {:ok, room} =
+        Sanctum.Tenancy.Athanors.create_group(
+          ctx.user_id,
+          "Room #{System.unique_integer([:positive])}"
+        )
+
+      assert {:ok, %{id: _}} = call(%{ctx | athanor_id: room.id}, %{"action" => "create"})
     end
 
     test "follow and unfollow are the caller's own rows, on this estate's topics only", %{
@@ -229,6 +344,27 @@ defmodule Emissary.MCP.ConversationToolTest do
       {:ok, room} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Room #{n}")
       {:ok, shared} = Conversations.create(%{ctx | athanor_id: room.id})
       {:ok, room: room, shared: shared}
+    end
+
+    test "the ids are checked in shape and in number before anything is read", %{
+      ctx: ctx,
+      conv: conv,
+      room: room,
+      shared: shared
+    } do
+      base = %{
+        "action" => "aloud",
+        "conversation" => conv.id,
+        "target_athanor" => room.id,
+        "target_conversation" => shared.id
+      }
+
+      # The validator does not look inside arrays: a non-string element
+      # is a typed refusal here, not a clause error in storage.
+      assert {:error, {:invalid_argument, _}} = call(ctx, Map.put(base, "message_ids", [1]))
+
+      too_many = Enum.map(1..51, &"msg_#{&1}")
+      assert {:error, {:invalid_argument, _}} = call(ctx, Map.put(base, "message_ids", too_many))
     end
 
     test "your own line reaches the room; someone else's is refused", %{

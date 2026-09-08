@@ -27,7 +27,7 @@ defmodule Cyfr.ContextSwapTest do
     "apps/cyfr/lib/aqua",
     "apps/cyfr/lib/emissary/mcp/conversation_tool.ex",
     "apps/cyfr/lib/emissary/mcp/notes_tool.ex",
-    "apps/cyfr/lib/prism_web/live/aqua_live.ex",
+    "apps/cyfr/lib/prism_web",
     "apps/cyfr/lib/sanctum"
   ]
 
@@ -41,12 +41,11 @@ defmodule Cyfr.ContextSwapTest do
     # `:allow_tenancy_resolver_override` (test builds); production
     # compiles the branch out entirely.
     "apps/cyfr/lib/sanctum/tenancy.ex" => 1,
-    # `resolve/3`: the member branch swaps after its own membership
-    # check, and the operator branch hand-builds the focused shape with
-    # the same audit event `focus/2` emits — because `focus/2` rightly
-    # refuses an archived athanor, and `unarchive`/`get` must still be
-    # able to name one.
-    "apps/cyfr/lib/sanctum/mcp/athanor_tool.ex" => 2
+    # `resolve/3` narrows through `focus/2`; the one swap left is its
+    # open of an ARCHIVED athanor for `get`/`unarchive`, hand-built under
+    # the same two admissions (membership, or the operator's audited open)
+    # because `focus/2` rightly refuses an archived athanor.
+    "apps/cyfr/lib/sanctum/mcp/athanor_tool.ex" => 1
   }
 
   @pattern ~r/%\{\s*[\w.]+\s*\|\s*athanor_id:/

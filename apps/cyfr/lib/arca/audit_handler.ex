@@ -74,19 +74,21 @@ defmodule Arca.AuditHandler do
   end
 
   # `:telemetry` runs handlers in the emitting process and permanently
-  # DETACHES any handler that raises — so an exception anywhere in here ends
+  # DETACHES any handler that fails — a raise, an exit (a store call timing
+  # out arrives as one), a throw — so a failure anywhere in here ends
   # auditing for that event, for the life of the node, silently. The
-  # per-sink rescue below covers the sinks; this covers everything else
-  # (context construction most of all, which validates and can raise).
-  # `Cyfr.OtelTenantHandler` and `Prism.TelemetryBridge` take the same
-  # precaution for the same reason.
+  # per-sink rescue below covers the sinks; this covers everything else,
+  # every class (context construction most of all, which validates and
+  # can raise). `Cyfr.OtelTenantHandler` and `Prism.TelemetryBridge` take
+  # the same precaution for the same reason.
   def handle_event(event_name, measurements, metadata, config) do
     do_handle_event(event_name, measurements, metadata, config)
-  rescue
-    e ->
+  catch
+    kind, reason ->
       Logger.error(
-        "[AuditHandler] handler raised for #{inspect(event_name)}: #{Exception.message(e)} — " <>
-          "the event was not audited; the handler stays attached"
+        "[AuditHandler] handler failed for #{inspect(event_name)}: " <>
+          Exception.format_banner(kind, reason) <>
+          " — the event was not audited; the handler stays attached"
       )
 
       :telemetry.execute(

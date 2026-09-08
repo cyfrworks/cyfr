@@ -19,6 +19,7 @@ defmodule Sanctum.Consent.Plan do
   `@`-prefixed names, so a future manifest need can never collide.
   """
 
+  alias Arca.Schemas.Profile
   alias Sanctum.Consent.Authz
   alias Sanctum.Consent.Proof
   alias Sanctum.Consent.ShapeDerivation
@@ -51,7 +52,7 @@ defmodule Sanctum.Consent.Plan do
     kind = Map.get(params, :kind, :owner)
 
     with :ok <- Authz.authorize_staging(ctx),
-         :ok <- check_label(label),
+         :ok <- Profile.check_label(label),
          {:ok, source_ref} <- name_ref(ref),
          {:ok, component} <- fetch_component(ctx, source_ref),
          {:ok, shape_input} <- ShapeDerivation.shape_input(ctx, source_ref),
@@ -102,23 +103,6 @@ defmodule Sanctum.Consent.Plan do
           end
       end
     end
-  end
-
-  @doc """
-  Refuse a profile label that would make a selector ambiguous.
-
-  A label is half of the profiles' identity index, and it is also half of
-  what a person may type as a selector. `Sanctum.Authority.RootSelect`
-  tells an id from a label by the `prof_` prefix, so a label free to wear
-  that prefix would turn `RootSelect.decode/1` into a guess — and leave an
-  operator no way to say which of the two they meant. The grammar lives
-  there; both consent verbs that accept a label enforce it here.
-  """
-  @spec check_label(term()) :: :ok | {:error, {:invalid_label, term()}}
-  def check_label(label) do
-    if Sanctum.Authority.RootSelect.valid_label?(label),
-      do: :ok,
-      else: {:error, {:invalid_label, label}}
   end
 
   @doc false

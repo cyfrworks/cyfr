@@ -64,6 +64,10 @@ defmodule Emissary.MCP.ConversationTool do
 
   @behaviour Emissary.MCP.ToolProvider
 
+  # The most lines one `aloud` may carry: each one copies bytes into the
+  # target estate, so a call moves a slice, never a thread.
+  @aloud_max 50
+
   alias Aqua.ConversationRunner
   alias Sanctum.Context
 
@@ -83,9 +87,9 @@ defmodule Emissary.MCP.ConversationTool do
           "stop a turn, decide the approval cards a turn raises, follow or unfollow a " <>
           "topic, and say one of your own private lines aloud into an estate you " <>
           "belong to. Addressing: in an estate with one person every send starts a " <>
-          "turn; with more than one, a send starts a turn only when it names an " <>
-          "agent — @name, or @<owner-slug>.name for a personal agent shadowed by an " <>
-          "estate agent of the same name. An unaddressed send is people talking: it " <>
+          "turn; with more than one, a send starts a turn only when it names one — " <>
+          "@aqua for the estate's assistant, or @<role> for one of its roles. An " <>
+          "unaddressed send is people talking: it " <>
           "persists and starts nothing (the result says running: false). The wire " <>
           "send takes text only — no attachments, no model or agent argument; address " <>
           "by mention — and threads are deleted from the console, not from here. " <>
@@ -326,6 +330,31 @@ defmodule Emissary.MCP.ConversationTool do
          "target_conversation" => target_conversation
        })
        when is_list(ids) and is_binary(target_athanor) and is_binary(target_conversation) do
+    # The validator does not look inside arrays, so the ids' shape and the
+    # list's length are checked here: every element copies bytes into the
+    # target estate, and a bound is what keeps one call from moving a
+    # whole thread.
+    cond do
+      not Enum.all?(ids, &is_binary/1) ->
+        {:error, {:invalid_argument, "aloud takes a list of message ids"}}
+
+      length(ids) > @aloud_max ->
+        {:error, {:invalid_argument, "aloud takes at most #{@aloud_max} messages at a time"}}
+
+      true ->
+        say_aloud(ctx, id, ids, target_athanor, target_conversation)
+    end
+  end
+
+  defp act("aloud", _ctx, _id, _args),
+    do:
+      {:error,
+       {:invalid_argument,
+        "aloud requires 'message_ids', 'target_athanor' and 'target_conversation'"}}
+
+  defp act(action, _ctx, _id, _args), do: {:error, {:unknown_action, "conversation.#{action}"}}
+
+  defp say_aloud(ctx, id, ids, target_athanor, target_conversation) do
     case Aqua.Aloud.post(ctx, id, ids, target_athanor, target_conversation) do
       {:ok, rows} ->
         {:ok, %{said_aloud: length(rows), target_conversation: target_conversation}}
@@ -358,14 +387,6 @@ defmodule Emissary.MCP.ConversationTool do
         {:error, refusal(reason, id)}
     end
   end
-
-  defp act("aloud", _ctx, _id, _args),
-    do:
-      {:error,
-       {:invalid_argument,
-        "aloud requires 'message_ids', 'target_athanor' and 'target_conversation'"}}
-
-  defp act(action, _ctx, _id, _args), do: {:error, {:unknown_action, "conversation.#{action}"}}
 
   # ---------------------------------------------------------------------------
   # Internal
@@ -445,9 +466,10 @@ defmodule Emissary.MCP.ConversationTool do
   defp translate(:unavailable, _id), do: {:unavailable, "Conversations"}
   defp translate(:database_error, _id), do: {:unavailable, "Storage"}
 
-  defp translate({:scope_not_permitted, kind}, _id),
-    do:
-      {:invalid_argument, "a standing answer is not permitted for #{kind} actions — decide once"}
+  # One sentence per reason, and the runner's — the same words the chat
+  # shows, so a client and a person are told the same thing.
+  defp translate({:scope_not_permitted, _reason} = refusal, _id),
+    do: {:invalid_argument, Aqua.ToolGrants.refusal_message(refusal)}
 
   # An unmapped reason stays as it is — the router logs it and answers
   # generically, which is the visible cue that a new refusal needs a row
@@ -468,7 +490,20 @@ defmodule Emissary.MCP.ConversationTool do
   defp cursor([]), do: nil
   defp cursor(rows), do: rows |> List.last() |> Map.get(:seq)
 
-  defp render(msg) do
+  # An approval row carries its intent — the tool, action and arguments
+  # the card asks about — so a client without a card to render still sees
+  # what it is deciding before it answers `approve`, standing scopes
+  # included. A client that hides this from its person is the client's
+  # failing; withholding it here would make the blind answer the only one.
+  defp render(%{kind: "approval"} = msg) do
+    msg
+    |> render_row()
+    |> Map.put(:intent, Arca.ConversationStorage.payload(msg)["intent"])
+  end
+
+  defp render(msg), do: render_row(msg)
+
+  defp render_row(msg) do
     %{
       id: msg.id,
       seq: msg.seq,
@@ -480,8 +515,12 @@ defmodule Emissary.MCP.ConversationTool do
     }
   end
 
-  @approve_scopes %{"once" => :once, "conversation" => :conversation, "always" => :always}
-  @decline_scopes %{"once" => :once, "never" => :never}
+  # The codec is `Aqua.ApprovalScope`; what each verb accepts is the verb's.
+  @approve_scopes Map.new(
+                    [:once, :conversation, :always],
+                    &{Aqua.ApprovalScope.to_string(&1), &1}
+                  )
+  @decline_scopes Map.new([:once, :never], &{Aqua.ApprovalScope.to_string(&1), &1})
 
   defp approve_scope(nil), do: {:ok, :once}
 

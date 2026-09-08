@@ -24,11 +24,14 @@ defmodule Compendium.AquaTemplate do
   `all: true` deletes the whole upper layer).
   """
 
+  require Logger
+
   alias Compendium.AquaAgent
   alias Compendium.AquaPath
   alias Sanctum.Context
 
   @seed_prefix Arca.Storage.seed_prefix("aqua")
+  @legacy_agents AquaPath.legacy_agents_dirname()
 
   @doc "The template's seed segments: `[\"seed\", \"aqua\"]`."
   @spec seed_prefix() :: [String.t()]
@@ -49,6 +52,9 @@ defmodule Compendium.AquaTemplate do
       Arca.exists?(ctx, @seed_prefix ++ ["agent.json"]) ->
         {:error, :seed_is_v2_shaped}
 
+      agents_shaped?(ctx) ->
+        {:error, :seed_is_agents_shaped}
+
       true ->
         with {:ok, _soul} <- seed_soul(ctx),
              {:ok, _roles} <- seed_roles(ctx) do
@@ -57,11 +63,23 @@ defmodule Compendium.AquaTemplate do
     end
   end
 
+  # The shape before the soul had a file of its own: agents under
+  # `agents/`, no `aqua.md` beside them. A mount with a soul AND a stale
+  # `agents/` is the current shape carrying a leftover, and reads fine.
+  defp agents_shaped?(ctx) do
+    case Arca.list_typed(ctx, @seed_prefix ++ [@legacy_agents]) do
+      {:ok, [_ | _]} -> not Arca.exists?(ctx, @seed_prefix ++ [List.last(AquaPath.soul_file())])
+      _ -> false
+    end
+  end
+
   @doc """
   The files the seed ships, as paths relative to the aqua root — only what
   the tree's grammar recognises as a unit (the soul, `roles/*.md`, the
   scrolls). A mount that still carries an older shape beside the shipped
-  one is not what the seed ships.
+  one is not what the seed ships. A seed that cannot be listed answers
+  nothing, and says so in the log — a silent empty list reads as "the
+  install ships no files", which is never true.
   """
   @spec files() :: [[String.t()]]
   def files do
@@ -70,10 +88,14 @@ defmodule Compendium.AquaTemplate do
         leaves
         |> Enum.map(&Enum.drop(&1, length(@seed_prefix)))
         |> Enum.filter(fn rel ->
-          hd(rel) != "agents" and AquaPath.locate(AquaPath.root() ++ rel) != :above_unit
+          hd(rel) != @legacy_agents and AquaPath.locate(AquaPath.root() ++ rel) != :above_unit
         end)
 
-      {:error, _} ->
+      {:error, reason} ->
+        Logger.error(
+          "[Compendium.AquaTemplate] the seed tree could not be listed: #{inspect(reason)}"
+        )
+
         []
     end
   end

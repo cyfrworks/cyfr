@@ -13,10 +13,11 @@ defmodule PrismWeb.Nav do
 
   Two scopes. An `:athanor` page lives under `/a/<athanor>` — the
   workbench, focused on one estate. A `:global` page has no estate in its
-  address — the chat, which spans every estate the person belongs to
-  (`Cyfr.GlobalPages` is the list the engine reads too). `href/2` is the
-  one place a path becomes a link, so no surface has to know which is
-  which.
+  address — the chat, which spans every estate the person belongs to.
+  Which is which is `Cyfr.GlobalPages`' list (the engine reads the same
+  one): an item's `scope` is derived from it, never written by hand, and
+  `href/2` is the one place a path becomes a link, so no surface has to
+  know.
   """
 
   alias Prism.Labels
@@ -36,15 +37,7 @@ defmodule PrismWeb.Nav do
 
   # In dev order; the lite order is its own list below.
   @items [
-    %{
-      key: "chat",
-      label: "Chat",
-      path: "/chat",
-      icon: "play",
-      section: :top,
-      modes: @both,
-      scope: :global
-    },
+    %{key: "chat", label: "Chat", path: "/chat", icon: "play", section: :top, modes: @both},
     %{key: "aqua", label: "AQUA", path: "/aqua", icon: "user", section: :top, modes: @both},
     %{
       key: "tinctures",
@@ -227,23 +220,23 @@ defmodule PrismWeb.Nav do
   def dom_id(prefix, key), do: prefix <> "-" <> String.replace(key, "_", "-")
 
   @doc """
-  The link for a page: a global page is its own path; an athanor page is
-  focused on `athanor_route` (`PrismWeb.Focus.path/2`).
+  The link for a page — an item, or a bare page path (query string
+  allowed): a global page is its own address; an athanor page is focused
+  on `athanor_route` (`PrismWeb.Focus.path/2`).
   """
-  @spec href(item(), String.t() | nil) :: String.t()
-  def href(%{scope: :global, path: path}, _athanor_route), do: path
-  def href(%{path: path}, athanor_route), do: PrismWeb.Focus.path(athanor_route, path)
+  @spec href(item() | String.t(), String.t() | nil) :: String.t()
+  def href(%{path: path}, athanor_route), do: href(path, athanor_route)
 
-  @doc "Whether `path` is a global page's — one with no estate in its address."
-  @spec global?(String.t()) :: boolean()
-  defdelegate global?(path), to: Cyfr.GlobalPages
-
-  @doc "The global pages' paths — the items marked `:global`, which `Cyfr.GlobalPages` pins."
-  @spec global_paths() :: [String.t()]
-  def global_paths, do: for(%{scope: :global, path: path} <- @items, do: path)
+  def href(path, athanor_route) when is_binary(path) do
+    if Cyfr.GlobalPages.global?(path),
+      do: path,
+      else: PrismWeb.Focus.path(athanor_route, path)
+  end
 
   defp resolve(%{label: noun} = item, mode) when is_atom(noun),
     do: resolve(%{item | label: Labels.label(noun, mode)}, mode)
 
-  defp resolve(item, _mode), do: Map.put_new(item, :scope, :athanor)
+  defp resolve(item, _mode), do: Map.put(item, :scope, scope(item.path))
+
+  defp scope(path), do: if(Cyfr.GlobalPages.global?(path), do: :global, else: :athanor)
 end

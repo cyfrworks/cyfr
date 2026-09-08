@@ -98,8 +98,8 @@ defmodule Emissary.MCP.NotesToolTest do
     auth
   end
 
-  defp in_chain(ctx, args, auth),
-    do: ToolRegistry.call_in_chain("notes", Context.enter_guest(ctx), args, auth)
+  defp in_chain(ctx, args, auth, opts \\ []),
+    do: ToolRegistry.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
 
   test "a note lands in the estate you are working in, and nowhere else", %{
     ctx: ctx,
@@ -121,6 +121,17 @@ defmodule Emissary.MCP.NotesToolTest do
 
     assert {:ok, %{notes: [%{name: "flight"}]}} = call(home, %{"action" => "list"})
     refute estate.id == mine.id
+  end
+
+  test "keeping under a name that exists replaces it, and says so", %{ctx: ctx} do
+    assert {:ok, %{kept: "decided", replaced: false}} =
+             call(ctx, %{"action" => "keep", "name" => "decided", "content" => "Lisbon"})
+
+    assert {:ok, %{kept: "decided", replaced: true}} =
+             call(ctx, %{"action" => "keep", "name" => "decided", "content" => "Porto"})
+
+    assert {:ok, %{content: "Porto"}} = call(ctx, %{"action" => "read", "name" => "decided"})
+    assert {:ok, %{notes: [_]}} = call(ctx, %{"action" => "list"})
   end
 
   test "a write names no estate", %{ctx: ctx} do
@@ -295,23 +306,34 @@ defmodule Emissary.MCP.NotesToolTest do
        %{ctx: ctx, estate: estate} do
     auth = granting([{"notes", "keep"}, {"notes", "read"}])
 
+    # What the model wrote as provenance — ignored in a chain: the host
+    # stamps the card's own execution and conversation as lineage, and
+    # those are the only provenance the tool records there.
     args = %{
       "action" => "keep",
       "name" => "decided",
       "content" => "Lisbon",
-      "conversation" => "conv_1",
-      "execution" => "exec_1"
+      "conversation" => "forged",
+      "execution" => "forged"
     }
+
+    lineage = [lineage: %{root_execution_id: "exec_1", conversation_id: "conv_1"}]
 
     # The person's own session, now guest-planed by the approved run: the
     # plane is not asked again, the surface is.
-    assert {:ok, %{kept: "decided", athanor_id: id}} = in_chain(ctx, args, auth)
+    assert {:ok, %{kept: "decided", athanor_id: id}} = in_chain(ctx, args, auth, lineage)
     assert id == estate.id
 
     assert {:ok, %{conversation: "conv_1", execution: "exec_1", kept_by: kept_by}} =
              in_chain(ctx, %{"action" => "read", "name" => "decided"}, auth)
 
     assert kept_by == ctx.user_id
+
+    # Without host lineage the forged values are still not recorded.
+    assert {:ok, _} = in_chain(ctx, %{args | "name" => "bare"}, auth)
+
+    assert {:ok, %{conversation: nil, execution: nil}} =
+             in_chain(ctx, %{"action" => "read", "name" => "bare"}, auth)
 
     # The same formula started by a key or a schedule is refused inside the
     # chain exactly as it is at the door — the click was a session's.
@@ -329,6 +351,88 @@ defmodule Emissary.MCP.NotesToolTest do
     # the tool is reached — legibly, so re-consent is the obvious answer.
     assert {:error, "Denied by chain authority: " <> _} =
              in_chain(ctx, args, granting([{"notes", "read"}]))
+  end
+
+  test "list and search answer pages, one budget across every estate", %{ctx: ctx, home: home} do
+    for n <- 1..3,
+        do:
+          {:ok, _} =
+            call(ctx, %{"action" => "keep", "name" => "e#{n}", "content" => "lisbon #{n}"})
+
+    for n <- 1..3,
+        do:
+          {:ok, _} =
+            call(home, %{"action" => "keep", "name" => "m#{n}", "content" => "lisbon #{n}"})
+
+    # The focus first, then the person's other estates, names sorted; a
+    # page of two, then the next page from its cursor, and so on — no
+    # overlap, nothing skipped.
+    {:ok, %{notes: page1, more: true, next: cursor1}} =
+      call(home, %{"action" => "list", "scope" => "everywhere", "limit" => 2})
+
+    assert Enum.map(page1, & &1.name) == ["m1", "m2"]
+
+    {:ok, %{notes: page2, more: true, next: cursor2}} =
+      call(home, %{"action" => "list", "scope" => "everywhere", "limit" => 2, "after" => cursor1})
+
+    assert Enum.map(page2, & &1.name) == ["m3", "e1"]
+
+    {:ok, %{notes: page3, more: false, next: nil}} =
+      call(home, %{"action" => "list", "scope" => "everywhere", "limit" => 2, "after" => cursor2})
+
+    assert Enum.map(page3, & &1.name) == ["e2", "e3"]
+
+    # A search pages the same way, and reads no note past its page.
+    {:ok, %{matches: hits, more: true, next: cursor}} =
+      call(home, %{
+        "action" => "search",
+        "query" => "lisbon",
+        "scope" => "everywhere",
+        "limit" => 4
+      })
+
+    assert length(hits) == 4
+
+    {:ok, %{matches: rest, more: false}} =
+      call(home, %{
+        "action" => "search",
+        "query" => "lisbon",
+        "scope" => "everywhere",
+        "after" => cursor
+      })
+
+    assert Enum.map(rest, & &1.name) == ["e2", "e3"]
+
+    assert {:error, {:invalid_argument, msg}} =
+             call(home, %{"action" => "list", "after" => "garbage"})
+
+    assert msg =~ "cursor"
+  end
+
+  test "a search's estate is a locator a read may follow — under the reader's own seat", %{
+    ctx: ctx,
+    home: home,
+    estate: estate
+  } do
+    {:ok, _} =
+      call(ctx, %{"action" => "keep", "name" => "porto-hotel", "content" => "the Yeatman"})
+
+    {:ok, %{matches: [%{name: "porto-hotel", athanor_id: id}]}} =
+      call(home, %{"action" => "search", "query" => "yeatman", "scope" => "everywhere"})
+
+    assert id == estate.id
+
+    assert {:ok, %{content: "the Yeatman", athanor_id: ^id}} =
+             call(home, %{"action" => "read", "name" => "porto-hotel", "athanor_id" => id})
+
+    # An estate the reader holds no seat in reads as no such note — the
+    # locator is not a way to learn which estates exist.
+    assert {:error, {:not_found, "estate", "ath_nobody"}} =
+             call(home, %{
+               "action" => "read",
+               "name" => "porto-hotel",
+               "athanor_id" => "ath_nobody"
+             })
   end
 
   test "a room's assistant reads only the room's notes", %{ctx: ctx, home: home} do
@@ -385,11 +489,7 @@ defmodule Emissary.MCP.NotesToolTest do
     # blob, minted from the manifest's caps against the loaded providers —
     # a name no provider serves drops silently, so this pins that every
     # notes action the soul may propose survives the expansion.
-    manifest =
-      "../../../../seed/components/formulas/local/aqua/1.0.6/cyfr-manifest.json"
-      |> Path.expand(__DIR__)
-      |> File.read!()
-      |> Jason.decode!()
+    manifest = shipped_aqua_manifest() |> File.read!() |> Jason.decode!()
 
     caps = Compendium.Manifest.Caps.from_manifest(manifest)
     granted = Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
@@ -403,6 +503,22 @@ defmodule Emissary.MCP.NotesToolTest do
     end
 
     refute "aqua.skill_delete" in granted
+  end
+
+  # The newest shipped AQUA formula, found rather than pinned: a release
+  # bump must not leave this test reading a version that no longer ships.
+  defp shipped_aqua_manifest do
+    path =
+      [__DIR__, "../../../../seed/components/formulas/local/aqua/*/cyfr-manifest.json"]
+      |> Path.join()
+      |> Path.wildcard()
+      |> Enum.sort_by(fn path ->
+        path |> Path.split() |> Enum.at(-2) |> String.split(".") |> Enum.map(&String.to_integer/1)
+      end)
+      |> List.last()
+
+    assert path, "no shipped AQUA formula under seed/components/formulas/local/aqua"
+    path
   end
 
   test "the annotations say what a person may pre-answer" do

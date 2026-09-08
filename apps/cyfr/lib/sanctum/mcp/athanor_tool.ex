@@ -132,7 +132,10 @@ defmodule Sanctum.MCP.AthanorTool do
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args)
       when is_binary(name) do
-    case Sanctum.Provisioning.ensure_group_athanor(ctx, name, slug: Map.get(args, "slug")) do
+    # The row and the creator's seat only — the estate is filled at first
+    # need (`Sanctum.Provisioning.ensure_provisioned/1`), so creating a
+    # group never waits on a registry round trip.
+    case Athanors.create_group(ctx.user_id, name, slug: Map.get(args, "slug")) do
       {:ok, athanor} ->
         broadcast_athanors_changed(ctx, athanor)
         {:ok, render(athanor)}
@@ -230,7 +233,8 @@ defmodule Sanctum.MCP.AthanorTool do
 
   # A person's own athanor is closed by the door (deny) and reopened by the
   # door (allow); restoring it here while its owner is still denied would
-  # reopen a furnace nobody may enter. A retired Home never reopens at all.
+  # reopen a furnace nobody may enter. A retired Home never reopens at all,
+  # and neither does a DM that ended — its husk holds one member.
   def handle(%Context{} = ctx, %{"action" => "unarchive"} = args) do
     with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true),
          :ok <- owner_admitted(athanor) do
@@ -243,6 +247,11 @@ defmodule Sanctum.MCP.AthanorTool do
           {:error,
            {:invalid_argument,
             "That Home is archived for the record; the server has already started a new one"}}
+
+        {:error, :frozen_is_final} ->
+          {:error,
+           {:invalid_argument,
+            "A DM that ended is final — click the name again to start a new one"}}
 
         {:error, reason} ->
           Logger.error("[AthanorTool] athanor.unarchive failed: #{inspect(reason)}")
@@ -368,20 +377,31 @@ defmodule Sanctum.MCP.AthanorTool do
   #
   # Returns the resolved athanor AND a context focused on it (`scope:
   # :athanor`, its id bound) — the shape every downstream act must run
-  # under. A platform admin's wider scope stops here, not in the handler.
+  # under. `Context.focus/2` is the narrowing: membership, or the operator's
+  # audited open. A platform admin's wider scope stops here, not in the
+  # handler.
   @doc false
   def resolve(%Context{} = ctx, args, opts \\ []) do
     with {:ok, athanor} <- lookup(ctx, Map.get(args, "athanor"), opts) do
+      case Context.focus(ctx, athanor) do
+        {:ok, focused} -> {:ok, athanor, focused}
+        {:error, :archived} -> open_archived(ctx, athanor)
+        {:error, _} -> not_a_member()
+      end
+    end
+  end
+
+  # `focus/2` rightly refuses an archived athanor, and `lookup/3` only
+  # admitted one because the action asked for it (`get`, `unarchive`) — so
+  # the focused shape is built by hand here, under the same two admissions
+  # focus grants: membership, or the operator's audited open.
+  defp open_archived(ctx, athanor) do
+    admitted? =
       cond do
         Members.member?(ctx.user_id, athanor.id) ->
-          {:ok, athanor, %{ctx | athanor_id: athanor.id, scope: :athanor}}
+          true
 
-        # An operator opening an athanor they do not belong to: the audited
-        # act `Context.focus/2` records — or, for an archived one that only
-        # `unarchive`/`get` may name, the focused shape built by hand with
-        # the same audit event, since focus rightly refuses an archived
-        # athanor.
-        ctx.platform_admin and athanor.status == "archived" ->
+        ctx.platform_admin ->
           Sanctum.Telemetry.platform_context_event(%{
             caller: :athanor_tool,
             user_id: ctx.user_id,
@@ -389,19 +409,18 @@ defmodule Sanctum.MCP.AthanorTool do
             auth_method: ctx.auth_method
           })
 
-          {:ok, athanor, %{ctx | athanor_id: athanor.id, scope: :athanor}}
-
-        ctx.platform_admin ->
-          case Context.focus(ctx, athanor) do
-            {:ok, focused} -> {:ok, athanor, focused}
-            {:error, _} -> {:error, {:invalid_argument, "Not a member of that athanor"}}
-          end
+          true
 
         true ->
-          {:error, {:invalid_argument, "Not a member of that athanor"}}
+          false
       end
-    end
+
+    if admitted?,
+      do: {:ok, athanor, %{ctx | athanor_id: athanor.id, scope: :athanor}},
+      else: not_a_member()
   end
+
+  defp not_a_member, do: {:error, {:invalid_argument, "Not a member of that athanor"}}
 
   defp lookup(%Context{athanor_id: id}, nil, opts) when is_binary(id), do: get(id, opts)
 

@@ -13,11 +13,21 @@ defmodule Compendium.WasmValidatorTest do
   # Valid Component Model binary (magic + component preamble)
   @valid_component <<0x00, 0x61, 0x73, 0x6D, 0x0D, 0x00, 0x01, 0x00>>
 
-  # Tracked cargo-component output — the realest component fixtures there are.
-  @seed_formula Path.expand(
-                  "../../../../seed/components/formulas/local/aqua/1.0.6/formula.wasm",
-                  __DIR__
-                )
+  # Tracked cargo-component output — the realest component fixtures there
+  # are. The AQUA formula is found at its newest shipped version rather
+  # than pinned, so a release bump cannot leave this pointing at a
+  # directory that no longer ships.
+  @seed_formula [__DIR__, "../../../../seed/components/formulas/local/aqua/*/formula.wasm"]
+                |> Path.join()
+                |> Path.wildcard()
+                |> Enum.sort_by(fn path ->
+                  path
+                  |> Path.split()
+                  |> Enum.at(-2)
+                  |> String.split(".")
+                  |> Enum.map(&String.to_integer/1)
+                end)
+                |> List.last()
   @seed_catalyst Path.expand(
                    "../../../../seed/components/catalysts/local/http/1.1.0/catalyst.wasm",
                    __DIR__

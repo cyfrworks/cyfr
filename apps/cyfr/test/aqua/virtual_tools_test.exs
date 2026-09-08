@@ -2,92 +2,100 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.VirtualToolsTest do
+  # The host's copy of the guest's virtual-tool contract, held to the one
+  # fixture the guest's own tests run (`virtual_tools.json` beside
+  # `tools.rs`): every virtual call builds the catalyst request the guest
+  # builds, and every catalyst request names the virtual actions the
+  # guest's guard would judge it as.
   use ExUnit.Case, async: true
 
-  alias Aqua.VirtualTools, as: AquaVirtualTools
+  alias Aqua.VirtualTools
 
-  describe "catalog/0" do
-    test "exposes the four expected virtual tools" do
-      catalog = AquaVirtualTools.catalog()
+  @fixture Path.join([
+             __DIR__,
+             "../../../../seed/components/formulas/local/aqua/*/src/src/virtual_tools.json"
+           ])
 
-      assert Map.keys(catalog) |> Enum.sort() ==
-               ["files", "http", "request_setup", "storage"]
-    end
+  defp fixture do
+    [path] = Path.wildcard(@fixture)
+    path |> File.read!() |> Jason.decode!()
+  end
 
-    test "every action declares a kind from the canonical set" do
-      for {tool, %{actions: actions}} <- AquaVirtualTools.catalog(),
-          {action, %{kind: kind}} <- actions do
-        assert kind in [:read, :write, :execute, :destructive, :external],
-               "#{tool}.#{action} has unexpected kind #{inspect(kind)}"
+  test "the shared fixture holds on both directions" do
+    cases = fixture()
+    assert length(cases) > 20
+
+    for case <- cases do
+      canonical =
+        case VirtualTools.canonical(case["catalyst"], case["input"]) do
+          {:ok, ops} -> Enum.map(ops, &"#{&1.tool}.#{&1.action}")
+          {:error, _} -> []
+        end
+
+      assert canonical == case["canonical"], "reverse of #{inspect(case["input"])}"
+
+      unless case["reverse_only"] do
+        assert {:ok, %{catalyst: catalyst, input: input}} =
+                 VirtualTools.child_call(case["tool"], case["action"], case["args"])
+
+        assert catalyst == case["catalyst"], "#{case["tool"]}.#{case["action"]}"
+        assert input == case["input"], "#{case["tool"]}.#{case["action"]}"
       end
     end
-
-    test "files tool has the expected verbs" do
-      %{actions: actions} = AquaVirtualTools.catalog()["files"]
-      keys = actions |> Map.keys() |> Enum.sort()
-      assert keys == ~w(delete edit grep list read search tree write)
-    end
-
-    test "storage tool aligns with formula API (read/write/list/delete)" do
-      %{actions: actions} = AquaVirtualTools.catalog()["storage"]
-      keys = actions |> Map.keys() |> Enum.sort()
-      assert keys == ~w(delete list read write)
-    end
-
-    test "http tool covers the HTTP methods plus the markdown read" do
-      # `read` is not an HTTP method — it fetches and extracts markdown, and
-      # it is the agent's most-used read path. It belongs here because the
-      # Rust side dispatches it; the two lists are checked against each
-      # other in Prism.AquaRustConsistencyTest.
-      %{actions: actions} = AquaVirtualTools.catalog()["http"]
-      keys = actions |> Map.keys() |> Enum.sort()
-      assert keys == ~w(delete get head options patch post put read)
-    end
   end
 
-  describe "kind_for/2" do
-    test "looks up known virtual actions" do
-      assert AquaVirtualTools.kind_for("files", "read") == :read
-      assert AquaVirtualTools.kind_for("files", "write") == :write
-      assert AquaVirtualTools.kind_for("files", "delete") == :destructive
-      assert AquaVirtualTools.kind_for("storage", "read") == :read
-      assert AquaVirtualTools.kind_for("http", "post") == :execute
-      assert AquaVirtualTools.kind_for("http", "delete") == :destructive
-    end
+  test "a canonical operation carries the virtual tool's own args, so a card can run it again" do
+    assert {:ok, [%{tool: "files", action: "delete", args: %{"path" => "a.md"}}]} =
+             VirtualTools.canonical("catalyst:local.files", %{
+               "action" => "delete",
+               "path" => "a.md"
+             })
 
-    test "returns nil for unknown tool/action" do
-      assert AquaVirtualTools.kind_for("nope", "read") == nil
-      assert AquaVirtualTools.kind_for("files", "purge") == nil
-    end
+    assert {:ok,
+            [%{tool: "storage", action: "write", args: %{"key" => "k", "value" => %{"a" => 1}}}]} =
+             VirtualTools.canonical("catalyst:local.files:0.5.1", %{
+               "action" => "write_text",
+               "path" => "data/storage/k.json",
+               "content" => ~s({"a": 1})
+             })
+
+    assert {:ok, [%{tool: "http", action: "post", args: %{"url" => "http://x", "body" => "b"}}]} =
+             VirtualTools.canonical("catalyst:local.http", %{
+               "operation" => "fetch",
+               "params" => %{"url" => "http://x", "method" => "POST", "body" => "b"}
+             })
+
+    # And round-trips through the child call.
+    assert {:ok, %{input: %{"action" => "delete", "path" => "data/storage/k.json"}}} =
+             VirtualTools.child_call("storage", "delete", %{"key" => "k"})
   end
 
-  describe "list_for_panel/0" do
-    test "returns sorted [{tool, [{action, kind}]}] tuples" do
-      panel = AquaVirtualTools.list_for_panel()
-
-      tools = Enum.map(panel, &elem(&1, 0))
-      assert tools == Enum.sort(tools)
-
-      Enum.each(panel, fn {_tool, actions} ->
-        action_names = Enum.map(actions, &elem(&1, 0))
-        assert action_names == Enum.sort(action_names)
-      end)
-    end
+  test "references are judged at name level, and the assistant itself is never a tool" do
+    assert VirtualTools.name_level("catalyst:local.files:0.5.1") == "catalyst:local.files"
+    assert VirtualTools.name_level("catalyst:local.files") == "catalyst:local.files"
+    assert VirtualTools.self_reference?("formula:local.aqua")
+    assert VirtualTools.self_reference?("formula:local.aqua:1.0.6")
+    refute VirtualTools.self_reference?("formula:local.other")
+    assert {:error, :not_virtual} = VirtualTools.canonical("formula:local.other", %{})
   end
 
-  describe "virtual_tool?/1" do
-    test "true for managed virtual tools" do
-      assert AquaVirtualTools.virtual_tool?("files")
-      assert AquaVirtualTools.virtual_tool?("storage")
-      assert AquaVirtualTools.virtual_tool?("http")
-      assert AquaVirtualTools.virtual_tool?("request_setup")
-    end
+  test "a files call inside the storage boundary is the storage operation" do
+    assert {:ok, %{tool: "storage", action: "delete", args: %{"key" => "k"}}} =
+             VirtualTools.canonical_files("delete", %{"path" => "data/storage/k.json"})
 
-    test "false for MCP tool names and unknowns" do
-      refute AquaVirtualTools.virtual_tool?("secret")
-      refute AquaVirtualTools.virtual_tool?("mcp_servers")
-      refute AquaVirtualTools.virtual_tool?(nil)
-      refute AquaVirtualTools.virtual_tool?(123)
-    end
+    assert {:ok, %{tool: "storage", action: "list", args: %{"key" => "notes"}}} =
+             VirtualTools.canonical_files("tree", %{"path" => "data/storage/notes"})
+
+    assert {:ok, %{tool: "files", action: "delete"}} =
+             VirtualTools.canonical_files("delete", %{"path" => "a.md"})
+
+    assert {:error, :not_a_storage_operation} =
+             VirtualTools.canonical_files("grep", %{"path" => "data/storage", "pattern" => "x"})
+  end
+
+  test "request_setup.open is auto-only and builds no child call" do
+    assert VirtualTools.auto_only?("request_setup", "open")
+    refute VirtualTools.auto_only?("files", "read")
+    assert {:error, _} = VirtualTools.child_call("request_setup", "open", %{})
   end
 end

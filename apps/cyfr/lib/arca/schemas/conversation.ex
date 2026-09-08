@@ -27,11 +27,6 @@ defmodule Arca.Schemas.Conversation do
     field :history, :string
     field :execution_id, :string
     field :orchestrator, :string
-    # The athanor whose `aqua/` tree holds that orchestrator — an ID, so an
-    # estate rename cannot make the stored name point at a different tree.
-    # Nil resolves from the estate in focus (pre-column rows, unqualified
-    # fallbacks).
-    field :orchestrator_owner, :string
     field :turn_seq, :integer, default: 0
     field :last_message_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)
@@ -45,7 +40,6 @@ defmodule Arca.Schemas.Conversation do
     :history,
     :execution_id,
     :orchestrator,
-    :orchestrator_owner,
     :turn_seq,
     :last_message_at
   ]

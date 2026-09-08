@@ -21,16 +21,23 @@ defmodule PrismWeb.ChatLive do
   selected here — the session's default athanor does not move.
 
   The page owns what is the page's: the selection, the lists and what is
-  followed, the say-aloud picker, and the selected estate's own
-  notifications. The pane owns the thread. What is in view is announced
-  (`PrismWeb.RoomFeed`) for the person's own AQUA beside the page.
+  followed, which estates are unfolded, the phone drawer, the say-aloud
+  picker, and the selected estate's own notifications. The pane owns the
+  thread. What is in view is announced (`PrismWeb.RoomFeed`) for the
+  person's own AQUA beside the page, and told to the bar over it
+  (`PrismWeb.TopbarLive.viewing/2`) so the tray follows.
+
+  The rail is read once per change to the SET of estates — a seat gained
+  or lost. Moving between estates, a message on the open thread, a follow
+  or a rename each touch the one row they concern.
   """
 
   use PrismWeb, :live_view
 
+  alias Phoenix.LiveView.JS
+
   alias Arca.ConversationStorage, as: Conversations
   alias Aqua.ConversationRunner
-  alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Athanors
 
   @impl true
@@ -47,12 +54,17 @@ defmodule PrismWeb.ChatLive do
      |> assign(:room, nil)
      |> assign(:page_title, "Chat")
      |> assign(:active_nav, "chat")
+     |> assign(:loading?, true)
      |> assign(:estates, [])
      |> assign(:people, [])
+     |> assign(:expanded, MapSet.new())
+     |> assign(:rail_open?, false)
      |> assign(:focus, nil)
+     |> assign(:athanor_label, nil)
      |> assign(:conversations, [])
      |> assign(:followed, MapSet.new())
      |> assign(:conversation, nil)
+     |> assign(:pane, nil)
      |> assign(:aloud_for, nil)
      |> assign(:aloud_targets, [])
      |> assign(:aloud_estate, nil)
@@ -76,66 +88,80 @@ defmodule PrismWeb.ChatLive do
   # that focused context is what the lists and the pane run under.
   @impl true
   def handle_params(params, _uri, socket) do
-    if connected?(socket) do
-      ctx = socket.assigns.context
+    if connected?(socket), do: open(socket, params), else: {:noreply, socket}
+  end
 
-      case focus_on(ctx, params["a"]) do
-        {:ok, focus, athanor} ->
-          conversations = Conversations.list(focus)
+  defp open(socket, params) do
+    ctx = socket.assigns.context
+    athanors = Sanctum.Tenancy.list_athanors(ctx)
 
-          target =
-            case params["c"] do
-              id when is_binary(id) and id != "" -> Enum.find(conversations, &(&1.id == id))
-              _ -> List.first(conversations)
-            end
+    case focus_on(ctx, params["a"], athanors) do
+      {:ok, focus, athanor} ->
+        open_estate(socket, focus, athanor, athanors, params["c"])
 
-          if socket.assigns.tray_key, do: Prism.Tray.clear(socket.assigns.tray_key, athanor.id)
+      {:error, :no_estate} ->
+        # No seat anywhere: nothing to open, and nothing to patch to.
+        {:noreply,
+         socket
+         |> assign(:loading?, false)
+         |> assign(:athanor, nil)
+         |> assign(:focus, nil)
+         |> assign(:conversation, nil)
+         |> assign(:estates, [])
+         |> assign(:people, [])}
 
-          {:noreply,
-           socket
-           |> subscribe_estate(athanor)
-           |> assign(:focus, focus)
-           |> assign(:athanor, athanor)
-           |> assign(:athanor_route, Athanors.route_slug(athanor))
-           |> assign(:conversations, conversations)
-           |> refresh_followed()
-           |> select(target)
-           |> load_rail()}
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "That estate cannot be opened (#{reason}).")
+         |> push_navigate(to: chat_path(nil))}
+    end
+  end
 
-        {:error, :no_estate} ->
-          # No seat anywhere: nothing to open, and nothing to patch to.
-          {:noreply,
-           socket
-           |> assign(:athanor, nil)
-           |> assign(:focus, nil)
-           |> assign(:conversation, nil)
-           |> assign(:estates, [])
-           |> assign(:people, [])}
+  defp open_estate(socket, focus, athanor, athanors, conversation_id) do
+    ctx = socket.assigns.context
+    conversations = topics(focus)
 
-        {:error, reason} ->
-          {:noreply,
-           socket
-           |> put_flash(:error, "That estate cannot be opened (#{reason}).")
-           |> push_navigate(to: chat_path(nil))}
-      end
-    else
-      {:noreply, socket}
+    case pick(conversations, conversation_id) do
+      {:ok, target} ->
+        if socket.assigns.tray_key, do: Prism.Tray.clear(socket.assigns.tray_key, athanor.id)
+        PrismWeb.TopbarLive.viewing(self(), athanor.id)
+
+        {:noreply,
+         socket
+         |> assign(:loading?, false)
+         |> subscribe_estate(athanor)
+         |> assign(:focus, focus)
+         |> assign(:athanor, athanor)
+         |> assign(:athanor_route, Athanors.route_slug(athanor))
+         |> assign(:athanor_label, estate_label(athanor, socket.assigns.mine, ctx))
+         |> assign(:conversations, conversations)
+         |> assign(:followed, Arca.TopicSubscriptionStorage.followed(focus, ctx.user_id))
+         |> update(:expanded, &MapSet.put(&1, athanor.id))
+         |> select(target)
+         |> sync_rail(athanors)}
+
+      # The address named a thread this estate does not hold: say so, and
+      # open the estate's own default rather than a blank pane.
+      :unseen ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "That conversation isn't in this estate.")
+         |> push_patch(to: chat_path(Athanors.route_slug(athanor)))}
     end
   end
 
   # No estate named: the session's default, or — when that seat is gone —
   # the first estate the person still holds one in. Never a patch back to
   # the default, which is how a lost seat would loop.
-  defp focus_on(ctx, route) when route in [nil, ""] do
-    candidates =
-      [ctx.athanor_id && Athanors.get(ctx.athanor_id)]
-      |> Enum.flat_map(fn
+  defp focus_on(ctx, route, athanors) when route in [nil, ""] do
+    default =
+      case ctx.athanor_id && Athanors.get(ctx.athanor_id) do
         {:ok, %{status: "active"} = athanor} -> [athanor]
         _ -> []
-      end)
-      |> Kernel.++(Sanctum.Tenancy.list_athanors(ctx))
+      end
 
-    Enum.find_value(candidates, {:error, :no_estate}, fn athanor ->
+    Enum.find_value(default ++ athanors, {:error, :no_estate}, fn athanor ->
       case Sanctum.Context.focus(ctx, athanor) do
         {:ok, focus} -> {:ok, focus, athanor}
         {:error, _} -> nil
@@ -143,10 +169,45 @@ defmodule PrismWeb.ChatLive do
     end)
   end
 
-  defp focus_on(ctx, route) when is_binary(route) do
+  # `Context.focus/2` decides who may open the estate named in the URL: a
+  # member, or a platform admin through the audited operator open. That
+  # the operator's open is reachable from this global address — not only
+  # from a workbench page — is deliberate: the audit event is the
+  # safeguard, wherever the open is made from.
+  defp focus_on(ctx, route, _athanors) when is_binary(route) do
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, focus} <- Sanctum.Context.focus(ctx, athanor) do
       {:ok, focus, athanor}
+    end
+  end
+
+  # The thread the address names; `new` a blank pane, whatever the estate
+  # holds — the first message starts the thread; the most recent without
+  # an address, or nothing in an empty estate. `new` is not an id: ids are
+  # prefixed (`conv_…`), so the word cannot name a thread.
+  @blank "new"
+
+  @doc "The address of a blank pane in an estate: `+ New` goes here."
+  @spec blank() :: String.t()
+  def blank, do: @blank
+
+  defp pick(_conversations, @blank), do: {:ok, nil}
+
+  defp pick(conversations, id) when is_binary(id) and id != "" do
+    case Enum.find(conversations, &(&1.id == id)) do
+      nil -> :unseen
+      conv -> {:ok, conv}
+    end
+  end
+
+  defp pick(conversations, _id), do: {:ok, List.first(conversations)}
+
+  # A list that could not be read is an empty estate for the rail's
+  # purposes — the pane says what it could not do.
+  defp topics(focus) do
+    case Conversations.list(focus) do
+      list when is_list(list) -> list
+      _ -> []
     end
   end
 
@@ -173,42 +234,73 @@ defmodule PrismWeb.ChatLive do
   defp select(socket, target) do
     socket = unsubscribe_current(socket)
     if target, do: ConversationRunner.subscribe(target.id, target.athanor_id)
-    %{athanor: athanor, mine: mine, context: ctx} = socket.assigns
-
-    room =
-      target && PrismWeb.RoomFeed.room(athanor, target, estate_label(athanor, mine, ctx))
-
-    PrismWeb.RoomFeed.announce(socket.assigns.room_feed, room)
 
     socket
     |> assign(:conversation, target)
-    |> assign(:room, room)
+    |> announce(target)
+    |> switch_pane(target)
+  end
+
+  # The pane is one per estate and turns to a thread by message; the pane
+  # of another estate, or one that has not reported in yet, is left to
+  # mount on the thread the address names.
+  defp switch_pane(
+         %{assigns: %{pane: {athanor_id, pid}, athanor: %{id: athanor_id}}} = socket,
+         target
+       ) do
+    send(pid, {:switch_thread, target && target.id})
+    socket
+  end
+
+  defp switch_pane(socket, _target), do: socket
+
+  defp announce(socket, target) do
+    %{athanor: athanor, athanor_label: label} = socket.assigns
+    room = target && PrismWeb.RoomFeed.room(athanor, target, label)
+    PrismWeb.RoomFeed.announce(socket.assigns.room_feed, room)
+    assign(socket, :room, room)
   end
 
   defp unsubscribe_current(
          %{assigns: %{conversation: %{id: id, athanor_id: athanor_id}}} = socket
        ) do
-    Phoenix.PubSub.unsubscribe(Emissary.PubSub, ConversationRunner.topic(id, athanor_id))
+    ConversationRunner.unsubscribe(id, athanor_id)
     socket
   end
 
   defp unsubscribe_current(socket), do: socket
 
-  # The rail: every estate the person holds a seat in, each entered through
+  # ============================================================================
+  # The rail
+  # ============================================================================
+
+  # Rebuilt only when the set of estates differs from what is listed — a
+  # seat gained or lost; otherwise the estate in view has its row refreshed
+  # from the lists `open/2` just read, and nothing else is queried.
+  defp sync_rail(socket, athanors) do
+    ids = MapSet.new(athanors, & &1.id)
+    listed = MapSet.new(socket.assigns.estates, & &1.athanor.id)
+
+    if MapSet.equal?(ids, listed),
+      do: patch_row(socket),
+      else: build_rail(socket, athanors)
+  end
+
+  # Every estate the person holds a seat in, each entered through
   # `Context.focus/2` for its own list, sorted own athanor, DMs, groups;
   # and the people they share an estate with, for a DM.
-  defp load_rail(socket) do
+  defp build_rail(socket, athanors) do
     %{context: ctx, mine: mine} = socket.assigns
 
     estates =
-      for athanor <- Sanctum.Tenancy.list_athanors(ctx),
+      for athanor <- athanors,
           {:ok, focus} <- [Sanctum.Context.focus(ctx, athanor)] do
         %{
           athanor: athanor,
           route: Athanors.route_slug(athanor),
           kind: estate_kind(athanor, mine),
           label: estate_label(athanor, mine, ctx),
-          topics: Conversations.list(focus),
+          topics: topics(focus),
           followed: Arca.TopicSubscriptionStorage.followed(focus, ctx.user_id)
         }
       end
@@ -217,24 +309,67 @@ defmodule PrismWeb.ChatLive do
     people =
       estates
       |> Enum.filter(&(&1.kind == :group))
-      |> Enum.flat_map(fn %{athanor: athanor} -> members_of(athanor) end)
+      |> Enum.flat_map(fn %{athanor: athanor} -> members_of(athanor, ctx) end)
       |> Enum.reject(&(&1.user_id == ctx.user_id))
       |> Enum.uniq_by(& &1.user_id)
       |> Enum.sort_by(&String.downcase(&1.label))
 
+    # An estate with nothing followed has only its other topics to show, so
+    # they start unfolded — once, when the estate first joins the rail. A
+    # later toggle is the person's and stands through every rebuild.
+    listed = MapSet.new(socket.assigns.estates, & &1.athanor.id)
+
+    expanded =
+      Enum.reduce(estates, socket.assigns.expanded, fn estate, acc ->
+        cond do
+          MapSet.member?(listed, estate.athanor.id) -> acc
+          Enum.any?(estate.topics, &MapSet.member?(estate.followed, &1.id)) -> acc
+          true -> MapSet.put(acc, other_key(estate.athanor.id))
+        end
+      end)
+
     socket
     |> assign(:estates, estates)
     |> assign(:people, people)
+    |> assign(:expanded, expanded)
+    |> patch_row()
   end
 
-  defp personal_athanor(%{user_id: user_id}) when is_binary(user_id) do
-    case Sanctum.Tenancy.Users.get(user_id) do
-      {:ok, %{personal_athanor_id: id}} -> id
-      _ -> nil
+  # The estate in view, from what the page already holds for it.
+  defp patch_row(%{assigns: %{athanor: %{id: id}}} = socket) do
+    %{conversations: conversations, followed: followed} = socket.assigns
+
+    update(socket, :estates, fn estates ->
+      for row <- estates do
+        if row.athanor.id == id, do: %{row | topics: conversations, followed: followed}, else: row
+      end
+    end)
+  end
+
+  defp patch_row(socket), do: socket
+
+  # The estate in view was renamed or reconfigured: its row, re-labelled.
+  defp patch_athanor(socket, athanor) do
+    label = estate_label(athanor, socket.assigns.mine, socket.assigns.context)
+
+    socket
+    |> assign(:athanor, athanor)
+    |> assign(:athanor_label, label)
+    |> update(:estates, fn estates ->
+      estates
+      |> Enum.map(fn row ->
+        if row.athanor.id == athanor.id, do: %{row | athanor: athanor, label: label}, else: row
+      end)
+      |> Enum.sort_by(&{kind_rank(&1.kind), String.downcase(&1.label)})
+    end)
+  end
+
+  defp personal_athanor(%{user_id: user_id}) do
+    case Sanctum.Tenancy.Users.personal_athanor_id(user_id) do
+      {:ok, id} -> id
+      :none -> nil
     end
   end
-
-  defp personal_athanor(_), do: nil
 
   defp estate_kind(%{id: id}, mine) when id == mine, do: :mine
   defp estate_kind(%{roster: "frozen"}, _mine), do: :dm
@@ -244,23 +379,15 @@ defmodule PrismWeb.ChatLive do
   defp kind_rank(:dm), do: 1
   defp kind_rank(:group), do: 2
 
-  # A DM is named by the other person, never by the pair estate's own name.
-  defp estate_label(%{id: id}, mine, _ctx) when id == mine, do: "You"
+  # Your own estate is "You"; a DM is the other person, never the pair
+  # row's own name; a group is its name (`Athanors.pair_label/2`).
+  defp estate_label(athanor, _mine, ctx), do: PrismWeb.Estates.label(athanor, ctx)
 
-  defp estate_label(%{roster: "frozen"} = athanor, _mine, ctx) do
-    case Enum.find(members_of(athanor), &(&1.user_id != ctx.user_id)) do
-      %{label: label} -> label
-      nil -> athanor.name
-    end
-  end
-
-  defp estate_label(athanor, _mine, _ctx), do: athanor.name
-
-  defp members_of(athanor) do
+  defp members_of(athanor, ctx) do
     case Sanctum.Tenancy.Members.list_by_athanor(athanor.id) do
       {:ok, rows} ->
         for m <- rows, is_binary(m.user_id), m.status == "active" do
-          %{user_id: m.user_id, label: m.display_name || m.email || m.user_id}
+          %{user_id: m.user_id, label: PrismWeb.People.label(m, ctx)}
         end
 
       {:error, _} ->
@@ -268,22 +395,57 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
+  defp other_key(athanor_id), do: athanor_id <> ":other"
+
+  # Whether `id` names one of the open estate's own threads.
+  defp topic_here?(socket, id) when is_binary(id),
+    do: Enum.any?(socket.assigns.conversations, &(&1.id == id))
+
+  defp topic_here?(_socket, _id), do: false
+
+  defp toggle(socket, key) do
+    update(socket, :expanded, fn expanded ->
+      if MapSet.member?(expanded, key),
+        do: MapSet.delete(expanded, key),
+        else: MapSet.put(expanded, key)
+    end)
+  end
+
   # ============================================================================
   # Events
   # ============================================================================
 
   @impl true
+  def handle_event("toggle_estate", %{"id" => id}, socket) do
+    {:noreply, toggle(socket, id)}
+  end
+
+  def handle_event("toggle_other", %{"id" => id}, socket) do
+    {:noreply, toggle(socket, other_key(id))}
+  end
+
   def handle_event("open_estate", %{"route" => route}, socket) do
     {:noreply, push_patch(socket, to: chat_path(route))}
   end
 
   def handle_event("open_conversation", %{"route" => route, "id" => id}, socket) do
     # Deliberately does NOT follow: reading a thread is not joining it.
-    {:noreply, push_patch(socket, to: chat_path(route, id))}
+    # On a phone the drawer gives way to the thread.
+    {:noreply,
+     socket
+     |> assign(:rail_open?, false)
+     |> push_patch(to: chat_path(route, id))}
   end
 
   def handle_event("new_conversation", _params, socket) do
-    {:noreply, push_patch(socket, to: chat_path(socket.assigns.athanor_route))}
+    {:noreply,
+     socket
+     |> assign(:rail_open?, false)
+     |> push_patch(to: chat_path(socket.assigns.athanor_route, @blank))}
+  end
+
+  def handle_event("close_rail", _params, socket) do
+    {:noreply, assign(socket, :rail_open?, false)}
   end
 
   # Click a person → the frozen pair of the two of you, found or minted,
@@ -341,11 +503,20 @@ defmodule PrismWeb.ChatLive do
         {:noreply,
          socket
          |> assign(:aloud_estate, athanor_id)
-         |> assign(:aloud_topics, Conversations.list(focused))}
+         |> assign(:aloud_topics, topics(focused))}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "You are not a member of that estate.")}
     end
+  end
+
+  # The open thread may have gone between opening the picker and choosing
+  # a topic — deleted by another member — so it is checked, not assumed.
+  def handle_event("aloud_post", _params, %{assigns: %{conversation: nil}} = socket) do
+    {:noreply,
+     socket
+     |> assign(:aloud_for, nil)
+     |> put_flash(:error, "That conversation is gone — nothing to say aloud.")}
   end
 
   def handle_event("aloud_post", %{"conversation" => topic_id}, socket) do
@@ -375,11 +546,18 @@ defmodule PrismWeb.ChatLive do
     {:noreply, assign(socket, :aloud_for, nil)}
   end
 
+  # Following decides emphasis and notification, never visibility. The
+  # write is the fact; the page's own set follows it without a re-read.
+  # The id comes off the wire and the row is written under the estate in
+  # focus, so only one of that estate's own threads may be named.
   def handle_event("follow_topic", %{"id" => id}, socket) do
     focus = socket.assigns.focus
 
-    case Arca.TopicSubscriptionStorage.follow(focus, id, focus.user_id) do
-      :ok -> {:noreply, socket |> refresh_followed() |> load_rail()}
+    with true <- topic_here?(socket, id),
+         :ok <- Arca.TopicSubscriptionStorage.follow(focus, id, focus.user_id) do
+      {:noreply, socket |> update(:followed, &MapSet.put(&1, id)) |> patch_row()}
+    else
+      false -> {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
       {:error, _} -> {:noreply, put_flash(socket, :error, "Could not follow — try again.")}
     end
   end
@@ -387,8 +565,11 @@ defmodule PrismWeb.ChatLive do
   def handle_event("unfollow_topic", %{"id" => id}, socket) do
     focus = socket.assigns.focus
 
-    case Arca.TopicSubscriptionStorage.unfollow(focus, id, focus.user_id) do
-      :ok -> {:noreply, socket |> refresh_followed() |> load_rail()}
+    with true <- topic_here?(socket, id),
+         :ok <- Arca.TopicSubscriptionStorage.unfollow(focus, id, focus.user_id) do
+      {:noreply, socket |> update(:followed, &MapSet.delete(&1, id)) |> patch_row()}
+    else
+      false -> {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
       {:error, _} -> {:noreply, put_flash(socket, :error, "Could not unfollow — try again.")}
     end
   end
@@ -398,22 +579,29 @@ defmodule PrismWeb.ChatLive do
 
     # The turn may be running in a thread this tab is not looking at: the
     # runner is the fact, not what this socket happens to be rendering.
-    if Aqua.ConversationRunner.turn_running?(focus, id) do
-      {:noreply, put_flash(socket, :error, "Stop the running turn before deleting.")}
-    else
-      case Conversations.delete(focus, id) do
-        :ok ->
-          current = socket.assigns.conversation && socket.assigns.conversation.id
+    # The id comes off the wire, and only one of this estate's own
+    # threads may be named — the same guard the follow verbs hold.
+    cond do
+      not topic_here?(socket, id) ->
+        {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
 
-          if current == id do
-            {:noreply, push_patch(socket, to: chat_path(socket.assigns.athanor_route))}
-          else
-            {:noreply, socket |> refresh_list() |> load_rail()}
-          end
+      Aqua.ConversationRunner.turn_running?(focus, id) ->
+        {:noreply, put_flash(socket, :error, "Stop the running turn before deleting.")}
 
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Delete failed: #{error_message(reason)}")}
-      end
+      true ->
+        case Conversations.delete(focus, id) do
+          :ok ->
+            current = socket.assigns.conversation && socket.assigns.conversation.id
+
+            if current == id do
+              {:noreply, push_patch(socket, to: chat_path(socket.assigns.athanor_route))}
+            else
+              {:noreply, socket |> assign(:conversations, topics(focus)) |> patch_row()}
+            end
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Delete failed: #{error_message(reason)}")}
+        end
     end
   end
 
@@ -421,23 +609,41 @@ defmodule PrismWeb.ChatLive do
   # PubSub fan-in — the lists, and what the pane tells the page
   # ============================================================================
 
+  # A message on the open thread: that row's title and last activity, and
+  # nothing else — the pane holds the tape.
   @impl true
   def handle_info(
         {:conversation, id, {:message, _row}},
         %{assigns: %{conversation: %{id: id}}} = socket
       ) do
-    {:noreply, socket |> refresh_list() |> load_rail()}
+    case Conversations.get(socket.assigns.focus, id) do
+      {:ok, conv} -> {:noreply, socket |> put_conversation(conv) |> patch_row()}
+      _ -> {:noreply, socket}
+    end
   end
 
   def handle_info({:conversation, _id, _event}, socket), do: {:noreply, socket}
 
+  # The pane is live: this is where a thread switch goes. A pane that
+  # mounted on a thread the address has since left is turned at once.
+  def handle_info({:pane, _pane, {:ready, pid, conversation_id}}, socket) do
+    case socket.assigns.athanor do
+      %{id: athanor_id} ->
+        socket = assign(socket, :pane, {athanor_id, pid})
+        current = socket.assigns.conversation && socket.assigns.conversation.id
+
+        if current != conversation_id,
+          do: {:noreply, switch_pane(socket, socket.assigns.conversation)},
+          else: {:noreply, socket}
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
   # The pane's first message created the thread: the address is this page's.
   def handle_info({:pane, _pane, {:opened, conv}}, socket) do
-    {:noreply,
-     socket
-     |> refresh_list()
-     |> load_rail()
-     |> push_patch(to: chat_path(socket.assigns.athanor_route, conv.id))}
+    {:noreply, push_patch(socket, to: chat_path(socket.assigns.athanor_route, conv.id))}
   end
 
   # A line the pane offers to say aloud: the picker is this page's.
@@ -445,22 +651,57 @@ defmodule PrismWeb.ChatLive do
     handle_event("aloud_open", %{"id" => msg_id}, socket)
   end
 
+  # The pane's own "Chats" button on a phone: the drawer is this page's.
+  def handle_info({:pane, _pane, :toggle_rail}, socket) do
+    {:noreply, update(socket, :rail_open?, &(not &1))}
+  end
+
   # A rename or a settings change re-reads the row; an archive sends the
   # page back to the default — the runner behind the thread has stopped.
   def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
-    socket = reload_athanor(socket)
-
-    case socket.assigns.athanor do
-      %{status: "archived"} ->
+    case Athanors.get(socket.assigns.athanor.id) do
+      {:ok, %{status: "archived"} = athanor} ->
         {:noreply,
          socket
-         |> put_flash(:error, "This athanor has been archived.")
+         |> assign(:athanor, athanor)
+         |> put_flash(:error, "This estate has been archived.")
          |> push_navigate(to: chat_path(nil))}
 
+      {:ok, athanor} ->
+        {:noreply, patch_athanor(socket, athanor)}
+
       _ ->
-        {:noreply, load_rail(socket)}
+        {:noreply, socket}
     end
   end
+
+  # Someone joined or left the estate in view: the people list is theirs.
+  def handle_info({:notify, _athanor_id, :member_changed, _payload}, socket) do
+    {:noreply, build_rail(socket, Sanctum.Tenancy.list_athanors(socket.assigns.context))}
+  end
+
+  # This person's own seats changed — a group they were added to, a DM the
+  # other person minted, a seat withdrawn. The gate (`PrismWeb.LiveAuth`)
+  # subscribes the page, settles the caller and hands the message on: a
+  # seat lost under the session's own estate never reaches here. One lost
+  # under the estate this page has open sends it back to the default;
+  # anything else re-reads the set of estates.
+  def handle_info(
+        {:membership_changed, %{athanor_id: id, change: :left}},
+        %{assigns: %{athanor: %{id: id}}} = socket
+      ) do
+    {:noreply,
+     socket
+     |> put_flash(:error, "You are no longer a member of that estate.")
+     |> push_navigate(to: chat_path(nil))}
+  end
+
+  def handle_info({:membership_changed, _change}, socket) do
+    {:noreply, build_rail(socket, Sanctum.Tenancy.list_athanors(socket.assigns.context))}
+  end
+
+  # The estate's other notifies are the bar's (the tray) and the pane's.
+  def handle_info({:notify, _athanor_id, _kind, _payload}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
@@ -474,17 +715,21 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  defp refresh_list(socket) do
-    socket
-    |> assign(:conversations, Conversations.list(socket.assigns.focus))
-    |> refresh_followed()
-  end
+  # The open thread's fresh row, in place and in order; the room is told
+  # again only when its title moved (the first message names a thread).
+  defp put_conversation(socket, conv) do
+    conversations =
+      socket.assigns.conversations
+      |> Enum.reject(&(&1.id == conv.id))
+      |> List.insert_at(0, conv)
+      |> Enum.sort_by(&(&1.last_message_at || &1.inserted_at), {:desc, DateTime})
 
-  # Which of the estate's topics are in this person's sidebar. Following
-  # decides emphasis and notification, never visibility.
-  defp refresh_followed(socket) do
-    focus = socket.assigns.focus
-    assign(socket, :followed, Arca.TopicSubscriptionStorage.followed(focus, focus.user_id))
+    socket = assign(socket, :conversations, conversations)
+
+    case socket.assigns.conversation do
+      %{title: title} when title == conv.title -> assign(socket, :conversation, conv)
+      _ -> socket |> assign(:conversation, conv) |> announce(conv)
+    end
   end
 
   defp provisioning_error(athanor) do
@@ -514,10 +759,15 @@ defmodule PrismWeb.ChatLive do
     <div id="chat-root" class="flex h-full min-h-0">
       <%!-- The rail: your own athanor, your DMs, your groups and their
             topics, across every estate you belong to — a column beside the
-            chat, a panel over it on a phone. --%>
+            chat, a drawer over it on a phone. --%>
       <aside
         id="conversation-list"
-        class="flex w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-900/40 max-md:fixed max-md:inset-y-12 max-md:bottom-0 max-md:left-0 max-md:z-30 max-md:hidden max-md:bg-gray-900 max-md:shadow-xl md:flex"
+        aria-label="Chats"
+        aria-busy={to_string(@loading?)}
+        class={[
+          "flex w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-900/40 max-md:fixed max-md:inset-y-12 max-md:bottom-0 max-md:left-0 max-md:z-30 max-md:bg-gray-900 max-md:shadow-xl md:flex",
+          if(@rail_open?, do: "", else: "max-md:hidden")
+        ]}
       >
         <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
           <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">Chats</span>
@@ -525,14 +775,19 @@ defmodule PrismWeb.ChatLive do
             <button
               type="button"
               phx-click="new_conversation"
-              class="rounded px-2 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200"
-              title={"Start a new conversation in #{@athanor && @athanor.name}"}
+              disabled={is_nil(@athanor)}
+              class="rounded px-2 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200 disabled:opacity-50"
+              title={
+                if @athanor,
+                  do: "Start a new conversation in #{@athanor_label}",
+                  else: "Start a new conversation"
+              }
             >
               + New
             </button>
             <button
               type="button"
-              phx-click={JS.add_class("max-md:hidden", to: "#conversation-list")}
+              phx-click="close_rail"
               class="md:hidden rounded px-2 py-1 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
               aria-label="Close the list"
             >
@@ -542,58 +797,89 @@ defmodule PrismWeb.ChatLive do
         </div>
 
         <div class="flex-1 overflow-y-auto">
-          <details
+          <.rail_skeleton :if={@loading?} />
+
+          <section
             :for={estate <- @estates}
             id={"estate-" <> estate.athanor.id}
-            open={@athanor && estate.athanor.id == @athanor.id}
             class="border-b border-gray-800/60"
           >
-            <summary
-              class={[
-                "flex items-center gap-2 px-3 py-1.5 text-[11px] uppercase tracking-wider cursor-pointer hover:text-gray-200",
-                if(@athanor && estate.athanor.id == @athanor.id,
-                  do: "text-gray-200",
-                  else: "text-gray-500"
-                )
-              ]}
-              phx-click="open_estate"
-              phx-value-route={estate.route}
-            >
-              <span class="truncate">{estate.label}</span>
-              <span :if={estate.kind == :dm} class="text-[9px] text-gray-600 normal-case">DM</span>
-              <span class="ml-auto text-[10px] text-gray-600 normal-case">
-                {length(estate.topics)}
-              </span>
-            </summary>
-            <div :if={estate.topics == []} class="px-3 py-2 text-xs text-gray-600">
-              No conversations yet.
+            <% current? = @athanor && estate.athanor.id == @athanor.id %>
+            <% unfolded? = MapSet.member?(@expanded, estate.athanor.id) %>
+            <div class={[
+              "flex items-center gap-1 pl-1 pr-3 py-1.5 text-[11px] uppercase tracking-wider",
+              if(current?, do: "text-gray-200", else: "text-gray-500")
+            ]}>
+              <button
+                type="button"
+                phx-click="toggle_estate"
+                phx-value-id={estate.athanor.id}
+                aria-expanded={to_string(unfolded?)}
+                aria-label={"Topics of " <> estate.label}
+                class="w-5 shrink-0 rounded text-center text-gray-600 hover:text-gray-300"
+              >
+                <span aria-hidden="true">{if unfolded?, do: "▾", else: "▸"}</span>
+              </button>
+              <button
+                type="button"
+                phx-click="open_estate"
+                phx-value-route={estate.route}
+                aria-current={current? && "true"}
+                class="flex flex-1 min-w-0 items-center gap-2 text-left hover:text-gray-200"
+              >
+                <span class="truncate">{estate.label}</span>
+                <span :if={estate.kind == :dm} class="text-[9px] text-gray-600 normal-case">
+                  DM
+                </span>
+                <span class="ml-auto text-[10px] text-gray-600 normal-case">
+                  {length(estate.topics)}
+                </span>
+              </button>
             </div>
-            <% {following, other} =
-              Enum.split_with(estate.topics, &MapSet.member?(estate.followed, &1.id)) %>
-            <ul :if={following != []} class="divide-y divide-gray-800/60">
-              <.topic_row
-                :for={conv <- following}
-                conv={conv}
-                route={estate.route}
-                current={@conversation}
-                followed
-              />
-            </ul>
-            <details :if={other != []} open={following == []} class="border-t border-gray-800/60">
-              <summary class="px-4 py-1 text-[10px] uppercase tracking-wider text-gray-600 cursor-pointer hover:text-gray-400">
-                Other topics ({length(other)})
-              </summary>
-              <ul class="divide-y divide-gray-800/60">
+            <div :if={unfolded?} id={"estate-topics-" <> estate.athanor.id}>
+              <div :if={estate.topics == []} class="px-3 py-2 text-xs text-gray-600">
+                No conversations yet.
+              </div>
+              <% {following, other} =
+                Enum.split_with(estate.topics, &MapSet.member?(estate.followed, &1.id)) %>
+              <ul :if={following != []} class="divide-y divide-gray-800/60">
                 <.topic_row
-                  :for={conv <- other}
+                  :for={conv <- following}
                   conv={conv}
                   route={estate.route}
                   current={@conversation}
-                  followed={false}
+                  estate_id={@athanor && @athanor.id}
+                  followed
                 />
               </ul>
-            </details>
-          </details>
+              <% other_open? = MapSet.member?(@expanded, other_key(estate.athanor.id)) %>
+              <div :if={other != []} class="border-t border-gray-800/60">
+                <button
+                  type="button"
+                  phx-click="toggle_other"
+                  phx-value-id={estate.athanor.id}
+                  aria-expanded={to_string(other_open?)}
+                  class="w-full px-4 py-1 text-left text-[10px] uppercase tracking-wider text-gray-600 hover:text-gray-400"
+                >
+                  Other topics ({length(other)})
+                </button>
+                <ul
+                  :if={other_open?}
+                  id={"estate-other-" <> estate.athanor.id}
+                  class="divide-y divide-gray-800/60"
+                >
+                  <.topic_row
+                    :for={conv <- other}
+                    conv={conv}
+                    route={estate.route}
+                    current={@conversation}
+                    estate_id={@athanor && @athanor.id}
+                    followed={false}
+                  />
+                </ul>
+              </div>
+            </div>
+          </section>
 
           <%!-- People you share an estate with: a click is a DM, found or
                 minted, opened here — the estate switcher does not move. --%>
@@ -617,51 +903,52 @@ defmodule PrismWeb.ChatLive do
       </aside>
 
       <div class="flex flex-1 min-w-0 flex-col">
-        <div
-          :if={@athanor && is_nil(@athanor.provisioned_at)}
-          class="flex items-center justify-between gap-3 border-b border-amber-900/60 bg-amber-950/40 px-4 py-2 text-xs text-amber-200"
-        >
-          <span class="min-w-0 truncate">
-            This athanor is still being set up
-            <span :if={provisioning_error(@athanor)} class="text-amber-300/80">
-              — last attempt failed at {provisioning_error(@athanor)["step"]}: {provisioning_detail(
-                @athanor
-              )}
-            </span>
-          </span>
-          <button
-            type="button"
-            phx-click="provision"
-            class="shrink-0 rounded px-2 py-1 text-[11px] uppercase tracking-wider bg-amber-800/60 text-amber-100 hover:bg-amber-700/80"
-          >
-            Retry
-          </button>
-        </div>
+        <%= cond do %>
+          <% @loading? -> %>
+            <.tape_skeleton />
+          <% @focus -> %>
+            <div
+              :if={is_nil(@athanor.provisioned_at)}
+              class="flex items-center justify-between gap-3 border-b border-amber-900/60 bg-amber-950/40 px-4 py-2 text-xs text-amber-200"
+            >
+              <span class="min-w-0 truncate">
+                This estate is still being set up
+                <span :if={provisioning_error(@athanor)} class="text-amber-300/80">
+                  — last attempt failed at {provisioning_error(@athanor)["step"]}: {provisioning_detail(
+                    @athanor
+                  )}
+                </span>
+              </span>
+              <button
+                type="button"
+                phx-click="provision"
+                class="shrink-0 rounded px-2 py-1 text-[11px] uppercase tracking-wider bg-amber-800/60 text-amber-100 hover:bg-amber-700/80"
+              >
+                Retry
+              </button>
+            </div>
 
-        <%!-- The open thread, as its own LiveView: a different thread is a
-              different pane, mounted fresh under its own focused context. --%>
-        {if @athanor,
-          do:
-            live_render(@socket, PrismWeb.ConversationPaneLive,
-              id: "pane-" <> @athanor.id <> "-" <> ((@conversation && @conversation.id) || "new"),
+            <%!-- The estate's pane, as its own LiveView under its own focused
+                  context: one per estate, turned to the open thread by
+                  message, so a thread switch re-reads the thread alone. --%>
+            {live_render(@socket, PrismWeb.ConversationPaneLive,
+              id: "pane-" <> @athanor.id,
               session: %{
                 "athanor_id" => @athanor.id,
                 "conversation_id" => @conversation && @conversation.id,
                 "ui_mode" => assigns[:ui_mode]
               }
             )}
+          <% true -> %>
+            <div class="flex flex-1 items-center justify-center px-6 text-center text-sm text-gray-500">
+              You are not in any estate yet — there is nowhere to chat.
+            </div>
+        <% end %>
       </div>
 
       <%!-- Say-aloud picker: which estate, then which of its topics. --%>
-      <div
-        :if={@aloud_for}
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-        phx-click="aloud_cancel"
-      >
-        <div
-          class="w-full max-w-sm rounded-lg bg-gray-900 border border-gray-800 shadow-2xl p-4 space-y-3"
-          phx-click-away="aloud_cancel"
-        >
+      <.modal id="aloud-picker" show={not is_nil(@aloud_for)} on_cancel={JS.push("aloud_cancel")}>
+        <div class="space-y-3">
           <h3 class="text-sm font-medium text-gray-200">Say aloud</h3>
           <p class="text-[11px] text-gray-500">
             A copy of the line lands on an estate's thread, attributed to you.
@@ -718,6 +1005,39 @@ defmodule PrismWeb.ChatLive do
             </button>
           </div>
         </div>
+      </.modal>
+    </div>
+    """
+  end
+
+  # What the page looks like before the estate is in focus: the shape of a
+  # rail and a tape, so the first paint is not a blank column.
+  defp rail_skeleton(assigns) do
+    ~H"""
+    <div id="rail-skeleton" class="animate-pulse space-y-3 px-3 py-3" aria-hidden="true">
+      <div :for={_ <- 1..3} class="space-y-2">
+        <div class="h-2.5 w-24 rounded bg-gray-800"></div>
+        <div class="h-2 w-full rounded bg-gray-800/70"></div>
+        <div class="h-2 w-4/5 rounded bg-gray-800/70"></div>
+      </div>
+    </div>
+    """
+  end
+
+  defp tape_skeleton(assigns) do
+    ~H"""
+    <div id="tape-skeleton" class="flex flex-1 flex-col animate-pulse" aria-hidden="true">
+      <div class="flex items-center gap-3 border-b border-gray-800 px-4 py-3">
+        <div class="h-3 w-20 rounded bg-gray-800"></div>
+        <div class="h-3 w-32 rounded bg-gray-800/70"></div>
+      </div>
+      <div class="flex-1 space-y-4 px-4 py-6">
+        <div class="h-3 w-1/2 rounded bg-gray-800/70"></div>
+        <div class="h-3 w-2/3 rounded bg-gray-800/70"></div>
+        <div class="h-3 w-1/3 rounded bg-gray-800/70"></div>
+      </div>
+      <div class="border-t border-gray-800 px-4 py-3">
+        <div class="h-9 rounded bg-gray-800/70"></div>
       </div>
     </div>
     """
@@ -726,25 +1046,34 @@ defmodule PrismWeb.ChatLive do
   attr :conv, :map, required: true
   attr :route, :string, required: true
   attr :current, :any, default: nil
+  attr :estate_id, :string, default: nil
   attr :followed, :boolean, required: true
 
   # One topic in the rail. Follow/unfollow is a word, not a glyph — the
   # action must read as what it does. Following decides emphasis and
-  # notification, never access: every row opens on a click.
+  # notification, never access: every row opens on a click. The actions
+  # show on hover or focus at a desk, and always on a phone, which has
+  # neither.
   defp topic_row(assigns) do
+    assigns =
+      assign(assigns, :open?, assigns.current && assigns.conv.id == assigns.current.id)
+
     ~H"""
     <li
       id={"conv-" <> @conv.id}
       class={[
-        "group flex items-start gap-2 px-4 py-2 text-xs cursor-pointer hover:bg-gray-800/50",
-        if(@current && @conv.id == @current.id, do: "bg-gray-800/80", else: "")
+        "group flex items-start gap-2 pl-4 pr-2 text-xs hover:bg-gray-800/50",
+        if(@open?, do: "bg-gray-800/80", else: "")
       ]}
-      phx-click={
-        JS.push("open_conversation", value: %{route: @route, id: @conv.id})
-        |> JS.add_class("max-md:hidden", to: "#conversation-list")
-      }
     >
-      <div class="flex-1 min-w-0">
+      <button
+        type="button"
+        phx-click="open_conversation"
+        phx-value-route={@route}
+        phx-value-id={@conv.id}
+        aria-current={@open? && "true"}
+        class="flex-1 min-w-0 py-2 text-left"
+      >
         <p class={["truncate", if(@followed, do: "text-gray-200", else: "text-gray-400")]}>
           {@conv.title}
         </p>
@@ -752,22 +1081,22 @@ defmodule PrismWeb.ChatLive do
           {Calendar.strftime(@conv.last_message_at || @conv.inserted_at, "%b %d %H:%M")}
           <span :if={@conv.execution_id} class="ml-1 text-blue-400">● running</span>
         </p>
-      </div>
+      </button>
       <button
-        :if={@current && @conv.athanor_id == @current.athanor_id}
+        :if={@estate_id && @conv.athanor_id == @estate_id}
         type="button"
         phx-click={if @followed, do: "unfollow_topic", else: "follow_topic"}
         phx-value-id={@conv.id}
-        class="opacity-0 group-hover:opacity-100 text-[10px] text-gray-500 hover:text-gray-200 shrink-0"
+        class="shrink-0 py-2 text-[10px] text-gray-500 hover:text-gray-200 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
       >
         {if @followed, do: "Unfollow", else: "Follow"}
       </button>
       <button
-        :if={@current && @conv.athanor_id == @current.athanor_id}
+        :if={@estate_id && @conv.athanor_id == @estate_id}
         type="button"
         phx-click="delete_conversation"
         phx-value-id={@conv.id}
-        class="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 shrink-0"
+        class="shrink-0 py-2 text-gray-500 hover:text-red-400 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
         data-confirm="Delete this conversation for everyone?"
         aria-label="Delete"
       >

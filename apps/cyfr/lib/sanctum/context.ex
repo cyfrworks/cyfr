@@ -517,10 +517,13 @@ defmodule Sanctum.Context do
 
   @doc """
   Narrow onto another athanor for a domain read or write on a tree the
-  caller can already name — the one chokepoint for what used to be
-  scattered `%{ctx | athanor_id: …}` struct updates (a roster read of your
-  own crew, an agent resolved from its owner's tree, an editor write that
-  follows the agent home).
+  caller can already name — the chokepoint for what used to be scattered
+  `%{ctx | athanor_id: …}` struct updates (a roster read of your own crew,
+  an agent resolved from its owner's tree, an editor write that follows
+  the agent home). Two raw swaps remain by design, each rostered with its
+  reason in `Cyfr.ContextSwapTest`: `Sanctum.MCP.AthanorTool.resolve/3`
+  opening an archived athanor for `get`/`unarchive` (which `focus/2`
+  rightly refuses), and `Sanctum.Tenancy`'s test-only resolver override.
 
   A user context goes through `focus/2` whole: membership or the audited
   operator open, and an archived athanor refused. A **system** context
@@ -539,6 +542,10 @@ defmodule Sanctum.Context do
       {:error, _} -> {:error, :not_found}
     end
   end
+
+  # No athanor is nothing to open — the spec's `:not_found`, not a clause
+  # error from a caller that read an id off a record that had none.
+  def refocus(%__MODULE__{}, nil), do: {:error, :not_found}
 
   def refocus(%__MODULE__{} = ctx, athanor_id), do: focus(ctx, athanor_id)
 

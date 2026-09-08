@@ -3,13 +3,18 @@
   "type": "formula",
   "version": "1.0.6",
   "publisher": "local",
-  "description": "AQUA agentic loop. Per-agent tool allowlist (tool_policy: tool.action -> ask|auto, supports tool.* globs); read-kind actions and auto-flagged actions are directly callable, everything else is requested for human approval. Uniform for orchestrator and sub-agents.",
+  "description": "AQUA, the estate's assistant: one loop for the soul and for every role it clones into. Per-file tool allowlist (tool_policy: tool.action -> ask|auto, supports tool.* globs); auto actions are directly callable, everything else is proposed for a person's approval.",
   "dependencies": {
     "static": [
       {
         "ref": "catalyst:local.files",
         "optional": false,
         "reason": "File operations"
+      },
+      {
+        "ref": "catalyst:local.http",
+        "optional": false,
+        "reason": "HTTP operations"
       },
       {
         "ref": "catalyst:moonmoon69.claude",
@@ -80,16 +85,9 @@
           "type": "integer",
           "description": "Completion token cap for the provider call"
         },
-        "visible_tools": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Tool names to expose to the LLM. Omit for all tools."
-        },
         "sub_agents": {
           "type": "array",
-          "description": "Sub-agent definitions provided by the harness. Each defines a specialist that becomes a virtual tool.",
+          "description": "The roles the soul may clone into, provided by the harness. Each becomes a virtual tool named after the role.",
           "items": {
             "type": "object",
             "required": [
@@ -100,7 +98,7 @@
             "properties": {
               "name": {
                 "type": "string",
-                "description": "Sub-agent name (used as virtual tool name)"
+                "description": "Role name (used as the virtual tool name)"
               },
               "title": {
                 "type": "string",
@@ -112,25 +110,30 @@
               },
               "prompt": {
                 "type": "string",
-                "description": "Full system prompt for the sub-agent"
+                "description": "Full system prompt for the role"
               },
-              "visible_tools": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Tools this sub-agent can see. Omit for all tools."
+              "tool_policy": {
+                "type": "object",
+                "description": "The role's own tool allowlist (\"ask\" | \"auto\"); absent means no tools"
               },
               "catalyst_ref": {
                 "type": "string",
-                "description": "Catalyst reference for this sub-agent (resolved by harness)"
+                "description": "Catalyst reference for this role (resolved by harness)"
               },
               "model": {
                 "type": "string",
-                "description": "Model for this sub-agent"
+                "description": "Model for this role"
               }
             }
           }
+        },
+        "role": {
+          "type": "string",
+          "description": "Set by the host when the assistant clones into one of its roles: the role's name, which every event of the run then carries."
+        },
+        "emit_tag": {
+          "type": "string",
+          "description": "Set by the host on a clone: the tag its events carry back to the parent's stream (role:tool_call_id)."
         }
       }
     },
@@ -186,24 +189,17 @@
     "tools": [
       "tools.list",
       "execution.run",
-      "execution.list",
       "execution.logs",
-      "execution.status",
-      "execution.cancel",
-      "execution.run_stream",
       "component.search",
       "component.inspect",
       "component.list",
-      "component.categories",
       "component.pull",
       "component.create",
+      "component.setup_plan",
       "build.compile",
       "build.toolchains",
       "aqua.list",
       "aqua.get",
-      "aqua.create",
-      "aqua.update",
-      "aqua.delete",
       "aqua.skill_list",
       "aqua.skill_get",
       "aqua.skill_create",
@@ -214,23 +210,8 @@
       "notes.list",
       "notes.read",
       "notes.search",
-      "config.get",
-      "config.get_all",
-      "config.list",
       "system.status",
-      "storage.read",
-      "storage.write",
-      "storage.list",
-      "schedule.create",
-      "schedule.list",
-      "schedule.pause",
-      "schedule.resume",
-      "schedule.delete",
-      "component.setup_plan",
-      "mcp_servers.list",
-      "mcp_servers.get",
-      "mcp_servers.test",
-      "mcp_servers.refresh"
+      "schedule.list"
     ],
     "limits": {
       "timeout": "15m",

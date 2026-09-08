@@ -6,9 +6,9 @@ defmodule Cyfr.ScheduleNotes do
   A schedule that asked to keep what it did. `keep_outcome: true` in a
   schedule's metadata (`Opus.CronMCP`) files every completed run's output
   as a note in the schedule's estate (`Aqua.Notes`) — named by the
-  metadata's `note_name`, else after the schedule's reference — with the
-  schedule and the execution as provenance, capped so one run cannot
-  fill a ledger.
+  metadata's `note_name`, else by the schedule's id — with the schedule
+  and the execution as provenance, capped so one run cannot fill a
+  ledger. Each run replaces the note before it.
 
   A telemetry consumer of `[:cyfr, :opus, :schedule, :completed]`,
   attached at boot. The write runs under the server's own context
@@ -38,17 +38,21 @@ defmodule Cyfr.ScheduleNotes do
     :telemetry.attach(@handler_id, @event, &__MODULE__.handle_event/4, nil)
   end
 
+  # `:telemetry` detaches a handler that fails in ANY way — a raise, an
+  # exit (a store checkout timing out arrives as one), a throw — for the
+  # life of the node, silently. Every class is caught, so one bad run
+  # costs one note and not every note after it.
   @doc false
   def handle_event(@event, _measurements, metadata, _config) do
     case wanted(metadata) do
       {:ok, name} -> keep(metadata, name)
       :skip -> :ok
     end
-  rescue
-    e ->
+  catch
+    kind, reason ->
       Logger.warning(
         "[ScheduleNotes] note not kept for schedule #{inspect(metadata[:schedule_id])}: " <>
-          Exception.message(e)
+          Exception.format_banner(kind, reason)
       )
 
       :ok
@@ -59,8 +63,18 @@ defmodule Cyfr.ScheduleNotes do
   # run nobody asked to keep.
   defp wanted(metadata) do
     case decode(metadata[:metadata]) do
-      %{"keep_outcome" => true} = wants -> {:ok, name(wants["note_name"], metadata)}
-      _ -> :skip
+      %{"keep_outcome" => true} = wants ->
+        case name(wants["note_name"], metadata) do
+          nil ->
+            Logger.warning("[ScheduleNotes] a completed run named no schedule; nothing kept")
+            :skip
+
+          name ->
+            {:ok, name}
+        end
+
+      _ ->
+        :skip
     end
   end
 
@@ -73,10 +87,12 @@ defmodule Cyfr.ScheduleNotes do
     end
   end
 
+  # The operator's `note_name` when set (the ledger's grammar judges it),
+  # else the schedule's own id — grammar-safe and unique, where a
+  # component reference is neither.
   defp name(note_name, _metadata) when is_binary(note_name) and note_name != "", do: note_name
-
-  defp name(_none, metadata),
-    do: "schedule-" <> to_string(metadata[:reference] || metadata[:schedule_id])
+  defp name(_none, %{schedule_id: id}) when is_binary(id) and id != "", do: id
+  defp name(_none, _metadata), do: nil
 
   defp keep(metadata, name) do
     internal = Context.internal(user_id: metadata[:user_id] || "system")

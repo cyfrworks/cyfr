@@ -4,6 +4,7 @@
 defmodule Sanctum.Tenancy.MembersTest do
   use ExUnit.Case, async: false
 
+  alias Arca.TopicSubscriptionStorage, as: Subs
   alias Sanctum.Tenancy.{Athanors, Members}
 
   setup do
@@ -137,6 +138,10 @@ defmodule Sanctum.Tenancy.MembersTest do
 
     user
   end
+
+  # A context focused on the athanor as this person — what a follow is written through.
+  defp follow_ctx(athanor_id, user_id),
+    do: %{Sanctum.TestContext.local() | athanor_id: athanor_id, user_id: user_id}
 
   describe "add/3 by user id" do
     test "seats a known active person; refuses an unknown or denied id", %{athanor: athanor} do
@@ -311,6 +316,68 @@ defmodule Sanctum.Tenancy.MembersTest do
       assert successor.id != home.id
       assert successor.slug == home.slug
       assert {:error, :home_is_final} = Athanors.unarchive(%{home | status: "archived"})
+    end
+  end
+
+  # A follow is the person's own row in an athanor — sidebar state, never
+  # access — and it must not outlive the seat: left standing, it resumed
+  # silently the moment the person was re-added.
+  describe "follows end with the seat" do
+    test "remove_member/2 drops the leaver's follows and nobody else's", %{athanor: athanor} do
+      n = System.unique_integer([:positive])
+      leaver = person(n)
+      stayer = person(n + 1)
+      {:ok, :added} = Members.add(athanor, [user_id: leaver.id], "system")
+      {:ok, :added} = Members.add(athanor, [user_id: stayer.id], "system")
+
+      conv = "conv_#{n}"
+      :ok = Subs.follow(follow_ctx(athanor.id, leaver.id), conv, leaver.id)
+      :ok = Subs.follow(follow_ctx(athanor.id, stayer.id), conv, stayer.id)
+
+      :ok = Members.remove_member(athanor, user_id: leaver.id)
+
+      refute Subs.follows?(athanor.id, conv, leaver.id)
+      assert Subs.follows?(athanor.id, conv, stayer.id)
+    end
+
+    test "remove_all_for_user/1 drops the follows in every athanor the person sat in", %{
+      athanor: athanor
+    } do
+      n = System.unique_integer([:positive])
+      user = person(n)
+
+      {:ok, other} =
+        Athanors.create(%{kind: "group", name: "Other", slug: "other-#{n}", created_by: "system"})
+
+      {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
+      {:ok, :added} = Members.add(other, [user_id: user.id], "system")
+
+      :ok = Subs.follow(follow_ctx(athanor.id, user.id), "conv_a_#{n}", user.id)
+      :ok = Subs.follow(follow_ctx(other.id, user.id), "conv_b_#{n}", user.id)
+
+      :ok = Members.remove_all_for_user(user.id)
+
+      assert Subs.followed(follow_ctx(athanor.id, user.id), user.id) == MapSet.new()
+      assert Subs.followed(follow_ctx(other.id, user.id), user.id) == MapSet.new()
+    end
+
+    test "a member who leaves and is added again starts unfollowed", %{athanor: athanor} do
+      n = System.unique_integer([:positive])
+      user = person(n)
+      stayer = person(n + 1)
+      {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
+      {:ok, :added} = Members.add(athanor, [user_id: stayer.id], "system")
+
+      ctx = follow_ctx(athanor.id, user.id)
+      conv = "conv_#{n}"
+      :ok = Subs.follow(ctx, conv, user.id)
+      assert MapSet.member?(Subs.followed(ctx, user.id), conv)
+
+      :ok = Members.remove_member(athanor, user_id: user.id)
+      {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
+
+      assert Members.member?(user.id, athanor.id)
+      assert Subs.followed(ctx, user.id) == MapSet.new()
     end
   end
 

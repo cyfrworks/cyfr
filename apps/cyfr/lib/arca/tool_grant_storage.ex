@@ -26,24 +26,45 @@ defmodule Arca.ToolGrantStorage do
   def put(attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.put", fn ->
       _ = Map.fetch!(attrs, :athanor_id)
-      scope = Map.fetch!(attrs, :scope)
 
       row =
         attrs
         |> Map.put_new(:id, Cyfr.UUID7.generate_id("grant"))
         |> Map.put_new(:granted_at, DateTime.utc_now())
 
-      :ok = delete_matching(row)
+      # One transaction: the delete and the insert are two statements, and
+      # a failed insert must not leave the key with no row at all — the
+      # decision that stood before has to stand until the new one is
+      # written. A concurrent writer landing between the two is a typed
+      # refusal through the constraint below, never a raise.
+      Arca.Repo.transaction(fn ->
+        :ok = delete_matching(row)
 
-      # The constraint is still declared: `delete_matching/1` and the
-      # insert are two statements, so a concurrent writer can land between
-      # them. Declaring it turns that race into a typed refusal instead of
-      # an `Ecto.ConstraintError` raised past the db-error rescue.
-      %ToolGrant{}
-      |> Ecto.Changeset.change(row)
-      |> Ecto.Changeset.unique_constraint(conflict_columns(scope), name: conflict_index(scope))
-      |> Arca.Repo.insert()
+        case Arca.Repo.insert(changeset(row)) do
+          {:ok, stored} -> stored
+          {:error, changeset} -> Arca.Repo.rollback(changeset)
+        end
+      end)
     end)
+  end
+
+  @doc false
+  # The scope's partial unique index, declared under BOTH names an adapter
+  # can report it by. Postgres reports the name the migration gave it —
+  # short on purpose, because the default for the conversation-scope key
+  # runs past the 63-byte identifier limit and would come back truncated.
+  # SQLite cannot name a violated index at all and reports the columns,
+  # from which `ecto_sqlite3` derives Ecto's default index name. One
+  # declaration would match one adapter and raise on the other.
+  @spec changeset(map()) :: Ecto.Changeset.t()
+  def changeset(row) when is_map(row) do
+    scope = Map.fetch!(row, :scope)
+    columns = conflict_columns(scope)
+
+    row
+    |> ToolGrant.changeset()
+    |> Ecto.Changeset.unique_constraint(columns, name: conflict_index(scope))
+    |> Ecto.Changeset.unique_constraint(columns, name: column_index_name(columns))
   end
 
   @doc "Drop one decision, by its identifying key. Idempotent."
@@ -64,47 +85,45 @@ defmodule Arca.ToolGrantStorage do
   Read whole and filtered in memory — a conversation has a handful of
   grants, and one indexed read beats a query per agent per turn.
   """
-  @spec list_for_conversation(String.t(), String.t()) :: [ToolGrant.t()]
+  @spec list_for_conversation(String.t(), String.t()) ::
+          {:ok, [ToolGrant.t()]} | {:error, term()}
   def list_for_conversation(athanor_id, conversation_id)
       when is_binary(athanor_id) and is_binary(conversation_id) do
-    # Deliberate default: a policy read that cannot reach the store answers
-    # "no standing grants", so the agent ASKS. Failing open here would mean
-    # an outage silently auto-approving.
-    Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.list_for_conversation", [], fn ->
-      from(g in ToolGrant,
-        where:
-          g.athanor_id == ^athanor_id and
-            (g.scope == "agent" or g.conversation_id == ^conversation_id),
-        order_by: [asc: g.granted_at, asc: g.id]
-      )
-      |> Arca.Repo.all()
+    # A read that cannot reach the store is an ERROR, never an empty list:
+    # "no standing answers" would drop every deny and leave an authored
+    # `auto` automatic, so an outage would widen what runs with no card.
+    # The caller refuses the turn instead.
+    Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.list_for_conversation", fn ->
+      {:ok,
+       from(g in ToolGrant,
+         where:
+           g.athanor_id == ^athanor_id and
+             (g.scope == ^ToolGrant.agent_scope() or g.conversation_id == ^conversation_id),
+         order_by: [asc: g.granted_at, asc: g.id]
+       )
+       |> Arca.Repo.all()}
     end)
   end
 
   @doc """
-  One agent's agent-scope decisions, read from the athanor that OWNS the
-  agent.
-
-  `athanor_id` here is the agent's owner — an agent-scope row is only ever
-  written while owner == focus (`Aqua.ToolGrants.authorize_scope/3`), so
-  the owner's estate is where those rows live. This is a deliberate
-  cross-estate read: a turn running a borrowed agent in another estate
-  reads the standing answers from the agent's home, which is what makes
-  "always"/"never" follow the agent rather than evaporate at the border.
-  Fails closed like `list_for_conversation/2` — no reachable store, no
-  standing answers, the agent asks.
+  One agent's agent-scope decisions in its estate. Fails closed like
+  `list_for_conversation/2`: an unreachable store is an error the caller
+  refuses on, never an empty answer.
   """
-  @spec list_agent_scope(String.t(), String.t()) :: [ToolGrant.t()]
+  @spec list_agent_scope(String.t(), String.t()) :: {:ok, [ToolGrant.t()]} | {:error, term()}
   def list_agent_scope(athanor_id, agent_name)
       when is_binary(athanor_id) and is_binary(agent_name) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.list_agent_scope", [], fn ->
-      from(g in ToolGrant,
-        where:
-          g.athanor_id == ^athanor_id and g.scope == "agent" and
-            g.agent_athanor_id == ^athanor_id and g.agent_name == ^agent_name,
-        order_by: [asc: g.granted_at, asc: g.id]
-      )
-      |> Arca.Repo.all()
+    agent_scope = ToolGrant.agent_scope()
+
+    Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.list_agent_scope", fn ->
+      {:ok,
+       from(g in ToolGrant,
+         where:
+           g.athanor_id == ^athanor_id and g.scope == ^agent_scope and
+             g.agent_name == ^agent_name,
+         order_by: [asc: g.granted_at, asc: g.id]
+       )
+       |> Arca.Repo.all()}
     end)
   end
 
@@ -112,25 +131,25 @@ defmodule Arca.ToolGrantStorage do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp conflict_columns("conversation"),
-    do: [:conversation_id, :agent_athanor_id, :agent_name, :tool, :action]
-
-  defp conflict_columns("agent"), do: [:agent_athanor_id, :agent_name, :tool, :action]
+  defp conflict_columns("conversation"), do: [:conversation_id, :agent_name, :tool, :action]
+  defp conflict_columns("agent"), do: [:athanor_id, :agent_name, :tool, :action]
 
   defp conflict_index("conversation"), do: :tool_grants_conversation_scope_index
   defp conflict_index("agent"), do: :tool_grants_agent_scope_index
 
+  # Ecto's default index name for these columns — what SQLite's adapter
+  # reports a violation under whatever the index was actually called.
+  defp column_index_name(columns), do: :"tool_grants_#{Enum.join(columns, "_")}_index"
+
   # The scope's own key, spelled as a query — WITH the tenant, so a delete
   # is bounded by the owning athanor exactly as the module claims every
-  # write is. The unique keys alone happen to be globally identifying
-  # today; the tenant predicate is what keeps that an implementation
-  # detail rather than a load-bearing accident.
+  # write is; the conversation key happens to be globally identifying, and
+  # the tenant predicate keeps that an implementation detail.
   defp delete_matching(%{scope: "agent"} = attrs) do
     from(g in ToolGrant,
       where:
         g.athanor_id == ^attrs.athanor_id and
-          g.scope == "agent" and
-          g.agent_athanor_id == ^attrs.agent_athanor_id and
+          g.scope == ^ToolGrant.agent_scope() and
           g.agent_name == ^attrs.agent_name and
           g.tool == ^attrs.tool and g.action == ^attrs.action
     )
@@ -143,9 +162,8 @@ defmodule Arca.ToolGrantStorage do
     from(g in ToolGrant,
       where:
         g.athanor_id == ^attrs.athanor_id and
-          g.scope == "conversation" and
+          g.scope == ^ToolGrant.conversation_scope() and
           g.conversation_id == ^attrs.conversation_id and
-          g.agent_athanor_id == ^attrs.agent_athanor_id and
           g.agent_name == ^attrs.agent_name and
           g.tool == ^attrs.tool and g.action == ^attrs.action
     )

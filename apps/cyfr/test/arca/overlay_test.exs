@@ -962,7 +962,10 @@ defmodule Arca.OverlayTest do
                end)
     end
 
-    test "deleting a subtree clears the marks beneath it", %{ctx: ctx, seed_dir: seed} do
+    test "a tree delete above units is refused while a unit stands beneath it", %{
+      ctx: ctx,
+      seed_dir: seed
+    } do
       agents = Path.join(seed, "aqua/roles")
       File.mkdir_p!(agents)
       File.write!(Path.join(agents, "a.md"), "shipped")
@@ -971,12 +974,30 @@ defmodule Arca.OverlayTest do
       :ok = Arca.put(ctx, ["aqua", "roles", "a.md"], "edited")
       assert Arca.Overlay.unit_status(ctx, ["aqua", "roles", "a.md"]) == {:ok, :materialized}
 
-      # A whole-scope delete (reset all: true's shape) clears the marks
-      # with the bytes: re-completing the same unit without the overlay's
-      # own copy machinery must NOT read as :materialized.
-      assert :ok = Arca.delete_tree(ctx, ["aqua"])
+      # The wholesale form rode no unit lock, so it could land inside a
+      # concurrent commit; a populated tree now refuses at every level
+      # above the unit, and the unit stands — a caller walks its units and
+      # drops them one at a time under each one's own lock.
+      assert {:error, :above_unit} = Arca.delete_tree(ctx, ["aqua"])
+      assert {:error, :above_unit} = Arca.delete_tree(ctx, ["aqua", "roles"])
+      assert {:ok, "edited"} = Arca.get(ctx, ["aqua", "roles", "a.md"])
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "roles", "a.md"]) == {:ok, :materialized}
+
+      # The internal-write scope keeps the wholesale form, and it clears
+      # the marks with the bytes: re-completing the same unit without the
+      # overlay's own copy machinery must NOT read as :materialized.
+      assert :ok = Arca.Overlay.with_internal_writes(fn -> Arca.delete_tree(ctx, ["aqua"]) end)
       :ok = lay_raw(ctx, ["aqua", "roles", "a.md"], "recreated by hand")
       assert Arca.Overlay.unit_status(ctx, ["aqua", "roles", "a.md"]) == {:ok, :own_shadowing}
+    end
+
+    test "a tree above units holding no unit deletes plainly", %{ctx: ctx} do
+      # Plain storage a unit grammar never claims — nothing a lock would
+      # cover, so the tidy the registry does on an emptied name dir keeps
+      # working.
+      :ok = Arca.put(ctx, ["aqua", "roles", "notes.txt"], "stray")
+      assert :ok = Arca.delete_tree(ctx, ["aqua"])
+      refute Arca.exists?(ctx, ["aqua", "roles", "notes.txt"])
     end
   end
 
@@ -1028,6 +1049,168 @@ defmodule Arca.OverlayTest do
                Arca.Overlay.with_internal_writes(fn ->
                  Arca.put(system, ["seed" | @version_dir] ++ ["x.txt"], "x")
                end)
+    end
+  end
+
+  describe "commit_unit/4 with if_absent: true — create, never replace" do
+    @skill_manifest "SKILL.md"
+
+    defp create(ctx, unit, bytes, opts \\ []) do
+      source =
+        case Arca.Storage.locate(unit) do
+          {:file, ^unit} -> {:files, [{[], bytes}]}
+          {:dir, ^unit, sentinel} -> {:files, [{[sentinel], bytes}]}
+        end
+
+      Arca.Overlay.commit_unit(ctx, unit, source, [cap: :exempt] ++ opts)
+    end
+
+    test "a shipped unit refuses, and stays unshadowed", %{ctx: ctx, seed_dir: seed} do
+      roles = Path.join(seed, "aqua/roles")
+      File.mkdir_p!(roles)
+      File.write!(Path.join(roles, "a.md"), "shipped role")
+      scroll_dir = Path.join(seed, "aqua/skills/s")
+      File.mkdir_p!(scroll_dir)
+      File.write!(Path.join(scroll_dir, @skill_manifest), "shipped scroll")
+
+      role = ["aqua", "roles", "a.md"]
+      scroll = ["aqua", "skills", "s"]
+
+      assert {:error, :exists} = create(ctx, role, "mine", if_absent: true)
+      assert {:error, :exists} = create(ctx, scroll, "mine", if_absent: true)
+
+      # Nothing moved: both still read from the seed, and the seed-backed
+      # component version refuses the same way.
+      assert Arca.Overlay.unit_status(ctx, role) == {:ok, :seed}
+      assert Arca.Overlay.unit_status(ctx, scroll) == {:ok, :seed}
+      assert {:ok, "shipped role"} = Arca.get(ctx, role)
+      assert {:ok, "shipped scroll"} = Arca.get(ctx, scroll ++ [@skill_manifest])
+
+      assert {:error, :exists} =
+               create(ctx, @version_dir, ~s({"type":"catalyst"}), if_absent: true)
+
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :seed}
+    end
+
+    test "the athanor's own unit refuses and keeps its bytes; an absent one lands", %{ctx: ctx} do
+      role = ["aqua", "roles", "b.md"]
+      scroll = ["aqua", "skills", "t"]
+
+      assert {:ok, [[]]} = create(ctx, role, "first", if_absent: true)
+      assert {:ok, [[@skill_manifest]]} = create(ctx, scroll, "first scroll", if_absent: true)
+
+      assert {:error, :exists} = create(ctx, role, "second", if_absent: true)
+      assert {:error, :exists} = create(ctx, scroll, "second scroll", if_absent: true)
+      assert {:ok, "first"} = Arca.get(ctx, role)
+      assert {:ok, "first scroll"} = Arca.get(ctx, scroll ++ [@skill_manifest])
+
+      # Without the option a commit replaces, as it always has.
+      assert {:ok, _} = create(ctx, role, "second")
+      assert {:ok, _} = create(ctx, scroll, "second scroll")
+      assert {:ok, "second"} = Arca.get(ctx, role)
+      assert {:ok, "second scroll"} = Arca.get(ctx, scroll ++ [@skill_manifest])
+    end
+
+    test "of concurrent creators of one name, exactly one lands", %{ctx: ctx} do
+      # The probe rides the unit's lock, so the creators serialise and every
+      # one after the first sees the unit present — a probe outside the
+      # lock would let several pass it and each replace the last.
+      role = ["aqua", "roles", "c.md"]
+      scroll = ["aqua", "skills", "u"]
+
+      for unit <- [role, scroll] do
+        results =
+          1..8
+          |> Enum.map(fn i ->
+            Task.async(fn -> create(ctx, unit, "creator #{i}", if_absent: true) end)
+          end)
+          |> Task.await_many(30_000)
+
+        assert Enum.count(results, &match?({:ok, _}, &1)) == 1, inspect(results)
+        assert Enum.count(results, &(&1 == {:error, :exists})) == 7, inspect(results)
+      end
+    end
+  end
+
+  describe "update/3 — one locked read-modify-write" do
+    @scroll ["aqua", "skills", "u"]
+    @manifest @scroll ++ ["SKILL.md"]
+
+    test "a queued update reads what the one before it wrote", %{ctx: ctx} do
+      {:ok, _} =
+        Arca.Overlay.commit_unit(ctx, @scroll, {:files, [{["SKILL.md"], "v0"}]}, cap: :exempt)
+
+      test_pid = self()
+
+      first =
+        Task.async(fn ->
+          Arca.Overlay.update(ctx, @manifest, fn current ->
+            send(test_pid, {:read, self()})
+
+            receive do
+              :proceed -> {:ok, current <> "+A"}
+            end
+          end)
+        end)
+
+      assert_receive {:read, first_pid}, 5_000
+
+      second =
+        Task.async(fn ->
+          Arca.Overlay.update(ctx, @manifest, fn current -> {:ok, current <> "+B"} end)
+        end)
+
+      wait_until(
+        fn -> queued_on_unit_lock?() end,
+        5_000,
+        "the second update to queue behind the first on the unit lock"
+      )
+
+      send(first_pid, :proceed)
+      assert :ok = Task.await(first, 30_000)
+      assert :ok = Task.await(second, 30_000)
+
+      # Serialised: the second read "v0+A", not the "v0" it would have read
+      # beside the first — and nothing was lost.
+      assert {:ok, "v0+A+B"} = Arca.get(ctx, @manifest)
+    end
+
+    test "reads through to a shipped unit and materializes it on the write", %{
+      ctx: ctx,
+      seed_dir: seed
+    } do
+      shipped = Path.join(seed, "aqua/skills/u")
+      File.mkdir_p!(shipped)
+      File.write!(Path.join(shipped, "SKILL.md"), "shipped scroll")
+      File.write!(Path.join(shipped, "reference.md"), "field tables")
+
+      assert :ok =
+               Arca.Overlay.update(ctx, @manifest, fn "shipped scroll" -> {:ok, "edited"} end)
+
+      # The manifest changed and the scroll's other files came along —
+      # copy-on-write under the same lock hold.
+      assert {:ok, "edited"} = Arca.get(ctx, @manifest)
+      assert {:ok, "field tables"} = Arca.get(ctx, @scroll ++ ["reference.md"])
+      assert Arca.Overlay.unit_status(ctx, @scroll) == {:ok, :materialized}
+    end
+
+    test "nothing at the path, a path no unit covers, and a declining fun write nothing", %{
+      ctx: ctx
+    } do
+      assert {:error, :not_found} = Arca.Overlay.update(ctx, @manifest, fn _ -> {:ok, "x"} end)
+      refute Arca.exists?(ctx, @manifest)
+
+      for path <- [["guest", "x.txt"], ["aqua", "roles"], ["aqua", "roles", "notes.txt"]] do
+        assert {:error, :not_overlaid} = Arca.Overlay.update(ctx, path, fn _ -> {:ok, "x"} end)
+      end
+
+      {:ok, _} =
+        Arca.Overlay.commit_unit(ctx, @scroll, {:files, [{["SKILL.md"], "v0"}]}, cap: :exempt)
+
+      assert {:error, :declined} =
+               Arca.Overlay.update(ctx, @manifest, fn "v0" -> {:error, :declined} end)
+
+      assert {:ok, "v0"} = Arca.get(ctx, @manifest)
     end
   end
 

@@ -11,17 +11,23 @@ defmodule PrismWeb.FocusIntentTest do
   parses exactly those keys back out of the URL to tell the command palette
   which resource is in focus. Between those two ends sits the page, and for
   five of the six intents the page's `handle_params/3` never looked: the
-  agent navigated, the palette believed a resource was focused, and the
-  person saw a bare list. Nothing failed, which is why it lasted.
+  assistant navigated, the palette believed a resource was focused, and
+  the person saw a bare list. Nothing failed, which is why it lasted.
 
   This walks the seam end to end for every intent, without a hand-kept list
-  of pages: mint the path through `Aqua.Actions`, ask the router which
-  LiveView serves it, and require that module's source to read every query
-  key the mint produced. The roster below is the intents, not the wiring —
-  and the first test fails if an intent is added without one.
+  of pages: mint the path through `Aqua.Actions`, hand it to a real
+  `PrismWeb.ConversationPaneLive` the way the runner does and take the path
+  it pushes to the browser — the athanor in focus prefixed, a global page
+  left alone — ask the router which LiveView serves it, and require that
+  module's source to read every query key the mint produced. The roster
+  below is the intents, not the wiring — and the first test fails if an
+  intent is added without one.
   """
 
-  use ExUnit.Case, async: true
+  use PrismWeb.ConnCase, async: false
+
+  alias Arca.ConversationStorage, as: Conversations
+  alias Sanctum.Tenancy.Athanors
 
   # Each `ui.*.focus` kind with arguments good enough to mint its path. The
   # values are shape-checked by `Aqua.Actions` (id prefixes, id-safe
@@ -36,6 +42,47 @@ defmodule PrismWeb.FocusIntentTest do
   ]
 
   defp root, do: Path.expand("../../../..", __DIR__)
+
+  # One pane on Home, on a thread of its own, in the mode whose nav shows
+  # every page: what it pushes for a navigate is what the browser would
+  # follow.
+  setup %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    home = Athanors.home!()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: home.id}
+    {:ok, conv} = Conversations.create(ctx)
+
+    # A kept catalogue: the pane must not spawn a model-listing run whose
+    # writes outlive this test and lock the next one's setup out of SQLite.
+    :ok = PrismWeb.ModelCatalog.remember(home.id, %{"models" => %{}})
+    on_exit(fn -> PrismWeb.ModelCatalog.forget(home.id) end)
+
+    {:ok, pane, _} =
+      live_isolated(conn, PrismWeb.ConversationPaneLive,
+        session: %{"athanor_id" => home.id, "conversation_id" => conv.id, "ui_mode" => "dev"}
+      )
+
+    {:ok, pane: pane, conv: conv, user: user, home: home}
+  end
+
+  defp pushed(%{pane: pane, conv: conv, user: user}, intent) do
+    send(pane.pid, {:conversation, conv.id, {:intents, [intent], user.user_id}})
+    render(pane)
+    assert_push_event(pane, "aqua:intents", %{intents: [%{kind: "navigate", to: to}]})
+    to
+  end
+
+  defp served_by(path) do
+    # The router is the SSOT for which module serves the path — naming the
+    # module here would let a re-route silently move the page out from
+    # under the intent.
+    assert %{plug: Phoenix.LiveView.Plug, log_module: module} =
+             Phoenix.Router.route_info(EmissaryWeb.Router, "GET", path, "example.com"),
+           "#{path} is served by no live route"
+
+    module
+  end
 
   test "every focus intent the assistant can mint is on the roster" do
     minted =
@@ -61,22 +108,18 @@ defmodule PrismWeb.FocusIntentTest do
   end
 
   for %{kind: kind, args: args} <- @intents do
-    test "#{kind} lands on a page that reads what it carries" do
-      assert {:ok, %{kind: "navigate", to: path}} =
+    test "#{kind} lands on a page that reads what it carries", %{home: home} = context do
+      assert {:ok, %{kind: "navigate", to: path} = intent} =
                Aqua.Actions.validate(Map.put(unquote(Macro.escape(args)), "kind", unquote(kind)))
 
-      # `Aqua.Actions` mints the page-relative path; `ConversationPaneLive`
-      # prefixes the athanor in focus before handing it to the client, the
-      # same split `PrismWeb.ActiveContext.strip_focus/1` undoes. Routing
-      # the bare path would 404, so the test follows the real pipeline.
-      uri = URI.parse(PrismWeb.Focus.path("home", path))
+      # `Aqua.Actions` mints the page-relative path; the pane prefixes the
+      # athanor in focus before handing it to the client, the same split
+      # `PrismWeb.ActiveContext.strip_focus/1` undoes.
+      to = pushed(context, intent)
+      assert to == PrismWeb.Focus.path(Athanors.route_slug(home), path)
 
-      # The router is the SSOT for which module serves the path — naming the
-      # module here would let a re-route silently move the page out from
-      # under the intent.
-      assert %{plug: Phoenix.LiveView.Plug, log_module: module} =
-               Phoenix.Router.route_info(EmissaryWeb.Router, "GET", uri.path, "example.com"),
-             "#{unquote(kind)} navigates to #{uri.path}, which no live route serves"
+      uri = URI.parse(to)
+      module = served_by(uri.path)
 
       source =
         root()
@@ -91,13 +134,25 @@ defmodule PrismWeb.FocusIntentTest do
                #{unquote(kind)} navigates to #{path}, but #{inspect(module)}
                never reads `params[#{inspect(key)}]`.
 
-               The intent is inert: the agent moves the person to a page that
-               shows the same list it showed before, while
+               The intent is inert: the assistant moves the person to a page
+               that shows the same list it showed before, while
                `PrismWeb.ActiveContext` tells the command palette a resource
                IS focused. Read the key in `handle_params/3` and put the page
                in the state a click on that row would have produced.
                """
       end
     end
+  end
+
+  test "a global page is pushed as it is, with no estate in its address",
+       %{home: home, conv: conv} = context do
+    path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(home), conv.id)
+    assert Cyfr.GlobalPages.global?(path)
+
+    assert {:ok, %{kind: "navigate", to: ^path} = intent} =
+             Aqua.Actions.validate(%{"kind" => "ui.navigate", "path" => path})
+
+    assert pushed(context, intent) == path
+    assert served_by(URI.parse(path).path) == PrismWeb.ChatLive
   end
 end

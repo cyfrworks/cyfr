@@ -38,6 +38,12 @@ defmodule Cyfr.Execution do
   @callback subscribe_events(String.t(), event_scope()) :: :ok | {:error, term()}
   @callback unsubscribe_events(String.t(), event_scope()) :: :ok | {:error, term()}
   @callback events_since(String.t(), non_neg_integer(), String.t()) :: [map()]
+  # The in-chain entry, mirrored one to one as the rest: `authority` is the
+  # chain's, `need` the edge's (nil for none), and `opts` carry `ctx` and
+  # the host lineage (`parent_execution_id`, `root_execution_id`) exactly
+  # as the formula host builds them for a guest's child call. Never a root.
+  @callback run_child(Sanctum.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
+              {:ok, map()} | {:error, term()}
   @callback cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   @callback cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   @callback get(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
@@ -72,7 +78,7 @@ defmodule Cyfr.Execution do
 
   @spec run_root_edge(Context.t(), String.t(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
-  def run_root_edge(ctx, source_ref, reference, input, opts \\ []),
+  def run_root_edge(ctx, source_ref, reference, input, opts) when is_list(opts),
     do: call(:run_root_edge, [ctx, source_ref, reference, input, opts])
 
   @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
@@ -97,6 +103,18 @@ defmodule Cyfr.Execution do
       mod -> mod.events_since(execution_id, last_sequence, athanor_id)
     end
   end
+
+  @doc """
+  Run a component as a CHILD of a running chain's authority — the hop the
+  formula host makes for a guest's `execution.run`, offered to the host
+  itself so an approved virtual-tool card (`Aqua.Turn.run_approved/3`)
+  runs the wrapped catalyst under the card's pinned authority with the
+  card's execution as its lineage, never as a fresh root.
+  """
+  @spec run_child(Sanctum.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def run_child(authority, reference, need, input, opts) when is_list(opts),
+    do: call(:run_child, [authority, reference, need, input, opts])
 
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def cancel(ctx, execution_id), do: call(:cancel, [ctx, execution_id])

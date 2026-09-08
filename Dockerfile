@@ -88,7 +88,7 @@ COPY LICENSES/ /app/LICENSES/
 # - seed/components — the bundle every athanor is provisioned from. Baked
 #   into the image, no first-boot copy, no bind mount: a bare image boot
 #   can always mint athanors.
-# - seed/aqua — the AQUA agent template (manifest + prompts), the
+# - seed/aqua — the AQUA tree (the soul, its roles and its scrolls), the
 #   operator-editable mount. Defaults are baked at /app/aqua-defaults and
 #   docker-entrypoint.sh seeds /app/seed/aqua/ from them on first start.
 #   This works whether or not the user has a host volume mount at

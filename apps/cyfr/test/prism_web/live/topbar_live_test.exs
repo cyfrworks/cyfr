@@ -51,6 +51,11 @@ defmodule PrismWeb.TopbarLiveTest do
     render_click(bar, "toggle_popover", %{"name" => "athanors"})
     assert render(bar) =~ "Bells"
 
+    # A row opens the estate's chat; the small link beside it, its AQUA.
+    route = Athanors.route_slug(group)
+    assert has_element?(bar, ~s(a[href="#{PrismWeb.ChatLive.chat_path(route)}"]), "Bells")
+    assert has_element?(bar, ~s(a[href="/a/#{route}/aqua"]), "AQUA")
+
     # something happens in a FOLLOWED thread of the group while Home is in
     # focus: a badge. The creator follows their own thread.
     group_ctx =
@@ -77,6 +82,23 @@ defmodule PrismWeb.TopbarLiveTest do
     Sanctum.Notify.broadcast(group.id, :approval_pending, %{conversation_id: "conv_unfollowed"})
     :sys.get_state(bar.pid)
     assert render(bar) == before
+  end
+
+  test "the bar follows the page only into an estate the person holds a seat in", %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    {:ok, group} = Athanors.create_group(alice.user_id, "Seen #{alice.namespace}")
+    {view, _html} = mount_athanor(conn, "")
+    bar = topbar(view)
+    viewing = fn -> :sys.get_state(bar.pid).socket.assigns.viewing end
+    assert viewing.() == Athanors.home!().id
+
+    send(bar.pid, {:viewing, group.id})
+    assert viewing.() == group.id
+
+    # An id that names no seat of theirs is not followed.
+    send(bar.pid, {:viewing, "ath_nobody"})
+    assert viewing.() == group.id
   end
 
   test "the tray is the session's: a badge survives navigating, and opening the athanor clears it",

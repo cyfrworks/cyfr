@@ -408,13 +408,13 @@ defmodule Aqua.ConversationRunnerTest do
 
     # "for this chat" is remembered and shown to everyone.
     assert_receive {:conversation, _, {:grants, grants}}, 5_000
-    assert MapSet.member?(grants, {"component", "pull"})
+    assert MapSet.member?(grants, {"aqua", "component", "pull"})
 
     # And it is a ROW, not this process's memory. A `:conversation` grant
     # used to live in a `MapSet` that a deploy, a crash or an idle timeout
     # discarded — reverting an explicit human decision with nothing said.
-    assert [%{scope: "conversation", effect: "allow", tool: "component", action: "pull"}] =
-             Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
+    assert {:ok, [%{scope: "conversation", effect: "allow", tool: "component", action: "pull"}]} =
+             Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
 
     # The outcome is in the history the next turn will carry.
     {:ok, row} = Conversations.get(alice, conv.id)
@@ -471,7 +471,7 @@ defmodule Aqua.ConversationRunnerTest do
     end
 
     # And no standing row was written by either refusal.
-    assert [] = Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
+    assert {:ok, []} = Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
   end
 
   test "a standing rule on the intent is the runner's rule too", %{
@@ -527,8 +527,88 @@ defmodule Aqua.ConversationRunnerTest do
 
     :ok = ConversationRunner.approve(bob, conv.id, keep.id, :conversation)
 
-    rows = Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
+    {:ok, rows} = Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
     assert [{"notes", "keep"}] = rows |> Aqua.ToolGrants.allowed_keys() |> MapSet.to_list()
+  end
+
+  test "a card runs under the profile its OWN turn pinned, not the runner's current one", %{
+    alice: alice,
+    conv: conv
+  } do
+    # The first turn's execution, pinned to a profile of its own.
+    first = "exec_first_#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      Arca.Execution.record_start(%{
+        id: first,
+        reference: "formula:local.aqua",
+        user_id: alice.user_id,
+        athanor_id: conv.athanor_id,
+        started_at: DateTime.utc_now(),
+        status: "running",
+        component_type: "formula",
+        profile_id: "prof_first"
+      })
+
+    # A card that turn raised, stamped with it as the runner stamps every card.
+    {:ok, apr} =
+      Conversations.append(alice, conv.id, %{
+        author: "aqua",
+        kind: "approval",
+        status: "pending",
+        content: "Pull component",
+        execution_id: first,
+        payload: %{
+          "orchestrator" => "aqua",
+          "intent" => %{
+            "kind" => "request_approval",
+            "title" => "Pull component",
+            "action_kind" => "write",
+            "proposal" => %{"tool" => "component", "action" => "pull", "args" => %{}}
+          }
+        }
+      })
+
+    # The NEXT turn starts before the person decides; the runner's pin is
+    # now the fake's profile, not the first turn's.
+    {_eid, _runner, _} = start_turn(alice, conv, "and another thing")
+
+    :ok = ConversationRunner.approve(alice, conv.id, apr.id, :once)
+
+    assert_receive {:fake_run_approved, _proposal, _ctx, profile}, 5_000
+    assert profile == "prof_first"
+    refute profile == Aqua.FakeTurn.fake_profile_id()
+  end
+
+  test "a card whose execution cannot be read is refused, never rooted afresh", %{
+    alice: alice,
+    conv: conv
+  } do
+    {_eid, _runner, _} = start_turn(alice, conv, "plant")
+
+    {:ok, apr} =
+      Conversations.append(alice, conv.id, %{
+        author: "aqua",
+        kind: "approval",
+        status: "pending",
+        content: "Pull component",
+        execution_id: "exec_gone_#{System.unique_integer([:positive])}",
+        payload: %{
+          "orchestrator" => "aqua",
+          "intent" => %{
+            "kind" => "request_approval",
+            "title" => "Pull component",
+            "action_kind" => "write",
+            "proposal" => %{"tool" => "component", "action" => "pull", "args" => %{}}
+          }
+        }
+      })
+
+    :ok = ConversationRunner.approve(alice, conv.id, apr.id, :once)
+
+    refute_receive {:fake_run_approved, _, _, _}, 500
+    assert_receive {:conversation, _, {:message_updated, %{id: id, status: "error"}}}, 5_000
+    assert id == apr.id
   end
 
   test "an approved note names the turn it was kept from, and lands on the tape as a line", %{
@@ -543,6 +623,7 @@ defmodule Aqua.ConversationRunnerTest do
         kind: "approval",
         status: "pending",
         content: "Keep a note",
+        execution_id: eid,
         payload: %{
           "orchestrator" => "aqua",
           "intent" => %{
@@ -564,8 +645,12 @@ defmodule Aqua.ConversationRunnerTest do
 
     assert_receive {:fake_run_approved, proposal, _ctx, _profile}, 5_000
     assert proposal.args["name"] == "decided"
-    assert proposal.args["conversation"] == conv.id
-    assert proposal.args["execution"] == eid
+    # The card's own execution and this conversation ride the proposal as
+    # host lineage — what the registry stamps onto the call and the tool
+    # reads; the model's `conversation` is left where it is, for the tool
+    # to ignore.
+    assert proposal.lineage == %{execution_id: eid, conversation_id: conv.id}
+    assert proposal.args["conversation"] == "forged"
 
     # The room sees what was kept, in the runner's voice — never the
     # agent's, which the tape would read as speech.
@@ -573,6 +658,48 @@ defmodule Aqua.ConversationRunnerTest do
                     {:message,
                      %{author: "system", kind: "system", content: "📝 Kept a note: decided"}}},
                    5_000
+  end
+
+  test "a standing answer the write path refuses is said on the tape, not only logged", %{
+    alice: alice,
+    conv: conv
+  } do
+    {_eid, _runner, _} = start_turn(alice, conv, "clean up")
+
+    # The card's intent says `write`, so the runner's own check lets the
+    # standing scope through; the grant write re-derives the kind from the
+    # registry — `notes.forget` is destructive, and the soul holds it at
+    # ask — and refuses. The click still runs this one call; the person
+    # must hear that "always for this conversation" did NOT stick.
+    {:ok, apr} =
+      Conversations.append(alice, conv.id, %{
+        author: "aqua",
+        kind: "approval",
+        status: "pending",
+        content: "Forget it",
+        payload: %{
+          "orchestrator" => "aqua",
+          "intent" => %{
+            "kind" => "request_approval",
+            "title" => "Forget it",
+            "action_kind" => "write",
+            "proposal" => %{"tool" => "notes", "action" => "forget", "args" => %{"name" => "x"}}
+          }
+        }
+      })
+
+    :ok = ConversationRunner.approve(alice, conv.id, apr.id, :conversation)
+
+    assert_receive {:conversation, _,
+                    {:message, %{author: "system", kind: "system", content: content}}},
+                   5_000
+
+    assert content =~ "\"Always for this conversation\" was not recorded for notes.forget"
+    assert content =~ Aqua.ToolGrants.refusal_message({:scope_not_permitted, :destructive})
+    refute content =~ "scope_not_permitted"
+
+    assert_receive {:fake_run_approved, %{tool: "notes", action: "forget"}, _, _}, 5_000
+    assert {:ok, []} = Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
   end
 
   test "a standing decline denies the pair and outranks a declared auto", %{
@@ -604,15 +731,17 @@ defmodule Aqua.ConversationRunnerTest do
     # "Never" is a deny ROW now. It used to delete the key from the agent's
     # authored markdown — the same file the agents page edits — so a
     # decline in one chat quietly rewrote the agent for everyone.
-    assert [%{scope: "agent", effect: "deny", tool: "component", action: "pull"}] =
-             Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
+    assert {:ok, [%{scope: "agent", effect: "deny", tool: "component", action: "pull"}]} =
+             Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
 
-    # And it beats a declared "auto": the pair leaves the surface entirely,
-    # so the agent cannot call it and is not asked about it again.
-    assert Aqua.ToolGrants.resolve(
-             %{"component.pull" => "auto"},
-             Aqua.ToolGrants.for_conversation(alice, conv.id, conv.athanor_id, "aqua")
-           ) == %{}
+    # And it beats a declared "auto": the pair is pinned as denied — kept
+    # as an exact key so no glob can answer for it — so the agent cannot
+    # call it and is not asked about it again.
+    {:ok, denied} = Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
+
+    assert Aqua.ToolGrants.resolve(%{"component.pull" => "auto"}, denied) == %{
+             "component.pull" => "deny"
+           }
   end
 
   test "decline records the reason; a proposal outside policy is a tripwire", %{
@@ -773,15 +902,15 @@ defmodule Aqua.ConversationRunnerTest do
     assert Conversations.messages(alice, conv.id) == []
   end
 
-  test "recovery resolves the orchestrator from its stored owner's tree, not the estate in focus",
+  test "recovery resolves the stored orchestrator from the estate's tree as it is now",
        %{alice: alice, conv: conv} do
-    defmodule StillRunningOwnedTurn do
+    defmodule StillRunningStoredTurn do
       def pin_profile(_ctx), do: {:ok, %{profile_id: "prof_stub"}}
       def start(_ctx, _input, _profile), do: {:error, :unused}
       def engine_available?, do: true
 
       def subscribe(execution_id, _ctx),
-        do: send(:owner_recover_probe, {:owner_subscribed, execution_id, self()})
+        do: send(:stored_recover_probe, {:stored_subscribed, execution_id, self()})
 
       def unsubscribe(_, _), do: :ok
       def cancel(_, _), do: :ok
@@ -791,152 +920,24 @@ defmodule Aqua.ConversationRunnerTest do
       def run_approved(_, _, _), do: {:ok, %{}}
     end
 
-    # A personal tree beside the estate: the row remembers WHOSE `aqua`
-    # ran, and a restart must resume that one — a bare name re-read from
-    # the estate in focus was the restart bug.
-    n = System.unique_integer([:positive])
+    Process.register(self(), :stored_recover_probe)
+    Application.put_env(:cyfr, :aqua_turn, StillRunningStoredTurn)
 
-    {:ok, mine} =
-      Sanctum.Tenancy.Athanors.create(%{
-        kind: "person",
-        name: "Me",
-        slug: "me-r#{n}",
-        owner_user_id: alice.user_id,
-        created_by: alice.user_id
-      })
-
-    Process.register(self(), :owner_recover_probe)
-    Application.put_env(:cyfr, :aqua_turn, StillRunningOwnedTurn)
-
+    # The row remembers the agent's NAME; the restart reads its definition
+    # back from the estate's tree — the roster of the moment, not a copy.
     {:ok, _} =
       Conversations.update(alice, conv.id, %{
-        execution_id: "exec_owned",
-        orchestrator: "aqua",
-        orchestrator_owner: mine.id
+        execution_id: "exec_stored",
+        orchestrator: "aqua_planner"
       })
 
     {:ok, _pid} = ConversationRunner.ensure(conv.id, conv.athanor_id)
-    assert_receive {:owner_subscribed, "exec_owned", _}, 10_000
+    assert_receive {:stored_subscribed, "exec_stored", _}, 10_000
 
     live = ConversationRunner.state(conv.id, conv.athanor_id)
     assert live.running
-    assert live.orchestrator["name"] == "aqua"
-    assert live.orchestrator["owner"] == mine.id
-  end
-
-  # A personal tree for Alice with an agent in it — the borrowed-agent
-  # setup tests below share. Seats, users row and personal pointer as
-  # production mints them.
-  defp personal_tom(alice) do
-    n = System.unique_integer([:positive])
-
-    {:ok, mine} =
-      Sanctum.Tenancy.Athanors.create(%{
-        kind: "person",
-        name: "Me",
-        slug: "me-g#{n}",
-        owner_user_id: alice.user_id,
-        created_by: alice.user_id
-      })
-
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(alice.user_id, scope: "athanor", athanor_id: mine.id)
-
-    {:ok, mine_ctx} = Context.focus(alice, mine.id)
-
-    {:ok, _} =
-      Aqua.AgentConfig.call_aqua(mine_ctx, %{
-        "action" => "create",
-        "name" => "tom",
-        "title" => "Tom",
-        "content" => "# Tom",
-        "tool_policy" => %{"record.list" => "auto", "record.get" => "ask"}
-      })
-
-    entry = %{
-      "name" => "tom",
-      "title" => "Tom",
-      "owner" => mine.id,
-      "owner_slug" => mine.slug,
-      "estate?" => false
-    }
-
-    {mine, mine_ctx, entry}
-  end
-
-  test "a borrowed agent's first turn reads the standing answers from its owner's estate",
-       %{alice: alice, conv: conv} do
-    {mine, mine_ctx, entry} = personal_tom(alice)
-
-    # "Never" answered at home, before this thread existed. On the first
-    # turn there is no previous orchestrator on runner state — the owner
-    # must come off the turn's own resolved agent, or this row is read
-    # from the wrong estate and the declared "auto" runs anyway.
-    {:ok, %{narrowed?: false}} =
-      Aqua.ToolGrants.put(mine_ctx, %{
-        scope: "agent",
-        effect: "deny",
-        agent_athanor_id: mine.id,
-        agent_name: "tom",
-        tool: "record",
-        action: "list"
-      })
-
-    :ok = ConversationRunner.send_message(alice, conv.id, "@tom hi", orchestrators: [entry])
-    assert_receive {:fake_start, _eid, _ctx, input, _profile}, 10_000
-
-    # The deny drops the declared auto from the surface; the rest of the
-    # declared policy still flows.
-    refute Map.has_key?(input["tool_policy"], "record.list")
-    assert input["tool_policy"]["record.get"] == "ask"
-  end
-
-  test "switching orchestrators does not carry the previous agent's standing answers",
-       %{alice: alice, conv: conv} do
-    {mine, _mine_ctx, personal} = personal_tom(alice)
-
-    # An estate agent of the SAME name — the collision that makes a stale
-    # owner read the wrong agent's rows.
-    {:ok, _} =
-      Aqua.AgentConfig.call_aqua(alice, %{
-        "action" => "create",
-        "name" => "tom",
-        "title" => "Estate Tom",
-        "content" => "# Tom"
-      })
-
-    estate = %{
-      "name" => "tom",
-      "title" => "Estate Tom",
-      "owner" => conv.athanor_id,
-      "owner_slug" => "estate",
-      "estate?" => true
-    }
-
-    # Turn 1 runs Alice's Tom.
-    :ok = ConversationRunner.send_message(alice, conv.id, "@tom hi", orchestrators: [personal])
-    assert_receive {:fake_start, _eid, _ctx, _input, _profile}, 10_000
-    assert_receive {:fake_subscribe, _eid2, runner}, 5_000
-    complete(runner)
-    assert_receive {:conversation, _, {:turn_finished}}, 5_000
-
-    # "Always for this conversation" — answered for ALICE's Tom.
-    {:ok, %{narrowed?: false}} =
-      Aqua.ToolGrants.put(alice, %{
-        scope: "conversation",
-        effect: "allow",
-        conversation_id: conv.id,
-        agent_athanor_id: mine.id,
-        agent_name: "tom",
-        tool: "record",
-        action: "list"
-      })
-
-    # Turn 2 runs the ESTATE's Tom. Its policy must not inherit the allow
-    # recorded against Alice's — the runner state still points at hers.
-    :ok = ConversationRunner.send_message(alice, conv.id, "@tom again", orchestrators: [estate])
-    assert_receive {:fake_start, _eid3, _ctx, input, _profile}, 10_000
-    refute Map.get(input["tool_policy"], "record.list") == "auto"
+    assert live.orchestrator["name"] == "aqua_planner"
+    refute Map.has_key?(live.orchestrator, "owner")
   end
 
   test "an approval on a turn with no pinned profile is refused, never re-rooted", %{
@@ -1019,11 +1020,10 @@ defmodule Aqua.ConversationRunnerTest do
     # recovered policy must be the same COMPOSITION a fresh start builds —
     # restoring the raw declared markdown would put the denied pair back
     # on the surface until the next turn.
-    {:ok, %{narrowed?: false}} =
+    {:ok, _} =
       Aqua.ToolGrants.put(alice, %{
         scope: "agent",
         effect: "deny",
-        agent_athanor_id: conv.athanor_id,
         agent_name: "aqua",
         tool: "component",
         action: "pull"
@@ -1038,10 +1038,10 @@ defmodule Aqua.ConversationRunnerTest do
     {:ok, _pid} = ConversationRunner.ensure(conv.id, conv.athanor_id)
     assert_receive {:deny_subscribed, "exec_denied", runner}, 10_000
 
-    # The denied pair is off the surface; the rest of the declared policy
+    # The denied pair is pinned as denied; the rest of the declared policy
     # was read and survives — the composition ran, not a raw restore.
     state = :sys.get_state(runner)
-    refute Map.has_key?(state.tool_policy, "component.pull")
+    assert state.tool_policy["component.pull"] == "deny"
     assert Map.has_key?(state.tool_policy, "component.list")
   end
 
@@ -1386,8 +1386,9 @@ defmodule Aqua.ConversationRunnerTest do
     assert_receive {:fake_start, eid, _ctx, input, _profile}, 10_000
     assert_receive {:fake_subscribe, ^eid, runner}, 5_000
 
-    assert input["system"] =~ "## Read from the room"
-    assert input["system"] =~ "Bob: ship friday"
+    assert input["transient"] =~ "## Read from the room"
+    assert input["transient"] =~ "Bob: ship friday"
+    refute input["system"] =~ "ship friday"
     refute input["task"] =~ "ship friday"
     refute :sys.get_state(runner).last_task =~ "ship friday"
 

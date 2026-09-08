@@ -57,6 +57,11 @@ defmodule Arca.Repo.Migrations.ToolGrants do
       add :granted_at, :utc_datetime_usec, null: false
     end
 
+    # Named short on purpose: Ecto's default name for the conversation-scope
+    # key is 73 bytes and Postgres would truncate it at 63, so the changeset
+    # could never match what the database reports. SQLite reports a
+    # violation by column, not by name, so `Arca.ToolGrantStorage` declares
+    # the constraint under both spellings.
     create unique_index(
              :tool_grants,
              [:conversation_id, :agent_athanor_id, :agent_name, :tool, :action],
@@ -77,8 +82,15 @@ defmodule Arca.Repo.Migrations.ToolGrants do
 
   def down do
     drop index(:tool_grants, [:athanor_id, :agent_name])
-    drop index(:tool_grants, [:agent_athanor_id, :agent_name, :tool, :action])
-    drop index(:tool_grants, [:conversation_id, :agent_athanor_id, :agent_name, :tool, :action])
+
+    drop index(:tool_grants, [:agent_athanor_id, :agent_name, :tool, :action],
+           name: :tool_grants_agent_scope_index
+         )
+
+    drop index(:tool_grants, [:conversation_id, :agent_athanor_id, :agent_name, :tool, :action],
+           name: :tool_grants_conversation_scope_index
+         )
+
     drop table(:tool_grants)
   end
 end

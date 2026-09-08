@@ -234,13 +234,21 @@ defmodule Compendium.Manifest.Caps do
   defp string_set(nil), do: []
   defp string_set(list) when is_list(list), do: list |> Enum.uniq() |> Enum.sort()
 
+  # The limit keys are `Sanctum.Limits`' closed vocabulary, matched by
+  # name — never `String.to_existing_atom/1`, which only answers once the
+  # module that owns the atom has happened to be loaded.
   defp normalize_limits(limits) do
     Map.new(limits, fn
       {"rate_limit", %{"requests" => requests, "window" => window}} ->
         {:rate_limit, %{requests: requests, window: window}}
 
       {key, value} ->
-        {String.to_existing_atom(key), value}
+        {limit_key(key), value}
     end)
+  end
+
+  defp limit_key(key) when is_binary(key) do
+    Enum.find(Sanctum.Limits.fields(), &(Atom.to_string(&1) == key)) ||
+      raise ArgumentError, "unknown limit #{inspect(key)}"
   end
 end

@@ -103,6 +103,33 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert Users.prefs(u) == %{"mode" => "lite", "theme" => "dark"}
   end
 
+  test "personal_athanor_id/1 and own_athanor?/2 are the one read of a person's own furnace" do
+    u = person(7)
+
+    # Known, but no furnace minted yet — and an unknown id, and no id at all.
+    assert :none = Users.personal_athanor_id(u.id)
+    assert :none = Users.personal_athanor_id("github|https://github.com|nobody")
+    assert :none = Users.personal_athanor_id(nil)
+    refute Users.own_athanor?(u.id, "ath_anything")
+
+    {:ok, personal} =
+      Athanors.create(%{
+        kind: "person",
+        name: "P7",
+        slug: "p7-#{System.unique_integer([:positive])}",
+        owner_user_id: u.id,
+        created_by: u.id
+      })
+
+    {:ok, _} = Users.set_personal_athanor(u, personal.id)
+
+    assert {:ok, personal.id} == Users.personal_athanor_id(u.id)
+    assert Users.own_athanor?(u.id, personal.id)
+    refute Users.own_athanor?(u.id, "ath_elsewhere")
+    # A context with no person (the public or an internal one) is never at home.
+    refute Users.own_athanor?(nil, personal.id)
+  end
+
   test "deny ejects: sessions and keys revoked, own athanor archived, group rows gone" do
     u = person(4)
 

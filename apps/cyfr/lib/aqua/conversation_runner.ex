@@ -59,9 +59,13 @@ defmodule Aqua.ConversationRunner do
   A turn that was running when the server stopped is re-followed on the
   next start (`recover_all/0`) or, if it finished meanwhile, closed off.
 
-  The turn itself — the formula input, the execution, its events — is
-  `Aqua.Turn`; the module is read from `:cyfr, :aqua_turn` when a
-  runner starts so a suite can stand in a fake engine.
+  The turn itself — resolving the addressed agent, pinning the profile,
+  composing the formula input, starting the execution — is
+  `Aqua.Turn.begin/5`, run in a task off the runner's loop; the engine
+  half it calls into is read from `:cyfr, :aqua_turn` when a runner
+  starts so a suite can stand in a fake. The agent addressed travels as an
+  `Aqua.Orchestrator`: a name and its owner from the pick, the resolved
+  detail once the task has read the tree.
   """
 
   use GenServer, restart: :transient
@@ -69,37 +73,20 @@ defmodule Aqua.ConversationRunner do
   require Logger
 
   alias Arca.ConversationStorage, as: Conversations
-  alias Aqua.Attachments
+  alias Aqua.Orchestrator
   alias Aqua.Turn, as: AquaTurn
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.Athanors
 
-  @idle_ms :timer.minutes(15)
-  @recover_retry_ms 2_000
   @recover_attempts 15
   # Turns waiting behind the running one; beyond it a sender is told `:busy`.
   @queue_max 8
-  # A turn's task is bounded — a long-quiet group can pile up chatter.
-  @window_rows 50
-  @window_bytes 60_000
   # One human line, in BYTES — the SSOT for message size, sitting under the
-  # task window. The wire schema carries an advisory `maxLength` too, but
-  # that counts graphemes and the LiveView never passes through it; this
-  # check is what actually governs, for every sender.
+  # task window (`Aqua.Runner.Addressing`). The wire schema carries an
+  # advisory `maxLength` too, but that counts graphemes and the LiveView
+  # never passes through it; this check is what actually governs, for
+  # every sender.
   @max_message_bytes 32 * 1024
-
-  # Ceiling on the async turn start reporting back. Every fault inside the
-  # task is converted to a `{:turn_start_result, ...}` message, so this
-  # fires only when the task itself was killed (supervisor shutdown, brutal
-  # kill) — without it, `running: true` with no execution id was permanent
-  # and the conversation answered `:busy` forever.
-  @turn_start_timeout_ms :timer.minutes(2)
-  # A turn's streamed text and tool feed are model-driven — without caps
-  # they were the only two unbounded accumulations in a module that bounds
-  # its queue, its task window and its persisted history. Applied BEFORE
-  # the broadcast, so every subscribed viewer inherits the same bound.
-  @max_streaming_text_bytes 512 * 1024
-  @max_tool_activity 200
 
   @type scope :: :once | :conversation | :always
 
@@ -180,6 +167,12 @@ defmodule Aqua.ConversationRunner do
   @spec subscribe(String.t(), String.t()) :: :ok | {:error, {:already_registered, pid()}}
   def subscribe(conversation_id, athanor_id) do
     Phoenix.PubSub.subscribe(Emissary.PubSub, topic(conversation_id, athanor_id))
+  end
+
+  @doc "Undo `subscribe/2` for the calling process — a pane turning to another thread."
+  @spec unsubscribe(String.t(), String.t()) :: :ok
+  def unsubscribe(conversation_id, athanor_id) do
+    Phoenix.PubSub.unsubscribe(Emissary.PubSub, topic(conversation_id, athanor_id))
   end
 
   @doc """
@@ -268,9 +261,11 @@ defmodule Aqua.ConversationRunner do
   end
 
   @doc "Stop auto-approving `{tool, action}` for the rest of this conversation."
-  @spec revoke_grant(Context.t(), String.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def revoke_grant(%Context{} = ctx, conversation_id, tool, action) do
-    call(ctx, conversation_id, {:revoke_grant, ctx, tool, action})
+  @spec revoke_grant(Context.t(), String.t(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, term()}
+  def revoke_grant(%Context{} = ctx, conversation_id, agent, tool, action)
+      when is_binary(agent) and is_binary(tool) and is_binary(action) do
+    call(ctx, conversation_id, {:revoke_grant, ctx, agent, tool, action})
   end
 
   @doc """
@@ -334,7 +329,7 @@ defmodule Aqua.ConversationRunner do
   def init({conversation_id, athanor_id}) do
     # Trapping exits so a supervisor shutdown mid-turn reaches terminate/2.
     Process.flag(:trap_exit, true)
-    ctx = system_ctx(athanor_id)
+    ctx = Aqua.Runner.Shared.system_ctx(athanor_id)
 
     # An archived athanor is a hard stop for a new runner too, not only for a
     # send into a live one: a tab left open on a chat whose furnace closed
@@ -386,20 +381,16 @@ defmodule Aqua.ConversationRunner do
         idle_ref: nil
       }
 
-      state =
-        if conv.execution_id do
-          send(
-            self(),
-            {:recover, conv.execution_id, {conv.orchestrator, conv.orchestrator_owner},
-             @recover_attempts}
-          )
+      # The row remembers WHICH agent ran (name and owner), so the
+      # recovered turn resolves the same one from the same tree.
+      if conv.execution_id do
+        send(
+          self(),
+          {:recover, conv.execution_id, Orchestrator.from_conversation(conv), @recover_attempts}
+        )
+      end
 
-          state
-        else
-          state
-        end
-
-      {:ok, touch(state)}
+      {:ok, Aqua.Runner.Shared.touch(state)}
     else
       # No conversation, no athanor, or a furnace that has closed: no runner.
       {:ok, %{status: _archived}} -> :ignore
@@ -409,7 +400,7 @@ defmodule Aqua.ConversationRunner do
 
   @impl true
   def handle_call(:state, _from, state) do
-    {:reply, public_state(state), touch(state)}
+    {:reply, Aqua.Runner.Shared.public_state(state), Aqua.Runner.Shared.touch(state)}
   end
 
   def handle_call({:send, ctx, text, opts}, _from, state) do
@@ -430,11 +421,11 @@ defmodule Aqua.ConversationRunner do
         # The same bound as the message: the room read is prompt bytes too.
         {:reply, {:error, :context_too_long}, state}
 
-      (refusal = standing(ctx, state)) != :ok ->
+      (refusal = Aqua.Runner.Shared.standing(ctx, state)) != :ok ->
         {:reply, refusal, state}
 
       true ->
-        case addressing(state, ctx, text, opts) do
+        case Aqua.Runner.Addressing.addressing(state, ctx, text, opts) do
           {:error, reason} ->
             {:reply, {:error, reason}, state}
 
@@ -443,10 +434,12 @@ defmodule Aqua.ConversationRunner do
             {:reply, {:error, :busy}, state}
 
           decision ->
-            case persist_message(state, ctx, text, opts) do
+            case Aqua.Runner.Addressing.persist_message(state, ctx, text, opts) do
               {:ok, row} ->
-                state = broadcast(state, {:message, row})
-                {:reply, :ok, after_persist(state, ctx, row, decision, opts)}
+                state = Aqua.Runner.Shared.broadcast(state, {:message, row})
+
+                {:reply, :ok,
+                 Aqua.Runner.Addressing.after_persist(state, ctx, row, decision, opts)}
 
               {:error, reason} ->
                 {:reply, {:error, reason}, state}
@@ -458,8 +451,8 @@ defmodule Aqua.ConversationRunner do
   # Stop ends the running turn and drops what was waiting behind it — a
   # member who says stop means the conversation, not one reply.
   def handle_call({:stop, ctx}, _from, state) do
-    case standing(ctx, state) do
-      :ok -> do_stop(state, ctx)
+    case Aqua.Runner.Shared.standing(ctx, state) do
+      :ok -> Aqua.Runner.Addressing.do_stop(state, ctx)
       refusal -> {:reply, refusal, state}
     end
   end
@@ -468,19 +461,19 @@ defmodule Aqua.ConversationRunner do
     # Deciding a card runs a tool and can write the athanor's shared
     # allowlist: the same standing a send is held to, asked again here rather
     # than trusted from the mount that opened the socket.
-    with :ok <- standing(ctx, state),
+    with :ok <- Aqua.Runner.Shared.standing(ctx, state),
          {:ok, peek} <- Conversations.get_message(ctx, message_id),
          # get_message is tenant-scoped, not conversation-scoped: without
          # this pin a member could drive conversation A's runner to settle
          # conversation B's card — the outcome note, the broadcast topic and
          # the tray attribution would all name the wrong conversation.
-         :ok <- same_conversation(peek, state.id),
-         :ok <- scope_permitted(peek, scope),
+         :ok <- Aqua.Runner.Shared.same_conversation(peek, state.id),
+         :ok <- Aqua.Runner.Approvals.scope_permitted(peek, scope),
          {:ok, msg} <-
            Conversations.resolve_approval(ctx, message_id, "pending", "running", %{
              resolution: %{"scope" => scope}
            }) do
-      {:reply, :ok, run_approval(state, ctx, msg, scope)}
+      {:reply, :ok, Aqua.Runner.Approvals.run_approval(state, ctx, msg, scope)}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -491,57 +484,51 @@ defmodule Aqua.ConversationRunner do
     # the next turn's prompt, so the bound is enforced here too.
     reason = String.slice(reason || "", 0, 80)
 
-    with :ok <- standing(ctx, state),
+    with :ok <- Aqua.Runner.Shared.standing(ctx, state),
          {:ok, msg} <- Conversations.get_message(ctx, message_id),
          # Same conversation pin as approve — see the comment there.
-         :ok <- same_conversation(msg, state.id),
-         intent = approval_intent(msg),
+         :ok <- Aqua.Runner.Shared.same_conversation(msg, state.id),
+         intent = Aqua.Runner.Approvals.approval_intent(msg),
          {summary, system_text} =
            AquaTurn.outcome_summary(:declined, %{reason: reason}, intent["title"] || ""),
          {:ok, msg} <-
            Conversations.resolve_approval(ctx, message_id, "pending", "declined", %{
              resolution: %{"reason" => reason, "summary" => summary, "scope" => scope}
            }) do
-      state = if scope == :never, do: deny_standing(state, ctx, msg), else: state
-      approval_telemetry(state, ctx, msg, :declined, scope, reason)
-      notify_resolved(state, msg)
-      state = state |> append_history(system_text) |> broadcast({:message_updated, msg})
-      {:reply, :ok, touch(state)}
+      state =
+        if scope == :never, do: Aqua.Runner.Approvals.deny_standing(state, ctx, msg), else: state
+
+      Aqua.Runner.Approvals.approval_telemetry(state, ctx, msg, :declined, scope, reason)
+      Aqua.Runner.Approvals.notify_resolved(state, msg)
+
+      state =
+        state
+        |> Aqua.Runner.Approvals.append_history(system_text)
+        |> Aqua.Runner.Shared.broadcast({:message_updated, msg})
+
+      {:reply, :ok, Aqua.Runner.Shared.touch(state)}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
-  def handle_call({:revoke_grant, ctx, tool, action}, _from, state) do
-    case standing(ctx, state) do
+  def handle_call({:revoke_grant, ctx, agent, tool, action}, _from, state) do
+    case Aqua.Runner.Shared.standing(ctx, state) do
       :ok ->
         # Withdraw the row, not just this process's copy of it — a grant
-        # that survives a restart has to be revocable the same way. The
-        # agent-scope arm's foreign-agent refusal is discarded on purpose:
-        # for a borrowed agent the only row that can exist HERE is
-        # conversation-scope (writes narrow), and its agent-scope rows are
-        # revoked where they live — the owner's estate.
-        name = orchestrator_name(state.orchestrator)
+        # that survives a restart has to be revocable the same way, and
+        # for the agent it was answered for, which the chat names.
+        for scope <- Arca.Schemas.ToolGrant.scopes() do
+          Aqua.ToolGrants.revoke(ctx, %{
+            scope: scope,
+            conversation_id: state.id,
+            agent_name: agent,
+            tool: tool,
+            action: action
+          })
+        end
 
-        state =
-          if is_binary(name) do
-            for scope <- ["conversation", "agent"] do
-              Aqua.ToolGrants.revoke(ctx, %{
-                scope: scope,
-                conversation_id: state.id,
-                agent_athanor_id: agent_owner(state),
-                agent_name: name,
-                tool: tool,
-                action: action
-              })
-            end
-
-            refresh_grants(state, ctx, name)
-          else
-            state
-          end
-
-        {:reply, :ok, state}
+        {:reply, :ok, Aqua.Runner.Approvals.refresh_grants(state, ctx, agent)}
 
       refusal ->
         {:reply, refusal, state}
@@ -549,7 +536,7 @@ defmodule Aqua.ConversationRunner do
   end
 
   def handle_call({:restart_for_consent, ctx, result}, _from, state) do
-    with :ok <- standing(ctx, state) do
+    with :ok <- Aqua.Runner.Shared.standing(ctx, state) do
       handle_restart_for_consent(ctx, result, state)
     else
       refusal -> {:reply, refusal, state}
@@ -570,480 +557,24 @@ defmodule Aqua.ConversationRunner do
 
       # A refused spawn is logged by start_task; the sweeper reaps the
       # execution the cancel would have stopped.
-      _ = start_task(fn -> turn.cancel_for_restart(ctx, exec_id, payload) end)
+      _ =
+        Aqua.Runner.Addressing.start_task(fn ->
+          turn.cancel_for_restart(ctx, exec_id, payload)
+        end)
 
       # The sender is asked to re-send; a queued turn firing now would send
       # for them.
       state =
         state
-        |> clear_queue()
-        |> finish_turn()
-        |> broadcast({:restart_prompt, state.last_task, ctx.user_id})
+        |> Aqua.Runner.Addressing.clear_queue()
+        |> Aqua.Runner.Stream.finish_turn()
+        |> Aqua.Runner.Shared.broadcast({:restart_prompt, state.last_task, ctx.user_id})
 
       {:reply, :ok, state}
     else
       {:reply, :ok, state}
     end
   end
-
-  # ---------------------------------------------------------------------------
-  # Sending: persist, address, start or queue
-  # ---------------------------------------------------------------------------
-
-  # A member of the athanor may act; so may an operator who opened it
-  # (`Context.focus/2` audited that). A context minted at mount is not
-  # trusted forever: this is re-asked on every send and at every dequeue.
-  defp do_stop(state, ctx) do
-    state = clear_queue(state)
-
-    cond do
-      state.running and state.execution_id ->
-        {:reply, :ok, cancel_turn(state, ctx)}
-
-      state.running ->
-        {:reply, :ok, %{state | cancel_requested: true}}
-
-      true ->
-        {:reply, :ok, state}
-    end
-  end
-
-  defp same_conversation(%{conversation_id: id}, id), do: :ok
-  defp same_conversation(_msg, _id), do: {:error, :not_found}
-
-  # What every act in a live conversation is held to: the furnace is open and
-  # the caller still belongs to it.
-  defp standing(%Context{} = ctx, state) do
-    cond do
-      not Athanors.active?(state.athanor_id) -> {:error, :archived}
-      not may_act?(ctx, state) -> {:error, :not_member}
-      true -> :ok
-    end
-  end
-
-  defp may_act?(%Context{platform_admin: true}, _state), do: true
-  defp may_act?(%Context{user_id: user_id}, state), do: Members.member?(user_id, state.athanor_id)
-
-  defp persist_message(state, ctx, text, opts) do
-    Conversations.append(ctx, state.id, %{
-      id: Keyword.get(opts, :id),
-      author: ctx.user_id || "system",
-      kind: "text",
-      content: text,
-      payload: attachment_payload(Keyword.get(opts, :attachments, []))
-    })
-  end
-
-  defp attachment_payload([]), do: nil
-  defp attachment_payload(refs) when is_list(refs), do: %{"attachments" => refs}
-
-  # What a message means for AQUA: `:post` (people talking), or a turn for
-  # an orchestrator.
-  #
-  # An estate with exactly one human addresses its agent with every
-  # message — there is nobody else the message could be for. Any other
-  # estate requires a mention, every time. There is deliberately no
-  # "follow-up" rule that keeps addressing the last agent: once sticky, a
-  # person who said `@tom` could not say anything to the people in the room
-  # without starting a turn, and there is no un-mention. Nothing is lost by
-  # it — `task_of/2` carries every human line since the last turn, so a
-  # bare follow-up reaches the agent on the next mention.
-  #
-  # This used to read a stored `answer_mode` and the athanor's `kind`. Both
-  # are derivable, and `"all"` stopped meaning anything once an agent could
-  # belong to a person: whose agent answers every line?
-  defp addressing(state, _ctx, text, opts) do
-    roster = Keyword.get(opts, :orchestrators, [])
-    {_message, mentioned} = AquaTurn.parse_mention(text, roster)
-
-    if solo_human?(state) or not is_nil(mentioned) do
-      case pick_orchestrator(state, roster, mentioned, opts) do
-        {:ok, orchestrator} -> {:turn, orchestrator}
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      :post
-    end
-  end
-
-  defp solo_human?(state), do: Members.solo?(state.athanor_id)
-
-  # Several people speak here, so the task prefixes each line with a name
-  # and the prompt says so. The same derivation as `solo_human?/1` —
-  # "whose message is this?" and "does the agent need to be told who is
-  # talking?" are one fact, and they used to be two stored ones.
-  defp multi_author?(rows) do
-    rows |> Enum.map(& &1.author) |> Enum.uniq() |> length() > 1
-  end
-
-  defp attributed(acc, row, text) do
-    {name, acc} = name_of(acc, row.author)
-    {"#{name}: #{text}", acc}
-  end
-
-  defp after_persist(state, _ctx, _row, :post, _opts), do: touch(state)
-
-  defp after_persist(state, ctx, row, {:turn, orchestrator}, opts) do
-    entry = %{
-      ctx: ctx,
-      orchestrator: orchestrator,
-      seq: row.seq,
-      message_id: row.id,
-      model: Keyword.get(opts, :model),
-      # What the sender had open beside this thread, for this turn alone —
-      # it is not in the row, so it has to travel with the entry.
-      context: Keyword.get(opts, :context),
-      # This sender's roster, carried with the message it belongs to. A
-      # queued turn may start long after the send, and it must still strip
-      # the mention against the roster of whoever wrote that line.
-      roster: Keyword.get(opts, :orchestrators, [])
-    }
-
-    if state.running do
-      state = %{state | queue: state.queue ++ [entry]}
-      state |> broadcast({:queued, length(state.queue)}) |> touch()
-    else
-      start_turn(state, entry)
-    end
-  end
-
-  # The next waiting turn, if any — only after a turn *completed*; a stop,
-  # a failure or a restart prompt never launches what was queued.
-  defp start_next(%{queue: []} = state), do: state
-
-  defp start_next(%{queue: [entry | rest]} = state) do
-    state = %{state | queue: rest} |> broadcast({:queued, length(rest)})
-
-    if may_act?(entry.ctx, state) do
-      start_turn(state, entry)
-    else
-      # The sender left the athanor while waiting; their turn does not run.
-      state
-      |> append_and_broadcast(%{
-        author: "system",
-        kind: "system",
-        content: "A queued message was dropped — its sender is no longer a member."
-      })
-      |> start_next()
-    end
-  end
-
-  defp clear_queue(%{queue: []} = state), do: state
-  defp clear_queue(state), do: %{state | queue: []} |> broadcast({:queued, 0})
-
-  # Engine work pushed out of the runner's loop (turn starts, cancels,
-  # approvals). The WORK reports back by message; the SPAWN is checked
-  # here — a supervisor at its ceiling used to drop the work silently,
-  # leaving whatever waited on the message waiting forever.
-  defp start_task(fun) do
-    logger_metadata = Cyfr.LoggerContext.capture()
-
-    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
-           fun.()
-         end) do
-      {:ok, _pid} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[Aqua.ConversationRunner] task not started: #{inspect(reason)}")
-        :error
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Turn start
-  # ---------------------------------------------------------------------------
-
-  # The task is every human message since the last turn, up to and
-  # including the one that addressed AQUA — bounded, mention-stripped, and
-  # in a group prefixed with who said it. The cursor advances at start;
-  # what a cancelled or failed turn consumed is folded into the history
-  # instead (`cancel_turn/2`, `fail_turn/2`), so nothing is lost and
-  # nothing is fed twice.
-  defp start_turn(state, %{ctx: ctx, orchestrator: orchestrator, seq: seq} = entry) do
-    # Belt: every turn-end path drains or clears the queue synchronously,
-    # so an entry should never carry a seq behind the cursor — but if one
-    # ever does, the cursor must not move backwards, or the next turn
-    # re-reads messages a finished turn already consumed.
-    seq = max(seq, state.turn_seq || 0)
-    rows = window_rows(state, seq)
-    {task, state} = task_of(state, rows, seq, entry.roster)
-    turn_attachments = Attachments.attachments_of(rows)
-    conv_id = state.id
-
-    Conversations.update(state.system_ctx, state.id, %{
-      turn_seq: seq,
-      orchestrator: orchestrator_name(orchestrator),
-      # The owner rides along so a restart resolves the same agent from the
-      # same tree — a bare name would re-read out of the estate in focus.
-      orchestrator_owner: orchestrator_owner_of(orchestrator)
-    })
-
-    ref = make_ref()
-    runner = self()
-    history = state.history
-    group? = not solo_human?(state)
-    turn = state.turn
-
-    spawned =
-      start_task(fn ->
-        result =
-          try do
-            # A name-only pick resolves its run-time detail here, in the
-            # task — the MCP call this costs must never run inside the
-            # runner's handle_call.
-            # Pin, compose, run. The profile is resolved FIRST because both
-            # of the other two need it: the run must name it rather than
-            # re-select, and (once the composer takes an authority) the
-            # prompt must describe what this authority actually grants.
-            with %{} = orchestrator <- resolve_orchestrator(ctx, orchestrator),
-                 {:ok, authority} <- turn.pin_profile(ctx) do
-              attachments = Attachments.load(ctx, conv_id, turn_attachments)
-
-              # The owner comes off THIS turn's resolved agent, never off
-              # runner state: the previous turn may have run a different
-              # agent, and a first turn has no previous at all — either
-              # would key the grants below (and the prompt's owner) to the
-              # wrong estate. The `||` repeats `Turn.orchestrator/3`'s own
-              # ownerless default.
-              agent_owner_id = orchestrator["owner"] || ctx.athanor_id
-
-              # Declared policy is the agent's markdown; the standing
-              # answers a person already gave are rows. The turn runs on
-              # the composition, so a "never" from three weeks ago is not
-              # re-offered as a card and a restart does not forget a
-              # "for this conversation".
-              grants =
-                Aqua.ToolGrants.for_conversation(
-                  ctx,
-                  conv_id,
-                  agent_owner_id,
-                  orchestrator["name"]
-                )
-
-              orchestrator =
-                Map.put(
-                  orchestrator,
-                  "tool_policy",
-                  Aqua.ToolGrants.resolve(orchestrator["tool_policy"] || %{}, grants)
-                )
-
-              build =
-                AquaTurn.build_input(ctx, orchestrator, task,
-                  history: history,
-                  attachments: attachments,
-                  model: entry.model,
-                  group: group?,
-                  # The prompt describes what THIS authority grants, so it
-                  # has to be composed after the pin, not before it.
-                  authority: authority,
-                  owner: agent_owner_id,
-                  focus: ctx.athanor_id,
-                  room_context: entry.context
-                )
-
-              with {:ok, %{input: input, tool_policy: policy}} <- build,
-                   {:ok, eid} <- turn.start(ctx, input, authority.profile_id) do
-                {:ok, eid, policy, orchestrator, authority.profile_id,
-                 Aqua.ToolGrants.allowed_keys(grants)}
-              end
-            else
-              nil -> {:error, :no_orchestrator}
-              {:error, reason} -> {:error, reason}
-            end
-          rescue
-            e -> {:error, Exception.message(e)}
-          catch
-            # The loads and `turn.start` reach GenServers and MCP: a call
-            # timeout or a dead process arrives as an exit, not an
-            # exception. Uncaught, the task died silently and the runner
-            # waited forever on a result that was never coming.
-            kind, reason ->
-              Logger.warning("[Aqua.ConversationRunner] turn start #{kind}: #{inspect(reason)}")
-              {:error, "the engine did not respond while starting the turn"}
-          end
-
-        send(runner, {:turn_start_result, ref, result})
-      end)
-
-    case spawned do
-      :ok ->
-        # The task is the only thing that reports back; if it is killed
-        # mid-flight, the deadline turns the silence into a failed turn.
-        Process.send_after(self(), {:turn_start_timeout, ref}, @turn_start_timeout_ms)
-
-        %{
-          state
-          | turn_ctx: ctx,
-            running: true,
-            starting: ref,
-            execution_id: nil,
-            last_event_seq: -1,
-            cancel_requested: false,
-            streaming_text: "",
-            tool_activity: [],
-            usage: %{input: 0, output: 0},
-            orchestrator: resolved_or_previous(orchestrator, state.orchestrator),
-            tool_policy: pre_policy(orchestrator),
-            turn_seq: seq,
-            last_task: task
-        }
-        |> broadcast({:turn_starting, ctx.user_id})
-        |> touch()
-
-      :error ->
-        # The supervisor refused the task: the turn never started, so the
-        # state must not say it did. Same shape as the dropped-member case
-        # above — tell the room, then keep draining the queue.
-        state
-        |> append_and_broadcast(%{
-          author: "system",
-          kind: "error",
-          content: "The turn could not start — the server is busy. Send the message again."
-        })
-        |> start_next()
-    end
-  end
-
-  # The human text rows a turn takes up: after the last cursor, up to the
-  # addressing message; the newest @window_rows / @window_bytes of them.
-  defp window_rows(state, upto_seq) do
-    rows =
-      Conversations.messages(state.system_ctx, state.id,
-        after_seq: state.turn_seq,
-        upto_seq: upto_seq
-      )
-      |> Enum.filter(&(&1.kind == "text" and &1.author not in ["aqua", "system"]))
-
-    rows
-    |> Enum.reverse()
-    |> Enum.take(@window_rows)
-    |> Enum.reduce_while({[], 0}, fn row, {kept, bytes} ->
-      size = byte_size(row.content || "")
-
-      if kept != [] and bytes + size > @window_bytes,
-        do: {:halt, {kept, bytes}},
-        else: {:cont, {[row | kept], bytes + size}}
-    end)
-    |> elem(0)
-  end
-
-  # The turn's task: every human line since the last cursor.
-  #
-  # Only the TRIGGERING line has its mention stripped, and only against the
-  # roster of the person who wrote it. Its `@tom` is routing metadata that
-  # `addressing/4` already consumed; everyone else's is content, and the
-  # model should see who Bob was addressing. Stripping the whole window
-  # against one sender's roster would delete Bob's `@tom` because Alice
-  # happens to have a Tom.
-  defp task_of(state, rows, trigger_seq, roster) do
-    # Attribute when this task carries more than one voice, or when there
-    # is more than one person here to carry a second. Reading the ROWS and
-    # not just the roster matters: a member can leave between writing a
-    # line and the turn that consumes it, and their words still need a
-    # name on them.
-    attribute? = multi_author?(rows) or not solo_human?(state)
-
-    {lines, state} =
-      Enum.map_reduce(rows, state, fn row, acc ->
-        text =
-          if row.seq == trigger_seq do
-            {stripped, _mention} = AquaTurn.parse_mention(row.content || "", roster)
-            stripped
-          else
-            row.content || ""
-          end
-
-        if attribute?, do: attributed(acc, row, text), else: {text, acc}
-      end)
-
-    {Enum.join(lines, "\n"), state}
-  end
-
-  defp name_of(state, user_id) do
-    case Map.fetch(state.names, user_id) do
-      {:ok, name} ->
-        {name, state}
-
-      :error ->
-        name = AquaTurn.display_name(user_id)
-        {name, %{state | names: Map.put(state.names, user_id, name)}}
-    end
-  end
-
-  # `@name` in the text wins, then an explicit option, then the
-  # orchestrator of the previous turn, then the athanor's first (the roster
-  # sorts estate entries ahead, so "first" is the estate's). Only the NAME
-  # is decided here (against the cached roster — no network in
-  # handle_call); the run-time detail resolves inside the turn-start task.
-  # `roster` is THIS sender's, resolved for this message. The fallback to
-  # the turn's last orchestrator is a name-resolution convenience once a
-  # message is already addressed — it never decides that a bare line IS
-  # addressed, which is `addressing/4`'s job alone.
-  #
-  # A pick carries the OWNER as well as the name: an agent belongs to the
-  # tree it lives in, and the turn has to read it back from that tree
-  # rather than from whichever estate happens to be in focus.
-  defp pick_orchestrator(state, roster, mentioned, opts) do
-    picked =
-      cond do
-        is_map(mentioned) -> mentioned
-        entry = entry_named(roster, Keyword.get(opts, :orchestrator)) -> entry
-        state.orchestrator -> state.orchestrator
-        true -> List.first(roster)
-      end
-
-    cond do
-      is_nil(picked) ->
-        {:error, :no_orchestrator}
-
-      state.orchestrator && same_agent?(state.orchestrator, picked) && is_nil(mentioned) &&
-          is_nil(Keyword.get(opts, :orchestrator)) ->
-        {:ok, state.orchestrator}
-
-      true ->
-        # Name and owner only; the turn-start task resolves (and thereby
-        # validates) the detail — an unknown name fails the turn there
-        # rather than holding the send hostage to a catalog read.
-        {:ok, {:by_name, picked["name"], picked["owner"]}}
-    end
-  end
-
-  # The explicit option: a roster entry (the picker hands the whole map,
-  # owner included), or a bare name for older callers — matched with the
-  # ESTATE winning a collision, the same rule a bare mention follows. An
-  # unknown name still picks, ownerless; the turn-start task is where it
-  # fails.
-  defp entry_named(_roster, nil), do: nil
-  defp entry_named(_roster, %{"name" => _} = entry), do: entry
-
-  defp entry_named(roster, name) when is_binary(name) do
-    Enum.find(roster, &(&1["name"] == name and &1["estate?"])) ||
-      Enum.find(roster, &(&1["name"] == name)) ||
-      %{"name" => name}
-  end
-
-  defp same_agent?(a, b), do: a["name"] == b["name"] and a["owner"] == b["owner"]
-
-  defp orchestrator_name({:by_name, name, _owner}), do: name
-  defp orchestrator_name(%{} = orchestrator), do: orchestrator["name"]
-
-  defp orchestrator_owner_of({:by_name, _name, owner}), do: owner
-  defp orchestrator_owner_of(%{} = orchestrator), do: orchestrator["owner"]
-
-  defp resolve_orchestrator(_ctx, %{} = orchestrator), do: orchestrator
-
-  defp resolve_orchestrator(ctx, {:by_name, name, owner}),
-    do: AquaTurn.orchestrator(ctx, name, owner)
-
-  # Until the task reports the resolved detail, the previous turn's
-  # orchestrator stands in for display; a full map replaces it at once.
-  defp resolved_or_previous(%{} = orchestrator, _previous), do: orchestrator
-  defp resolved_or_previous({:by_name, _, _}, previous), do: previous
-
-  defp pre_policy(%{} = orchestrator), do: orchestrator["tool_policy"] || %{}
-  defp pre_policy({:by_name, _, _}), do: %{}
 
   # ---------------------------------------------------------------------------
   # Turn events
@@ -1054,20 +585,20 @@ defmodule Aqua.ConversationRunner do
     state = %{state | starting: nil}
 
     case result do
-      {:ok, eid, policy, orchestrator, profile_id, grants} ->
+      {:ok, %{execution_id: eid} = started} ->
         state = %{
           state
           | execution_id: eid,
-            tool_policy: policy,
-            orchestrator: orchestrator,
-            profile_id: profile_id,
-            grants: grants
+            tool_policy: started.tool_policy,
+            orchestrator: started.orchestrator,
+            profile_id: started.profile_id,
+            grants: started.grants
         }
 
         Conversations.update(state.system_ctx, state.id, %{execution_id: eid})
 
         if state.cancel_requested do
-          {:noreply, cancel_turn(state, state.turn_ctx)}
+          {:noreply, Aqua.Runner.Stream.cancel_turn(state, state.turn_ctx)}
         else
           state.turn.subscribe(eid, state.turn_ctx)
 
@@ -1079,8 +610,8 @@ defmodule Aqua.ConversationRunner do
           state =
             state.turn.events_since(eid, state.athanor_id)
             |> Enum.reduce(
-              broadcast(state, {:turn_started, eid}),
-              &apply_sequenced_event(&2, &1)
+              Aqua.Runner.Shared.broadcast(state, {:turn_started, eid}),
+              &Aqua.Runner.Stream.apply_sequenced_event(&2, &1)
             )
 
           {:noreply, state}
@@ -1091,16 +622,16 @@ defmodule Aqua.ConversationRunner do
       # is not. Deliberately fail-closed — see `Aqua.Turn.build_input/4`.
       {:error, {:catalyst_not_in_estate, ref}} ->
         {:noreply,
-         fail_turn(
+         Aqua.Runner.Stream.fail_turn(
            state,
-           "The agent's model#{ref_note(ref)} is not installed in this estate — " <>
+           "The agent's model#{Aqua.Runner.Stream.ref_note(ref)} is not installed in this estate — " <>
              "install its catalyst here, or address another agent."
          )}
 
       {:error, reason} ->
         safe = Aqua.MCPHelpers.render_refusal(reason)
 
-        {:noreply, fail_turn(state, "Execution failed to start: #{safe}")}
+        {:noreply, Aqua.Runner.Stream.fail_turn(state, "Execution failed to start: #{safe}")}
     end
   end
 
@@ -1113,7 +644,10 @@ defmodule Aqua.ConversationRunner do
   # `starting`, so a stale deadline matches the clause below and is dropped.
   def handle_info({:turn_start_timeout, ref}, %{starting: ref} = state) do
     {:noreply,
-     fail_turn(%{state | starting: nil}, "The turn did not start. Send the message again.")}
+     Aqua.Runner.Stream.fail_turn(
+       %{state | starting: nil},
+       "The turn did not start. Send the message again."
+     )}
   end
 
   def handle_info({:turn_start_timeout, _ref}, state), do: {:noreply, state}
@@ -1126,7 +660,7 @@ defmodule Aqua.ConversationRunner do
   def handle_info({:execution_event, %{execution_id: id} = event}, state)
       when is_binary(id) do
     if id == state.execution_id do
-      {:noreply, apply_sequenced_event(state, event)}
+      {:noreply, Aqua.Runner.Stream.apply_sequenced_event(state, event)}
     else
       {:noreply, state}
     end
@@ -1146,11 +680,11 @@ defmodule Aqua.ConversationRunner do
   end
 
   def handle_info({:approval_result, message_id, ctx, outcome, payload}, state) do
-    {:noreply, complete_approval(state, ctx, message_id, outcome, payload)}
+    {:noreply, Aqua.Runner.Approvals.complete_approval(state, ctx, message_id, outcome, payload)}
   end
 
-  def handle_info({:recover, execution_id, {_name, _owner} = orchestrator_ref, attempts}, state) do
-    {:noreply, recover(state, execution_id, orchestrator_ref, attempts)}
+  def handle_info({:recover, execution_id, stored, attempts}, state) do
+    {:noreply, Aqua.Runner.Recovery.recover(state, execution_id, stored, attempts)}
   end
 
   # The athanor changed (a rename, a settings patch, an archive): re-read
@@ -1164,8 +698,8 @@ defmodule Aqua.ConversationRunner do
       {:ok, %{status: "archived"}} ->
         state =
           if state.running,
-            do: shutdown(state, "the athanor was archived"),
-            else: clear_queue(state)
+            do: Aqua.Runner.Stream.shutdown(state, "the athanor was archived"),
+            else: Aqua.Runner.Addressing.clear_queue(state)
 
         {:stop, :normal, state}
 
@@ -1186,996 +720,18 @@ defmodule Aqua.ConversationRunner do
     {:stop, :normal, state}
   end
 
-  def handle_info(:idle, state), do: {:noreply, touch(state)}
+  def handle_info(:idle, state), do: {:noreply, Aqua.Runner.Shared.touch(state)}
 
   def handle_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
-  defp ref_note(ref) when is_binary(ref) and ref != "", do: " (#{ref})"
-  defp ref_note(_), do: ""
-
-  # One gate for every execution event, live or replayed: a finished turn
-  # takes no more events, and an event delivered twice (buffered AND live)
-  # must apply once — the producer's sequence is the dedup key.
-  defp apply_sequenced_event(%{running: false} = state, _event), do: state
-
-  defp apply_sequenced_event(state, %{sequence: seq} = event) when is_integer(seq) do
-    if seq <= state.last_event_seq do
-      state
-    else
-      apply_execution_event(%{state | last_event_seq: seq}, event)
-    end
-  end
-
-  defp apply_sequenced_event(state, event), do: apply_execution_event(state, event)
-
-  defp apply_execution_event(state, %{type: "emit", data: data}) do
-    handle_emit(state, data["kind"] || data[:kind], data)
-  end
-
-  defp apply_execution_event(state, %{type: "complete"}), do: complete_turn(state)
-
-  defp apply_execution_event(state, %{type: "error", data: data}) do
-    # Producers spell the reason under `:error` (every
-    # `ExecutionEventBuffer.push_terminal/5` caller); an unrecognized shape
-    # is logged, never inspected into a row every member reads.
-    case data[:error] || data["error"] do
-      msg when is_binary(msg) ->
-        fail_turn(state, msg)
-
-      _ ->
-        Logger.warning(
-          "[Aqua.ConversationRunner] error event with unrecognized data keys: " <>
-            inspect(if is_map(data), do: Map.keys(data), else: data)
-        )
-
-        fail_turn(state, "The turn failed.")
-    end
-  end
-
-  defp apply_execution_event(state, _other), do: state
-
-  # A supervisor stop (a shutdown, a rolling deploy) mid-turn: write the
-  # interruption while the Repo is still up, drop the queue, and let the
-  # engine know — inline, since a task started here would die with us. A
-  # crash writes nothing and keeps the row's `execution_id`, so the
-  # transient restart re-follows a still-live execution.
   @impl true
   def terminate(reason, %{running: true} = state) when reason in [:normal, :shutdown] do
-    shutdown(state)
+    Aqua.Runner.Stream.shutdown(state)
   end
 
-  def terminate({:shutdown, _}, %{running: true} = state), do: shutdown(state)
+  def terminate({:shutdown, _}, %{running: true} = state), do: Aqua.Runner.Stream.shutdown(state)
   def terminate(_reason, _state), do: :ok
-
-  defp shutdown(state, why \\ "the server stopped") do
-    exec_id = state.execution_id
-    ctx = state.turn_ctx || state.system_ctx
-
-    state =
-      state
-      |> clear_queue()
-      |> interrupted(exec_id, why)
-
-    if exec_id do
-      state.turn.unsubscribe(exec_id, ctx)
-      state.turn.cancel(ctx, exec_id)
-    end
-
-    state
-  rescue
-    e ->
-      # Shutdown must not crash, but a failed cancel leaves the execution
-      # running server-side while this runner reports itself stopped —
-      # that orphan must be visible.
-      Logger.warning(
-        "[Aqua.ConversationRunner] shutdown cancel failed for #{inspect(state.execution_id)}: " <>
-          Exception.message(e)
-      )
-
-      %{state | running: false, execution_id: nil}
-  catch
-    :exit, reason ->
-      Logger.warning(
-        "[Aqua.ConversationRunner] shutdown cancel exited for #{inspect(state.execution_id)}: " <>
-          inspect(reason)
-      )
-
-      %{state | running: false, execution_id: nil}
-  end
-
-  # ---------------------------------------------------------------------------
-  # Emits
-  # ---------------------------------------------------------------------------
-
-  defp handle_emit(state, "text_delta", data) do
-    chunk = data["content"] || data[:content] || ""
-    streamed = byte_size(state.streaming_text)
-
-    cond do
-      streamed >= @max_streaming_text_bytes ->
-        state
-
-      streamed + byte_size(chunk) > @max_streaming_text_bytes ->
-        marker = "\n\n_(output truncated)_"
-
-        %{state | streaming_text: state.streaming_text <> marker}
-        |> broadcast({:delta, marker})
-
-      true ->
-        %{state | streaming_text: state.streaming_text <> chunk}
-        |> broadcast({:delta, chunk})
-    end
-  end
-
-  defp handle_emit(state, "tool_use", data) do
-    if length(state.tool_activity) >= @max_tool_activity do
-      state
-    else
-      tool = data["tool"] || data[:tool] || "tool"
-      activity = state.tool_activity ++ [%{tool: tool, status: :running, preview: nil}]
-      %{state | tool_activity: activity} |> broadcast({:tool_activity, activity})
-    end
-  end
-
-  defp handle_emit(state, "tool_result", data) do
-    tool = data["tool"] || data[:tool] || "tool"
-    preview = data["preview"] || data[:preview]
-    activity = AquaTurn.mark_tool_done(state.tool_activity, tool, preview)
-    %{state | tool_activity: activity} |> broadcast({:tool_activity, activity})
-  end
-
-  # Whatever the component still needs, the consent walk is the one place
-  # it gets granted — the sender is shown the sheet for the asking ref.
-  defp handle_emit(state, kind, data) when kind in ["setup_required", "request_setup"] do
-    case data["component_ref"] || data[:component_ref] || "" do
-      "" -> state
-      ref -> broadcast(state, {:consent_required, ref, turn_user(state)})
-    end
-  end
-
-  defp handle_emit(state, "usage", data) do
-    input = data["input_tokens"] || data[:input_tokens] || 0
-    output = data["output_tokens"] || data[:output_tokens] || 0
-    usage = %{input: state.usage.input + input, output: state.usage.output + output}
-    %{state | usage: usage} |> broadcast({:usage, usage})
-  end
-
-  # The formula's full history (provider-canonical shape); kept for the
-  # next turn so the agent has multi-turn memory. Notes appended while the
-  # turn ran (an approval outcome) ride along, not under it.
-  defp handle_emit(state, "conversation_complete", data) do
-    history = (data["messages"] || data[:messages] || []) ++ state.notes_in_flight
-
-    # `last_task` goes with the notes. This list is the model's own, and it
-    # already contains this turn's user message — so the fold that
-    # `fail_turn`/`cancel_turn` apply for turns that ended BEFORE the model
-    # spoke would add it a second time, and every later turn would read it
-    # twice. Cleared here because those two fold before `finish_turn/1`
-    # ever runs.
-    %{state | history: history, notes_in_flight: [], last_task: nil}
-  end
-
-  defp handle_emit(state, _kind, _data), do: state
-
-  # ---------------------------------------------------------------------------
-  # Turn end
-  # ---------------------------------------------------------------------------
-
-  defp complete_turn(state) do
-    ctx = state.turn_ctx || state.system_ctx
-    if state.execution_id, do: state.turn.unsubscribe(state.execution_id, ctx)
-
-    %{text: text, approvals: approvals, intents: intents, tripwires: tripwires} =
-      AquaTurn.parse_completion(state.streaming_text, state.tool_policy)
-
-    # No bang-matches on the appends: a store hiccup here must degrade to
-    # a broadcast error, never crash the runner mid-completion and drop
-    # the whole turn's bookkeeping.
-    state =
-      if text != "" do
-        case Conversations.append(ctx, state.id, %{
-               author: "aqua",
-               kind: "text",
-               content: text,
-               execution_id: state.execution_id
-             }) do
-          {:ok, row} ->
-            broadcast(state, {:message, row})
-
-          {:error, reason} ->
-            Logger.error("[Aqua.ConversationRunner] reply append failed: #{inspect(reason)}")
-            broadcast(state, {:error, "The reply could not be saved"})
-        end
-      else
-        state
-      end
-
-    orchestrator_name = state.orchestrator && state.orchestrator["name"]
-
-    approval_rows =
-      Enum.flat_map(approvals, fn intent ->
-        case Conversations.append(ctx, state.id, %{
-               id: intent.id,
-               author: "aqua",
-               kind: "approval",
-               content: intent.title,
-               status: "pending",
-               payload: %{"intent" => intent, "orchestrator" => orchestrator_name},
-               execution_id: state.execution_id
-             }) do
-          {:ok, row} ->
-            [row]
-
-          {:error, reason} ->
-            Logger.error("[Aqua.ConversationRunner] approval append failed: #{inspect(reason)}")
-
-            []
-        end
-      end)
-
-    state = Enum.reduce(approval_rows, state, &broadcast(&2, {:message, &1}))
-
-    state =
-      Enum.reduce(tripwires, state, fn text, acc ->
-        case Conversations.append(ctx, acc.id, %{
-               author: "system",
-               kind: "error",
-               content: text
-             }) do
-          {:ok, row} -> broadcast(acc, {:message, row})
-          {:error, _} -> broadcast(acc, {:error, text})
-        end
-      end)
-
-    if approval_rows != [] do
-      Sanctum.Notify.broadcast(state.athanor_id, :approval_pending, %{
-        conversation_id: state.id,
-        count: length(approval_rows)
-      })
-    end
-
-    state =
-      state
-      |> finish_turn()
-      |> broadcast_intents(intents)
-
-    # Conversation-grant fast path: a proposal the members already chose to
-    # auto-approve "for this chat" runs at once.
-    state =
-      Enum.reduce(approval_rows, state, fn row, acc ->
-        intent = approval_intent(row)
-
-        if AquaTurn.granted?(atomize_intent(intent), acc.grants) do
-          case Conversations.resolve_approval(ctx, row.id, "pending", "running", %{
-                 resolution: %{"scope" => :conversation}
-               }) do
-            {:ok, msg} -> run_approval(acc, ctx, msg, :conversation)
-            _ -> acc
-          end
-        else
-          acc
-        end
-      end)
-
-    start_next(state)
-  end
-
-  defp broadcast_intents(state, []), do: state
-
-  defp broadcast_intents(state, intents),
-    do: broadcast(state, {:intents, intents, turn_user(state)})
-
-  defp fail_turn(state, text) do
-    ctx = state.turn_ctx || state.system_ctx
-    if state.execution_id, do: state.turn.unsubscribe(state.execution_id, ctx)
-
-    state =
-      case Conversations.append(ctx, state.id, %{author: "system", kind: "error", content: text}) do
-        {:ok, row} -> broadcast(state, {:message, row})
-        _ -> broadcast(state, {:error, text})
-      end
-
-    # What this turn consumed stays in the agent's memory, the same fold
-    # cancel_turn does: the thread still shows the person's message, and a
-    # failed turn used to drop it from the history — so the next answer had
-    # amnesia about exactly the message that failed.
-    user_turn =
-      if state.last_task,
-        do: [%{"role" => "user", "content" => state.last_task}],
-        else: []
-
-    partial = state.streaming_text
-
-    assistant_turn =
-      if partial != "",
-        do: [%{"role" => "assistant", "content" => partial <> "\n\n(failed)"}],
-        else: []
-
-    state = %{
-      state
-      | history: state.history ++ user_turn ++ assistant_turn ++ state.notes_in_flight,
-        notes_in_flight: []
-    }
-
-    # A failure never launches what was queued (start_next's rule) — but it
-    # must not strand it either: stranded entries sat as a stale badge, a
-    # later send jumped them, and a delayed launch then regressed the
-    # cursor and fed consumed messages twice. Dropped, with a note.
-    state =
-      if state.queue != [] do
-        state
-        |> append_and_broadcast(%{
-          author: "system",
-          kind: "system",
-          content:
-            "The waiting turn was dropped because this one failed — the messages stay " <>
-              "in the thread; send again to continue."
-        })
-        |> clear_queue()
-      else
-        state
-      end
-
-    finish_turn(state)
-  end
-
-  # Cancel an in-flight turn: unsubscribe, ask the engine to stop, keep the
-  # partial reply as a message, and synthesise the user + truncated
-  # assistant turns into the history so the next message keeps context.
-  defp cancel_turn(state, ctx) do
-    exec_id = state.execution_id
-    turn_ctx = state.turn_ctx || ctx
-    turn = state.turn
-
-    if exec_id do
-      turn.unsubscribe(exec_id, turn_ctx)
-
-      # A refused spawn is logged by start_task; the sweeper reaps the
-      # execution the cancel would have stopped.
-      _ = start_task(fn -> turn.cancel(ctx, exec_id) end)
-    end
-
-    partial = state.streaming_text
-
-    state =
-      if partial != "" do
-        # No bang-match — the same rule complete_turn states: a store
-        # hiccup must degrade to a broadcast, never crash the runner
-        # mid-cancel. A crash here is worse than mid-completion: it skips
-        # terminate/2 (which fires only on normal/shutdown), so the engine
-        # is never told to cancel and the execution orphans.
-        case Conversations.append(turn_ctx, state.id, %{
-               author: "aqua",
-               kind: "text",
-               content: partial <> "\n\n_(cancelled)_",
-               execution_id: exec_id
-             }) do
-          {:ok, row} -> broadcast(state, {:message, row})
-          {:error, _} -> broadcast(state, {:error, "the cancelled reply could not be saved"})
-        end
-      else
-        state
-      end
-
-    user_turn =
-      if state.last_task,
-        do: [%{"role" => "user", "content" => state.last_task}],
-        else: []
-
-    assistant_turn =
-      if partial != "",
-        do: [%{"role" => "assistant", "content" => partial <> "\n\n(cancelled)"}],
-        else: []
-
-    %{
-      state
-      | history: state.history ++ user_turn ++ assistant_turn ++ state.notes_in_flight,
-        notes_in_flight: []
-    }
-    |> finish_turn()
-  end
-
-  # Persist the history and clear the running execution; broadcast the end.
-  defp finish_turn(state) do
-    # Bounded at the point of persistence, not only on the way into the
-    # model: without this the row, the runner heap and every future JSON
-    # decode of the history grew without limit.
-    history = Aqua.ConversationCompactor.compact(state.history)
-
-    Conversations.update(state.system_ctx, state.id, %{
-      history: history,
-      execution_id: nil
-    })
-
-    %{
-      state
-      | history: history,
-        running: false,
-        execution_id: nil,
-        starting: nil,
-        cancel_requested: false,
-        streaming_text: "",
-        tool_activity: [],
-        turn_ctx: nil,
-        # Cleared here, not only where a note happens to be merged. A note
-        # that landed between this turn's `conversation_complete` (which
-        # merges and clears) and its `complete` stayed in the list while
-        # already being part of `history`, so every later turn's merge
-        # appended it again — the same "[System: …]" line accreting once per
-        # turn for the rest of the conversation.
-        notes_in_flight: [],
-        # Same reason, for the task itself. `conversation_complete` REPLACES
-        # history with the model's own list, which already contains this
-        # turn's user message; a later `fail_turn`/`cancel_turn` fold would
-        # then append it a second time and every subsequent turn would read
-        # it twice. The fold is for turns that ended before the model
-        # spoke, so the task is consumed once the turn is over.
-        last_task: nil
-    }
-    |> broadcast({:turn_finished})
-    |> touch()
-  end
-
-  # ---------------------------------------------------------------------------
-  # Approvals
-  # ---------------------------------------------------------------------------
-
-  # `msg` is already marked "running" by the caller's compare-and-set.
-  defp run_approval(state, ctx, msg, scope) do
-    intent = approval_intent(msg)
-    proposal = intent |> proposal_of() |> with_provenance(state)
-
-    state = apply_scope(state, ctx, msg, proposal, scope)
-    state = broadcast(state, {:message_updated, msg})
-
-    case proposal do
-      nil ->
-        # A pure-confirmation card — nothing to execute; the acknowledgement
-        # is the outcome.
-        complete_approval(state, ctx, msg.id, :approved, %{result: %{status: "ok"}})
-
-      %{} when not is_binary(state.profile_id) ->
-        # No pin means the turn's authority is unknown — a runner that
-        # recovered an execution written before the column, or a row the
-        # read could not reach. Refuse: rooting a freshly-selected profile
-        # here is exactly the substitution the pin exists to prevent.
-        complete_approval(state, ctx, msg.id, :error, %{
-          reason: "the turn's profile is unknown — send the message again"
-        })
-
-      %{} ->
-        runner = self()
-        id = msg.id
-        turn = state.turn
-        # The turn's own profile, not a fresh selection: a human decision
-        # unblocks a call, it never chooses the authority the call runs
-        # under.
-        profile_id = state.profile_id
-
-        spawned =
-          start_task(fn ->
-            result =
-              try do
-                turn.run_approved(proposal, ctx, profile_id)
-              rescue
-                e -> {:error, Exception.message(e)}
-              catch
-                # The approved run reaches GenServers and MCP; an exit
-                # uncaught here died silently and the card read "running"
-                # forever.
-                kind, reason ->
-                  Logger.warning(
-                    "[Aqua.ConversationRunner] approval run #{kind}: #{inspect(reason)}"
-                  )
-
-                  {:error, "the engine did not respond"}
-              end
-
-            case result do
-              {:ok, value} ->
-                send(runner, {:approval_result, id, ctx, :approved, %{result: value}})
-
-              {:error, reason} ->
-                send(runner, {:approval_result, id, ctx, :error, %{reason: reason}})
-            end
-          end)
-
-        case spawned do
-          :ok ->
-            state
-
-          :error ->
-            # The card was already marked "running" by the caller's
-            # compare-and-set; without this it stayed there forever.
-            complete_approval(state, ctx, id, :error, %{
-              reason: "The action could not run — the server is busy. Approve again to retry."
-            })
-        end
-    end
-  end
-
-  # `:conversation` and `:always` are both STANDING grants — they answer
-  # for calls nobody has seen yet — so both are refused for
-  # destructive/external actions; only `:once` may approve those. Past the
-  # kind, the action's own standing rule — minted onto the intent from the
-  # same annotation `Aqua.ToolGrants` reads at the write — has the last
-  # word: `false` takes no standing answer at all, `"conversation"` takes
-  # none at agent scope. The card hides these buttons, but the card is a
-  # client; the rule is decided here, on what the intent already carries.
-  defp scope_permitted(msg, scope) when scope in [:conversation, :always] do
-    intent = approval_intent(msg)
-
-    cond do
-      intent["action_kind"] in ["destructive", "external"] ->
-        {:error, {:scope_not_permitted, intent["action_kind"]}}
-
-      intent["standing"] == false ->
-        {:error, {:scope_not_permitted, :never_standing}}
-
-      intent["standing"] == "conversation" and scope == :always ->
-        {:error, {:scope_not_permitted, :conversation_only}}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp scope_permitted(_msg, _scope), do: :ok
-
-  # A note kept from a turn names the turn. The runner is the one party
-  # that knows both the conversation and the execution, so it stamps them
-  # onto the approved call's arguments; the tool reads them as provenance
-  # and nothing else, and a value the model put there is overwritten.
-  @note_writes ~w(keep pin)
-
-  defp with_provenance(%{tool: "notes", action: action, args: args} = proposal, state)
-       when action in @note_writes do
-    args =
-      (args || %{})
-      |> Map.put("conversation", state.id)
-      |> Cyfr.MapUtil.put_present("execution", state.execution_id)
-
-    %{proposal | args: args}
-  end
-
-  defp with_provenance(proposal, _state), do: proposal
-
-  # What an approved card kept lands on the tape as a visible line, in the
-  # runner's voice: the agent proposed, a person clicked, and the room sees
-  # what was kept. `author: "system"` like every other runner line — never
-  # `"aqua"`, which the tape reads as the agent's own speech.
-  defp note_kept(state, :approved, intent, %{result: result}) do
-    case {proposal_of(intent), note_line(result)} do
-      {%{tool: "notes"}, line} when is_binary(line) ->
-        append_and_broadcast(state, %{author: "system", kind: "system", content: line})
-
-      _ ->
-        state
-    end
-  end
-
-  defp note_kept(state, _outcome, _intent, _payload), do: state
-
-  defp note_line(%{} = result) do
-    cond do
-      name = result[:kept] || result["kept"] -> "📝 Kept a note: #{name}"
-      name = result[:pinned] || result["pinned"] -> "📝 Pinned #{name}"
-      name = result[:cleared] || result["cleared"] -> "📝 Cleared #{name}"
-      true -> nil
-    end
-  end
-
-  defp note_line(_result), do: nil
-
-  # A standing approval is a row now, not a `MapSet` that a restart
-  # discards and not an edit to the agent's authored markdown.
-  # `:conversation` reaches this thread, `:always` every thread the agent
-  # runs in — and `Aqua.ToolGrants` refuses the latter for an agent this
-  # estate does not own.
-  defp apply_scope(state, ctx, msg, %{tool: tool, action: action}, scope)
-       when scope in [:conversation, :always] do
-    write_grant(state, ctx, msg, {tool, action}, grant_scope(scope), "allow")
-  end
-
-  defp apply_scope(state, _ctx, _msg, _proposal, _scope), do: state
-
-  # Decline "never": a standing DENY, which the resolver drops from the
-  # policy outright. It used to delete the key from the agent's markdown —
-  # the same file the agents page edits, so a decline in a chat quietly
-  # rewrote the agent's definition for everyone.
-  defp deny_standing(state, ctx, msg) do
-    case proposal_of(approval_intent(msg)) do
-      %{tool: tool, action: action} ->
-        write_grant(state, ctx, msg, {tool, action}, "agent", "deny")
-
-      _ ->
-        state
-    end
-  end
-
-  defp grant_scope(:conversation), do: "conversation"
-  defp grant_scope(:always), do: "agent"
-
-  # One write path for both effects: resolve the agent, record the row,
-  # then re-read the conversation's standing grants so the runner's fast
-  # path and the chat's display come from the store rather than a
-  # separately-maintained set. An agent-scope answer for a borrowed agent
-  # comes back NARROWED to this conversation — recorded, and said out loud
-  # in the thread, never a silent no-op the person mistakes for a standing
-  # answer.
-  defp write_grant(state, ctx, msg, {tool, action}, scope, effect) do
-    case approval_orchestrator(msg) do
-      name when is_binary(name) ->
-        attrs = %{
-          scope: scope,
-          effect: effect,
-          conversation_id: state.id,
-          agent_athanor_id: agent_owner(state),
-          agent_name: name,
-          tool: tool,
-          action: action
-        }
-
-        case Aqua.ToolGrants.put(ctx, attrs) do
-          {:ok, %{narrowed?: true}} ->
-            state
-            |> append_and_broadcast(%{
-              author: "system",
-              kind: "system",
-              content: narrowed_note(effect, name)
-            })
-            |> refresh_grants(ctx, name)
-
-          {:ok, _} ->
-            refresh_grants(state, ctx, name)
-
-          {:error, reason} ->
-            Logger.warning(
-              "[Aqua.ConversationRunner] could not record #{effect} for #{tool}.#{action}: " <>
-                inspect(reason)
-            )
-
-            state
-        end
-
-      _ ->
-        state
-    end
-  end
-
-  defp narrowed_note("allow", name),
-    do:
-      "\"Always\" was recorded for this conversation only — #{name} belongs to " <>
-        "another estate, so a standing answer made here cannot follow it home."
-
-  defp narrowed_note("deny", name),
-    do:
-      "\"Never\" was recorded for this conversation only — #{name} belongs to " <>
-        "another estate, so a standing answer made here cannot follow it home."
-
-  # Which estate owns the agent this turn is running. A personal crew
-  # member belongs to its person's tree even while working in a group, and
-  # a grant recorded against it has to name that tree — otherwise "always
-  # for Tom" would be filed under whichever estate Tom happened to be in.
-  # Valid only once `state.orchestrator` is THIS turn's resolved map (the
-  # write paths, which run after `{:turn_start_result}` installs it) —
-  # turn start and recovery read the owner off their own resolved agent
-  # instead, because here the previous turn's would answer.
-  defp agent_owner(state) do
-    (state.orchestrator && state.orchestrator["owner"]) || state.athanor_id
-  end
-
-  defp refresh_grants(state, ctx, agent_name) do
-    grants =
-      ctx
-      |> Aqua.ToolGrants.for_conversation(state.id, agent_owner(state), agent_name)
-      |> Aqua.ToolGrants.allowed_keys()
-
-    %{state | grants: grants} |> broadcast({:grants, grants})
-  end
-
-  defp complete_approval(state, ctx, message_id, outcome, payload) do
-    case Conversations.get_message(ctx, message_id) do
-      {:ok, msg} ->
-        intent = approval_intent(msg)
-        scope = Conversations.resolution(msg)["scope"]
-
-        {summary, system_text} =
-          AquaTurn.outcome_summary(outcome, payload, intent["title"] || "")
-
-        status = if outcome == :approved, do: "approved", else: "error"
-
-        case Conversations.resolve_approval(ctx, message_id, "running", status, %{
-               resolution: %{
-                 "summary" => summary,
-                 # Sanitize before inspect: an arbitrary tool failure term
-                 # lands on a row every member reads.
-                 "reason" =>
-                   payload[:reason] && inspect(Sanctum.Sanitizer.sanitize(payload[:reason])),
-                 "scope" => scope
-               }
-             }) do
-          {:ok, updated} ->
-            approval_telemetry(state, ctx, updated, outcome, scope, payload[:reason])
-            notify_resolved(state, updated)
-
-            state
-            |> note_kept(outcome, intent, payload)
-            |> append_history(system_text)
-            |> broadcast({:message_updated, updated})
-            |> touch()
-
-          {:error, _} ->
-            state
-        end
-
-      {:error, _} ->
-        state
-    end
-  end
-
-  # A synthetic turn the agent should see next time. While a turn runs the
-  # formula will hand back its own snapshot of the history at the end, so
-  # the note is also kept aside and merged into that snapshot.
-  defp append_history(state, system_text) do
-    note = %{"role" => "user", "content" => system_text}
-    history = state.history ++ [note]
-    Conversations.update(state.system_ctx, state.id, %{history: history})
-
-    notes = if state.running, do: state.notes_in_flight ++ [note], else: state.notes_in_flight
-    %{state | history: history, notes_in_flight: notes}
-  end
-
-  # The tray: a card someone else was looking at is settled.
-  defp notify_resolved(state, msg) do
-    Sanctum.Notify.broadcast(state.athanor_id, :approval_resolved, %{
-      conversation_id: state.id,
-      message_id: msg.id,
-      status: msg.status,
-      resolved_by: msg.resolved_by
-    })
-  end
-
-  defp approval_telemetry(state, ctx, msg, outcome, scope, reason) do
-    proposal = proposal_of(approval_intent(msg)) || %{tool: nil, action: nil}
-    intent = approval_intent(msg)
-
-    :telemetry.execute([:cyfr, :aqua, :approval], %{count: 1}, %{
-      id: msg.id,
-      decision: outcome,
-      scope: scope_atom(scope),
-      tool: proposal[:tool],
-      action: proposal[:action],
-      kind: intent["action_kind"],
-      conversation_id: state.id,
-      user_id: ctx.user_id,
-      athanor_id: ctx.athanor_id,
-      orchestrator: approval_orchestrator(msg),
-      reason: reason
-    })
-  rescue
-    # An approval decision's telemetry is compliance-relevant — dropping
-    # it must leave a trace, even though it must not fail the decision.
-    e ->
-      Logger.warning(
-        "[Aqua.ConversationRunner] approval telemetry dropped: " <> Exception.message(e)
-      )
-
-      :ok
-  end
-
-  defp scope_atom(scope) when scope in [:once, :conversation, :always, :never], do: scope
-  defp scope_atom("conversation"), do: :conversation
-  defp scope_atom("always"), do: :always
-  defp scope_atom("never"), do: :never
-  defp scope_atom(_), do: :once
-
-  # The intent as stored on the row (string keys after the JSON round trip).
-  defp approval_intent(msg), do: Conversations.payload(msg)["intent"] || %{}
-  defp approval_orchestrator(msg), do: Conversations.payload(msg)["orchestrator"]
-
-  defp proposal_of(%{"proposal" => %{"tool" => tool, "action" => action} = p})
-       when is_binary(tool) and is_binary(action),
-       do: %{tool: tool, action: action, args: p["args"] || %{}}
-
-  defp proposal_of(_), do: nil
-
-  defp atomize_intent(intent), do: %{proposal: proposal_of(intent)}
-
-  # ---------------------------------------------------------------------------
-  # Recovery
-  # ---------------------------------------------------------------------------
-
-  # A turn that was running when the server stopped. If the engine is not
-  # up yet, wait for it; if the execution is still running, follow it again
-  # (its buffered events replay through the same handlers); if it finished
-  # meanwhile, close the turn off with what the buffer still holds.
-  # `orchestrator_ref` is `{name, owner}` off the conversation row — the
-  # owner is what keeps a restart from resolving a personal agent's name
-  # out of the estate's tree.
-  defp recover(state, execution_id, {orchestrator_name, orchestrator_owner} = ref, attempts) do
-    ctx = state.system_ctx
-    turn = state.turn
-
-    cond do
-      state.running ->
-        state
-
-      not turn.engine_available?() and attempts > 0 ->
-        Process.send_after(
-          self(),
-          {:recover, execution_id, ref, attempts - 1},
-          @recover_retry_ms
-        )
-
-        state
-
-      not turn.engine_available?() ->
-        interrupted(state, execution_id, "no execution engine")
-
-      true ->
-        # Subscribe before reading the buffer: an event landing between the
-        # two reads would otherwise be lost, and the sequence gate drops
-        # any the buffer and the live feed both deliver.
-        turn.subscribe(execution_id, ctx)
-        events = turn.events_since(execution_id, state.athanor_id)
-        finished? = Enum.any?(events, &(&1.type in ["complete", "error"]))
-
-        # The turn's policy is the orchestrator's; the row remembers which,
-        # so a recovered completion checks its intents against the right one
-        # instead of an empty allowlist that would drop them all.
-        orchestrator =
-          state.orchestrator ||
-            (orchestrator_name &&
-               AquaTurn.orchestrator(ctx, orchestrator_name, orchestrator_owner))
-
-        # Standing grants are rows, so a recovered turn reads them back
-        # rather than resuming with an empty set — the whole point of
-        # moving them out of process memory. Keyed by the RESOLVED agent's
-        # owner (a borrowed agent's rows live in its own estate), and
-        # composed into the policy exactly as `start_turn/2` composes it:
-        # a recovered completion must not treat a denied pair as callable
-        # again just because the runner restarted.
-        {grants, tool_policy} =
-          case orchestrator do
-            %{"name" => name} = resolved when is_binary(name) ->
-              rows =
-                Aqua.ToolGrants.for_conversation(
-                  ctx,
-                  state.id,
-                  resolved["owner"] || state.athanor_id,
-                  name
-                )
-
-              {Aqua.ToolGrants.allowed_keys(rows),
-               Aqua.ToolGrants.resolve(resolved["tool_policy"] || %{}, rows)}
-
-            _ ->
-              {state.grants, %{}}
-          end
-
-        state = %{
-          state
-          | running: true,
-            execution_id: execution_id,
-            last_event_seq: -1,
-            turn_ctx: ctx,
-            orchestrator: orchestrator,
-            grants: grants,
-            tool_policy: tool_policy,
-            # The pin is on the execution row precisely so a turn that
-            # outlived its runner can still answer "under which consent?".
-            # An approval decided after a restart roots the same profile
-            # the turn did, not whatever a fresh selection would pick.
-            profile_id: state.profile_id || pinned_profile(ctx, execution_id)
-        }
-
-        state = replay(state, events)
-
-        cond do
-          finished? ->
-            # The replayed complete/error already unsubscribed.
-            state
-
-          turn.running?(ctx, execution_id) ->
-            broadcast(state, {:turn_started, execution_id})
-
-          true ->
-            turn.unsubscribe(execution_id, ctx)
-            interrupted(state, execution_id, "the server restarted")
-        end
-    end
-  end
-
-  # The profile a running execution rooted under, off its own row. Nil when
-  # the read fails or the row predates the column: `run_approval/4` then
-  # refuses the approval rather than rooting a re-selected authority, which
-  # is the whole point of pinning.
-  defp pinned_profile(ctx, execution_id) do
-    case Cyfr.Execution.get(ctx, execution_id) do
-      {:ok, %{profile_id: id}} when is_binary(id) -> id
-      _ -> nil
-    end
-  end
-
-  defp replay(state, events),
-    do: Enum.reduce(events, state, &apply_sequenced_event(&2, &1))
-
-  defp interrupted(state, execution_id, why) do
-    state =
-      if state.streaming_text != "" do
-        append_and_broadcast(state, %{
-          author: "aqua",
-          kind: "text",
-          content: state.streaming_text <> "\n\n_(interrupted)_",
-          execution_id: execution_id
-        })
-      else
-        state
-      end
-
-    state
-    |> append_and_broadcast(%{
-      author: "system",
-      kind: "system",
-      content: "This turn was interrupted — #{why}. Send the message again to continue."
-    })
-    |> Map.put(:running, true)
-    |> finish_turn()
-  end
-
-  defp append_and_broadcast(state, attrs) do
-    case Conversations.append(state.system_ctx, state.id, attrs) do
-      {:ok, row} -> broadcast(state, {:message, row})
-      {:error, _} -> state
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Helpers
-  # ---------------------------------------------------------------------------
-
-  defp public_state(state) do
-    %{
-      running: state.running,
-      athanor_id: state.athanor_id,
-      execution_id: state.execution_id,
-      streaming_text: state.streaming_text,
-      tool_activity: state.tool_activity,
-      usage: state.usage,
-      grants: state.grants,
-      orchestrator: state.orchestrator,
-      turn_user: turn_user(state),
-      queued: length(state.queue),
-      # Derived, not stored: whether this estate needs a mention.
-      solo_human: solo_human?(state)
-    }
-  end
-
-  defp turn_user(%{turn_ctx: %Context{user_id: user_id}}), do: user_id
-  defp turn_user(_), do: nil
-
-  defp broadcast(state, event) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      topic(state.id, state.athanor_id),
-      {:conversation, state.id, event}
-    )
-
-    state
-  end
-
-  defp touch(state) do
-    if state.idle_ref, do: Process.cancel_timer(state.idle_ref)
-    %{state | idle_ref: Process.send_after(self(), :idle, @idle_ms)}
-  end
-
-  # The runner's own hands inside the athanor: reads and the rows the agent
-  # writes (`author: "aqua"` / `"system"`) when no member's context applies.
-  defp system_ctx(athanor_id) do
-    Sanctum.internal_context(user_id: "_conversations", athanor_id: athanor_id, scope: :athanor)
-  end
 end

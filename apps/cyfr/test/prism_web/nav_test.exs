@@ -65,10 +65,22 @@ defmodule PrismWeb.NavTest do
     assert aqua.scope == :athanor
     assert Nav.href(aqua, "home") == "/a/home/aqua"
 
-    assert Nav.global?("/chat")
-    assert Nav.global?("/chat?a=home&c=conv_1")
-    refute Nav.global?("/aqua")
-    # The engine reads the same list from the glue namespace.
-    assert Nav.global_paths() == Cyfr.GlobalPages.paths()
+    # A bare path decides the same way — the palette and an intent hand
+    # one in — and a query string does not change the answer.
+    assert Nav.href("/chat", "home") == "/chat"
+    assert Nav.href("/chat?a=home&c=conv_1", "home") == "/chat?a=home&c=conv_1"
+    assert Nav.href("/aqua", "home") == "/a/home/aqua"
+    assert Nav.href("/executions?id=exec_1", "home") == "/a/home/executions?id=exec_1"
+  end
+
+  test "an item's scope is derived from Cyfr.GlobalPages, the one list the engine reads too" do
+    for item <- Nav.items("dev") do
+      expected = if Cyfr.GlobalPages.global?(item.path), do: :global, else: :athanor
+      assert item.scope == expected, "#{item.key} is #{item.scope}, the list says #{expected}"
+    end
+
+    # Every global page is a nav item — the list names pages, not stray paths.
+    paths = Enum.map(Nav.items("dev"), & &1.path)
+    for path <- Cyfr.GlobalPages.paths(), do: assert(path in paths)
   end
 end

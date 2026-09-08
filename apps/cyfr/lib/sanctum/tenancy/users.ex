@@ -154,6 +154,40 @@ defmodule Sanctum.Tenancy.Users do
 
   def personal_athanor?(_), do: true
 
+  @doc """
+  The person's own athanor — `{:ok, id}` once one has been minted, else
+  `:none`.
+
+  `:none` covers a person the server does not know, one whose furnace has
+  not been minted yet, and an unanswerable read alike: every caller asks
+  so it may open something (a cross-estate note read, a copy out of a
+  private thread), and "could not tell" must read as "not yours" there.
+  """
+  @spec personal_athanor_id(String.t() | nil) :: {:ok, String.t()} | :none
+  def personal_athanor_id(user_id) when is_binary(user_id) do
+    case get(user_id) do
+      {:ok, %{personal_athanor_id: id}} when is_binary(id) and id != "" -> {:ok, id}
+      _ -> :none
+    end
+  end
+
+  def personal_athanor_id(_), do: :none
+
+  @doc """
+  Whether `athanor_id` is this person's own athanor.
+
+  The one predicate behind "is the caller at home": a running chain reads
+  notes across estates only from there, and an assistant's line is the
+  person's to say aloud only when it was said there. Spelled once so the
+  domains that ask it cannot drift from the row that answers.
+  """
+  @spec own_athanor?(String.t() | nil, String.t() | nil) :: boolean()
+  def own_athanor?(user_id, athanor_id) when is_binary(user_id) and is_binary(athanor_id) do
+    personal_athanor_id(user_id) == {:ok, athanor_id}
+  end
+
+  def own_athanor?(_user_id, _athanor_id), do: false
+
   @doc "The identity whose cyfr.run namespace this is, if any."
   @spec get_by_namespace(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
   def get_by_namespace(namespace) when is_binary(namespace) and namespace != "" do

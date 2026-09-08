@@ -366,6 +366,27 @@ defmodule Opus.ChainTest do
       assert row.activation_digest
       assert row.activation_graph
       assert row.parent_execution_id == nil
+      # The row is the SSOT for which consent the turn ran under, for a
+      # routed root exactly as for `run_root/5`.
+      assert row.profile_id == "prof-chain"
+    end
+
+    test "a public route stamps the public profile on the row", %{ctx: ctx} do
+      execution_id = "exec_route_pub_row_#{System.unique_integer([:positive])}"
+
+      _result =
+        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+          route: :public,
+          execution_id: execution_id
+        )
+
+      assert %{profile_id: "prof-route-pub"} = Arca.Repo.get(Arca.Execution, execution_id)
+    end
+
+    test "a call without a route raises rather than falling through to a guess", %{ctx: ctx} do
+      assert_raise KeyError, ~r/:route/, fn ->
+        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{}, [])
+      end
     end
   end
 

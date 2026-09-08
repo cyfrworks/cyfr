@@ -66,6 +66,9 @@ defmodule PrismWeb.ChatLiveTest do
   # the pane's process to apply a broadcast.
   defp pane(view), do: Enum.find(live_children(view), &String.starts_with?(&1.id, "pane-"))
 
+  # The thread the estate's one pane is turned to, from its own state.
+  defp pane_thread(view), do: :sys.get_state(pane(view).pid).socket.assigns.conversation
+
   defp emit(runner, kind, data) do
     %{execution_id: eid} = :sys.get_state(runner)
 
@@ -90,19 +93,92 @@ defmodule PrismWeb.ChatLiveTest do
     {view, html} = mount_chat(conn)
     assert html =~ "Rail #{alice.namespace}"
     assert has_element?(view, "#estate-" <> group.id)
-    # The tape is Home's.
+    # The tape is Home's, and the open estate says so to a screen reader.
     assert render(pane(view)) =~ "in Home"
+    assert has_element?(view, "#estate-#{home().id} button[aria-current=true]", "Home")
 
     view
-    |> element("#estate-#{group.id} summary")
+    |> element("#estate-#{group.id} button[phx-click=open_estate]")
     |> render_click()
 
     assert_patch(view, chat_path(group))
     # The tape moved to the group…
     assert render(pane(view)) =~ "in Rail #{alice.namespace}"
-    # …and the bench did not: the switcher still says Home.
+    assert has_element?(view, "#estate-#{group.id} button[aria-current=true]")
+    refute has_element?(view, "#estate-#{home().id} button[aria-current=true]")
+
+    # …and the bar followed what the page has in view: the switcher names
+    # the group, and the tray now reads Home as "elsewhere" — a page that
+    # moves by patch cannot leave the bar on the estate it mounted with.
     bar = find_live_child(view, "topbar")
-    assert render(bar) =~ ~s(<span class="truncate text-xs font-medium">Home</span>)
+    assert has_element?(bar, "#viewing-name", "Rail #{alice.namespace}")
+    Sanctum.Notify.broadcast(group.id, :execution_failed, %{})
+    Sanctum.Notify.broadcast(home().id, :execution_failed, %{})
+    :sys.get_state(bar.pid)
+    render_click(bar, "toggle_popover", %{"name" => "athanors"})
+    assert render(bar) =~ ~r/bg-blue-500\/80[^>]*>\s*1\s*</
+
+    # The session's default athanor did not move: the root still lands in Home.
+    assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/")
+    assert to == chat_path(nil)
+  end
+
+  defp home, do: Sanctum.Tenancy.Athanors.home!()
+
+  test "a thread named in the address opens under its estate, whatever the session's default is",
+       %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Cold #{alice.namespace}")
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: alice.user_id,
+        athanor_id: group.id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, conv} = Conversations.create(ctx)
+    {:ok, _} = Conversations.append(ctx, conv.id, %{author: alice.user_id, content: "cold open"})
+
+    # A cold mount — no rail click, the session defaulting to Home.
+    {view, html} = mount_chat(conn, group, conv.id)
+    assert html =~ "cold open"
+    assert :sys.get_state(view.pid).socket.assigns.athanor.id == group.id
+    assert has_element?(view, "#conv-#{conv.id} button[aria-current=true]")
+  end
+
+  test "the rail lists only the estates you hold a seat in", %{conn: conn} do
+    alice = test_user()
+    bob = test_user()
+    carol = test_user()
+    conn = log_in_user(conn, alice)
+    {:ok, theirs} = Sanctum.Tenancy.Athanors.create_group(bob.user_id, "Theirs #{bob.namespace}")
+    # Carol shares nothing with Alice: her only seat is in Bob's group.
+    _carol_conn = log_in_user(build_conn(), carol, athanor_id: theirs.id)
+
+    {view, html} = mount_chat(conn)
+    %{estates: estates, people: people} = :sys.get_state(view.pid).socket.assigns
+
+    refute theirs.id in Enum.map(estates, & &1.athanor.id)
+    refute html =~ "Theirs #{bob.namespace}"
+    refute carol.user_id in Enum.map(people, & &1.user_id)
+  end
+
+  test "a thread the estate does not hold is refused by name, and the estate's own opens",
+       %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+
+    # A patch pushed from the first handle_params is applied inside the
+    # join, so it is the outcome that is checked: the flash, and Home's own.
+    {view, html} = mount_chat(conn, nil, "conv_not_here")
+    assert html =~ "That conversation isn"
+    assert render(pane(view)) =~ "in Home"
+    assert :sys.get_state(view.pid).socket.assigns.athanor.id == home().id
   end
 
   test "a DM opens from the rail, in place", %{conn: conn} do
@@ -126,9 +202,13 @@ defmodule PrismWeb.ChatLiveTest do
 
     assert_patch(view, chat_path(pair))
     assert render(pane(view)) =~ "DM"
-    # The session's default athanor did not move.
+    # The bar names the DM by the other person, never the pair's own "A & B"…
     bar = find_live_child(view, "topbar")
-    assert render(bar) =~ "Pals #{alice.namespace}"
+    assert has_element?(bar, "#viewing-name", bob.email)
+    refute has_element?(bar, "#viewing-name", alice.email)
+    # …and the session's default athanor did not move.
+    assert {:error, {:live_redirect, %{to: to}}} = live(alice_conn, "/")
+    assert to == chat_path(group)
   end
 
   test "the chat opens on the estate its address names, and a sent message becomes everyone's thread",
@@ -141,7 +221,8 @@ defmodule PrismWeb.ChatLiveTest do
     bob_conn = log_in_user(build_conn(), bob)
 
     {alice_view, html} = mount_chat(alice_conn)
-    assert html =~ "A.Q.U.A."
+    assert html =~ "AQUA"
+    refute html =~ "A.Q.U.A."
     # The chat says which furnace it is, and whether that furnace can think:
     # a test athanor has an orchestrator but no key behind its model.
     assert html =~ "in Home"
@@ -184,7 +265,8 @@ defmodule PrismWeb.ChatLiveTest do
     refute rendered =~ "is asking"
     assert render(pane(alice_view)) =~ "Hi Alice, hi Bob"
 
-    assert [%{author: a}, %{author: "aqua"}] = Conversations.messages(start_ctx, conv.id)
+    agent = Arca.Schemas.Message.agent_author()
+    assert [%{author: a}, %{author: ^agent}] = Conversations.messages(start_ctx, conv.id)
     assert a == alice.user_id
   end
 
@@ -264,10 +346,15 @@ defmodule PrismWeb.ChatLiveTest do
       Conversations.append(ctx, conv.id, %{author: alice.user_id, content: "secret plan"})
 
     # Home, asked for the group's conversation id, opens nothing of it: the
-    # id is not one of Home's threads. (The rail may name the group's topic
-    # — Alice is its member — but the tape stays Home's.)
-    {view, _html} = mount_chat(alice_conn, nil, conv.id)
+    # id is not one of Home's threads, so the page says so and opens Home's
+    # own. (The rail may name the group's topic — Alice is its member — but
+    # the tape stays Home's.)
+    {view, html} = mount_chat(alice_conn, nil, conv.id)
+    assert html =~ "That conversation isn"
     refute render(pane(view)) =~ "secret plan"
+    %{athanor: athanor, conversation: open} = :sys.get_state(view.pid).socket.assigns
+    assert athanor.id == home().id
+    refute open && open.id == conv.id
 
     # A person outside the group cannot address it at all: the chat leaves
     # for the default estate.
@@ -467,5 +554,146 @@ defmodule PrismWeb.ChatLiveTest do
     assert has_element?(view, ".consent-sheet")
     send(view.pid, {:consent_sheet_closed, "catalyst:local.http:1.1.0"})
     refute has_element?(view, ".consent-sheet")
+  end
+
+  test "on a phone the drawer opens from the pane's Chats button and closes from its own ×",
+       %{conn: conn} do
+    conn = log_in_user(conn, test_user())
+    {view, html} = mount_chat(conn)
+    hidden = ~r/id="conversation-list"[^>]*max-md:hidden/
+
+    # At rest: a column at a desk, off-screen on a phone.
+    assert html =~ hidden
+
+    # The button is the pane's; the drawer is the page's, and one owner
+    # holds it — the pane asks, the page opens.
+    pane(view) |> element("button[phx-click=toggle_rail]") |> render_click()
+    refute render(view) =~ hidden
+
+    view |> element("#conversation-list button[phx-click=close_rail]") |> render_click()
+    assert render(view) =~ hidden
+  end
+
+  test "a seat gained while the page is open joins the rail, and a fold the person closed stays closed",
+       %{conn: conn} do
+    alice = test_user()
+    bob = test_user()
+    conn = log_in_user(conn, alice)
+
+    # Home holds a thread Alice does not follow, so its "Other topics" has
+    # something to fold.
+    home_ctx =
+      Sanctum.Context.build(
+        user_id: alice.user_id,
+        athanor_id: home().id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, conv} = Conversations.create(home_ctx)
+    :ok = Arca.TopicSubscriptionStorage.unfollow(home_ctx, conv.id, alice.user_id)
+
+    {view, _html} = mount_chat(conn)
+    fold = "#estate-#{home().id} button[phx-click=toggle_other]"
+    assert has_element?(view, fold <> "[aria-expanded=true]")
+    view |> element(fold) |> render_click()
+    assert has_element?(view, fold <> "[aria-expanded=false]")
+
+    # Bob makes a group and adds Alice from his side: her rail hears of it
+    # without a reload…
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(bob.user_id, "Late #{bob.namespace}")
+    refute has_element?(view, "#estate-" <> group.id)
+    {:ok, :added} = Sanctum.Tenancy.Members.add(group, [user_id: alice.user_id], bob.user_id)
+    assert has_element?(view, "#estate-" <> group.id)
+    assert render(view) =~ "Late #{bob.namespace}"
+
+    # …and the rebuild did not undo what she folded.
+    assert has_element?(view, fold <> "[aria-expanded=false]")
+
+    # Bob takes the seat back: the row goes, and the page — on Home — stays.
+    :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: alice.user_id)
+    refute has_element?(view, "#estate-" <> group.id)
+    assert has_element?(view, "#estate-#{home().id} button[aria-current=true]", "Home")
+  end
+
+  test "following names only the open estate's own threads: a foreign id writes no row",
+       %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Else #{alice.namespace}")
+
+    group_ctx =
+      Sanctum.Context.build(
+        user_id: alice.user_id,
+        athanor_id: group.id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, foreign} = Conversations.create(group_ctx)
+    :ok = Arca.TopicSubscriptionStorage.unfollow(group_ctx, foreign.id, alice.user_id)
+
+    # Home is open; the id belongs to the group.
+    {view, _html} = mount_chat(conn)
+    assert render_click(view, "follow_topic", %{"id" => foreign.id}) =~ "That conversation isn"
+    refute Arca.TopicSubscriptionStorage.follows?(home().id, foreign.id, alice.user_id)
+    refute Arca.TopicSubscriptionStorage.follows?(group.id, foreign.id, alice.user_id)
+
+    assert render_click(view, "unfollow_topic", %{"id" => foreign.id}) =~
+             "That conversation isn"
+  end
+
+  test "+ New opens a blank pane, whatever the estate already holds", %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    home = home()
+    ctx = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: home.id}
+    {:ok, existing} = Conversations.create(ctx)
+
+    {view, _html} = mount_chat(conn, home, existing.id)
+    assert pane(view).id == "pane-#{home.id}"
+    assert pane_thread(view).id == existing.id
+    pid = pane(view).pid
+
+    render_click(view, "new_conversation")
+    assert_patch(view, chat_path(home, PrismWeb.ChatLive.blank()))
+    settled_render(view)
+    # The pane is the estate's one: turned to the blank slate, not remounted.
+    assert pane(view).pid == pid
+    assert pane_thread(view) == nil
+
+    # And the address is a place: a refresh of it is the same blank pane,
+    # not the newest thread.
+    {view2, _} = mount_chat(conn, home, PrismWeb.ChatLive.blank())
+    assert pane(view2).id == "pane-#{home.id}"
+    assert pane_thread(view2) == nil
+  end
+
+  test "a thread switch turns the estate's pane rather than mounting another", %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    home = home()
+    ctx = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: home.id}
+    {:ok, first} = Conversations.create(ctx)
+    {:ok, second} = Conversations.create(ctx)
+
+    {view, _html} = mount_chat(conn, home, first.id)
+    pid = pane(view).pid
+    assert pane_thread(view).id == first.id
+
+    render_click(view, "open_conversation", %{
+      "route" => Sanctum.Tenancy.Athanors.route_slug(home),
+      "id" => second.id
+    })
+
+    assert_patch(view, chat_path(home, second.id))
+    settled_render(view)
+
+    assert pane(view).pid == pid
+    assert pane_thread(view).id == second.id
   end
 end

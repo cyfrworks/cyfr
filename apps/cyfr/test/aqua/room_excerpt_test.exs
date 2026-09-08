@@ -8,6 +8,7 @@ defmodule Aqua.RoomExcerptTest do
 
   alias Aqua.RoomExcerpt
   alias Arca.ConversationStorage, as: Conversations
+  alias Arca.Schemas.Message
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -54,9 +55,14 @@ defmodule Aqua.RoomExcerptTest do
        %{me: me, them: them, in_room: in_room, room: room, conv: conv} do
     say(in_room, conv, %{content: "plan?"})
     say(them, conv, %{content: "ship friday"})
-    say(in_room, conv, %{author: "aqua", content: "Friday it is."})
+    say(in_room, conv, %{author: Message.agent_author(), content: "Friday it is."})
     say(in_room, conv, %{kind: "approval", content: "", payload: %{"intent" => %{"x" => 1}}})
-    say(in_room, conv, %{author: "system", kind: "system", content: "📝 kept a note"})
+
+    say(in_room, conv, %{
+      author: Message.system_author(),
+      kind: "system",
+      content: "📝 kept a note"
+    })
 
     assert {:ok, text} = RoomExcerpt.read(me, room(room, conv, %{title: "Plans", estate: "Team"}))
 

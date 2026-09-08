@@ -14,11 +14,13 @@ defmodule Sanctum.Provisioning do
 
   A person's own athanor is minted here on their first admitted sign-in
   (`after_sign_in/1`, once their cyfr.run namespace is known — the athanor's
-  slug is the namespace); a group's when a member creates it
-  (`ensure_group_athanor/3`); Home at boot (`Cyfr.Bootstrap`). Provisioning
-  is idempotent — `provisioned_at` marks completion and every step tolerates
-  being repeated — and loud: a failure leaves the row unprovisioned with the
-  reason in its settings, and the next sign-in tries again.
+  slug is the namespace); Home at boot (`Cyfr.Bootstrap`). A group is
+  minted as a bare row (`Sanctum.Tenancy.Athanors.create_group/3`) and
+  filled the first time something reads its bundle (`ensure_provisioned/1`).
+  Provisioning is idempotent — `provisioned_at` marks completion and every
+  step tolerates being repeated — and loud: a failure leaves the row
+  unprovisioned with the reason in its settings, and the next sign-in
+  tries again.
 
   The registry pull runs as the person whose sign-in caused it, so their
   pull credential is used; a server-side mint (Home at boot) pulls
@@ -100,21 +102,11 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  @doc """
-  Mint a group athanor for the caller. The row only — filling it happens at
-  first need (`ensure_provisioned/1`).
-
-  It used to provision before answering, which meant creating a group
-  waited on a registry round trip that can fail. That was survivable while
-  a group was a deliberate act; it is not once clicking a person's name
-  mints a pair estate, because a chat that takes a network call to open is
-  a chat that sometimes does not.
-  """
-  @spec ensure_group_athanor(Context.t(), String.t(), keyword()) ::
-          {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
-  def ensure_group_athanor(%Context{user_id: user_id}, name, opts \\ []) do
-    Athanors.create_group(user_id, name, opts)
-  end
+  # How long a second first-need caller waits for the first to finish
+  # filling the estate. Bounded well under the lock's default: the caller
+  # is a LiveView mount or a tool call, and an unprovisioned athanor
+  # renders empty and tries again next time — it must never hang.
+  @first_need_wait_ms 3_000
 
   @doc """
   Fill the context's athanor if nothing has yet — the first-need hook.
@@ -127,8 +119,11 @@ defmodule Sanctum.Provisioning do
 
   Single-flighted per athanor. `provision/2` is idempotent but unlocked, so
   two people opening a fresh estate at once would each pull the dependency
-  closure; the lock makes the second wait and find the work done. A cheap
-  `provisioned_at` read short-circuits the common case before taking it.
+  closure; the lock makes the second wait briefly and find the work done.
+  A cheap `provisioned_at` read short-circuits the common case before
+  taking it. Always `:ok`: a first need must never take a page down, so a
+  wait that runs out renders the athanor unprovisioned this time and the
+  next consumer tries again.
   """
   @spec ensure_provisioned(Context.t()) :: :ok
   def ensure_provisioned(%Context{athanor_id: athanor_id} = ctx)
@@ -138,15 +133,7 @@ defmodule Sanctum.Provisioning do
         :ok
 
       {:ok, athanor} ->
-        Arca.Overlay.UnitLock.with_lock({athanor_id, :provisioning}, fn ->
-          # Re-read inside the lock: the caller that just held it may have
-          # been provisioning this very athanor.
-          case Athanors.get(athanor_id) do
-            {:ok, %{provisioned_at: %DateTime{}}} -> :ok
-            {:ok, fresh} -> provision_quietly(fresh, ctx)
-            _ -> provision_quietly(athanor, ctx)
-          end
-        end)
+        provision_single_flight(athanor, ctx)
 
       _ ->
         :ok
@@ -154,6 +141,37 @@ defmodule Sanctum.Provisioning do
   end
 
   def ensure_provisioned(_ctx), do: :ok
+
+  defp provision_single_flight(%{id: athanor_id} = athanor, ctx) do
+    locked = fn ->
+      # Re-read inside the lock: the caller that just held it may have
+      # been provisioning this very athanor.
+      case Athanors.get(athanor_id) do
+        {:ok, %{provisioned_at: %DateTime{}}} -> :ok
+        {:ok, fresh} -> provision_quietly(fresh, ctx)
+        _ -> provision_quietly(athanor, ctx)
+      end
+    end
+
+    case Arca.Overlay.UnitLock.with_lock({athanor_id, :provisioning}, locked, @first_need_wait_ms) do
+      :ok ->
+        :ok
+
+      {:error, :unit_locked} ->
+        Logger.warning(
+          "[Provisioning] #{athanor_id} is still being provisioned by another caller; " <>
+            "rendering it unprovisioned this time"
+        )
+
+        :ok
+
+      other ->
+        # The lock's body rescues its own failures; anything else that
+        # reaches here is logged and still costs the page nothing.
+        Logger.warning("[Provisioning] #{athanor_id} first-need answered #{inspect(other)}")
+        :ok
+    end
+  end
 
   # First need must never take a page down: an unprovisioned athanor
   # renders empty and the next consumer tries again, which is the same

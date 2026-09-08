@@ -49,8 +49,14 @@ defmodule Arca.ConsentStorage do
     athanor_id = Map.fetch!(profile_attrs, :athanor_id)
     row = revision_row(consent_attrs, athanor_id)
 
+    # Through the schema's changeset, never a raw struct: the label rule
+    # and the kind/status vocabulary are the changeset's, and this is the
+    # one production mint of a profile.
     Ecto.Multi.new()
-    |> Ecto.Multi.insert(:profile, struct(Arca.Schemas.Profile, profile_attrs))
+    |> Ecto.Multi.insert(
+      :profile,
+      Arca.Schemas.Profile.changeset(%Arca.Schemas.Profile{}, profile_attrs)
+    )
     |> revision_multi(row, vault_refs, nil, athanor_id, opts)
     |> run_multi(:consent)
   end

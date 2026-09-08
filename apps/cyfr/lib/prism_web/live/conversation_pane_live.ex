@@ -18,9 +18,14 @@ defmodule PrismWeb.ConversationPaneLive do
   focus; every runner call, every row read, every attachment write runs
   under the pane's context, and two panes on two estates cannot bleed.
 
-  The host names the conversation at mount; a different conversation is a
-  different pane (`id: "pane-<conversation id>"`). What the host must know
-  travels back as `{:pane, id, message}` to `socket.parent_pid`.
+  One pane per estate (`id: "pane-<athanor id>"`): the host names the
+  thread at mount and turns the pane to another with `{:switch_thread,
+  id | nil}` — the estate's reads (the row, the roster, the members, the
+  models) are made once, the thread's (its rows, the runner's live state,
+  the subscription) on every turn. What the host must know travels back
+  as `{:pane, id, message}` to `socket.parent_pid`, first of all
+  `{:ready, pid, conversation_id}` once the pane is live, which is how
+  the host learns where to send the switch.
 
   In the person's own panel (`PrismWeb.AquaPanelLive`, session `"panel"`)
   the pane sits beside a room: it hears what the host page shows
@@ -36,6 +41,13 @@ defmodule PrismWeb.ConversationPaneLive do
   alias Arca.ConversationStorage, as: Conversations
   alias Aqua.ConversationRunner
   alias Phoenix.LiveView.JS
+  alias Sanctum.Tenancy.Users
+
+  @agent_author Arca.Schemas.Message.agent_author()
+  @system_author Arca.Schemas.Message.system_author()
+
+  # How many pages the assistant may leave pointed at in the panel at once.
+  @max_links 5
 
   @impl true
   def mount(_params, session, socket) do
@@ -45,8 +57,14 @@ defmodule PrismWeb.ConversationPaneLive do
 
     case PrismWeb.AuthHelpers.authenticate_session(token, session["athanor_id"]) do
       {:ok, ctx} ->
-        {:ok, socket |> assign(:context, ctx) |> beside(session) |> open(ctx, session),
-         layout: false}
+        socket = socket |> assign(:context, ctx) |> beside(session) |> open(ctx, session)
+
+        if connected?(socket) do
+          conversation = socket.assigns.conversation
+          tell_host(socket, {:ready, self(), conversation && conversation.id})
+        end
+
+        {:ok, socket, layout: false}
 
       {:error, _} ->
         {:ok, assign(socket, :context, nil), layout: false}
@@ -66,10 +84,10 @@ defmodule PrismWeb.ConversationPaneLive do
     |> assign(:read_room?, true)
   end
 
-  # Everything the pane knows, from its own context: the athanor row, the
-  # roster, the members, the models, and the conversation's rows and live
-  # state. A `nil` conversation is the blank slate — the first message
-  # creates the row.
+  # Everything the pane knows of its estate, from its own context: the
+  # athanor row, the roster (the estate's soul and roles), the members and
+  # the models — read once, however many threads the pane is turned to.
+  # The thread named at mount is opened last, the way any thread is.
   defp open(socket, ctx, session) do
     dom = socket.assigns.dom
 
@@ -79,18 +97,6 @@ defmodule PrismWeb.ConversationPaneLive do
         _ -> nil
       end
 
-    conversation =
-      case session["conversation_id"] do
-        id when is_binary(id) and id != "" ->
-          case Conversations.get(ctx, id) do
-            {:ok, conv} -> conv
-            _ -> nil
-          end
-
-        _ ->
-          nil
-      end
-
     roster = if connected?(socket), do: Aqua.Turn.roster(ctx), else: []
 
     socket =
@@ -98,21 +104,18 @@ defmodule PrismWeb.ConversationPaneLive do
       |> assign(:athanor, athanor)
       |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
       |> assign(:ui_mode, Prism.Labels.mode(session["ui_mode"], ctx))
-      |> assign(:conversation, conversation)
+      |> assign(:conversation, nil)
       |> assign(:members, member_labels(ctx))
-      |> assign(:orchestrators, roster)
+      |> assign(:roster, roster)
       |> assign(:model_ready, model_ready(ctx, roster))
       |> assign(:solo_human, Sanctum.Tenancy.Members.solo?(ctx.athanor_id))
-      |> assign(:orchestrator, nil)
+      |> assign(:own?, Users.own_athanor?(ctx.user_id, ctx.athanor_id))
+      |> assign(:links, [])
       |> assign(:model_override, nil)
       |> assign(:models_by_provider, %{})
       |> assign(:models_loaded, false)
-      |> assign(:input, "")
       |> stream_configure(:messages, dom_id: &(dom <> "-m-" <> &1.id))
       |> stream(:messages, [])
-      |> assign(:pending_approvals, [])
-      |> assign(:any_messages, false)
-      |> reset_live()
       |> allow_upload(:attachments,
         accept: :any,
         max_entries: Aqua.Attachments.limits().max_files,
@@ -121,6 +124,39 @@ defmodule PrismWeb.ConversationPaneLive do
         max_file_size: Aqua.Attachments.limits().max_file_bytes,
         auto_upload: true
       )
+
+    socket = if connected?(socket), do: load_models(socket), else: socket
+
+    open_thread(socket, conversation_of(ctx, session["conversation_id"]))
+  end
+
+  # The thread a host names, under the pane's own context — so a thread
+  # another estate holds is nothing here — or the blank slate, where the
+  # first message creates the row.
+  defp conversation_of(ctx, id) when is_binary(id) and id != "" do
+    case Conversations.get(ctx, id) do
+      {:ok, conv} -> conv
+      _ -> nil
+    end
+  end
+
+  defp conversation_of(_ctx, _none), do: nil
+
+  # Everything the pane knows of one thread — its rows, the runner's live
+  # state and the subscription that keeps them current — replacing what it
+  # knew of the last: the tape, the cards, the draft and the turn's state
+  # are the thread's, never carried over.
+  defp open_thread(socket, conversation) do
+    socket =
+      socket
+      |> unsubscribe_thread()
+      |> assign(:conversation, conversation)
+      |> assign(:assistant, nil)
+      |> assign(:input, "")
+      |> stream(:messages, [], reset: true)
+      |> assign(:pending_approvals, [])
+      |> assign(:any_messages, false)
+      |> reset_live()
 
     case {connected?(socket), conversation} do
       {true, %{} = conv} ->
@@ -131,7 +167,7 @@ defmodule PrismWeb.ConversationPaneLive do
         # long-lived conversation into every viewer's socket. The runner's
         # own turn assembly stays windowed separately.
         rows =
-          case Conversations.latest_messages(ctx, conv.id, 500) do
+          case Conversations.latest_messages(socket.assigns.context, conv.id, 500) do
             rows when is_list(rows) -> rows
             {:error, _} -> []
           end
@@ -141,15 +177,18 @@ defmodule PrismWeb.ConversationPaneLive do
         |> assign(:pending_approvals, pending_in(rows))
         |> assign(:any_messages, rows != [])
         |> apply_live(live)
-        |> load_models()
-
-      {true, nil} ->
-        load_models(socket)
 
       _ ->
         socket
     end
   end
+
+  defp unsubscribe_thread(%{assigns: %{conversation: %{id: id, athanor_id: athanor_id}}} = socket) do
+    ConversationRunner.unsubscribe(id, athanor_id)
+    socket
+  end
+
+  defp unsubscribe_thread(socket), do: socket
 
   defp reset_live(socket) do
     socket
@@ -160,6 +199,7 @@ defmodule PrismWeb.ConversationPaneLive do
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
     |> assign(:grants, MapSet.new())
+    |> assign(:announcement, "")
     |> assign(:consent_sheet_ref, nil)
     |> assign(:restart_prompt, nil)
     |> assign(:cancel_requested, false)
@@ -175,20 +215,19 @@ defmodule PrismWeb.ConversationPaneLive do
     |> assign(:token_usage, live.usage)
     |> assign(:grants, live.grants)
     |> assign(:solo_human, Map.get(live, :solo_human, socket.assigns.solo_human))
-    |> assign(:orchestrator, live.orchestrator || socket.assigns.orchestrator)
+    |> assign(:assistant, live.orchestrator || socket.assigns.assistant)
   end
 
   defp apply_live(socket, _), do: socket
 
+  # Every member by name, once at mount, the one way a person is named on
+  # the console (`PrismWeb.People.label/2`) — the viewer as "You".
   defp member_labels(ctx) do
     case Sanctum.Tenancy.Members.list_by_athanor(ctx.athanor_id) do
       {:ok, rows} ->
-        Enum.reduce(rows, %{}, fn m, acc ->
-          case m.user_id do
-            nil -> acc
-            id -> Map.put(acc, id, m.display_name || m.email || id)
-          end
-        end)
+        for m <- rows, is_binary(m.user_id), into: %{} do
+          {m.user_id, PrismWeb.People.label(m, ctx)}
+        end
 
       {:error, _} ->
         %{}
@@ -260,10 +299,18 @@ defmodule PrismWeb.ConversationPaneLive do
     {:noreply, assign(socket, :model_override, if(model == "", do: nil, else: model))}
   end
 
-  def handle_event("revoke_grant", %{"tool" => tool, "action" => action}, socket) do
+  def handle_event(
+        "revoke_grant",
+        %{"agent" => agent, "tool" => tool, "action" => action},
+        socket
+      ) do
     case socket.assigns.conversation do
-      nil -> {:noreply, socket}
-      conv -> {:noreply, run(socket, &ConversationRunner.revoke_grant(&1, conv.id, tool, action))}
+      nil ->
+        {:noreply, socket}
+
+      conv ->
+        {:noreply,
+         run(socket, &ConversationRunner.revoke_grant(&1, conv.id, agent, tool, action))}
     end
   end
 
@@ -288,6 +335,12 @@ defmodule PrismWeb.ConversationPaneLive do
   # Saying a line aloud is the host's picker; the pane names the line.
   def handle_event("aloud_open", %{"id" => msg_id}, socket) do
     tell_host(socket, {:aloud_open, msg_id})
+    {:noreply, socket}
+  end
+
+  # The list beside the thread is the host's drawer on a phone.
+  def handle_event("toggle_rail", _params, socket) do
+    tell_host(socket, :toggle_rail)
     {:noreply, socket}
   end
 
@@ -326,6 +379,11 @@ defmodule PrismWeb.ConversationPaneLive do
       _ ->
         {:noreply, socket}
     end
+  end
+
+  # A page the assistant pointed at from the panel, taken or left.
+  def handle_event("dismiss_link", %{"to" => to}, socket) do
+    {:noreply, assign(socket, :links, List.delete(socket.assigns.links, to))}
   end
 
   def handle_event("validate_upload", _params, socket), do: {:noreply, socket}
@@ -390,6 +448,17 @@ defmodule PrismWeb.ConversationPaneLive do
     {:noreply, assign(socket, :models_loaded, true)}
   end
 
+  # The host turned this pane to another thread — or to the blank slate.
+  # The thread it is already on is left alone: a host that patched its
+  # address to the thread this pane just created must not reset the tape.
+  def handle_info({:switch_thread, id}, socket) do
+    current = socket.assigns.conversation && socket.assigns.conversation.id
+
+    if id == current,
+      do: {:noreply, socket},
+      else: {:noreply, open_thread(socket, conversation_of(socket.assigns.context, id))}
+  end
+
   # The host page opened another thread: the room this pane reads changed.
   def handle_info({:room_in_view, room}, socket), do: {:noreply, assign(socket, :room, room)}
 
@@ -410,12 +479,8 @@ defmodule PrismWeb.ConversationPaneLive do
           {:error, :already_resolved} ->
             socket
 
-          {:error, {:scope_not_permitted, kind}} ->
-            put_flash(
-              socket,
-              :error,
-              "A #{kind} action always asks — 'always' cannot be granted for it."
-            )
+          {:error, {:scope_not_permitted, _} = refusal} ->
+            put_flash(socket, :error, Aqua.ToolGrants.refusal_message(refusal))
 
           {:error, reason} ->
             Logger.warning("[ConversationPane] approve failed: #{inspect(reason)}")
@@ -457,6 +522,8 @@ defmodule PrismWeb.ConversationPaneLive do
   # A turn may start for a message queued earlier — the sender's draft of
   # a newer message stays where it is (`send_message/3` clears on send).
   defp handle_conversation_event(socket, {:turn_starting, user_id}) do
+    socket = assign(socket, :announcement, "AQUA is thinking.")
+
     socket
     |> assign(:running, true)
     |> assign(:turn_user, user_id)
@@ -471,6 +538,8 @@ defmodule PrismWeb.ConversationPaneLive do
     do: assign(socket, :running, true)
 
   defp handle_conversation_event(socket, {:turn_finished}) do
+    socket = assign(socket, :announcement, "AQUA replied.")
+
     socket
     |> assign(:running, false)
     |> assign(:turn_user, nil)
@@ -546,9 +615,10 @@ defmodule PrismWeb.ConversationPaneLive do
          {room, socket} = room_context(socket, conv),
          {:ok, refs} <- Aqua.Attachments.store(ctx, conv.id, message_id, files),
          :ok <- send_or_discard(ctx, conv, message, message_id, refs, room, socket) do
-      # A conversation this send created is the host's to select — the
-      # URL is the host's, the pane only asked for a row.
+      # A conversation this send created is this pane's now, and the host's
+      # to address — the URL is the host's, the pane only asked for a row.
       if created?, do: tell_host(socket, {:opened, conv})
+      socket = if created?, do: open_thread(socket, conv), else: socket
       {:noreply, assign(socket, :input, "")}
     else
       {:error, :busy} ->
@@ -559,13 +629,13 @@ defmodule PrismWeb.ConversationPaneLive do
         {:noreply, put_flash(socket, :error, "You are no longer a member here.")}
 
       {:error, :archived} ->
-        {:noreply, put_flash(socket, :error, "This athanor has been archived.")}
+        {:noreply, put_flash(socket, :error, "This estate has been archived.")}
 
       {:error, :no_orchestrator} ->
         {:noreply, put_flash(socket, :error, "This estate has no assistant — see AQUA.")}
 
       {:error, :storage_full} ->
-        {:noreply, put_flash(socket, :error, "This athanor's storage is full.")}
+        {:noreply, put_flash(socket, :error, "This estate's storage is full.")}
 
       {:error, :storage_unverifiable} ->
         {:noreply,
@@ -574,6 +644,14 @@ defmodule PrismWeb.ConversationPaneLive do
       {:error, :message_too_long} ->
         {:noreply,
          put_flash(socket, :error, "That message is too long — up to 32 KiB of text per line.")}
+
+      {:error, :context_too_long} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "What the room shows is too long to read into one message — untick reading it and send again."
+         )}
 
       {:error, :too_many_attachments} ->
         {:noreply, put_flash(socket, :error, "Too many attachments for one message.")}
@@ -603,8 +681,8 @@ defmodule PrismWeb.ConversationPaneLive do
         attachments: refs,
         model: socket.assigns.model_override,
         # The whole entry, not the name: the runner must know whose tree
-        # the picked agent lives in.
-        orchestrator: socket.assigns.orchestrator
+        # the picked soul or role lives in.
+        orchestrator: socket.assigns.assistant
       ] ++ room
 
     case ConversationRunner.send_message(ctx, conv.id, message, opts) do
@@ -693,51 +771,49 @@ defmodule PrismWeb.ConversationPaneLive do
     Enum.filter(messages, &(&1.kind == "approval" and &1.status == "pending"))
   end
 
-  defp tell_host(socket, message), do: send(socket.parent_pid, {:pane, socket.id, message})
+  # A pane mounted on its own (a test's isolated mount) has no host to tell.
+  defp tell_host(%{parent_pid: pid} = socket, message) when is_pid(pid),
+    do: send(pid, {:pane, socket.id, message})
 
-  # Whether this athanor's AQUA can answer at all: an agent, and a model
+  defp tell_host(_socket, _message), do: :ok
+
+  # Whether this athanor's AQUA can answer at all: a soul, and a model
   # with a key behind it. A fresh furnace has neither, and the chat is
   # where someone finds that out — not the drawer.
-  defp model_ready(ctx, orchestrators) do
-    case Aqua.AgentConfig.model_status(ctx, orchestrators) do
+  defp model_ready(ctx, roster) do
+    case Aqua.AgentConfig.model_status(ctx, roster) do
       empty when map_size(empty) == 0 -> :no_model
       statuses -> if Enum.any?(statuses, &match?({_, {:ready, _}}, &1)), do: :ready, else: :no_key
     end
   end
 
-  # What to call the athanor in its own chat: a person's is theirs, a group
-  # goes by name.
-  defp athanor_label(%{kind: "person"}), do: "your AQUA"
-  defp athanor_label(%{name: name}), do: name
-  defp athanor_label(_), do: "this athanor"
-
-  # What a message would address, and what to call it: the agent the
-  # thread is on, or the roster's first — the estate's soul — before any
-  # turn has run. An agent from another tree would be addressed QUALIFIED;
-  # the roster no longer offers one, but the incantation the placeholder
-  # teaches stays the one that would resolve.
-  defp orchestrator_handle(%{"name" => name} = o, athanor)
-       when is_binary(name) and name != "" do
-    focus = athanor && athanor.id
-
-    handle =
-      if is_binary(o["owner"]) and o["owner"] != focus and is_binary(o["owner_slug"]),
-        do: "#{o["owner_slug"]}.#{name}",
-        else: name
-
-    {handle, o["title"] || name}
+  # What to call the athanor in its own chat: the person's own is "your
+  # AQUA" — theirs, not any person-kind athanor an operator opened — a DM
+  # or a group goes by its label.
+  defp athanor_label(%{} = athanor, ctx) do
+    if PrismWeb.Estates.own?(athanor, ctx),
+      do: "your AQUA",
+      else: PrismWeb.Estates.label(athanor, ctx)
   end
+
+  defp athanor_label(_none, _ctx), do: "this estate"
+
+  # What a message would address, and what to call it: the soul or role
+  # the thread is on, or the roster's first — the estate's soul — before
+  # any turn has run.
+  defp assistant_handle(%{"name" => name} = o, _athanor) when is_binary(name) and name != "",
+    do: {name, o["title"] || name}
 
   # No roster entry at all: teach nothing rather than a handle that does
   # not resolve — the "no assistant" note in the header is the honest
   # sentence.
-  defp orchestrator_handle(_, _athanor), do: nil
+  defp assistant_handle(_, _athanor), do: nil
 
-  defp current_orchestrator(nil, roster), do: List.first(roster)
-  defp current_orchestrator(%{} = orchestrator, _roster), do: orchestrator
+  defp current_assistant(nil, roster), do: List.first(roster)
+  defp current_assistant(%{} = assistant, _roster), do: assistant
 
-  defp agent_label(%{} = o), do: o["title"] || o["name"]
-  defp agent_label(_), do: "your agent"
+  defp assistant_label(%{} = o), do: o["title"] || o["name"]
+  defp assistant_label(_), do: "your AQUA"
 
   # Whether a mention is needed is derived from how many people are here,
   # so the placeholder asks the same question the runner does rather than
@@ -765,34 +841,79 @@ defmodule PrismWeb.ConversationPaneLive do
   end
 
   # Navigate intents are page paths (`/activities`); the athanor this pane
-  # is on is added here, so the agent never addresses another athanor's
+  # is on is added here, so the assistant never addresses another athanor's
   # pages. A global page (the chat) is its own address.
+  #
+  # The push names this pane: the client hands a pushed event to every
+  # pane on the page, and each acts only on `%{pane: <its section id>}`.
+  # In the panel a navigate never moves the page the person is reading —
+  # a chat path onto a thread of You turns the panel to that thread, and
+  # any other page is offered as a link line, theirs to take or leave.
   defp push_intents(socket, []), do: socket
 
   defp push_intents(socket, intents) do
     mode = socket.assigns[:ui_mode]
-
-    intents = Enum.filter(intents, &mode_permits?(&1, mode))
-
     route = socket.assigns.athanor_route
 
     intents =
-      Enum.map(intents, fn
-        %{kind: "navigate", to: to} = intent ->
-          if Cyfr.GlobalPages.global?(to),
-            do: intent,
-            else: %{intent | to: PrismWeb.Focus.path(route, to)}
-
-        intent ->
-          intent
+      intents
+      |> Enum.filter(&mode_permits?(&1, mode))
+      |> Enum.map(fn
+        # One decision for "global page or under the estate": `Nav.href/2`.
+        %{kind: "navigate", to: to} = intent -> %{intent | to: PrismWeb.Nav.href(to, route)}
+        intent -> intent
       end)
 
-    push_event(socket, "aqua:intents", %{intents: intents})
+    {socket, intents} =
+      if socket.assigns.panel?, do: keep_navigates(socket, intents), else: {socket, intents}
+
+    if intents == [],
+      do: socket,
+      else: push_event(socket, "aqua:intents", %{pane: pane_id(socket), intents: intents})
   end
+
+  defp keep_navigates(socket, intents) do
+    {navigates, rest} = Enum.split_with(intents, &(&1.kind == "navigate"))
+
+    socket =
+      Enum.reduce(navigates, socket, fn %{to: to}, socket ->
+        case own_thread(to, socket.assigns.athanor_route) do
+          {:ok, conversation_id} ->
+            tell_host(socket, {:open_thread, conversation_id})
+            socket
+
+          :elsewhere ->
+            assign(socket, :links, Enum.take(Enum.uniq([to | socket.assigns.links]), @max_links))
+        end
+      end)
+
+    {socket, rest}
+  end
+
+  # A chat path onto one thread of the athanor this pane is on —
+  # `/chat?a=<route>&c=<id>`, as `PrismWeb.ChatLive.chat_path/2` spells it.
+  # The estate alone, with no `c`, names no thread the panel could turn
+  # to: that is a page, and offered as a link like any other.
+  defp own_thread(to, route) do
+    uri = URI.parse(to)
+    params = URI.decode_query(uri.query || "")
+
+    case params["c"] do
+      id when is_binary(id) and id != "" ->
+        if uri.path == PrismWeb.ChatLive.chat_path(nil) and params["a"] == route,
+          do: {:ok, id},
+          else: :elsewhere
+
+      _ ->
+        :elsewhere
+    end
+  end
+
+  defp pane_id(socket), do: socket.assigns.dom <> "-pane"
 
   # A navigate to a page the current mode's nav does not show is dropped —
   # `PrismWeb.Nav` is the one owner of what a mode surfaces, and an
-  # agent's intent gets no wider view than the person's own chrome.
+  # the assistant's intent gets no wider view than the person's own chrome.
   defp mode_permits?(%{kind: "navigate", to: to}, mode) do
     base = to |> String.split("?", parts: 2) |> hd()
 
@@ -810,28 +931,41 @@ defmodule PrismWeb.ConversationPaneLive do
   @impl true
   def render(%{context: nil} = assigns) do
     ~H"""
-    <section id={@dom <> "-pane"} class="flex flex-1 min-w-0 flex-col"></section>
+    <section
+      id={@dom <> "-pane"}
+      class="flex flex-1 min-w-0 flex-col items-center justify-center p-4 text-sm text-gray-500"
+    >
+      <p>Signed out — reload to continue.</p>
+    </section>
     """
   end
 
   def render(assigns) do
     ~H"""
-    <section id={@dom <> "-pane"} phx-hook="Conversation" class="flex flex-1 min-w-0 flex-col">
+    <%!-- Focusable so a click anywhere in the pane makes it the one ⌘. halts. --%>
+    <section
+      id={@dom <> "-pane"}
+      phx-hook="Conversation"
+      tabindex="-1"
+      class="flex flex-1 min-w-0 flex-col focus:outline-none"
+    >
       <header class="flex items-center justify-between gap-2 border-b border-gray-800 px-4 py-2">
         <div class="flex items-center gap-2 min-w-0">
+          <%!-- The phone drawer is the host's: this only asks for it. --%>
           <button
             :if={not @panel?}
             type="button"
-            phx-click={JS.toggle_class("max-md:hidden", to: "#conversation-list")}
+            phx-click="toggle_rail"
             class="md:hidden rounded px-1.5 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200"
             title="Chats"
           >
             Chats
           </button>
-          <span class="text-sm font-medium text-gray-200 shrink-0">A.Q.U.A.</span>
-          <!-- Which furnace this chat is: a key bound here is bound here. -->
-          <span class="text-xs text-gray-500 shrink-0 truncate max-w-[10rem]">
-            in {athanor_label(@athanor)}
+          <span class="text-sm font-medium text-gray-200 shrink-0">AQUA</span>
+          <%!-- Which furnace this chat is: a key bound here is bound here.
+                The panel's header already says You. --%>
+          <span :if={not @panel?} class="text-xs text-gray-500 shrink-0 truncate max-w-[10rem]">
+            in {athanor_label(@athanor, @context)}
           </span>
           <span
             :if={@athanor && @athanor.roster == "frozen"}
@@ -841,13 +975,13 @@ defmodule PrismWeb.ConversationPaneLive do
             DM
           </span>
           <span
-            :if={@orchestrators != []}
+            :if={@roster != []}
             class="text-xs text-gray-400 max-w-[14rem] truncate"
-            title="The agent this thread is on"
+            title="The soul or role this thread is on"
           >
-            {agent_label(current_orchestrator(@orchestrator, @orchestrators))}
+            {assistant_label(current_assistant(@assistant, @roster))}
           </span>
-          <span :if={@orchestrators == []} class="text-xs text-amber-400">
+          <span :if={@roster == []} class="text-xs text-amber-400">
             No assistant here
           </span>
           <span
@@ -870,9 +1004,10 @@ defmodule PrismWeb.ConversationPaneLive do
             name="model"
             class="bg-transparent text-[10px] text-gray-600 hover:text-gray-300 border-none focus:ring-0 focus:outline-none cursor-pointer max-w-[14rem] truncate font-mono"
             title="Override model"
+            aria-label="Override model"
           >
             <option value="" selected={is_nil(@model_override)}>
-              {(@orchestrator && @orchestrator["model"]) || "default"}
+              {(@assistant && @assistant["model"]) || "default"}
             </option>
             <%= for {provider, models} <- @models_by_provider, models != [] do %>
               <optgroup label={provider}>
@@ -888,16 +1023,9 @@ defmodule PrismWeb.ConversationPaneLive do
           >
             {label_for(@members, @turn_user, @context)} is asking…
           </span>
-          <button
-            :if={@running}
-            type="button"
-            phx-click="stop"
-            class="rounded px-2 py-1 text-[11px] uppercase tracking-wider bg-red-900/60 text-red-200 hover:bg-red-800/80"
-            title="Halt the agent (⌘.)"
-          >
-            ◼ {if @cancel_requested, do: "Cancelling…", else: "Stop"}
-          </button>
+          <%!-- The workbench is the page's; from the panel it would leave the room. --%>
           <.link
+            :if={not @panel?}
             navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
             class="rounded px-2 py-1 text-[11px] uppercase tracking-wider text-gray-500 hover:bg-gray-800 hover:text-gray-300"
           >
@@ -924,6 +1052,11 @@ defmodule PrismWeb.ConversationPaneLive do
         {Phoenix.Flash.get(@flash, kind)}
       </div>
 
+      <%!-- What a screen reader hears: a coherent update — AQUA started, AQUA
+            replied — never the stream, which would announce every word. --%>
+      <div id={@dom <> "-announcer"} class="sr-only" aria-live="polite" aria-atomic="true">
+        {@announcement}
+      </div>
       <div
         id={@dom <> "-thread"}
         phx-hook="ScrollBottom"
@@ -934,16 +1067,19 @@ defmodule PrismWeb.ConversationPaneLive do
           class="flex flex-col items-center justify-center h-full gap-2 text-sm text-gray-500"
         >
           <%= if @model_ready in [:no_model, :no_key] do %>
-            <span>{athanor_label(@athanor)} has no model yet.</span>
+            <span>{athanor_label(@athanor, @context)} has no model yet.</span>
+            <%!-- From the panel a navigate would leave the room being read. --%>
             <.link
+              :if={not @panel?}
               navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
               class="text-blue-400 hover:text-blue-300"
             >
               Connect a model
             </.link>
+            <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
           <% else %>
             <span>
-              Ask {agent_label(current_orchestrator(@orchestrator, @orchestrators))} anything.
+              Ask {assistant_label(current_assistant(@assistant, @roster))} anything.
             </span>
           <% end %>
         </div>
@@ -954,13 +1090,15 @@ defmodule PrismWeb.ConversationPaneLive do
         >
           <span>auto-approving this chat:</span>
           <span
-            :for={{tool, action} <- @grants}
+            :for={{agent, tool, action} <- Enum.sort(@grants)}
             class="inline-flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-gray-300 font-mono"
+            title={"answered for #{agent}"}
           >
-            {tool}.{action}
+            <span class="text-gray-500">{agent}:</span>{tool}.{action}
             <button
               type="button"
               phx-click="revoke_grant"
+              phx-value-agent={agent}
               phx-value-tool={tool}
               phx-value-action={action}
               class="text-gray-500 hover:text-gray-200"
@@ -1010,7 +1148,7 @@ defmodule PrismWeb.ConversationPaneLive do
                   result_summary={resolution["summary"]}
                   scope={scope_atom(resolution["scope"])}
                   resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
-                  agent_label={@orchestrator && @orchestrator["title"]}
+                  agent_label={@assistant && @assistant["title"]}
                   shared_with={@athanor.kind == "group" && @athanor.name}
                 />
               <% else %>
@@ -1026,13 +1164,13 @@ defmodule PrismWeb.ConversationPaneLive do
                   <%!-- A line you may say aloud: yours, or your assistant's
                         in your own athanor. The host owns the picker — in
                         the panel the target is the room beside it. --%>
-                  <div :if={sayable?(msg, @context, @athanor)} class="flex justify-end">
+                  <div :if={sayable?(msg, @context, @own?)} class="flex justify-end">
                     <button
                       :if={not @panel?}
                       type="button"
                       phx-click="aloud_open"
                       phx-value-id={msg.id}
-                      class="opacity-0 group-hover/aloud:opacity-100 text-[10px] text-gray-500 hover:text-gray-300 px-1"
+                      class={aloud_button_class()}
                     >
                       Say aloud…
                     </button>
@@ -1041,7 +1179,7 @@ defmodule PrismWeb.ConversationPaneLive do
                       type="button"
                       phx-click="paste"
                       phx-value-id={msg.id}
-                      class="opacity-0 group-hover/aloud:opacity-100 text-[10px] text-gray-500 hover:text-gray-300 px-1"
+                      class={aloud_button_class()}
                     >
                       Paste to {PrismWeb.RoomFeed.label(@room)}
                     </button>
@@ -1113,6 +1251,26 @@ defmodule PrismWeb.ConversationPaneLive do
         </button>
       </div>
 
+      <div
+        :if={@links != []}
+        id={@dom <> "-links"}
+        class="flex flex-col gap-1 border-t border-gray-800 px-3 py-1.5 text-[11px] text-gray-500"
+      >
+        <div :for={to <- @links} class="flex min-w-0 items-center gap-2">
+          <span class="shrink-0">AQUA points to</span>
+          <.link navigate={to} class="truncate text-blue-400 hover:text-blue-300">{to}</.link>
+          <button
+            type="button"
+            phx-click="dismiss_link"
+            phx-value-to={to}
+            aria-label="Dismiss"
+            class="ml-auto shrink-0 px-1 text-gray-500 hover:text-gray-200"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
       <label
         :if={@panel? and reads_room?(@room, @conversation)}
         id={@dom <> "-read-room"}
@@ -1170,16 +1328,15 @@ defmodule PrismWeb.ConversationPaneLive do
             placeholder={
               composer_placeholder(
                 @solo_human,
-                orchestrator_handle(current_orchestrator(@orchestrator, @orchestrators), @athanor)
+                assistant_handle(current_assistant(@assistant, @roster), @athanor)
               )
             }
             class="flex-1 resize-none rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none max-h-40 overflow-y-auto"
-            autofocus
-            disabled={@orchestrators == []}
+            disabled={@roster == []}
           >{@input}</textarea>
           <button
             type="submit"
-            disabled={@orchestrators == [] or (@input == "" and @uploads.attachments.entries == [])}
+            disabled={@roster == [] or (@input == "" and @uploads.attachments.entries == [])}
             class="self-end rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Send
@@ -1188,7 +1345,7 @@ defmodule PrismWeb.ConversationPaneLive do
             :if={@running}
             type="button"
             phx-click="stop"
-            title="Stop the running agent"
+            title="Stop the running turn"
             class="self-end rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
           >
             {if @cancel_requested, do: "Cancelling…", else: "Stop"}
@@ -1265,18 +1422,26 @@ defmodule PrismWeb.ConversationPaneLive do
 
   # A line the person may say aloud: their own, or their assistant's in
   # their own athanor — the same rule `Aqua.Aloud` enforces, shown here so
-  # the button is offered only where the verb would accept it.
-  defp sayable?(%{kind: "text", author: author}, %{user_id: author}, _athanor), do: true
-  defp sayable?(%{kind: "text", author: "aqua"}, _ctx, %{kind: "person"}), do: true
-  defp sayable?(_msg, _ctx, _athanor), do: false
+  # the button is offered only where the verb would accept it. Whether this
+  # is the person's own athanor is read once at mount (`:own?`).
+  defp sayable?(%{kind: "text", author: author}, %{user_id: author}, _own?), do: true
+  defp sayable?(%{kind: "text", author: @agent_author}, _ctx, own?), do: own?
+  defp sayable?(_msg, _ctx, _own?), do: false
+
+  # Hidden until the line is hovered or reached by keyboard; there is no
+  # hover to reach it by on a narrow screen, so there it always shows.
+  defp aloud_button_class do
+    "opacity-0 group-hover/aloud:opacity-100 group-focus-within/aloud:opacity-100 " <>
+      "focus-visible:opacity-100 max-md:opacity-100 text-[10px] text-gray-500 hover:text-gray-300 px-1"
+  end
 
   defp role_of(%{kind: "error"}), do: "error"
   defp role_of(%{kind: "system"}), do: "system"
-  defp role_of(%{author: "aqua"}), do: "assistant"
+  defp role_of(%{author: @agent_author}), do: "assistant"
   defp role_of(_), do: "user"
 
-  defp author_label(%{author: "aqua"}, _members, _ctx), do: nil
-  defp author_label(%{author: "system"}, _members, _ctx), do: nil
+  defp author_label(%{author: @agent_author}, _members, _ctx), do: nil
+  defp author_label(%{author: @system_author}, _members, _ctx), do: nil
   defp author_label(%{kind: kind}, _members, _ctx) when kind in ["error", "system"], do: nil
 
   # A copy of an assistant's line is the person's, and says so.
@@ -1288,18 +1453,15 @@ defmodule PrismWeb.ConversationPaneLive do
       else: label
   end
 
-  defp label_for(_members, user_id, %{user_id: user_id}), do: "You"
-
-  defp label_for(members, user_id, _ctx) when is_binary(user_id) do
-    Map.get(members, user_id) || PrismWeb.DisplayHelpers.principal_label(user_id)
+  # A member from the labels read at mount; anyone since gone (or an
+  # operator reading a room they hold no seat in) by the same rule.
+  defp label_for(members, user_id, ctx) when is_binary(user_id) do
+    Map.get(members, user_id) || PrismWeb.People.label(user_id, ctx)
   end
 
   defp label_for(_members, _user_id, _ctx), do: nil
 
-  defp scope_atom("conversation"), do: :conversation
-  defp scope_atom("always"), do: :always
-  defp scope_atom("never"), do: :never
-  defp scope_atom(_), do: :once
+  defp scope_atom(scope), do: Aqua.ApprovalScope.parse(scope)
 
   defp role_align("user"), do: "items-end"
   defp role_align(_), do: "items-start"

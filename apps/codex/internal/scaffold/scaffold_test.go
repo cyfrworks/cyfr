@@ -4,16 +4,18 @@
 package scaffold
 
 import (
-	"os"
+	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // TestIsManaged pins down which scaffold entries `cyfr update` is allowed to
-// overwrite. Managed = the docs, the WIT definitions, and the bundled aqua
-// prompts (under the v3 aqua/agents/ layout). Everything the user owns —
-// config, the compose/proxy files, custom prompts, .env — must NOT be
-// managed, or `cyfr update` would clobber them.
+// overwrite. Managed = the guides, the WIT definitions, and the AQUA files
+// the scaffold ships — the soul, the shipped roles and every file inside a
+// shipped scroll. Everything a member owns — config, the compose/proxy
+// files, their own roles and scrolls, .env — must NOT be managed, or
+// `cyfr update` would clobber them.
 func TestIsManaged(t *testing.T) {
 	managed := []string{
 		"component-guide.md",
@@ -21,9 +23,11 @@ func TestIsManaged(t *testing.T) {
 		"integration-guide.md",
 		"wit",
 		"wit/cyfr/oauth/token.wit",
-		"aqua/agents/aqua.md",
-		"aqua/agents/aqua_builder.md",
-		"aqua/agents/aqua_web.md",
+		"aqua/aqua.md",
+		"aqua/roles/aqua_builder.md",
+		"aqua/roles/aqua_web.md",
+		"aqua/skills/capability-acquisition/SKILL.md",
+		"aqua/skills/capability-acquisition/references/notes.md",
 	}
 	for _, p := range managed {
 		if !isManaged(p) {
@@ -39,8 +43,13 @@ func TestIsManaged(t *testing.T) {
 		"Dockerfile.node",
 		"apps/mcp-bridge/server.mjs",
 		"cyfr.yaml",
-		"aqua/aqua.md",               // the retired v2 flat spelling ships in no tarball
-		"aqua/agents/aqua_custom.md", // user-created prompt
+		"aqua",
+		"aqua/README.md",                     // only the soul, roles and scrolls ship
+		"aqua/roles/custom.md",               // a member's own role
+		"aqua/roles/aqua_builder.txt",        // a role is a .md file
+		"aqua/roles/nested/aqua_builder.md",  // roles are flat
+		"aqua/skills/custom/SKILL.md",        // a member's own scroll
+		"aqua/skills/capability-acquisition", // a scroll is the files inside its directory
 	}
 	for _, p := range notManaged {
 		if isManaged(p) {
@@ -49,40 +58,94 @@ func TestIsManaged(t *testing.T) {
 	}
 }
 
-// TestBundledPromptsMatchSeed binds bundledAquaPrompts to the seed tree the
-// scaffold tarball is built from (scripts/scaffold-tarball.sh packs
-// `-C seed aqua`). The v2→v3 layout move was invisible to TestIsManaged —
-// both the map and its test spelled the same stale flat paths, so `cyfr
-// update` silently stopped refreshing every shipped prompt.
+// TestBundledPromptsMatchSeed binds the shipped rosters to the seed tree the
+// scaffold tarball is packed from (scripts/scaffold-tarball.sh packs
+// `-C seed aqua`, so seed/aqua/<path> lands in the tarball as aqua/<path>).
+// A role or scroll added to seed without a roster entry would never be
+// refreshed by `cyfr update`; a roster entry the seed no longer ships would
+// match nothing.
 func TestBundledPromptsMatchSeed(t *testing.T) {
-	seedAgents := filepath.Join("..", "..", "..", "..", "seed", "aqua", "agents")
+	seedAqua := filepath.Join("..", "..", "..", "..", "seed", "aqua")
 
-	entries, err := os.ReadDir(seedAgents)
+	soulShipped := false
+	seedRoles := map[string]bool{}
+	seedScrolls := map[string]bool{}
+
+	err := filepath.WalkDir(seedAqua, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(seedAqua, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		tarPath := "aqua/" + rel
+
+		switch {
+		case rel == "aqua.md":
+			soulShipped = true
+			if !isManaged(tarPath) {
+				t.Errorf("the soul %q is not managed — `cyfr update` will never refresh it", tarPath)
+			}
+		case strings.HasPrefix(rel, "roles/"):
+			name, isMarkdown := strings.CutSuffix(strings.TrimPrefix(rel, "roles/"), ".md")
+			if !isMarkdown || strings.Contains(name, "/") {
+				return nil
+			}
+			seedRoles[name] = true
+			if !isManaged(tarPath) {
+				t.Errorf("shipped role %q is not managed — `cyfr update` will never refresh it", tarPath)
+			}
+		case strings.HasPrefix(rel, "skills/"):
+			name, file, _ := strings.Cut(strings.TrimPrefix(rel, "skills/"), "/")
+			if file != "SKILL.md" {
+				return nil
+			}
+			seedScrolls[name] = true
+			if !isManaged(tarPath) {
+				t.Errorf("shipped scroll %q is not managed — `cyfr update` will never refresh it", tarPath)
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("cannot read the shipped seed tree at %s: %v", seedAgents, err)
+		t.Fatalf("cannot walk the shipped seed tree at %s: %v", seedAqua, err)
 	}
 
-	shipped := map[string]bool{}
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
-			continue
-		}
-		shipped["aqua/agents/"+e.Name()] = true
+	if !soulShipped {
+		t.Fatalf("no soul found at %s", filepath.Join(seedAqua, "aqua.md"))
+	}
+	if len(seedRoles) == 0 {
+		t.Fatalf("no shipped roles found under %s", filepath.Join(seedAqua, "roles"))
+	}
+	if len(seedScrolls) == 0 {
+		t.Fatalf("no shipped scrolls found under %s", filepath.Join(seedAqua, "skills"))
 	}
 
-	if len(shipped) == 0 {
-		t.Fatalf("no shipped prompts found under %s", seedAgents)
-	}
-
-	for p := range shipped {
-		if !bundledAquaPrompts[p] {
-			t.Errorf("shipped prompt %q is not in bundledAquaPrompts — `cyfr update` will never refresh it", p)
+	for name := range shippedRoles {
+		if !seedRoles[name] {
+			t.Errorf("shippedRoles names %q which the seed tree does not ship — a stale entry that matches nothing", name)
 		}
 	}
+	for name := range shippedScrolls {
+		if !seedScrolls[name] {
+			t.Errorf("shippedScrolls names %q which the seed tree does not ship — a stale entry that matches nothing", name)
+		}
+	}
 
-	for p := range bundledAquaPrompts {
-		if !shipped[p] {
-			t.Errorf("bundledAquaPrompts names %q which the seed tree does not ship — a stale path that matches nothing", p)
+	// A member's own role or scroll must survive `cyfr update`. Guard the
+	// made-up name so the assertion stays honest if seed ever ships it.
+	const custom = "custom"
+	if seedRoles[custom] || seedScrolls[custom] {
+		t.Fatalf("the seed tree ships a role or scroll named %q; pick another name for the member-owned check", custom)
+	}
+	for _, p := range []string{"aqua/roles/custom.md", "aqua/skills/custom/SKILL.md"} {
+		if isManaged(p) {
+			t.Errorf("expected member-owned %q NOT to be managed (must be preserved on update)", p)
 		}
 	}
 }

@@ -210,9 +210,39 @@ defmodule Arca.Overlay do
   end
 
   defp do_delete_tree(%Context{} = ctx, path) do
-    with :ok <- deletable(ctx, path),
+    with :ok <- tree_deletable(ctx, path),
+         :ok <- deletable(ctx, path),
          :ok <- tenant().delete_tree(ctx, path) do
       clear_origin_after_delete_tree(ctx, path)
+    end
+  end
+
+  # A tree delete ABOVE units — `aqua/`, `aqua/roles`, a component's name
+  # dir — rides no lock: the decorator locks one unit, and covering a tree
+  # would mean locking every unit beneath it in an order two processes
+  # could invert. So it is admitted only while the athanor holds no unit
+  # beneath the path — nothing a lock would cover: an empty name dir the
+  # registry tidies, a stray non-unit file — and refused as
+  # `{:error, :above_unit}` once a unit stands there. A caller clearing a
+  # populated subtree walks its units and drops them one at a time under
+  # each unit's own lock (`Compendium.AquaTemplate.reset/2`); the old
+  # wholesale form could land inside a concurrent commit and leave a unit
+  # reading complete while holding little more than its sentinel. The
+  # listing and the delete are still two steps — a unit landing between
+  # them is the same sub-second window the registry's empty-dir tidy
+  # already accepts. Only the internal-write scope keeps the wholesale
+  # form (its origin-mark sweep beneath a cleared root).
+  defp tree_deletable(%Context{} = ctx, path) do
+    if not internal_writes?() and Arca.Storage.locate(path) == :above_unit do
+      case tenant().list_recursive(ctx, path) do
+        {:ok, leaves} ->
+          if Enum.any?(leaves, &leaf_loc/1), do: {:error, :above_unit}, else: :ok
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      :ok
     end
   end
 
@@ -602,6 +632,12 @@ defmodule Arca.Overlay do
       any write.
     * `origin: :seed` — stamp the origin mark after the sentinel: the
       materializer's option, nobody else's (`:none` default).
+    * `if_absent: true` — create, never replace: the union is asked for
+      the unit INSIDE its lock, and one already there — shipped, or the
+      athanor's own — refuses as `{:error, :exists}` before any write. A
+      probe outside the lock (`exists?`, then commit) is a check-then-act
+      race: two creators of one name could both pass it, and the second
+      would silently replace the first.
 
   A file unit commits as one plain facade put — atomic by construction,
   the file CoW mark untouched — and refuses `sentinel:`/`origin:`. A
@@ -619,13 +655,14 @@ defmodule Arca.Overlay do
     cap = Keyword.fetch!(opts, :cap)
     origin = Keyword.get(opts, :origin, :none)
     override = Keyword.get(opts, :sentinel)
+    if_absent? = Keyword.get(opts, :if_absent, false)
 
     case Arca.Storage.locate(unit) do
       {:file, ^unit} ->
-        commit_file_unit(ctx, unit, source, cap, origin, override)
+        commit_file_unit(ctx, unit, source, cap, origin, override, if_absent?)
 
       {:dir, ^unit, sentinel} ->
-        commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override)
+        commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override, if_absent?)
 
       other ->
         raise ArgumentError,
@@ -633,34 +670,89 @@ defmodule Arca.Overlay do
     end
   end
 
+  @doc """
+  One locked read-modify-write at a path inside a unit. `fun` receives
+  the bytes the union serves at `path` and answers `{:ok, bytes}` to write
+  them — a plain facade put, so copy-on-write and the storage cap apply as
+  for any write — or `{:error, reason}` to write nothing and answer that.
+  The read and the write ride one hold of the unit's lock, so of two
+  concurrent updates the second reads what the first wrote instead of
+  overwriting it. `{:error, :not_found}` when nothing is at `path`,
+  `{:error, :not_overlaid}` for a path no unit covers — there is no lock
+  to hold there, and this must not promise one.
+  """
+  @spec update(
+          Context.t(),
+          Arca.Storage.path(),
+          (binary() -> {:ok, binary()} | {:error, term()})
+        ) :: :ok | {:error, term()}
+  def update(%Context{} = ctx, path, fun) when is_function(fun, 1) do
+    case Arca.Storage.locate(path) do
+      loc when loc in [:not_overlaid, :above_unit] ->
+        {:error, :not_overlaid}
+
+      loc ->
+        with_unit_lock_at(ctx, unit_of(loc), fn ->
+          with {:ok, current} <- Arca.get(ctx, path) do
+            case fun.(current) do
+              {:ok, bytes} when is_binary(bytes) -> Arca.put(ctx, path, bytes)
+              {:error, _reason} = error -> error
+            end
+          end
+        end)
+    end
+  end
+
   # A file unit's completing write IS the caller's one atomic put: no
   # sentinel, no rollback (failure leaves the previous bytes), and the
   # plain facade path so the file CoW mark-then-put applies untouched.
-  defp commit_file_unit(ctx, unit, {:files, [{[], content}]}, cap, :none, nil) do
+  defp commit_file_unit(ctx, unit, {:files, [{[], content}]}, cap, :none, nil, if_absent?) do
     # `cap: :exempt` on the put because the commit's own required policy
     # was just applied above — the caller stated it, and the one check is
     # this commit's, not the write gate's.
     with {:ok, bytes} <- resolve_content(content),
          :ok <- check_commit_cap(ctx, cap),
-         :ok <- Arca.put(ctx, unit, bytes, cap: :exempt) do
+         :ok <- put_file_unit(ctx, unit, bytes, if_absent?) do
       {:ok, [[]]}
     end
   end
 
-  defp commit_file_unit(_ctx, unit, _source, _cap, _origin, _override) do
+  defp commit_file_unit(_ctx, unit, _source, _cap, _origin, _override, _if_absent?) do
     raise ArgumentError,
           "a file unit (#{Enum.join(unit, "/")}) commits as {:files, [{[], bytes}]} " <>
             "with no sentinel:/origin: — the put is the commit"
+  end
+
+  # The presence probe and the put ride one hold of the unit's lock; the
+  # nested facade put passes through the held-unit register.
+  defp put_file_unit(ctx, unit, bytes, if_absent?) do
+    with_unit_lock_at(ctx, unit, fn ->
+      with :ok <- refuse_present(ctx, {:file, unit}, if_absent?) do
+        Arca.put(ctx, unit, bytes, cap: :exempt)
+      end
+    end)
   end
 
   # Under the unit's lock: `clean_slate/2` clears the whole unit, so two of
   # these interleaving means the second one deletes the first one's files —
   # including files a caller has already been told were written. Nothing
   # inside a single commit can detect that; they simply must not overlap.
-  defp commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override) do
+  defp commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override, if_absent?) do
     with_unit_lock_at(ctx, unit, fn ->
-      do_commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override)
+      with :ok <- refuse_present(ctx, {:dir, unit, sentinel}, if_absent?) do
+        do_commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override)
+      end
     end)
+  end
+
+  # `if_absent:` — a unit is present when the union serves it: a completed
+  # tenant copy, or a shipped counterpart the athanor has not shadowed. A
+  # partial copy (a crashed commit: no sentinel, no seed) is not — the
+  # commit replaces it whole, as any commit would.
+  defp refuse_present(_ctx, _loc, false), do: :ok
+
+  defp refuse_present(ctx, loc, true) do
+    if completed?(ctx, loc) or seed_unit_present?(loc), do: {:error, :exists}, else: :ok
   end
 
   # The lock is per athanor and per unit: two athanors publishing the same
@@ -691,12 +783,13 @@ defmodule Arca.Overlay do
   # already holds passes straight through, and the outer acquisition is
   # what serialises against other processes.
   #
-  # Scope is one unit. A `delete_tree` ABOVE units (the aqua root reset,
-  # the empty-parent tidy) takes no lock and cannot: covering it would mean
-  # locking every unit beneath, in an order two processes could invert.
-  # Callers that need to clear a whole subtree walk its units and drop them
-  # one at a time instead — `Compendium.AquaTemplate.reset/2` with
-  # `all: true` is the one that used to delete the root wholesale.
+  # Scope is one unit. A `delete_tree` ABOVE units (the empty-parent tidy)
+  # takes no lock and cannot: covering it would mean locking every unit
+  # beneath, in an order two processes could invert — so `tree_deletable/2`
+  # admits one only while no unit stands beneath it. Callers that need to
+  # clear a whole subtree walk its units and drop them one at a time
+  # instead — `Compendium.AquaTemplate.reset/2` with `all: true` is the
+  # one that used to delete the root wholesale.
   @held_units_key {__MODULE__, :held_unit_locks}
 
   defp with_unit_lock(%Context{} = ctx, path, fun) do

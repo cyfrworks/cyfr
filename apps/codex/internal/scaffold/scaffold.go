@@ -35,36 +35,56 @@ func Download(version string) error {
 }
 
 // Update fetches the scaffold tarball for the given version and extracts it
-// into the current working directory. Managed files (docs, wit/ definitions)
-// are overwritten with the latest content. Component files that already exist
-// are skipped; new components are created. Version "dev" or "" is a no-op.
+// into the current working directory. Managed files (guides, wit/
+// definitions, the shipped AQUA soul, roles and scrolls) are overwritten
+// with the latest content. Component files that already exist are skipped;
+// new components are created. Version "dev" or "" is a no-op.
 func Update(version string) error {
 	return extract(version, true)
 }
 
-// bundledAquaPrompts is the set of aqua/ prompt files we ship and own. These
-// get overwritten on `cyfr update` so users receive improvements to the
-// default agent prompts. The v3 template keeps them under aqua/agents/ —
-// the flat v2 spelling matched nothing in the tarball, so `cyfr update`
-// silently stopped delivering prompt improvements while its test pinned
-// the stale paths (TestBundledPromptsMatchSeed now binds this list to the
-// shipped seed tree).
-//
-// Everything else under aqua/ is the user's — custom prompt files they add
-// (e.g. aqua/agents/aqua_custom.md) are not in this list and are preserved.
-var bundledAquaPrompts = map[string]bool{
-	"aqua/agents/aqua.md":          true,
-	"aqua/agents/aqua_builder.md":  true,
-	"aqua/agents/aqua_artisan.md":  true,
-	"aqua/agents/aqua_arcade.md":   true,
-	"aqua/agents/aqua_explorer.md": true,
-	"aqua/agents/aqua_planner.md":  true,
-	"aqua/agents/aqua_web.md":      true,
+// The AQUA files the scaffold ships and owns, so `cyfr update` refreshes
+// them with each release: the soul at aqua/aqua.md, the shipped roles at
+// aqua/roles/<name>.md, and every file under a shipped scroll's directory
+// aqua/skills/<name>/. Each kind is an explicit roster of the names the
+// seed tree ships, so a member's own aqua/roles/custom.md or
+// aqua/skills/mine/SKILL.md matches neither and is preserved on update.
+// TestBundledPromptsMatchSeed binds both rosters to the seed tree the
+// tarball is packed from.
+const aquaSoul = "aqua/aqua.md"
+
+var shippedRoles = map[string]bool{
+	"aqua_artisan":  true,
+	"aqua_builder":  true,
+	"aqua_explorer": true,
+	"aqua_planner":  true,
+	"aqua_web":      true,
+}
+
+var shippedScrolls = map[string]bool{
+	"capability-acquisition": true,
+}
+
+// isManagedAqua reports whether path is one of the AQUA files the scaffold
+// ships: the soul, a shipped role, or a file inside a shipped scroll.
+func isManagedAqua(path string) bool {
+	if path == aquaSoul {
+		return true
+	}
+	if rest, ok := strings.CutPrefix(path, "aqua/roles/"); ok {
+		name, isMarkdown := strings.CutSuffix(rest, ".md")
+		return isMarkdown && shippedRoles[name]
+	}
+	if rest, ok := strings.CutPrefix(path, "aqua/skills/"); ok {
+		name, _, inside := strings.Cut(rest, "/")
+		return inside && shippedScrolls[name]
+	}
+	return false
 }
 
 // isManaged returns true for files that are maintained by cyfr and should be
-// overwritten during an upgrade (docs, WIT interface definitions, bundled
-// aqua prompt files).
+// overwritten during an upgrade (guides, WIT interface definitions, and the
+// shipped AQUA soul, roles and scrolls).
 func isManaged(path string) bool {
 	switch path {
 	case "component-guide.md", "tincture-guide.md", "integration-guide.md":
@@ -74,12 +94,9 @@ func isManaged(path string) bool {
 	if strings.HasPrefix(path, "wit/") || path == "wit" {
 		return true
 	}
-	// Specific bundled aqua prompts are managed; user-created prompts are
-	// preserved.
-	if bundledAquaPrompts[path] {
-		return true
-	}
-	return false
+	// The shipped AQUA files are managed; a member's own roles and scrolls
+	// are preserved.
+	return isManagedAqua(path)
 }
 
 // extract fetches the scaffold tarball and extracts it. When overwriteManaged

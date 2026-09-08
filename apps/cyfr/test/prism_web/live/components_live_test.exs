@@ -56,8 +56,10 @@ defmodule PrismWeb.ComponentsLiveTest do
     # roll back — an edit one test materializes must not leak into the
     # next test's provenance. Registered before the seed restore, so it
     # runs first (LIFO).
+    # A whole-tree delete above a unit is refused now; the copy is a unit,
+    # dropped as one (nothing to drop when no test materialized it).
     on_exit(fn ->
-      Arca.delete_tree(ctx, ["components", "reagents", "local", "shelf-tool"])
+      _ = Arca.Overlay.drop_unit(ctx, @version_dir)
     end)
 
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)

@@ -108,18 +108,20 @@ defmodule Opus.Chain do
   WASM execution, bound to the tincture→dependency edge's resources, or
   inert/denied exactly as the transition relation decides.
 
-  `:route` (`:public` | `:protected`) selects the profile public-first —
-  authentication never upgrades a public route.
+  `:route` is required — `:public` | `:protected` — and IS the profile
+  selection, public-first: authentication never upgrades a public route.
+  There is no selector to fall back to, so a call without a route raises
+  rather than reaching a default that would guess.
   """
   @spec run_root_edge(Context.t(), String.t(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_root_edge(%Context{} = ctx, source_ref, reference, input, opts) do
     source = Keyword.get(opts, :consent_source, Source.impl())
+    route = Keyword.fetch!(opts, :route)
 
     with {:ok, source_name_ref} <- name_level(source_ref),
          {:ok, candidates} <- source.profiles(ctx, source_name_ref),
-         {:ok, profile} <-
-           select_profile(ctx, candidates, Keyword.get(opts, :profile), opts),
+         {:ok, profile} <- RootSelect.select_for_route(candidates, route, ctx.authenticated),
          {:ok, _ref, _type, source_component} <-
            Opus.Executor.inspect_component(ctx, source_ref),
          {:ok, authority, stamp} <-
@@ -128,8 +130,13 @@ defmodule Opus.Chain do
            step_invoke(authority, reference, Keyword.get(opts, :need), ctx: ctx) do
       exec_opts =
         opts
+        # `:profile` is not an option any more; a caller still setting it
+        # must not see it forwarded to the child as if it meant something.
         |> Keyword.drop([:consent_source, :route, :ceiling, :live_shape_digest, :need, :profile])
-        |> Keyword.merge(ctx: ctx, activation_stamp: stamp)
+        # A routed root records the profile it resolved to exactly as
+        # `run_root/5` does — the row is the SSOT for which consent the
+        # turn ran under.
+        |> Keyword.merge(ctx: ctx, activation_stamp: stamp, profile_id: profile.id)
 
       execute_child(decision, input, exec_opts)
     end
@@ -281,6 +288,9 @@ defmodule Opus.Chain do
         |> Arca.QueryHelpers.maybe_put(:activation_stamp, Keyword.get(opts, :activation_stamp))
         |> Arca.QueryHelpers.maybe_put(:client_ip, Keyword.get(opts, :client_ip))
         |> Arca.QueryHelpers.maybe_put(:execution_id, Keyword.get(opts, :execution_id))
+        # Only a root carries one; an in-chain child walks its parent's
+        # authority and leaves the column nil.
+        |> Arca.QueryHelpers.maybe_put(:profile_id, Keyword.get(opts, :profile_id))
         |> Arca.QueryHelpers.maybe_put(
           :type,
           decision.component && Map.get(decision.component, "type")

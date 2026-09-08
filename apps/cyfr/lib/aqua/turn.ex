@@ -3,11 +3,13 @@
 
 defmodule Aqua.Turn do
   @moduledoc """
-  One AQUA turn, as data: the orchestrator lookup, the formula input a
-  message becomes, the execution that runs it, and what its output turns
-  into afterwards. `Aqua.ConversationRunner` owns the process; this
-  module owns the shapes, so the runner stays a small state machine and the
-  turn can be exercised without one.
+  One AQUA turn: the orchestrator lookup, the road from a picked agent and
+  a task to a running execution (`begin/5` — resolve, pin, compose,
+  start), the formula input a message becomes, and what the output turns
+  into afterwards. `Aqua.ConversationRunner` owns the process, the
+  conversation's rows and the cursor over them; this module owns the
+  shapes and the turn's start, so the runner stays a state machine over
+  messages and a turn can be begun and exercised without one.
 
   Two roads reach the engine, on purpose: STARTING work (`start/3`, an
   approved app launch) goes through the `execution` MCP tool so it passes
@@ -15,22 +17,42 @@ defmodule Aqua.Turn do
   everything that manages an execution already started — pin, subscribe,
   cancel, events, status — goes through the `Cyfr.Execution` port directly,
   because those are the harness's own hands on its own turn, not a tool
-  call anyone else could make.
+  call anyone else could make. The runner reads that engine half from
+  `:cyfr, :aqua_turn` and hands it to `begin/5` as `:engine`, so a suite
+  can stand in a fake for the calls that reach Opus and keep the rest.
   """
 
   require Logger
 
+  alias Aqua.Orchestrator
   alias Sanctum.Context
 
   @agent_ref "formula:local.aqua"
 
-  @type orchestrator :: %{
+  @typedoc """
+  One agent's run-time detail, string-keyed as the `aqua` tool projects it
+  — `"name"`, `"title"`, `"catalyst_ref"`, `"model"`,
+  `"tool_policy"` — the `agent` an `Aqua.Orchestrator` carries once
+  resolved.
+  """
+  @type agent :: %{
           required(String.t()) => term()
         }
 
-  @doc "The bundled AQUA formula every conversation turn runs."
-  @spec agent_ref() :: String.t()
-  def agent_ref, do: @agent_ref
+  @typedoc """
+  What `begin/5` hands the runner to install: the execution to follow,
+  the policy its intents are checked against (the composition over the
+  standing grants, not the authored one), the resolved agent, the profile
+  the turn pinned, and the conversation's standing allows keyed by the
+  agent they were answered for.
+  """
+  @type started :: %{
+          execution_id: String.t(),
+          tool_policy: map(),
+          orchestrator: Orchestrator.t(),
+          profile_id: String.t(),
+          grants: MapSet.t({String.t(), String.t(), String.t()})
+        }
 
   # ---------------------------------------------------------------------------
   # Orchestrators
@@ -38,121 +60,58 @@ defmodule Aqua.Turn do
 
   @doc """
   Who can be addressed on this tape: the estate's soul first, then its
-  roles — the tree in focus and no other.
-
-  A room's tape is the room's. `@aqua` reaches the room's soul, and a
-  role mention (`@aqua_builder`) runs that role directly for one turn; a
-  person's own assistant lives in their own athanor and rides along in
-  its own panel, never on a shared tape. Each entry carries `"owner"`, the
-  athanor whose `aqua/` tree it came from — always the focus here, kept
-  on the entry because everything downstream (the persisted pick, the
-  recovery read, the standing-grant key) is written in terms of it — and
-  `"estate?"`, true for every entry this roster builds.
-
-  `parse_mention/2` still speaks the qualified `@slug.name` grammar over
-  any roster it is handed, and `orchestrator/3` still reads an agent from
-  a named owner's tree: the machinery for an agent borrowed across
-  estates stays correct, and dormant, because this roster never offers
-  one.
+  roles — the tree in focus and no other. A room's tape is the room's:
+  `@aqua` reaches the room's soul, and a role mention (`@aqua_builder`)
+  runs that role directly for one turn; a person's own assistant lives in
+  their own athanor and rides along in its own panel, never on a shared
+  tape.
   """
   @spec roster(Context.t()) :: [map()]
   def roster(%Context{} = ctx) do
-    owner = ctx.athanor_id
-
-    Enum.map(roster_in(ctx, owner), &Map.put(&1, "estate?", true))
-  end
-
-  defp roster_in(ctx, owner) do
-    # Resolved once per roster build, not once per entry per message:
-    # `parse_mention/2` is a pure function over the roster it is handed.
-    slug = owner_slug(owner)
-
-    case Aqua.AgentConfig.call_aqua(ctx, %{"action" => "list"}) do
-      {:ok, result} ->
-        (result["guides"] || [])
-        |> Enum.filter(&(&1["type"] in ["soul", "role"]))
-        |> Enum.map(fn g ->
-          %{
-            "name" => g["name"],
-            "title" => g["title"] || g["name"],
-            "owner" => owner,
-            "owner_slug" => slug
-          }
+    case Aqua.AgentConfig.roster(ctx) do
+      {:ok, agents} ->
+        Enum.map(agents, fn agent ->
+          %{"name" => agent["name"], "title" => agent["title"] || agent["name"]}
         end)
-        |> Enum.reject(fn g -> is_nil(g["name"]) end)
 
-      # Fail-open BY CHOICE: a broken aqua tool reads as "nobody here" —
-      # the chat still renders, which beats refusing the whole
-      # conversation for a catalog read. (A SEND with an empty roster and
-      # no prior pick is still refused `:no_orchestrator` by the runner;
-      # the generic fallback prompt covers only a name that resolves but
-      # whose content read fails.)
-      _ ->
+      # Fail-open BY CHOICE, and said in the log by the read itself: an
+      # unreadable tree reads as "nobody here" — the chat still renders,
+      # which beats refusing the whole conversation for a catalog read.
+      # (A SEND with an empty roster and no prior pick is still refused
+      # `:no_orchestrator` by the runner, and the turn's own roster read
+      # in `build_input/4` refuses outright.)
+      {:error, _} ->
         []
     end
   end
 
-  @doc """
-  One agent's run-time detail — the soul or a role — or `nil`.
+  @doc "One agent's run-time detail — the soul or a role of the estate in focus — or `nil`."
+  @spec orchestrator(Context.t(), String.t() | nil) :: agent() | nil
+  def orchestrator(_ctx, nil), do: nil
 
-  `owner` is the athanor whose tree holds it — from the roster entry, never
-  guessed. Reading an agent from the estate in focus when it belongs to the
-  person would find a different agent of the same name, or none.
-  """
-  @spec orchestrator(Context.t(), String.t() | nil, String.t() | nil) :: orchestrator() | nil
-  def orchestrator(ctx, name, owner \\ nil)
+  def orchestrator(%Context{} = ctx, name) when is_binary(name) do
+    case Aqua.AgentConfig.agent(ctx, name) do
+      {:ok, detail} ->
+        %{
+          "name" => name,
+          "title" => detail["title"] || name,
+          "catalyst_ref" => detail["catalyst_ref"],
+          "model" => detail["model"],
+          "tool_policy" => detail["tool_policy"] || %{}
+        }
 
-  def orchestrator(_ctx, nil, _owner), do: nil
-
-  def orchestrator(%Context{} = ctx, name, owner) when is_binary(name) do
-    owner_id = owner || ctx.athanor_id
-
-    with {:ok, read_ctx} <- reach(ctx, owner),
-         {:ok, %{"type" => type} = detail} when type in ["soul", "role"] <-
-           Aqua.AgentConfig.call_aqua(read_ctx, %{"action" => "get", "name" => name}) do
-      %{
-        "name" => name,
-        "owner" => owner_id,
-        # For the composer's qualified handle when the owner is not the
-        # estate in focus — the ID stays the identity, the slug is what a
-        # person can type.
-        "owner_slug" => owner_slug(owner_id),
-        "title" => detail["title"] || name,
-        "catalyst_ref" => detail["catalyst_ref"],
-        "model" => detail["model"],
-        "tool_policy" => detail["tool_policy"] || %{}
-      }
-    else
-      # Same deliberate fail-open as roster/1: nil means "run on
-      # the fallback prompt", never "refuse the turn" — and an owner tree
-      # the caller cannot reach reads as no agent at all.
-      _ -> nil
+      # Same deliberate fail-open as roster/1: nil means "run on the
+      # fallback prompt", never "refuse the turn".
+      _ ->
+        nil
     end
   end
 
-  # The owner's tree through the refocus chokepoint: a member's context
-  # takes the member branch; recovery's system context crosses by design
-  # and still refuses an archived estate.
-  defp reach(ctx, nil), do: {:ok, ctx}
-  defp reach(ctx, owner), do: Context.refocus(ctx, owner)
-
   @doc """
-  An explicit `@name` in the message names the orchestrator for this turn.
-
-  Two spellings, because a person's crew and an estate's may share a name:
-
-    * `@tom` — the roster entry called `tom`, with the estate's winning a
-      collision (it is the one a bare mention means where you are).
-    * `@alice.tom` — qualified by the owning estate's slug, which is how a
-      personal agent shadowed by an estate's is still reachable.
-
-  The collision rule lives HERE, and only here: the roster hands over both
-  same-named entries, and the sort below puts the estate's bare handle
-  ahead of the personal one — deterministically, not by roster order, which
-  lists the personal tree first. Returns
-  `{message_without_mention, entry | nil}` — the whole roster entry, not
-  just the name, because the caller needs to know WHOSE tree to read it
-  from. Matching longest-first so `@aqua_planner` is not read as `@aqua`
+  An explicit `@name` in the message names the orchestrator for this turn
+  — the roster entry called `name`. Returns `{message_without_mention,
+  entry | nil}`: the whole entry, since the caller carries it into the
+  turn. Matching longest-first so `@aqua_planner` is not read as `@aqua`
   with a suffix.
   """
   @spec parse_mention(String.t(), [map()]) :: {String.t(), map() | nil}
@@ -161,12 +120,10 @@ defmodule Aqua.Turn do
       {message, nil}
     else
       orchestrators
-      |> Enum.flat_map(&handles/1)
-      |> Enum.sort_by(fn {handle, entry} ->
-        {-String.length(handle), if(entry["estate?"], do: 0, else: 1)}
-      end)
-      |> Enum.find_value({message, nil}, fn {handle, entry} ->
-        re = Regex.compile!("(?<![\\w@])@#{Regex.escape(handle)}(?![\\w.-])", "i")
+      |> Enum.filter(&is_binary(&1["name"]))
+      |> Enum.sort_by(&(-String.length(&1["name"])))
+      |> Enum.find_value({message, nil}, fn %{"name" => name} = entry ->
+        re = Regex.compile!("(?<![\\w@])@#{Regex.escape(name)}(?![\\w.-])", "i")
 
         if Regex.match?(re, message) do
           cleaned = Regex.replace(re, message, "") |> String.trim()
@@ -175,24 +132,6 @@ defmodule Aqua.Turn do
       end)
     end
   end
-
-  # Every way one entry may be addressed. The qualifier is the owning
-  # estate's SLUG rather than its id: a slug is what a person can type, and
-  # binding the entry to the owner's id (not the qualifier) means renaming
-  # the estate cannot make a stored mention point elsewhere.
-  defp handles(%{"name" => name, "owner_slug" => slug} = entry) when is_binary(slug),
-    do: [{"#{slug}.#{name}", entry}, {name, entry}]
-
-  defp handles(%{"name" => name} = entry), do: [{name, entry}]
-
-  defp owner_slug(owner) when is_binary(owner) do
-    case Sanctum.Tenancy.Athanors.get(owner) do
-      {:ok, athanor} -> athanor.slug
-      _ -> nil
-    end
-  end
-
-  defp owner_slug(_), do: nil
 
   # ---------------------------------------------------------------------------
   # Input
@@ -206,72 +145,131 @@ defmodule Aqua.Turn do
   `:model` (an override for the orchestrator's model), `:group` (several
   people are speaking, so the task's lines are name-prefixed),
   `:authority` (what the turn is rooted at — the prompt describes only what
-  this grants), `:owner` / `:focus` (whose agent, whose estate).
+  this grants), `:role_grants` (a function from role names to their
+  standing rows, so each role's definition is composed like the soul's),
+  `:roster` (the estate's tree as already read, so it is not read again),
+  `:room_context` (text read for the person beside the task — a room open
+  next to this thread — placed as the input's `transient`, never in the
+  system prompt and never in the history).
+
+  Two reads, each once: the tree the agent lives in
+  (`Aqua.AgentConfig.roster/1` — the orchestrator's own prompt and every
+  role come out of it; `begin/5` reads it once and hands it in) and the
+  working estate's catalyst listing (`Aqua.AgentConfig.catalyst_listing/1`
+  — the orchestrator's model and each role's resolve against it). Neither
+  is a tool call per role.
 
   Returns `{:ok, %{input: map, tool_policy: map}}` — the policy is what the
-  turn's intents are later checked against — or
+  turn's intents are later checked against — or a refusal:
   `{:error, {:catalyst_not_in_estate, ref}}` when the agent's model does
-  not resolve in the estate the turn runs in. That refusal is deliberate
-  and crisp: a catalyst is a component, components belong to the working
-  estate, and handing the formula an unresolved ref surfaced as a
-  confusing runtime error instead of "this estate has no such model".
+  not resolve in the estate the turn runs in (deliberate and crisp: a
+  catalyst is a component, components belong to the working estate, and
+  handing the formula an unresolved ref surfaced as a confusing runtime
+  error instead of "this estate has no such model"); or
+  `{:error, {:unavailable, _}}` when the tree cannot be read — a turn is
+  never quietly composed on an empty roster.
   """
-  @spec build_input(Context.t(), orchestrator(), String.t(), keyword()) ::
+  @spec build_input(Context.t(), agent(), String.t(), keyword()) ::
           {:ok, %{input: map(), tool_policy: map()}}
           | {:error, {:catalyst_not_in_estate, String.t() | nil}}
+          | {:error, {:unavailable, String.t()}}
   def build_input(%Context{} = ctx, %{"name" => _name} = orchestrator, message, opts \\ []) do
     tool_policy = orchestrator["tool_policy"] || %{}
 
-    # One composer owns the whole prompt — including the aqua-actions
-    # protocol, which is an orchestrator's alone (sub-agents are scoped
-    # task-runners and never emit UI intents).
-    system_prompt =
-      Aqua.Prompt.compose(ctx,
-        agent: orchestrator,
-        authority: Keyword.get(opts, :authority),
-        owner: Keyword.get(opts, :owner),
-        focus: Keyword.get(opts, :focus),
-        several_people?: Keyword.get(opts, :group, false),
-        room_context: Keyword.get(opts, :room_context)
-      )
+    # The listing is read whether or not the orchestrator pins a model —
+    # the roles resolve theirs against it — and a listing that cannot be
+    # read is empty here BY CHOICE for the roles (they fall back to the
+    # parent's catalyst) while a NAMED orchestrator ref still fails closed
+    # below: a model that is not here is not a degraded turn, it is no
+    # turn. An agent that pins no catalyst rides nil through to the
+    # engine's default.
+    with {:ok, roster} <- roster_for(ctx, Keyword.get(opts, :roster)),
+         listing = catalyst_listing_or_empty(ctx),
+         {:ok, resolved_catalyst} <- resolve_or_pass(listing, orchestrator["catalyst_ref"]) do
+      # One composer owns the whole prompt — including the aqua-actions
+      # protocol, which is an orchestrator's alone (sub-agents are scoped
+      # task-runners and never emit UI intents). The authored prompt comes
+      # off the roster just read; only an agent the roster does not list
+      # (disabled, or a stand-in map) sends the composer back to the tree.
+      system_prompt =
+        Aqua.Prompt.compose(ctx,
+          agent: with_prompt(orchestrator, roster),
+          authority: Keyword.get(opts, :authority),
+          several_people?: Keyword.get(opts, :group, false)
+        )
 
-    # Resolved against the estate the turn RUNS in — see the doc. Fails
-    # CLOSED for a NAMED ref this estate does not hold; the empty roster
-    # and a missing prompt stay fail-open (documented on their own sites),
-    # but a model that is not here is not a degraded turn, it is no turn.
-    # An agent that pins no catalyst at all is a different, pre-existing
-    # path — nil rides through to the engine's default, exactly as before.
-    case resolve_or_pass(ctx, orchestrator["catalyst_ref"]) do
-      {:ok, resolved_catalyst} ->
-        sub_agents =
-          Aqua.AgentConfig.role_definitions(
-            ctx,
-            orchestrator,
-            resolved_catalyst,
-            orchestrator["model"]
-          )
+      sub_agents =
+        Aqua.AgentConfig.role_definitions(
+          roster,
+          listing,
+          resolved_catalyst,
+          orchestrator["model"],
+          role_grants(roster, Keyword.get(opts, :role_grants))
+        )
 
-        input =
-          %{
-            "task" => message,
-            "system" => system_prompt,
-            "sub_agents" => sub_agents,
-            "catalyst_ref" => resolved_catalyst,
-            "model" => Keyword.get(opts, :model) || orchestrator["model"]
-          }
-          |> Aqua.AgentConfig.put_formula_tool_surface(tool_policy)
-          |> put_attachments(Keyword.get(opts, :attachments, []))
-          |> put_messages(Keyword.get(opts, :history, []))
+      input =
+        %{
+          "task" => message,
+          "system" => system_prompt,
+          "sub_agents" => sub_agents,
+          "catalyst_ref" => resolved_catalyst,
+          "model" => Keyword.get(opts, :model) || orchestrator["model"]
+        }
+        |> Aqua.AgentConfig.put_formula_tool_surface(tool_policy)
+        |> put_attachments(Keyword.get(opts, :attachments, []))
+        |> put_transient(Aqua.Prompt.transient(Keyword.get(opts, :room_context)))
+        |> put_messages(Keyword.get(opts, :history, []))
 
-        {:ok, %{input: input, tool_policy: tool_policy}}
+      {:ok, %{input: input, tool_policy: tool_policy}}
+    else
+      {:error, {:unavailable, _}} = refusal ->
+        refusal
 
-      _ ->
+      {:error, _catalyst_miss} ->
         {:error, {:catalyst_not_in_estate, orchestrator["catalyst_ref"]}}
     end
   end
 
-  defp resolve_or_pass(_ctx, ref) when ref in [nil, ""], do: {:ok, nil}
-  defp resolve_or_pass(ctx, ref), do: Aqua.AgentConfig.resolve_catalyst(ctx, ref)
+  # The roster the caller already read (`begin/5` resolves the pick from
+  # it), else the estate's tree.
+  defp roster_for(_ctx, roster) when is_list(roster), do: {:ok, roster}
+  defp roster_for(ctx, _none), do: Aqua.AgentConfig.roster(ctx)
+
+  defp catalyst_listing_or_empty(ctx) do
+    case Aqua.AgentConfig.catalyst_listing(ctx) do
+      {:ok, components} -> components
+      {:error, _} -> []
+    end
+  end
+
+  # The standing decisions for every role the roster holds, read once from
+  # the thread (`Aqua.ToolGrants.for_agents/4`) through the function
+  # `begin/5` hands over — or none, for a caller composing a turn without
+  # a conversation. A role's definition is composed from them exactly as
+  # the soul's is.
+  defp role_grants(roster, reader) when is_function(reader, 1) do
+    roster
+    |> Enum.filter(&(&1["type"] == Compendium.AquaAgent.role_type()))
+    |> Enum.map(& &1["name"])
+    |> reader.()
+  end
+
+  defp role_grants(_roster, _none), do: %{}
+
+  defp with_prompt(%{"name" => name} = orchestrator, roster) do
+    case Enum.find(roster, &(&1["name"] == name)) do
+      %{"content" => content} when is_binary(content) -> Map.put(orchestrator, "prompt", content)
+      _ -> orchestrator
+    end
+  end
+
+  defp resolve_or_pass(_listing, ref) when ref in [nil, ""], do: {:ok, nil}
+  defp resolve_or_pass(listing, ref), do: Aqua.AgentConfig.resolve_catalyst(listing, ref)
+
+  # Read beside the task for this one call: the guest places it as a part
+  # of the task's user turn and takes it out before the history comes back.
+  defp put_transient(input, nil), do: input
+  defp put_transient(input, text), do: Map.put(input, "transient", text)
 
   defp put_attachments(input, []), do: input
   defp put_attachments(input, attachments), do: Map.put(input, "attachments", attachments)
@@ -313,6 +311,81 @@ defmodule Aqua.Turn do
   # ---------------------------------------------------------------------------
   # Execution
   # ---------------------------------------------------------------------------
+
+  @doc """
+  Begin a turn: resolve the picked agent from the estate's tree, pin the
+  profile, compose the formula input, start the execution. The whole road
+  from what the runner decided in its loop (who is addressed, what the
+  task says) to an execution it can follow — run in the turn-start task,
+  never in the runner's `handle_call`, because every step reaches storage
+  or MCP.
+
+  The order is the point. The profile is pinned FIRST because the other
+  two steps need it: the run must name it rather than re-select one, and
+  the prompt must describe what this authority actually grants. The
+  grants are keyed by THIS turn's resolved agent, never by runner state —
+  the previous turn may have run a different agent, and a first turn has
+  no previous at all.
+
+  `opts`: `:engine` — the module answering `pin_profile/1` and `start/3`
+  (this one; a suite stands in a fake); `:attachments` — the refs of the
+  task's rows (`Aqua.Attachments.attachments_of/1`), loaded here;
+  `:history`, `:model`, `:group`, `:room_context` as `build_input/4`
+  takes them.
+
+  Refusals: `{:error, :no_orchestrator}` for a name the estate's tree does
+  not hold; `pin_profile/1`'s, `build_input/4`'s and the engine's own on
+  `start/3` pass through unchanged.
+  """
+  @spec begin(Context.t(), String.t(), Orchestrator.t(), String.t(), keyword()) ::
+          {:ok, started()} | {:error, term()}
+  def begin(%Context{} = ctx, conversation_id, %Orchestrator{} = pick, task, opts \\ [])
+      when is_binary(conversation_id) and is_binary(task) do
+    engine = Keyword.get(opts, :engine, __MODULE__)
+
+    with {:ok, orchestrator, roster} <- Orchestrator.resolve_with_roster(ctx, pick),
+         {:ok, authority} <- engine.pin_profile(ctx),
+         # Authored policy is the agent's markdown; the standing answers a
+         # person already gave are rows — read ONCE for every agent of the
+         # roster, so the soul and each role it may clone into compose the
+         # same way. A store that cannot be read refuses the turn: composing
+         # without the rows would drop every "never".
+         {:ok, grants_by_agent} <-
+           Aqua.ToolGrants.for_agents(ctx, conversation_id, Enum.map(roster, & &1["name"])),
+         {:ok, allowed} <- Aqua.ToolGrants.allowed_by_agent(ctx, conversation_id) do
+      orchestrator =
+        Orchestrator.with_grants(orchestrator, Map.get(grants_by_agent, orchestrator.name, []))
+
+      attachments =
+        Aqua.Attachments.load(ctx, conversation_id, Keyword.get(opts, :attachments, []))
+
+      build =
+        build_input(ctx, Orchestrator.for_turn(orchestrator), task,
+          history: Keyword.get(opts, :history, []),
+          attachments: attachments,
+          model: Keyword.get(opts, :model),
+          group: Keyword.get(opts, :group, false),
+          # The prompt describes what THIS authority grants, so it is
+          # composed after the pin, not before it.
+          authority: authority,
+          room_context: Keyword.get(opts, :room_context),
+          roster: roster,
+          role_grants: fn names -> Map.take(grants_by_agent, names) end
+        )
+
+      with {:ok, %{input: input, tool_policy: tool_policy}} <- build,
+           {:ok, execution_id} <- engine.start(ctx, input, authority.profile_id) do
+        {:ok,
+         %{
+           execution_id: execution_id,
+           tool_policy: tool_policy,
+           orchestrator: orchestrator,
+           profile_id: authority.profile_id,
+           grants: allowed
+         }}
+      end
+    end
+  end
 
   @doc """
   Resolve — and pin — the profile this turn will run as.
@@ -475,12 +548,17 @@ defmodule Aqua.Turn do
     end)
   end
 
-  @doc "True when the intent's `{tool, action}` is in the conversation's grant set."
-  @spec granted?(map(), MapSet.t()) :: boolean()
-  def granted?(%{proposal: %{tool: t, action: a}}, grants) when is_binary(t) and is_binary(a),
-    do: MapSet.member?(grants, {t, a})
+  @doc """
+  True when `{agent, tool, action}` is in the conversation's grant set —
+  the agent being the one the CARD names, never the runner's current
+  turn: an answer given for one agent runs no other agent's card.
+  """
+  @spec granted?(String.t() | nil, map(), MapSet.t()) :: boolean()
+  def granted?(agent, %{proposal: %{tool: t, action: a}}, grants)
+      when is_binary(agent) and is_binary(t) and is_binary(a),
+      do: MapSet.member?(grants, {agent, t, a})
 
-  def granted?(_, _), do: false
+  def granted?(_agent, _intent, _grants), do: false
 
   # ---------------------------------------------------------------------------
   # Approvals
@@ -515,32 +593,94 @@ defmodule Aqua.Turn do
   def run_approved(proposal, ctx, profile_id)
 
   def run_approved(
-        %{tool: "execution", action: action, args: args},
+        %{tool: "execution", action: action, args: args} = proposal,
         %Context{} = ctx,
-        _profile_id
+        profile_id
       )
       when action in ["run", "run_stream"] do
-    launch_args =
-      (args || %{})
-      |> Map.put("action", action)
-      |> Map.drop(["parent_execution_id", "root_execution_id"])
+    reference = (args || %{})["reference"]
+    input = (args || %{})["input"] || %{}
 
-    Aqua.MCPHelpers.call_tool("execution", ctx, launch_args)
+    # Decided again here, whatever the card said: the assistant itself is
+    # never launched as an app, and a wrapped catalyst is the virtual
+    # action its input denotes — run under the kind ceiling and the pinned
+    # authority, never as a root. `Aqua.Actions` canonicalises a proposal
+    # before the card exists; this is the same rule at the last door.
+    cond do
+      is_binary(reference) and Aqua.VirtualTools.self_reference?(reference) ->
+        {:error, {:invalid_argument, "the assistant itself is not a tool to run"}}
+
+      is_binary(reference) and match?({:ok, _}, Aqua.VirtualTools.canonical(reference, input)) ->
+        {:ok, [canonical | _]} = Aqua.VirtualTools.canonical(reference, input)
+        run_approved(Map.merge(proposal, canonical), ctx, profile_id)
+
+      true ->
+        launch_args =
+          (args || %{})
+          |> Map.put("action", action)
+          |> Map.drop(["parent_execution_id", "root_execution_id"])
+
+        Aqua.MCPHelpers.call_tool("execution", ctx, launch_args)
+    end
   end
 
-  def run_approved(%{tool: tool, action: action, args: args}, %Context{} = ctx, profile_id)
+  def run_approved(
+        %{tool: tool, action: action, args: args} = proposal,
+        %Context{} = ctx,
+        profile_id
+      )
       when is_binary(tool) and is_binary(action) and is_binary(profile_id) do
-    case Cyfr.Execution.authority_for(ctx, {:id, profile_id}, @agent_ref) do
-      {:ok, authority} ->
-        Aqua.MCPHelpers.call_in_chain(
-          tool,
-          Context.enter_guest(ctx),
-          Map.put(args || %{}, "action", action),
-          authority
-        )
+    with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, {:id, profile_id}, @agent_ref) do
+      if Aqua.VirtualTools.virtual_tool?(tool),
+        do: run_virtual(proposal, ctx, authority),
+        else:
+          Aqua.MCPHelpers.call_in_chain(
+            tool,
+            Context.enter_guest(ctx),
+            Map.put(args || %{}, "action", action),
+            authority,
+            lineage: registry_lineage(proposal)
+          )
+    end
+  end
 
-      {:error, reason} ->
-        {:error, reason}
+  @doc false
+  # The card's own execution and conversation, as the registry stamps
+  # them onto an in-chain call: the execution is both parent and root of
+  # what the approval runs. Public for its test alone.
+  def registry_lineage(%{lineage: %{} = lineage}) do
+    execution_id = lineage[:execution_id]
+
+    %{
+      parent_execution_id: execution_id,
+      root_execution_id: execution_id,
+      conversation_id: lineage[:conversation_id]
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  def registry_lineage(_proposal), do: %{}
+
+  # An approved virtual action runs the catalyst the guest would have run
+  # for it, as a CHILD of the card's pinned authority — the same hop the
+  # formula host makes for the guest — with the card's own execution as
+  # lineage. Never `call_in_chain("execution", …)`: the registry refuses a
+  # guest-planed `execution.run` by design, and never a fresh root. A UI
+  # event (`request_setup`) is not a catalyst and has no card to run.
+  defp run_virtual(%{tool: tool, action: action, args: args} = proposal, ctx, authority) do
+    with {:ok, %{catalyst: catalyst, input: input}} <-
+           Aqua.VirtualTools.child_call(tool, action, args || %{}) do
+      lineage = Map.get(proposal, :lineage) || %{}
+      execution_id = lineage[:execution_id] || lineage["execution_id"]
+
+      opts =
+        [ctx: Context.enter_guest(ctx)]
+        |> Arca.QueryHelpers.maybe_put(:parent_execution_id, execution_id)
+        |> Arca.QueryHelpers.maybe_put(:root_execution_id, execution_id)
+
+      Cyfr.Execution.run_child(authority, catalyst, nil, input, opts)
+    else
+      {:error, reason} -> {:error, {:invalid_argument, reason}}
     end
   end
 

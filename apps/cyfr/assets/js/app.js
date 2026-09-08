@@ -40,18 +40,37 @@ Hooks.FlashAutoHide = {
   }
 }
 
+// A tape that follows its newest line — but only while the person is
+// reading the end of it. Someone scrolled up into the history stays where
+// they are as lines stream in; scrolling back to within the band below
+// re-engages the follow. The band is remembered on each scroll, since new
+// content moves the bottom without firing one.
+const SCROLL_FOLLOW_BAND_PX = 50
+
 Hooks.ScrollBottom = {
+  _nearBottom() {
+    const el = this.el
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_FOLLOW_BAND_PX
+  },
+  _follow() {
+    if (this._following) this.el.scrollTop = this.el.scrollHeight
+  },
   mounted() {
-    this.observer = new MutationObserver(() => {
-      this.el.scrollTop = this.el.scrollHeight
-    })
+    this._following = true
+    this._onScroll = () => {
+      this._following = this._nearBottom()
+    }
+    this.el.addEventListener("scroll", this._onScroll, { passive: true })
+    this.observer = new MutationObserver(() => this._follow())
     this.observer.observe(this.el, { childList: true, subtree: true })
+    this._follow()
   },
   updated() {
-    this.el.scrollTop = this.el.scrollHeight
+    this._follow()
   },
   destroyed() {
     if (this.observer) this.observer.disconnect()
+    if (this._onScroll) this.el.removeEventListener("scroll", this._onScroll)
   }
 }
 

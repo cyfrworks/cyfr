@@ -3,6 +3,10 @@
 
 // Chat composer textarea hook (ConversationPaneLive).
 //
+// - Takes focus when it mounts — a pane opening, a thread switching, the
+//   person's own AQUA panel opening — unless focus already sits inside a
+//   dialog: the open panel owns focus, and the page's own pane mounting
+//   beside it must not pull it back out.
 // - Auto-grows from one row up to a max height (then scrolls).
 // - Enter (no modifiers) submits the composer form.
 // - Shift+Enter / Ctrl+Enter / Cmd+Enter insert a newline at the cursor.
@@ -13,7 +17,18 @@
 
 const MAX_HEIGHT = 160 // px — keep in sync with the textarea's max-h-40 class
 
+function focusHeldByDialog() {
+  const active = document.activeElement
+  return !!(active && active.closest && active.closest("[role='dialog']"))
+}
+
 const AquaChat = {
+  _focus() {
+    if (this.el.disabled) return
+    if (focusHeldByDialog() && !this.el.closest("[role='dialog']")) return
+    this.el.focus()
+  },
+
   _resize() {
     const el = this.el
     el.style.height = "auto"
@@ -31,6 +46,7 @@ const AquaChat = {
     this._onInput = () => this._resize()
     this.el.addEventListener("input", this._onInput)
     this._resize()
+    this._focus()
 
     this._onKeyDown = (e) => {
       if (e.key !== "Enter" || e.isComposing) return

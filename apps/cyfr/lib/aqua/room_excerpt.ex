@@ -24,6 +24,7 @@ defmodule Aqua.RoomExcerpt do
 
   @max_bytes 16 * 1024
   @rows 40
+  @agent_author Arca.Schemas.Message.agent_author()
 
   @typedoc "Which room, and how the person sees it named."
   @type room :: %{
@@ -73,7 +74,7 @@ defmodule Aqua.RoomExcerpt do
         %{kind: "text", content: content}, names when content in [nil, ""] ->
           {[], names}
 
-        %{kind: "text", author: "aqua", content: content}, names ->
+        %{kind: "text", author: @agent_author, content: content}, names ->
           {["AQUA: " <> String.trim(content)], names}
 
         %{kind: "text", author: author, content: content}, names when is_binary(author) ->

@@ -6,7 +6,7 @@ defmodule PrismWeb.ActivitiesLive do
   Unified activity view: every CYFR request and the executions it spawned.
 
   Each row is one Arca.McpLog record (real MCP request, tincture invoke, or
-  cron firing — all share the same shape after Phase 1.3a). Expanding a row
+  cron firing — all share the same shape). Expanding a row
   calls `mcp_log/correlate` to fetch the full causal tree (executions +
   policy logs).
 

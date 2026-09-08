@@ -57,6 +57,7 @@ defmodule Emissary.MCP.ToolError do
   @spec reason?(term()) :: boolean()
   def reason?({:not_found, resource, id}) when is_binary(resource) and is_binary(id), do: true
   def reason?({:invalid_argument, message}) when is_binary(message), do: true
+  def reason?({:conflict, message}) when is_binary(message), do: true
   def reason?({:unavailable, what}) when is_binary(what), do: true
   def reason?({:crashed, message}) when is_binary(message), do: true
   def reason?({:exit, message}) when is_binary(message), do: true
@@ -74,6 +75,8 @@ defmodule Emissary.MCP.ToolError do
   @spec message(t()) :: String.t()
   def message({:not_found, resource, id}), do: "#{resource} not found: #{id}"
   def message({:invalid_argument, message}), do: message
+  # The write met a newer version than the one the caller edited.
+  def message({:conflict, message}), do: message
   def message({:unavailable, what}), do: "#{what} is unavailable — retry shortly"
 
   # `Emissary.MCP.ToolRegistry` mints these three when a tool crashes, exits

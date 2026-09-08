@@ -38,7 +38,7 @@ defmodule Sanctum.Tenancy.Members do
   the `"athanor"` scope and must name an existing athanor.
   """
   # arca:unscoped-ok memberships are tenancy fabric — a platform row names no athanor by design.
-  def create(attrs) do
+  def create(attrs, opts \\ []) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.create", fn ->
       now = DateTime.utc_now()
 
@@ -53,13 +53,31 @@ defmodule Sanctum.Tenancy.Members do
 
       # The row also carries a foreign key, but SQLite reports a violation
       # without naming it, so the changeset could not translate it. Checking
-      # here answers the same way on both adapters.
-      if changeset.valid? and missing_athanor?(changeset) do
-        {:error, Ecto.Changeset.add_error(changeset, :athanor_id, "does not exist")}
-      else
-        Arca.Repo.insert(changeset)
+      # here answers the same way on both adapters. A frozen estate took
+      # its members at birth and never gains another — every writer of a
+      # membership row is held to that here, not only `add/3`; the birth
+      # itself says so with `birth: true` (`Sanctum.Tenancy.Athanors`).
+      cond do
+        changeset.valid? and missing_athanor?(changeset) ->
+          {:error, Ecto.Changeset.add_error(changeset, :athanor_id, "does not exist")}
+
+        changeset.valid? and not Keyword.get(opts, :birth, false) and frozen?(changeset) ->
+          {:error, :frozen_roster}
+
+        true ->
+          Arca.Repo.insert(changeset)
       end
     end)
+  end
+
+  defp frozen?(changeset) do
+    case Ecto.Changeset.get_field(changeset, :athanor_id) do
+      id when is_binary(id) ->
+        match?({:ok, %{roster: "frozen"}}, Sanctum.Tenancy.Athanors.get(id))
+
+      _ ->
+        false
+    end
   end
 
   @doc """
@@ -393,14 +411,23 @@ defmodule Sanctum.Tenancy.Members do
   comes back (`Sanctum.Tenancy.Athanors.ensure_home/0` mints its successor).
   The owner of a person's athanor is that athanor's one member and is never
   removed — deny at the door is the only way out of one's own furnace.
+
+  The person's topic follows in the athanor go with the seat: a follow row
+  left behind would resume the moment they are re-added, so a returning
+  member starts unfollowed like a new one.
   """
   @spec remove_member(Arca.Schemas.Athanor.t(), [user_id: String.t()] | [email: String.t()]) ::
           :ok | {:error, term()}
   def remove_member(%{kind: "person"}, _target), do: {:error, :person_athanor}
 
   def remove_member(%{id: athanor_id} = athanor, user_id: user_id) when is_binary(user_id) do
+    # Follows are dropped BEFORE the membership row, for the reason
+    # `end_if_frozen/1` runs first: with the row already gone a failed
+    # sweep could never be retried (`find/3` answers :not_found), and the
+    # orphaned follows would stand until a re-add revived them.
     with {:ok, row} <- find(user_id, "athanor", athanor_id),
          :ok <- end_if_frozen(athanor),
+         :ok <- Arca.TopicSubscriptionStorage.unfollow_all(athanor_id, user_id),
          {:ok, _} <- remove(row) do
       # The established-context memo would otherwise serve the removed
       # member their cached, athanor-focused context on the stateless
@@ -425,9 +452,10 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc """
   Remove every row of a person (a denied user's rows) — group and platform
-  alike. A group they were the last active member of is archived, as when
-  they leave it. A failure is reported: the caller is ejecting someone and
-  must not answer "done" while rows survive.
+  alike, and their topic follows in every athanor they held a seat in. A
+  group they were the last active member of is archived, as when they
+  leave it. A failure is reported: the caller is ejecting someone and must
+  not answer "done" while rows survive.
   """
   @spec remove_all_for_user(String.t()) :: :ok | {:error, term()}
   def remove_all_for_user(user_id) when is_binary(user_id) do
@@ -438,7 +466,9 @@ defmodule Sanctum.Tenancy.Members do
       # go, for the same reason `remove_member/2` orders it that way: a
       # failure must abort while the memberships still exist, or the husk
       # could never be re-attempted and its pair_key would stand forever.
-      with :ok <- end_frozen_estates(rows) do
+      # The follows go before the rows for the same reason.
+      with :ok <- end_frozen_estates(rows),
+           :ok <- drop_follows(rows, user_id) do
         Arca.Repo.delete_all(from(m in Membership, where: m.user_id == ^user_id))
 
         for %{athanor_id: athanor_id} <- rows, is_binary(athanor_id) do
@@ -458,9 +488,7 @@ defmodule Sanctum.Tenancy.Members do
 
   defp end_frozen_estates(rows) do
     rows
-    |> Enum.map(& &1.athanor_id)
-    |> Enum.filter(&is_binary/1)
-    |> Enum.uniq()
+    |> athanor_ids()
     |> Enum.reduce_while(:ok, fn athanor_id, :ok ->
       case Athanors.get(athanor_id) do
         {:ok, athanor} ->
@@ -478,6 +506,25 @@ defmodule Sanctum.Tenancy.Members do
           {:halt, err}
       end
     end)
+  end
+
+  defp drop_follows(rows, user_id) do
+    rows
+    |> athanor_ids()
+    |> Enum.reduce_while(:ok, fn athanor_id, :ok ->
+      case Arca.TopicSubscriptionStorage.unfollow_all(athanor_id, user_id) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  # The athanors a person's rows name — a platform row names none.
+  defp athanor_ids(rows) do
+    rows
+    |> Enum.map(& &1.athanor_id)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
   end
 
   @max_page 500

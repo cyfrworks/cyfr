@@ -107,6 +107,7 @@ defmodule Opus do
   """
   @spec run_child(Sanctum.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
           {:ok, map()} | {:error, term()}
+  @impl Cyfr.Execution
   defdelegate run_child(authority, reference, need, input, opts), to: Opus.Chain
 
   @doc """

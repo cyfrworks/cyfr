@@ -21,16 +21,19 @@ defmodule Arca.ProfileStorage do
       _ = Map.fetch!(attrs, :athanor_id)
       row = Map.put_new(attrs, :id, Cyfr.UUID7.generate_id("prof"))
 
-      # Through a changeset carrying the active-identity index — see
-      # `Arca.VaultStorage.put/1`: a bare struct insert declares no
-      # constraint, so a race raised `Ecto.ConstraintError` past the
-      # db-error rescue instead of refusing typed.
-      %Profile{}
-      |> Ecto.Changeset.change(row)
-      |> Ecto.Changeset.unique_constraint([:athanor_id, :source_ref, :label, :kind],
-        name: :profiles_active_identity_index
-      )
-      |> Arca.Repo.insert()
+      # The schema's changeset holds the row to the profile vocabulary and
+      # carries the active-identity index (a bare struct insert declares no
+      # constraint, so a race raised past the db-error rescue). A label
+      # refusal keeps the typed shape the consent verbs answer with.
+      case Arca.Repo.insert(Profile.changeset(%Profile{}, row)) do
+        {:error, %Ecto.Changeset{errors: errors}} = refusal ->
+          if Keyword.has_key?(errors, :label),
+            do: {:error, {:invalid_label, Map.get(row, :label)}},
+            else: refusal
+
+        result ->
+          result
+      end
     end)
   end
 

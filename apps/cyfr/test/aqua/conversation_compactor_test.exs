@@ -128,8 +128,41 @@ defmodule Aqua.ConversationCompactorTest do
           [older_msg | build_recent_messages(20)]
 
       result = ConversationCompactor.compact(messages)
-      assert is_list(result)
-      assert result != []
+
+      assert [%{"parts" => [%{"functionResponse" => %{"response" => response}}]}] =
+               Enum.filter(result, &Map.has_key?(&1, "parts"))
+
+      assert %{"content" => cut} = response
+      assert String.ends_with?(cut, "... [truncated]")
+      assert byte_size(cut) <= 520
+    end
+
+    test "truncates the canonical tool_results bodies in older messages" do
+      # What every provider writes back: one message carrying the results
+      # of the assistant turn before it. It has to shrink in place, not
+      # only drop whole.
+      older =
+        build_large_conversation(80) ++
+          [
+            %{
+              "role" => "assistant",
+              "content" => [
+                %{"type" => "tool_use", "id" => "t1", "name" => "read", "input" => %{}}
+              ]
+            },
+            %{
+              "role" => "tool_results",
+              "results" => [%{"tool_call_id" => "t1", "content" => String.duplicate("f", 10_000)}]
+            }
+          ]
+
+      result = ConversationCompactor.compact(older ++ build_recent_messages(20))
+
+      assert [%{"results" => [%{"tool_call_id" => "t1", "content" => content}]}] =
+               Enum.filter(result, &(&1["role"] == "tool_results"))
+
+      assert String.ends_with?(content, "... [truncated]")
+      assert byte_size(content) <= 520
     end
 
     test "preserves last 20 messages even when over budget" do

@@ -22,7 +22,6 @@ defmodule Aqua.ToolGrantsTest do
           scope: "conversation",
           effect: "allow",
           conversation_id: "conv_1",
-          agent_athanor_id: ctx.athanor_id,
           agent_name: "aqua",
           tool: "component",
           action: "pull"
@@ -33,6 +32,41 @@ defmodule Aqua.ToolGrantsTest do
     ToolGrants.put(ctx, attrs)
   end
 
+  describe "refusal_message/1" do
+    test "every reason the union carries reads as a sentence, never as an atom" do
+      reasons = [
+        :destructive,
+        :external,
+        "destructive",
+        "external",
+        :never_standing,
+        :conversation_only,
+        :unknown_kind,
+        :something_new
+      ]
+
+      for reason <- reasons do
+        sentence = ToolGrants.refusal_message({:scope_not_permitted, reason})
+        assert is_binary(sentence) and String.ends_with?(sentence, ".")
+        refute sentence =~ ~r/never_standing|conversation_only|unknown_kind|foreign_agent/
+      end
+
+      # The runner spells the kind as the intent stores it (a string), the
+      # write path as an atom; the person reads the same words.
+      assert ToolGrants.refusal_message({:scope_not_permitted, :destructive}) ==
+               ToolGrants.refusal_message({:scope_not_permitted, "destructive"})
+
+      assert ToolGrants.refusal_message({:scope_not_permitted, :destructive}) =~
+               "A destructive action always asks"
+
+      assert ToolGrants.refusal_message({:scope_not_permitted, :never_standing}) =~
+               "one click at a time"
+
+      assert ToolGrants.refusal_message({:scope_not_permitted, :conversation_only}) =~
+               "this conversation only"
+    end
+  end
+
   describe "resolve/2" do
     test "an allow makes a declared 'ask' automatic" do
       declared = %{"component.pull" => "ask"}
@@ -41,14 +75,16 @@ defmodule Aqua.ToolGrantsTest do
       assert ToolGrants.resolve(declared, grants) == %{"component.pull" => "auto"}
     end
 
-    test "a deny beats a declared 'auto' and leaves the surface entirely" do
+    test "a deny beats a declared 'auto' and pins the pair as denied" do
       declared = %{"component.pull" => "auto", "files.read" => "auto"}
       grants = [%{effect: "deny", tool: "component", action: "pull"}]
 
-      # Removed, not demoted to "ask": absence from the allowlist is what
-      # makes an action uncallable, so a person who said "never" is not
-      # asked again either.
-      assert ToolGrants.resolve(declared, grants) == %{"files.read" => "auto"}
+      # Kept as an exact "deny", not dropped: every policy reader falls back
+      # to a `tool.*` glob only for an ABSENT key, so a dropped pair would
+      # let a surviving glob answer for it. A present "deny" is uncallable
+      # and not proposable, so a person who said "never" is not asked again.
+      assert ToolGrants.resolve(declared, grants) ==
+               %{"component.pull" => "deny", "files.read" => "auto"}
     end
 
     test "a deny wins over an allow for the same pair" do
@@ -59,7 +95,47 @@ defmodule Aqua.ToolGrantsTest do
         %{effect: "deny", tool: "component", action: "pull"}
       ]
 
-      assert ToolGrants.resolve(declared, grants) == %{}
+      assert ToolGrants.resolve(declared, grants) == %{"component.pull" => "deny"}
+    end
+
+    test "a deny is not defeated, or inverted, by a glob" do
+      # The two shapes that used to fail: a deny against a globbed `ask`
+      # was re-offered every turn, and a deny against an exact `ask` under
+      # a globbed `auto` made the pair directly callable.
+      deny = [%{effect: "deny", tool: "component", action: "pull"}]
+
+      composed = ToolGrants.resolve(%{"component.*" => "ask"}, deny)
+      assert composed["component.pull"] == "deny"
+      refute Map.has_key?(composed, "component.*")
+      assert composed["component.search"] == "ask"
+
+      inverted = ToolGrants.resolve(%{"component.pull" => "ask", "component.*" => "auto"}, deny)
+      assert inverted["component.pull"] == "deny"
+      assert inverted["component.search"] == "auto"
+    end
+
+    test "a role's delegation glob and the search gate pass through composition untouched" do
+      composed = ToolGrants.resolve(%{"aqua_builder.*" => "auto", "native_search" => "auto"}, [])
+      assert composed == %{"aqua_builder.*" => "auto", "native_search" => "auto"}
+    end
+
+    test "the kind ceiling demotes an automatic destructive action, wherever it came from" do
+      # A hand-edited file, or a row written before the rule: neither
+      # reaches the guest as auto.
+      assert ToolGrants.resolve(%{"files.delete" => "auto", "files.read" => "auto"}, []) ==
+               %{"files.delete" => "ask", "files.read" => "auto"}
+
+      assert ToolGrants.resolve(%{"http.*" => "auto"}, [])["http.delete"] == "ask"
+    end
+
+    test "allowed_keys/1 is grant-derived and a deny subtracts" do
+      rows = [
+        %{effect: "allow", scope: "conversation", tool: "component", action: "pull"},
+        %{effect: "deny", scope: "agent", tool: "component", action: "pull"},
+        %{effect: "allow", scope: "conversation", tool: "component", action: "list"}
+      ]
+
+      assert ToolGrants.allowed_keys(rows) == MapSet.new([{"component", "list"}])
     end
 
     test "no grants leaves the declared policy exactly as written" do
@@ -69,69 +145,10 @@ defmodule Aqua.ToolGrantsTest do
   end
 
   describe "scope" do
-    test "agent scope for a borrowed agent narrows to this conversation, loudly", %{ctx: ctx} do
-      # Not refused-and-dropped: the person answered, and the answer is
-      # recorded where it CAN reach — this thread — with `narrowed?: true`
-      # as the caller's cue to say so.
-      assert {:ok, %{row: row, narrowed?: true}} =
-               grant(ctx, %{scope: "agent", agent_athanor_id: "ath_someone_else"})
-
-      assert row.scope == "conversation"
-      assert row.conversation_id == "conv_1"
-      assert row.athanor_id == ctx.athanor_id
-
-      # …and the same narrowing for a deny: "never" on a borrowed agent IS
-      # a conversation-scope deny. An agent-scope "never" following the
-      # agent home would be the allow leak with the sign reversed.
-      assert {:ok, %{row: deny, narrowed?: true}} =
-               grant(ctx, %{
-                 scope: "agent",
-                 effect: "deny",
-                 agent_athanor_id: "ath_someone_else"
-               })
-
-      assert deny.scope == "conversation"
-    end
-
-    test "agent scope with nothing to narrow into keeps the refusal", %{ctx: ctx} do
-      assert {:error, {:scope_not_permitted, :foreign_agent}} =
-               grant(ctx, %{
-                 scope: "agent",
-                 agent_athanor_id: "ath_someone_else",
-                 conversation_id: nil
-               })
-    end
-
-    test "conversation scope stays available for a borrowed agent", %{ctx: ctx} do
-      assert {:ok, %{row: row, narrowed?: false}} =
-               grant(ctx, %{scope: "conversation", agent_athanor_id: "ath_someone_else"})
-
-      assert row.scope == "conversation"
-      assert row.athanor_id == ctx.athanor_id
-      assert row.agent_athanor_id == "ath_someone_else"
-    end
-
-    test "an agent-scope row carries no conversation", %{ctx: ctx} do
-      assert {:ok, %{row: row}} = grant(ctx, %{scope: "agent"})
+    test "an agent-scope row carries no conversation, and is keyed by the estate", %{ctx: ctx} do
+      assert {:ok, row} = grant(ctx, %{scope: "agent"})
       assert is_nil(row.conversation_id)
-    end
-
-    test "an agent-scope answer follows the agent into another estate", %{ctx: ctx} do
-      # Written at home (owner == focus)…
-      {:ok, _} = grant(ctx, %{scope: "agent", tool: "component", action: "pull"})
-      {:ok, _} = grant(ctx, %{scope: "agent", effect: "deny", tool: "files", action: "write"})
-
-      # …and read wherever the agent works: another estate's conversation
-      # unions the OWNER's agent-scope rows in.
-      elsewhere = %{ctx | athanor_id: "ath_elsewhere"}
-      rows = ToolGrants.for_conversation(elsewhere, "conv_far", ctx.athanor_id, "aqua")
-
-      assert {"component", "pull"} in ToolGrants.allowed_keys(rows)
-
-      # The deny rides along too — a "never" answered at home is not
-      # re-offered abroad (and the followed allow composes in as auto).
-      assert ToolGrants.resolve(%{"files.write" => "auto"}, rows) ==
-               %{"component.pull" => "auto"}
+      assert row.athanor_id == ctx.athanor_id
     end
 
     test "a standing allow for a destructive or external action is refused at the write", %{
@@ -163,6 +180,52 @@ defmodule Aqua.ToolGrantsTest do
                grant(ctx, %{scope: "agent", tool: "notes", action: "pin"})
 
       assert {:ok, _} = grant(ctx, %{tool: "notes", action: "pin", effect: "deny"})
+
+      # A scroll is read into every turn's prompt index, so the two scroll
+      # writes a chain may propose are `standing: false` the same way —
+      # each one a click, at neither scope; a deny still stands.
+      for action <- ~w(skill_create skill_update) do
+        assert {:error, {:scope_not_permitted, :never_standing}} =
+                 grant(ctx, %{tool: "aqua", action: action}),
+               "aqua.#{action} took a conversation-scope standing allow"
+
+        assert {:error, {:scope_not_permitted, :never_standing}} =
+                 grant(ctx, %{scope: "agent", tool: "aqua", action: action}),
+               "aqua.#{action} took an agent-scope standing allow"
+
+        assert {:ok, _} = grant(ctx, %{tool: "aqua", action: action, effect: "deny"})
+      end
+    end
+
+    test "an allow the action's current declaration would refuse stops counting at the read",
+         %{ctx: ctx} do
+      # A row written before `notes.pin` declared `standing: false` (or by
+      # a surface that never went through `put/2`). It must not auto-run
+      # anything — neither on the runner's fast path (`allowed_keys/1`)
+      # nor by becoming `auto` in the policy the formula is handed
+      # (`resolve/2`). A deny still counts.
+      stale =
+        %{
+          athanor_id: ctx.athanor_id,
+          scope: "conversation",
+          effect: "allow",
+          conversation_id: "conv_1",
+          agent_name: "aqua",
+          tool: "notes",
+          action: "pin",
+          granted_by: ctx.user_id
+        }
+
+      assert {:ok, _} = Arca.ToolGrantStorage.put(stale)
+      assert {:ok, _} = Arca.ToolGrantStorage.put(%{stale | action: "forget", effect: "deny"})
+
+      rows = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
+      assert length(rows) == 2
+
+      assert ToolGrants.allowed_keys(rows) == MapSet.new()
+
+      assert ToolGrants.resolve(%{"notes.pin" => "ask", "notes.forget" => "auto"}, rows) ==
+               %{"notes.pin" => "ask", "notes.forget" => "deny"}
     end
 
     test "a conversation-only action takes a conversation allow and refuses the agent scope",
@@ -170,7 +233,7 @@ defmodule Aqua.ToolGrantsTest do
       # `notes.keep` declares `standing: :conversation`: a filed note
       # follows the thread it was kept from, never the agent — so an
       # agent-scope allow is refused outright rather than narrowed.
-      assert {:ok, %{narrowed?: false}} = grant(ctx, %{tool: "notes", action: "keep"})
+      assert {:ok, _} = grant(ctx, %{tool: "notes", action: "keep"})
 
       assert {:error, {:scope_not_permitted, :conversation_only}} =
                grant(ctx, %{scope: "agent", tool: "notes", action: "keep"})
@@ -204,28 +267,16 @@ defmodule Aqua.ToolGrantsTest do
       {:ok, _} = grant(ctx, %{scope: "agent", effect: "allow"})
       {:ok, _} = grant(ctx, %{scope: "agent", effect: "deny"})
 
-      rows = ToolGrants.for_conversation(ctx, "conv_1", ctx.athanor_id, "aqua")
+      rows = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
       assert [%{effect: "deny"}] = rows
-    end
-
-    test "two agent-scope rows for the same pair collide despite the null conversation", %{
-      ctx: ctx
-    } do
-      # The regression the two partial indexes exist for: a single unique
-      # index over a nullable `conversation_id` constrains nothing, because
-      # NULL never equals NULL.
-      {:ok, _} = grant(ctx, %{scope: "agent", effect: "allow"})
-      {:ok, _} = grant(ctx, %{scope: "agent", effect: "allow"})
-
-      assert [_one] = ToolGrants.for_conversation(ctx, "conv_1", ctx.athanor_id, "aqua")
     end
 
     test "the same pair in two conversations is two rows", %{ctx: ctx} do
       {:ok, _} = grant(ctx, %{conversation_id: "conv_1"})
       {:ok, _} = grant(ctx, %{conversation_id: "conv_2"})
 
-      assert [_] = ToolGrants.for_conversation(ctx, "conv_1", ctx.athanor_id, "aqua")
-      assert [_] = ToolGrants.for_conversation(ctx, "conv_2", ctx.athanor_id, "aqua")
+      assert [_] = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
+      assert [_] = rows(ctx, "conv_2", ctx.athanor_id, "aqua")
     end
   end
 
@@ -237,7 +288,7 @@ defmodule Aqua.ToolGrantsTest do
 
       keys =
         ctx
-        |> ToolGrants.for_conversation("conv_1", ctx.athanor_id, "aqua")
+        |> rows("conv_1", ctx.athanor_id, "aqua")
         |> ToolGrants.allowed_keys()
 
       assert MapSet.equal?(keys, MapSet.new([{"component", "pull"}, {"record", "list"}]))
@@ -246,7 +297,7 @@ defmodule Aqua.ToolGrantsTest do
     test "another agent's grants are not this agent's", %{ctx: ctx} do
       {:ok, _} = grant(ctx, %{agent_name: "aqua_planner"})
 
-      assert [] = ToolGrants.for_conversation(ctx, "conv_1", ctx.athanor_id, "aqua")
+      assert [] = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
     end
   end
 
@@ -257,15 +308,21 @@ defmodule Aqua.ToolGrantsTest do
       key = %{
         scope: "conversation",
         conversation_id: "conv_1",
-        agent_athanor_id: ctx.athanor_id,
         agent_name: "aqua",
         tool: "component",
         action: "pull"
       }
 
       assert :ok = ToolGrants.revoke(ctx, key)
-      assert [] = ToolGrants.for_conversation(ctx, "conv_1", ctx.athanor_id, "aqua")
+      assert [] = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
       assert :ok = ToolGrants.revoke(ctx, key)
     end
+  end
+
+  # The rows a read answers — `{:ok, rows}`, since a store that cannot be
+  # read is an error the caller refuses on, never an empty list.
+  defp rows(ctx, conversation_id, _owner, name) do
+    {:ok, rows} = ToolGrants.for_conversation(ctx, conversation_id, name)
+    rows
   end
 end

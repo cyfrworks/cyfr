@@ -25,6 +25,7 @@ defmodule PrismWeb.MembersLive do
      |> assign(:page_title, "Members")
      |> assign(:active_nav, "members")
      |> assign(:athanor, nil)
+     |> assign(:athanor_label, nil)
      |> assign(:members, [])
      |> assign(:groups, [])
      |> assign(:new_email, "")
@@ -237,6 +238,7 @@ defmodule PrismWeb.MembersLive do
 
     socket
     |> assign(:athanor, athanor)
+    |> assign(:athanor_label, athanor && PrismWeb.Estates.label(athanor, ctx))
     |> assign(:members, members)
     |> assign(:groups, groups)
   end
@@ -263,7 +265,7 @@ defmodule PrismWeb.MembersLive do
       <div :if={!@loading} class="space-y-6">
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-1">
-            {if @athanor, do: @athanor.name, else: "Athanor"}
+            {@athanor_label || "Estate"}
           </h3>
           <p class="text-xs text-gray-500 mb-4">
             <%= cond do %>
@@ -282,9 +284,7 @@ defmodule PrismWeb.MembersLive do
 
           <div :if={@members == []} class="py-8"><.empty_state message="No members" /></div>
           <.table :if={@members != []} id="members" rows={@members}>
-            <:col :let={m} label="Who">
-              {m[:display_name] || m[:namespace] || m[:email] || m[:user_id]}
-            </:col>
+            <:col :let={m} label="Who">{PrismWeb.People.label(m, @context)}</:col>
             <:col :let={m} label="Email">{m[:email] || "-"}</:col>
             <:col :let={m} label="Status">
               <.badge color={if m[:status] == "active", do: "green", else: "yellow"}>

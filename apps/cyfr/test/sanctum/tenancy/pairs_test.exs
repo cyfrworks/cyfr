@@ -82,7 +82,39 @@ defmodule Sanctum.Tenancy.PairsTest do
     end
   end
 
+  describe "pair_key/2" do
+    test "is order-independent and names exactly two people" do
+      assert Athanors.pair_key("a", "b") == Athanors.pair_key(["b", "a"], nil)
+
+      # A key over one id, or three, would name nothing a pair can be.
+      assert_raise FunctionClauseError, fn -> Athanors.pair_key(["a"], nil) end
+      assert_raise FunctionClauseError, fn -> Athanors.pair_key(["a", "b", "c"], nil) end
+    end
+
+    test "delimits the ids by encoding, not by a separator an id could hold" do
+      # Under a newline join these two pairs hashed the same bytes.
+      refute Athanors.pair_key("a\nb", "c") == Athanors.pair_key("a", "b\nc")
+    end
+  end
+
   describe "the door is closed" do
+    test "every writer of a membership row refuses a frozen estate, not only add/3", %{
+      alice: alice,
+      bob: bob,
+      carol: carol
+    } do
+      {:ok, pair} = Athanors.create_pair(alice, bob)
+
+      assert {:error, :frozen_roster} =
+               Members.create(%{user_id: carol, scope: "athanor", athanor_id: pair.id})
+
+      assert {:error, :frozen_roster} =
+               Members.ensure(carol, scope: "athanor", athanor_id: pair.id)
+
+      {:ok, rows} = Members.list_by_athanor(pair.id)
+      assert length(rows) == 2
+    end
+
     test "member.add refuses a frozen estate on both arms", %{
       alice: alice,
       bob: bob,
@@ -170,6 +202,15 @@ defmodule Sanctum.Tenancy.PairsTest do
       {:ok, first} = Athanors.create_pair(alice, bob)
       :ok = Members.remove_member(first, user_id: alice)
 
+      # The husk holds one member — Bob. Reopened, it would seat him alone
+      # in a second You, so an ended DM is final on every path, including
+      # the verb that reopens any other archived estate.
+      {:ok, husk} = Athanors.get(first.id)
+      assert husk.status == "archived"
+      assert {:error, :frozen_is_final} = Athanors.unarchive(husk)
+      assert {:error, :frozen_is_final} = Athanors.unarchive(first)
+      assert {:ok, %{status: "archived"}} = Athanors.get(first.id)
+
       # The unique index is partial on ACTIVE precisely so the archived
       # husk does not hold the key hostage — without that, these two could
       # never be paired again.
@@ -203,6 +244,53 @@ defmodule Sanctum.Tenancy.PairsTest do
 
       assert {:error, {:limit_reached, :max_groups_per_person, 1}} =
                Athanors.create_group(alice, "One too many")
+    end
+
+    test "a person at the pair cap cannot open another DM — from either side", %{
+      alice: alice,
+      bob: bob,
+      carol: carol
+    } do
+      original = Application.get_env(:cyfr, :caps, [])
+      Application.put_env(:cyfr, :caps, Keyword.put(original, :max_pairs_per_person, 1))
+      on_exit(fn -> Application.put_env(:cyfr, :caps, original) end)
+
+      {:ok, pair} = Athanors.create_pair(alice, bob)
+
+      # Alice holds her one DM. A pair is minted for two, so Carol — who
+      # holds none — cannot reach Alice either: one member of a large room
+      # must not be able to mint an estate per co-member, nor have one
+      # minted onto them.
+      assert {:error, {:limit_reached, :max_pairs_per_person, 1}} =
+               Athanors.create_pair(alice, carol)
+
+      assert {:error, {:limit_reached, :max_pairs_per_person, 1}} =
+               Athanors.create_pair(carol, alice)
+
+      refute Enum.any?(Athanors.list_for_user(carol), &(&1.roster == "frozen"))
+
+      # Finding the DM that exists is not a mint, and is never capped.
+      assert {:ok, ^pair} = Athanors.create_pair(bob, alice)
+    end
+
+    test "an ended DM frees its place under the pair cap", %{
+      alice: alice,
+      bob: bob,
+      carol: carol
+    } do
+      original = Application.get_env(:cyfr, :caps, [])
+      Application.put_env(:cyfr, :caps, Keyword.put(original, :max_pairs_per_person, 1))
+      on_exit(fn -> Application.put_env(:cyfr, :caps, original) end)
+
+      {:ok, pair} = Athanors.create_pair(alice, bob)
+
+      assert {:error, {:limit_reached, :max_pairs_per_person, 1}} =
+               Athanors.create_pair(alice, carol)
+
+      # Bob leaves; the tape is archived, and archived is not counted.
+      :ok = Members.remove_member(pair, user_id: bob)
+      assert {:ok, next} = Athanors.create_pair(alice, carol)
+      assert next.roster == "frozen"
     end
   end
 end

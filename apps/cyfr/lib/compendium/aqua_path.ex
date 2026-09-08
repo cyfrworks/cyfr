@@ -41,10 +41,6 @@ defmodule Compendium.AquaPath do
   # speak it, so a name the tools refuse can never mint a unit.
   @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9_-]*\z/
 
-  @doc "The role/scroll name grammar — letters, digits, `_` and `-`."
-  @spec name_format() :: Regex.t()
-  def name_format, do: @name_format
-
   @doc """
   Whether `name` is a valid role or scroll name.
 
@@ -127,6 +123,21 @@ defmodule Compendium.AquaPath do
   """
   @spec roles_dirname() :: String.t()
   def roles_dirname, do: @roles
+
+  @doc """
+  The directory an earlier tree shape kept its agents in. Nothing reads
+  it; `locate/1` still recognises a file there as a unit so `reset all`
+  can drop a stale shadow, and the seed side uses the name to keep such a
+  directory out of what the template is said to ship.
+
+  ## Examples
+
+      iex> Compendium.AquaPath.legacy_agents_dirname()
+      "agents"
+
+  """
+  @spec legacy_agents_dirname() :: String.t()
+  def legacy_agents_dirname, do: @legacy_agents
 
   @doc """
   One role's file — a shadow unit of its own.

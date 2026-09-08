@@ -101,6 +101,11 @@ defmodule Sanctum.Tenancy.Athanors do
   `or_read_the_winner/1` shape `ensure_home/0` uses). Two people
   double-clicking each other's names get one tape.
 
+  The per-person cap on pairs applies to a mint, and to both people: a
+  pair is minted for two, so either one at `CYFR_MAX_PAIRS_PER_PERSON`
+  refuses it with `{:error, {:limit_reached, :max_pairs_per_person, cap}}`.
+  Finding the existing pair is not a mint and is never capped.
+
   The row only — it is deliberately **not** provisioned here. A pair that
   owns nothing needs no registry pull, no component scan and no consent
   bootstrap to exist; `Sanctum.Provisioning.ensure_provisioned/1` fills it
@@ -113,26 +118,52 @@ defmodule Sanctum.Tenancy.Athanors do
     key = pair_key(user_a, user_b)
 
     case get_by_pair_key(key) do
-      {:ok, athanor} -> {:ok, athanor}
-      {:error, :not_found} -> mint_pair(key, user_a, user_b)
-      {:error, _} = err -> err
+      {:ok, athanor} ->
+        {:ok, athanor}
+
+      {:error, :not_found} ->
+        with :ok <- check_pair_cap(user_a, user_b), do: mint_pair(key, user_a, user_b)
+
+      {:error, _} = err ->
+        err
     end
   end
 
   def create_pair(_, _), do: {:error, :invalid_pair}
 
+  # A pair is minted for two, so the cap is asked for both. Without it one
+  # member of a large room could mint an estate per co-member from the
+  # wire — a DM asks nobody else's consent — and spend `CYFR_MAX_ATHANORS`
+  # for everyone.
+  defp check_pair_cap(user_a, user_b) do
+    Enum.reduce_while([user_a, user_b], :ok, fn user_id, :ok ->
+      case Caps.check_counted(:max_pairs_per_person, fn -> count_pairs_of(user_id) end) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
   @doc """
-  The canonical key for a set of people: order-independent, so
-  `{alice, bob}` and `{bob, alice}` name the same estate.
+  The canonical key for a pair of people: order-independent, so
+  `{alice, bob}` and `{bob, alice}` name the same estate. Exactly two ids
+  — a pair is what a frozen estate holds, and a key over any other number
+  would name nothing `create_pair/2` can find.
+
+  The hash is over the JSON encoding of the sorted ids, so each id is
+  delimited by the encoding rather than by a separator an id could
+  contain. Keys minted under the earlier newline-joined form were re-keyed
+  by the `pair_key_rehash` migration, so an existing pair is still found
+  by its members.
   """
   @spec pair_key([String.t()] | String.t(), String.t() | nil) :: String.t()
   def pair_key(user_a, user_b) when is_binary(user_a) and is_binary(user_b),
     do: pair_key([user_a, user_b], nil)
 
-  def pair_key(user_ids, nil) when is_list(user_ids) do
+  def pair_key([a, b] = user_ids, nil) when is_binary(a) and is_binary(b) do
     user_ids
     |> Enum.sort()
-    |> Enum.join("\n")
+    |> Jason.encode!()
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.url_encode64(padding: false)
   end
@@ -195,13 +226,12 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
+  # A pair's two seats, at birth — the one write a frozen roster admits.
   defp seat(athanor, user_id) do
-    Sanctum.Tenancy.Members.create(%{
-      user_id: user_id,
-      scope: "athanor",
-      athanor_id: athanor.id,
-      added_by: user_id
-    })
+    Sanctum.Tenancy.Members.create(
+      %{user_id: user_id, scope: "athanor", athanor_id: athanor.id, added_by: user_id},
+      birth: true
+    )
   end
 
   # Both display names, so the estate reads as the two people in it. The
@@ -213,6 +243,31 @@ defmodule Sanctum.Tenancy.Athanors do
     |> Enum.join(" & ")
     |> String.slice(0, 80)
   end
+
+  @doc """
+  How an estate is named to one of its members: a frozen pair by the
+  OTHER person — to `user_id`, a DM is whoever they are talking to, never
+  the stored "A & B" — and any other estate by its own name. The stored
+  name stands in when the other seat cannot be read (an ended pair holds
+  one member).
+  """
+  @spec pair_label(Athanor.t(), String.t() | nil) :: String.t()
+  def pair_label(%Athanor{roster: "frozen", id: id, name: name}, user_id)
+      when is_binary(user_id) do
+    with {:ok, rows} <- Sanctum.Tenancy.Members.list_by_athanor(id),
+         %{user_id: other} <- Enum.find(rows, &other_seat?(&1, user_id)) do
+      Sanctum.Tenancy.Users.display_name(other)
+    else
+      _ -> name
+    end
+  end
+
+  def pair_label(%Athanor{name: name}, _user_id), do: name
+
+  defp other_seat?(%{user_id: other, status: "active"}, user_id) when is_binary(other),
+    do: other != user_id
+
+  defp other_seat?(_row, _user_id), do: false
 
   @spec get(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | :database_error}
   def get(id) when is_binary(id) do
@@ -547,7 +602,10 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Reopen an archived athanor, if the server still has room for it. A retired
   Home never reopens — it is the record of a furnace that ended;
-  `ensure_home/0` mints its successor.
+  `ensure_home/0` mints its successor. Nor does an ended DM: a frozen
+  estate is archived the moment either person leaves, so its husk holds
+  one member, and reopening it would seat that person alone in a second
+  You. Clicking the name again mints a new pair instead.
   """
   @spec unarchive(Athanor.t()) :: {:ok, Athanor.t()} | {:error, term()}
   def unarchive(%Athanor{} = athanor) do
@@ -555,6 +613,9 @@ defmodule Sanctum.Tenancy.Athanors do
       cond do
         current.home ->
           {:error, :home_is_final}
+
+        current.roster == "frozen" ->
+          {:error, :frozen_is_final}
 
         current.status == "active" ->
           {:ok, current}
@@ -695,10 +756,11 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   Merge `patch` into the athanor's settings document, one level deep: a map
-  under a key merges into the map already there (so `%{"aqua" => %{"answer_mode"
-  => "all"}}` leaves the other `aqua` keys alone), a `nil` deletes the key,
-  anything else replaces. Every member's open views hear of the change on
-  the athanor's notify topic.
+  under a key merges into the map already there (so a `"retention"` patch
+  naming one window leaves the other windows alone), a `nil` deletes the
+  key, anything else replaces (a `"provisioning_error"` is recorded whole).
+  Every member's open views hear of the change on the athanor's notify
+  topic.
   """
   @spec put_settings(Athanor.t(), map()) :: {:ok, Athanor.t()} | {:error, term()}
   def put_settings(%Athanor{} = athanor, patch) when is_map(patch) do
@@ -825,6 +887,8 @@ defmodule Sanctum.Tenancy.Athanors do
   # conversation, not a group they created, and counting DMs against
   # `CYFR_MAX_GROUPS_PER_PERSON` would make the cap mean "how many people
   # may you talk to" — which is not what an operator setting it intends.
+  # DMs have their own ceiling, `CYFR_MAX_PAIRS_PER_PERSON`, counted by
+  # `count_pairs_of/1` below.
   defp count_groups_created_by(user_id) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.count_groups_created_by", fn ->
       {:ok,
@@ -833,6 +897,26 @@ defmodule Sanctum.Tenancy.Athanors do
            where:
              a.kind == "group" and a.roster == "open" and
                a.created_by == ^user_id and a.status == "active",
+           select: count(a.id)
+         )
+       ) || 0}
+    end)
+  end
+
+  # Every ACTIVE pair a person sits in — the pair cap's measure. Counted by
+  # membership, not by `created_by`: a pair is minted for two, and the one
+  # who did not click holds it just the same. An ended pair is archived
+  # and frees its place. Strict like the other counts the caps consult.
+  defp count_pairs_of(user_id) do
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.count_pairs_of", fn ->
+      {:ok,
+       Arca.Repo.one(
+         from(a in Athanor,
+           join: m in Membership,
+           on: m.athanor_id == a.id,
+           where:
+             m.user_id == ^user_id and m.scope == "athanor" and m.status == "active" and
+               a.roster == "frozen" and a.status == "active",
            select: count(a.id)
          )
        ) || 0}

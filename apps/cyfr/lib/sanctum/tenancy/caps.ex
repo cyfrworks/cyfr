@@ -4,17 +4,31 @@
 defmodule Sanctum.Tenancy.Caps do
   @moduledoc """
   The public-door caps: how many athanors a server holds, how many groups a
-  person may create, how many members a group may hold, how many personal
-  athanors may be minted per hour, and how many bytes an athanor may store.
+  person may create, how many DMs a person may hold open, how many members
+  a group may hold, how many conversations an athanor may hold, how many
+  personal athanors may be minted per hour, and how many bytes an athanor
+  may store.
 
   Read from `config :cyfr, :caps` (`CYFR_MAX_ATHANORS`,
-  `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_MEMBERS_PER_GROUP`,
-  `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES`). A `nil` cap is off.
-  A private box needs none of them; a `*` server sets them — and a default
-  install therefore has NO total-byte ceiling on authenticated guest
-  writes (only the per-call `max_request_size` and the per-scope file
-  backstop): an operator exposing the box sets
-  `CYFR_ATHANOR_STORAGE_BYTES` deliberately.
+  `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_PAIRS_PER_PERSON`,
+  `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MAX_CONVERSATIONS_PER_ATHANOR`,
+  `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES`). A `nil` cap is off. A private box needs
+  none of them; a `*` server sets them — and a default install therefore
+  has NO total-byte ceiling on authenticated guest writes (only the
+  per-call `max_request_size` and the per-scope file backstop): an
+  operator exposing the box sets `CYFR_ATHANOR_STORAGE_BYTES`
+  deliberately.
+
+  The pair cap and the conversation cap ship on: `config/runtime.exs`
+  defaults them to 200 and 1000 (`0` turns either off). A conversation is
+  a row any member — or any headless client of theirs — can mint from the
+  wire (`conversation.create`), each with a follow row of its own, so an
+  estate's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone
+  the caller shares a room with, and nobody else's consent is asked, so
+  one member of a large room could otherwise spend `CYFR_MAX_ATHANORS`
+  for everyone by opening a DM per co-member. It counts the ACTIVE pairs a
+  person sits in — an ended DM is archived and frees its place — and is
+  asked for both people, since a pair is minted for two.
 
   The byte cap counts the athanor's whole tree — every scope — on every
   write, which is what `CYFR_ATHANOR_STORAGE_BYTES` claims to bound.
@@ -31,14 +45,18 @@ defmodule Sanctum.Tenancy.Caps do
   @type key ::
           :max_athanors
           | :max_groups_per_person
+          | :max_pairs_per_person
           | :max_members_per_group
+          | :max_conversations_per_athanor
           | :mint_per_hour
           | :athanor_storage_bytes
 
   @keys [
     :max_athanors,
     :max_groups_per_person,
+    :max_pairs_per_person,
     :max_members_per_group,
+    :max_conversations_per_athanor,
     :mint_per_hour,
     :athanor_storage_bytes
   ]
@@ -176,8 +194,4 @@ defmodule Sanctum.Tenancy.Caps do
   end
 
   defp athanor_bytes(_ctx), do: {:ok, 0}
-
-  @doc "The keys, for config resolution."
-  @spec keys() :: [key()]
-  def keys, do: @keys
 end

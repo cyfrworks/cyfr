@@ -1131,8 +1131,8 @@ until you edit it. The rules:
   releases no longer touch it. `component status` shows it as `bundled_modified`
   with a diff against shipped.
 - **Delete never means revert.** Deleting a bundled component is refused (it
-  isn't yours to delete — and it costs nothing); `component reset` reverts an
-  edited copy to exactly what the release ships.
+  isn't yours to delete — and it costs nothing); the `component` tool's `reset`
+  action reverts an edited copy to exactly what the release ships.
 - **Your own component at a shipped path stays yours.** If a release later
   ships a component where you already created one, your bytes keep answering
   (shown as "hides shipped"); deleting yours reveals the shipped one. Reset
@@ -1141,9 +1141,11 @@ until you edit it. The rules:
   (`forked_from`); when a newer version of that upstream line is present
   locally, status flags it `upstream_superseded`.
 
-AQUA agent definitions follow the same overlay with per-file units: an unedited
-agent tracks the release automatically, an edited one shadows only itself, and
-`aqua reset` reverts edited copies while keeping agents you created.
+The AQUA tree — the soul, its roles and its scrolls — follows the same overlay
+with per-unit shadows: an unedited file tracks the release automatically, an
+edited one shadows only itself, and the `aqua` tool's `reset` action (from the
+AQUA page or over MCP) reverts edited copies while keeping the roles and
+scrolls the estate made.
 
 ---
 

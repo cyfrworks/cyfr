@@ -76,16 +76,6 @@ defmodule Compendium.MCPTest do
     )
 
     write.(
-      "aqua_arcade",
-      %{
-        title: "Arcade",
-        description: "Game tincture sub-agent prompt",
-        tool_policy: %{"files.read" => "auto", "storage.get" => "auto"}
-      },
-      "# Arcade Agent\n\nYou are the Arcade."
-    )
-
-    write.(
       "aqua_explorer",
       %{
         title: "Explorer",
@@ -1287,9 +1277,9 @@ defmodule Compendium.MCPTest do
     test "list returns available guides", %{ctx: ctx} do
       {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list"})
 
-      # the soul + 6 roles + 3 doc guides = 10
-      assert result.count == 10
-      assert length(result.guides) == 10
+      # the soul + 5 roles + 3 doc guides = 9
+      assert result.count == 9
+      assert length(result.guides) == 9
 
       names = Enum.map(result.guides, & &1.name)
       assert "component-guide" in names
@@ -1298,7 +1288,6 @@ defmodule Compendium.MCPTest do
       assert "aqua" in names
       assert "aqua_builder" in names
       assert "aqua_artisan" in names
-      assert "aqua_arcade" in names
       assert "aqua_explorer" in names
       assert "aqua_planner" in names
       assert "aqua_web" in names
@@ -1318,7 +1307,7 @@ defmodule Compendium.MCPTest do
       {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list"})
       roles = Enum.filter(result.guides, &(&1.type == "role"))
 
-      assert length(roles) == 6
+      assert length(roles) == 5
       refute Enum.any?(roles, &Map.has_key?(&1, :parent))
     end
 
@@ -1440,7 +1429,7 @@ defmodule Compendium.MCPTest do
       assert {:ok, _} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "aqua",
                  "tool_policy" => %{
                    "files.read" => "auto",
                    "files.delete" => "ask",
@@ -1448,8 +1437,69 @@ defmodule Compendium.MCPTest do
                  }
                })
 
-      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
       assert result.tool_policy["native_search"] == "auto"
+      assert result.tool_policy["files.delete"] == "ask"
+    end
+
+    test "the door refuses what no agent may hold: destructive auto, ask on a role, a UI event at ask",
+         %{ctx: ctx} do
+      # Kind always wins — on the soul as on a role.
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua",
+                 "tool_policy" => %{"files.delete" => "auto"}
+               })
+
+      assert msg =~ "always asks"
+
+      # A glob at auto that would cover a destructive action names it.
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua_builder",
+                 "tool_policy" => %{"files.*" => "auto"}
+               })
+
+      assert msg =~ "files.delete"
+
+      # A cloned role has no card to raise.
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua_builder",
+                 "tool_policy" => %{"files.write" => "ask"}
+               })
+
+      assert msg =~ "no card"
+
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "create",
+                 "name" => "asker",
+                 "tool_policy" => %{"component.pull" => "ask"}
+               })
+
+      assert msg =~ "no card"
+
+      # A UI event is auto or absent.
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua",
+                 "tool_policy" => %{"request_setup.open" => "ask"}
+               })
+
+      assert msg =~ "runs on its own"
+
+      # What a role may hold is written whole.
+      assert {:ok, _} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua_builder",
+                 "tool_policy" => %{"files.write" => "auto", "files.read" => "auto"}
+               })
     end
 
     test "get aqua_artisan returns a role prompt", %{ctx: ctx} do
@@ -1459,15 +1509,6 @@ defmodule Compendium.MCPTest do
       assert result.name == "aqua_artisan"
       assert result.type == "role"
       assert result.content =~ "Artisan Agent"
-    end
-
-    test "get aqua_arcade returns a role prompt", %{ctx: ctx} do
-      {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_arcade"})
-
-      assert result.name == "aqua_arcade"
-      assert result.type == "role"
-      assert result.content =~ "Arcade Agent"
     end
 
     test "get aqua_web returns a role prompt", %{ctx: ctx} do

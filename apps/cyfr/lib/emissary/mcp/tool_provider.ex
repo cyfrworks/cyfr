@@ -50,6 +50,27 @@ defmodule Emissary.MCP.ToolProvider do
   is where the size of that project is written down: the engine names some
   forty cyfr modules, so a worker needs a client for each, not a routing
   patch.
+
+  ## The shape of an answer
+
+  One convention for what `handle/3` puts in `{:ok, result}`, so a client
+  (and the AQUA harness reading a tool's answer back onto the tape) can
+  read any tool the same way:
+
+    * a **list** action answers a map keyed by the plural of what it
+      lists — `%{notes: [...]}`, `%{guides: [...]}`, `%{skills: [...]}` —
+      beside which a `count`, a `scope` or a `hint` may ride;
+    * a **single read** answers the record itself — `get` and `read`
+      return the fields, not a wrapper;
+    * a **write** answers the verb's past tense as the key and the
+      subject as the value — `%{created: name}`, `%{updated: name}`,
+      `%{deleted: name}`, `%{kept: name}`, `%{pinned: name}`,
+      `%{forgot: name}`, `%{decided: "approved"}` — with whatever the
+      caller must know beside it (`replaced: true`, `restored: "shipped"`,
+      the `athanor_id` a note landed in).
+
+  A search is a list: `notes.search` answers `%{matches: [...]}`, the
+  plural of what a search yields rather than of what it searched.
   """
 
   alias Sanctum.Context

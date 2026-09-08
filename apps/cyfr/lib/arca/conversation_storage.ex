@@ -29,6 +29,10 @@ defmodule Arca.ConversationStorage do
   alias Arca.Schemas.Message
   alias Sanctum.Context
 
+  # The two reserved row authors, spelled once in the schema.
+  @agent_author Message.agent_author()
+  @system_author Message.system_author()
+
   @default_title "New conversation"
   @title_max 80
 
@@ -80,21 +84,30 @@ defmodule Arca.ConversationStorage do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.create", fn ->
       Context.require_tenant!(ctx)
 
-      result =
-        %Conversation{}
-        |> Conversation.changeset(%{
-          id: attrs[:id] || Cyfr.UUID7.generate_id("conv"),
-          athanor_id: ctx.athanor_id,
-          title: attrs[:title] || @default_title,
-          created_by: ctx.user_id || "system"
-        })
-        |> Repo.insert()
-
-      with {:ok, conv} <- result do
+      # A thread is a row any member's client can mint from the wire, so
+      # the estate's count is held to the operator's cap like its DMs are.
+      with :ok <-
+             Sanctum.Tenancy.Caps.check_counted(:max_conversations_per_athanor, fn ->
+               {:ok, count(ctx)}
+             end),
+           {:ok, conv} <-
+             %Conversation{}
+             |> Conversation.changeset(%{
+               id: attrs[:id] || Cyfr.UUID7.generate_id("conv"),
+               athanor_id: ctx.athanor_id,
+               title: attrs[:title] || @default_title,
+               created_by: ctx.user_id || @system_author
+             })
+             |> Repo.insert() do
         subscribe_creator(ctx, conv)
         {:ok, conv}
       end
     end)
+  end
+
+  # How many threads the estate holds — read inside `create/2`'s rescue.
+  defp count(%Context{} = ctx) do
+    Repo.aggregate(from(c in Conversation, where: c.athanor_id == ^ctx.athanor_id), :count)
   end
 
   # Best effort: a topic that exists but is in nobody's sidebar is a
@@ -122,7 +135,6 @@ defmodule Arca.ConversationStorage do
             :history,
             :execution_id,
             :orchestrator,
-            :orchestrator_owner,
             :turn_seq,
             :last_message_at
           ])
@@ -183,7 +195,8 @@ defmodule Arca.ConversationStorage do
 
     Repo.delete_all(
       from(g in Arca.Schemas.ToolGrant,
-        where: g.scope == "conversation" and g.conversation_id in ^ids
+        where:
+          g.scope == ^Arca.Schemas.ToolGrant.conversation_scope() and g.conversation_id in ^ids
       )
     )
 
@@ -448,7 +461,7 @@ defmodule Arca.ConversationStorage do
          author: author,
          content: content
        })
-       when author not in ["aqua", "system"] and is_binary(content) do
+       when author not in [@agent_author, @system_author] and is_binary(content) do
     # The row keeps the text as typed; the title drops a leading `@aqua`.
     first_line = content |> String.trim() |> String.split("\n", parts: 2) |> List.first()
 
@@ -501,7 +514,7 @@ defmodule Arca.ConversationStorage do
     now = DateTime.utc_now()
 
     updates =
-      [status: to, resolved_by: ctx.user_id || "system"]
+      [status: to, resolved_by: ctx.user_id || @system_author]
       |> Keyword.merge(if(to == "running", do: [], else: [resolved_at: now]))
       |> Keyword.merge(
         case attrs[:resolution] do
@@ -564,22 +577,13 @@ defmodule Arca.ConversationStorage do
   @spec delete_before(Context.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def delete_before(%Context{} = ctx, %DateTime{} = cutoff) do
-    athanor_id = Context.athanor!(ctx)
-
     Arca.Repo.Errors.with_db_rescue("Arca.ConversationStorage.delete_before", fn ->
-      delete_before_rows(ctx, athanor_id, cutoff)
+      delete_before_rows(ctx, cutoff)
     end)
   end
 
-  defp delete_before_rows(ctx, athanor_id, cutoff) do
-    stale =
-      from(c in Conversation,
-        where: is_nil(c.execution_id) and coalesce(c.last_message_at, c.inserted_at) < ^cutoff,
-        select: c.id
-      )
-      |> QueryHelpers.where_athanor(athanor_id)
-
-    ids = Repo.all(stale)
+  defp delete_before_rows(ctx, cutoff) do
+    ids = Repo.all(from(c in stale_before(ctx, cutoff), select: c.id))
 
     # Bytes before rows, per conversation: an id whose blob delete fails
     # keeps its rows and retries next cycle — never an orphaned tree the
@@ -608,12 +612,27 @@ defmodule Arca.ConversationStorage do
         Repo.transaction(fn ->
           Repo.delete_all(from(m in Message, where: m.conversation_id in ^deletable))
           delete_conversation_satellites(deletable)
-          {count, _} = Repo.delete_all(from(c in Conversation, where: c.id in ^deletable))
+
+          {count, _} =
+            from(c in Conversation, where: c.id in ^deletable)
+            |> QueryHelpers.where_tenant(ctx)
+            |> Repo.delete_all()
+
           count
         end)
 
       {:ok, count}
     end
+  end
+
+  # The retention window both verbs speak, scoped the one way this module
+  # scopes: the athanor's conversations whose last activity is older than
+  # `cutoff`, a conversation with a running turn never among them.
+  defp stale_before(ctx, cutoff) do
+    from(c in Conversation,
+      where: is_nil(c.execution_id) and coalesce(c.last_message_at, c.inserted_at) < ^cutoff
+    )
+    |> QueryHelpers.where_tenant(ctx)
   end
 
   @doc """
@@ -625,14 +644,7 @@ defmodule Arca.ConversationStorage do
           {:ok, non_neg_integer()} | {:error, :database_error}
   def count_before(%Context{} = ctx, %DateTime{} = cutoff) do
     Arca.Repo.Errors.with_db_rescue("Arca.ConversationStorage.count_before", fn ->
-      count =
-        from(c in Conversation,
-          where: is_nil(c.execution_id) and coalesce(c.last_message_at, c.inserted_at) < ^cutoff
-        )
-        |> QueryHelpers.where_tenant(ctx)
-        |> Repo.aggregate(:count)
-
-      {:ok, count}
+      {:ok, Repo.aggregate(stale_before(ctx, cutoff), :count)}
     end)
   end
 

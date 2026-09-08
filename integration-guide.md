@@ -1064,6 +1064,8 @@ A typical live-data pipeline:
 | `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oauth` (GitHub/Google) or `oidc` (federated) |
 | `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails of the server's operators (platform admins). They are always let in and manage the door — the server allowlist (`cyfr admin allow <email\|user_id\|*>`) that decides who else may sign in. Everyone not on either list is refused at sign-in (403). |
 | `CYFR_MAX_ATHANORS`, `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES` | unset (off) | Public-door caps for a server whose allowlist is `*`. Note `CYFR_ATHANOR_STORAGE_BYTES` in particular: unset, an athanor's storage has no total-byte ceiling (each write is still bounded, and files per scope are backstopped) — a server exposed to others sets it deliberately. |
+| `CYFR_MAX_CONVERSATIONS_PER_ATHANOR` | `1000` | Threads one estate may hold (`0` = off). A thread is a row any member — or any headless client of theirs, via `conversation.create` — can mint, each with a follow row of its own, so an estate's count needs a ceiling the way its DMs do. |
+| `CYFR_MAX_PAIRS_PER_PERSON` | `200` | Active DMs one person may hold open (`0` = off). A DM is minted for two and asks nobody else's consent, so the cap is checked for both people; without it one member of a large room could spend `CYFR_MAX_ATHANORS` for everyone by opening a DM with every co-member. |
 
 ### Platform admins
 

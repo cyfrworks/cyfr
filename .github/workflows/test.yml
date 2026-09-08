@@ -33,6 +33,9 @@ on:
       - 'tests/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
+      # Cyfr.DocsDriftTest binds UPGRADING's roster of the aqua tool's verbs
+      # to the tool's own enum.
+      - 'UPGRADING.md'
       - '.gitignore'
       - '.dockerignore'
   pull_request:
@@ -67,6 +70,9 @@ on:
       - 'tests/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
+      # Cyfr.DocsDriftTest binds UPGRADING's roster of the aqua tool's verbs
+      # to the tool's own enum.
+      - 'UPGRADING.md'
       - '.gitignore'
       - '.dockerignore'
   # Callable, so the tag-triggered publish workflows can require this
@@ -143,6 +149,19 @@ jobs:
             cargo install cargo-component --version 0.21.1 --locked
           fi
           cargo-component --version
+      # The AQUA formula guest's own suite — its one dispatch table, the
+      # role gate, the attachment strip — runs on the host target; the
+      # shipped binary is not rebuilt here.
+      - name: Test the AQUA formula guest
+        run: |
+          for src in seed/components/formulas/local/aqua/*/src; do
+            (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/aqua-guest-target")
+          done
+      # The shipped binary is the build of its source: the stamp the build
+      # script writes binds the binary's digest to the source tree's, so a
+      # guest edit without a rebuild fails here, toolchain or not.
+      - name: The shipped AQUA guest is built from its source
+        run: scripts/build-aqua-guest.sh --check
       - name: Install dependencies
         run: mix deps.get
       - name: Compile with warnings as errors

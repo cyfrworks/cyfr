@@ -4,10 +4,11 @@
 set -e
 
 # Seed /app/seed/aqua/ from /app/aqua-defaults/ on first start.
-# /app/seed/aqua is the AQUA agent template every new athanor is given. We
-# bake defaults into /app/aqua-defaults at image build time and copy them on
-# first start so the directory always has working orchestrators — works
-# whether /app/seed/aqua is the image filesystem or a host bind mount.
+# /app/seed/aqua is the AQUA tree every new athanor reads — the soul, its
+# roles and its scrolls. We bake defaults into /app/aqua-defaults at image
+# build time and copy them on first start so the directory always has a
+# working soul and roles — works whether /app/seed/aqua is the image
+# filesystem or a host bind mount.
 #
 # FIRST start only: the mount is the operator's to edit, so a copy that ran
 # every boot would revert their changes to the shipped files. The guard is

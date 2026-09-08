@@ -44,9 +44,12 @@ defmodule Aqua.Aloud do
   """
 
   alias Arca.ConversationStorage, as: Conversations
+  alias Arca.Schemas.Message
   alias Aqua.Attachments
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Members
+  alias Sanctum.Tenancy.{Members, Users}
+
+  @agent_author Message.agent_author()
 
   @type error ::
           :not_a_member
@@ -150,19 +153,13 @@ defmodule Aqua.Aloud do
   end
 
   defp sayable?(%{author: author}, %Context{user_id: author}), do: true
-  defp sayable?(%{author: "aqua", kind: "text"}, ctx), do: own_athanor?(ctx)
+
+  # An assistant's line is the caller's to share only when the source
+  # estate is their own athanor — the one place it was said to them alone.
+  defp sayable?(%{author: @agent_author, kind: "text"}, %Context{} = ctx),
+    do: Users.own_athanor?(ctx.user_id, ctx.athanor_id)
+
   defp sayable?(_row, _ctx), do: false
-
-  # Whether the source estate is the caller's own athanor — the one place
-  # an assistant's line was said to them alone.
-  defp own_athanor?(%Context{user_id: user_id, athanor_id: focus}) when is_binary(user_id) do
-    case Sanctum.Tenancy.Users.get(user_id) do
-      {:ok, %{personal_athanor_id: ^focus}} -> true
-      _ -> false
-    end
-  end
-
-  defp own_athanor?(_ctx), do: false
 
   defp copy(source_ctx, target_ctx, source_id, target_id, rows) do
     Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
@@ -194,7 +191,7 @@ defmodule Aqua.Aloud do
 
       case Conversations.append(target_ctx, target_id, %{
              id: message_id,
-             author: target_ctx.user_id || "system",
+             author: target_ctx.user_id || Message.system_author(),
              kind: "text",
              content: row.content || "",
              payload: payload
@@ -217,7 +214,9 @@ defmodule Aqua.Aloud do
 
   # The copy is the person's, attributed to them; the mark says the words
   # were their assistant's, so a room can render "shared from AQUA".
-  defp put_shared_agent(payload, %{author: "aqua"}), do: Map.put(payload, "shared_agent", true)
+  defp put_shared_agent(payload, %{author: @agent_author}),
+    do: Map.put(payload, "shared_agent", true)
+
   defp put_shared_agent(payload, _row), do: payload
 
   # A message's blobs as upload-shaped files, read out of the source estate

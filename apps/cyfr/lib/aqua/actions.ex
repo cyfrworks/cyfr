@@ -34,10 +34,13 @@ defmodule Aqua.Actions do
   ## Allowlist
 
   `ui.navigate` paths are validated against the console GET routes the
-  router itself declares, minus `@excluded_routes` — derived, not
-  mirrored, so a route added to the router needs no edit here. It is not
-  configurable: a config key that replaces this list is a lever for
-  widening where an agent may send the browser, and nothing set it.
+  router itself declares — derived, not mirrored, so a route added to the
+  router needs no edit here. Two kinds of route are left out by rule:
+  a detail route (one with a parameter — an agent navigates to pages, not
+  to records) and a redirect stub (a LiveView that only forwards to
+  another address). It is not configurable: a config key that replaces
+  this list is a lever for widening where an agent may send the browser,
+  and nothing set it.
 
   Resource-focus actions (`ui.execution.focus`, `ui.component.focus`, etc.)
   compute their target paths internally and don't need to be in the allowlist.
@@ -46,9 +49,12 @@ defmodule Aqua.Actions do
 
   `ui.request_approval` may carry a `proposal: {tool, action, args}` payload
   describing a concrete tool call. The validator looks the pair up in the
-  agent's `tool_policy` allowlist (`{"tool.action" | "tool.*" => "ask" | "auto"}`):
+  agent's `tool_policy` allowlist (`{"tool.action" | "tool.*" => "ask" | "auto"}`,
+  plus the `"deny"` a standing "never" composes in — `Aqua.ToolGrants`):
   only `"ask"` is accepted — `"auto"` means the agent should call it directly,
-  and an absent key means it isn't permitted. Risk visualization is derived
+  and an absent or denied key means it isn't permitted. The proposal is
+  canonicalised first: an `execution.run` of a wrapped catalyst is the
+  virtual action its input denotes, and a card is always for that. Risk visualization is derived
   from the action's `kind` (read/write/execute/destructive/external), which
   lives in the tool definition's annotations or the AQUA virtual-tool catalog.
   External upstream MCP tools are namespaced `server:tool` and classified
@@ -57,12 +63,6 @@ defmodule Aqua.Actions do
 
   @block_re ~r/```aqua-actions[ \t]*\r?\n(.*?)```/s
   @render_strip_re ~r/```aqua-actions[ \t]*\r?\n.*?(```|\z)/s
-
-  # Live navigation targets, derived from the router at first use (see
-  # `allowed_routes/0`) so the allowlist cannot drift from what actually
-  # mounts. Redirect stubs and parameterized detail routes are excluded —
-  # an agent navigates to pages, not to individual records.
-  @excluded_routes ~w(/logs /logs/:id /components/:ref)
 
   @allowed_overlay_states ~w(half full)
   # Risk values for `ui.request_approval`. Prism derives the card's risk from
@@ -302,6 +302,8 @@ defmodule Aqua.Actions do
          :ok <- check_id_shape(action, "ui.request_approval.proposal", "action"),
          args <- Map.get(p, "args", %{}),
          :ok <- ensure_object(args, "ui.request_approval.proposal.args"),
+         {:ok, %{tool: tool, action: action, args: args}} <-
+           canonical_proposal(tool, action, args, tool_policy),
          :ok <- lookup_proposal(tool_policy, tool, action) do
       {:ok, %{tool: tool, action: action, args: args}, kind_for(tool, action),
        standing_for(tool, action)}
@@ -310,6 +312,73 @@ defmodule Aqua.Actions do
 
   defp validate_proposal(_, _),
     do: {:error, "ui.request_approval: proposal must be an object when present"}
+
+  # The operation a proposal IS, decided before its policy, its kind and
+  # its scopes are — so a card is always for the canonical operation and
+  # an `execution.run` spelling of a delete can never earn an execute-kind
+  # card. Three cases: the AQUA formula itself is not a tool the model may
+  # run; an `execution.run` of a wrapped catalyst is the virtual action its
+  # input denotes (`Aqua.VirtualTools.canonical/2`); a `files` call whose
+  # path lands in the storage boundary is the storage operation. A request
+  # two virtual actions build identically is canonical only when the
+  # policy answers the same for both.
+  defp canonical_proposal("execution", action, %{"reference" => reference} = args, policy)
+       when action in ["run", "run_stream"] and is_binary(reference) do
+    cond do
+      Aqua.VirtualTools.self_reference?(reference) ->
+        {:error,
+         {:not_in_allowlist,
+          "ui.request_approval: the assistant itself is not a tool to run — clone a role instead"}}
+
+      true ->
+        case Aqua.VirtualTools.canonical(reference, Map.get(args, "input") || %{}) do
+          {:ok, candidates} ->
+            pick_canonical(candidates, policy, reference)
+
+          {:error, :not_virtual} ->
+            {:ok, %{tool: "execution", action: action, args: args}}
+
+          {:error, :unknown_operation} ->
+            {:error,
+             {:not_in_allowlist,
+              "ui.request_approval: execution of #{reference} names no operation this " <>
+                "assistant has — propose the files, storage or http action itself"}}
+        end
+    end
+  end
+
+  defp canonical_proposal("files", action, args, _policy) do
+    case Aqua.VirtualTools.canonical_files(action, args) do
+      {:ok, canonical} ->
+        {:ok, canonical}
+
+      {:error, :not_a_storage_operation} ->
+        {:error,
+         {:not_in_allowlist,
+          "ui.request_approval: files.#{action} inside data/storage/ is not a storage " <>
+            "operation — use the storage tool"}}
+
+      {:error, :unknown_operation} ->
+        {:ok, %{tool: "files", action: action, args: args}}
+    end
+  end
+
+  defp canonical_proposal(tool, action, args, _policy),
+    do: {:ok, %{tool: tool, action: action, args: args}}
+
+  defp pick_canonical([first | _] = candidates, policy, reference) do
+    values = Enum.map(candidates, &policy_value(policy, &1.tool, &1.action))
+
+    if Enum.uniq(values) |> length() == 1 do
+      {:ok, first}
+    else
+      {:error,
+       {:not_in_allowlist,
+        "ui.request_approval: execution of #{reference} could be " <>
+          Enum.map_join(candidates, " or ", &"#{&1.tool}.#{&1.action}") <>
+          ", which your policy answers differently — propose the action itself"}}
+    end
+  end
 
   # Allowlist values: "ask" (request approval) | "auto" (call directly). An
   # absent key (and no matching `tool.*` glob) means the agent cannot perform
@@ -325,15 +394,30 @@ defmodule Aqua.Actions do
       "ask" ->
         # The harness runs an approved proposal inside the chain, so an
         # action that plane refuses would become a card that fails on the
-        # click. Say so here instead, where the agent can act on it.
-        if refused?(tool, action) do
-          {:error,
-           {:chat_refused,
-            "ui.request_approval: '#{key}' cannot be run from a chat — tell the person to " <>
-              "open its page"}}
-        else
-          :ok
+        # click. Say so here instead, where the agent can act on it. A UI
+        # event the guest answers in place is never a card either.
+        cond do
+          Aqua.VirtualTools.auto_only?(tool, action) ->
+            {:error,
+             {:auto_allowlisted,
+              "ui.request_approval: '#{key}' runs on its own — call it directly, do not request approval"}}
+
+          refused?(tool, action) ->
+            {:error,
+             {:chat_refused,
+              "ui.request_approval: '#{key}' cannot be run from a chat — tell the person to " <>
+                "open its page"}}
+
+          true ->
+            :ok
         end
+
+      # A standing "never": the composition keeps the pair as an exact
+      # key so no glob can answer for it. Not proposable, and said so.
+      "deny" ->
+        {:error,
+         {:not_in_allowlist,
+          "ui.request_approval: '#{key}' was declined for good — it is not available"}}
 
       "auto" ->
         {:error,
@@ -386,6 +470,41 @@ defmodule Aqua.Actions do
   def kind_for(_, _), do: nil
 
   defp lookup_internal_kind(tool, action), do: Aqua.MCPHelpers.action_kind(tool, action)
+
+  @auto_kinds [:read, :write, :execute]
+
+  @doc """
+  Whether `tool.action` may ever run without a card: only a read, write or
+  execute kind. Destructive and external actions always ask, and an
+  action whose kind is unknown is refused too — "not known" and "not yet
+  loaded" read the same here, and only the second could otherwise run
+  something destructive with no card. The one rule the AQUA page, the
+  `aqua` tool's door and the runtime ceiling (`Aqua.ToolGrants.effective/2`)
+  all read.
+  """
+  @spec auto_permitted?(String.t(), String.t()) :: boolean()
+  def auto_permitted?(tool, action), do: kind_for(tool, action) in @auto_kinds
+
+  @doc """
+  The action verbs a catalogued tool has — the virtual catalog's for a
+  virtual tool, the registry's `action` enum otherwise — and `[]` for a
+  tool neither holds. What a `tool.*` glob stands for.
+  """
+  @spec actions_of(String.t()) :: [String.t()]
+  def actions_of(tool) when is_binary(tool) do
+    if Aqua.VirtualTools.virtual_tool?(tool),
+      do: Aqua.VirtualTools.actions_of(tool),
+      else: Aqua.MCPHelpers.actions_of(tool)
+  end
+
+  def actions_of(_tool), do: []
+
+  @doc "Whether the virtual catalog or the registry holds a tool of this name."
+  @spec catalogued?(String.t()) :: boolean()
+  def catalogued?(tool) when is_binary(tool),
+    do: Aqua.VirtualTools.virtual_tool?(tool) or actions_of(tool) != []
+
+  def catalogued?(_tool), do: false
 
   # The standing rule of a tool.action, from the same declaration `kind_for/2`
   # reads. The virtual catalog and the external namespace declare none, so
@@ -450,24 +569,27 @@ defmodule Aqua.Actions do
   # The Prism page paths — the router's routes under `/a/:athanor/…` with
   # the focus prefix stripped (an intent addresses a page; the athanor in
   # focus is added when it is pushed), plus the global pages, which have no
-  # estate in their address and are pushed as they are — minus the
-  # exclusions. Memoized, since the router's route table is fixed for the
-  # VM lifetime.
+  # estate in their address and are pushed as they are. A route with a
+  # parameter left in it is a record's, not a page's, and a redirect stub
+  # is not a page at all. Memoized, since the router's route table is
+  # fixed for the VM lifetime.
   @focus_prefix "/a/:athanor"
 
-  defp allowed_routes do
+  @doc false
+  @spec allowed_routes() :: [String.t()]
+  def allowed_routes do
     case :persistent_term.get({__MODULE__, :allowed_routes}, :miss) do
       :miss ->
         routes =
           EmissaryWeb.Router.__routes__()
           |> Enum.filter(
-            &(&1.verb == :get and String.starts_with?(&1.path, @focus_prefix <> "/"))
+            &(&1.verb == :get and String.starts_with?(&1.path, @focus_prefix <> "/") and
+                not redirect_stub?(&1))
           )
           |> Enum.map(&String.replace_prefix(&1.path, @focus_prefix, ""))
           |> Enum.reject(&String.contains?(&1, ":"))
           |> Kernel.++(Cyfr.GlobalPages.paths())
           |> Enum.uniq()
-          |> Kernel.--(@excluded_routes)
 
         :persistent_term.put({__MODULE__, :allowed_routes}, routes)
         routes
@@ -476,6 +598,15 @@ defmodule Aqua.Actions do
         routes
     end
   end
+
+  # A LiveView named `…RedirectLive` only forwards to another address: a
+  # navigate to it would land the browser somewhere the agent did not
+  # name, so the stub is not a target — the page it forwards to is.
+  defp redirect_stub?(%{metadata: %{phoenix_live_view: live}}) when is_tuple(live) do
+    live |> elem(0) |> Atom.to_string() |> String.ends_with?("RedirectLive")
+  end
+
+  defp redirect_stub?(_route), do: false
 
   # The clipboard is the one action whose output leaves the browser: whatever
   # lands there can be pasted anywhere, and a terminal treats a carriage
@@ -601,7 +732,14 @@ defmodule Aqua.Actions do
   # Only a refusal the registry actually asserts counts: a virtual tool (the
   # formula dispatches those itself) and a `tool.*` glob stand, and so does
   # anything the registry has never heard of.
-  defp proposable?(key), do: not refused?(key)
+  defp proposable?(key), do: not refused?(key) and not auto_only?(key)
+
+  defp auto_only?(key) do
+    case String.split(key, ".", parts: 2) do
+      [tool, action] -> Aqua.VirtualTools.auto_only?(tool, action)
+      _ -> false
+    end
+  end
 
   defp refused?(key) do
     case String.split(key, ".", parts: 2) do

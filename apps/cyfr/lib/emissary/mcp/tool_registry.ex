@@ -213,7 +213,10 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   def call_external(name, %Context{} = ctx, args, opts) when is_map(args) do
-    do_call(name, ctx, args, opts)
+    # The plane is this function's name, never an option: a caller cannot
+    # reach the in-chain arm (its consent-class and proxied-tool rules) by
+    # passing the flag `call_in_chain/5` sets.
+    do_call(name, ctx, args, Keyword.delete(opts, :in_chain))
   end
 
   @doc """
@@ -240,7 +243,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
     args =
       args
-      |> Map.drop(["parent_execution_id", "root_execution_id"])
+      |> Map.drop(["parent_execution_id", "root_execution_id", "conversation_id"])
       |> put_lineage(Keyword.get(opts, :lineage))
 
     with :ok <- check_in_chain_reachable(name, args),
@@ -289,6 +292,10 @@ defmodule Emissary.MCP.ToolRegistry do
     args
     |> Cyfr.MapUtil.put_present("parent_execution_id", Map.get(lineage, :parent_execution_id))
     |> Cyfr.MapUtil.put_present("root_execution_id", Map.get(lineage, :root_execution_id))
+    # The conversation an approved card came from — host-stamped like the
+    # execution ids, so a tool that records provenance reads it from here
+    # and never from what the model wrote.
+    |> Cyfr.MapUtil.put_present("conversation_id", Map.get(lineage, :conversation_id))
   end
 
   @doc """

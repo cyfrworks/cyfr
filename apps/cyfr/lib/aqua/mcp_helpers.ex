@@ -26,11 +26,18 @@ defmodule Aqua.MCPHelpers do
     Emissary.MCP.ToolRegistry.call_external(tool, ctx, args)
   end
 
-  @doc "Call a tool on the in-chain plane, under the chain's `authority`."
-  @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Sanctum.Authority.t()) ::
+  @doc """
+  Call a tool on the in-chain plane, under the chain's `authority`.
+
+  `opts` are the registry's own (`:lineage` — the host-stamped execution
+  and conversation identity a tool may trust, guest-supplied spellings
+  dropped); the helper forwards them so the runner can name a card's own
+  execution without the argument map carrying it.
+  """
+  @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Sanctum.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
-  def call_in_chain(tool, %Sanctum.Context{} = ctx, args, authority) do
-    Emissary.MCP.ToolRegistry.call_in_chain(tool, ctx, args, authority)
+  def call_in_chain(tool, %Sanctum.Context{} = ctx, args, authority, opts \\ []) do
+    Emissary.MCP.ToolRegistry.call_in_chain(tool, ctx, args, authority, opts)
   end
 
   @doc """
@@ -57,6 +64,27 @@ defmodule Aqua.MCPHelpers do
       _ -> nil
     end
   end
+
+  @doc """
+  The action verbs a registry tool enumerates — its input schema's
+  `action` enum — or `[]` for a tool the registry does not hold or one
+  with no verbs. What a `tool.*` glob expands to.
+  """
+  @spec actions_of(String.t()) :: [String.t()]
+  def actions_of(tool) when is_binary(tool) do
+    case Emissary.MCP.ToolRegistry.get_tool(tool) do
+      {:ok, tool_def} ->
+        case get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) do
+          verbs when is_list(verbs) -> Enum.filter(verbs, &is_binary/1)
+          _ -> []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  def actions_of(_tool), do: []
 
   @doc "Whether a running chain would refuse `tool`/`action` (external-only plane)."
   @spec in_chain_refused?(String.t(), String.t()) :: boolean()

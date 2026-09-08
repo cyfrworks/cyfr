@@ -144,7 +144,9 @@ defmodule Opus.FormulaHandler do
       [
         parent_execution_id: parent_execution_id,
         root_execution_id: root_execution_id,
-        limits: limits
+        limits: limits,
+        parent_reference: opts[:parent_reference],
+        parent_roster: opts[:parent_roster] || []
       ] ++ authority_opts
 
     spawn_opts =
@@ -352,36 +354,122 @@ defmodule Opus.FormulaHandler do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
     start_time = System.monotonic_time(:millisecond)
 
-    case Map.get(args, "reference") do
-      reference when is_binary(reference) and reference != "" ->
-        # Guest-supplied lineage keys never survive: the child's parent and
-        # root ids come from this closure, and the input is only what the
-        # request's own "input" carried.
-        child_opts = child_opts(ctx, opts)
-        need = Map.get(args, "need")
-        input = Map.get(args, "input") || %{}
+    with reference when is_binary(reference) and reference != "" <- Map.get(args, "reference"),
+         {:ok, input} <- delegated_input(reference, Map.get(args, "input") || %{}, opts) do
+      # Guest-supplied lineage keys never survive: the child's parent and
+      # root ids come from this closure, and the input is only what the
+      # request's own "input" carried — or, for a delegate of the same
+      # formula, what the parent's roster holds for it.
+      child_opts = child_opts(ctx, opts)
+      need = Map.get(args, "need")
 
-        result =
-          case action do
-            "run" ->
-              Opus.Chain.run_child(authority, reference, need, input, child_opts)
+      result =
+        case action do
+          "run" ->
+            Opus.Chain.run_child(authority, reference, need, input, child_opts)
 
-            "run_stream" ->
-              Opus.Chain.run_child_stream(authority, reference, need, input, child_opts)
-          end
-
-        case result do
-          {:ok, output} ->
-            emit_telemetry(parent_execution_id, "execution.#{action}", :ok, start_time)
-            encode_success(normalize_keys(output))
-
-          {:error, reason} ->
-            emit_telemetry(parent_execution_id, "execution.#{action}", :error, start_time)
-            encode_child_error(reason)
+          "run_stream" ->
+            Opus.Chain.run_child_stream(authority, reference, need, input, child_opts)
         end
+
+      case result do
+        {:ok, output} ->
+          emit_telemetry(parent_execution_id, "execution.#{action}", :ok, start_time)
+          encode_success(normalize_keys(output))
+
+        {:error, reason} ->
+          emit_telemetry(parent_execution_id, "execution.#{action}", :error, start_time)
+          encode_child_error(reason)
+      end
+    else
+      {:error, {:delegation_refused, why}} ->
+        emit_telemetry(parent_execution_id, "execution.#{action}", :error, start_time)
+        encode_error(:tool_denied, "Invocation denied: #{why}")
 
       _ ->
         encode_error(:invalid_request, "execution.#{action} requires a 'reference'")
+    end
+  end
+
+  @doc """
+  The delegation roster a formula's input carries — its `sub_agents`, each
+  a map with a `name` — or `[]`. What a child of the same formula is held
+  to.
+  """
+  @spec roster_of(term()) :: [map()]
+  def roster_of(%{"sub_agents" => roster}) when is_list(roster),
+    do: Enum.filter(roster, &(is_map(&1) and is_binary(&1["name"])))
+
+  def roster_of(_input), do: []
+
+  # A formula invoking ITSELF is delegation when there is a roster to
+  # delegate from, and the parent's roster is then the only source of what
+  # a delegate may be: the child must name a `role` the roster lists; its
+  # `tool_policy`, `system` and roster are then the roster entry's — the
+  # host supplies them, whatever the guest's request carried, so a
+  # model-written child input can never widen the policy the host
+  # composed. A parent with no roster (itself a delegate, or a formula
+  # that recurses plainly) delegates to nobody: a child that names a role
+  # or carries a policy or a roster is refused, and one that carries none
+  # of those is the ordinary recursion it looks like. Any other reference
+  # is an ordinary child, its input its own.
+  @host_controlled ~w(role tool_policy sub_agents)
+
+  @doc false
+  @spec delegated_input(String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, {:delegation_refused, String.t()}}
+  def delegated_input(reference, input, opts) do
+    parent = opts[:parent_reference]
+    roster = opts[:parent_roster] || []
+
+    cond do
+      not (is_binary(parent) and same_component?(reference, parent)) ->
+        {:ok, input}
+
+      roster != [] ->
+        delegate_from(roster, input)
+
+      Enum.any?(@host_controlled, &Map.has_key?(input, &1)) ->
+        {:error,
+         {:delegation_refused,
+          "this formula has no roster to delegate from — a child of it names no role and carries no policy"}}
+
+      true ->
+        {:ok, input}
+    end
+  end
+
+  defp delegate_from(roster, input) do
+    role = input["role"]
+
+    case Enum.find(roster, &(&1["name"] == role)) do
+      nil when is_binary(role) and role != "" ->
+        {:error, {:delegation_refused, "the roster lists no role #{inspect(role)}"}}
+
+      nil ->
+        {:error,
+         {:delegation_refused, "a delegate of the same formula must name a role its roster lists"}}
+
+      entry ->
+        {:ok,
+         input
+         |> Map.put("tool_policy", entry["tool_policy"] || %{})
+         |> Map.put("system", entry["prompt"] || "")
+         |> Map.put("sub_agents", [])
+         |> put_if_binary("catalyst_ref", entry["catalyst_ref"])
+         |> put_if_binary("model", entry["model"])}
+    end
+  end
+
+  defp put_if_binary(input, key, value) when is_binary(value) and value != "",
+    do: Map.put(input, key, value)
+
+  defp put_if_binary(input, _key, _value), do: input
+
+  defp same_component?(a, b) do
+    case {Compendium.Activation.key_for_ref(a), Compendium.Activation.key_for_ref(b)} do
+      {{:ok, name_a}, {:ok, name_b}} -> name_a == name_b
+      _ -> false
     end
   end
 

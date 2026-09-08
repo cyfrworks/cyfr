@@ -45,6 +45,34 @@ defmodule Aqua.ActionsTest do
     end
   end
 
+  describe "allowed_routes/0" do
+    @focus_prefix "/a/:athanor"
+
+    test "no redirect stub is a target, and every page the nav offers is one" do
+      routes = AquaActions.allowed_routes()
+
+      # Derived from the router the same way, so a new stub fails here.
+      stubs =
+        for %{path: path, metadata: %{phoenix_live_view: live}} <-
+              EmissaryWeb.Router.__routes__(),
+            is_tuple(live),
+            live |> elem(0) |> Atom.to_string() |> String.ends_with?("RedirectLive"),
+            String.starts_with?(path, @focus_prefix),
+            do: String.replace_prefix(path, @focus_prefix, "")
+
+      # The old agents page is the stub this rule was written for.
+      assert "/agents" in stubs
+
+      for stub <- stubs do
+        refute stub in routes, "#{stub} forwards elsewhere and must not be a navigate target"
+      end
+
+      for mode <- ~w(dev lite), item <- PrismWeb.Nav.items(mode) do
+        assert item.path in routes, "#{mode} nav offers #{item.path}, the allowlist does not"
+      end
+    end
+  end
+
   describe "parse/2" do
     test "ui.navigate: allowed path produces navigate intent" do
       input =
@@ -72,6 +100,15 @@ defmodule Aqua.ActionsTest do
       result = AquaActions.parse(input, @policy)
 
       assert result.stripped == ""
+      assert result.intents == []
+      assert [%{reason: reason}] = result.drops
+      assert reason =~ "not in allowlist"
+    end
+
+    test "ui.navigate: a redirect stub is not a target" do
+      input = "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/agents\"}]\n```"
+      result = AquaActions.parse(input, @policy)
+
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "not in allowlist"
@@ -285,6 +322,108 @@ defmodule Aqua.ActionsTest do
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "cannot be run from a chat"
+    end
+
+    test "an execution.run of a wrapped catalyst is canonicalised before the card exists" do
+      # A delete spelled as execution.run earns a files.delete card —
+      # destructive kind, the virtual tool's own args — never an
+      # execute-kind card for `execution.run`.
+      input = ~S(```aqua-actions
+[{"kind":"ui.request_approval","title":"Clean","summary":"rm","risk":"low","action_description":"d","proposal":{"tool":"execution","action":"run","args":{"reference":"catalyst:local.files:0.5.1","input":{"action":"delete","path":"data/storage/k.json"}}}}]
+```)
+      policy = %{"execution.run" => "ask", "storage.delete" => "ask"}
+      assert [intent] = AquaActions.parse(input, policy).intents
+      assert intent.proposal == %{tool: "storage", action: "delete", args: %{"key" => "k"}}
+      assert intent.action_kind == :destructive
+
+      # With the canonical pair absent from the policy the card is refused,
+      # however `execution.run` is held.
+      result = AquaActions.parse(input, %{"execution.run" => "ask"})
+      assert result.intents == []
+      assert [%{tag: :not_in_allowlist}] = result.drops
+    end
+
+    test "the assistant itself is never a proposal, and an unknown catalyst operation is refused" do
+      card = fn reference, catalyst_input ->
+        ~s(```aqua-actions
+[{"kind":"ui.request_approval","title":"t","summary":"s","risk":"low","action_description":"d","proposal":{"tool":"execution","action":"run","args":{"reference":"#{reference}","input":#{Jason.encode!(catalyst_input)}}}}]
+```)
+      end
+
+      policy = %{"execution.run" => "ask", "files.*" => "ask"}
+
+      result = AquaActions.parse(card.("formula:local.aqua", %{"tool_policy" => %{}}), policy)
+      assert [%{tag: :not_in_allowlist, reason: reason}] = result.drops
+      assert reason =~ "clone a role"
+
+      result = AquaActions.parse(card.("catalyst:local.files", %{"action" => "bogus"}), policy)
+      assert [%{tag: :not_in_allowlist, reason: reason}] = result.drops
+      assert reason =~ "names no operation"
+
+      # Any other reference is the app launch the policy holds at ask.
+      assert [intent] =
+               AquaActions.parse(card.("formula:local.other", %{"x" => 1}), policy).intents
+
+      assert intent.proposal.tool == "execution"
+    end
+
+    test "a request two virtual actions build identically is canonical only when the policy agrees" do
+      card = ~S(```aqua-actions
+[{"kind":"ui.request_approval","title":"t","summary":"s","risk":"low","action_description":"d","proposal":{"tool":"execution","action":"run","args":{"reference":"catalyst:local.files","input":{"action":"tree","path":"src"}}}}]
+```)
+      agreed = %{"files.tree" => "ask", "files.list" => "ask"}
+
+      assert [%{proposal: %{tool: "files", action: "tree"}}] =
+               AquaActions.parse(card, agreed).intents
+
+      split = %{"files.tree" => "ask", "files.list" => "auto"}
+      assert [%{reason: reason}] = AquaActions.parse(card, split).drops
+      assert reason =~ "answers differently"
+    end
+
+    test "a files proposal inside the storage boundary is the storage operation" do
+      card = ~S(```aqua-actions
+[{"kind":"ui.request_approval","title":"t","summary":"s","risk":"low","action_description":"d","proposal":{"tool":"files","action":"delete","args":{"path":"data/storage/k.json"}}}]
+```)
+
+      assert [%{proposal: %{tool: "storage", action: "delete", args: %{"key" => "k"}}}] =
+               AquaActions.parse(card, %{"files.delete" => "ask", "storage.delete" => "ask"}).intents
+
+      # And files.delete alone does not cover it: the storage pair decides.
+      assert [%{tag: :not_in_allowlist}] =
+               AquaActions.parse(card, %{"files.delete" => "ask"}).drops
+    end
+
+    test "a denied pair and a UI event are never proposable" do
+      card = fn tool, action ->
+        ~s(```aqua-actions
+[{"kind":"ui.request_approval","title":"t","summary":"s","risk":"low","action_description":"d","proposal":{"tool":"#{tool}","action":"#{action}","args":{}}}]
+```)
+      end
+
+      result =
+        AquaActions.parse(card.("component", "pull"), %{
+          "component.*" => "ask",
+          "component.pull" => "deny"
+        })
+
+      assert [%{tag: :not_in_allowlist, reason: reason}] = result.drops
+      assert reason =~ "declined"
+
+      result = AquaActions.parse(card.("request_setup", "open"), %{"request_setup.open" => "ask"})
+      assert [%{tag: :auto_allowlisted}] = result.drops
+
+      # And the prelude never lists it as something to ask for.
+      refute AquaActions.system_prelude(%{"request_setup.open" => "ask"}) =~ "request_setup.open"
+    end
+
+    test "auto_permitted?/2 is the one kind rule" do
+      assert AquaActions.auto_permitted?("files", "read")
+      assert AquaActions.auto_permitted?("files", "write")
+      assert AquaActions.auto_permitted?("http", "post")
+      refute AquaActions.auto_permitted?("files", "delete")
+      refute AquaActions.auto_permitted?("notion:create_page", "call")
+      refute AquaActions.auto_permitted?("no_such_tool", "go")
     end
 
     test "kind_for/2 looks up the right kind for virtual tools" do

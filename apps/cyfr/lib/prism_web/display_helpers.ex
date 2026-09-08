@@ -24,37 +24,35 @@ defmodule PrismWeb.DisplayHelpers do
 
   @doc """
   A short human label for a principal id as it appears on executions, logs
-  and messages: a person (their display name, else email, else a shortened
-  id) or one of the server's synthetic principals — `system`, `_seed`,
-  `_health_probe`, `_system_scan`, `webhook:<slug>`, `_tincture` — which
-  are never people and read as what they are.
+  and messages: a person (`PrismWeb.People.label/2`, with nobody in
+  particular looking) or one of the server's synthetic principals —
+  `system`, `_seed`, `_health_probe`, `_system_scan`, `webhook:<slug>`,
+  `_tincture` — and the assistant's own reserved author, which are never
+  people and read as what they are.
   """
   @spec principal_label(String.t() | nil) :: String.t()
   def principal_label(nil), do: "-"
-  def principal_label("system"), do: "System"
   def principal_label("_seed"), do: "System (seed)"
   def principal_label("_health_probe"), do: "System (health probe)"
   def principal_label("_system_scan"), do: "System (scan)"
   def principal_label("_tincture"), do: "Public tincture"
   def principal_label("webhook:" <> slug), do: "Webhook " <> slug
-  def principal_label("aqua"), do: "AQUA"
 
-  def principal_label(user_id) when is_binary(user_id) do
-    case Sanctum.Tenancy.Users.get(user_id) do
-      {:ok, %{display_name: name}} when is_binary(name) and name != "" -> name
-      {:ok, %{email: email}} when is_binary(email) and email != "" -> email
-      _ -> short_id(user_id)
+  def principal_label(author) when is_binary(author) do
+    cond do
+      author == Arca.Schemas.Message.system_author() -> "System"
+      author == Arca.Schemas.Message.agent_author() -> "AQUA"
+      true -> PrismWeb.People.label(author, nil)
     end
   end
 
   def principal_label(other), do: inspect(other)
 
-  defp short_id(id), do: truncate(id, 24)
-
   @doc """
   Truncate a value for a table cell: at most `max` characters plus an
   ellipsis. `nil` renders as "-".
   """
+  @spec truncate(term(), non_neg_integer()) :: String.t()
   def truncate(value, max)
   def truncate(nil, _max), do: "-"
 

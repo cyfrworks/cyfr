@@ -21,7 +21,7 @@ defmodule Arca.SanctumSurfaceTest do
 
   # The Sanctum namespaces lib/arca reaches into IN CODE (doc prose
   # mentions many more — the filter below is what keeps this list honest),
-  # and why each is here. Narrower than it reads from a raw grep: seven
+  # and why each is here. Narrower than it reads from a raw grep: eight
   # namespaces, mostly vocabulary.
   @surface [
     # The tenancy carrier and its resolution — the reason the cycle
@@ -37,7 +37,13 @@ defmodule Arca.SanctumSurfaceTest do
 
     # The one genuine domain-logic reach: the webhook signature header's
     # default is the domain's to name.
-    "Sanctum.Webhook"
+    "Sanctum.Webhook",
+
+    # The profile label grammar belongs to the selector vocabulary
+    # (`Sanctum.Authority.RootSelect.valid_label?/1`): `decode/1` tells an
+    # id from a label by prefix and is only sound while no stored label
+    # wears it, so the profile schema holds every insert to that one rule.
+    "Sanctum.Authority"
   ]
 
   @namespace ~r/\bSanctum(?:\.[A-Z]\w+)+\b/

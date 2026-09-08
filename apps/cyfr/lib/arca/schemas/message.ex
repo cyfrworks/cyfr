@@ -5,9 +5,10 @@ defmodule Arca.Schemas.Message do
   @moduledoc """
   Ecto schema for the `messages` table (backs `Arca.ConversationStorage`).
 
-  One row per thread entry, in `seq` order. `author` is a user id, `"aqua"`
-  or `"system"`; `kind` is `text | approval | error | system`. An approval
-  row carries the agent's proposal in `payload` and walks
+  One row per thread entry, in `seq` order. `author` is a user id or one
+  of the two reserved authors below (`agent_author/0`, `system_author/0`);
+  `kind` is `text | approval | error | system`. An approval row carries the
+  agent's proposal in `payload` and walks
   `pending → running → approved | declined | error`, with the decision in
   `resolution` and the person who made it in `resolved_by`.
   """
@@ -20,6 +21,28 @@ defmodule Arca.Schemas.Message do
   @type t :: %__MODULE__{}
   @kinds ~w(text approval error system)
   @statuses ~w(pending running approved declined error)
+  @agent_author "aqua"
+  @system_author "system"
+
+  @doc """
+  The `author` of a row the assistant wrote: its reply, and the approval
+  card it proposed. The tape reads it as the agent's own speech — what a
+  person may say aloud from their own athanor, what a room excerpt renders
+  under the assistant's name — so nothing the runner says in its own voice
+  carries it.
+  """
+  @spec agent_author() :: String.t()
+  def agent_author, do: @agent_author
+
+  @doc """
+  The `author` of a row written in the server's voice rather than the
+  assistant's — a note about the turn (dropped, interrupted, a standing
+  answer recorded or refused), an error, a line the runner posts on a
+  person's behalf when no person's context applies. Never read as the
+  agent's speech, never a person.
+  """
+  @spec system_author() :: String.t()
+  def system_author, do: @system_author
 
   schema "messages" do
     field :conversation_id, :string
@@ -53,9 +76,6 @@ defmodule Arca.Schemas.Message do
     :execution_id,
     :inserted_at
   ]
-
-  def kinds, do: @kinds
-  def statuses, do: @statuses
 
   def changeset(row, attrs) do
     row

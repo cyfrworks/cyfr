@@ -9,7 +9,6 @@ use bindings::cyfr::formula::invoke;
 
 use providers::detect_provider;
 use serde_json::{json, Value};
-use std::collections::HashSet;
 pub use tools::SubAgentDef;
 
 struct Component;
@@ -60,6 +59,16 @@ fn handle_request(input: &str) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required 'task' field".to_string())?;
 
+    // Text the host reads beside the task for this one call — a room the
+    // person has open next to the thread. It is other people's words, so
+    // it is placed as a part of the task's user turn for the model and
+    // taken back out before the history is returned: never persisted,
+    // never read by a later turn.
+    let transient = parsed
+        .get("transient")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.is_empty());
+
     let max_turns = DEFAULT_MAX_TURNS;
 
     let custom_system = parsed.get("system").and_then(|v| v.as_str());
@@ -72,20 +81,18 @@ fn handle_request(input: &str) -> Result<String, String> {
     let role = parsed.get("role").and_then(|v| v.as_str()).unwrap_or("");
     let emit_tag = parsed.get("emit_tag").and_then(|v| v.as_str()).unwrap_or("");
 
-    // --- Parse sub-agent definitions from harness ---
+    // --- Parse the roster: the roles this run may clone into ---
     let sub_agents: Vec<SubAgentDef> = parsed
         .get("sub_agents")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(SubAgentDef::from_value).collect())
         .unwrap_or_default();
 
-    let sub_agent_names: HashSet<String> = sub_agents.iter().map(|a| a.name.clone()).collect();
-
     // --- Per-agent tool allowlist ---
     // `tool_policy`: {"tool.action" | "tool.*" => "ask" | "auto"} — the ONLY
-    // tool surface. Each tool's `action` enum is filtered to its directly-
-    // callable verbs (read-kind or "auto"); "ask" actions reach the agent via
-    // the approval prelude in the system prompt instead. An absent policy is
+    // tool surface. Each tool's `action` enum is filtered to its "auto"
+    // verbs; "ask" actions reach the agent via the approval prelude in the
+    // system prompt instead. A role is granted by its name. An absent policy is
     // an empty allowlist: the model sees no tools at all (fail-closed), and
     // the native provider tool appears only when the policy names it.
     let tool_policy: Value = parsed
@@ -106,13 +113,17 @@ fn handle_request(input: &str) -> Result<String, String> {
 
     // --- Build initial conversation ---
     let mut conversation = build_initial_messages(&parsed, task, &attachments)?;
+    let task_index = conversation.len() - 1;
+    if let Some(text) = transient {
+        put_transient(&mut conversation[task_index], text);
+    }
 
     // --- Build system prompt (passthrough from caller) ---
     let system_prompt = context::build_system_prompt(custom_system);
 
     // --- Build tool definitions, apply the allowlist, build the dispatch guard ---
     let canonical_tools = tools::build_tool_definitions(&sub_agents);
-    let policy_guard = Some(tools::PolicyGuard::new(&tool_policy, &canonical_tools));
+    let policy_guard = tools::PolicyGuard::new(&tool_policy, &canonical_tools, &sub_agents);
     let canonical_tools = tools::apply_tool_policy(canonical_tools, &tool_policy);
     let native_search = providers::native_search_allowed(&tool_policy);
     let tools_for_llm = provider.format_tools(&canonical_tools, native_search);
@@ -244,9 +255,9 @@ fn handle_request(input: &str) -> Result<String, String> {
                 .iter()
                 .map(|tc| {
                     let mut args = tc.arguments.clone();
-                    // When delegating to a sub-agent formula, inject our own
-                    // catalyst_ref and model so the sub-agent uses the same
-                    // provider the user selected — models may hallucinate these.
+                    // When the model runs a formula itself, inject our own
+                    // catalyst_ref and model so the child uses the provider
+                    // the user selected — models may hallucinate these.
                     if tc.name == "execution" {
                         let is_formula = args.get("reference")
                             .and_then(|v| v.as_str())
@@ -267,7 +278,7 @@ fn handle_request(input: &str) -> Result<String, String> {
                 })
                 .collect();
 
-            let results = tools::execute_tools_parallel(&call_tuples, catalyst_ref, model, &sub_agents, &sub_agent_names, policy_guard.as_ref());
+            let results = tools::execute_tools_parallel(&call_tuples, catalyst_ref, model, &sub_agents, &policy_guard);
 
             // Emit tool_result events
             for (id, name, result) in &results {
@@ -295,11 +306,15 @@ fn handle_request(input: &str) -> Result<String, String> {
         break;
     }
 
-    // Strip base64 attachment data from conversation before persisting
-    // (attachments are ephemeral — only needed for the initial LLM call)
-    if !attachments.is_empty() {
-        strip_attachment_data(&mut conversation);
+    // What was read beside the task was for this call alone.
+    if transient.is_some() {
+        strip_transient(&mut conversation[task_index]);
     }
+
+    // Attachments are ephemeral — only the call they arrived with needs the
+    // bytes. Strip them from the whole history before it is persisted, so a
+    // turn that carried none still cleans up what an earlier one left.
+    strip_attachment_data(&mut conversation);
 
     // Emit conversation history so the LiveView can capture it for follow-up messages
     let _ = invoke::emit(&emit_event(json!({
@@ -339,10 +354,11 @@ fn emit_event(mut event: Value, role: &str, emit_tag: &str) -> String {
 
 /// Estimate conversation size in bytes by summing JSON-serialized message lengths.
 fn conv_byte_size(conversation: &[Value]) -> usize {
-    conversation
-        .iter()
-        .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
-        .sum()
+    conversation.iter().map(message_byte_size).sum()
+}
+
+fn message_byte_size(message: &Value) -> usize {
+    serde_json::to_string(message).map(|s| s.len()).unwrap_or(0)
 }
 
 /// Truncate a string at a UTF-8 safe boundary, returning a borrowed slice.
@@ -358,103 +374,68 @@ pub(crate) fn truncate_str(s: &str, max_bytes: usize) -> &str {
     }
 }
 
-/// Compact older tool-result messages to bring conversation under `target_bytes`.
+/// Compact older tool results to bring the conversation under `target_bytes`.
 ///
-/// Walks messages from oldest to newest, truncating tool_result content blocks.
-/// Skips the most recent assistant+tool_result pair (the last turn) so the LLM
-/// always has full context for its immediate previous action.
+/// Walks messages from oldest to newest, truncating each tool result's
+/// content, and stops as soon as the running size is under target. The final
+/// turn — the last assistant message and everything after it — is left intact
+/// so the model always has full context for its immediate previous action.
 fn compact_old_tool_results(conversation: &mut [Value], target_bytes: usize) {
     const PREVIEW_CHARS: usize = 500;
 
-    // Find the index of the last assistant message so we can protect the final turn
-    let last_assistant_idx = conversation
+    let protected_from = conversation
         .iter()
-        .rposition(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"));
+        .rposition(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"))
+        .unwrap_or(conversation.len());
+    let mut size = conv_byte_size(conversation);
 
-    for i in 0..conversation.len() {
-        // Don't compact messages at or after the last assistant message (protect final turn)
-        if let Some(lai) = last_assistant_idx {
-            if i >= lai {
-                break;
-            }
-        }
-
-        // Extract role as owned String so we don't hold a borrow on conversation[i]
-        let role = conversation[i]
-            .get("role")
-            .and_then(|r| r.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        // --- Claude format: role "user" with content array containing tool_result blocks ---
-        if role == "user" {
-            if let Some(content) = conversation[i].get("content").and_then(|c| c.as_array()).cloned() {
-                let mut changed = false;
-                let mut new_content = content;
-                for block in new_content.iter_mut() {
-                    if block.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
-                        if let Some(inner) = block.get("content").cloned() {
-                            let text = match &inner {
-                                Value::String(s) => s.clone(),
-                                _ => serde_json::to_string(&inner).unwrap_or_default(),
-                            };
-                            if text.len() > PREVIEW_CHARS + 100 {
-                                let summary = smart_truncation_summary(&text, PREVIEW_CHARS);
-                                block["content"] = json!(summary);
-                                changed = true;
-                            }
-                        }
-                    }
-                }
-                if changed {
-                    conversation[i]["content"] = json!(new_content);
-                }
-            }
-        }
-
-        // --- OpenAI format: role "tool" with content string ---
-        if role == "tool" {
-            let summary = {
-                let text = conversation[i].get("content").and_then(|c| c.as_str());
-                text.and_then(|t| {
-                    if t.len() > PREVIEW_CHARS + 100 {
-                        Some(smart_truncation_summary(t, PREVIEW_CHARS))
-                    } else {
-                        None
-                    }
-                })
-            };
-            if let Some(s) = summary {
-                conversation[i]["content"] = json!(s);
-            }
-        }
-
-        // --- Grok Responses API format: type "function_call_output" with output string ---
-        let item_type = conversation[i]
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string();
-        if item_type == "function_call_output" {
-            let summary = {
-                let text = conversation[i].get("output").and_then(|c| c.as_str());
-                text.and_then(|t| {
-                    if t.len() > PREVIEW_CHARS + 100 {
-                        Some(smart_truncation_summary(t, PREVIEW_CHARS))
-                    } else {
-                        None
-                    }
-                })
-            };
-            if let Some(s) = summary {
-                conversation[i]["output"] = json!(s);
-            }
-        }
-
-        // Check if we're under target now
-        if conv_byte_size(conversation) <= target_bytes {
+    for message in conversation[..protected_from].iter_mut() {
+        if size <= target_bytes {
             break;
         }
+        let before = message_byte_size(message);
+        compact_message(message, PREVIEW_CHARS);
+        size = size - before + message_byte_size(message);
+    }
+}
+
+/// Truncate every tool result carried by one history message. Every provider
+/// records results in the canonical `{"role":"tool_results","results":[…]}`
+/// shape; a `user` message whose content array carries Claude-style
+/// `tool_result` blocks (history the harness compacted itself) is handled
+/// the same way.
+fn compact_message(message: &mut Value, preview_chars: usize) {
+    match message.get("role").and_then(|r| r.as_str()) {
+        Some("tool_results") => {
+            if let Some(results) = message.get_mut("results").and_then(|r| r.as_array_mut()) {
+                for result in results {
+                    compact_content(result, preview_chars);
+                }
+            }
+        }
+        Some("user") => {
+            if let Some(blocks) = message.get_mut("content").and_then(|c| c.as_array_mut()) {
+                for block in blocks
+                    .iter_mut()
+                    .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
+                {
+                    compact_content(block, preview_chars);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Replace a long `content` (a string, or any JSON value) with its summary.
+fn compact_content(holder: &mut Value, preview_chars: usize) {
+    let Some(content) = holder.get("content") else { return };
+    let text = match content {
+        Value::String(s) => s.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    };
+    if text.len() > preview_chars + 100 {
+        holder["content"] = json!(smart_truncation_summary(&text, preview_chars));
     }
 }
 
@@ -553,41 +534,161 @@ fn build_user_message_with_attachments(task: &str, attachments: &[Value]) -> Val
     json!({"role": "user", "content": blocks})
 }
 
-/// Strip base64 attachment data from the first user message in the conversation,
-/// replacing it with text placeholders. This keeps history small for follow-up turns.
+/// Put the transient text in front of the task, as the first block of the
+/// user turn. `strip_transient` is its exact inverse.
+fn put_transient(message: &mut Value, text: &str) {
+    let block = json!({"type": "text", "text": text});
+    let Some(content) = message.get_mut("content") else { return };
+    match content {
+        Value::String(task) => {
+            let task = std::mem::take(task);
+            *content = json!([block, {"type": "text", "text": task}]);
+        }
+        Value::Array(blocks) => blocks.insert(0, block),
+        _ => {}
+    }
+}
+
+/// Take the transient block back out of the task turn; a turn that was a
+/// plain string before is a plain string again.
+fn strip_transient(message: &mut Value) {
+    let collapse = {
+        let Some(blocks) = message.get_mut("content").and_then(|c| c.as_array_mut()) else {
+            return;
+        };
+        if blocks.is_empty() {
+            return;
+        }
+        blocks.remove(0);
+        match blocks.as_slice() {
+            [only] if only.get("type").and_then(|t| t.as_str()) == Some("text") => {
+                only.get("text").and_then(|t| t.as_str()).map(str::to_string)
+            }
+            _ => None,
+        }
+    };
+    if let Some(task) = collapse {
+        message["content"] = Value::String(task);
+    }
+}
+
+/// Replace every base64 attachment block in the conversation with a text
+/// placeholder, so the history kept for follow-up turns stays small.
 ///
-/// Works with the canonical (Claude-like) format used by all providers.
+/// Works with the canonical (Claude-like) content blocks used by all providers.
 fn strip_attachment_data(conversation: &mut [Value]) {
-    // Only the first user message can have attachments
-    if conversation.is_empty() {
-        return;
+    for message in conversation.iter_mut() {
+        let Some(blocks) = message.get_mut("content").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
+        for block in blocks.iter_mut() {
+            if !matches!(block.get("type").and_then(|t| t.as_str()), Some("image" | "document")) {
+                continue;
+            }
+            let media_type = block
+                .get("source")
+                .and_then(|s| s.get("media_type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            *block = json!({"type": "text", "text": format!("[Attached file ({media_type})]")});
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_transient_is_read_with_the_task_and_never_kept() {
+        let mut plain = json!({"role": "user", "content": "what do they mean?"});
+        put_transient(&mut plain, "## Read from the room\n\nBob: ship friday");
+        assert_eq!(plain["content"][0]["text"], "## Read from the room\n\nBob: ship friday");
+        assert_eq!(plain["content"][1]["text"], "what do they mean?");
+        strip_transient(&mut plain);
+        assert_eq!(plain, json!({"role": "user", "content": "what do they mean?"}));
+
+        let image = json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}});
+        let mut with_attachment = json!({"role": "user", "content": [{"type": "text", "text": "look"}, image]});
+        put_transient(&mut with_attachment, "room");
+        assert_eq!(with_attachment["content"].as_array().unwrap().len(), 3);
+        strip_transient(&mut with_attachment);
+        assert_eq!(with_attachment["content"][0]["text"], "look");
+        assert_eq!(with_attachment["content"][1]["type"], "image");
+        assert_eq!(with_attachment["content"].as_array().unwrap().len(), 2);
     }
 
-    let msg = &mut conversation[0];
-    if msg.get("role").and_then(|r| r.as_str()) != Some("user") {
-        return;
+    fn tool_results(id: &str, content: String) -> Value {
+        json!({"role": "tool_results", "results": [{"tool_call_id": id, "name": "files", "content": content}]})
     }
 
-    // Handle "content" array (canonical format)
-    if let Some(content) = msg.get("content").and_then(|c| c.as_array()).cloned() {
-        let new_content: Vec<Value> = content
-            .into_iter()
-            .map(|block| {
-                let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                match block_type {
-                    "image" | "document" => {
-                        let mt = block
-                            .get("source")
-                            .and_then(|s| s.get("media_type"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        json!({"type": "text", "text": format!("[Attached file ({})]", mt)})
-                    }
-                    _ => block,
-                }
-            })
-            .collect();
-        msg["content"] = json!(new_content);
+    #[test]
+    fn compaction_shrinks_canonical_tool_results_and_spares_the_last_turn() {
+        let big = "x".repeat(10_000);
+        let mut conversation = vec![
+            json!({"role": "user", "content": "start"}),
+            json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "name": "files", "arguments": {}}]}),
+            tool_results("c1", big.clone()),
+            json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c2", "name": "files", "arguments": {}}]}),
+            tool_results("c2", big.clone()),
+            json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c3", "name": "files", "arguments": {}}]}),
+            tool_results("c3", big.clone()),
+        ];
+        let before = conv_byte_size(&conversation);
+        assert!(before > 30_000);
+
+        compact_old_tool_results(&mut conversation, 15_000);
+
+        assert!(conv_byte_size(&conversation) < 15_000);
+        let content = |i: usize| conversation[i]["results"][0]["content"].as_str().unwrap().to_string();
+        assert!(content(2).starts_with("[Result truncated: was 10000 bytes."));
+        assert!(content(4).starts_with("[Result truncated: was 10000 bytes."));
+        // The final turn keeps its full result.
+        assert_eq!(content(6), big);
+    }
+
+    #[test]
+    fn compaction_stops_once_under_target() {
+        let big = "x".repeat(10_000);
+        let mut conversation = vec![
+            json!({"role": "assistant", "content": "", "tool_calls": []}),
+            tool_results("c1", big.clone()),
+            json!({"role": "assistant", "content": "", "tool_calls": []}),
+            tool_results("c2", big.clone()),
+            json!({"role": "assistant", "content": "final"}),
+        ];
+        compact_old_tool_results(&mut conversation, 15_000);
+        assert!(conversation[1]["results"][0]["content"].as_str().unwrap().starts_with("[Result truncated"));
+        assert_eq!(conversation[3]["results"][0]["content"], big);
+    }
+
+    #[test]
+    fn compaction_handles_claude_style_tool_result_blocks() {
+        let big = "x".repeat(10_000);
+        let mut conversation = vec![
+            json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c1", "content": big}]}),
+            json!({"role": "assistant", "content": "final"}),
+        ];
+        compact_old_tool_results(&mut conversation, 1_000);
+        assert!(conversation[0]["content"][0]["content"].as_str().unwrap().starts_with("[Result truncated"));
+    }
+
+    #[test]
+    fn attachments_are_stripped_from_every_message() {
+        let image = json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}});
+        let pdf = json!({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "BBBB"}});
+        let mut conversation = vec![
+            json!({"role": "user", "content": [{"type": "text", "text": "first"}, image]}),
+            json!({"role": "assistant", "content": "ok"}),
+            json!({"role": "user", "content": [{"type": "text", "text": "second"}, pdf]}),
+        ];
+
+        strip_attachment_data(&mut conversation);
+
+        assert_eq!(conversation[0]["content"][1], json!({"type": "text", "text": "[Attached file (image/png)]"}));
+        assert_eq!(conversation[2]["content"][1], json!({"type": "text", "text": "[Attached file (application/pdf)]"}));
+        assert_eq!(conversation[1], json!({"role": "assistant", "content": "ok"}));
+        assert!(!serde_json::to_string(&conversation).unwrap().contains("AAAA"));
     }
 }
 

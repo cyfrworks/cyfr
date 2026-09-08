@@ -16,9 +16,10 @@ defmodule Prism.AquaRustConsistencyTest do
                "../../../../seed/components/formulas/local/aqua/*/src/src/tools.rs"
              ])
 
-  # Host-side only: the Rust side declares it, but its verbs are handled by
-  # the harness rather than dispatched as a tool.
-  @host_side_tools ~w(request_setup)
+  # Every virtual tool is compared, `request_setup` included: its one verb
+  # is handled by the harness rather than dispatched, but the guest still
+  # declares it, so the two sides must agree on it like any other.
+  @host_side_tools ~w()
 
   defp newest_tools_rs do
     @aqua_glob
@@ -29,12 +30,21 @@ defmodule Prism.AquaRustConsistencyTest do
     |> List.last()
   end
 
-  # Extract `"name": "x"` … `"action": {… "enum": [...]}` pairs from the
-  # virtual-tool definitions.
+  # Extract each virtual tool's name and its `action` enum from the
+  # definitions the model is shown. The names are constants (`"name":
+  # FILES_TOOL`), resolved first; the guest's own unit tests hold that
+  # enum to the set its one dispatch table accepts, so the schema IS the
+  # dispatch surface and this comparison is the whole contract.
   defp rust_actions(source) do
-    ~r/"name":\s*"(?<tool>[a-z_]+)".*?"enum":\s*\[(?<enum>[^\]]*)\]/s
+    consts =
+      ~r/const\s+(?<ident>[A-Z_]+):\s*&str\s*=\s*"(?<value>[a-z_]+)";/
+      |> Regex.scan(source, capture: :all_names)
+      |> Map.new(fn [ident, value] -> {ident, value} end)
+
+    ~r/"name":\s*(?:"(?<literal>[a-z_]+)"|(?<const>[A-Z_]+)).*?"enum":\s*\[(?<enum>[^\]]*)\]/s
     |> Regex.scan(source, capture: :all_names)
-    |> Map.new(fn [enum, tool] ->
+    |> Map.new(fn [const, enum, literal] ->
+      tool = if literal == "", do: Map.fetch!(consts, const), else: literal
       {tool, ~r/"([a-z_]+)"/ |> Regex.scan(enum) |> Enum.map(&List.last/1) |> Enum.sort()}
     end)
   end

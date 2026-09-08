@@ -20,19 +20,23 @@ defmodule Compendium.AquaAgent do
   frontmatter's.
 
       ---
-      title: Arcade
-      description: Spawn an Arcade specialist …
+      title: Artisan
+      description: Put on the Artisan role to …
       catalyst_ref: catalyst:moonmoon69.claude
       model: claude-sonnet-4-6
       tool_policy:
         files.read: auto
         build.compile: ask
       ---
-      You are the Arcade specialist …
+      You are AQUA in the Artisan role …
 
   The frontmatter grammar is restricted on purpose: string and boolean
   scalars plus the one flat string→string map (`tool_policy`) — enough for
   portability, small enough that `serialize/1` can emit it byte-stably.
+  The policy's own grammar — keys `tool.action`, `tool.*` or
+  `native_search`, values `ask` or `auto` — is `check_tool_policy/1`, the
+  one rule the file parser and the `aqua` tool door both apply, so a
+  value the runtime would otherwise have to reinterpret never lands.
   `parse_frontmatter/1` is shared with the scrolls (`SKILL.md` files under
   `aqua/skills/` follow the open Agent Skills convention: `name` +
   `description` frontmatter, instructions as the body).
@@ -58,12 +62,16 @@ defmodule Compendium.AquaAgent do
 
   @doc """
   Parse one agent file. The name comes from the filename (`<name>.md`),
-  never from the frontmatter — the tree is the roster.
+  never from the frontmatter — the tree is the roster. A `tool_policy`
+  outside the grammar refuses the whole file with its typed reason
+  (`t:tool_policy_error/0`) rather than parsing to something the runtime
+  would have to guess at.
   """
   @spec parse(String.t(), binary()) :: {:ok, t()} | {:error, term()}
   def parse(name, binary) when is_binary(name) and is_binary(binary) do
     with {:ok, meta, body} <- parse_frontmatter(binary),
-         {:ok, policy} <- checked_tool_policy(meta["tool_policy"]) do
+         policy = policy_or_empty(meta["tool_policy"]),
+         :ok <- check_tool_policy(policy) do
       {:ok,
        %{
          name: name,
@@ -174,17 +182,44 @@ defmodule Compendium.AquaAgent do
 
         {:ok, soul ++ Enum.sort_by(roles, & &1.name), Enum.reverse(errors)}
 
-      {:error, :not_found} ->
-        {:ok, [], []}
-
       {:error, reason} ->
         {:error, reason}
     end
   end
 
+  @doc """
+  The key on a soul's allowlist that gives it leave to clone into the role
+  `name` — the delegation glob the runtime reads (`Aqua.ToolGrants`) and
+  every writer of it spells through here.
+  """
+  @spec clone_glob(String.t()) :: String.t()
+  def clone_glob(name) when is_binary(name), do: name <> ".*"
+
   @doc "Whether this agent is the estate's soul, by the one reserved name."
   @spec soul?(t()) :: boolean()
   def soul?(%{name: name}), do: AquaPath.soul?(name)
+
+  @soul_type "soul"
+  @role_type "role"
+
+  @doc """
+  The `type` a soul carries on the wire — what the `aqua` tool's `list` and
+  `get` answer and what every surface filters on. Spelled here once, so a
+  reader that compares against the literal cannot drift from the writer.
+  """
+  @spec soul_type() :: String.t()
+  def soul_type, do: @soul_type
+
+  @doc "The `type` a role carries on the wire — see `soul_type/0`."
+  @spec role_type() :: String.t()
+  def role_type, do: @role_type
+
+  @doc """
+  An agent's wire `type`, decided by the tree: the reserved name is the
+  soul, every other name a role (`soul?/1`).
+  """
+  @spec type_of(t()) :: String.t()
+  def type_of(agent), do: if(soul?(agent), do: @soul_type, else: @role_type)
 
   @doc "One agent by name — the soul or a role, whichever the name is — through the overlay union."
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
@@ -198,21 +233,58 @@ defmodule Compendium.AquaAgent do
   # Internals
   # ---------------------------------------------------------------------------
 
+  # An absent `tool_policy` is the empty allowlist; anything present is
+  # checked as written.
+  defp policy_or_empty(nil), do: %{}
+  defp policy_or_empty(policy), do: policy
+
   defp string_or(value, _fallback) when is_binary(value) and value != "", do: value
   defp string_or(_value, fallback), do: fallback
 
   defp blank_to_nil(value) when is_binary(value) and value != "", do: value
   defp blank_to_nil(_), do: nil
 
-  defp checked_tool_policy(nil), do: {:ok, %{}}
+  @typedoc """
+  Why a `tool_policy` is refused: not a map at all, a key that is neither
+  `tool.action`, `tool.*` nor `native_search`, or a value that is neither
+  `"ask"` nor `"auto"`.
+  """
+  @type tool_policy_error ::
+          :tool_policy_not_a_map
+          | {:tool_policy_invalid_key, term()}
+          | {:tool_policy_invalid_value, String.t(), term()}
 
-  defp checked_tool_policy(policy) when is_map(policy) do
-    if Enum.all?(policy, fn {k, v} -> is_binary(k) and is_binary(v) end),
-      do: {:ok, policy},
-      else: {:error, :tool_policy_not_a_string_map}
+  @doc """
+  Check a `tool_policy` map against the grammar the runtime reads: every
+  key is `tool.action`, `tool.*` or the bare `native_search`, every value
+  exactly `"ask"` or `"auto"`. The guest treats only `"auto"` as
+  automatic and anything else as ask, so a value outside the vocabulary is
+  refused here — at the file and at the tool door alike — rather than
+  persisted for the runtime to reinterpret.
+  """
+  @spec check_tool_policy(term()) :: :ok | {:error, tool_policy_error()}
+  def check_tool_policy(policy) when is_map(policy) do
+    Enum.find_value(policy, :ok, fn {key, value} ->
+      cond do
+        not valid_policy_key?(key) -> {:error, {:tool_policy_invalid_key, key}}
+        value not in ["ask", "auto"] -> {:error, {:tool_policy_invalid_value, key, value}}
+        true -> nil
+      end
+    end)
   end
 
-  defp checked_tool_policy(_), do: {:error, :tool_policy_not_a_map}
+  def check_tool_policy(_policy), do: {:error, :tool_policy_not_a_map}
+
+  defp valid_policy_key?("native_search"), do: true
+
+  defp valid_policy_key?(key) when is_binary(key) do
+    case String.split(key, ".") do
+      [tool, action] when tool != "" and action != "" -> true
+      _ -> false
+    end
+  end
+
+  defp valid_policy_key?(_key), do: false
 
   # The restricted emission grammar: booleans bare; strings plain when they
   # cannot be misread by a YAML parser, double-quoted (JSON-escaped, which

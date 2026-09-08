@@ -76,7 +76,10 @@ defmodule PrismWeb.LiveAuth do
 
   # Revoked sessions end the LiveView; a lost focus sends the person back to
   # the root, where the next mount re-derives what they may work in. The
-  # standing messages are consumed here; everything else passes through.
+  # session messages are consumed here. A membership change is settled here
+  # first — the caller re-derived, or sent away — and then handed on to the
+  # page, which may have a list to re-read (the chat's rail); a page with
+  # no clause for it logs and moves on.
   defp standing_changed({:sessions_revoked, user_id}, socket) do
     if socket.assigns.context.user_id == user_id do
       {:halt, redirect(socket, to: "/login")}
@@ -89,13 +92,14 @@ defmodule PrismWeb.LiveAuth do
     if socket.assigns.context.athanor_id == athanor_id do
       {:halt, redirect(socket, to: "/")}
     else
-      {:halt, socket}
+      {:cont, socket}
     end
   end
 
   # Any other membership change — joined a group, the operator bit granted —
   # re-derives the caller instead of trusting the Context assigned at mount
-  # for the socket's lifetime.
+  # for the socket's lifetime, so the page hears of the change under the
+  # fresh context.
   #
   # From the Context, not from the session token. Memberships, the operator
   # bit and whether the focused athanor is still granted are all `revalidate/1`
@@ -108,7 +112,7 @@ defmodule PrismWeb.LiveAuth do
     case Sanctum.Tenancy.revalidate(socket.assigns.context) do
       %Sanctum.Context{authenticated: true, athanor_id: id} = ctx when is_binary(id) ->
         Cyfr.LoggerContext.set_from_context(ctx)
-        {:halt, assign(socket, :context, ctx)}
+        {:cont, assign(socket, :context, ctx)}
 
       _ ->
         {:halt, redirect(socket, to: "/")}

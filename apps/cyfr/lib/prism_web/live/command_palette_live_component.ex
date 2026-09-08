@@ -60,16 +60,11 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     {:noreply, socket |> assign(:query, query) |> refilter()}
   end
 
-  # Every target is a page path: an athanor page gets the focus prefix
-  # added here, once, and a global page (the chat) is its own address.
-  # `@athanor_route` is already in assigns — `Focus.route_of/1` re-read it
-  # from the DB on every pick.
+  # Every target is a page path; `Nav.href/2` decides whether the focus
+  # prefix goes on it. `@athanor_route` is already in assigns —
+  # `Focus.route_of/1` re-read it from the DB on every pick.
   def handle_event("pick", %{"to" => path}, socket) when is_binary(path) do
-    to =
-      if PrismWeb.Nav.global?(path),
-        do: path,
-        else: PrismWeb.Focus.path(socket.assigns.athanor_route, path)
-
+    to = PrismWeb.Nav.href(path, socket.assigns.athanor_route)
     {:noreply, socket |> close() |> push_navigate(to: to)}
   end
 
