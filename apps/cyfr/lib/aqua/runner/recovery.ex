@@ -53,70 +53,92 @@ defmodule Aqua.Runner.Recovery do
         interrupted(state, execution_id, "no execution engine")
 
       true ->
-        # Subscribe before reading the buffer: an event landing between the
-        # two reads would otherwise be lost, and the sequence gate drops
-        # any the buffer and the live feed both deliver.
-        turn.subscribe(execution_id, ctx)
-        events = turn.events_since(execution_id, state.athanor_id)
-        finished? = Enum.any?(events, &(&1.type in ["complete", "error"]))
+        # The standing answers are read before the turn is followed again,
+        # composed into the policy exactly as `Aqua.Turn.begin/5` composes
+        # them: a recovered completion must not treat a denied pair as
+        # callable just because the runner restarted. A store that cannot
+        # answer is retried like an engine that is not up yet, then the
+        # turn is interrupted — recovering on the authored policy alone
+        # would make a standing "never" on an authored `auto` pair callable
+        # again until the store returned, the wider reading `begin/5`
+        # refuses too.
+        case standing(ctx, state, stored) do
+          :unavailable when attempts > 0 ->
+            Process.send_after(
+              self(),
+              {:recover, execution_id, stored, attempts - 1},
+              @recover_retry_ms
+            )
 
-        # The turn's policy is the orchestrator's; the row remembers which,
-        # so a recovered completion checks its intents against the right one
-        # instead of an empty allowlist that would drop them all.
-        #
-        # Standing grants are rows, so a recovered turn reads them back
-        # rather than resuming with an empty set — the whole point of
-        # moving them out of process memory — composed into the policy
-        # exactly as `Aqua.Turn.begin/5` composes it: a recovered
-        # completion must not treat a denied pair as callable again just
-        # because the runner restarted.
-        {orchestrator, grants} =
-          case resolve_stored(ctx, stored || state.orchestrator) do
-            %Orchestrator{} = resolved ->
-              with {:ok, rows} <- Aqua.ToolGrants.for_conversation(ctx, state.id, resolved.name),
-                   {:ok, allowed} <- Aqua.ToolGrants.allowed_by_agent(ctx, state.id) do
-                {Orchestrator.with_grants(resolved, rows), allowed}
-              else
-                # The store could not answer: recover on the authored
-                # policy under the ceiling and no standing allows — the
-                # narrower reading, never the wider one.
-                {:error, _} -> {resolved, MapSet.new()}
-              end
-
-            nil ->
-              {nil, state.grants}
-          end
-
-        state = %{
-          state
-          | running: true,
-            execution_id: execution_id,
-            last_event_seq: -1,
-            turn_ctx: ctx,
-            orchestrator: orchestrator,
-            grants: grants,
-            tool_policy: Orchestrator.tool_policy(orchestrator),
-            # The pin is on the execution row precisely so a turn that
-            # outlived its runner can still answer "under which consent?".
-            # An approval decided after a restart roots the same profile
-            # the turn did, not whatever a fresh selection would pick.
-            profile_id: state.profile_id || pinned_profile(ctx, execution_id)
-        }
-
-        state = replay(state, events)
-
-        cond do
-          finished? ->
-            # The replayed complete/error already unsubscribed.
             state
 
-          turn.running?(ctx, execution_id) ->
-            Aqua.Runner.Shared.broadcast(state, {:turn_started, execution_id})
+          :unavailable ->
+            interrupted(state, execution_id, "the standing answers could not be read")
 
-          true ->
-            turn.unsubscribe(execution_id, ctx)
-            interrupted(state, execution_id, "the server restarted")
+          {:ok, orchestrator, grants} ->
+            follow(state, execution_id, orchestrator, grants)
         end
+    end
+  end
+
+  # The recorded pick resolved against the tree as it is now, with its
+  # standing rows composed in and the fast-path set beside it; `nil` for a
+  # row that recorded no pick or a tree that no longer holds it.
+  defp standing(ctx, state, stored) do
+    case resolve_stored(ctx, stored || state.orchestrator) do
+      %Orchestrator{} = resolved ->
+        with {:ok, rows} <- Aqua.ToolGrants.for_conversation(ctx, state.id, resolved.name),
+             {:ok, allowed} <- Aqua.ToolGrants.allowed_by_agent(ctx, state.id) do
+          {:ok, Orchestrator.with_grants(resolved, rows), allowed}
+        else
+          {:error, _} -> :unavailable
+        end
+
+      nil ->
+        {:ok, nil, state.grants}
+    end
+  end
+
+  # Follow the execution again. Subscribe before reading the buffer: an
+  # event landing between the two reads would otherwise be lost, and the
+  # sequence gate drops any the buffer and the live feed both deliver.
+  defp follow(state, execution_id, orchestrator, grants) do
+    ctx = state.system_ctx
+    turn = state.turn
+
+    turn.subscribe(execution_id, ctx)
+    events = turn.events_since(execution_id, state.athanor_id)
+    finished? = Enum.any?(events, &(&1.type in ["complete", "error"]))
+
+    state = %{
+      state
+      | running: true,
+        execution_id: execution_id,
+        last_event_seq: -1,
+        turn_ctx: ctx,
+        orchestrator: orchestrator,
+        grants: grants,
+        tool_policy: Orchestrator.tool_policy(orchestrator),
+        # The pin is on the execution row precisely so a turn that
+        # outlived its runner can still answer "under which consent?".
+        # An approval decided after a restart roots the same profile
+        # the turn did, not whatever a fresh selection would pick.
+        profile_id: state.profile_id || pinned_profile(ctx, execution_id)
+    }
+
+    state = replay(state, events)
+
+    cond do
+      finished? ->
+        # The replayed complete/error already unsubscribed.
+        state
+
+      turn.running?(ctx, execution_id) ->
+        Aqua.Runner.Shared.broadcast(state, {:turn_started, execution_id})
+
+      true ->
+        turn.unsubscribe(execution_id, ctx)
+        interrupted(state, execution_id, "the server restarted")
     end
   end
 

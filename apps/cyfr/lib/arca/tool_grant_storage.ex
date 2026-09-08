@@ -105,28 +105,6 @@ defmodule Arca.ToolGrantStorage do
     end)
   end
 
-  @doc """
-  One agent's agent-scope decisions in its estate. Fails closed like
-  `list_for_conversation/2`: an unreachable store is an error the caller
-  refuses on, never an empty answer.
-  """
-  @spec list_agent_scope(String.t(), String.t()) :: {:ok, [ToolGrant.t()]} | {:error, term()}
-  def list_agent_scope(athanor_id, agent_name)
-      when is_binary(athanor_id) and is_binary(agent_name) do
-    agent_scope = ToolGrant.agent_scope()
-
-    Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.list_agent_scope", fn ->
-      {:ok,
-       from(g in ToolGrant,
-         where:
-           g.athanor_id == ^athanor_id and g.scope == ^agent_scope and
-             g.agent_name == ^agent_name,
-         order_by: [asc: g.granted_at, asc: g.id]
-       )
-       |> Arca.Repo.all()}
-    end)
-  end
-
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------

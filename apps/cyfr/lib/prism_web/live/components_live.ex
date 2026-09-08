@@ -5,7 +5,9 @@ defmodule PrismWeb.ComponentsLive do
   use PrismWeb, :live_view
   require Logger
 
+  alias Phoenix.LiveView.JS
   alias PrismWeb.ComponentsLive.Editor
+  alias PrismWeb.ConsentSheetComponent
 
   # The one spelling of the local namespace. Exact equality on purpose: a
   # nil publisher is a display question, not `local_publisher?/1`'s
@@ -296,6 +298,11 @@ defmodule PrismWeb.ComponentsLive do
     # The consent sheet plans against the latest versioned ref; the walk
     # itself decides what the grant covers.
     {:noreply, assign(socket, :consent_sheet_ref, latest_versioned_ref(socket))}
+  end
+
+  # The dialog's backdrop and Escape; the sheet's own Cancel arrives as a message.
+  def handle_event("close_consent", _params, socket) do
+    {:noreply, assign(socket, :consent_sheet_ref, nil)}
   end
 
   def handle_event("push", %{"ref" => ref}, socket) do
@@ -1602,21 +1609,15 @@ defmodule PrismWeb.ComponentsLive do
           </.card>
         </section>
       </div>
-      
-    <!-- Consent sheet overlay -->
-      <div :if={@consent_sheet_ref} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-black/60"></div>
-        <div class="relative w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-lg border border-gray-800 bg-gray-900 p-4 shadow-xl">
-          <.live_component
-            module={PrismWeb.ConsentSheetComponent}
-            id={"consent-#{@consent_sheet_ref}"}
-            ref={@consent_sheet_ref}
-            context={@context}
-            athanor_route={@athanor_route}
-            athanor_name={@athanor && @athanor.name}
-          />
-        </div>
-      </div>
+
+      <%!-- The consent sheet for a model's key: the house dialog. --%>
+      <ConsentSheetComponent.consent_sheet_modal
+        ref={@consent_sheet_ref}
+        context={@context}
+        athanor_route={@athanor_route}
+        athanor_name={@athanor && @athanor.name}
+        on_cancel={JS.push("close_consent")}
+      />
     </div>
     """
   end

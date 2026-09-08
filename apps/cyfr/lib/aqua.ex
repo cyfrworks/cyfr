@@ -11,7 +11,8 @@ defmodule Aqua do
   - `Aqua.Turn` — begins a turn (resolve, pin, compose, start), builds its
     input for the AQUA formula and parses its completion.
   - `Aqua.Orchestrator` — the agent a turn is addressed to, as the runner
-    carries it: a name and its owner, then the resolved detail.
+    carries it: a name between turns, the authored definition and the
+    effective policy once a turn resolves it.
   - `Aqua.Prompt` — the one composer of the system prompt, from the
     resolved agent and the turn's pinned authority.
   - `Aqua.ToolGrants` — standing approvals as rows, composed over the

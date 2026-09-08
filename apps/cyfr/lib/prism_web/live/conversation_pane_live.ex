@@ -1131,7 +1131,15 @@ defmodule PrismWeb.ConversationPaneLive do
           </button>
         </div>
 
-        <div id={@dom <> "-messages"} phx-update="stream" class="space-y-3">
+        <%!-- A log to assistive tech, but not a live region: the announcer
+              above speaks the coherent updates, not every streamed delta. --%>
+        <div
+          id={@dom <> "-messages"}
+          phx-update="stream"
+          role="log"
+          aria-live="off"
+          class="space-y-3"
+        >
           <%= for {dom_id, msg} <- @streams.messages do %>
             <div id={dom_id}>
               <%= if msg.kind == "approval" do %>

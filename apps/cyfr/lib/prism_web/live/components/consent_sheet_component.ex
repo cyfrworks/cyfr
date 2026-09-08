@@ -22,6 +22,36 @@ defmodule PrismWeb.ConsentSheetComponent do
     {:ok, assign(socket, plan: nil, preview: nil, decisions: %{}, error: nil)}
   end
 
+  @doc """
+  The sheet as a dialog over a page — the house modal, with its sibling
+  backdrop and an Escape of its own — holding the sheet for `ref` while
+  there is one. `on_cancel` is the page's event for the backdrop and
+  Escape; the sheet's own Cancel still arrives as
+  `{:consent_sheet_closed, ref}`. A pane shows the sheet inline instead.
+  """
+  attr :ref, :any, default: nil
+  attr :context, :any, required: true
+  attr :athanor_route, :any, default: nil
+  attr :athanor_name, :any, default: nil
+  attr :on_cancel, Phoenix.LiveView.JS, required: true
+
+  def consent_sheet_modal(assigns) do
+    ~H"""
+    <.modal id="consent-sheet-dialog" show={not is_nil(@ref)} on_cancel={@on_cancel}>
+      <div class="max-h-[70vh] overflow-y-auto">
+        <.live_component
+          module={__MODULE__}
+          id={"consent-#{@ref}"}
+          ref={@ref}
+          context={@context}
+          athanor_route={@athanor_route}
+          athanor_name={@athanor_name}
+        />
+      </div>
+    </.modal>
+    """
+  end
+
   @impl true
   def update(%{ref: ref} = assigns, socket) do
     socket = assign(socket, assigns)

@@ -34,7 +34,9 @@ defmodule PrismWeb.AquaLive do
 
   use PrismWeb, :live_view
 
+  alias Phoenix.LiveView.JS
   alias PrismWeb.AquaLive.{AgentsComponent, NotesComponent, RestoreComponent, ScrollsComponent}
+  alias PrismWeb.ConsentSheetComponent
 
   # Each section reloads on its own message, so a write refreshes what it
   # changed and nothing else: a note kept here does not re-read the
@@ -68,42 +70,30 @@ defmodule PrismWeb.AquaLive do
     {:noreply, assign(socket, :consent_sheet_ref, ref)}
   end
 
+  # The dialog's backdrop and Escape; the sheet's own Cancel arrives as a message.
+  def handle_event("close_consent", _params, socket) do
+    {:noreply, assign(socket, :consent_sheet_ref, nil)}
+  end
+
   # ============================================================================
   # Loads and refreshes
   # ============================================================================
 
   @impl true
-  # One message per section, in order, and `:loaded` last. The reads are
-  # slow enough together (each is a walk of the overlay) that a child
-  # LiveView's mount — the topbar, the panel — would wait behind all of
-  # them and time out; between messages the page answers it.
-  @load_order [:provenance, :agents, :models, :notes, :skills]
-
+  # Everything the load needs is queued from this one message: the
+  # provenance is read here, each section's read is the `send_update/3`
+  # message its component serves, and `:loaded` is queued last. Queued at
+  # once, so a render asked for after this message is served is behind
+  # them all — the settled page — while each read is still its own message,
+  # so a child LiveView's mount (the topbar, the panel) is answered between
+  # them rather than after them all.
   def handle_info(:load, socket) do
-    send(self(), {:load_section, hd(@load_order)})
-    {:noreply, socket}
-  end
-
-  # Each step hands to the next only once its own work is queued: a
-  # section's read runs in its component's `update/2`, which the
-  # `send_update/3` message carries, so the next step — and `:loaded` last
-  # — always lands behind it.
-  def handle_info({:load_section, section}, socket) do
-    socket =
-      case section do
-        :provenance -> load_provenance(socket)
-        :agents -> load_agents(socket)
-        :models -> load_models(socket)
-        :notes -> load_notes(socket)
-        :skills -> load_skills(socket)
-      end
-
-    case Enum.drop_while(@load_order, &(&1 != section)) do
-      [_this, next | _] -> send(self(), {:load_section, next})
-      _ -> send(self(), :loaded)
-    end
-
-    {:noreply, socket}
+    socket = load_provenance(socket)
+    load_agents(socket)
+    load_notes(socket)
+    load_skills(socket)
+    send(self(), :loaded)
+    {:noreply, load_models(socket)}
   end
 
   def handle_info(:loaded, socket), do: {:noreply, assign(socket, :loading, false)}
@@ -296,21 +286,15 @@ defmodule PrismWeb.AquaLive do
         context={@context}
         loaded={not @loading}
       />
-      
-    <!-- Consent sheet: bind a vault entry to the soul's model -->
-      <div :if={@consent_sheet_ref} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-black/60"></div>
-        <div class="relative w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-lg border border-gray-800 bg-gray-900 p-4 shadow-xl">
-          <.live_component
-            module={PrismWeb.ConsentSheetComponent}
-            id={"consent-#{@consent_sheet_ref}"}
-            ref={@consent_sheet_ref}
-            context={@context}
-            athanor_route={@athanor_route}
-            athanor_name={@athanor && @athanor.name}
-          />
-        </div>
-      </div>
+
+      <%!-- The consent sheet for a model's key: the house dialog. --%>
+      <ConsentSheetComponent.consent_sheet_modal
+        ref={@consent_sheet_ref}
+        context={@context}
+        athanor_route={@athanor_route}
+        athanor_name={@athanor && @athanor.name}
+        on_cancel={JS.push("close_consent")}
+      />
     </div>
     """
   end

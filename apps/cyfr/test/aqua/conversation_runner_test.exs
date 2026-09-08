@@ -1045,6 +1045,54 @@ defmodule Aqua.ConversationRunnerTest do
     assert Map.has_key?(state.tool_policy, "component.list")
   end
 
+  test "recovery that cannot read the standing answers retries, then interrupts the turn", %{
+    alice: alice,
+    conv: conv
+  } do
+    defmodule OutageTurn do
+      def pin_profile(_ctx), do: {:ok, %{profile_id: "prof_stub"}}
+      def start(_ctx, _input, _profile), do: {:error, :unused}
+      def engine_available?, do: true
+
+      def subscribe(execution_id, _ctx),
+        do: send(:outage_probe, {:outage_subscribed, execution_id})
+
+      def unsubscribe(_, _), do: :ok
+      def cancel(_, _), do: :ok
+      def cancel_for_restart(_, _, _), do: :ok
+      def events_since(_, _), do: []
+      def running?(_, _), do: true
+      def run_approved(_, _, _), do: {:ok, %{}}
+    end
+
+    # A standing "never" the store holds — and then cannot answer for. The
+    # authored policy alone would put the pair back at `auto`; recovering
+    # on it is the wider reading, so the turn is not followed at all: the
+    # store is retried, then the turn is interrupted, as `begin/5` refuses.
+    {:ok, _} =
+      Aqua.ToolGrants.put(alice, %{
+        scope: "agent",
+        effect: "deny",
+        agent_name: "aqua",
+        tool: "component",
+        action: "list"
+      })
+
+    Process.register(self(), :outage_probe)
+    Application.put_env(:cyfr, :aqua_turn, OutageTurn)
+    {:ok, runner} = ConversationRunner.ensure(conv.id, conv.athanor_id)
+
+    # The rows are there, the store is not.
+    Arca.Repo.query!("ALTER TABLE tool_grants RENAME TO tool_grants_outage")
+    send(runner, {:recover, "exec_outage", Aqua.Orchestrator.by_name("aqua"), 1})
+
+    assert_receive {:conversation, _, {:message, %{kind: "system", content: text}}}, 10_000
+    assert text =~ "interrupted"
+    assert text =~ "standing answers could not be read"
+    refute_received {:outage_subscribed, _}
+    refute :sys.get_state(runner).running
+  end
+
   test "a shutdown mid-turn writes the interruption and clears the running turn; a crash keeps it",
        %{alice: alice, conv: conv} do
     {eid, runner, _} = start_turn(alice, conv, "long question")

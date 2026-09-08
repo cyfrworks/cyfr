@@ -282,7 +282,9 @@ collapsed until each person follows it from the rail.
   (`/chat?a=<route>&c=<conversation>`). `/a/<route>` and
   `/a/<route>?c=<id>` forward there. The rail lists your own athanor, your
   DMs (by the other person's name), your groups and their topics; clicking
-  a person opens the DM in place.
+  a person opens the DM in place. `+ New` opens a blank pane at
+  `/chat?a=<route>&c=new`: the first message starts the thread, and a
+  refresh of that address is the same blank pane, not the newest thread.
 - `/a/<route>/aqua` is the estate's AQUA page; `/a/<route>/agents`
   forwards there. The sidebar, drawer and palette say **AQUA** where they
   said Agents. The page holds the soul and roles, the pinned page, the

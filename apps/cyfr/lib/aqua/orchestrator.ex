@@ -16,7 +16,7 @@ defmodule Aqua.Orchestrator do
   Between turns the runner keeps the IDENTITY only. Every turn resolves
   it again (`resolve/2`, inside the turn-start task, never in the
   runner's loop): the current enabled definition — `agent`, the
-  string-keyed projection `Aqua.Turn.orchestrator/3` reads, with the
+  string-keyed projection `Aqua.Turn.orchestrator/2` reads, with the
   AUTHORED policy under `"tool_policy"` — and then the EFFECTIVE policy
   (`policy`, `with_grants/2`) composed from the standing decisions made
   since. Keeping the two apart is what lets a revoked "always" go back to

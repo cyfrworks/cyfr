@@ -280,7 +280,7 @@ defmodule Aqua.ToolGrantsTest do
     end
   end
 
-  describe "for_conversation/4" do
+  describe "for_conversation/3" do
     test "sees this thread's grants and the agent's, but not another thread's", %{ctx: ctx} do
       {:ok, _} = grant(ctx, %{conversation_id: "conv_1", tool: "component", action: "pull"})
       {:ok, _} = grant(ctx, %{conversation_id: "conv_2", tool: "component", action: "list"})
