@@ -37,7 +37,7 @@ defmodule Sanctum.Consent.BlobBuilder do
     extras = Keyword.get(opts, :ingress_extras, %{})
 
     Enum.reduce_while(Map.keys(graph), {:ok, %{}}, fn node_key, {:ok, acc} ->
-      case build_node(ctx, node_key, source_ref, vault_fn, extras) do
+      case build_node(ctx, graph, node_key, source_ref, vault_fn, extras) do
         {:ok, node} -> {:cont, {:ok, Map.put(acc, node_key, node)}}
         {:error, reason} -> {:halt, {:error, {node_key, reason}}}
       end
@@ -115,7 +115,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp build_node(ctx, node_key, source_ref, vault_fn, extras) do
+  defp build_node(ctx, graph, node_key, source_ref, vault_fn, extras) do
     with {:ok, row} <- node_row(ctx, node_key),
          manifest =
            Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest")),
@@ -124,7 +124,7 @@ defmodule Sanctum.Consent.BlobBuilder do
 
       edges =
         manifest
-        |> direct_dep_keys(node_key)
+        |> direct_dep_keys(graph, node_key)
         |> Map.new(fn dep_key -> {dep_key, %{"__dep__" => dep_key}} end)
 
       edges =
@@ -214,13 +214,21 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  defp direct_dep_keys(manifest, node_key) do
+  # The node's dependency edges: every declared dependency, except an
+  # OPTIONAL one the activation does not carry — it is not installed, the
+  # activation attests to what can run, and an edge to nothing would be a
+  # dangling dep. A required dependency always edges: the activation
+  # refused to resolve without it, so it is in the graph.
+  defp direct_dep_keys(manifest, graph, node_key) do
     case Compendium.DependencyResolver.extract_from_manifest(manifest, node_key) do
       {:ok, deps} ->
         deps
         |> Enum.map(fn dep ->
-          Sanctum.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name)
+          {Sanctum.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name),
+           dep.optional == true}
         end)
+        |> Enum.reject(fn {key, optional?} -> optional? and not Map.has_key?(graph, key) end)
+        |> Enum.map(&elem(&1, 0))
         |> Enum.uniq()
         |> Enum.reject(&(&1 == node_key))
 

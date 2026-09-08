@@ -223,6 +223,34 @@ defmodule Sanctum.ProvisioningTest do
     assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :seed}
   end
 
+  test "with no registry, a bundle whose OPTIONAL dependency is not installed still provisions",
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir,
+      deps: [%{"ref" => "catalyst:someone.elsewhere", "optional" => true}]
+    )
+
+    previous = Application.get_env(:cyfr, :registry_url)
+    Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:cyfr, :registry_url),
+        else: Application.put_env(:cyfr, :registry_url, previous)
+    end)
+
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
+
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Offline #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.ensure_provisioned(in_group)
+
+    {:ok, group} = Athanors.get(group.id)
+    assert group.provisioned_at
+    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+    assert profile.kind == "owner"
+  end
+
   test "a bundle whose closure cannot be pulled leaves the athanor unprovisioned, loudly, and retries",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir, deps: ["catalyst:someone.elsewhere"])

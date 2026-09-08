@@ -55,16 +55,25 @@ defmodule Compendium.Pull do
 
   @doc """
   The static dependencies of a registered component's manifest that are
-  not present in the caller's athanor, as ref strings.
+  not present in the caller's athanor, as ref strings. The required ones
+  by default; `include: :all` adds the optional ones.
   """
-  @spec missing_deps(Context.t(), map()) :: [String.t()]
-  def missing_deps(%Context{} = ctx, component) when is_map(component) do
+  @spec missing_deps(Context.t(), map(), keyword()) :: [String.t()]
+  def missing_deps(%Context{} = ctx, component, opts \\ []) when is_map(component) do
     manifest = Compendium.Manifest.decode(Map.get(component, :manifest))
 
     with {:ok, deps} <-
            DependencyResolver.extract_from_manifest(manifest, component_id(component)) do
-      %{missing: missing} = DependencyResolver.classify_availability(ctx, deps)
-      Enum.map(missing, & &1.dependency_ref)
+      %{missing: missing, optional_missing: optional} =
+        DependencyResolver.classify_availability(ctx, deps)
+
+      wanted =
+        case Keyword.get(opts, :include, :required) do
+          :all -> missing ++ optional
+          :required -> missing
+        end
+
+      Enum.map(wanted, & &1.dependency_ref)
     else
       _ -> []
     end

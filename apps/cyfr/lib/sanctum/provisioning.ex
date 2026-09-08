@@ -198,7 +198,7 @@ defmodule Sanctum.Provisioning do
 
     with {:ok, _scan} <- register_bundle(athanor_id),
          :ok <- aqua_definitions(ctx),
-         %{failed: []} = closure <- Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx)),
+         %{failed: []} = closure <- Pull.ensure_published_deps(ctx, bundle_deps_to_pull(ctx)),
          {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx),
          :ok <- all_minted(bootstrap) do
       Logger.info(
@@ -454,7 +454,7 @@ defmodule Sanctum.Provisioning do
       # something — a transient registry outage at the previous sync must
       # not leave the closure missing until the next release. Both are
       # cheap no-ops when nothing is missing.
-      case missing_bundle_deps(ctx) do
+      case bundle_deps_to_pull(ctx) do
         [] ->
           :ok
 
@@ -530,14 +530,25 @@ defmodule Sanctum.Provisioning do
 
   # Every static dependency the athanor's local components declare that
   # is not present — the published catalysts the bundled AQUA depends on.
-  defp missing_bundle_deps(ctx) do
+  # What the bundle needs pulled before it can be consented: every missing
+  # required dependency, plus the optional ones (the model catalysts) when
+  # a registry is configured to pull them from — then a failed pull leaves
+  # the estate unprovisioned and retried, as for any dependency. With no
+  # registry the optional ones are left out: the estate boots on what the
+  # bundle ships, and its activations cover what is there.
+  defp bundle_deps_to_pull(ctx) do
+    include = if Compendium.RegistryHost.configured?(), do: :all, else: :required
+    missing_bundle_deps(ctx, include)
+  end
+
+  defp missing_bundle_deps(ctx, include) do
     case Arca.ComponentStorage.list_components(ctx,
            publisher: Compendium.ComponentPath.default_publisher(),
            limit: :none
          ) do
       {:ok, rows} ->
         rows
-        |> Enum.flat_map(&Pull.missing_deps(ctx, &1))
+        |> Enum.flat_map(&Pull.missing_deps(ctx, &1, include: include))
         |> Enum.uniq()
 
       _ ->

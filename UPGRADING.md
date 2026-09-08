@@ -4,6 +4,37 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## A server boots with no registry — formula `local.aqua` 1.0.7
+
+A person's own athanor is minted the moment the door admits them, under
+a slug of this server's, and a session without a cyfr.run namespace is as
+signed in as any other. The namespace is a publishing credential claimed
+at first publish (`/claim-namespace`, whenever the person chooses); the
+claim gate after sign-in, and the sign-in outcomes that depended on the
+registry answering, are gone. The probe after the door is a budgeted
+courtesy for everyone: whatever cyfr.run answers, the person proceeds,
+and the console flashes what is still owed (a policy to accept, a
+namespace another identity here holds).
+
+`CYFR_REGISTRY_URL=none` names no registry at all. Every client refuses
+at its network seam with a typed `registry_unconfigured` error before
+dialling; the health probe reports the registry as "disabled" rather than
+"down"; `component.search` and `component.pull` say so. For that to boot,
+the shipped AQUA formula's five model catalysts
+(`catalyst:moonmoon69.{claude,openai,gemini,grok,openrouter}`) are now
+`optional` dependencies. Provisioning succeeds on the required closure
+(`local.files`, `local.http`), the consent bootstrap mints the baseline,
+and an activation omits an optional dependency that is not installed — so
+when a catalyst is pulled later, the formula's activation changes and
+the estate re-consents from the grant sheet, as for any dependency
+change. A turn whose agent names a catalyst the estate does not hold is
+refused with `catalyst_not_in_estate`, as before.
+
+The manifest change is a new seed version: `local.aqua` 1.0.7 replaces
+1.0.6 (the guest binary and source are unchanged; the build stamp still
+matches). An estate consented against 1.0.6 re-consents from the grant
+sheet at first use.
+
 ## An agent belongs to its estate — the borrow machinery is gone
 
 A shared tape runs its own estate's soul and roles alone, and a person's

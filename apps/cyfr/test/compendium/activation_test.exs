@@ -228,6 +228,27 @@ defmodule Compendium.ActivationTest do
       assert {:error, {:incomplete, :unresolvable_dependency}} = Activation.resolve(ctx, root)
     end
 
+    test "a missing OPTIONAL dependency is absent from the graph, not a refusal", %{ctx: ctx} do
+      leaf = publish!(ctx, "present", type: "reagent")
+
+      root =
+        publish!(ctx, "tolerant",
+          type: "formula",
+          manifest: %{
+            "dependencies" => %{
+              "static" => [
+                %{"ref" => "reagent:local.present:1.0.0"},
+                %{"ref" => "catalyst:local.absent:1.0.0", "optional" => true}
+              ]
+            }
+          }
+        )
+
+      assert {:ok, %{graph: graph}} = Activation.resolve(ctx, root)
+      assert Map.keys(graph) |> Enum.sort() == ["formula:local.tolerant", "reagent:local.present"]
+      assert graph["reagent:local.present"] == leaf.release_digest
+    end
+
     test "a node without a release digest makes the activation incomplete", %{ctx: ctx} do
       component = publish!(ctx, "legacy")
       legacy = %{component | release_digest: nil}

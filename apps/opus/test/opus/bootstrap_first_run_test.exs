@@ -85,11 +85,13 @@ defmodule Opus.BootstrapFirstRunTest do
       assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
 
-    # AQUA's and list-models' static deps are name-level moonmoon69 refs
-    # that arrive only via registry pull (the closure pull at provisioning
-    # on a real install). Registration only asks that the refs parse —
-    # the rows land — but with the deps absent their activation cannot
-    # resolve, so bootstrap mints nothing for them: the fail-closed CI truth.
+    # The model catalysts are name-level moonmoon69 refs that arrive only
+    # via registry pull (the closure pull at provisioning on a real
+    # install). AQUA declares them OPTIONAL, so with none installed its
+    # activation covers the two shipped catalysts and bootstrap mints it —
+    # a server with no registry boots. list-models requires its, so with
+    # them absent its activation cannot resolve and bootstrap mints
+    # nothing for it: the fail-closed CI truth for a required dependency.
     for rel <- @pull_gated do
       assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
@@ -97,9 +99,18 @@ defmodule Opus.BootstrapFirstRunTest do
     {:ok, %{minted: minted} = outcome} = Bootstrap.run(ctx)
     assert "catalyst:local.files" in minted
     assert "catalyst:local.http" in minted
-    refute "formula:local.aqua" in minted
+    assert "formula:local.aqua" in minted
     refute "formula:local.list-models" in minted
-    assert Enum.any?(outcome.skipped, fn {ref, _reason} -> ref == "formula:local.aqua" end)
+
+    assert Enum.any?(outcome.skipped, fn {ref, _reason} ->
+             ref == "formula:local.list-models"
+           end)
+
+    {:ok, [aqua_profile]} = Source.DB.profiles(ctx, "formula:local.aqua")
+    {:ok, aqua_consent} = Source.DB.head_consent(ctx, aqua_profile.id)
+
+    assert Map.keys(aqua_consent.activation) |> Enum.sort() ==
+             ["catalyst:local.files", "catalyst:local.http", "formula:local.aqua"]
 
     # Each minted consent loads through the production source, and the
     # blob's ingress edge carries the manifest's declared ask.
