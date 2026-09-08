@@ -554,6 +554,8 @@ defmodule Sanctum.ApiKeyTest do
   describe "a key is a standing channel of its athanor" do
     test "it stops when the athanor is archived, and when its creator is denied", %{ctx: ctx} do
       n = System.unique_integer([:positive])
+      # The creator is a person this server knows, named by their own id.
+      {ctx, creator} = Sanctum.TestContext.person!(ctx, %{email: "keys#{n}@example.com"})
       {:ok, group} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Keys #{n}")
       in_group = %{ctx | athanor_id: group.id}
       {:ok, %{api_key: key}} = ApiKey.create(in_group, %{name: "chan-#{n}"})
@@ -576,15 +578,7 @@ defmodule Sanctum.ApiKeyTest do
       assert {:ok, _} = ApiKey.validate(key, [])
 
       # the creator being denied on this server does
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: ctx.user_id,
-          provider: "github",
-          email: "keys#{n}@example.com",
-          verified: true
-        })
-
-      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
+      {:ok, _} = Sanctum.Tenancy.Users.deny(creator)
       assert {:error, :revoked} = ApiKey.validate(key, [])
     end
   end

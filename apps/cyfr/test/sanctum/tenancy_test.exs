@@ -287,7 +287,7 @@ defmodule Sanctum.TenancyTest do
           verified: true
         })
 
-      assert Tenancy.channel_active?(athanor.id, uid)
+      assert Tenancy.channel_active?(athanor.id, user.id)
       # a creator who merely leaves (or never was a member) leaves the channel running
       assert Tenancy.channel_active?(athanor.id, "someone-else")
       # synthetic principals are never denied
@@ -296,10 +296,10 @@ defmodule Sanctum.TenancyTest do
 
       # a person the store never saw is not a denied one: rows are never
       # deleted, so an unknown id was never a signed-in person here
-      assert Tenancy.channel_active?(athanor.id, "github|https://github.com|never-seen")
+      assert Tenancy.channel_active?(athanor.id, "usr_never-seen")
 
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
-      refute Tenancy.channel_active?(athanor.id, uid)
+      refute Tenancy.channel_active?(athanor.id, user.id)
 
       {:ok, _} = Athanors.archive(athanor)
       refute Tenancy.channel_active?(athanor.id, "someone-else")

@@ -30,7 +30,11 @@ defmodule Emissary.MCP.NotesToolTest do
     end)
 
     n = System.unique_integer([:positive])
-    user = "local|idp|note-#{n}"
+
+    {:ok, u} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{id: "local|idp|note-#{n}", provider: "local"})
+
+    user = u.id
 
     {:ok, mine} =
       Sanctum.Tenancy.Athanors.create(%{
@@ -41,8 +45,6 @@ defmodule Emissary.MCP.NotesToolTest do
         created_by: user
       })
 
-    {:ok, _} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: user, provider: "local"})
-    {:ok, u} = Sanctum.Tenancy.Users.get(user)
     {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
     # The owner's seat in their own athanor — production mints it in
     # `ensure_personal_athanor/1`, and `Context.focus/2` (the "mine" read)

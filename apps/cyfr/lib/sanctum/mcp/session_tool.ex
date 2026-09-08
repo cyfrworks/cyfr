@@ -283,20 +283,12 @@ defmodule Sanctum.MCP.SessionTool do
       "This server knows: #{Enum.join(Sanctum.Auth.DeviceFlow.providers(), ", ")}."
   end
 
-  # session.whoami helpers: derive display fields from the Context without
-  # reaching into Compendium. user_id is the pipe-delimited identifier and
-  # email is not carried in Context today; we best-effort reverse-engineer
-  # display info from user_id when Sanctum.Session didn't persist an email
-  # alongside.
+  # session.whoami helpers: the display fields the Context carries.
   defp derive_email(%Context{email: email}) when is_binary(email) and email != "", do: email
   defp derive_email(_), do: nil
 
-  defp derive_provider(%Context{user_id: user_id}) when is_binary(user_id) do
-    case String.split(user_id, "|", parts: 3) do
-      [provider, _iss, _sub] -> provider
-      _ -> nil
-    end
-  end
+  defp derive_provider(%Context{provider: provider}) when is_binary(provider) and provider != "",
+    do: provider
 
   defp derive_provider(_), do: nil
 

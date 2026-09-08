@@ -133,6 +133,29 @@ if Mix.env() in [:test, :dev] do
     end
 
     @doc """
+    The context's identity signed in: the `users` row minted (or found)
+    for `ctx.user_id` read as an IdP identity key, and the context re-named
+    by the person's own id — what every request carries after admission.
+    Returns the context and the row.
+    """
+    def person!(%Context{} = ctx, attrs \\ %{}) do
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(
+          Map.merge(
+            %{
+              id: ctx.user_id,
+              provider: ctx.provider || "local",
+              email: ctx.email,
+              verified: true
+            },
+            attrs
+          )
+        )
+
+      {%{ctx | user_id: user.id}, user}
+    end
+
+    @doc """
     Build a platform-scope test Context through the one sanctioned
     construction path (`Sanctum.Context.internal/1`) — `build/1` refuses
     `scope: :platform` from anywhere else.

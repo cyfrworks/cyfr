@@ -18,15 +18,6 @@ defmodule PrismWeb.MembersLiveTest do
     bob = test_user()
     conn = log_in_user(conn, alice)
     {:ok, group} = Athanors.create_group(alice.user_id, "Team #{alice.namespace}")
-
-    {:ok, _} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: bob.user_id,
-        provider: "github",
-        email: bob.email,
-        verified: true
-      })
-
     {:ok, :added} = Members.add(group, [user_id: bob.user_id], alice.user_id)
 
     {view, html} = mount_athanor(conn, "/members", group)

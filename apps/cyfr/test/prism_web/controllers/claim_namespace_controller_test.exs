@@ -51,7 +51,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       n = System.unique_integer([:positive])
       user_id = "github|https://github.com|claim-#{n}"
 
-      {:ok, _} =
+      {:ok, %{id: person_id}} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
           id: user_id,
           provider: "github",
@@ -63,7 +63,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       {:ok, session} =
         Sanctum.Session.create(
           Sanctum.Context.build(
-            user_id: user_id,
+            user_id: person_id,
             email: "claim#{n}@example.com",
             provider: "github",
             permissions: [:*],
@@ -249,7 +249,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       n = System.unique_integer([:positive])
       user_id = "github|https://github.com|claim-#{n}"
 
-      {:ok, _} =
+      {:ok, %{id: person_id}} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
           id: user_id,
           provider: "github",
@@ -259,14 +259,14 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
 
       ctx =
         Sanctum.Context.build(
-          user_id: user_id,
+          user_id: person_id,
           email: "claim#{n}@example.com",
           provider: "github",
           permissions: [:*]
         )
 
       {:ok, session} = Sanctum.Session.create(ctx)
-      {user_id, session.token, "claimed#{n}"}
+      {person_id, session.token, "claimed#{n}"}
     end
 
     defp submit(username, session_token) do

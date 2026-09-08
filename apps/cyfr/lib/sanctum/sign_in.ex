@@ -66,8 +66,9 @@ defmodule Sanctum.SignIn do
   `email`, `verified` (`true | false | :unknown`) and `name`.
   """
   @spec admitted(map(), :admin | :allowed) :: {:ok, Arca.Schemas.User.t()} | {:error, term()}
-  def admitted(%{id: user_id} = user_info, verdict) when verdict in [:admin, :allowed] do
+  def admitted(%{id: _identity} = user_info, verdict) when verdict in [:admin, :allowed] do
     with {:ok, user} <- Users.upsert_from_provider(user_info) do
+      user_id = user.id
       apply_platform(user_id, verdict)
 
       # The invited seats activate on the next sign-in; refusing this one

@@ -4,6 +4,27 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## A person has an id of this server's; identities are rows of their own
+
+A `users` row's id is now minted here (`usr_…`) and is the `user_id` every
+membership, session, key, consent and execution carries. How an identity
+provider names the person is an `external_identities` row keyed by the
+IdP composite `<provider>|<issuer>|<subject>` (migration
+`20260912000000`); one person may be named by several, and a sign-in
+through a known identity refreshes the same person. Nothing parses a
+`user_id` any more: the session's `whoami` answers the provider the
+context carries, and the server's synthetic principals (`system`,
+`_seed`, `webhook:<slug>`) are told from people by the prefix.
+
+The door still speaks the provider's terms, because it judges a person
+before any row exists: a `user_id` door entry names an IdP identity key,
+and the door tool refuses a person's own id there ("name their email").
+`member.add` accepts either a person's id or an identity key that names
+them. A CLI or client that keyed anything on the old composite `user_id`
+will find it changed after the upgrade; there is no migration of
+existing rows — a server upgraded in place mints new people at their
+next sign-in.
+
 ## A server boots with no registry — formula `local.aqua` 1.0.7
 
 A person's own athanor is minted the moment the door admits them, under

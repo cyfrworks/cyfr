@@ -50,13 +50,14 @@ defmodule Sanctum.Tenancy.UsersTest do
 
     {:ok, refreshed} =
       Users.upsert_from_provider(%{
-        id: stored.id,
+        id: "github|https://github.com|41",
         provider: "github",
         email: nil,
         name: nil,
         verified: true
       })
 
+    assert refreshed.id == stored.id
     assert refreshed.display_name == "Keep Me"
     assert refreshed.email == "keep@example.com"
   end
@@ -66,24 +67,45 @@ defmodule Sanctum.Tenancy.UsersTest do
 
     {:ok, refreshed} =
       Users.upsert_from_provider(%{
-        id: stored.id,
+        id: "github|https://github.com|42",
         provider: "github",
         email: "new@example.com",
         name: "New Name",
         verified: true
       })
 
+    assert refreshed.id == stored.id
     assert refreshed.display_name == "New Name"
     assert refreshed.email == "new@example.com"
   end
 
-  test "a users row is a person: synthetic principal ids are refused" do
-    for id <- ["system", "_seed", "_health_probe", "webhook:orders", "aqua", "no-pipes"] do
-      assert {:error, %Ecto.Changeset{errors: errors}} =
-               Users.upsert_from_provider(%{id: id, provider: "github", email: "x@example.com"})
+  test "a person is minted with an id of this server's, named by the identity that signed in" do
+    n = System.unique_integer([:positive])
+    key = "github|https://github.com|minted-#{n}"
+    user = person(n, %{id: key})
 
-      assert Keyword.has_key?(errors, :id), "#{id} was accepted as a person"
+    assert Arca.Schemas.User.person_id?(user.id)
+    refute user.id == key
+    assert {:ok, %{id: same}} = Users.get_by_identity(key)
+    assert same == user.id
+    assert [%{key: ^key, provider: "github", subject: subject}] = Users.identities(user.id)
+    assert subject == "minted-#{n}"
+
+    # The same identity signs in again: the same person, not a second one.
+    assert person(n, %{id: key}).id == user.id
+    assert {:error, :not_found} = Users.get_by_identity("github|https://github.com|nobody-#{n}")
+  end
+
+  test "only an IdP identity signs in: synthetic principal ids and bare ids are refused" do
+    for id <- ["system", "_seed", "_health_probe", "webhook:orders", "aqua", "no-pipes", "usr_x"] do
+      assert {:error, :not_an_identity} =
+               Users.upsert_from_provider(%{id: id, provider: "github", email: "x@example.com"})
     end
+
+    # A row's id is a person's, never a synthetic principal's.
+    refute Arca.Schemas.User.person_id?("system")
+    refute Arca.Schemas.User.person_id?("webhook:orders")
+    assert Arca.Schemas.User.person_id?("usr_01")
   end
 
   test "list/1 pages the people the server knows" do

@@ -26,10 +26,14 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     bob = "github|https://github.com|bob-#{n}"
     ops = "github|https://github.com|ops-#{n}"
 
-    for {id, email} <- [{alice, "alice#{n}@example.com"}, {bob, "bob#{n}@example.com"}] do
-      {:ok, _} =
-        Users.upsert_from_provider(%{id: id, provider: "github", email: email, verified: true})
-    end
+    # The identities sign in; from then on each person is named by their own id.
+    [alice, bob] =
+      for {key, email} <- [{alice, "alice#{n}@example.com"}, {bob, "bob#{n}@example.com"}] do
+        {:ok, user} =
+          Users.upsert_from_provider(%{id: key, provider: "github", email: email, verified: true})
+
+        user.id
+      end
 
     {:ok, _} = Members.ensure_platform(ops)
 
@@ -287,7 +291,9 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
              call(admin, "door", %{"action" => "deny", "value" => email})
 
     assert {:error, :denied} = Sanctum.Door.admit("github|https://github.com|c", email, true)
-    assert {:ok, %{status: "denied"}} = Users.get("github|https://github.com|carol-#{n}")
+
+    assert {:ok, %{status: "denied"}} =
+             Users.get_by_identity("github|https://github.com|carol-#{n}")
 
     # an operator email cannot be denied
     assert {:error, msg} =
@@ -297,15 +303,22 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     # allowing again reverses the standing
     assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => email})
-    assert {:ok, %{status: "active"}} = Users.get("github|https://github.com|carol-#{n}")
+
+    assert {:ok, %{status: "active"}} =
+             Users.get_by_identity("github|https://github.com|carol-#{n}")
 
     # so does removing a deny entry — nobody is left denied with no entry to say why
     assert {:ok, %{effect: "deny", id: deny_id}} =
              call(admin, "door", %{"action" => "deny", "value" => email})
 
-    assert {:ok, %{status: "denied"}} = Users.get("github|https://github.com|carol-#{n}")
+    assert {:ok, %{status: "denied"}} =
+             Users.get_by_identity("github|https://github.com|carol-#{n}")
+
     assert {:ok, %{removed: true}} = call(admin, "door", %{"action" => "remove", "id" => deny_id})
-    assert {:ok, %{status: "active"}} = Users.get("github|https://github.com|carol-#{n}")
+
+    assert {:ok, %{status: "active"}} =
+             Users.get_by_identity("github|https://github.com|carol-#{n}")
+
     assert {:ok, :allowed} = Sanctum.Door.admit("github|https://github.com|c", email, true)
   end
 

@@ -100,6 +100,7 @@ defmodule Sanctum.SessionTest do
         })
 
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(row, "sess#{n}")
+      user_id = row.id
 
       ctx =
         Sanctum.Context.build(

@@ -613,14 +613,7 @@ defmodule Compendium.MCPTest do
     test "push of a local component resolves the caller's claimed personal namespace",
          %{ctx: ctx} do
       # A claimed namespace is on the users row; the push token beside it.
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: ctx.user_id,
-          provider: "local",
-          email: "testns@example.com",
-          verified: true
-        })
-
+      {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "testns@example.com"})
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
 
       :ok =

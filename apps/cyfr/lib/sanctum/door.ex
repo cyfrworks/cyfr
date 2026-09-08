@@ -132,16 +132,25 @@ defmodule Sanctum.Door do
     end
   end
 
+  # The door judges an IdP identity, so a person is asked about by each of
+  # theirs and stays admitted while any one of them is.
   defp eject_if_refused(user) do
-    case admit(user.id, user.email, verified_claim(user)) do
-      {:ok, _} ->
-        false
+    keys =
+      case Sanctum.Tenancy.Users.identities(user.id) do
+        [] -> [user.id]
+        identities -> Enum.map(identities, & &1.key)
+      end
 
-      {:error, reason} ->
-        Logger.info("[Sanctum.Door] #{user.id} no longer admitted (#{reason}) — ejecting")
-        Sanctum.Session.revoke_all_for_user(user.id)
-        Sanctum.ApiKey.revoke_all_created_by(user.id)
-        true
+    verdicts = Enum.map(keys, &admit(&1, user.email, verified_claim(user)))
+
+    if Enum.any?(verdicts, &match?({:ok, _}, &1)) do
+      false
+    else
+      {:error, reason} = hd(verdicts)
+      Logger.info("[Sanctum.Door] #{user.id} no longer admitted (#{reason}) — ejecting")
+      Sanctum.Session.revoke_all_for_user(user.id)
+      Sanctum.ApiKey.revoke_all_created_by(user.id)
+      true
     end
   end
 

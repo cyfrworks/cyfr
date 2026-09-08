@@ -132,12 +132,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert html =~ "nav-executions"
     assert html =~ "Tinctures"
 
-    {:ok, row} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: user.user_id,
-        provider: "github",
-        email: user.email
-      })
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
 
     {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "lite"})
 
@@ -162,12 +157,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert has_element?(view, "#drawer #drawer-nav-executions")
     assert render(find_live_child(view, "topbar")) =~ ~s(id="live-indicators")
 
-    {:ok, row} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: user.user_id,
-        provider: "github",
-        email: user.email
-      })
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
 
     {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "lite"})
 

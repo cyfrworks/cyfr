@@ -31,7 +31,7 @@ defmodule Sanctum.NamespaceTest do
       {:ok, _} = user |> Ecto.Changeset.change(namespace: namespace) |> Arca.Repo.update()
     end
 
-    id
+    user.id
   end
 
   describe "lookup/1" do

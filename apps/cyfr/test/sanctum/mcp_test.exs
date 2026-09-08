@@ -141,11 +141,12 @@ defmodule Sanctum.MCPTest do
       assert err_msg(msg) =~ "Not authenticated"
     end
 
-    test "whoami surfaces :email from Context when present" do
+    test "whoami surfaces :email and :provider from the Context" do
       ctx =
         Context.build(
-          user_id: "github|https://github.com|12345",
+          user_id: "usr_whoami",
           email: "alice@example.com",
+          provider: "github",
           permissions: [:*],
           scope: :athanor,
           auth_method: :oidc,

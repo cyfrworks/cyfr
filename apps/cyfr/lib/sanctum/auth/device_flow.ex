@@ -530,14 +530,14 @@ defmodule Sanctum.Auth.DeviceFlow do
   # The door runs before the session exists and before cyfr.run hears of the
   # identity: a refused sign-in leaves no row and makes no call.
   defp admit(user_info, provider) do
-    user_id = Identity.builtin_user_id(provider, user_info.id)
-    user_info = Map.merge(user_info, %{id: user_id, provider: provider})
+    identity = Identity.builtin_key(provider, user_info.id)
+    user_info = Map.merge(user_info, %{id: identity, provider: provider})
 
-    with {:ok, verdict} <- Sanctum.Door.admit_identity(user_id, user_info),
+    with {:ok, verdict} <- Sanctum.Door.admit_identity(identity, user_info),
          {:ok, user} <- Sanctum.SignIn.admitted(user_info, verdict) do
       ctx =
         Context.build(
-          user_id: user_id,
+          user_id: user.id,
           email: user_info.email,
           provider: to_string(provider),
           # Start athanor-less; resolve_into/2 fills the athanor from memberships.

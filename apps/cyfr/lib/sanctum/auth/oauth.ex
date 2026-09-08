@@ -44,7 +44,8 @@ defmodule Sanctum.Auth.OAuth do
   def authenticate(%{provider: provider} = params) when provider in @supported_providers do
     ctx_attrs = fn user_info ->
       [
-        user_id: Identity.builtin_user_id(provider, user_info.id),
+        # The IdP identity key: the person's own id comes with admission.
+        user_id: Identity.builtin_key(provider, user_info.id),
         email: user_info.email,
         provider: to_string(provider),
         # Start athanor-less; resolve_status/2 fills the athanor from

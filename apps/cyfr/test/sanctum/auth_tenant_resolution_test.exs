@@ -103,16 +103,17 @@ defmodule Sanctum.AuthTenantResolutionTest do
       # The door admits the operator; sign-in records it; resolution reads it.
       assert {:ok, :admin} = Sanctum.Door.admit(ctx.user_id, ctx.email, true)
 
-      assert {:ok, _} =
+      assert {:ok, user} =
                Sanctum.SignIn.admitted(
                  %{id: ctx.user_id, provider: "github", email: ctx.email, verified: true},
                  :admin
                )
 
-      result = Tenancy.resolve_into(ctx, force: true)
+      # From admission on the person is named by their own id.
+      result = Tenancy.resolve_into(%{ctx | user_id: user.id}, force: true)
       assert result.platform_admin
       assert result.scope == :athanor
-      assert Enum.any?(rows!(Members.list_by_user(ctx.user_id)), &(&1.scope == "platform"))
+      assert Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "platform"))
     end
 
     test "an unlisted, unmembered user stays unresolved with no membership row" do
@@ -132,7 +133,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
   defp oauth_shaped_context do
     Context.build(
-      user_id: Sanctum.Auth.Identity.builtin_user_id(:github, "12345"),
+      user_id: Sanctum.Auth.Identity.builtin_key(:github, "12345"),
       email: "tester@example.com",
       provider: "github",
       namespace: "testns",

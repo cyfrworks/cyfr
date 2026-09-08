@@ -180,8 +180,10 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
       # A restored session is re-validated against current memberships.
       Sanctum.TestContext.athanor!()
-      {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: "ath_test")
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "athanor", athanor_id: "ath_test")
 
+      # From admission on the person is named by their own id.
+      ctx = %{ctx | user_id: user.id}
       {:ok, session} = Sanctum.Session.create(ctx)
 
       conn =
@@ -190,7 +192,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         |> Authenticate.call([])
 
       refute conn.halted
-      assert conn.assigns[:context].user_id == user_id
+      assert conn.assigns[:context].user_id == user.id
       assert conn.assigns[:auth_method] == :session_token
 
       Sanctum.Session.destroy(session.token)

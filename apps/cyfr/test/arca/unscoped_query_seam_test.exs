@@ -193,7 +193,9 @@ defmodule Arca.UnscopedQuerySeamTest do
   # baseline migration gives for `memberships` and `sessions`.
   @athanor_less %{
     "Arca.Schemas.Athanor" => "the tenant itself — it cannot carry a reference to itself",
-    "Arca.Schemas.User" => "a person, addressed by IdP subject; people are not tenant-owned",
+    "Arca.Schemas.User" => "a person, addressed by their own id; people are not tenant-owned",
+    "Arca.Schemas.ExternalIdentity" =>
+      "how an IdP names a person — keyed by the identity key and the person's id, no tenant",
     "Arca.Schemas.RegistryToken" => "keyed by user_id — the identity plane, not a tenant's",
     "Arca.Schemas.ServerAllowlistEntry" => "the door: who may sign in at all, before any tenant",
     "Arca.Schemas.ServerMeta" =>

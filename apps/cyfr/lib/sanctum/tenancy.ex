@@ -301,12 +301,11 @@ defmodule Sanctum.Tenancy do
 
   defp athanor_active?(_), do: false
 
-  # The IdP composite every `users` row carries (`Sanctum.Auth.Identity.user_id/3`);
-  # the server's synthetic principals never have this shape.
-  @person_id ~r/^[^|]+\|[^|]+\|.+$/
-
+  # A person's id is minted by `Sanctum.Tenancy.Users`; the server's
+  # synthetic principals (`system`, `_seed`, `webhook:<slug>`, …) are never
+  # people, so they are never denied.
   defp creator_not_denied?(user_id) when is_binary(user_id) do
-    if Regex.match?(@person_id, user_id) do
+    if Arca.Schemas.User.person_id?(user_id) do
       case Users.get(user_id) do
         {:ok, %{status: "denied"}} ->
           false

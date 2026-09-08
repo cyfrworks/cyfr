@@ -30,7 +30,8 @@ defmodule Sanctum.S7TinctureTokenTest do
         verified: true
       })
 
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(@person, scope: "athanor", athanor_id: "ath_acme")
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(person_id(), scope: "athanor", athanor_id: "ath_acme")
 
     # A second member, so removing the first does not archive the athanor
     # out from under the test.
@@ -41,6 +42,12 @@ defmodule Sanctum.S7TinctureTokenTest do
       )
 
     {:ok, ctx: Sanctum.TestContext.local(), user: user}
+  end
+
+  # The person the identity names: their own id, minted at the setup's sign-in.
+  defp person_id do
+    {:ok, %{id: id}} = Sanctum.Tenancy.Users.get_by_identity(@person)
+    id
   end
 
   defp conn(query_string, headers \\ []) do
@@ -66,7 +73,7 @@ defmodule Sanctum.S7TinctureTokenTest do
 
   defp authed_ctx do
     Context.build(
-      user_id: @person,
+      user_id: person_id(),
       namespace: "ns-1",
       athanor_id: "ath_acme",
       permissions: [:read, :write],
@@ -81,7 +88,7 @@ defmodule Sanctum.S7TinctureTokenTest do
       token = token_for()
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(conn("_t=#{token}"))
-      assert out.user_id == @person
+      assert out.user_id == person_id()
       assert out.namespace == "ns-1"
       assert out.athanor_id == "ath_acme"
       assert out.scope == :athanor
@@ -96,16 +103,18 @@ defmodule Sanctum.S7TinctureTokenTest do
 
       # The seat goes: the signature is still valid, the standing is not.
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get("ath_acme")
-      :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: @person)
+      :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: person_id())
       assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :not_standing}
 
       # Back in, and the same token works again — the check is standing, not
       # a revocation list.
-      {:ok, _} = Sanctum.Tenancy.Members.ensure(@person, scope: "athanor", athanor_id: "ath_acme")
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(person_id(), scope: "athanor", athanor_id: "ath_acme")
+
       assert {:ok, %Context{}} = TinctureAuth.authenticate(conn("_t=#{token}"))
 
       # ...and a person the door has denied opens nothing at all.
-      {:ok, user} = Sanctum.Tenancy.Users.get(@person)
+      {:ok, user} = Sanctum.Tenancy.Users.get(person_id())
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
       assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :not_standing}
     end
@@ -157,7 +166,7 @@ defmodule Sanctum.S7TinctureTokenTest do
       token = token_for("acme", "dash")
 
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get("ath_acme")
-      :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: @person)
+      :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: person_id())
 
       assert TinctureAuth.authenticate(conn_for("_t=#{token}", "acme", "dash")) ==
                {:error, :not_standing}

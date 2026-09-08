@@ -107,8 +107,8 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert conn.status == 403
       assert conn.resp_body =~ "not allowed on this server"
       refute get_session(conn, :sanctum_session_token)
-      user_id = Sanctum.Auth.Identity.builtin_user_id(:github, "99999")
-      assert {:error, :not_found} = Sanctum.Tenancy.Users.get(user_id)
+      user_id = Sanctum.Auth.Identity.builtin_key(:github, "99999")
+      assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identity(user_id)
     end
 
     test "a denied identity is refused even when the door is *", %{conn: conn} do
@@ -164,9 +164,10 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert is_binary(Plug.Conn.get_session(conn, :sanctum_session_token))
 
       assert {:ok, %{namespace: nil, personal_athanor_id: pid}} =
-               Sanctum.Tenancy.Users.get(user_id)
+               Sanctum.Tenancy.Users.get(person_id(user_id))
 
-      assert {:ok, %{kind: "person", owner_user_id: ^user_id}} = Sanctum.Tenancy.Athanors.get(pid)
+      assert {:ok, %{kind: "person", owner_user_id: owner}} = Sanctum.Tenancy.Athanors.get(pid)
+      assert owner == person_id(user_id)
     end
 
     test "a returning person signs in and lands in the chat even with cyfr.run unreachable",
@@ -304,11 +305,11 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
-      assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(user_id)
+      assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(person_id(user_id))
       assert ns == "alice#{n}"
 
       assert {:ok, %{token: "cyfr_pt_personal", role: "personal"}} =
-               CredentialStore.get(user_id, "registry.test", ns)
+               CredentialStore.get(person_id(user_id), "registry.test", ns)
 
       # The session is a working one: the person is authenticated at once...
       assert {:ok, %{authenticated: true, namespace: ^ns} = loaded} =
@@ -318,7 +319,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       # admin picks up a moment earlier. Minted at admission, its address
       # is the namespace only when the namespace was known first.
       assert {:ok, %{id: personal_id, kind: "person"}} =
-               Sanctum.Tenancy.Athanors.get_by_owner(user_id)
+               Sanctum.Tenancy.Athanors.get_by_owner(person_id(user_id))
 
       assert loaded.athanor_id == personal_id
     end
@@ -377,13 +378,15 @@ defmodule EmissaryWeb.AuthControllerTest do
       # The Home seat and their own athanor are both minted at admission;
       # the session must name their own.
       assert {:ok, %{id: personal_id}} =
-               Sanctum.Tenancy.Athanors.get_by_owner("github|https://github.com|#{uid}")
+               Sanctum.Tenancy.Athanors.get_by_owner(
+                 person_id("github|https://github.com|#{uid}")
+               )
 
       assert {:ok, %{athanor_id: ^personal_id, platform_admin: true}} =
                Sanctum.Session.load(session_of(conn), surface: :console)
 
       assert Sanctum.Tenancy.Members.member?(
-               "github|https://github.com|#{uid}",
+               person_id("github|https://github.com|#{uid}"),
                Sanctum.Tenancy.Athanors.home!().id
              )
     end
@@ -403,13 +406,13 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert is_binary(session_of(conn))
       assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
 
-      assert {:ok, %{personal_athanor_id: pid}} = Sanctum.Tenancy.Users.get(user_id)
+      assert {:ok, %{personal_athanor_id: pid}} = Sanctum.Tenancy.Users.get(person_id(user_id))
       assert is_binary(pid)
 
       assert {:ok, %{authenticated: true, namespace: nil, athanor_id: ^pid}} =
                Sanctum.Session.load(session_of(conn), surface: :console)
 
-      assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
+      assert :not_found = CredentialStore.get(person_id(user_id), "registry.test", "alice")
     end
 
     test "412: signed in, the policy owed at publish, IdP token kept", %{
@@ -445,7 +448,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "refused the sign-in token"
-      assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
+      assert :not_found = CredentialStore.get(person_id(user_id), "registry.test", "alice")
     end
 
     test "probe 5xx: a first-time person and a returning one both sign in",
@@ -505,9 +508,9 @@ defmodule EmissaryWeb.AuthControllerTest do
       conn = callback(conn, verified_github_auth(uid))
 
       assert redirected_to(conn) == "/"
-      assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(user_id)
+      assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(person_id(user_id))
       assert ns == "alice#{n}"
-      assert :not_found = CredentialStore.get(user_id, "registry.test", ns)
+      assert :not_found = CredentialStore.get(person_id(user_id), "registry.test", ns)
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "didn't fully sync"
     end
 
@@ -740,5 +743,11 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert redirected_to(retry) == "/login"
       refute Plug.Conn.get_session(retry, :sanctum_session_token)
     end
+  end
+
+  # The person an IdP identity key names: their own id, minted at admission.
+  defp person_id(identity) do
+    {:ok, %{id: id}} = Sanctum.Tenancy.Users.get_by_identity(identity)
+    id
   end
 end

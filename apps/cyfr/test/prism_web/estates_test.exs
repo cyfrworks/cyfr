@@ -13,15 +13,16 @@ defmodule PrismWeb.EstatesTest do
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     n = System.unique_integer([:positive])
-    alice = "local|idp|alice-#{n}"
 
     {:ok, user} =
       Users.upsert_from_provider(%{
-        id: alice,
+        id: "local|idp|alice-#{n}",
         provider: "local",
         name: "Alice",
         email: "alice-#{n}@example.com"
       })
+
+    alice = user.id
 
     {:ok, mine} =
       Athanors.create(%{
@@ -57,11 +58,9 @@ defmodule PrismWeb.EstatesTest do
     {:ok, group} = Athanors.create_group(alice, "Trip #{n}")
     assert Estates.label(group, %{user_id: alice}) == "Trip #{n}"
 
-    bob = "local|idp|bob-#{n}"
-
-    {:ok, _} =
+    {:ok, %{id: bob}} =
       Users.upsert_from_provider(%{
-        id: bob,
+        id: "local|idp|bob-#{n}",
         provider: "local",
         name: "Bob",
         email: "bob-#{n}@example.com"

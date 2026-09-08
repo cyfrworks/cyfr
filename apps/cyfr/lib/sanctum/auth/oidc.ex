@@ -73,14 +73,16 @@ defmodule Sanctum.Auth.OIDC do
 
     case Sanctum.Auth.EmailVerification.verify(provider, email, extra) do
       :ok ->
-        user_id = Identity.user_id(provider, iss, to_string(auth.uid))
+        # Before the door the person is named by their IdP identity key;
+        # their own id, and their namespace, come with admission.
+        identity = Identity.key(provider, iss, to_string(auth.uid))
 
         ctx =
           Context.build(
-            user_id: user_id,
+            user_id: identity,
             email: email,
             provider: to_string(provider),
-            namespace: Sanctum.Namespace.lookup(user_id),
+            namespace: nil,
             # Start athanor-less; resolve_status/2 fills the athanor from
             # memberships — a failed read refuses as :unavailable instead of
             # leaving the context athanor-less to 403 downstream.

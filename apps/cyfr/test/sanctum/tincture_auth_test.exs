@@ -74,14 +74,7 @@ defmodule Sanctum.TinctureAuthTest do
     test "a bearer session token authenticates, carrying the recorded namespace",
          %{ctx: ctx} do
       # `Session.load` reads the namespace from the users row.
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: ctx.user_id,
-          provider: "local",
-          email: "testns@example.com",
-          verified: true
-        })
-
+      {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "testns@example.com"})
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
 
       # A restored session is re-validated against current memberships; the
@@ -160,14 +153,7 @@ defmodule Sanctum.TinctureAuthTest do
 
   describe "authenticate/1 — a denied person's surviving session" do
     test "is refused, not re-upgraded", %{ctx: ctx} do
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: ctx.user_id,
-          provider: "local",
-          email: "denied-tincture@example.com",
-          verified: true
-        })
-
+      {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "denied-tincture@example.com"})
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
       Sanctum.TestContext.athanor!()
 

@@ -44,7 +44,7 @@ defmodule Sanctum.Test.AltAuthProvider do
     provider = auth.provider
     email = auth.info && Map.get(auth.info, :email)
     iss = Sanctum.Auth.Identity.issuer(provider)
-    user_id = Sanctum.Auth.Identity.user_id(provider, iss, to_string(auth.uid))
+    user_id = Sanctum.Auth.Identity.key(provider, iss, to_string(auth.uid))
 
     ctx =
       Context.build(

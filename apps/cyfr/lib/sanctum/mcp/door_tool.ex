@@ -248,7 +248,7 @@ defmodule Sanctum.MCP.DoorTool do
   defp known_users("email", value), do: Users.list_by_email(value)
 
   defp known_users("user_id", value) do
-    case Users.get(value) do
+    case Users.get_by_identity(value) do
       {:ok, user} -> [user]
       _ -> []
     end
@@ -260,16 +260,30 @@ defmodule Sanctum.MCP.DoorTool do
     do: kind |> known_users(value) |> Enum.filter(&(&1.status == "denied"))
 
   # `*` is the wildcard; an `@` makes an email; anything else is an IdP
-  # subject unless the caller said otherwise.
+  # identity key unless the caller said otherwise. The door speaks the
+  # provider's terms — it judges a person before any row of theirs exists
+  # — so a person's own id here is not an entry it can act on.
   defp kind_for("*", _), do: {:ok, "wildcard"}
-  defp kind_for(_value, kind) when kind in ["email", "user_id"], do: {:ok, kind}
+  defp kind_for(value, kind) when kind in ["email", "user_id"], do: identity_kind(value, kind)
 
   defp kind_for(value, nil) do
-    {:ok, if(String.contains?(value, "@"), do: "email", else: "user_id")}
+    identity_kind(value, if(String.contains?(value, "@"), do: "email", else: "user_id"))
   end
 
   defp kind_for(_value, kind),
     do: {:error, {:invalid_argument, "Invalid kind: #{kind} (email | user_id)"}}
+
+  defp identity_kind(value, "user_id") do
+    if Sanctum.Auth.Identity.key?(value),
+      do: {:ok, "user_id"},
+      else:
+        {:error,
+         {:invalid_argument,
+          "A user_id entry names an IdP identity (provider|issuer|subject); " <>
+            "to act on a person, name their email"}}
+  end
+
+  defp identity_kind(_value, kind), do: {:ok, kind}
 
   defp render(entry) do
     %{

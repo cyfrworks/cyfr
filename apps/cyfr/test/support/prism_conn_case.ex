@@ -75,37 +75,38 @@ defmodule PrismWeb.ConnCase do
   def session_key, do: @session_key
 
   @doc """
-  A distinct test person: IdP-composite `user_id`, email, and a personal
-  namespace slug. Every call yields a new identity.
+  A distinct test person, signed in once: `user_id` is their own id (the
+  `users` row is minted here), `identity` the IdP key that names them,
+  plus an email and a personal namespace slug. Every call yields a new
+  person.
   """
   def test_user(attrs \\ %{}) do
     n = System.unique_integer([:positive])
+    attrs = Map.new(attrs)
+    identity = Map.get(attrs, :identity, "github|https://github.com|#{n}")
+    email = Map.get(attrs, :email, "user#{n}@example.com")
+
+    {:ok, row} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: identity,
+        provider: "github",
+        email: email,
+        verified: true,
+        name: Map.get(attrs, :name)
+      })
 
     Map.merge(
-      %{
-        user_id: "github|https://github.com|#{n}",
-        email: "user#{n}@example.com",
-        namespace: "testns#{n}"
-      },
-      Map.new(attrs)
+      %{user_id: row.id, identity: identity, email: email, namespace: "testns#{n}"},
+      Map.drop(attrs, [:identity, :name])
     )
   end
 
   @doc """
   Record a claimed personal namespace for `user` on their users row, the
-  way the cyfr.run probe/claim does — a session restores as authenticated
-  only when the row carries one.
+  way the cyfr.run probe/claim does.
   """
-  def claim_namespace!(%{user_id: user_id, namespace: slug} = user) do
-    {:ok, row} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: user_id,
-        provider: "github",
-        email: Map.get(user, :email),
-        verified: true,
-        name: nil
-      })
-
+  def claim_namespace!(%{user_id: user_id, namespace: slug}) do
+    {:ok, row} = Sanctum.Tenancy.Users.get(user_id)
     {:ok, _} = Sanctum.Tenancy.Users.set_namespace(row, slug)
     :ok
   end

@@ -24,33 +24,33 @@ defmodule Sanctum.Auth.IdentityTest do
     end
   end
 
-  describe "user_id/3" do
+  describe "key/3" do
     test "constructs pipe-delimited id from provider atom" do
-      assert Identity.user_id(:github, "https://github.com", "12345") ==
+      assert Identity.key(:github, "https://github.com", "12345") ==
                "github|https://github.com|12345"
     end
 
     test "constructs pipe-delimited id from provider string" do
-      assert Identity.user_id("google", "https://accounts.google.com", "108") ==
+      assert Identity.key("google", "https://accounts.google.com", "108") ==
                "google|https://accounts.google.com|108"
     end
 
     test "refuses a degenerate id with an empty component" do
       assert_raise ArgumentError, ~r/invalid identity components/, fn ->
-        Identity.user_id("github", "", "12345")
+        Identity.key("github", "", "12345")
       end
 
       assert_raise ArgumentError, ~r/invalid identity components/, fn ->
-        Identity.user_id("github", "https://github.com", "")
+        Identity.key("github", "https://github.com", "")
       end
     end
   end
 
-  describe "builtin_user_id/2" do
+  describe "builtin_key/2" do
     test "stamps the provider's own issuer" do
-      assert Identity.builtin_user_id(:github, "12345") == "github|https://github.com|12345"
+      assert Identity.builtin_key(:github, "12345") == "github|https://github.com|12345"
 
-      assert Identity.builtin_user_id(:google, "108") ==
+      assert Identity.builtin_key(:google, "108") ==
                "google|https://accounts.google.com|108"
     end
   end

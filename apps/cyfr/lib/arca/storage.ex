@@ -138,8 +138,8 @@ defmodule Arca.Storage do
   Every athanor on a server shares one storage root (filesystem path or
   object-store bucket prefix); isolation comes from the athanor segment.
 
-  `Sanctum.Context.user_id` (e.g. `"github|https://github.com|123"`,
-  `"oidcc|<iss>|<sub>"`, `"webhook:<slug>"`) and `namespace` are identity
+  `Sanctum.Context.user_id` (a person's `usr_…`, or a synthetic principal
+  such as `"webhook:<slug>"`) and `namespace` are identity
   fields (attribution, display, tincture tokens) — they are *not* path
   primitives. Only `athanor_id` shapes the on-disk layout, so members of an
   athanor share its storage.

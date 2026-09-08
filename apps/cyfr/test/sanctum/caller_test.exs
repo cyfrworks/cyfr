@@ -24,6 +24,7 @@ defmodule Sanctum.CallerTest do
     }
   end
 
+  # The identity signs in: from then on the person is named by their own id.
   defp claim!(user) do
     {:ok, row} =
       Sanctum.Tenancy.Users.upsert_from_provider(%{
@@ -34,12 +35,12 @@ defmodule Sanctum.CallerTest do
       })
 
     {:ok, _} = Sanctum.Tenancy.Users.set_namespace(row, user.slug)
-    user
+    %{user | user_id: row.id}
   end
 
   # A signed-in person with no publisher namespace and a seat in Home.
   defp known!(user) do
-    {:ok, _} =
+    {:ok, row} =
       Sanctum.Tenancy.Users.upsert_from_provider(%{
         id: user.user_id,
         provider: "github",
@@ -48,12 +49,12 @@ defmodule Sanctum.CallerTest do
       })
 
     {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(user.user_id,
+      Sanctum.Tenancy.Members.ensure(row.id,
         scope: "athanor",
         athanor_id: Sanctum.Tenancy.Athanors.home!().id
       )
 
-    user
+    %{user | user_id: row.id}
   end
 
   defp session_for(user, attrs \\ []) do

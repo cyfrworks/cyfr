@@ -216,11 +216,12 @@ defmodule Sanctum.Tenancy.Members do
       when is_binary(user_id) do
     opts = [scope: "athanor", athanor_id: athanor_id, added_by: added_by]
 
-    # A membership names a person: an id nobody has signed in with, or one
-    # the door has since denied, is refused. (Unlike the email arm, a
-    # verified email is not required — a person admitted by a `user_id`
-    # door entry may have none.)
-    with {:ok, %User{status: "active"}} <- Users.get(user_id),
+    # A membership names a person — by their own id, or by an IdP identity
+    # key that names them. An id nobody has signed in with, or one the door
+    # has since denied, is refused. (Unlike the email arm, a verified email
+    # is not required — a person admitted by a `user_id` door entry may
+    # have none.)
+    with {:ok, %User{status: "active", id: user_id}} <- find_person(user_id),
          :ok <- Caps.check_counted(:max_members_per_group, fn -> count_seats(athanor_id) end),
          {:ok, _} <- ensure(user_id, opts) do
       broadcast_change(user_id, athanor.id, :joined)
@@ -283,6 +284,10 @@ defmodule Sanctum.Tenancy.Members do
   # still refuses.
   defp known_and_active?(%User{} = user),
     do: user.email_verified == true and user.status == "active"
+
+  defp find_person(id) do
+    if Sanctum.Auth.Identity.key?(id), do: Users.get_by_identity(id), else: Users.get(id)
+  end
 
   defp invite(athanor_id, email, added_by) do
     case find_invited(email, athanor_id) do

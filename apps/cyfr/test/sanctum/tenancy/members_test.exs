@@ -236,7 +236,7 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: user.id,
+          id: "github|https://github.com|mem-#{n}",
           provider: "github",
           email: email,
           verified: true
@@ -266,7 +266,7 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: user.id,
+          id: "github|https://github.com|mem-#{n}",
           provider: "github",
           email: email,
           verified: true
@@ -308,7 +308,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       for claim <- [nil, false] do
         {:ok, user} =
           Sanctum.Tenancy.Users.upsert_from_provider(%{
-            id: user.id,
+            id: "github|https://github.com|mem-#{n}",
             provider: "oidcc",
             email: email,
             verified: claim
@@ -321,7 +321,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       # The seat is still held, so proving the address later still claims it.
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: user.id,
+          id: "github|https://github.com|mem-#{n}",
           provider: "oidcc",
           email: email,
           verified: true
