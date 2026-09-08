@@ -38,7 +38,7 @@ defmodule Emissary.MCP.ConversationTool do
 
   ## Two gates, on different axes
 
-    * **Plane.** `Emissary.MCP.ToolRegistry.call_external/4` refuses a
+    * **Plane.** `Cyfr.Ops.Catalog.call_external/4` refuses a
       `:guest` context outright, and these actions declare
       `planes: [:external]` so they never appear in-chain. A running agent
       cannot read or post into conversations — including other people's in
@@ -62,7 +62,7 @@ defmodule Emissary.MCP.ConversationTool do
   pending until somebody answers it through `approve` or `decline`.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   # The most lines one `aloud` may carry: each one copies bytes into the
   # target estate, so a call moves a slice, never a thread.
@@ -441,7 +441,7 @@ defmodule Emissary.MCP.ConversationTool do
   # collapses to a generic "the tool call failed". A reason already in the
   # vocabulary passes through untouched.
   defp refusal(reason, id) do
-    if Emissary.MCP.ToolError.reason?(reason), do: reason, else: translate(reason, id)
+    if Cyfr.Ops.Error.reason?(reason), do: reason, else: translate(reason, id)
   end
 
   defp translate(:not_found, id), do: {:not_found, "conversation", id}

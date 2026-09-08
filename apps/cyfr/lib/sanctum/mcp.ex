@@ -30,7 +30,7 @@ defmodule Sanctum.MCP do
   require browser redirects.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   def service, do: "sanctum"
 

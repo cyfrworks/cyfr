@@ -5,7 +5,7 @@ defmodule PrismWeb.MCPHelpers do
   @moduledoc """
   The seam between LiveViews and the MCP tool surface.
 
-  All tool invocations go through `Emissary.MCP.ToolRegistry.call_external/3`
+  All tool invocations go through `Cyfr.Ops.Catalog.call_external/3`
   using the `Sanctum.Context` stored in socket assigns.
 
   ## Two planes, and which one a mutation belongs to
@@ -67,7 +67,7 @@ defmodule PrismWeb.MCPHelpers do
 
   def call_tool(%Sanctum.Context{} = ctx, tool_name, args) do
     {name, merged_args} = normalize_tool_call(tool_name, args)
-    Emissary.MCP.ToolRegistry.call_external(name, ctx, merged_args)
+    Cyfr.Ops.Catalog.call_external(name, ctx, merged_args)
   end
 
   def call_tool(socket, tool_name, args) do
@@ -108,10 +108,10 @@ defmodule PrismWeb.MCPHelpers do
 
   def error_message(reason) do
     # The same renderer the wire and the guest use
-    # (`Emissary.MCP.ToolError.render/1`): this used to carry its own `cond`,
+    # (`Cyfr.Ops.Error.render/1`): this used to carry its own `cond`,
     # which had drifted — it knew nothing of the crash/exit/timeout tuples and
     # showed the generic sentence for all three, losing the distinction.
-    case Emissary.MCP.ToolError.render(reason) do
+    case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[MCPHelpers] tool call failed: #{inspect(reason)}")
         "The request failed — try again."

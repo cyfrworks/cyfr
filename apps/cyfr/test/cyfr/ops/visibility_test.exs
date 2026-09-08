@@ -1,23 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ToolVisibilityTest do
+defmodule Cyfr.Ops.VisibilityTest do
   # Not async: reads the live registry cache the application owns.
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolRegistry
-  alias Emissary.MCP.ToolVisibility
+  alias Cyfr.Ops.Catalog
+  alias Cyfr.Ops.Visibility
   alias Sanctum.Context
 
   # ============================================================================
   # Fixtures — live registry, not hand-copied samples. A hand-kept fixture
   # list drifted (it taught retired actions for years); deriving from
-  # ToolRegistry.list_tools/0 means these tests exercise the same tool
+  # Catalog.list_tools/0 means these tests exercise the same tool
   # definitions production serves.
   # ============================================================================
 
   defp live_tools do
-    ToolRegistry.list_tools()
+    Catalog.list_tools()
     |> Enum.reject(&String.contains?(&1["name"], ":"))
   end
 
@@ -73,7 +73,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
   end
 
   defp visible_actions(name, ctx) do
-    case ToolVisibility.filter_for_context([live_tool(name)], ctx) do
+    case Visibility.filter_for_context([live_tool(name)], ctx) do
       [tool] -> action_enum(tool) || []
       [] -> []
     end
@@ -105,7 +105,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
     test "does not see tools whose every action needs another permission" do
       names =
         live_tools()
-        |> ToolVisibility.filter_for_context(ctx_with([:execute]))
+        |> Visibility.filter_for_context(ctx_with([:execute]))
         |> Enum.map(& &1["name"])
 
       refute "key" in names
@@ -131,7 +131,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
   describe "no permissions context" do
     test "sees only open and anonymous actions" do
       ctx = ctx_with([])
-      names = live_tools() |> ToolVisibility.filter_for_context(ctx) |> Enum.map(& &1["name"])
+      names = live_tools() |> Visibility.filter_for_context(ctx) |> Enum.map(& &1["name"])
 
       assert "aqua" in names
       assert "system" in names
@@ -216,15 +216,15 @@ defmodule Emissary.MCP.ToolVisibilityTest do
   describe "unclassified actions are invisible (default-deny pin)" do
     test "a tool without annotations is hidden from everyone" do
       tools = [make_tool("imaginary", ["made_up_action"])]
-      assert ToolVisibility.filter_for_context(tools, anonymous_ctx()) == []
-      assert ToolVisibility.filter_for_context(tools, ctx_with([:admin, :execute])) == []
+      assert Visibility.filter_for_context(tools, anonymous_ctx()) == []
+      assert Visibility.filter_for_context(tools, ctx_with([:admin, :execute])) == []
     end
 
     test "an unannotated action is pruned from a tool that keeps its declared ones" do
       annotations = %{actions: %{"status" => %{kind: :read, planes: [:external]}}}
       tools = [make_tool("imaginary", ["status", "made_up_action"], annotations)]
 
-      [tool] = ToolVisibility.filter_for_context(tools, ctx_with([]))
+      [tool] = Visibility.filter_for_context(tools, ctx_with([]))
       assert action_enum(tool) == ["status"]
     end
   end
@@ -232,12 +232,12 @@ defmodule Emissary.MCP.ToolVisibilityTest do
   describe "external tools" do
     test "a tool with no action enum passes through for authenticated callers" do
       ext = make_tool_no_actions("notion:create_page")
-      assert ToolVisibility.filter_for_context([ext], ctx_with([])) == [ext]
+      assert Visibility.filter_for_context([ext], ctx_with([])) == [ext]
     end
 
     test "a tool with no action enum is hidden from anonymous callers" do
       ext = make_tool_no_actions("notion:create_page")
-      assert ToolVisibility.filter_for_context([ext], anonymous_ctx()) == []
+      assert Visibility.filter_for_context([ext], anonymous_ctx()) == []
     end
   end
 
@@ -248,7 +248,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
   describe "classification completeness" do
     @tag :requires_opus_modules
     test "every registered action carries a complete access declaration" do
-      assert ToolRegistry.audit_action_kinds() == :ok
+      assert Catalog.audit_action_kinds() == :ok
     end
   end
 
@@ -275,13 +275,13 @@ defmodule Emissary.MCP.ToolVisibilityTest do
 
       for tool_def <- live_tools(),
           name = tool_def["name"],
-          {:ok, {_module, meta}} = ToolRegistry.lookup(name),
+          {:ok, {_module, meta}} = Catalog.lookup(name),
           action <- action_enum(tool_def) || [],
           ctx <- probes do
         visible = action in visible_actions(name, ctx)
 
         authorized =
-          ToolRegistry.authorize_annotated_action(name, meta, ctx, %{"action" => action}) == :ok
+          Catalog.authorize_annotated_action(name, meta, ctx, %{"action" => action}) == :ok
 
         assert visible == authorized,
                "#{name}.#{action}: discovery says #{inspect(visible)} but dispatch says " <>
@@ -296,10 +296,10 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       for tool_def <- live_tools(),
           name = tool_def["name"],
           action <- action_enum(tool_def) || [] do
-        {:ok, {_module, meta}} = ToolRegistry.lookup(name)
+        {:ok, {_module, meta}} = Catalog.lookup(name)
         declared = get_in(meta, [:annotations, :actions, action, :auth]) == :anonymous
 
-        assert ToolVisibility.anonymous_action?(name, action) == declared,
+        assert Visibility.anonymous_action?(name, action) == declared,
                "#{name}.#{action}: anonymous_action? disagrees with the annotation"
       end
     end
@@ -309,7 +309,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         for tool_def <- live_tools(),
             name = tool_def["name"],
             action <- action_enum(tool_def) || [],
-            ToolVisibility.anonymous_action?(name, action),
+            Visibility.anonymous_action?(name, action),
             into: MapSet.new() do
           "#{name}.#{action}"
         end
@@ -325,10 +325,10 @@ defmodule Emissary.MCP.ToolVisibilityTest do
     end
 
     test "an uncredentialed caller is shown only what it may call" do
-      filtered = ToolVisibility.filter_for_context(live_tools(), anonymous_ctx())
+      filtered = Visibility.filter_for_context(live_tools(), anonymous_ctx())
 
       for tool <- filtered, action <- action_enum(tool) || [] do
-        assert ToolVisibility.anonymous_action?(tool["name"], action),
+        assert Visibility.anonymous_action?(tool["name"], action),
                "discovery offered #{tool["name"]}.#{action} to an anonymous caller, " <>
                  "which tools/call refuses"
       end

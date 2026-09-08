@@ -368,7 +368,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       # message claiming admin was required — the denial now names the real
       # permission.)
       assert {:error, {:missing_permission, :storage_write}} =
-               Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
+               Cyfr.Ops.Catalog.call_external("retention", app_ctx, %{
                  "action" => "set",
                  "settings" => %{"executions" => 5}
                })
@@ -376,7 +376,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "cannot run cleanup", %{app_ctx: app_ctx} do
       assert {:error, {:missing_permission, :admin}} =
-               Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
+               Cyfr.Ops.Catalog.call_external("retention", app_ctx, %{
                  "action" => "cleanup",
                  "cleanup_type" => "executions"
                })
@@ -629,7 +629,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
       for {tool, verb} <- retired do
         {:error, {:unknown_action, name_action}} =
-          Emissary.MCP.ToolRegistry.call_external(tool, ctx, %{"action" => verb})
+          Cyfr.Ops.Catalog.call_external(tool, ctx, %{"action" => verb})
 
         assert name_action == "#{tool}.#{verb}"
       end
@@ -674,7 +674,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "mcp_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error, {:missing_permission, :storage_read}} =
-               Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{
+               Cyfr.Ops.Catalog.call_external("mcp_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
@@ -682,7 +682,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "policy_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error, {:missing_permission, :storage_read}} =
-               Emissary.MCP.ToolRegistry.call_external("policy_log", ctx, %{
+               Cyfr.Ops.Catalog.call_external("policy_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
@@ -717,7 +717,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "stats requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error, {:missing_permission, :storage_read}} =
-               Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{"action" => "stats"})
+               Cyfr.Ops.Catalog.call_external("mcp_log", ctx, %{"action" => "stats"})
     end
 
     test "stats succeeds for a :storage_read context", %{ctx: ctx} do
@@ -759,7 +759,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           action <- tool.input_schema["properties"]["action"]["enum"] do
         args = Map.put(extra_args.(action), "action", action)
 
-        case Emissary.MCP.ToolRegistry.call_external(tool.name, no_perm_ctx, args) do
+        case Cyfr.Ops.Catalog.call_external(tool.name, no_perm_ctx, args) do
           {:error, reason} ->
             assert Sanctum.Unauthorized.reason?(reason),
                    "#{tool.name}.#{action} error is not a permission denial: #{inspect(reason)}"
@@ -799,7 +799,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

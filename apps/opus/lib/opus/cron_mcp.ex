@@ -10,7 +10,7 @@ defmodule Opus.CronMCP do
   user-scoped recurring WASM component executions.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   def service, do: "opus"
 

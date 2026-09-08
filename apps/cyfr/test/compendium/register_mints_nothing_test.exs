@@ -26,7 +26,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
@@ -52,7 +52,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   describe "the register action's reach" do
     test "is refused in-chain, so an approved AQUA proposal cannot run it" do
-      assert ToolRegistry.in_chain_refused?("component", "register"),
+      assert Catalog.in_chain_refused?("component", "register"),
              """
              `component.register` is reachable in-chain again.
 
@@ -65,10 +65,10 @@ defmodule Compendium.RegisterMintsNothingTest do
     end
 
     test "still reachable from the external plane, so console and CLI keep working" do
-      refute ToolRegistry.in_chain_refused?("component", "list"),
+      refute Catalog.in_chain_refused?("component", "list"),
              "sanity: a plainly in-chain action must not read as refused"
 
-      {:ok, {_module, definition}} = ToolRegistry.lookup("component")
+      {:ok, {_module, definition}} = Catalog.lookup("component")
       register = Map.fetch!(definition.annotations.actions, "register")
 
       assert :external in register.planes

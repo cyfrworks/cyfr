@@ -31,13 +31,13 @@ defmodule PrismWeb.AquaLive.Catalog do
   """
   def enumerate_tool_actions do
     mcp =
-      Emissary.MCP.ToolRegistry.list_tools()
+      Cyfr.Ops.Catalog.list_tools()
       |> Enum.map(fn t ->
         name = t["name"]
         schema = t["inputSchema"] || %{}
         props = schema["properties"] || %{}
         action_enum = get_in(props, ["action", "enum"]) || []
-        actions_meta = Emissary.MCP.ActionAnnotations.actions_of(t)
+        actions_meta = Cyfr.Ops.Annotations.actions_of(t)
         default_meta = actions_meta["_default"]
 
         actions =
@@ -81,7 +81,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   end
 
   defp reachable?(name, action) when is_binary(name),
-    do: Emissary.MCP.ToolRegistry.in_chain_reachable?(name, action)
+    do: Cyfr.Ops.Catalog.in_chain_reachable?(name, action)
 
   defp reachable?(_name, _action), do: false
 

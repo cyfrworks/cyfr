@@ -162,7 +162,7 @@ defmodule PrismWeb.TopbarLiveTest do
       )
 
     assert {:ok, _} =
-             Emissary.MCP.ToolRegistry.call_external("door", ctx, %{
+             Cyfr.Ops.Catalog.call_external("door", ctx, %{
                "action" => "resolve",
                "id" => id,
                "decision" => "reject"

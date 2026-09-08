@@ -19,7 +19,7 @@ defmodule Arca.Cache do
   `Arca.Cache.Keys`, e.g.:
   - `{:component_meta, "ath_…", "catalyst:local.demo:0.1.0"}`
   - `{:wasm_bytes, "sha256:…"}`
-  - `{:mcp_tool, "execution"}` (private to `Emissary.MCP.ToolRegistry` —
+  - `{:mcp_tool, "execution"}` (private to `Cyfr.Ops.Catalog` —
     read and written only through its `lookup/1` / `register_tool/4`)
   """
 
@@ -66,7 +66,7 @@ defmodule Arca.Cache do
   Monitor the process that owns the cache table.
 
   For the consumers that treat this table as a store rather than a
-  read-through: `Emissary.MCP.ToolRegistry` and
+  read-through: `Cyfr.Ops.Catalog` and
   `Emissary.MCP.ResourceRegistry` write their catalogues here at boot and
   refresh them only every 23 hours. The table dies with its owner and comes
   back empty, and `get/1` turns the missing table into an ordinary miss —

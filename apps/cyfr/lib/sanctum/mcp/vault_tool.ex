@@ -238,7 +238,7 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("vault", action_enum())}
+    {:error, Cyfr.Ops.Provider.invalid_action("vault", action_enum())}
   end
 
   # ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@ defmodule Sanctum.MCP.VaultTool do
   # An unknown term is internal — logged, never inspected to the client
   # (the rule every renderer in the tree applies).
   defp fmt(reason) do
-    case Emissary.MCP.ToolError.render(reason) do
+    case Cyfr.Ops.Error.render(reason) do
       nil ->
         # Sanitized and bounded: an internal reason on the VAULT surface
         # can carry credential material a bare inspect would spell out.
@@ -282,5 +282,5 @@ defmodule Sanctum.MCP.VaultTool do
     end
   end
 
-  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
+  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
 end

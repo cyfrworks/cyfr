@@ -16,10 +16,10 @@ defmodule Locus.MCP do
   close to their implementation. Compilation is handled by `Locus.Builder`.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Emissary.MCP.ToolRegistry.
+  which is validated at runtime by Cyfr.Ops.Catalog.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   def service, do: "locus"
 
@@ -351,7 +351,7 @@ defmodule Locus.MCP do
                 Cyfr.LoggerContext.restore(logger_metadata)
 
                 outcome =
-                  case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+                  case Cyfr.Ops.Catalog.call_external("component", ctx, %{
                          "action" => "register"
                        }) do
                     {:ok, _} ->

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ToolError do
+defmodule Cyfr.Ops.Error do
   @moduledoc """
   Typed tool-refusal vocabulary: reasons stay data until a renderer.
 
@@ -18,7 +18,7 @@ defmodule Emissary.MCP.ToolError do
   What is left is NOT listed here. A migration in progress cannot be
   recorded in prose — this paragraph named `Opus.MCP` as the remaining
   surface long after two larger ones had appeared — so the worklist lives
-  in `Emissary.MCP.ToolErrorAdoptionTest`, where every module and its
+  in `Cyfr.Ops.ErrorAdoptionTest`, where every module and its
   count are checked against the tree and may only go down. Read it for the
   real number and the order worth working in.
 
@@ -79,7 +79,7 @@ defmodule Emissary.MCP.ToolError do
   def message({:conflict, message}), do: message
   def message({:unavailable, what}), do: "#{what} is unavailable — retry shortly"
 
-  # `Emissary.MCP.ToolRegistry` mints these three when a tool crashes, exits
+  # `Cyfr.Ops.Catalog` mints these three when a tool crashes, exits
   # or overruns its deadline. Each already carries a crafted, client-safe
   # sentence (the tool's name and what happened, never the exception's own
   # message), so rendering is the identity — the point of naming them here is

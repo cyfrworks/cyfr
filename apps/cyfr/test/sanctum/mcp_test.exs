@@ -345,12 +345,12 @@ defmodule Sanctum.MCPTest do
 
     test "key:list requires admin permission", %{restricted_ctx: ctx} do
       assert {:error, {:missing_permission, :admin}} =
-               Emissary.MCP.ToolRegistry.call_external("key", ctx, %{"action" => "list"})
+               Cyfr.Ops.Catalog.call_external("key", ctx, %{"action" => "list"})
     end
 
     test "key:get requires admin permission", %{restricted_ctx: ctx} do
       assert {:error, {:missing_permission, :admin}} =
-               Emissary.MCP.ToolRegistry.call_external("key", ctx, %{
+               Cyfr.Ops.Catalog.call_external("key", ctx, %{
                  "action" => "get",
                  "name" => "test-key"
                })
@@ -593,7 +593,7 @@ defmodule Sanctum.MCPTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

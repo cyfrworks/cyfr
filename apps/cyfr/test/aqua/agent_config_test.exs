@@ -32,7 +32,7 @@ defmodule Aqua.AgentConfigTest do
 
   defp policy(ctx, name) do
     {:ok, guide} =
-      Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{"action" => "get", "name" => name})
+      Cyfr.Ops.Catalog.call_external("aqua", ctx, %{"action" => "get", "name" => name})
 
     Aqua.AgentConfig.stringify_deep(guide)["tool_policy"]
   end

@@ -225,7 +225,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
       tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
       assert tool.input_schema["properties"]["scope"]["enum"] ==
-               ["all"] ++ Emissary.MCP.Services.service_names() ++ ["registry"]
+               ["all"] ++ Cyfr.Ops.Services.service_names() ++ ["registry"]
     end
 
     test "invalid scope returns error" do

@@ -199,7 +199,7 @@ defmodule PrismWeb.LegalAcceptController do
   defp accept_error_message(reason) do
     # One renderer (ToolError.render covers the OCI struct and crafted
     # binaries too); nil means internal and stays out of the page.
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       "The acceptance could not be recorded — try again."
   end
 

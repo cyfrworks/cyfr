@@ -36,7 +36,7 @@ defmodule Opus.Host do
   @spec tool_call(String.t(), Context.t(), map(), Sanctum.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   defdelegate tool_call(name, ctx, args, authority, opts \\ []),
-    to: Emissary.MCP.ToolRegistry,
+    to: Cyfr.Ops.Catalog,
     as: :call_in_chain
 
   @doc "The material a consented vault edge projects for this execution."

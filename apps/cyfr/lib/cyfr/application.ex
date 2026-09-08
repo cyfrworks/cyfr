@@ -95,7 +95,7 @@ defmodule Cyfr.Application do
       # might read through the cache.
       group(Arca.Cache.TreeSupervisor, [
         Arca.Cache.Sweeper,
-        Emissary.MCP.ToolRegistry,
+        Cyfr.Ops.Catalog,
         Emissary.MCP.ResourceRegistry
       ]),
       # Orders whole-unit replacement so two commits to one unit cannot

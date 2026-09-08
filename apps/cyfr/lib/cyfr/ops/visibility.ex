@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ToolVisibility do
+defmodule Cyfr.Ops.Visibility do
   @moduledoc """
   Derives what a caller may see in `tools/list` — and, for a caller with
   no credential, what they may reach at all — from the same per-action
-  access annotations `Emissary.MCP.ToolRegistry` enforces at dispatch.
+  access annotations `Cyfr.Ops.Catalog` enforces at dispatch.
 
   Discovery is not a policy of its own. Every question here is answered by
   reading the action's annotation (`auth`, `permission`, `consent`), so a
@@ -21,7 +21,7 @@ defmodule Emissary.MCP.ToolVisibility do
   - An action with no annotation is visible to no one — the dispatcher
     refuses it too (default-deny at both gates).
 
-  The completeness audit (`Emissary.MCP.ToolRegistry.audit_action_kinds/0`,
+  The completeness audit (`Cyfr.Ops.Catalog.audit_action_kinds/0`,
   asserted `:ok` in CI) guarantees every registered action carries a full
   declaration, so nothing falls through to an accidental default.
 
@@ -31,7 +31,7 @@ defmodule Emissary.MCP.ToolVisibility do
   callers pass them through unchanged.
   """
 
-  alias Emissary.MCP.ActionAnnotations
+  alias Cyfr.Ops.Annotations
   alias Sanctum.Context
 
   @doc """
@@ -42,9 +42,9 @@ defmodule Emissary.MCP.ToolVisibility do
   """
   @spec anonymous_action?(String.t(), String.t()) :: boolean()
   def anonymous_action?(name, action) do
-    case Emissary.MCP.ToolRegistry.lookup(name) do
+    case Cyfr.Ops.Catalog.lookup(name) do
       {:ok, {_module, meta}} ->
-        ActionAnnotations.auth(meta, action) == :anonymous
+        Annotations.auth(meta, action) == :anonymous
 
       :miss ->
         false
@@ -69,9 +69,9 @@ defmodule Emissary.MCP.ToolVisibility do
   @doc "`admits?/2` by tool and action name, for the Router's invocation gate."
   @spec admits_action?(String.t(), String.t(), Context.t()) :: boolean()
   def admits_action?(name, action, %Context{} = ctx) do
-    case Emissary.MCP.ToolRegistry.lookup(name) do
+    case Cyfr.Ops.Catalog.lookup(name) do
       {:ok, {_module, meta}} ->
-        admits?(ActionAnnotations.annotation(meta, action) || %{}, ctx)
+        admits?(Annotations.annotation(meta, action) || %{}, ctx)
 
       :miss ->
         false
@@ -99,7 +99,7 @@ defmodule Emissary.MCP.ToolVisibility do
         if ctx.authenticated, do: tool_def, else: nil
 
       actions when is_list(actions) ->
-        annotations = ActionAnnotations.actions_of(tool_def)
+        annotations = Annotations.actions_of(tool_def)
         visible = Enum.filter(actions, &visible_action?(Map.get(annotations, &1), ctx))
 
         case visible do
@@ -149,7 +149,7 @@ defmodule Emissary.MCP.ToolVisibility do
     end
   end
 
-  # One shape reaches here. `Emissary.MCP.ToolRegistry` emits the wire
+  # One shape reaches here. `Cyfr.Ops.Catalog` emits the wire
   # spelling for registered tools and `ExternalProvider` maps a peer's
   # "parameters" onto it at ingest, so this reads "inputSchema" and nothing
   # else — a second accepted spelling only invites a third.

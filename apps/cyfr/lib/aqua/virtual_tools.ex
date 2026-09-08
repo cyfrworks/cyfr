@@ -8,7 +8,7 @@ defmodule Aqua.VirtualTools do
 
   Virtual tools are defined and dispatched inside the AQUA formula
   (`components/formulas/local/aqua/<version>/src/src/tools.rs`); they never
-  reach `Emissary.MCP.ToolRegistry`. The guest wraps each call as an
+  reach `Cyfr.Ops.Catalog`. The guest wraps each call as an
   `execution.run` of a local catalyst with a rewritten input. This module
   is the host's copy of that contract, and it answers four questions from
   the same rows:
@@ -178,7 +178,7 @@ defmodule Aqua.VirtualTools do
   The second arm of the plane taxonomy audit.
 
   Virtual tools are dispatched inside the formula and never reach
-  `Emissary.MCP.ToolRegistry`, so `audit_action_kinds/0` structurally
+  `Cyfr.Ops.Catalog`, so `audit_action_kinds/0` structurally
   cannot see them. Without this arm the taxonomy has a silent hole exactly
   where the agent surface is.
 

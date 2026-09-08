@@ -4,7 +4,7 @@
 defmodule PrismWeb.MCPHelpersTest do
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
   alias PrismWeb.MCPHelpers
 
   defmodule ListProvider do
@@ -26,14 +26,14 @@ defmodule PrismWeb.MCPHelpersTest do
   }
 
   setup do
-    ToolRegistry.register_tool(
+    Catalog.register_tool(
       "helper_list_probe",
       ListProvider,
       %{annotations: @annotations},
       :timer.minutes(1)
     )
 
-    on_exit(fn -> ToolRegistry.unregister_tool("helper_list_probe") end)
+    on_exit(fn -> Catalog.unregister_tool("helper_list_probe") end)
     {:ok, socket: %{assigns: %{context: Sanctum.TestContext.local()}}}
   end
 

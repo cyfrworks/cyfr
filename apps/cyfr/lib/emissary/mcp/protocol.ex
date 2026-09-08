@@ -85,7 +85,7 @@ defmodule Emissary.MCP.Protocol do
 
   # `x-mcp-header` mirrors a tool argument into `Mcp-Param-{Name}`. A preflight
   # cannot advertise a prefix, so each one would have to be named explicitly —
-  # see `Emissary.MCP.ToolProvider` and the CORS drift test.
+  # see `Cyfr.Ops.Provider` and the CORS drift test.
   # Reserved: no producer or consumer in this revision — a client library
   # may mirror simple params as headers under this prefix for
   # middleboxes; kept so the name is spoken for.

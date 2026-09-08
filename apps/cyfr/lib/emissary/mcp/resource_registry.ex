@@ -150,7 +150,7 @@ defmodule Emissary.MCP.ResourceRegistry do
   end
 
   defp resource_providers do
-    Emissary.MCP.ToolRegistry.available_providers()
+    Cyfr.Ops.Catalog.available_providers()
     |> Enum.filter(fn provider ->
       function_exported?(provider, :read, 2) and
         (non_empty?(provider, :resources) or non_empty?(provider, :resource_templates))

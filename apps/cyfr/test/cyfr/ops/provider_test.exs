@@ -1,20 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ToolProviderTest do
+defmodule Cyfr.Ops.ProviderTest do
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.ToolProvider
+  alias Cyfr.Ops.Provider
 
   describe "behaviour definition" do
     test "defines tools/0 callback" do
-      callbacks = ToolProvider.behaviour_info(:callbacks)
+      callbacks = Provider.behaviour_info(:callbacks)
 
       assert {:tools, 0} in callbacks
     end
 
     test "defines handle/3 callback" do
-      callbacks = ToolProvider.behaviour_info(:callbacks)
+      callbacks = Provider.behaviour_info(:callbacks)
 
       assert {:handle, 3} in callbacks
     end
@@ -25,17 +25,17 @@ defmodule Emissary.MCP.ToolProviderTest do
       # Verify the module compiles and exports expected types
       # The type specs are checked at compile time, but we can verify
       # the module is properly loaded
-      assert Code.ensure_loaded?(ToolProvider)
+      assert Code.ensure_loaded?(Provider)
     end
 
     test "handle_result type is documented" do
-      assert Code.ensure_loaded?(ToolProvider)
+      assert Code.ensure_loaded?(Provider)
     end
   end
 
   describe "provider implementation verification" do
     defmodule MockToolProvider do
-      @behaviour Emissary.MCP.ToolProvider
+      @behaviour Cyfr.Ops.Provider
 
       @impl true
       def tools do

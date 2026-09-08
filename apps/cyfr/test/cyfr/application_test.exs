@@ -90,7 +90,7 @@ defmodule Cyfr.ApplicationTest do
 
       assert Arca.Cache.TreeSupervisor in ids
       assert Arca.Cache.Sweeper in cache_tree_ids
-      assert Emissary.MCP.ToolRegistry in cache_tree_ids
+      assert Cyfr.Ops.Catalog in cache_tree_ids
       refute EmissaryWeb.Endpoint in ids
     end
 

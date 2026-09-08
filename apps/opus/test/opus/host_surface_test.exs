@@ -74,6 +74,8 @@ defmodule Opus.HostSurfaceTest do
     "Cyfr.LoggerContext",
     "Cyfr.MediaType",
     "Cyfr.Network",
+    # The operation catalog: an in-chain tool call is dispatched through it.
+    "Cyfr.Ops",
     "Cyfr.PathSafety",
     # The signed-pulls posture, read at execution as well as at pull so a
     # component stored before the knob was turned on cannot keep running. A

@@ -83,7 +83,7 @@ defmodule EmissaryWeb.HealthController do
       cache: check_cache(),
       pubsub: check_pubsub(),
       storage: check_storage(),
-      tool_registry: check_process(Emissary.MCP.ToolRegistry),
+      tool_registry: check_process(Cyfr.Ops.Catalog),
       resource_registry: check_process(Emissary.MCP.ResourceRegistry),
       progress: check_process(Emissary.MCP.Progress.Registry),
       # A boot that lost its control-plane lease is not ready: the endpoint

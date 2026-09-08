@@ -18,7 +18,7 @@ defmodule Cyfr.NamespaceDirectionTest do
 
   The rule this pins is narrow and checkable: an engine does not depend on
   a user interface. `Emissary` is deliberately NOT on the forbidden list —
-  opus implements `Emissary.MCP.ToolProvider` and dispatches in-chain tool
+  opus implements `Cyfr.Ops.Provider` and dispatches in-chain tool
   calls through the registry, which is a real contract with the transport,
   honestly declared.
   """

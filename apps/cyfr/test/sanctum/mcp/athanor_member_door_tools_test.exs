@@ -8,8 +8,8 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
   """
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolError
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Error
+  alias Cyfr.Ops.Catalog
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
@@ -53,7 +53,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     {:ok, alice: alice, bob: bob, ops: ops, ctx: ctx, n: n}
   end
 
-  defp call(ctx, tool, args), do: ToolRegistry.call_external(tool, ctx, args)
+  defp call(ctx, tool, args), do: Catalog.call_external(tool, ctx, args)
 
   test "a person creates a group, is its only member, and the others see it once added",
        %{alice: alice, bob: bob, ctx: ctx, n: n} do
@@ -75,7 +75,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(b, "member", %{"action" => "list", "athanor" => group.id})
 
-    assert ToolError.render(msg) =~ "Not a member"
+    assert Error.render(msg) =~ "Not a member"
 
     # add by user id, then bob sees it
     assert {:ok, %{state: "added"}} =
@@ -172,7 +172,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => shared})
 
-    assert ToolError.render(msg) =~ "More than one person"
+    assert Error.render(msg) =~ "More than one person"
 
     # An address the provider positively refuses cannot be seated by email:
     # a permanent invitation nobody could ever claim is the alternative.
@@ -189,7 +189,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => unverified})
 
-    assert ToolError.render(msg) =~ "not verified"
+    assert Error.render(msg) =~ "not verified"
     refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
 
     # By user id they are seatable — the id is the person.
@@ -229,9 +229,9 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
 
     assert {:error, msg} = call(k, "athanor", %{"action" => "create", "name" => "Nope"})
-    assert ToolError.render(msg) =~ "person's act"
+    assert Error.render(msg) =~ "person's act"
     assert {:error, msg} = call(k, "member", %{"action" => "add", "email" => "x@example.com"})
-    assert ToolError.render(msg) =~ "person's act"
+    assert Error.render(msg) =~ "person's act"
     # reads are fine
     assert {:ok, %{athanors: _}} = call(k, "athanor", %{"action" => "list"})
   end
@@ -242,7 +242,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: home.id)
     a = ctx.(alice, home.id, [])
     assert {:error, msg} = call(a, "athanor", %{"action" => "archive"})
-    assert ToolError.render(msg) =~ "Home"
+    assert Error.render(msg) =~ "Home"
 
     {:ok, personal} =
       Athanors.create(%{
@@ -255,9 +255,9 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
     assert {:error, msg} = call(a, "athanor", %{"action" => "archive", "athanor" => personal.id})
-    assert ToolError.render(msg) =~ "own athanor"
+    assert Error.render(msg) =~ "own athanor"
     assert {:error, msg} = call(a, "member", %{"action" => "leave", "athanor" => personal.id})
-    assert ToolError.render(msg) =~ "own athanor"
+    assert Error.render(msg) =~ "own athanor"
   end
 
   test "door.* is the operator's: refused for a member, hidden from tools/list, open to an admin",
@@ -299,7 +299,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(admin, "door", %{"action" => "deny", "value" => "ops@example.com"})
 
-    assert ToolError.render(msg) =~ "platform admin"
+    assert Error.render(msg) =~ "platform admin"
 
     # allowing again reverses the standing
     assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => email})
@@ -345,11 +345,11 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     b = %{ctx.(bob, Sanctum.TestContext.athanor_id(), []) | session_token_hash: "x"}
     assert {:error, msg} = call(b, "session", %{"action" => "use", "athanor" => group.slug})
-    assert ToolError.render(msg) =~ "Not a member"
+    assert Error.render(msg) =~ "Not a member"
 
     k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
     assert {:error, msg} = call(k, "session", %{"action" => "use", "athanor" => group.slug})
-    assert ToolError.render(msg) =~ "needs a session"
+    assert Error.render(msg) =~ "needs a session"
   end
 
   test "a person's own athanor has one member on every path — its owner is neither joined nor removed",
@@ -368,11 +368,11 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     for target <- [%{"user_id" => bob}, %{"email" => "bob#{n}@example.com"}] do
       assert {:error, msg} = call(a, "member", Map.merge(%{"action" => "add"}, target))
-      assert ToolError.render(msg) =~ "one member"
+      assert Error.render(msg) =~ "one member"
     end
 
     assert {:error, msg} = call(a, "member", %{"action" => "remove", "user_id" => alice})
-    assert ToolError.render(msg) =~ "owner"
+    assert Error.render(msg) =~ "owner"
     assert Members.member?(alice, personal.id)
     assert Members.count_by_athanor(personal.id) == {:ok, 1}
 
@@ -401,7 +401,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
         ] do
       assert {:error, msg} = call(who, tool, Map.put(args, "athanor", group.id))
 
-      assert ToolError.render(msg) =~ "archived",
+      assert Error.render(msg) =~ "archived",
              "#{tool}.#{args["action"]} ran on an archived athanor"
     end
 
@@ -448,7 +448,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(operator, "athanor", %{"action" => "unarchive", "athanor" => personal.id})
 
-    assert ToolError.render(msg) =~ "denied at the door"
+    assert Error.render(msg) =~ "denied at the door"
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
     {:ok, user} = Users.get(alice)

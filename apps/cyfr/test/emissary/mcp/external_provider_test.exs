@@ -102,7 +102,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       })
 
       assert {:error, msg} =
-               Emissary.MCP.ToolRegistry.call_external("plane-pin:sometool", ctx, %{})
+               Cyfr.Ops.Catalog.call_external("plane-pin:sometool", ctx, %{})
 
       assert msg =~ "only from inside a chain"
 

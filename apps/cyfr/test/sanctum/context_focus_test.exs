@@ -136,7 +136,7 @@ defmodule Sanctum.ContextFocusTest do
 
     # the audit ledger of B is invisible from A
     assert {:error, msg} =
-             Emissary.MCP.ToolRegistry.call_external("record", focused, %{
+             Cyfr.Ops.Catalog.call_external("record", focused, %{
                "action" => "get",
                "id" => b_exec
              })
@@ -144,7 +144,7 @@ defmodule Sanctum.ContextFocusTest do
     assert err_msg(msg) =~ "not found"
 
     assert {:ok, %{executions: listed}} =
-             Emissary.MCP.ToolRegistry.call_external("record", focused, %{"action" => "list"})
+             Cyfr.Ops.Catalog.call_external("record", focused, %{"action" => "list"})
 
     refute Enum.any?(listed, &(&1.id == b_exec))
 
@@ -193,7 +193,7 @@ defmodule Sanctum.ContextFocusTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

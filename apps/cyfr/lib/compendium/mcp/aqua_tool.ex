@@ -700,7 +700,7 @@ defmodule Compendium.MCP.AquaTool do
   # A refusal the `with` head already typed is the caller's answer; anything
   # else reaching an else arm is a storage term — logged, never reflected.
   defp passthrough_or_unavailable(reason, where) do
-    if Emissary.MCP.ToolError.reason?(reason) do
+    if Cyfr.Ops.Error.reason?(reason) do
       {:error, reason}
     else
       Logger.error("[AquaTool] #{where} failed: #{inspect(reason)}")
@@ -794,7 +794,7 @@ defmodule Compendium.MCP.AquaTool do
           cloneable: false,
           note:
             "The soul was not given leave to clone into it: " <>
-              (Emissary.MCP.ToolError.render(reason) || "the write failed")
+              (Cyfr.Ops.Error.render(reason) || "the write failed")
         }
     end
   end

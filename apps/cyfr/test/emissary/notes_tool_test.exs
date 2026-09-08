@@ -8,7 +8,7 @@ defmodule Emissary.MCP.NotesToolTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.NotesTool, as: Tool
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
   alias Sanctum.Authority
   alias Sanctum.Authority.Blob
   alias Sanctum.Context
@@ -101,7 +101,7 @@ defmodule Emissary.MCP.NotesToolTest do
   end
 
   defp in_chain(ctx, args, auth, opts \\ []),
-    do: ToolRegistry.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
+    do: Catalog.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
 
   test "a note lands in the estate you are working in, and nowhere else", %{
     ctx: ctx,
@@ -347,7 +347,7 @@ defmodule Emissary.MCP.NotesToolTest do
     # And the door still refuses the guest plane outright — before consent
     # is even consulted.
     assert {:error, {:guest_plane_call, "notes"}} =
-             ToolRegistry.call_external("notes", Context.enter_guest(ctx), args)
+             Catalog.call_external("notes", Context.enter_guest(ctx), args)
 
     # A chain whose authority predates the notes actions is denied before
     # the tool is reached — legibly, so re-consent is the obvious answer.
@@ -545,22 +545,22 @@ defmodule Emissary.MCP.NotesToolTest do
     star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
     assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-             Emissary.MCP.ToolRegistry.call_external("notes", star, %{
+             Cyfr.Ops.Catalog.call_external("notes", star, %{
                "action" => "keep",
                "name" => "sneak",
                "content" => "x"
              })
 
     assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-             Emissary.MCP.ToolRegistry.call_external("notes", star, %{
+             Cyfr.Ops.Catalog.call_external("notes", star, %{
                "action" => "list",
                "scope" => "mine"
              })
 
     # Discovery agrees with dispatch: the key is not shown the tool.
     shown =
-      Emissary.MCP.ToolVisibility.filter_for_context(
-        Emissary.MCP.ToolRegistry.list_tools(),
+      Cyfr.Ops.Visibility.filter_for_context(
+        Cyfr.Ops.Catalog.list_tools(),
         star
       )
 

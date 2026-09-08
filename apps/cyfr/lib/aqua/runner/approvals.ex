@@ -196,7 +196,7 @@ defmodule Aqua.Runner.Approvals do
   # is stamped with it when the card is raised, and the runner's current
   # execution may by now be a later turn's or none — and this
   # conversation. It rides the proposal as `lineage`, which the registry
-  # stamps onto the call as host-only keys (`Emissary.MCP.ToolRegistry`);
+  # stamps onto the call as host-only keys (`Cyfr.Ops.Catalog`);
   # a tool reads provenance from those and nothing the model wrote.
   @doc false
   def with_provenance(nil, _state, _msg), do: nil

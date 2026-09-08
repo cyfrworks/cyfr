@@ -24,7 +24,7 @@ defmodule Aqua.SeedContractTest do
   use ExUnit.Case, async: true
 
   alias Aqua.VirtualTools, as: AquaVirtualTools
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
   @formulas Path.expand("../../../../seed/components/formulas/local/aqua", __DIR__)
@@ -60,7 +60,7 @@ defmodule Aqua.SeedContractTest do
     refused =
       for key <- granted,
           {tool, action} = split(key),
-          ToolRegistry.in_chain_refused?(tool, action),
+          Catalog.in_chain_refused?(tool, action),
           do: key
 
     assert refused == [], "caps grant actions a chain cannot reach: #{inspect(refused)}"
@@ -197,7 +197,7 @@ defmodule Aqua.SeedContractTest do
 
     [
       if(not MapSet.member?(granted, key), do: "is not in the manifest caps"),
-      if(ToolRegistry.in_chain_refused?(tool, action), do: "is not reachable from a chain")
+      if(Catalog.in_chain_refused?(tool, action), do: "is not reachable from a chain")
     ]
     |> Enum.reject(&is_nil/1)
   end

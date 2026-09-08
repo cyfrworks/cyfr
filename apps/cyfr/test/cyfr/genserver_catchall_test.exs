@@ -21,7 +21,7 @@ defmodule Cyfr.GenServerCatchallTest do
 
   # Probed live: named, started by the app under test.
   @genservers [
-    {Emissary.MCP.ToolRegistry, "ToolRegistry"},
+    {Cyfr.Ops.Catalog, "ToolRegistry"},
     {Emissary.MCP.ResourceRegistry, "ResourceRegistry"},
     {Arca.Cache.Sweeper, "Sweeper"},
     {Prism.TelemetryBridge, "TelemetryBridge"},

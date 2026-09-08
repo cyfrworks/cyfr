@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ToolErrorAdoptionTest do
+defmodule Cyfr.Ops.ErrorAdoptionTest do
   @moduledoc """
-  A ratchet on the conversion to `Emissary.MCP.ToolError`.
+  A ratchet on the conversion to `Cyfr.Ops.Error`.
 
   Adoption is deliberately incremental: a provider converts an action by
   returning a typed tuple instead of a sentence, and unconverted strings
@@ -54,7 +54,7 @@ defmodule Emissary.MCP.ToolErrorAdoptionTest do
     "apps/cyfr/lib/sanctum/mcp/athanor_tool.ex" => 1
   }
 
-  defp root, do: Path.expand("../../../..", __DIR__)
+  defp root, do: Path.expand("../../../../..", __DIR__)
 
   # Every module that defines a tool: those are the ones whose refusals
   # reach a renderer, and the only ones this roster is about.
@@ -96,7 +96,7 @@ defmodule Emissary.MCP.ToolErrorAdoptionTest do
            #{Enum.join(Enum.sort(grown), "\n")}
 
            A refusal that a caller might branch on belongs in the
-           `Emissary.MCP.ToolError` vocabulary — `{:not_found, kind, name}`,
+           `Cyfr.Ops.Error` vocabulary — `{:not_found, kind, name}`,
            `{:invalid_argument, msg}`, `{:unavailable, service}` — so the
            wire, the console and the guest all render one decision.
 

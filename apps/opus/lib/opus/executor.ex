@@ -271,11 +271,11 @@ defmodule Opus.Executor do
   end
 
   # The render seam for failure reasons: a typed refusal gets its one
-  # sentence (`Emissary.MCP.ToolError.render/1` — Unauthorized, the tool
+  # sentence (`Cyfr.Ops.Error.render/1` — Unauthorized, the tool
   # reasons, OCI errors, crafted binaries); an internal term goes to the
   # log and never into a message that outlives this call.
   defp client_reason(reason) do
-    case Emissary.MCP.ToolError.render(reason) do
+    case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[Opus.Executor] unrenderable failure reason: #{inspect(reason)}")
         "internal error"

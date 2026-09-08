@@ -30,8 +30,8 @@ defmodule Opus.FormulaHandlerMcpTest do
     Application.put_env(:cyfr, :base_path, test_dir)
 
     # Ensure ToolRegistry has providers loaded for dispatch tests
-    if Process.whereis(Emissary.MCP.ToolRegistry) do
-      Emissary.MCP.ToolRegistry.refresh()
+    if Process.whereis(Cyfr.Ops.Catalog) do
+      Cyfr.Ops.Catalog.refresh()
     end
 
     ctx = Sanctum.TestContext.local()

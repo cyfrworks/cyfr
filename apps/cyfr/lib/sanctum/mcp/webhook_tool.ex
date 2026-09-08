@@ -247,7 +247,7 @@ defmodule Sanctum.MCP.WebhookTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("webhook", action_enum())}
+    {:error, Cyfr.Ops.Provider.invalid_action("webhook", action_enum())}
   end
 
   # --- helpers ---
@@ -286,5 +286,5 @@ defmodule Sanctum.MCP.WebhookTool do
     )
   end
 
-  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
+  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
 end

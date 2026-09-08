@@ -64,21 +64,23 @@ defmodule Cyfr.SanctumSurfacesTest do
     # every sealed blob, and that advice needs a rotation they can actually
     # run. `Sanctum.Cipher.Rotation` had no caller outside its own tests, so
     # the release task is what makes the warning actionable.
+    # `lib/cyfr/ops` is the operation catalog: the annotation gate reads
+    # consent classes and chain authority, and the error vocabulary
+    # renders the authorization refusals.
     "cyfr" => ~w(
-      Sanctum.Auth Sanctum.Authority Sanctum.Cidr Sanctum.Cipher
-      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
-      Sanctum.OAuth Sanctum.Provisioning Sanctum.ProvisioningSupervisor
-      Sanctum.PubSub Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy
+      Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Cidr Sanctum.Cipher
+      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth
+      Sanctum.Provisioning Sanctum.ProvisioningSupervisor Sanctum.PubSub
+      Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy Sanctum.ToolServerDigest
+      Sanctum.Unauthorized Sanctum.UnauthorizedError
     ),
     # The notes tool no longer reaches `Sanctum.Tenancy`: reading "your
     # own" notes resolves `users.personal_athanor_id`, and that read lives
     # with the domain (`Aqua.Notes`, under the `aqua` surface) rather than
     # the door.
     "emissary" => ~w(
-      Sanctum.Atoms Sanctum.Authority Sanctum.ComponentRef Sanctum.Consent
-      Sanctum.Context Sanctum.Sanitizer Sanctum.ToolPattern
-      Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.UnauthorizedError
-      Sanctum.VaultReader
+      Sanctum.ComponentRef Sanctum.Context Sanctum.Sanitizer Sanctum.ToolPattern
+      Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.VaultReader
     ),
     "emissary_web" => ~w(
       Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller

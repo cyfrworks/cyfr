@@ -207,7 +207,7 @@ defmodule Sanctum.MCP.ProfileTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("profile", action_enum())}
+    {:error, Cyfr.Ops.Provider.invalid_action("profile", action_enum())}
   end
 
   # ---------------------------------------------------------------------------
@@ -390,5 +390,5 @@ defmodule Sanctum.MCP.ProfileTool do
   defp fmt({:invalid_ref, reason}), do: "invalid_ref: #{reason}"
   defp fmt(reason), do: inspect(reason)
 
-  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
+  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
 end

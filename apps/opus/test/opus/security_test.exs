@@ -420,7 +420,7 @@ defmodule Opus.SecurityTest do
         })
 
       assert {:consent_required, %{}} = msg
-      refute Emissary.MCP.ToolError.render(msg) =~ "Signature verification"
+      refute Cyfr.Ops.Error.render(msg) =~ "Signature verification"
     end
   end
 end

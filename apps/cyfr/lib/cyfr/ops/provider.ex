@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ToolProvider do
+defmodule Cyfr.Ops.Provider do
   @moduledoc """
   Behaviour for MCP tool providers.
 
@@ -14,7 +14,7 @@ defmodule Emissary.MCP.ToolProvider do
   ## Implementing a Provider
 
       defmodule Emissary.MCP.Tools.RecordsProvider do
-        @behaviour Emissary.MCP.ToolProvider
+        @behaviour Cyfr.Ops.Provider
 
         @impl true
         def tools do
@@ -104,8 +104,8 @@ defmodule Emissary.MCP.ToolProvider do
   @typedoc """
   Per-action access declaration — the gate, not a hint.
 
-  `Emissary.MCP.ToolRegistry.do_call/4` enforces these keys at dispatch and
-  `Emissary.MCP.ToolVisibility` derives discovery from the same map, so what
+  `Cyfr.Ops.Catalog.do_call/4` enforces these keys at dispatch and
+  `Cyfr.Ops.Visibility` derives discovery from the same map, so what
   a caller is shown and what a caller may invoke cannot drift apart.
 
   - `:auth` — `:anonymous` serves uncredentialed callers (device flow,
@@ -204,7 +204,7 @@ defmodule Emissary.MCP.ToolProvider do
     Every action listed in the tool's
     `input_schema.properties.action.enum` MUST have a matching key in
     `annotations.actions` with an explicit `kind`. Drift is surfaced at
-    boot via `Emissary.MCP.ToolRegistry.audit_action_kinds/0`, which logs
+    boot via `Cyfr.Ops.Catalog.audit_action_kinds/0`, which logs
     a warning per offender. Tests can call the function directly and
     assert on `:ok` to enforce zero drift in CI.
 

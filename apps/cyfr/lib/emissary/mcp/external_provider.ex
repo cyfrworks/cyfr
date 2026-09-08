@@ -74,7 +74,7 @@ defmodule Emissary.MCP.ExternalProvider do
   dispatch, not defending against the member's own deliberate
   configuration.
   """
-  @spec default_planes() :: [Emissary.MCP.ToolProvider.plane(), ...]
+  @spec default_planes() :: [Cyfr.Ops.Provider.plane(), ...]
   def default_planes, do: [:in_chain]
 
   @doc """

@@ -43,10 +43,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   calls here.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Emissary.MCP.ToolRegistry.
+  which is validated at runtime by Cyfr.Ops.Catalog.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   def service, do: "arca"
 
@@ -381,7 +381,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("record", _ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("record", action_enum("record"))}
+    {:error, Cyfr.Ops.Provider.invalid_action("record", action_enum("record"))}
   end
 
   # ============================================================================
@@ -533,7 +533,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", _ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("mcp_log", action_enum("mcp_log"))}
+    {:error, Cyfr.Ops.Provider.invalid_action("mcp_log", action_enum("mcp_log"))}
   end
 
   # ============================================================================
@@ -605,7 +605,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("policy_log", _ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("policy_log", action_enum("policy_log"))}
+    {:error, Cyfr.Ops.Provider.invalid_action("policy_log", action_enum("policy_log"))}
   end
 
   # ============================================================================
@@ -686,7 +686,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("retention", _ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("retention", action_enum("retention"))}
+    {:error, Cyfr.Ops.Provider.invalid_action("retention", action_enum("retention"))}
   end
 
   def handle(tool, _ctx, _args) do

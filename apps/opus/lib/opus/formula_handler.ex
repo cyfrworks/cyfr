@@ -11,7 +11,7 @@ defmodule Opus.FormulaHandler do
 
   ## Unified MCP Dispatch
 
-  All formula capabilities go through `Emissary.MCP.ToolRegistry`. Component
+  All formula capabilities go through `Cyfr.Ops.Catalog`. Component
   execution, registry search, build, aqua — everything is an MCP tool call.
   Tool access is decided by the authority's transition relation over the
   consent edge's granted tools.
@@ -1262,7 +1262,7 @@ defmodule Opus.FormulaHandler do
   defp guest_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp guest_reason(reason) do
-    case Emissary.MCP.ToolError.render(reason) do
+    case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[FormulaHandler] unrenderable guest reason: #{inspect(reason)}")
         "the call failed"
@@ -1285,6 +1285,6 @@ defmodule Opus.FormulaHandler do
   def render_reason(reason) do
     # `nil` means the term is internal — logged where it was produced, never
     # handed to the guest.
-    Emissary.MCP.ToolError.render(reason) || "The call failed."
+    Cyfr.Ops.Error.render(reason) || "The call failed."
   end
 end

@@ -13,7 +13,7 @@ defmodule Prism.AquaTemplatePolicyTest do
   """
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
   alias Aqua.VirtualTools, as: AquaVirtualTools
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
@@ -91,5 +91,5 @@ defmodule Prism.AquaTemplatePolicyTest do
     end
   end
 
-  defp refused_action?(tool, action), do: ToolRegistry.in_chain_refused?(tool, action)
+  defp refused_action?(tool, action), do: Catalog.in_chain_refused?(tool, action)
 end

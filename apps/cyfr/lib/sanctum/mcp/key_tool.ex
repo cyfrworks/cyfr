@@ -191,7 +191,7 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("key", action_enum())}
+    {:error, Cyfr.Ops.Provider.invalid_action("key", action_enum())}
   end
 
   # --- helpers ---
@@ -208,5 +208,5 @@ defmodule Sanctum.MCP.KeyTool do
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :api_keys_changed)
   end
 
-  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
+  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
 end

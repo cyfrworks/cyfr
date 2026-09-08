@@ -9,7 +9,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
   # server's config moves the digest so the old grant stops matching.
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
   alias Sanctum.Authority
   alias Sanctum.Authority.Blob
 
@@ -110,7 +110,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     on_exit(fn -> Arca.Cache.delete_match({:external_tools, :_}) end)
 
     {:ok, %{tools: tools}} =
-      ToolRegistry.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth)
+      Catalog.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth)
 
     names = Enum.map(tools, & &1["name"])
 
@@ -133,7 +133,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:ok, %{tools: tools}} =
-      ToolRegistry.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth)
+      Catalog.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth)
 
     internal = Enum.reject(tools, &String.contains?(&1["name"], ":"))
 
@@ -155,11 +155,11 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     # Everything in-chain-planed but ungranted was pruned, and a call
     # would be denied — the catalogue and the verdict are one fact.
-    for tool_def <- ToolRegistry.list_tools(),
+    for tool_def <- Catalog.list_tools(),
         name = tool_def["name"],
         not String.contains?(name, ":"),
         action <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
-        :in_chain in Emissary.MCP.ActionAnnotations.planes(tool_def, action),
+        :in_chain in Cyfr.Ops.Annotations.planes(tool_def, action),
         {name, action} not in advertised do
       assert {:deny, :tool_not_granted} =
                Sanctum.Authority.Transition.step(
@@ -174,7 +174,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, message} =
-      ToolRegistry.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth)
 
     # It got PAST the authority — the failure is the unreachable upstream.
     refute message =~ "Denied by chain authority"
@@ -184,7 +184,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, message} =
-      ToolRegistry.call_in_chain("ghserver:repo_get", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("ghserver:repo_get", guest(ctx), %{}, auth)
 
     assert message =~ "Denied by chain authority"
   end
@@ -200,7 +200,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, message} =
-      ToolRegistry.call_in_chain("othersrv:issues.list", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("othersrv:issues.list", guest(ctx), %{}, auth)
 
     assert message =~ "Denied by chain authority"
   end
@@ -216,7 +216,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     Emissary.MCP.ExternalProvider.invalidate_external_tools_cache(ctx)
 
     {:error, message} =
-      ToolRegistry.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth)
 
     assert message =~ "Denied by chain authority"
   end
@@ -225,7 +225,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, message} =
-      ToolRegistry.call_in_chain("ghost:issues.list", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("ghost:issues.list", guest(ctx), %{}, auth)
 
     assert message =~ "Denied by chain authority"
   end

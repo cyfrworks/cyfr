@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ToolErrorRenderersTest do
+defmodule Cyfr.Ops.ErrorRenderersTest do
   @moduledoc """
   One refusal, one sentence, whichever surface renders it.
 
-  `Emissary.MCP.ToolError`'s moduledoc names the three consumers that must
+  `Cyfr.Ops.Error`'s moduledoc names the three consumers that must
   agree: the wire (`Emissary.MCP.Router`), the console
   (`PrismWeb.MCPHelpers`) and the in-chain guest view
   (`Opus.FormulaHandler`). `ToolRegistry` mints a fourth vocabulary of its own
@@ -15,7 +15,7 @@ defmodule Emissary.MCP.ToolErrorRenderersTest do
   """
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.ToolError
+  alias Cyfr.Ops.Error
 
   @crash_vocabulary [
     {:crashed, "Tool x crashed: boom"},
@@ -26,14 +26,14 @@ defmodule Emissary.MCP.ToolErrorRenderersTest do
   describe "the crash vocabulary" do
     test "is part of the typed roster" do
       for reason <- @crash_vocabulary do
-        assert ToolError.reason?(reason), "#{inspect(reason)} is not recognised"
-        assert is_binary(ToolError.message(reason))
+        assert Error.reason?(reason), "#{inspect(reason)} is not recognised"
+        assert is_binary(Error.message(reason))
       end
     end
 
     test "renders the same sentence on all three surfaces" do
       for reason <- @crash_vocabulary do
-        expected = ToolError.message(reason)
+        expected = Error.message(reason)
 
         assert PrismWeb.MCPHelpers.error_message(reason) == expected,
                "the console disagrees about #{inspect(reason)}"
@@ -69,7 +69,7 @@ defmodule Emissary.MCP.ToolErrorRenderersTest do
 
     test "the other typed vocabularies render through their own module" do
       assert Opus.FormulaHandler.render_reason({:not_found, "component", "x"}) ==
-               ToolError.message({:not_found, "component", "x"})
+               Error.message({:not_found, "component", "x"})
 
       unauthorized = {:missing_permission, :vault_write}
 

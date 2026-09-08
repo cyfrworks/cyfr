@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Emissary.MCP.ServicesTest do
+defmodule Cyfr.Ops.ServicesTest do
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.Services
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Services
+  alias Cyfr.Ops.Catalog
 
   test "every configured provider maps to a service the roster lists" do
     names = Services.service_names()
 
-    for module <- ToolRegistry.configured_providers() do
+    for module <- Catalog.configured_providers() do
       assert Services.service_name(module) in names
     end
 

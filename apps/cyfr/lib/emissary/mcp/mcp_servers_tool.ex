@@ -22,7 +22,7 @@ defmodule Emissary.MCP.McpServersTool do
   `Emissary.MCP.ExternalServers`.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   require Logger
 
@@ -574,7 +574,7 @@ defmodule Emissary.MCP.McpServersTool do
           failed =
             for {name, {:error, r}} <- results do
               Logger.warning("[MCP.Servers] refresh failed for #{name}: #{inspect(r)}")
-              %{name: name, error: Emissary.MCP.ToolError.render(r) || "refresh failed"}
+              %{name: name, error: Cyfr.Ops.Error.render(r) || "refresh failed"}
             end
 
           if refreshed != [], do: ExternalProvider.invalidate_external_tools_cache(ctx)

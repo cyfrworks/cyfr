@@ -22,17 +22,12 @@ defmodule Cyfr.EmissarySurfaceTest do
   use ExUnit.Case, async: true
 
   @surface ~w(
-    Emissary.MCP.ActionAnnotations
     Emissary.MCP.ExternalProvider
-    Emissary.MCP.ToolError
-    Emissary.MCP.ToolProvider
-    Emissary.MCP.ToolRegistry
     Emissary.PubSub
   )
 
-  # Why each entry is on the roster:
-  #   ActionAnnotations / ToolRegistry — consent shape derivation: a shape
-  #     may only name actions the registry can serve (one provider roster).
+  # Why each entry is on the roster (the operation catalog itself lives
+  # under `Cyfr.Ops` now, so its modules are not Emissary's surface):
   #   ExternalProvider — consent candidates come from the live
   #     external-server plane.
   #   ToolError — the shared refusal renderer (one sentence per reason).

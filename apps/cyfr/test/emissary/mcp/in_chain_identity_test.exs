@@ -13,7 +13,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
   # gate that still needs the identity-conjunct branch.
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
   alias Sanctum.Authority
   alias Sanctum.Authority.Blob
   alias Sanctum.Context
@@ -94,7 +94,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     refusals =
       for {tool, action} <- pairs,
-          result = ToolRegistry.call_in_chain(tool, ctx, %{"action" => action}, auth),
+          result = Catalog.call_in_chain(tool, ctx, %{"action" => action}, auth),
           match?({:error, msg} when is_binary(msg), result),
           {:error, msg} = result,
           msg =~ @plane_refusal,
@@ -127,7 +127,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     args = %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"}
 
-    case ToolRegistry.call_in_chain("tincture_visibility", ctx, args, auth) do
+    case Catalog.call_in_chain("tincture_visibility", ctx, args, auth) do
       {:ok, _result} ->
         :ok
 
@@ -147,7 +147,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, {:guest_plane_call, "component"}} =
-             ToolRegistry.call_external("component", ctx, %{"action" => "list"})
+             Catalog.call_external("component", ctx, %{"action" => "list"})
   end
 
   test "call_in_chain denies an action the authority does not grant" do
@@ -163,7 +163,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, msg} =
-             ToolRegistry.call_in_chain("component", ctx, %{"action" => "search"}, auth)
+             Catalog.call_in_chain("component", ctx, %{"action" => "search"}, auth)
 
     assert msg =~ "Denied by chain authority"
   end
@@ -183,7 +183,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, msg} =
-             ToolRegistry.call_in_chain(
+             Catalog.call_in_chain(
                "execution",
                ctx,
                %{"action" => "force_release"},
@@ -222,7 +222,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     for {tool, action} <- verbs do
       assert {:error, msg} =
-               ToolRegistry.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth)
+               Catalog.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth)
 
       assert msg =~ "not reachable from a running chain", "#{tool}.#{action}: #{msg}"
     end
@@ -241,7 +241,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, msg} =
-             ToolRegistry.call_in_chain("github:create_issue", ctx, %{}, auth)
+             Catalog.call_in_chain("github:create_issue", ctx, %{}, auth)
 
     assert msg =~ "Denied by chain authority"
   end

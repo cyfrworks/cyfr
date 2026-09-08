@@ -63,7 +63,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
   alias Aqua.VirtualTools, as: AquaVirtualTools
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
@@ -94,7 +94,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   describe "registered tools" do
     test "the audit passes" do
-      assert ToolRegistry.audit_action_kinds() == :ok
+      assert Catalog.audit_action_kinds() == :ok
     end
 
     test "every action declares a kind and at least one valid plane" do
@@ -103,7 +103,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
         assert is_atom(kind) and not is_nil(kind), "#{tool}.#{verb} has no kind"
         assert planes != [], "#{tool}.#{verb} has no plane"
 
-        assert Enum.all?(planes, &(&1 in ToolRegistry.valid_planes())),
+        assert Enum.all?(planes, &(&1 in Catalog.valid_planes())),
                "#{tool}.#{verb} has an invalid plane: #{inspect(planes)}"
       end
     end
@@ -120,7 +120,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
             {Probes.InvalidStanding, :invalid_standing},
             {Probes.Unannotated, :missing_annotation}
           ] do
-        assert {:error, [%{reason: ^reason}]} = ToolRegistry.audit_action_kinds([probe]),
+        assert {:error, [%{reason: ^reason}]} = Catalog.audit_action_kinds([probe]),
                "#{inspect(probe)} was not reported as #{reason}"
       end
     end
@@ -133,7 +133,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
       served =
         MapSet.new(
-          for tool_def <- ToolRegistry.list_tools(),
+          for tool_def <- Catalog.list_tools(),
               verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
               do: {tool_def["name"], verb}
         )
@@ -228,8 +228,8 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       # The wiring backstop still holds alongside the per-call gate: the
       # router rejects any name the registered-tool cache does not hold,
       # and proxied `server:tool` names are never cached.
-      assert {:error, :not_found} = ToolRegistry.get_tool("someserver:sometool")
-      refute Enum.any?(ToolRegistry.list_tools(), &String.contains?(&1["name"], ":"))
+      assert {:error, :not_found} = Catalog.get_tool("someserver:sometool")
+      refute Enum.any?(Catalog.list_tools(), &String.contains?(&1["name"], ":"))
     end
 
     # The bucket default is also enforced at dispatch, not left to the

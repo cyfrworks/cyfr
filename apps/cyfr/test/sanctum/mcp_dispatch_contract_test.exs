@@ -149,7 +149,7 @@ defmodule Sanctum.MCPDispatchContractTest do
       for {tool, expected} <- @invalid_action_errors do
         assert {:error, reason} = MCP.handle(tool, ctx, %{"action" => "___no_such_action___"})
 
-        assert Emissary.MCP.ToolError.render(reason) == expected,
+        assert Cyfr.Ops.Error.render(reason) == expected,
                "invalid-action message drift for tool #{tool}"
       end
     end

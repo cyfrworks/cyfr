@@ -30,7 +30,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
       for action <- ~w(create delete enable disable test refresh) do
         assert {:error, reason} =
-                 Emissary.MCP.ToolRegistry.call_external("mcp_servers", ctx, %{
+                 Cyfr.Ops.Catalog.call_external("mcp_servers", ctx, %{
                    "action" => action,
                    "name" => "some-server"
                  })
@@ -59,7 +59,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       for action <-
             ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove) do
         assert {:error, reason} =
-                 Emissary.MCP.ToolRegistry.call_external("registry", ctx, %{
+                 Cyfr.Ops.Catalog.call_external("registry", ctx, %{
                    "action" => action,
                    "slug" => "someslug"
                  })
@@ -152,7 +152,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       assert {:error, {:missing_permission, :admin}} =
-               Emissary.MCP.ToolRegistry.call_external("system", ctx, %{
+               Cyfr.Ops.Catalog.call_external("system", ctx, %{
                  "action" => "notify",
                  "event" => "test.event"
                })

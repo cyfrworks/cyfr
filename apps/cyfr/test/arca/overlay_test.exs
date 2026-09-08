@@ -1464,9 +1464,9 @@ defmodule Arca.OverlayTest do
     # exactly the paths where concurrent contention is expected. Contention
     # is retryable; an outage is not.
     test "unit_locked is a recognised refusal with a retry sentence" do
-      assert Emissary.MCP.ToolError.reason?(:unit_locked)
+      assert Cyfr.Ops.Error.reason?(:unit_locked)
 
-      message = Emissary.MCP.ToolError.render(:unit_locked)
+      message = Cyfr.Ops.Error.render(:unit_locked)
       assert is_binary(message)
       assert message =~ "retry"
     end

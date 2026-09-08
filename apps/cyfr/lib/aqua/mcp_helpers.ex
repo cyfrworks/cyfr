@@ -23,7 +23,7 @@ defmodule Aqua.MCPHelpers do
   @doc "Call a tool on the external plane under `ctx`."
   @spec call_tool(String.t(), Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_tool(tool, %Sanctum.Context{} = ctx, args) when is_binary(tool) and is_map(args) do
-    Emissary.MCP.ToolRegistry.call_external(tool, ctx, args)
+    Cyfr.Ops.Catalog.call_external(tool, ctx, args)
   end
 
   @doc """
@@ -37,7 +37,7 @@ defmodule Aqua.MCPHelpers do
   @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Sanctum.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def call_in_chain(tool, %Sanctum.Context{} = ctx, args, authority, opts \\ []) do
-    Emissary.MCP.ToolRegistry.call_in_chain(tool, ctx, args, authority, opts)
+    Cyfr.Ops.Catalog.call_in_chain(tool, ctx, args, authority, opts)
   end
 
   @doc """
@@ -47,8 +47,8 @@ defmodule Aqua.MCPHelpers do
   """
   @spec action_kind(String.t(), String.t()) :: atom() | nil
   def action_kind(tool, action) do
-    case Emissary.MCP.ToolRegistry.get_tool(tool) do
-      {:ok, tool_def} -> Emissary.MCP.ActionAnnotations.kind(tool_def, action)
+    case Cyfr.Ops.Catalog.get_tool(tool) do
+      {:ok, tool_def} -> Cyfr.Ops.Annotations.kind(tool_def, action)
       _ -> nil
     end
   end
@@ -59,8 +59,8 @@ defmodule Aqua.MCPHelpers do
   """
   @spec action_standing(String.t(), String.t()) :: :conversation | false | nil
   def action_standing(tool, action) do
-    case Emissary.MCP.ToolRegistry.get_tool(tool) do
-      {:ok, tool_def} -> Emissary.MCP.ActionAnnotations.standing(tool_def, action)
+    case Cyfr.Ops.Catalog.get_tool(tool) do
+      {:ok, tool_def} -> Cyfr.Ops.Annotations.standing(tool_def, action)
       _ -> nil
     end
   end
@@ -72,7 +72,7 @@ defmodule Aqua.MCPHelpers do
   """
   @spec actions_of(String.t()) :: [String.t()]
   def actions_of(tool) when is_binary(tool) do
-    case Emissary.MCP.ToolRegistry.get_tool(tool) do
+    case Cyfr.Ops.Catalog.get_tool(tool) do
       {:ok, tool_def} ->
         case get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) do
           verbs when is_list(verbs) -> Enum.filter(verbs, &is_binary/1)
@@ -89,7 +89,7 @@ defmodule Aqua.MCPHelpers do
   @doc "Whether a running chain would refuse `tool`/`action` (external-only plane)."
   @spec in_chain_refused?(String.t(), String.t()) :: boolean()
   def in_chain_refused?(tool, action),
-    do: Emissary.MCP.ToolRegistry.in_chain_refused?(tool, action)
+    do: Cyfr.Ops.Catalog.in_chain_refused?(tool, action)
 
   @doc """
   One sentence for a refusal: the shared renderer first (crafted binaries,
@@ -100,7 +100,7 @@ defmodule Aqua.MCPHelpers do
   """
   @spec render_refusal(term()) :: String.t()
   def render_refusal(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       inspect(Sanctum.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
   end
 end

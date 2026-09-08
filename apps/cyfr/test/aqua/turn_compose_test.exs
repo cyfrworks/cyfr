@@ -185,7 +185,7 @@ defmodule Aqua.TurnComposeTest do
     log =
       ExUnit.CaptureLog.capture_log(fn ->
         assert {:error, {:unavailable, what}} = Turn.build_input(ctx, soul, "hi")
-        assert Emissary.MCP.ToolError.render({:unavailable, what}) =~ "retry shortly"
+        assert Cyfr.Ops.Error.render({:unavailable, what}) =~ "retry shortly"
 
         # The addressing roster keeps its fail-open contract for the chat,
         # but says so rather than answering "nobody here" silently.

@@ -12,7 +12,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   This provider stays in Emissary because it needs cross-service visibility.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   @impl true
   def service, do: "emissary"
@@ -23,7 +23,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # The status scopes are derived from the provider roster — "all" and the
   # registry (an HTTP peer, not a provider) are the two extras.
   defp scope_enum, do: ["all"] ++ service_scopes()
-  defp service_scopes, do: Emissary.MCP.Services.service_names() ++ ["registry"]
+  defp service_scopes, do: Cyfr.Ops.Services.service_names() ++ ["registry"]
 
   # ============================================================================
   # ToolProvider Callbacks
@@ -133,13 +133,13 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   @impl true
   def handle("tools", %Context{} = ctx, %{"action" => "list"} = args) do
-    tools = Emissary.MCP.ToolRegistry.list_tools()
+    tools = Cyfr.Ops.Catalog.list_tools()
 
     # Augment with tenant-specific external MCP server tools
     external_tools = Emissary.MCP.ExternalProvider.list_external_tools(ctx)
 
     all_tools = tools ++ external_tools
-    all_tools = Emissary.MCP.ToolVisibility.filter_for_context(all_tools, ctx)
+    all_tools = Cyfr.Ops.Visibility.filter_for_context(all_tools, ctx)
 
     case args["component_ref"] do
       nil ->
@@ -215,7 +215,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # first provider that is not carries the answer.
   defp check_service_named(service) do
     service
-    |> Emissary.MCP.Services.providers_for()
+    |> Cyfr.Ops.Services.providers_for()
     |> Enum.map(&check_service/1)
     |> Enum.find("ok", &(&1 != "ok"))
   end
@@ -277,7 +277,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   defp handle_tools_list_for(tools, component_ref) do
     case Sanctum.ComponentRef.parse(component_ref) do
       {:ok, %{type: "formula"}} ->
-        filtered = Emissary.MCP.ToolRegistry.in_chain_view(tools)
+        filtered = Cyfr.Ops.Catalog.in_chain_view(tools)
         {:ok, %{tools: filtered, component_ref: component_ref, filtered: true}}
 
       {:ok, %{type: type}} ->
@@ -295,7 +295,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # ============================================================================
 
   defp check_all_services(_ctx) do
-    Emissary.MCP.Services.service_names()
+    Cyfr.Ops.Services.service_names()
     |> Map.new(fn service -> {String.to_atom(service), check_service_named(service)} end)
     |> Map.put(:registry, check_registry_health())
   end
@@ -439,8 +439,8 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   defp tool_count do
-    if Process.whereis(Emissary.MCP.ToolRegistry) do
-      Emissary.MCP.ToolRegistry.list_tools() |> length()
+    if Process.whereis(Cyfr.Ops.Catalog) do
+      Cyfr.Ops.Catalog.list_tools() |> length()
     else
       0
     end

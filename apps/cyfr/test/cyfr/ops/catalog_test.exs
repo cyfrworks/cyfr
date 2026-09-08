@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ToolRegistryTest.CrashingProvider do
+defmodule Cyfr.Ops.CatalogTest.CrashingProvider do
   @moduledoc false
   # A provider that fails the way a real one would: by raising or exiting
   # rather than returning an error tuple.
@@ -14,7 +14,7 @@ defmodule Emissary.MCP.ToolRegistryTest.CrashingProvider do
   def handle(_tool, _ctx, _args), do: {:ok, %{"ok" => true}}
 end
 
-defmodule Emissary.MCP.ToolRegistryTest.BlockingProvider do
+defmodule Cyfr.Ops.CatalogTest.BlockingProvider do
   @moduledoc false
   # A provider that stays in flight. It announces its own pid to the test
   # process first, so a test can assert on the dispatcher's bookkeeping while
@@ -25,7 +25,7 @@ defmodule Emissary.MCP.ToolRegistryTest.BlockingProvider do
   end
 end
 
-defmodule Emissary.MCP.ToolRegistryTest do
+defmodule Cyfr.Ops.CatalogTest do
   @moduledoc """
   Tests for the MCP tool registry.
 
@@ -33,7 +33,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
   """
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
   alias Sanctum.Context
 
   setup do
@@ -44,12 +44,12 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
   describe "list_tools/0" do
     test "returns a list of tools" do
-      tools = ToolRegistry.list_tools()
+      tools = Catalog.list_tools()
       assert is_list(tools)
     end
 
     test "tools have required MCP fields" do
-      tools = ToolRegistry.list_tools()
+      tools = Catalog.list_tools()
 
       for tool <- tools do
         assert Map.has_key?(tool, "name")
@@ -59,14 +59,14 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "tools are sorted by name" do
-      tools = ToolRegistry.list_tools()
+      tools = Catalog.list_tools()
       names = Enum.map(tools, & &1["name"])
 
       assert names == Enum.sort(names)
     end
 
     test "inputSchema has valid JSON Schema type" do
-      tools = ToolRegistry.list_tools()
+      tools = Catalog.list_tools()
 
       for tool <- tools do
         schema = tool["inputSchema"]
@@ -76,7 +76,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "includes system tool from SystemProvider" do
-      tools = ToolRegistry.list_tools()
+      tools = Catalog.list_tools()
       tool_names = Enum.map(tools, & &1["name"])
 
       assert "system" in tool_names
@@ -85,7 +85,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
   describe "get_tool/1" do
     test "returns tool definition for existing tool" do
-      {:ok, tool} = ToolRegistry.get_tool("system")
+      {:ok, tool} = Catalog.get_tool("system")
 
       assert tool["name"] == "system"
       assert is_binary(tool["description"])
@@ -93,14 +93,14 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "returns error for non-existent tool" do
-      result = ToolRegistry.get_tool("nonexistent/tool")
+      result = Catalog.get_tool("nonexistent/tool")
 
       assert {:error, :not_found} = result
     end
 
     test "tool definition matches list_tools format" do
-      {:ok, tool} = ToolRegistry.get_tool("system")
-      tools = ToolRegistry.list_tools()
+      {:ok, tool} = Catalog.get_tool("system")
+      tools = Catalog.list_tools()
       system_from_list = Enum.find(tools, &(&1["name"] == "system"))
 
       assert tool == system_from_list
@@ -111,7 +111,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     test "delegates to correct provider module" do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, result} = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+      {:ok, result} = Catalog.call_external("system", ctx, %{"action" => "status"})
 
       assert is_map(result)
       assert Map.has_key?(result, :status)
@@ -121,7 +121,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     test "returns error for unknown tool" do
       ctx = Sanctum.TestContext.local()
 
-      result = ToolRegistry.call_external("nonexistent/tool", ctx, %{})
+      result = Catalog.call_external("nonexistent/tool", ctx, %{})
 
       assert {:error, message} = result
       assert message =~ "Unknown tool"
@@ -133,7 +133,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # Call system with invalid action to trigger error — the dispatch
       # gate answers with the typed default-deny.
       {:error, {:unknown_action, message}} =
-        ToolRegistry.call_external("system", ctx, %{"action" => "invalid_action"})
+        Catalog.call_external("system", ctx, %{"action" => "invalid_action"})
 
       assert message == "system.invalid_action"
     end
@@ -145,7 +145,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # The system tool doesn't expose context directly, but we can verify
       # the call succeeds with valid context
       {:ok, result} =
-        ToolRegistry.call_external("system", ctx, %{"action" => "status", "scope" => "emissary"})
+        Catalog.call_external("system", ctx, %{"action" => "status", "scope" => "emissary"})
 
       assert result.status == "ok"
       assert result.services.emissary == "ok"
@@ -158,54 +158,54 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
       # An auth refusal, never "Unknown tool" — the gate fires first.
       assert {:error, {:tool_auth_required, "someserver:some_tool"}} =
-               ToolRegistry.call_external("someserver:some_tool", ctx, %{})
+               Catalog.call_external("someserver:some_tool", ctx, %{})
     end
 
     test "authenticated caller with a nonexistent server still gets Unknown tool" do
       ctx = Sanctum.TestContext.local()
 
-      assert {:error, message} = ToolRegistry.call_external("no-such-server:some_tool", ctx, %{})
+      assert {:error, message} = Catalog.call_external("no-such-server:some_tool", ctx, %{})
       assert message =~ "Unknown tool"
     end
 
     test "unauthenticated caller with a bare unknown name still gets Unknown tool" do
       ctx = Context.build(authenticated: false, permissions: [])
 
-      assert {:error, message} = ToolRegistry.call_external("definitely_not_a_tool", ctx, %{})
+      assert {:error, message} = Catalog.call_external("definitely_not_a_tool", ctx, %{})
       assert message =~ "Unknown tool"
     end
   end
 
   describe "exists?/1" do
     test "returns true for existing tool" do
-      assert ToolRegistry.exists?("system") == true
+      assert Catalog.exists?("system") == true
     end
 
     test "returns false for non-existent tool" do
-      assert ToolRegistry.exists?("nonexistent/tool") == false
+      assert Catalog.exists?("nonexistent/tool") == false
     end
   end
 
   describe "refresh/0" do
     test "reloads providers and returns tool count" do
-      {:ok, count} = ToolRegistry.refresh()
+      {:ok, count} = Catalog.refresh()
 
       assert is_integer(count)
       assert count > 0
     end
 
     test "tools are available after refresh" do
-      {:ok, _count} = ToolRegistry.refresh()
+      {:ok, _count} = Catalog.refresh()
 
       # Verify tools are still accessible
-      tools = ToolRegistry.list_tools()
+      tools = Catalog.list_tools()
       assert tools != []
     end
   end
 
   describe "tool schema validation" do
     test "system tool has action enum" do
-      {:ok, tool} = ToolRegistry.get_tool("system")
+      {:ok, tool} = Catalog.get_tool("system")
 
       action_prop = tool["inputSchema"]["properties"]["action"]
       assert action_prop["type"] == "string"
@@ -214,7 +214,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "system tool has required action field" do
-      {:ok, tool} = ToolRegistry.get_tool("system")
+      {:ok, tool} = Catalog.get_tool("system")
 
       assert "action" in tool["inputSchema"]["required"]
     end
@@ -226,7 +226,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
       # Calling a non-existent action will raise in the provider
       # The registry should catch this and return an error tuple
-      result = ToolRegistry.call_external("system", ctx, %{"action" => "crash_intentionally"})
+      result = Catalog.call_external("system", ctx, %{"action" => "crash_intentionally"})
 
       # Should return error instead of crashing — an undeclared action is
       # the typed default-deny, refused before the handler could raise.
@@ -237,7 +237,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     test "returns meaningful error for unknown tool" do
       ctx = Sanctum.TestContext.local()
 
-      result = ToolRegistry.call_external("completely/unknown/tool", ctx, %{})
+      result = Catalog.call_external("completely/unknown/tool", ctx, %{})
 
       assert {:error, message} = result
       assert message =~ "Unknown tool"
@@ -258,14 +258,14 @@ defmodule Emissary.MCP.ToolRegistryTest do
         }
       }
 
-      ToolRegistry.register_tool(
+      Catalog.register_tool(
         @crash_tool,
-        Emissary.MCP.ToolRegistryTest.CrashingProvider,
+        Cyfr.Ops.CatalogTest.CrashingProvider,
         %{annotations: annotations},
         :timer.minutes(1)
       )
 
-      on_exit(fn -> ToolRegistry.unregister_tool(@crash_tool) end)
+      on_exit(fn -> Catalog.unregister_tool(@crash_tool) end)
     end
 
     test "a raising handler yields a typed error and the caller survives" do
@@ -274,7 +274,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       caller = self()
 
       assert {:error, {:crashed, message}} =
-               ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "raise"})
+               Catalog.call_external(@crash_tool, ctx, %{"action" => "raise"})
 
       # The tuple names the tool, never the exception's own message — that
       # text can carry a query, a path, or the offending bytes, and this
@@ -287,7 +287,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       assert Process.alive?(caller)
 
       assert {:ok, %{"ok" => true}} =
-               ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "ok"})
+               Catalog.call_external(@crash_tool, ctx, %{"action" => "ok"})
     end
 
     test "an exiting handler yields a typed error and the caller survives" do
@@ -295,7 +295,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       ctx = Sanctum.TestContext.local()
 
       assert {:error, {:exit, message}} =
-               ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "exit"})
+               Catalog.call_external(@crash_tool, ctx, %{"action" => "exit"})
 
       assert message =~ "exited unexpectedly"
       assert Process.alive?(self())
@@ -310,7 +310,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # is how it gets its own JSON-RPC code instead of everything landing
       # on :insufficient_permissions.
       assert {:error, reason} =
-               ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "unauthorized"})
+               Catalog.call_external(@crash_tool, ctx, %{"action" => "unauthorized"})
 
       assert reason == :missing_tenant
       assert Sanctum.Unauthorized.reason?(reason)
@@ -321,7 +321,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       ctx = Sanctum.TestContext.local()
 
       # This should fail due to missing required action, but not crash
-      assert {:error, :action_missing} = ToolRegistry.call_external("system", ctx, %{})
+      assert {:error, :action_missing} = Catalog.call_external("system", ctx, %{})
     end
 
     test "provider errors are wrapped with context" do
@@ -330,7 +330,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # Invalid action is the dispatcher's typed default-deny, naming the
       # tool.action it refused.
       {:error, {:unknown_action, message}} =
-        ToolRegistry.call_external("system", ctx, %{"action" => "nonexistent"})
+        Catalog.call_external("system", ctx, %{"action" => "nonexistent"})
 
       assert message == "system.nonexistent"
     end
@@ -348,7 +348,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       }
 
       # The tool should handle nil user_id gracefully
-      result = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+      result = Catalog.call_external("system", ctx, %{"action" => "status"})
 
       # Should still work - status doesn't require auth
       assert {:ok, _} = result
@@ -360,7 +360,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       tasks =
         for _ <- 1..50 do
           Task.async(fn ->
-            ToolRegistry.list_tools()
+            Catalog.list_tools()
           end)
         end
 
@@ -377,7 +377,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       tasks =
         for _ <- 1..20 do
           Task.async(fn ->
-            ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+            Catalog.call_external("system", ctx, %{"action" => "status"})
           end)
         end
 
@@ -392,7 +392,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
   describe "optional tool-definition fields" do
     test "tools may include title field" do
-      {:ok, tool} = ToolRegistry.get_tool("system")
+      {:ok, tool} = Catalog.get_tool("system")
 
       # SystemProvider includes title
       if Map.has_key?(tool, "title") do
@@ -401,7 +401,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "optional fields are excluded when nil" do
-      tools = ToolRegistry.list_tools()
+      tools = Catalog.list_tools()
 
       for tool <- tools do
         # Verify nil values are not included in output
@@ -418,14 +418,14 @@ defmodule Emissary.MCP.ToolRegistryTest do
     defp register_blocking_tool do
       annotations = %{actions: %{"block" => %{kind: :execute, planes: [:external]}}}
 
-      ToolRegistry.register_tool(
+      Catalog.register_tool(
         @blocking_tool,
-        Emissary.MCP.ToolRegistryTest.BlockingProvider,
+        Cyfr.Ops.CatalogTest.BlockingProvider,
         %{annotations: annotations},
         :timer.minutes(1)
       )
 
-      on_exit(fn -> ToolRegistry.unregister_tool(@blocking_tool) end)
+      on_exit(fn -> Catalog.unregister_tool(@blocking_tool) end)
     end
 
     # The transport cancels a request by request id when its caller closes the
@@ -439,7 +439,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
       spawn(fn ->
         args = %{"action" => "block", :reply_to => caller}
-        send(caller, {:result, ToolRegistry.call_external(@blocking_tool, ctx, args)})
+        send(caller, {:result, Catalog.call_external(@blocking_tool, ctx, args)})
       end)
 
       # The handler reports its pid and then blocks, so the call is provably
@@ -463,7 +463,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     test "the entry is cleaned up when the work finishes on its own" do
       ctx = %{Sanctum.TestContext.local() | request_id: "req_finished"}
 
-      {:ok, _} = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+      {:ok, _} = Catalog.call_external("system", ctx, %{"action" => "status"})
 
       :sys.get_state(Emissary.MCP.RunningTasks)
       assert {:error, :not_found} = Emissary.MCP.RunningTasks.cancel("req_finished")
@@ -476,7 +476,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
       # The system tool with an invalid action is refused by the dispatch
       # gate's typed default-deny before any handler could raise.
-      result = ToolRegistry.call_external("system", ctx, %{"action" => "this_will_cause_error"})
+      result = Catalog.call_external("system", ctx, %{"action" => "this_will_cause_error"})
 
       assert {:error, {:unknown_action, message}} = result
       assert is_binary(message)
@@ -486,7 +486,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       ctx = Sanctum.TestContext.local()
 
       # A valid tool call should succeed
-      {:ok, result} = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+      {:ok, result} = Catalog.call_external("system", ctx, %{"action" => "status"})
       assert is_map(result)
     end
 
@@ -494,17 +494,17 @@ defmodule Emissary.MCP.ToolRegistryTest do
       ctx = Sanctum.TestContext.local()
 
       # First call fails
-      {:error, _} = ToolRegistry.call_external("system", ctx, %{"action" => "bad_action"})
+      {:error, _} = Catalog.call_external("system", ctx, %{"action" => "bad_action"})
 
       # Second call should still work
-      {:ok, result} = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+      {:ok, result} = Catalog.call_external("system", ctx, %{"action" => "status"})
       assert result.status in ["ok", "degraded"]
 
       # Third call fails
-      {:error, _} = ToolRegistry.call_external("system", ctx, %{"action" => "another_bad"})
+      {:error, _} = Catalog.call_external("system", ctx, %{"action" => "another_bad"})
 
       # Fourth call should still work
-      {:ok, result} = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+      {:ok, result} = Catalog.call_external("system", ctx, %{"action" => "status"})
       assert result.status in ["ok", "degraded"]
     end
 
@@ -512,7 +512,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       ctx = Sanctum.TestContext.local()
 
       {:error, {:unknown_action, message}} =
-        ToolRegistry.call_external("system", ctx, %{"action" => "unknown_action"})
+        Catalog.call_external("system", ctx, %{"action" => "unknown_action"})
 
       # Error should mention the issue
       assert message =~ "Unknown action" or message =~ "unknown_action"
@@ -531,7 +531,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       }
 
       # Should not crash the registry
-      result = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+      result = Catalog.call_external("system", ctx, %{"action" => "status"})
 
       # Might succeed or fail gracefully depending on provider
       assert match?({:ok, _}, result) or match?({:error, _}, result)
@@ -545,10 +545,10 @@ defmodule Emissary.MCP.ToolRegistryTest do
           Task.async(fn ->
             if rem(i, 2) == 0 do
               # Even: valid call
-              ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+              Catalog.call_external("system", ctx, %{"action" => "status"})
             else
               # Odd: invalid call
-              ToolRegistry.call_external("system", ctx, %{"action" => "invalid_#{i}"})
+              Catalog.call_external("system", ctx, %{"action" => "invalid_#{i}"})
             end
           end)
         end
@@ -572,11 +572,11 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # Start a tool call
       task =
         Task.async(fn ->
-          ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+          Catalog.call_external("system", ctx, %{"action" => "status"})
         end)
 
       # While it's running, list_tools should still work
-      tools = ToolRegistry.list_tools()
+      tools = Catalog.list_tools()
       assert match?([_ | _], tools)
 
       # Original call should complete
@@ -591,28 +591,28 @@ defmodule Emissary.MCP.ToolRegistryTest do
       call_tasks =
         for _ <- 1..10 do
           Task.async(fn ->
-            ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+            Catalog.call_external("system", ctx, %{"action" => "status"})
           end)
         end
 
       list_tasks =
         for _ <- 1..10 do
           Task.async(fn ->
-            ToolRegistry.list_tools()
+            Catalog.list_tools()
           end)
         end
 
       get_tasks =
         for _ <- 1..10 do
           Task.async(fn ->
-            ToolRegistry.get_tool("system")
+            Catalog.get_tool("system")
           end)
         end
 
       exists_tasks =
         for _ <- 1..10 do
           Task.async(fn ->
-            ToolRegistry.exists?("system")
+            Catalog.exists?("system")
           end)
         end
 
@@ -643,32 +643,32 @@ defmodule Emissary.MCP.ToolRegistryTest do
     test "prunes to actions whose planes include :in_chain" do
       defs = [tool_def("mixed", %{"get" => [:external, :in_chain], "set" => [:external]})]
 
-      [pruned] = Emissary.MCP.ToolRegistry.in_chain_view(defs)
+      [pruned] = Cyfr.Ops.Catalog.in_chain_view(defs)
       assert get_in(pruned, ["inputSchema", "properties", "action", "enum"]) == ["get"]
     end
 
     test "drops a tool with no in-chain actions" do
       defs = [tool_def("external_only", %{"plan" => [:external], "commit" => [:external]})]
 
-      assert Emissary.MCP.ToolRegistry.in_chain_view(defs) == []
+      assert Cyfr.Ops.Catalog.in_chain_view(defs) == []
     end
 
     test "keeps a fully in-chain tool untouched" do
       defs = [tool_def("chained", %{"run" => [:external, :in_chain]})]
 
-      assert Emissary.MCP.ToolRegistry.in_chain_view(defs) == defs
+      assert Cyfr.Ops.Catalog.in_chain_view(defs) == defs
     end
 
     test "proxied server:tool entries pass through whole" do
       defs = [%{"name" => "notion:create_page"}]
 
-      assert Emissary.MCP.ToolRegistry.in_chain_view(defs) == defs
+      assert Cyfr.Ops.Catalog.in_chain_view(defs) == defs
     end
 
     test "a tool without annotations fails closed" do
       defs = [%{"name" => "bare", "inputSchema" => %{}}]
 
-      assert Emissary.MCP.ToolRegistry.in_chain_view(defs) == []
+      assert Cyfr.Ops.Catalog.in_chain_view(defs) == []
     end
   end
 end

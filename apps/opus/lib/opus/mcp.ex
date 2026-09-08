@@ -18,7 +18,7 @@ defmodule Opus.MCP do
   via Wasmex (Wasmtime backend).
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Emissary.MCP.ToolRegistry.
+  which is validated at runtime by Cyfr.Ops.Catalog.
 
   ## Simplified Lifecycle
 
@@ -27,7 +27,7 @@ defmodule Opus.MCP do
       Develop in components/ → Register via `cyfr register` → Execute by name
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   def service, do: "opus"
 
@@ -659,7 +659,7 @@ defmodule Opus.MCP do
     # A typed refusal renders through the shared seam; an internal term is
     # logged, never reflected to the MCP client (`inspect/1` here was the
     # one place this module put Elixir terms on the wire).
-    case Emissary.MCP.ToolError.render(reason) do
+    case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[Opus.MCP] unrenderable authority error: #{inspect(reason)}")
         {:error, "authority_error: the request could not be authorized"}

@@ -179,7 +179,7 @@ defmodule Cyfr.DocsDriftTest do
   # Every action a provider annotates `auth: :anonymous` — the actions that
   # answer without a session, which is exactly what the table claims to list.
   defp anonymous_actions do
-    for provider <- Emissary.MCP.ToolRegistry.available_providers(),
+    for provider <- Cyfr.Ops.Catalog.available_providers(),
         tool <- provider.tools(),
         {action, meta} <- get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{},
         meta[:auth] == :anonymous,

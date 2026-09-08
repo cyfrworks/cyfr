@@ -17,7 +17,7 @@ defmodule Emissary.MCP.RegistryCacheRecoveryTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.ResourceRegistry
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
 
   # The registries wait on the sweeper's restart before rebuilding.
   defp wait_until(fun, remaining \\ 200)
@@ -34,7 +34,7 @@ defmodule Emissary.MCP.RegistryCacheRecoveryTest do
   end
 
   test "the tool catalogue survives losing the cache table with its owner" do
-    tools_before = ToolRegistry.list_tools()
+    tools_before = Catalog.list_tools()
     refute tools_before == [], "no tools registered — the fixture proves nothing"
 
     owner = Process.whereis(Arca.Cache.Sweeper)
@@ -47,13 +47,13 @@ defmodule Emissary.MCP.RegistryCacheRecoveryTest do
 
     assert wait_until(fn ->
              is_pid(Process.whereis(Arca.Cache.Sweeper)) and
-               ToolRegistry.list_tools() != []
+               Catalog.list_tools() != []
            end),
            "the tool catalogue stayed empty after the cache table was lost"
 
     # And the entries are usable, not just present.
-    name = ToolRegistry.list_tools() |> hd() |> Map.fetch!("name")
-    assert {:ok, _} = ToolRegistry.lookup(name)
+    name = Catalog.list_tools() |> hd() |> Map.fetch!("name")
+    assert {:ok, _} = Catalog.lookup(name)
   end
 
   test "the resource catalogue is rebuilt too" do

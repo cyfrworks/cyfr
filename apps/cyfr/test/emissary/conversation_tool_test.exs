@@ -9,7 +9,7 @@ defmodule Emissary.MCP.ConversationToolTest do
 
   alias Arca.ConversationStorage, as: Conversations
   alias Emissary.MCP.ConversationTool, as: Tool
-  alias Emissary.MCP.{ToolRegistry, ToolVisibility}
+  alias Cyfr.Ops.{Catalog, Visibility}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -37,7 +37,7 @@ defmodule Emissary.MCP.ConversationToolTest do
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
       assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               ToolRegistry.call_external("conversation", star, %{
+               Catalog.call_external("conversation", star, %{
                  "action" => "events",
                  "conversation" => conv.id
                })
@@ -45,7 +45,7 @@ defmodule Emissary.MCP.ConversationToolTest do
       scoped = %{ctx | auth_method: :api_key, api_key_type: :application}
 
       assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               ToolRegistry.call_external("conversation", scoped, %{
+               Catalog.call_external("conversation", scoped, %{
                  "action" => "send",
                  "conversation" => conv.id,
                  "message" => "hi"
@@ -57,10 +57,10 @@ defmodule Emissary.MCP.ConversationToolTest do
       # is not offered a door it cannot open.
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
-      shown = ToolVisibility.filter_for_context(ToolRegistry.list_tools(), star)
+      shown = Visibility.filter_for_context(Catalog.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "conversation"))
 
-      shown_oidc = ToolVisibility.filter_for_context(ToolRegistry.list_tools(), ctx)
+      shown_oidc = Visibility.filter_for_context(Catalog.list_tools(), ctx)
       assert Enum.any?(shown_oidc, &(&1["name"] == "conversation"))
     end
 
@@ -74,7 +74,7 @@ defmodule Emissary.MCP.ConversationToolTest do
       guest = Sanctum.Context.enter_guest(ctx)
 
       assert {:error, {:guest_plane_call, "conversation"}} =
-               ToolRegistry.call_external("conversation", guest, %{
+               Catalog.call_external("conversation", guest, %{
                  "action" => "events",
                  "conversation" => conv.id
                })

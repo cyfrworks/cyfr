@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ToolRegistry do
+defmodule Cyfr.Ops.Catalog do
   @moduledoc """
   Cache-backed registry for MCP tools.
 
@@ -13,7 +13,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
   ```
   ┌─────────────────────────────────────────────────────────────────┐
-  │  Emissary.MCP.ToolRegistry (GenServer)                          │
+  │  Cyfr.Ops.Catalog (GenServer)                          │
   │  ├── Arca.Cache keys: {:mcp_tool, name}                         │
   │  │   └── {:mcp_tool, "retention"} => {Emissary.MCP.Tools.RecordsProvider, %{desc, ...}}   │
   │  │   └── {:mcp_tool, "execution"} => {Opus.MCP, %{...}}        │
@@ -41,7 +41,7 @@ defmodule Emissary.MCP.ToolRegistry do
   use GenServer
   require Logger
 
-  alias Emissary.MCP.ActionAnnotations
+  alias Cyfr.Ops.Annotations
   alias Sanctum.Context
 
   # 24 hours
@@ -119,7 +119,7 @@ defmodule Emissary.MCP.ToolRegistry do
     if String.contains?(name, ":") do
       tool_def
     else
-      actions = ActionAnnotations.actions_of(tool_def)
+      actions = Annotations.actions_of(tool_def)
 
       reachable =
         for {action, %{planes: planes}} <- actions, :in_chain in planes, do: action
@@ -341,7 +341,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
       case lookup(name) do
         {:ok, {_module, meta}} ->
-          planes = ActionAnnotations.planes(meta, action)
+          planes = Annotations.planes(meta, action)
 
           if :in_chain in planes do
             :ok
@@ -395,7 +395,7 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   defp prune_to_granted(%{"name" => name} = tool_def, authority) do
-    actions = ActionAnnotations.actions_of(tool_def)
+    actions = Annotations.actions_of(tool_def)
 
     reachable =
       for {action, %{planes: planes}} <- actions,
@@ -483,7 +483,7 @@ defmodule Emissary.MCP.ToolRegistry do
            Sanctum.ToolServerDigest.descriptions_digest(tools, grant.tool_patterns) do
       unless Plug.Crypto.secure_compare(live, baseline) do
         Logger.warning(
-          "[ToolRegistry] tool descriptions for server '#{grant.server_name}' drifted " <>
+          "[Cyfr.Ops.Catalog] tool descriptions for server '#{grant.server_name}' drifted " <>
             "from their consent-time baseline — treat upstream descriptions as untrusted"
         )
 
@@ -509,7 +509,9 @@ defmodule Emissary.MCP.ToolRegistry do
       # `rescue` below is that a check which never runs must not read like
       # "no drift" — the same is true when the failure arrives as a value.
       {:error, reason} ->
-        Logger.warning("[ToolRegistry] description-drift check could not run: #{inspect(reason)}")
+        Logger.warning(
+          "[Cyfr.Ops.Catalog] description-drift check could not run: #{inspect(reason)}"
+        )
 
         :telemetry.execute(
           [:cyfr, :sanctum, :tool_server, :description_drift_check_failed],
@@ -526,7 +528,7 @@ defmodule Emissary.MCP.ToolRegistry do
     # check indistinguishable from "no drift".
     e ->
       Logger.warning(
-        "[ToolRegistry] description-drift check failed: " <>
+        "[Cyfr.Ops.Catalog] description-drift check failed: " <>
           Exception.format(:error, e, __STACKTRACE__)
       )
 
@@ -576,7 +578,7 @@ defmodule Emissary.MCP.ToolRegistry do
              Sanctum.Unauthorized.reason() | :action_missing | {:unknown_action, String.t()}}
   def authorize_annotated_action(name, meta, ctx, args, in_chain? \\ false) do
     action = args["action"] || args[:action]
-    annotation = ActionAnnotations.annotation(meta, action)
+    annotation = Annotations.annotation(meta, action)
 
     cond do
       is_nil(action) ->
@@ -610,7 +612,7 @@ defmodule Emissary.MCP.ToolRegistry do
   defp validate_against_schema(meta, args) do
     case Map.get(meta, :input_schema) do
       schema when is_map(schema) and map_size(schema) > 0 ->
-        case Emissary.MCP.InputValidator.validate(args, without_action_rules(schema)) do
+        case Cyfr.Ops.Contract.validate(args, without_action_rules(schema)) do
           :ok -> :ok
           {:error, message} -> {:error, {:invalid_argument, message}}
         end
@@ -624,7 +626,7 @@ defmodule Emissary.MCP.ToolRegistry do
   # as `:action_missing` and an unannotated one as `{:unknown_action, …}`,
   # and `ToolVisibility` prunes the enum per caller — so letting the schema
   # answer first would give one condition two vocabularies, which is the drift
-  # `Emissary.MCP.ToolError` exists to end. Neither case was the gap either:
+  # `Cyfr.Ops.Error` exists to end. Neither case was the gap either:
   # both were already refused before dispatch. What was NOT checked is every
   # other field, and that is what this validates.
   defp without_action_rules(schema) do
@@ -651,7 +653,7 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   defp check_auth(name, ctx, annotation) do
-    if Emissary.MCP.ToolVisibility.admits?(annotation, ctx) do
+    if Cyfr.Ops.Visibility.admits?(annotation, ctx) do
       :ok
     else
       {:error, {:tool_auth_required, name}}
@@ -847,7 +849,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
     # Strict read on purpose: the audit must reject exactly the spelling
     # the registry load would break on, not tolerate it.
-    actions_meta = ActionAnnotations.declared_actions(tool)
+    actions_meta = Annotations.declared_actions(tool)
 
     Enum.flat_map(enum, fn verb ->
       case audit_action(Map.get(actions_meta, verb)) do
@@ -897,7 +899,7 @@ defmodule Emissary.MCP.ToolRegistry do
   @doc """
   The planes an action may be annotated with.
   """
-  @spec valid_planes() :: [Emissary.MCP.ToolProvider.plane()]
+  @spec valid_planes() :: [Cyfr.Ops.Provider.plane()]
   def valid_planes, do: @valid_planes
 
   # ============================================================================
@@ -935,12 +937,13 @@ defmodule Emissary.MCP.ToolRegistry do
         lines = Enum.map(missing, &"  - #{&1.tool}.#{&1.action} (#{inspect(&1.provider)})")
 
         Logger.warning(
-          "[ToolRegistry] MCP tool actions missing :kind annotation:\n" <> Enum.join(lines, "\n")
+          "[Cyfr.Ops.Catalog] MCP tool actions missing :kind annotation:\n" <>
+            Enum.join(lines, "\n")
         )
     end
   rescue
     e ->
-      Logger.error("[ToolRegistry] action-kinds audit crashed: #{Exception.message(e)}")
+      Logger.error("[Cyfr.Ops.Catalog] action-kinds audit crashed: #{Exception.message(e)}")
       :ok
   end
 
@@ -1024,7 +1027,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
         {:exit, {exception, stacktrace}} when is_exception(exception) ->
           Logger.error(
-            "[ToolRegistry] Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}"
+            "[Cyfr.Ops.Catalog] Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}"
           )
 
           # The tuple carries only the tool's name — the exception's own
@@ -1036,11 +1039,11 @@ defmodule Emissary.MCP.ToolRegistry do
           {:error, {:exit, "Tool #{name} was cancelled"}}
 
         {:exit, reason} ->
-          Logger.error("[ToolRegistry] Tool #{name} exited: #{inspect(reason)}")
+          Logger.error("[Cyfr.Ops.Catalog] Tool #{name} exited: #{inspect(reason)}")
           {:error, {:exit, "Tool #{name} exited unexpectedly"}}
 
         nil ->
-          Logger.error("[ToolRegistry] Tool #{name} timed out after #{@tool_timeout_ms}ms")
+          Logger.error("[Cyfr.Ops.Catalog] Tool #{name} timed out after #{@tool_timeout_ms}ms")
           {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
       end
 
@@ -1079,7 +1082,7 @@ defmodule Emissary.MCP.ToolRegistry do
       end)
 
     Logger.info(
-      "[ToolRegistry] loaded #{length(tools)} tools from #{length(providers)} providers"
+      "[Cyfr.Ops.Catalog] loaded #{length(tools)} tools from #{length(providers)} providers"
     )
 
     length(tools)
@@ -1108,7 +1111,7 @@ defmodule Emissary.MCP.ToolRegistry do
         true
       else
         Logger.warning(
-          "[ToolRegistry] Tool provider #{inspect(module)} not available — skipping. " <>
+          "[Cyfr.Ops.Catalog] Tool provider #{inspect(module)} not available — skipping. " <>
             "Check that the application is started and the module exists."
         )
 

@@ -37,7 +37,7 @@ defmodule Emissary.MCP.NotesTool do
   annotation is the one source for every gate that honours it.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   alias Aqua.Notes
   alias Sanctum.Context
@@ -217,7 +217,7 @@ defmodule Emissary.MCP.NotesTool do
 
   # Where a note was kept from. In a chain the registry stamps the
   # execution and the conversation onto the call as host-only keys
-  # (`Emissary.MCP.ToolRegistry`'s lineage), and those are the only
+  # (`Cyfr.Ops.Catalog`'s lineage), and those are the only
   # provenance read there — a value the model put under `conversation` or
   # `execution` is ignored, never recorded. At the door a person says
   # what they choose to.

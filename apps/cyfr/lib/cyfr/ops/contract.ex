@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.InputValidator do
+defmodule Cyfr.Ops.Contract do
   @moduledoc """
   Validates MCP tool call arguments against the tool's declared JSON Schema.
 

@@ -16,8 +16,8 @@ defmodule Emissary.MCP.Router do
 
   The Router gates; the dispatcher authorizes. The Router answers only the
   coarse question — may an unauthenticated caller reach this tool action at
-  all? — by asking `Emissary.MCP.ToolVisibility`, which reads the action's
-  access annotation. `Emissary.MCP.ToolRegistry` then enforces the same
+  all? — by asking `Cyfr.Ops.Visibility`, which reads the action's
+  access annotation. `Cyfr.Ops.Catalog` then enforces the same
   annotation (`auth`, `permission`, `consent`) at dispatch, and handlers keep
   only the residual checks an annotation cannot express (tenant presence,
   ownership, definition authority, the domain's finer consent arms) — via
@@ -30,7 +30,7 @@ defmodule Emissary.MCP.Router do
 
   The anonymous surface — which tool actions a caller with no credential may
   reach — is the set of actions annotated `auth: :anonymous`, read through
-  `Emissary.MCP.ToolVisibility`, which also decides what such a caller may
+  `Cyfr.Ops.Visibility`, which also decides what such a caller may
   *see*. Discovery and invocation read one declaration: when each held its
   own list, discovery advertised writes that invocation refused.
 
@@ -48,8 +48,9 @@ defmodule Emissary.MCP.Router do
 
   require Logger
 
-  alias Emissary.MCP.{Message, Protocol, ToolRegistry, ResourceRegistry, InputValidator}
-  alias Emissary.MCP.ToolVisibility
+  alias Cyfr.Ops.{Catalog, Contract}
+  alias Emissary.MCP.{Message, Protocol, ResourceRegistry}
+  alias Cyfr.Ops.Visibility
 
   @server_capabilities %{
     # `listChanged: true` is a promise to actually push. It is true for tools
@@ -146,8 +147,8 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   defp dispatch_method(ctx, "tools/list", params, _id) do
-    ToolRegistry.list_tools()
-    |> Emissary.MCP.ToolVisibility.filter_for_context(ctx)
+    Catalog.list_tools()
+    |> Cyfr.Ops.Visibility.filter_for_context(ctx)
     |> paginate("tools", params)
   end
 
@@ -158,14 +159,14 @@ defmodule Emissary.MCP.Router do
       {:error, :invalid_params, "Missing required field: name"}
     else
       # Check tool existence first — unknown tools are protocol errors per spec
-      case ToolRegistry.get_tool(name) do
+      case Catalog.get_tool(name) do
         {:error, :not_found} ->
           {:error, :invalid_params, "Unknown tool: #{name}"}
 
         {:ok, tool_def} ->
           arguments = params["arguments"] || %{}
 
-          case InputValidator.validate(
+          case Contract.validate(
                  arguments,
                  tool_def["inputSchema"] || %{}
                ) do
@@ -175,14 +176,14 @@ defmodule Emissary.MCP.Router do
             :ok ->
               action = arguments["action"]
 
-              if not ToolVisibility.admits_action?(name, action, ctx) do
+              if not Visibility.admits_action?(name, action, ctx) do
                 # One prose (the CLI adds its own `cyfr login` hint off the
                 # :auth_required code, so the sentence needn't carry it).
                 {:error, :auth_required, Sanctum.Unauthorized.message(:unauthenticated)}
               else
                 has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
-                case ToolRegistry.call_external(name, ctx, arguments) do
+                case Catalog.call_external(name, ctx, arguments) do
                   {:ok, result} ->
                     text =
                       case Jason.encode(result) do
@@ -329,8 +330,8 @@ defmodule Emissary.MCP.Router do
             {:error, :internal_error, "Failed to read resource: the store could not answer"}
 
           # A typed tool refusal renders through its vocabulary.
-          Emissary.MCP.ToolError.reason?(reason) ->
-            {:error, :resource_not_found, Emissary.MCP.ToolError.message(reason)}
+          Cyfr.Ops.Error.reason?(reason) ->
+            {:error, :resource_not_found, Cyfr.Ops.Error.message(reason)}
 
           # A binary reason is a handler's crafted, client-safe diagnosis
           # ("Invalid URI format: …", "No provider found for scheme …").
@@ -352,16 +353,16 @@ defmodule Emissary.MCP.Router do
   # whoever called the tool. `inspect/1` on the catch-all made this the one
   # place in the module where they were reflected.
   # `{:timeout, _}`, `{:crashed, _}` and `{:exit, _}` used to be spelled out
-  # here; they are `Emissary.MCP.ToolError` reasons now, so the typed clause
+  # here; they are `Cyfr.Ops.Error` reasons now, so the typed clause
   # below renders them — and the console and the guest render them the same
   # way, which they did not while this was the only site that knew them.
   defp format_error_reason(reason) when is_binary(reason), do: reason
 
   defp format_error_reason(reason) do
-    # One renderer for every typed vocabulary (`Emissary.MCP.ToolError.render/1`
+    # One renderer for every typed vocabulary (`Cyfr.Ops.Error.render/1`
     # — Unauthorized, the tool reasons, OCI errors); `nil` means the term is
     # internal and must not be reflected.
-    case Emissary.MCP.ToolError.render(reason) do
+    case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
         "The tool call failed."

@@ -165,7 +165,7 @@ defmodule Sanctum.ProviderCredentialsTest do
       # wide — does not open an outbound-credential write.
       for ctx <- [narrow_ctx([:execute]), key_ctx()] do
         assert {:error, {:consent_class_required, _}} =
-                 Emissary.MCP.ToolRegistry.call_external("oauth", ctx, %{
+                 Cyfr.Ops.Catalog.call_external("oauth", ctx, %{
                    "action" => "set_client",
                    "provider" => "google",
                    "client_id" => "x"
