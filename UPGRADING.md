@@ -4,6 +4,25 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## Consent reads the catalog through a port; a provider that cannot load refuses the boot
+
+`Sanctum.Catalog` is the port a consent shape learns the servable
+`tool.action` pairs through, and `Cyfr.Ops.Catalog` its one
+implementation. A configured tool provider that cannot load is now a
+boot failure — a catalog missing a provider would narrow every consent
+digest derived from it — unless `config :cyfr, :tool_providers_lenient`
+is set, which only one app's own test run does.
+
+An external MCP server's consent identity is derived from its stored
+configuration at every read; the cached copy and its cache keys are
+gone, so a configuration change is its own invalidation.
+
+The `arca://files/{path}` resource opens the athanor's whole tree to a
+person (a session, or a key holding `:admin`); a key scoped to
+`:storage_read` alone reaches `conversations/` and `guest/` — what a
+conversation attached and what an agent could have written — and never
+the estate's components, its assistant tree or its notes.
+
 ## The operation catalog lives under `Cyfr.Ops`; the wire is one adapter
 
 The modules that define an operation — the provider behaviour, the

@@ -39,6 +39,8 @@ defmodule Cyfr.Ops.Catalog do
   """
 
   use GenServer
+
+  @behaviour Sanctum.Catalog
   require Logger
 
   alias Cyfr.Ops.Annotations
@@ -574,24 +576,16 @@ defmodule Cyfr.Ops.Catalog do
   defp warn_on_description_drift(_ctx, _authority, _resource), do: :ok
 
   # The consent identity of the named server, derived from its stored
-  # configuration at read (a stored digest is a cache someone forgets to
-  # recompute). A missing or unreadable server resolves to a sentinel no
-  # edge can name — fail closed, not fail absent.
+  # configuration at every read: the row is the one revision authorization
+  # and dispatch both see, and a cached digest is the copy someone forgets
+  # to drop when the row changes. A missing or unreadable server resolves
+  # to a sentinel no edge can name — fail closed, not fail absent.
   defp resolve_server_digest(ctx, server_name) do
-    cache_key = Arca.Cache.Keys.tool_server_digest(ctx.athanor_id, server_name)
-
-    case Arca.Cache.get(cache_key) do
-      {:ok, digest} ->
-        digest
-
-      :miss ->
-        with {:ok, server} <- Arca.McpServerStorage.get(ctx, server_name),
-             {:ok, digest} <- Sanctum.ToolServerDigest.from_server(server) do
-          Arca.Cache.put(cache_key, digest)
-          digest
-        else
-          _ -> "sha256:unresolved-server"
-        end
+    with {:ok, server} <- Arca.McpServerStorage.get(ctx, server_name),
+         {:ok, digest} <- Sanctum.ToolServerDigest.from_server(server) do
+      digest
+    else
+      _ -> "sha256:unresolved-server"
     end
   end
 
@@ -943,6 +937,25 @@ defmodule Cyfr.Ops.Catalog do
 
   @impl true
   def init(_opts) do
+    # A provider that cannot load is a boot failure, never a narrower
+    # catalog: every consent shape is digested against what is loaded, and
+    # a partial catalog would read as the whole. A run without the sibling
+    # apps (one app's tests) says so in config and boots leniently.
+    case providers_loaded() do
+      :ok ->
+        :ok
+
+      {:error, missing} ->
+        if Application.get_env(:cyfr, :tool_providers_lenient, false) do
+          Logger.warning(
+            "[Cyfr.Ops.Catalog] tool providers not loaded (lenient): #{inspect(missing)}"
+          )
+        else
+          raise "configured tool providers failed to load: #{inspect(missing)} — " <>
+                  "a catalog missing a provider narrows every consent digest; refusing to boot"
+        end
+    end
+
     # Load all configured providers into Arca.Cache
     load_providers()
     schedule_refresh()
@@ -1171,7 +1184,7 @@ defmodule Cyfr.Ops.Catalog do
   def available_providers do
     configured_providers()
     |> Enum.filter(fn module ->
-      if Code.ensure_loaded?(module) and function_exported?(module, :tools, 0) do
+      if loadable?(module) do
         true
       else
         Logger.warning(
@@ -1183,4 +1196,25 @@ defmodule Cyfr.Ops.Catalog do
       end
     end)
   end
+
+  @impl Sanctum.Catalog
+  def providers_loaded do
+    case Enum.reject(configured_providers(), &loadable?/1) do
+      [] -> :ok
+      missing -> {:error, missing}
+    end
+  end
+
+  # Every `tool.action` the loaded providers declare — what a consent
+  # shape may name (`Sanctum.Catalog`).
+  @impl Sanctum.Catalog
+  def tool_actions do
+    for module <- available_providers(),
+        tool <- module.tools(),
+        {action, _annotation} <- Annotations.actions_of(tool),
+        do: "#{tool.name}.#{action}"
+  end
+
+  defp loadable?(module),
+    do: Code.ensure_loaded?(module) and function_exported?(module, :tools, 0)
 end

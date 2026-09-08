@@ -170,10 +170,10 @@ defmodule Emissary.MCP.ExternalProvider do
   """
   @spec invalidate_external_tools_cache(Context.t()) :: :ok
   def invalidate_external_tools_cache(%Context{} = ctx) do
+    # The consent-matching digest of a server is never cached: it is
+    # derived from the row at every read, so a configuration change is
+    # its own invalidation.
     Arca.Cache.invalidate(Arca.Cache.Keys.external_tools(ctx.athanor_id))
-    # Config identity moved with the config — the consent-matching digests
-    # for this athanor's servers must be re-derived, not served stale.
-    Arca.Cache.delete_match(Arca.Cache.Keys.match_tool_server_digest(ctx.athanor_id))
   end
 
   defp fetch_external_tools(%Context{} = ctx) do

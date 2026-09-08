@@ -722,4 +722,41 @@ defmodule Cyfr.Ops.CatalogTest do
       assert Cyfr.Ops.Catalog.in_chain_view(defs) == []
     end
   end
+
+  describe "providers must load" do
+    setup do
+      original = Application.get_env(:cyfr, :tool_providers, [])
+      lenient = Application.get_env(:cyfr, :tool_providers_lenient)
+
+      on_exit(fn ->
+        Application.put_env(:cyfr, :tool_providers, original)
+
+        if is_nil(lenient),
+          do: Application.delete_env(:cyfr, :tool_providers_lenient),
+          else: Application.put_env(:cyfr, :tool_providers_lenient, lenient)
+      end)
+
+      {:ok, original: original}
+    end
+
+    test "a configured provider that cannot load is named, and refuses the boot unless lenient",
+         %{original: original} do
+      Application.put_env(
+        :cyfr,
+        :tool_providers,
+        original ++ [Cyfr.Ops.CatalogTest.NoSuchProvider]
+      )
+
+      assert {:error, [Cyfr.Ops.CatalogTest.NoSuchProvider]} = Catalog.providers_loaded()
+
+      Application.put_env(:cyfr, :tool_providers_lenient, false)
+
+      assert_raise RuntimeError, ~r/failed to load.*refusing to boot/, fn ->
+        Catalog.init([])
+      end
+
+      Application.put_env(:cyfr, :tool_providers_lenient, true)
+      assert {:ok, %{}, {:continue, :audit_action_kinds}} = Catalog.init([])
+    end
+  end
 end

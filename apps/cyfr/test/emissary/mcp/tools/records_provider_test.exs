@@ -136,6 +136,22 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
       assert {:error, :missing_tenant} = MCP.read(ctx, "arca://files/guest/x")
     end
+
+    # A person reads the athanor's whole tree; a key scoped to storage reads
+    # sees what an agent could have written or a conversation attached.
+    test "a key scoped to storage reads reaches guest/ and conversations/, a person everything",
+         %{ctx: ctx} do
+      :ok = Arca.put(ctx, ["guest", "reach.txt"], "g")
+      :ok = Arca.put(ctx, ["aqua", "reach.md"], "a")
+
+      key = %{ctx | permissions: MapSet.new([:storage_read]), auth_method: :api_key}
+
+      assert {:ok, _} = MCP.read(key, "arca://files/guest/reach.txt")
+      assert {:error, msg} = MCP.read(key, "arca://files/aqua/reach.md")
+      assert err_msg(msg) =~ "Forbidden path"
+
+      assert {:ok, _} = MCP.read(ctx, "arca://files/aqua/reach.md")
+    end
   end
 
   # ============================================================================

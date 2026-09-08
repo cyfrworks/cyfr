@@ -108,6 +108,10 @@ config :cyfr, private_egress_targets: ["localhost", "127.0.0.1/8", "::1"]
 # the override. See Sanctum.Tenancy "Test overrides".
 config :cyfr, allow_tenancy_resolver_override: true
 
+# One app's tests run without the sibling apps' providers; the catalog
+# boots leniently here and refuses to elsewhere.
+config :cyfr, tool_providers_lenient: true
+
 # Don't run the background retention sweeper in the test supervision tree —
 # its periodic DB cleanup conflicts with the Ecto sandbox connection lifecycle.
 # Retention logic is exercised directly in Cyfr.RetentionTest / scheduler unit tests.

@@ -15,13 +15,15 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   data retention policies (get, set, cleanup).
 
   The `arca://files/{path}` resource is read-only (MCP resources have no
-  write operation) and deliberately un-scoped within the athanor:
-  `:storage_read` means the athanor's WHOLE tree — every scope in
-  `Arca.Storage.tenant_roots/0`, attachment blobs included. The athanor is
-  its members' own machine; the boundaries that matter are tenant and
-  platform, not intra-athanor compartments. Conversation transcripts are
-  rows, never reachable here, and an unknown first segment is a typed
-  refusal at the Arca gate.
+  write operation). A person — a session, or a key holding `:admin` —
+  reads the athanor's whole tree, every scope in
+  `Arca.Storage.tenant_roots/0`, attachment blobs included: the athanor is
+  its members' own machine. A narrower credential, a key scoped to
+  `:storage_read` alone, reaches `conversations/` and `guest/` — what a
+  conversation attached and what an agent could have written — and never
+  the estate's components, its assistant tree or its notes. Conversation
+  transcripts are rows, never reachable here, and an unknown first
+  segment is a typed refusal at the Arca gate.
 
   ## Retention Tool
 
@@ -80,9 +82,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         uriTemplate: "arca://files/{path}",
         name: "Arca Files",
         description:
-          "Read any file in the athanor's storage by path (" <>
+          "Read a file in the athanor's storage by path. A person reads every root (" <>
             Enum.map_join(Arca.Storage.tenant_roots(), ", ", &(&1 <> "/")) <>
-            ") — :storage_read spans the whole tree",
+            "); a key scoped to :storage_read reaches conversations/ and guest/",
         mimeType: Cyfr.MediaType.binary()
       }
     ]
@@ -110,7 +112,8 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     with :ok <- Context.require_permission(ctx, :storage_read),
          :ok <- Context.tenant_ok(ctx),
          :ok <- storage_ctx_gate(ctx),
-         :ok <- validate_segments(segments) do
+         :ok <- validate_segments(segments),
+         :ok <- within_reach(ctx, segments) do
       case Arca.get(ctx, segments) do
         {:ok, content} ->
           {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
@@ -131,6 +134,20 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   def read(_ctx, uri) do
     {:error, "Unknown resource URI: #{uri}"}
   end
+
+  # What `:storage_read` opens through this resource: the whole tree for a
+  # person (`:admin` — a session holds every permission), and for a
+  # narrower key only the roots an agent or a conversation could have
+  # filled.
+  @key_reach ["conversations", "guest"]
+
+  defp within_reach(ctx, [root | _]) do
+    if Context.has_permission?(ctx, :admin) or root in @key_reach,
+      do: :ok,
+      else: {:error, {:invalid_argument, "Forbidden path: #{root}"}}
+  end
+
+  defp within_reach(_ctx, []), do: :ok
 
   # `tenant_gate/1` exempts platform scope; blob reads are tenant-relative,
   # so a platform context must still carry the athanor whose files it reads.

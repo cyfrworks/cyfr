@@ -65,11 +65,13 @@ defmodule Cyfr.SanctumSurfacesTest do
     # run. `Sanctum.Cipher.Rotation` had no caller outside its own tests, so
     # the release task is what makes the warning actionable.
     # `lib/cyfr/ops` is the operation catalog: the annotation gate reads
-    # consent classes and chain authority, and the error vocabulary
-    # renders the authorization refusals.
+    # consent classes and chain authority, the error vocabulary renders
+    # the authorization refusals, and the catalog implements the port
+    # consent reads it through (`Sanctum.Catalog`).
     "cyfr" => ~w(
-      Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Cidr Sanctum.Cipher
-      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth
+      Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cidr
+      Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
+      Sanctum.OAuth
       Sanctum.Provisioning Sanctum.ProvisioningSupervisor Sanctum.PubSub
       Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy Sanctum.ToolServerDigest
       Sanctum.Unauthorized Sanctum.UnauthorizedError

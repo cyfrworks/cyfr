@@ -37,6 +37,8 @@ defmodule Cyfr.ConfigKeyRosterTest do
     # Test seams — see `Sanctum.Auth.DeviceFlow.impl/0` for the rule.
     allow_tenancy_resolver_override: :seam,
     tenancy_resolver_override: :seam,
+    catalog: :seam,
+    tool_providers_lenient: :seam,
     aqua_turn: :seam,
     conversation_recovery: :seam,
     device_flow: :seam,
