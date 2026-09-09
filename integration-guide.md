@@ -984,9 +984,9 @@ Tinctures are frontend components served by CYFR at dedicated routes. Unlike WAS
 Served inside the Prism shell at `/t/:athanor/:publisher/:tincture_name`. Requires Prism session authentication (same as the dashboard).
 
 ```
-GET /t/home/local/stock-dashboard           → index.html
-GET /t/home/local/stock-dashboard/app.js    → static asset
-GET /t/home/local/stock-dashboard/style.css → static asset
+GET /t/@alice/local/stock-dashboard           → index.html
+GET /t/@alice/local/stock-dashboard/app.js    → static asset
+GET /t/@alice/local/stock-dashboard/style.css → static asset
 ```
 
 ### Public (Unauthenticated)
@@ -994,8 +994,8 @@ GET /t/home/local/stock-dashboard/style.css → static asset
 Public tinctures use the same `/t/` path — no authentication needed. A tincture is public when it has an active public consent profile: publish one with `profile.publish`, revoke it with `profile.revoke`, and read the current answer with `tincture_visibility.get`.
 
 ```
-GET /t/home/local/stock-dashboard              → index.html (no auth needed if public)
-GET /t/home/local/stock-dashboard/app.js       → static asset
+GET /t/@alice/local/stock-dashboard              → index.html (no auth needed if public)
+GET /t/@alice/local/stock-dashboard/app.js       → static asset
 ```
 
 ### Security Headers
@@ -1069,13 +1069,13 @@ A typical live-data pipeline:
 
 ### Platform admins
 
-CYFR is one product: deploy it as-is (sqlite, local FS, the seeded Home
-athanor) or configure OIDC / Postgres / a custom registry. There is no separate
-"edition" or "mode".
+CYFR is one product: deploy it as-is (sqlite, local FS) or configure OIDC /
+Postgres / a custom registry. There is no separate "edition" or "mode".
 
 Once authentication is configured, two lists do two jobs. `CYFR_PLATFORM_ADMIN_EMAILS`
-names the server's operators (platform admins): always let in, seated in the
-Home group, and able to run the operator verbs (`door.*`, `execution.force_release`)
+names the server's operators (platform admins): always let in, minted their
+own athanor past the server caps, and able to run the operator verbs
+(`door.*`, `execution.force_release`)
 — but working inside one athanor at a time like everyone else; there is no
 cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
 <email|user_id|*>`, `cyfr admin deny …`, or the Settings page) is who else may

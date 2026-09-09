@@ -116,7 +116,7 @@ defmodule PrismWeb.ActiveContext do
 
   # The route is the page within the athanor: `/a/<athanor>` is focus, not
   # place, and is stripped so the agent sees `/activities`, not
-  # `/a/home/activities`.
+  # `/a/@alice/activities`.
   defp route_from_uri(uri) when is_binary(uri) do
     case URI.parse(uri) do
       %URI{path: path} when is_binary(path) -> strip_focus(path)

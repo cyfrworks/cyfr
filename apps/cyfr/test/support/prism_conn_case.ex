@@ -112,15 +112,20 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  Sign `user` in: claim their namespace (unless `claim: false`), give them a
-  membership in Home (or `opts[:athanor_id]`), create a `Sanctum.Session`,
-  and put the token in the Plug session. Returns the conn.
+  Sign `user` in: claim their namespace (unless `claim: false`), seat them in
+  their own athanor (or `opts[:athanor_id]`), create a `Sanctum.Session`, and
+  put the token in the Plug session. Returns the conn.
+
+  The seat is the person's own estate, as it is in production — no estate is
+  shared server-wide, so two signed-in test users are strangers to each other
+  unless a test seats them together. The estate is remembered for this test
+  process so `athanor_path/2` and `mount_athanor/3` name the same one.
   """
   def log_in_user(conn, user, opts \\ []) do
     if Keyword.get(opts, :claim, true), do: claim_namespace!(user)
 
-    athanor_id =
-      Keyword.get_lazy(opts, :athanor_id, fn -> Sanctum.Tenancy.Athanors.home!().id end)
+    athanor_id = Keyword.get_lazy(opts, :athanor_id, fn -> own_athanor!(user).id end)
+    Process.put(:prism_test_athanor_id, athanor_id)
 
     {:ok, _membership} =
       Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: athanor_id)
@@ -143,6 +148,44 @@ defmodule PrismWeb.ConnCase do
     Plug.Test.init_test_session(conn, %{@session_key => session.token})
   end
 
+  # The person's own athanor, minted the way admission does: one per owner,
+  # slugged from their namespace. Idempotent, so repeated sign-ins in one
+  # test reuse it.
+  defp own_athanor!(user) do
+    case Sanctum.Tenancy.Athanors.get_by_owner(user.user_id) do
+      {:ok, athanor} ->
+        athanor
+
+      {:error, :not_found} ->
+        name = user[:namespace] || user.user_id
+        {:ok, slug} = Sanctum.Tenancy.Athanors.person_slug(user[:namespace], name)
+
+        {:ok, athanor} =
+          Sanctum.Tenancy.Athanors.create(%{
+            kind: "person",
+            name: name,
+            slug: slug,
+            owner_user_id: user.user_id,
+            created_by: user.user_id
+          })
+
+        athanor
+    end
+  end
+
+  @doc """
+  The athanor `log_in_user/3` seated this test's person in — the estate the
+  page helpers name by default.
+  """
+  def seated_athanor do
+    id =
+      Process.get(:prism_test_athanor_id) ||
+        raise "no athanor in focus — call log_in_user/3 first, or pass one explicitly"
+
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(id)
+    athanor
+  end
+
   @doc """
   Mount `path` as an authenticated LiveView, asserting the mount succeeded.
   Returns `{view, html}`. A macro because `live/2` needs the caller's
@@ -156,22 +199,29 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  The page path for an athanor: `/a/<route>` + `suffix`. Defaults to Home,
-  where `log_in_user/3` seats the person. The empty suffix is the athanor's
-  chat, which lives in the chat zone (`/chat?a=<route>`).
+  The page path for an athanor: `/a/<route>` + `suffix`. Takes an athanor, a
+  route string (for a test that names one without seating anybody), or
+  nothing — which is the estate `log_in_user/3` seated this test's person
+  in. The empty suffix is the athanor's chat, which lives in the chat zone
+  (`/chat?a=<route>`).
   """
-  def athanor_path(suffix, athanor \\ nil) do
-    athanor = athanor || Sanctum.Tenancy.Athanors.home!()
+  def athanor_path(suffix, athanor \\ nil)
 
+  def athanor_path(suffix, nil), do: athanor_path(suffix, seated_athanor())
+
+  def athanor_path(suffix, route) when is_binary(route) do
     case suffix do
-      "" -> PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor))
-      "?c=" <> id -> PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), id)
-      _ -> PrismWeb.Focus.path(athanor, suffix)
+      "" -> PrismWeb.ChatLive.chat_path(route)
+      "?c=" <> id -> PrismWeb.ChatLive.chat_path(route, id)
+      _ -> PrismWeb.Focus.path(route, suffix)
     end
   end
 
+  def athanor_path(suffix, athanor),
+    do: athanor_path(suffix, Sanctum.Tenancy.Athanors.route_slug(athanor))
+
   @doc """
-  Mount `suffix` under the athanor in focus (Home by default); returns
+  Mount `suffix` under the athanor in focus (the seated one by default); returns
   `{view, html}` where `html` is the settled page — rendered after the
   paint-then-load views' `:load` message has been served.
   """

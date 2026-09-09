@@ -45,7 +45,7 @@ defmodule Sanctum.SignInTest do
     assert DateTime.compare(again.last_seen_at, first) in [:gt, :eq]
   end
 
-  test "an operator gets the platform row and a seat in Home, minted once and audited once" do
+  test "an operator gets the platform row, minted once and audited once" do
     handler = "signin-test-#{System.unique_integer([:positive])}"
     parent = self()
 
@@ -65,13 +65,12 @@ defmodule Sanctum.SignInTest do
 
     rows = rows!(Members.list_by_user(user.id))
     assert Enum.any?(rows, &(&1.scope == "platform"))
-    home = Athanors.home!()
-    assert Enum.any?(rows, &(&1.scope == "athanor" and &1.athanor_id == home.id))
 
     assert {:ok, _} = SignIn.admitted(i, :admin)
     refute_receive {:bootstrap, _}
-    # the platform row, the Home seat, and the seat in their own athanor
-    assert length(rows!(Members.list_by_user(user.id))) == 3
+    # the platform row and the seat in their own athanor, and nothing else:
+    # no estate is shared server-wide for an operator to be seated in
+    assert length(rows!(Members.list_by_user(user.id))) == 2
   end
 
   test "an email dropped from the operator list loses the platform row on the next sign-in" do
@@ -81,7 +80,7 @@ defmodule Sanctum.SignInTest do
 
     assert {:ok, _} = SignIn.admitted(i, :allowed)
     refute Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "platform"))
-    # the Home seat is an ordinary membership and stays
+    # their own athanor is theirs whatever the operator list says
     assert Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "athanor"))
   end
 

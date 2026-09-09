@@ -422,7 +422,7 @@ jobs:
             fi
           done
           if grep -nE 'add :athanor_id.*default:' apps/cyfr/priv/repo/migrations/*.exs; then
-            echo "::error::athanor_id column with a default — a forgotten athanor must fail, not land in Home"; fail=1
+            echo "::error::athanor_id column with a default — a forgotten athanor must fail, never default into somebody's"; fail=1
           fi
           if [ "$(grep -c 'COALESCE(athanor_id' "$m")" -ne 1 ]; then
             echo "::error::expected exactly one COALESCE(athanor_id (the membership assignment index)"; fail=1

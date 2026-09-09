@@ -411,8 +411,7 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc """
   Remove a person from an athanor (or a pending invite by email). The last
-  active member leaving a group archives it — Home included, and Home never
-  comes back (`Sanctum.Tenancy.Athanors.ensure_home/0` mints its successor).
+  active member leaving a group archives it.
   The owner of a person's athanor is that athanor's one member and is never
   removed — deny at the door is the only way out of one's own furnace.
 
@@ -600,13 +599,12 @@ defmodule Sanctum.Tenancy.Members do
   Whether two people currently sit together in at least one ACTIVE estate.
 
   The DM reachability rule: a pair can be minted only with someone already
-  in a room with you. Home is not a directory (its members are the
-  operators), so this is what keeps `athanor.pair` from being one — a user
-  id you cannot see on any members list is a user id you cannot pair with,
-  and probing one answers exactly what probing an unknown one does. Home
-  is deliberately NOT excluded from the query: operators sit together in
-  Home and may DM each other through it — but a deployment that seats
-  ordinary users in Home has thereby made everyone mutually reachable.
+  in a room with you. This is what keeps `athanor.pair` from being a
+  directory — a user id you cannot see on any members list is a user id you
+  cannot pair with, and probing one answers exactly what probing an unknown
+  one does. No estate is shared server-wide, so two people who belong to no
+  group together cannot reach each other at all; operators are no exception
+  and add each other to a group to talk.
 
   Active memberships in active athanors only: an invitation is not a seat,
   and an archived room is not a room. Fails toward "no", like `solo?/1` —

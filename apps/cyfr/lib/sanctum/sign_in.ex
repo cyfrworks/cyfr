@@ -7,9 +7,8 @@ defmodule Sanctum.SignIn do
   never per request.
 
   `admitted/2`: the person's `users` row is written or refreshed; an
-  operator (verdict `:admin`) gets the platform-admin membership and a seat
-  in Home, and a person the env list no longer names loses the platform
-  row; every `invited` group row for the person's verified email becomes
+  operator (verdict `:admin`) gets the platform-admin membership, and a
+  person the env list no longer names loses it; every `invited` group row for the person's verified email becomes
   their active membership; and the person's own athanor is minted and
   provisioned (`Sanctum.Provisioning.after_sign_in/1`). Admission is
   personhood: nothing here waits on a registry.
@@ -35,7 +34,7 @@ defmodule Sanctum.SignIn do
   alias Arca.Schemas.User
   alias Compendium.Registry.CredentialStore
   alias Sanctum.Slug
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Members, Users}
 
   @typedoc """
   What a sign-in reports. The person always proceeds; `unsynced` names
@@ -312,11 +311,9 @@ defmodule Sanctum.SignIn do
   defp or_user({:ok, user}, _fallback), do: {:ok, user}
   defp or_user(_, fallback), do: {:ok, fallback}
 
-  # An operator's first sign-in mints the platform row and a seat in Home:
-  # the out-of-the-box install is one admin with two athanors, Home and
-  # their own. Removing an email from CYFR_PLATFORM_ADMIN_EMAILS revokes the
-  # platform row on the next sign-in; the Home seat is an ordinary membership
-  # and stays.
+  # An operator's first sign-in mints the platform row: the out-of-the-box
+  # install is one admin with one athanor, their own. Removing an email from
+  # CYFR_PLATFORM_ADMIN_EMAILS revokes the platform row on the next sign-in.
   defp apply_platform(user_id, :admin) do
     already? = platform_admin?(user_id)
 
@@ -329,7 +326,7 @@ defmodule Sanctum.SignIn do
           Members.broadcast_change(user_id, nil, :platform_granted)
         end
 
-        seat_in_home(user_id)
+        :ok
 
       {:error, reason} ->
         Logger.error(
@@ -354,23 +351,6 @@ defmodule Sanctum.SignIn do
           user_id: user_id
         })
 
-        :ok
-    end
-  end
-
-  # A sign-in must not 500 on a broken install: no Home means no seat, loudly.
-  # When the last Home was retired by its final member leaving, the operator's
-  # sign-in mints its successor — the server always has one to seat them in.
-  defp seat_in_home(user_id) do
-    with {:ok, home} <- Athanors.ensure_home(),
-         {:ok, _} <-
-           Members.ensure(user_id, scope: "athanor", athanor_id: home.id, added_by: "system") do
-      # Home is provisioned at boot; an operator's sign-in retries a boot
-      # that could not reach the registry, with their credential.
-      Sanctum.Provisioning.retry_home_async(user_id)
-    else
-      {:error, reason} ->
-        Logger.error("[Sanctum.SignIn] Home seat failed: #{inspect(reason)}")
         :ok
     end
   end

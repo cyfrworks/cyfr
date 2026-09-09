@@ -92,7 +92,7 @@ open http://localhost:4000
 
 ## Prism — the web face
 
-**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your conversation with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an estate with one person in it answers every message, and any room with two or more — Home included — answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own estate that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen estate minted by clicking a person in the chat rail (anyone you share an estate with is there; it ends when either person leaves — clicking again starts a new, empty one), following a topic decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
+**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your conversation with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an estate with one person in it answers every message, and any room with two or more answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own estate that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen estate minted by clicking a person in the chat rail (anyone you share an estate with is there; it ends when either person leaves — clicking again starts a new, empty one), following a topic decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
 Around the chat:
 
@@ -129,7 +129,7 @@ your-project/
     ├── cache/              # Immutable cached artifacts (OCI blobs)
     ├── system/             # Server-internal scratch (health probes)
     ├── mcp-bridge/         # The mcp-bridge sidecar's own files (not managed by cyfr)
-    └── athanors/           # One tree per athanor — Home, then each person's and group's
+    └── athanors/           # One tree per athanor — each person's and each group's
         └── <athanor id>/
             ├── components/ # {type}s/{publisher}/{name}/{version}/
             │   ├── catalysts/   # local: files, http · moonmoon69: claude, openai, gemini, …
@@ -236,9 +236,9 @@ cyfr new tincture stock-dashboard --template react
 cyfr build compile t:local.stock-dashboard:0.1.0
 
 # Open it in Prism (the athanor in focus is in the URL)
-open http://localhost:4000/a/home/tinctures
+open http://localhost:4000/a/@alice/tinctures
 
-# Make it publicly reachable at /t/home/local/stock-dashboard
+# Make it publicly reachable at /t/@alice/local/stock-dashboard
 cyfr tincture visibility set local stock-dashboard true
 ```
 

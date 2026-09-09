@@ -3,14 +3,13 @@
 
 defmodule Cyfr.Bootstrap do
   @moduledoc """
-  One-shot boot task: make sure the server's Home athanor is provisioned.
+  One-shot boot task: reconcile the operator list, and offer new seed media
+  to the estates that already exist.
 
-  Home is seeded by the baseline migration as a bare row; this task fills it
-  (`Sanctum.Provisioning.provision/2`, as the server — the registry pull is
-  anonymous) the first time the server boots. When the last Home was retired
-  by its final member leaving, `ensure_home/0` mints its successor here. A
-  failure is logged, never fatal — the app keeps serving, the operator's
-  first sign-in retries, and so does the next boot.
+  No athanor is created here. A person's estate is minted at the door and
+  filled on first need (`Sanctum.Provisioning`), so a server with nobody on
+  it provisions nothing and reaches no registry. A failure is logged, never
+  fatal — the app keeps serving and the next boot tries again.
 
   Disabled by `config :cyfr, provisioning_boot_enabled: false` (the test
   environment, where a boot-time write would precede any sandbox checkout).
@@ -18,19 +17,19 @@ defmodule Cyfr.Bootstrap do
   ## Boot ordering
 
   This is the last child of the infra tier. The root supervisor starts
-  `[infra, web]` in order, so provisioning and platform-admin reconciliation
-  finish before the endpoint accepts requests.
+  `[infra, web]` in order, so the operator reconcile finishes before the
+  endpoint accepts requests: a de-listed operator's live session must not
+  outlive the boot that dropped their email.
 
   Work runs synchronously in `init/1`, which returns `:ignore` without
-  leaving a supervised process. Provisioning failures are logged and
-  remain non-fatal.
+  leaving a supervised process. Failures are logged and remain non-fatal.
   """
 
   use GenServer, restart: :temporary
   require Logger
   require Arca.Repo.Errors
 
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Members, Users}
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, :ok)
@@ -46,7 +45,7 @@ defmodule Cyfr.Bootstrap do
     # Log bootstrap failures without preventing the application from serving.
     e ->
       Logger.error(
-        "[Cyfr.Bootstrap] boot provisioning raised: " <>
+        "[Cyfr.Bootstrap] boot task raised: " <>
           Exception.format(:error, e, __STACKTRACE__)
       )
 
@@ -57,7 +56,6 @@ defmodule Cyfr.Bootstrap do
   def run do
     if Application.get_env(:cyfr, :provisioning_boot_enabled, true) do
       reconcile_platform_admins()
-      ensure_home_seeded()
       sync_seed_media()
     end
 
@@ -114,31 +112,5 @@ defmodule Cyfr.Bootstrap do
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Cyfr.Bootstrap] platform reconcile raised: #{Exception.message(e)}")
       :ok
-  end
-
-  defp ensure_home_seeded do
-    case Athanors.ensure_home() do
-      {:ok, %{provisioned_at: nil} = home} ->
-        case Sanctum.Provisioning.provision(home, nil) do
-          {:ok, _} ->
-            Logger.info("[Cyfr.Bootstrap] Home athanor #{home.id} provisioned")
-
-          {:error, reason} ->
-            Logger.error(
-              "[Cyfr.Bootstrap] Home athanor #{home.id} not provisioned: #{inspect(reason)}"
-            )
-        end
-
-      {:ok, _already_provisioned} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error("[Cyfr.Bootstrap] Home seeding skipped: #{inspect(reason)}")
-    end
-  rescue
-    # Same shape as the reconcile above: a database outage logs and lets
-    # the rest of boot proceed; a bug crashes loudly.
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Cyfr.Bootstrap] Home seeding raised: #{Exception.message(e)}")
   end
 end

@@ -47,10 +47,12 @@ defmodule PrismWeb.ComponentsLiveTest do
 
     # The scan mints the bundled row through the overlay union — no bytes
     # move — inside the athanor the view will mount.
-    home = Sanctum.Tenancy.Athanors.home!()
-
     ctx =
-      Sanctum.internal_context(user_id: "_test", athanor_id: home.id, scope: :athanor)
+      Sanctum.internal_context(
+        user_id: "_test",
+        athanor_id: seated_athanor().id,
+        scope: :athanor
+      )
 
     # The suite's storage root is shared across tests while the DB rows
     # roll back — an edit one test materializes must not leak into the

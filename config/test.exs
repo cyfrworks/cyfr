@@ -111,8 +111,9 @@ config :cyfr, external_server_reconciler_enabled: false
 # stays within the owning test's sandbox lifetime.
 config :cyfr, cron_scheduler_enabled: false
 
-# Boot-time Home provisioning writes rows before any test's sandbox
-# checkout — provisioning is exercised directly by its own tests.
+# The boot task writes rows (the operator reconcile, the seed sync) before
+# any test's sandbox checkout — both are exercised directly by their own
+# tests.
 config :cyfr, provisioning_boot_enabled: false
 
 # Likewise the conversation-runner boot recovery reads the repo before any

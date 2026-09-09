@@ -98,18 +98,22 @@ defmodule Sanctum.TinctureAuthTest do
     test "a person without a namespace authenticates like anyone else, athanor-scoped", %{
       ctx: ctx
     } do
-      home = Sanctum.Tenancy.Athanors.home!()
+      {:ok, estate} =
+        Sanctum.Tenancy.Athanors.create_group(
+          ctx.user_id,
+          "Tincture #{System.unique_integer([:positive])}"
+        )
 
       {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: home.id)
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: estate.id)
 
-      {:ok, session} = Sanctum.Session.create(%{ctx | namespace: nil, athanor_id: home.id})
+      {:ok, session} = Sanctum.Session.create(%{ctx | namespace: nil, athanor_id: estate.id})
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(session.token))
       assert out.scope == :athanor
       assert out.authenticated
       assert out.namespace == nil
-      assert out.athanor_id == home.id
+      assert out.athanor_id == estate.id
     end
   end
 

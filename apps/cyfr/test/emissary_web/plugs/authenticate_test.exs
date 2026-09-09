@@ -468,7 +468,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       {:ok, _} =
         Sanctum.Tenancy.Members.ensure(ctx.user_id,
           scope: "athanor",
-          athanor_id: Sanctum.Tenancy.Athanors.home!().id
+          athanor_id: ctx.athanor_id
         )
 
       {:ok, session} = Sanctum.Session.create(ctx)

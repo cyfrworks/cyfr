@@ -183,16 +183,8 @@ defmodule PrismWeb.MembersLive do
   end
 
   # What leaving actually does, said before it happens: the last member out
-  # archives the group, and Home is retired for the record — the server
-  # starts a new one rather than reopening it.
-  defp leave_confirm(%{home: true}, members) do
-    if last_active?(members),
-      do:
-        "You are the last member. Leaving retires Home for the record — " <>
-          "the server starts a new one. Continue?",
-      else: "Leave Home? The others keep it."
-  end
-
+  # archives the group.
+  #
   # A frozen pair ends when ANYONE leaves — and a later click mints a new,
   # empty tape. Said before it happens, because people will read it as
   # data loss otherwise: it is, and it is deliberate.

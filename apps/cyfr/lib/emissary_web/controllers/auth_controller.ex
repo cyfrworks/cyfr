@@ -359,11 +359,9 @@ defmodule EmissaryWeb.AuthController do
     # from admission on they are named by their own id.
     with {:ok, verdict} <- Sanctum.Door.admit_identity(ctx.user_id, user_info),
          {:ok, user} <- Sanctum.SignIn.admitted(user_info, verdict) do
-      # No re-resolve here. An operator's first sign-in seats them in Home a
-      # moment before their own athanor exists, and an athanor pinned to the
-      # context now is the one every later resolve keeps — they would land in
-      # Home rather than their own chat. The callback resolves once the
-      # mint has happened.
+      # The context is renamed to the person's own id and nothing else: an
+      # athanor pinned here is the one every later resolve keeps, and the
+      # mint is what decides which. The callback resolves after it.
       {:ok, %{ctx | user_id: user.id}, user}
     end
   end

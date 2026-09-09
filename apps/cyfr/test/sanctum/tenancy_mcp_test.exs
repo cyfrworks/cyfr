@@ -23,7 +23,7 @@ defmodule Sanctum.TenancyMCPTest do
   - An archived athanor is a hard stop on every path except the reads and
     `unarchive` that ask for it by name.
   - A person's own athanor takes no members, gives none up, and cannot be
-    left; Home is never archived.
+    left.
   - The person-only verbs refuse an API key with a sentence, before doing
     anything.
   """
@@ -39,6 +39,7 @@ defmodule Sanctum.TenancyMCPTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     user = "github|https://github.com|tenancy_#{System.unique_integer([:positive])}"
+    {:ok, estate} = Athanors.create_group(user, "Tenancy #{System.unique_integer([:positive])}")
 
     ctx =
       Sanctum.Context.build(
@@ -46,16 +47,16 @@ defmodule Sanctum.TenancyMCPTest do
         email: "#{System.unique_integer([:positive])}@example.com",
         provider: "github",
         namespace: "tenancyns",
-        athanor_id: Athanors.home!().id,
+        athanor_id: estate.id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )
 
-    {:ok, _} = Members.ensure(user, scope: "athanor", athanor_id: Athanors.home!().id)
+    {:ok, _} = Members.ensure(user, scope: "athanor", athanor_id: estate.id)
 
-    {:ok, ctx: ctx, user: user}
+    {:ok, ctx: ctx, user: user, estate: estate}
   end
 
   defp group!(ctx, name \\ nil) do
@@ -143,18 +144,6 @@ defmodule Sanctum.TenancyMCPTest do
       # And it reopens.
       assert {:ok, %{status: "active"}} =
                MCP.handle("athanor", ctx, %{"action" => "unarchive", "athanor" => created.id})
-    end
-  end
-
-  describe "athanor.archive" do
-    test "Home is the server's group and is never archived", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, message}} =
-               MCP.handle("athanor", ctx, %{
-                 "action" => "archive",
-                 "athanor" => Athanors.home!().id
-               })
-
-      assert message =~ "Home is the server's group"
     end
   end
 

@@ -41,8 +41,9 @@ defmodule Sanctum.Tenancy do
   session for a Context that has just been admitted, pass `force: true`.
 
   The athanor chosen is, in order: the one the context already names when a
-  membership still grants it, the person's own athanor, the first athanor
-  a membership grants, and for a platform admin with none of those, Home.
+  membership still grants it, the person's own athanor, and the first
+  athanor a membership grants. A person with none of those has no working
+  athanor, operator or not.
 
   A membership read that FAILED is `{:error, :unavailable}`, distinct from
   a person who genuinely belongs to no athanor (`{:ok, ctx}` with no
@@ -141,8 +142,8 @@ defmodule Sanctum.Tenancy do
   # The candidates in order of preference, then one read for their rows so
   # an archived athanor is skipped: the athanor the context already names
   # (when a membership still grants it, or the caller is a platform admin who
-  # opened it deliberately), the person's own, the first membership grants,
-  # and — for a platform admin with none of those — Home.
+  # opened it deliberately), the person's own, and the first a membership
+  # grants.
   defp working_athanor(%Context{} = ctx, memberships, admin?, user) do
     named? = is_binary(ctx.athanor_id) and ctx.athanor_id != ""
     granted? = named? and membership_grants?(memberships, ctx.athanor_id)
@@ -177,16 +178,8 @@ defmodule Sanctum.Tenancy do
     active = candidates |> Athanors.list_by_ids() |> Enum.filter(&(&1.status == "active"))
 
     case Enum.find(candidates, fn id -> Enum.any?(active, &(&1.id == id)) end) do
-      nil -> if admin?, do: home_id(), else: nil
+      nil -> nil
       id -> id
-    end
-  end
-
-  # A missing Home is an install defect; a request must not 500 on it.
-  defp home_id do
-    case Athanors.home() do
-      {:ok, home} -> home.id
-      _ -> nil
     end
   end
 

@@ -236,13 +236,11 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:ok, %{athanors: _}} = call(k, "athanor", %{"action" => "list"})
   end
 
-  test "Home cannot be archived; a person's own athanor cannot be archived here",
+  test "a person's own athanor cannot be archived here",
        %{alice: alice, ctx: ctx, n: n} do
-    home = Athanors.home!()
-    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: home.id)
-    a = ctx.(alice, home.id, [])
-    assert {:error, msg} = call(a, "athanor", %{"action" => "archive"})
-    assert Error.render(msg) =~ "Home"
+    {:ok, estate} = Athanors.create_group(alice, "Door #{n}")
+    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: estate.id)
+    a = ctx.(alice, estate.id, [])
 
     {:ok, personal} =
       Athanors.create(%{
@@ -265,7 +263,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     member = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
     assert {:error, :platform_admin_required} = call(member, "door", %{"action" => "list"})
 
-    admin = ctx.(ops, Athanors.home!().id, platform_admin: true)
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
     assert {:ok, %{entries: []}} = call(admin, "door", %{"action" => "list"})
 
     email = "carol#{n}@example.com"

@@ -41,7 +41,7 @@ defmodule Sanctum.Consent.Bootstrap do
 
   `granted_by` names who the mint is attributed to: the person whose
   sign-in provisioned the athanor (`ctx.user_id` when a person), or
-  `"system:bootstrap"` for a server-side mint (Home at boot, a seed context).
+  `"system:bootstrap"` for a server-side mint (a seed context).
   """
   @spec run(Context.t()) :: {:ok, result()}
   def run(%Context{} = ctx) do
@@ -156,7 +156,7 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   # A person's provisioning is attributed to the person; a server-side mint
-  # (Home at boot, a seed context) to the system.
+  # (a seed context) to the system.
   defp granted_by(%Context{auth_method: :system}), do: "system:bootstrap"
   defp granted_by(%Context{user_id: user_id}) when is_binary(user_id), do: user_id
   defp granted_by(_), do: "system:bootstrap"

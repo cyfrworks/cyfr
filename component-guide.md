@@ -23,7 +23,7 @@ your-project/
 │   └── formula/           #   Composition interface (invoke sub-components)
 └── data/                  # Runtime state — cyfr.db plus every athanor's storage
     └── athanors/{athanor_id}/
-        ├── components/    # The athanor's component tree (Home first)
+        ├── components/    # The athanor's component tree
         │   ├── reagents/local/    #   name/version/reagent.wasm + cyfr-manifest.json
         │   ├── catalysts/local/   #   name/version/catalyst.wasm + cyfr-manifest.json + src/
         │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/

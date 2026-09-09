@@ -163,15 +163,15 @@ defmodule Cyfr.Application do
         {DynamicSupervisor, name: Aqua.ConversationSupervisor, strategy: :one_for_one},
         maybe_conversation_recovery()
       ]),
-      # Last, and synchronous: mints Home's rows from the seed union on first
-      # boot (the overlay serves the bundle in place — no bytes are copied)
-      # and reconciles the platform-admin roster against the env. Needs the
+      # Last, and synchronous: reconciles the platform-admin roster against
+      # the env and offers new seed media to the estates that exist (the
+      # overlay serves the bundle in place — no bytes are copied). Needs the
       # repo, the tincture registry (the scan reloads it) and nothing else.
       #
       # It runs its work in `init/1` and answers `:ignore`, so this child
       # finishing is what gates the web tier below — the endpoint must not
-      # answer requests while Home is half-seeded or while a de-listed
-      # operator's sessions are still live.
+      # answer requests while a de-listed operator's sessions are still
+      # live.
       Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)
     ]
 

@@ -14,8 +14,7 @@ defmodule Sanctum.Provisioning do
 
   A person's own athanor is minted here on their first admitted sign-in
   (`after_sign_in/1`, once their cyfr.run namespace is known — the athanor's
-  slug is the namespace); Home at boot (`Cyfr.Bootstrap`). A group is
-  minted as a bare row (`Sanctum.Tenancy.Athanors.create_group/3`) and
+  slug is the namespace). A group is minted as a bare row (`Sanctum.Tenancy.Athanors.create_group/3`) and
   filled the first time something reads its bundle (`ensure_provisioned/1`).
   Provisioning is idempotent — `provisioned_at` marks completion and every
   step tolerates being repeated — and loud: a failure leaves the row
@@ -23,8 +22,8 @@ defmodule Sanctum.Provisioning do
   tries again.
 
   The registry pull runs as the person whose sign-in caused it, so their
-  pull credential is used; a server-side mint (Home at boot) pulls
-  anonymously, which serves public components.
+  pull credential is used; a seed context pulls anonymously, which serves
+  public components.
   """
 
   require Logger
@@ -73,35 +72,9 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  @doc """
-  Home is provisioned at boot as the server, pulling anonymously; when that
-  failed (the registry was unreachable, or a bundled dependency is not
-  public), the operator's first sign-in retries it with their own credential.
-  """
-  @spec retry_home(String.t()) :: {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
-  def retry_home(user_id) when is_binary(user_id) do
-    with {:ok, home} <- Athanors.home() do
-      provision(home, person_ctx(user_id, home.id))
-    end
-  end
-
-  @doc """
-  `retry_home/1` off the sign-in path: a boot that could not reach the
-  registry is retried with the operator's credential without holding their
-  sign-in on the pull. The outcome lands on Home's row.
-  """
-  @spec retry_home_async(String.t()) :: :ok
-  def retry_home_async(user_id) when is_binary(user_id) do
-    case Athanors.home() do
-      {:ok, %{provisioned_at: nil}} -> in_background(fn -> retry_home(user_id) end)
-      _ -> :ok
-    end
-  end
-
-  # How long a second first-need caller waits for the first to finish
-  # filling the estate. Bounded well under the lock's default: the caller
-  # is a LiveView mount or a tool call, and an unprovisioned athanor
-  # renders empty and tries again next time — it must never hang.
+  # How long a first need waits for another caller already filling this
+  # athanor before rendering it unprovisioned and letting the next
+  # consumer try.
   @first_need_wait_ms 3_000
 
   @doc """
@@ -314,18 +287,29 @@ defmodule Sanctum.Provisioning do
     end
   end
 
+  # An operator's own athanor is minted past the server caps
+  # (`Athanors.create_for_operator/1`): they are named in
+  # `CYFR_PLATFORM_ADMIN_EMAILS` rather than arriving, and a server at
+  # capacity must still admit the person who can act on it. Everyone else
+  # is a stranger arriving and is capped — `CYFR_MINT_PER_HOUR` is exactly
+  # how fast that may happen, and `mint_allowed/0` is its only enforcement,
+  # so a refusal here must reach the door rather than being swallowed.
   defp mint_personal(%{id: user_id} = user) do
     name = personal_name(user)
 
-    with :ok <- mint_allowed(),
-         {:ok, slug} <- Athanors.person_slug(user.namespace, name) do
-      Athanors.create(%{
-        kind: "person",
-        name: name,
-        slug: slug,
-        owner_user_id: user_id,
-        created_by: user_id
-      })
+    attrs_for = fn slug ->
+      %{kind: "person", name: name, slug: slug, owner_user_id: user_id, created_by: user_id}
+    end
+
+    if Sanctum.Tenancy.platform_admin?(user_id) do
+      with {:ok, slug} <- Athanors.person_slug(user.namespace, name) do
+        Athanors.create_for_operator(attrs_for.(slug))
+      end
+    else
+      with :ok <- mint_allowed(),
+           {:ok, slug} <- Athanors.person_slug(user.namespace, name) do
+        Athanors.create(attrs_for.(slug))
+      end
     end
   end
 

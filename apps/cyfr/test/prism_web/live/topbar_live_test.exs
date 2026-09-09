@@ -91,7 +91,7 @@ defmodule PrismWeb.TopbarLiveTest do
     {view, _html} = mount_athanor(conn, "")
     bar = topbar(view)
     viewing = fn -> :sys.get_state(bar.pid).socket.assigns.viewing end
-    assert viewing.() == Athanors.home!().id
+    assert viewing.() == seated_athanor().id
 
     send(bar.pid, {:viewing, group.id})
     assert viewing.() == group.id
@@ -153,7 +153,7 @@ defmodule PrismWeb.TopbarLiveTest do
     ctx =
       Sanctum.Context.build(
         user_id: ops.user_id,
-        athanor_id: Sanctum.Tenancy.Athanors.home!().id,
+        athanor_id: seated_athanor().id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,

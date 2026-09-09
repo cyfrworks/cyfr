@@ -23,29 +23,6 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     athanor
   end
 
-  describe "ensure_home/0" do
-    test "is idempotent — repeated callers get the one Home" do
-      # Boot sync, a member leaving, and an operator's first request all call
-      # this, and each of them finding no Home is the normal case rather than
-      # the exceptional one. (The genuinely concurrent version of this — two
-      # callers both finding none and both inserting — cannot be driven from
-      # here: the sandbox runs every task over one connection, so the writes
-      # serialize. `athanors_home_index` is what makes exactly one land, and
-      # `ensure_home/0` reads the winner's row rather than returning the
-      # loser's constraint error.)
-      assert {:ok, first} = Athanors.ensure_home()
-      assert first.home == true
-
-      for _ <- 1..5 do
-        assert {:ok, again} = Athanors.ensure_home()
-        assert again.id == first.id
-      end
-
-      assert {:ok, home} = Athanors.home()
-      assert home.id == first.id
-    end
-  end
-
   describe "put_settings/2" do
     test "merges over the row as it is now, not the caller's copy" do
       athanor = group!()
@@ -73,7 +50,6 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       athanor = group!()
       assert String.starts_with?(athanor.id, "ath_")
       assert athanor.status == "active"
-      assert athanor.home == false
       assert athanor.provisioned_at == nil
     end
 
@@ -175,29 +151,6 @@ defmodule Sanctum.Tenancy.AthanorsTest do
                })
 
       assert %{slug: [_ | _]} = errors_on(changeset)
-    end
-  end
-
-  describe "home/0 and home!/0" do
-    test "finds the seeded Home by its flag" do
-      assert {:ok, home} = Athanors.home()
-      assert home.home == true
-      assert home.slug == "home"
-      assert home.kind == "group"
-      assert Athanors.home!().id == home.id
-    end
-
-    test "there can be only one Home" do
-      assert {:error, changeset} =
-               Athanors.create(%{
-                 kind: "group",
-                 name: "Second Home",
-                 slug: slug(),
-                 home: true,
-                 created_by: "system"
-               })
-
-      assert %{home: [_ | _]} = errors_on(changeset)
     end
   end
 
@@ -343,11 +296,8 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       assert Athanors.route_slug(person) == "@alice#{n}"
       assert Athanors.route_slug(group) == group.slug
 
-      # a person's athanor refuses archive unless forced; Home refuses every
-      # arm but the last member leaving (`reason: :empty`)
+      # a person's athanor refuses archive unless forced
       assert {:error, :person_athanor_cannot_be_archived} = Athanors.archive(person)
-      assert {:error, :home_cannot_be_archived} = Athanors.archive(Athanors.home!())
-      assert {:error, :home_cannot_be_archived} = Athanors.archive(Athanors.home!(), force: true)
       assert {:ok, %{status: "archived"}} = Athanors.archive(person, force: true)
       assert {:error, :not_found} = Athanors.by_route_slug("@alice#{n}")
 

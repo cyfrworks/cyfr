@@ -110,14 +110,16 @@ defmodule Sanctum.TenancyTest do
       assert result.athanor_id == athanor.id
     end
 
-    test "a platform admin with no athanor membership works in Home" do
+    test "a platform admin with no athanor membership has no athanor to work in" do
+      # No estate is shared server-wide, so the operator bit alone seats
+      # nobody. What guarantees an operator an athanor is the one minted for
+      # them at admission, past the server caps.
       uid = "u-plat-only-#{System.unique_integer([:positive])}"
       {:ok, _} = Members.ensure(uid, scope: "platform")
 
       {:ok, result} = Tenancy.resolve_status(%Context{user_id: uid, athanor_id: nil}, force: true)
-      assert result.scope == :athanor
       assert result.platform_admin
-      assert result.athanor_id == Athanors.home!().id
+      assert result.athanor_id == nil
     end
 
     test "resolution never mints anything — the operator list is applied at sign-in only" do
@@ -169,7 +171,7 @@ defmodule Sanctum.TenancyTest do
 
       ctx = %Context{
         user_id: uid,
-        athanor_id: Athanors.home!().id,
+        athanor_id: group!("reval-keep").id,
         scope: :athanor,
         authenticated: true
       }
@@ -185,7 +187,7 @@ defmodule Sanctum.TenancyTest do
 
       ctx = %Context{
         user_id: uid,
-        athanor_id: Athanors.home!().id,
+        athanor_id: group!("reval-revoke").id,
         scope: :athanor,
         platform_admin: true,
         authenticated: true

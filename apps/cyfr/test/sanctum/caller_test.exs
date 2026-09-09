@@ -48,12 +48,6 @@ defmodule Sanctum.CallerTest do
         verified: true
       })
 
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(row.id,
-        scope: "athanor",
-        athanor_id: Sanctum.Tenancy.Athanors.home!().id
-      )
-
     %{user | user_id: row.id}
   end
 
@@ -78,13 +72,19 @@ defmodule Sanctum.CallerTest do
     session
   end
 
+  # A group of this person's own: no estate is shared server-wide, so a
+  # test that needs a seat mints one.
   defp member!(user) do
-    home = Sanctum.Tenancy.Athanors.home!()
+    {:ok, estate} =
+      Sanctum.Tenancy.Athanors.create_group(
+        user.user_id,
+        "Caller #{System.unique_integer([:positive])}"
+      )
 
     {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: home.id)
+      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: estate.id)
 
-    {user, home}
+    {user, estate}
   end
 
   describe "establish/2" do
@@ -121,14 +121,14 @@ defmodule Sanctum.CallerTest do
     end
 
     test "a session whose person has no publisher namespace is established like any other" do
-      user = new_user() |> known!()
+      {user, estate} = new_user() |> known!() |> member!()
       session = session_for(user, namespace: nil)
 
       assert {:ok, %Context{} = ctx} = Caller.establish(session.token)
       assert ctx.user_id == user.user_id
       assert ctx.authenticated
       assert ctx.namespace == nil
-      assert ctx.athanor_id == Sanctum.Tenancy.Athanors.home!().id
+      assert ctx.athanor_id == estate.id
     end
 
     test "no token, a blank token, and an unknown token are unauthenticated" do

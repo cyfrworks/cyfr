@@ -31,8 +31,8 @@ defmodule PrismWeb.SecretRevealTest do
 
   test "a webhook secret is dismissible too", %{conn: conn} do
     user = test_user()
-    home = Sanctum.Tenancy.Athanors.home!()
-    ctx = %{Sanctum.TestContext.local() | athanor_id: home.id, user_id: user.user_id}
+    conn = log_in_user(conn, user)
+    ctx = %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user.user_id}
     name = "reveal-hook-#{System.unique_integer([:positive])}"
 
     wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
@@ -57,7 +57,7 @@ defmodule PrismWeb.SecretRevealTest do
         profile_id: profile_id
       })
 
-    {view, _html} = conn |> log_in_user(user) |> mount_athanor("/webhooks")
+    {view, _html} = mount_athanor(conn, "/webhooks")
 
     # Rotating reveals the new secret the same way creating does.
     render_click(view, "rotate", %{"id" => name})

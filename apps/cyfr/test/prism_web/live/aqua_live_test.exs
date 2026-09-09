@@ -91,9 +91,9 @@ defmodule PrismWeb.AquaLiveTest do
     setup %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      home = Sanctum.Tenancy.Athanors.home!()
-      ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: home.id}
-      {:ok, conn: conn, ctx: ctx}
+      estate = seated_athanor()
+      ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
+      {:ok, conn: conn, ctx: ctx, estate: estate}
     end
 
     test "the soul offers no Delete; a shipped role is disabled and enabled from its card",
@@ -206,9 +206,12 @@ defmodule PrismWeb.AquaLiveTest do
                "Unknown role: nobody"
     end
 
-    test "About us is pinned from the page and is what the soul reads", %{conn: conn, ctx: ctx} do
+    test "the pinned page is written from the page and is what the soul reads",
+         %{conn: conn, ctx: ctx} do
+      # The estate here is the person's own, so its one pinned page is
+      # `about-you`; a shared estate's is `about-us`.
       {view, html} = mount_athanor(conn, "/aqua")
-      assert html =~ "About us"
+      assert html =~ "About you"
       assert html =~ "Nothing pinned yet."
 
       view |> with_target("#aqua-notes-section") |> render_click("about_edit", %{})
@@ -218,10 +221,10 @@ defmodule PrismWeb.AquaLiveTest do
       |> render_submit()
 
       assert render(view) =~ "We ship on Fridays."
-      assert {:ok, %{name: "about-us", content: "We ship on Fridays."}} = Aqua.Notes.pinned(ctx)
+      assert {:ok, %{name: "about-you", content: "We ship on Fridays."}} = Aqua.Notes.pinned(ctx)
 
       # The pinned page is not a note in the drawer.
-      refute has_element?(view, "#aqua-notes button[phx-value-name=about-us]")
+      refute has_element?(view, "#aqua-notes button[phx-value-name=about-you]")
     end
 
     test "the pinned editor counts bytes, and the tool's refusal over the cap is the flash",
@@ -436,9 +439,12 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "a key bound from the page drops the kept catalogue, so the picker is read again",
          %{conn: conn, ctx: ctx} do
-      home = Sanctum.Tenancy.Athanors.home!()
-      :ok = PrismWeb.ModelCatalog.remember(home.id, %{"models" => %{"kept" => ["kept-model-1"]}})
-      on_exit(fn -> PrismWeb.ModelCatalog.forget(home.id) end)
+      estate = seated_athanor()
+
+      :ok =
+        PrismWeb.ModelCatalog.remember(estate.id, %{"models" => %{"kept" => ["kept-model-1"]}})
+
+      on_exit(fn -> PrismWeb.ModelCatalog.forget(estate.id) end)
 
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "kept-model-1"

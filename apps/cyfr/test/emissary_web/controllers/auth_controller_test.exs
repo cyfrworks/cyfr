@@ -355,7 +355,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       refute Plug.Conn.get_session(conn, "_csrf_token") == "pre-login-csrf"
     end
 
-    test "an operator's first sign-in lands in their own athanor, not the Home seat",
+    test "an operator's first sign-in lands in their own athanor",
          %{conn: conn, bypass: bypass} do
       n = System.unique_integer([:positive])
       uid = "auth_cb_ops_#{n}"
@@ -375,8 +375,8 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       assert redirected_to(conn) == "/"
 
-      # The Home seat and their own athanor are both minted at admission;
-      # the session must name their own.
+      # Their own athanor is minted at admission and is what the session
+      # names; the operator bit is a platform row beside it, not a seat.
       assert {:ok, %{id: personal_id}} =
                Sanctum.Tenancy.Athanors.get_by_owner(
                  person_id("github|https://github.com|#{uid}")
@@ -384,11 +384,6 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       assert {:ok, %{athanor_id: ^personal_id, platform_admin: true}} =
                Sanctum.Session.load(session_of(conn), surface: :console)
-
-      assert Sanctum.Tenancy.Members.member?(
-               person_id("github|https://github.com|#{uid}"),
-               Sanctum.Tenancy.Athanors.home!().id
-             )
     end
 
     test "no personal namespace: signed in on their own athanor, IdP token kept for the claim",

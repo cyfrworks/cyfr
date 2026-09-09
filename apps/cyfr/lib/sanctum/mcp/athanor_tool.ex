@@ -218,9 +218,6 @@ defmodule Sanctum.MCP.AthanorTool do
           Members.broadcast_change(ctx.user_id, archived.id, :athanor_changed)
           {:ok, render(archived)}
 
-        {:error, :home_cannot_be_archived} ->
-          {:error, {:invalid_argument, "Home is the server's group and cannot be archived"}}
-
         {:error, :person_athanor_cannot_be_archived} ->
           {:error, {:invalid_argument, "A person's own athanor is not archived here"}}
 
@@ -233,8 +230,8 @@ defmodule Sanctum.MCP.AthanorTool do
 
   # A person's own athanor is closed by the door (deny) and reopened by the
   # door (allow); restoring it here while its owner is still denied would
-  # reopen a furnace nobody may enter. A retired Home never reopens at all,
-  # and neither does a DM that ended — its husk holds one member.
+  # reopen a furnace nobody may enter. A DM that ended never reopens at
+  # all — its husk holds one member.
   def handle(%Context{} = ctx, %{"action" => "unarchive"} = args) do
     with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true),
          :ok <- owner_admitted(athanor) do
@@ -242,11 +239,6 @@ defmodule Sanctum.MCP.AthanorTool do
         {:ok, restored} ->
           broadcast_athanors_changed(ctx, restored)
           {:ok, render(restored)}
-
-        {:error, :home_is_final} ->
-          {:error,
-           {:invalid_argument,
-            "That Home is archived for the record; the server has already started a new one"}}
 
         {:error, :frozen_is_final} ->
           {:error,
@@ -478,7 +470,6 @@ defmodule Sanctum.MCP.AthanorTool do
       name: athanor.name,
       slug: athanor.slug,
       route: Athanors.route_slug(athanor),
-      home: athanor.home,
       status: athanor.status,
       member_count:
         case Members.count_by_athanor(athanor.id) do

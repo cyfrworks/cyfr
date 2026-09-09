@@ -7,7 +7,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
   Every tenant-owned row carries an `athanor_id` — the athanor (a person's or
   a group's furnace) that owns it. The column is `NOT NULL` with no default:
-  a row that forgets its athanor must fail, never land in the seeded Home.
+  a row that forgets its athanor must fail, never default into somebody's.
   It carries no foreign key TO `athanors` on purpose — an athanor is
   archived, never deleted, so nothing needs the constraint and every fixture
   is spared a parent row. Two tables do name it inside a COMPOSITE key, which
@@ -31,7 +31,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     vault_and_consent()
     registrations()
     conversations()
-    seed_home()
   end
 
   # Refuse applying the baseline to a database containing an incompatible tenant schema.
@@ -74,7 +73,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :kind, :string, null: false
       add :name, :string, null: false
       add :slug, :string, null: false
-      add :home, :boolean, null: false, default: false
       add :owner_user_id, :string
       add :status, :string, null: false, default: "active"
       add :archived_at, :utc_datetime_usec
@@ -86,12 +84,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create unique_index(:athanors, [:kind, :slug])
-    # Exactly one *active* Home per server. A retired Home keeps the flag as
-    # its record; its successor takes the place.
-    create unique_index(:athanors, [:home],
-             where: "home AND status = 'active'",
-             name: :athanors_home_index
-           )
 
     # One personal athanor per person. Default index name on purpose: SQLite
     # reports a violation by column, and ecto_sqlite3 derives the constraint
@@ -681,31 +673,5 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:messages, [:conversation_id, :seq])
     create index(:messages, [:athanor_id, :inserted_at])
     create index(:messages, [:conversation_id, :status])
-  end
-
-  # ==========================================================================
-  # Home
-  # ==========================================================================
-
-  # Every server has one Home: the group athanor the operator and everyone
-  # they let in share. It is found by its flag, never by a fixed id.
-  # Raw SQL: a schemaless insert has no column types, and a boolean bound
-  # without one lands as text on SQLite — `TRUE` is a literal on both adapters.
-  # `DO NOTHING` because several nodes may boot at once.
-  defp seed_home do
-    id = "ath_" <> Ecto.UUID.generate()
-    # The naive ISO 8601 form both adapters store for `:utc_datetime_usec`.
-    now =
-      NaiveDateTime.utc_now()
-      |> NaiveDateTime.truncate(:microsecond)
-      |> NaiveDateTime.to_iso8601()
-
-    execute """
-    INSERT INTO athanors
-      (id, kind, name, slug, home, status, created_by, created_at, updated_at)
-    VALUES
-      ('#{id}', 'group', 'Home', 'home', TRUE, 'active', 'system', '#{now}', '#{now}')
-    ON CONFLICT (kind, slug) DO NOTHING
-    """
   end
 end

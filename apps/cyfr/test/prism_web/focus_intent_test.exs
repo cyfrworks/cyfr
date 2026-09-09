@@ -39,27 +39,27 @@ defmodule PrismWeb.FocusIntentTest do
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
-  # One pane on Home, on a thread of its own, in the mode whose nav shows
+  # One pane on the person's own estate, on a thread of its own, in the mode whose nav shows
   # every page: what it pushes for a navigate is what the browser would
   # follow.
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    home = Athanors.home!()
-    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: home.id}
+    estate = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
     {:ok, conv} = Conversations.create(ctx)
 
     # A kept catalogue: the pane must not spawn a model-listing run whose
     # writes outlive this test and lock the next one's setup out of SQLite.
-    :ok = PrismWeb.ModelCatalog.remember(home.id, %{"models" => %{}})
-    on_exit(fn -> PrismWeb.ModelCatalog.forget(home.id) end)
+    :ok = PrismWeb.ModelCatalog.remember(estate.id, %{"models" => %{}})
+    on_exit(fn -> PrismWeb.ModelCatalog.forget(estate.id) end)
 
     {:ok, pane, _} =
       live_isolated(conn, PrismWeb.ConversationPaneLive,
-        session: %{"athanor_id" => home.id, "conversation_id" => conv.id, "ui_mode" => "dev"}
+        session: %{"athanor_id" => estate.id, "conversation_id" => conv.id, "ui_mode" => "dev"}
       )
 
-    {:ok, pane: pane, conv: conv, user: user, home: home}
+    {:ok, pane: pane, conv: conv, user: user, estate: estate}
   end
 
   defp pushed(%{pane: pane, conv: conv, user: user}, intent) do
@@ -104,7 +104,7 @@ defmodule PrismWeb.FocusIntentTest do
   end
 
   for %{kind: kind, args: args} <- @intents do
-    test "#{kind} lands on a page that reads what it carries", %{home: home} = context do
+    test "#{kind} lands on a page that reads what it carries", %{estate: estate} = context do
       assert {:ok, %{kind: "navigate", to: path} = intent} =
                Aqua.Wire.validate(Map.put(unquote(Macro.escape(args)), "kind", unquote(kind)))
 
@@ -112,7 +112,7 @@ defmodule PrismWeb.FocusIntentTest do
       # athanor in focus before handing it to the client, the same split
       # `PrismWeb.ActiveContext.strip_focus/1` undoes.
       to = pushed(context, intent)
-      assert to == PrismWeb.Focus.path(Athanors.route_slug(home), path)
+      assert to == PrismWeb.Focus.path(Athanors.route_slug(estate), path)
 
       uri = URI.parse(to)
       module = served_by(uri.path)
@@ -141,8 +141,8 @@ defmodule PrismWeb.FocusIntentTest do
   end
 
   test "a global page is pushed as it is, with no estate in its address",
-       %{home: home, conv: conv} = context do
-    path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(home), conv.id)
+       %{estate: estate, conv: conv} = context do
+    path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(estate), conv.id)
     assert Cyfr.GlobalPages.global?(path)
 
     assert {:ok, %{kind: "navigate", to: ^path} = intent} =

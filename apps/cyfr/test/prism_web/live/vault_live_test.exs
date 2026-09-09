@@ -12,7 +12,8 @@ defmodule PrismWeb.VaultLiveTest do
 
   describe "GET /vault (unauthenticated)" do
     test "redirects to login", %{conn: conn} do
-      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/vault"))
+      assert {:error, {:redirect, %{to: "/login"}}} =
+               live(conn, athanor_path("/vault", "@nobody"))
     end
   end
 
@@ -86,7 +87,7 @@ defmodule PrismWeb.VaultLiveTest do
     ctx =
       Sanctum.Context.build(
         user_id: user.user_id,
-        athanor_id: Sanctum.Tenancy.Athanors.home!().id,
+        athanor_id: seated_athanor().id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,

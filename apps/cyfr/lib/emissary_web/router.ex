@@ -366,7 +366,7 @@ defmodule EmissaryWeb.Router do
     get "/attachments/:message_id/:filename", AttachmentController, :show
   end
 
-  # "open Home" is a link. `PrismWeb.Focus` resolves the segment and narrows
+  # Opening an estate is a link. `PrismWeb.Focus` resolves the segment and narrows
   # the context (`Sanctum.Context.focus/2`) before the page mounts.
   scope "/", PrismWeb do
     pipe_through :browser

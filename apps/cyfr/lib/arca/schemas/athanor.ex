@@ -13,9 +13,8 @@ defmodule Arca.Schemas.Athanor do
   is. `pair_key` is set on a two-person frozen estate so "click Alice"
   finds the one that exists instead of minting a second.
 
-  `home` marks the one seeded group athanor every server has. `status` is
-  `"active"` or `"archived"` — an athanor is never deleted. `settings` is a
-  JSON document owned by `Sanctum.Tenancy.Athanors`.
+  `status` is `"active"` or `"archived"` — an athanor is never deleted.
+  `settings` is a JSON document owned by `Sanctum.Tenancy.Athanors`.
   """
 
   use Ecto.Schema
@@ -35,7 +34,6 @@ defmodule Arca.Schemas.Athanor do
     field :pair_key, :string
     field :name, :string
     field :slug, :string
-    field :home, :boolean, default: false
     field :owner_user_id, :string
     field :status, :string, default: "active"
     field :archived_at, :utc_datetime_usec
@@ -50,7 +48,7 @@ defmodule Arca.Schemas.Athanor do
   def rosters, do: @rosters
   def statuses, do: @statuses
 
-  # What a row is born with. Identity fields (`id`, `kind`, `home`,
+  # What a row is born with. Identity fields (`id`, `kind`,
   # `owner_user_id`, `created_by`) are set here and never cast again.
   @create_fields [
     :id,
@@ -59,7 +57,6 @@ defmodule Arca.Schemas.Athanor do
     :pair_key,
     :name,
     :slug,
-    :home,
     :owner_user_id,
     :status,
     :archived_at,
@@ -97,7 +94,6 @@ defmodule Arca.Schemas.Athanor do
     )
     |> validate_owner()
     |> unique_constraint([:kind, :slug])
-    |> unique_constraint(:home, name: :athanors_home_index)
     |> unique_constraint(:owner_user_id)
     |> unique_constraint(:pair_key)
   end
