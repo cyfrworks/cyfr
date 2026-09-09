@@ -345,14 +345,49 @@ defmodule Opus.ExecutionRecord do
            },
            attempt: record.attempt
          ) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:ok, _} ->
+        retain_result(ctx, record)
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   def write_completed(%__MODULE__{status: status}) do
     {:error, "Cannot write completed record for status: #{status}"}
   end
+
+  # A non-chat execution's result is kept as a payload in its own store,
+  # by digest and retention class; the row keeps answering as it does. A
+  # store that cannot keep it is logged, never the execution's failure.
+  # Chat executions are the transcript's, not the payload store's.
+  defp retain_result(ctx, %__MODULE__{} = record) do
+    chat? = assistant_ref?(record.reference) or assistant_ref?(record.parent_reference)
+
+    if not chat? and not is_nil(record.output) do
+      case Arca.ExecutionPayloads.put(
+             ctx,
+             record.id,
+             "result",
+             encode_json(record.output),
+             retention_class(record)
+           ) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Opus.ExecutionRecord] result payload of #{record.id} not retained: #{inspect(reason)}"
+          )
+      end
+    end
+
+    :ok
+  end
+
+  defp retention_class(%__MODULE__{user_id: "webhook:" <> _}), do: "webhook"
+  defp retention_class(_record), do: "api"
 
   @doc """
   Write execution failure record AFTER failed or cancelled execution.

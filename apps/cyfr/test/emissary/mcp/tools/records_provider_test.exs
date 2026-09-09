@@ -50,11 +50,11 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       assert actions == ["get", "set", "cleanup"]
     end
 
-    test "record tool has 2 read-only actions" do
+    test "record tool has 3 read-only actions" do
       tools = MCP.tools()
       tool = Enum.find(tools, &(&1.name == "record"))
       actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["get", "list"]
+      assert actions == ["get", "list", "payload"]
     end
 
     test "each tool has required schema fields" do
@@ -139,6 +139,27 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     # A person reads the athanor's whole tree; a key scoped to storage reads
     # sees what an agent could have written or a conversation attached.
+    # A completed execution's result is a payload a member reads by the
+    # execution's id; another estate reads nothing.
+    test "record.payload answers a retained result to a member of the athanor", %{ctx: ctx} do
+      exec = "exec_payload_#{System.unique_integer([:positive])}"
+      {:ok, _} = Arca.ExecutionPayloads.put(ctx, exec, "result", ~s({"answer":42}), "api")
+
+      assert {:ok, %{execution_id: ^exec, kind: "result", bytes: 13, content: content}} =
+               MCP.handle("record", ctx, %{"action" => "payload", "id" => exec})
+
+      assert Base.decode64!(content) == ~s({"answer":42})
+
+      assert {:error, {:not_found, "Payload", _}} =
+               MCP.handle("record", ctx, %{"action" => "payload", "id" => exec, "kind" => "input"})
+
+      assert {:error, {:not_found, "Payload", _}} =
+               MCP.handle("record", %{ctx | athanor_id: "ath_elsewhere"}, %{
+                 "action" => "payload",
+                 "id" => exec
+               })
+    end
+
     test "a key scoped to storage reads reaches guest/ and conversations/, a person everything",
          %{ctx: ctx} do
       :ok = Arca.put(ctx, ["guest", "reach.txt"], "g")

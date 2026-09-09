@@ -31,6 +31,7 @@ your-project/
         ├── aqua/          # The athanor's AQUA: the soul, its roles, its scrolls
         ├── conversations/ # Chat attachment files
         ├── notes/         # What was kept out of a conversation — host-only, never a guest scope
+        ├── payloads/      # Retained execution inputs and results — host-only, by digest
         ├── guest/         # Files WASM components store — their `data/` scope
         └── meta/          # Overlay origin marks — system-plane only, never yours to write
 ```

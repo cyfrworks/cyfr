@@ -183,6 +183,7 @@ config :cyfr, Cyfr.Retention,
   executions: 10_000,
   # Days an execution record is kept, whatever the count.
   execution_days: 90,
+  payload_days: 30,
   # Newest N build records kept per athanor.
   builds: 100,
   # Days of policy-enforcement log kept.

@@ -38,6 +38,8 @@ defmodule Opus.HostSurfaceTest do
     "Arca.Cache",
     "Arca.CronSchedule",
     "Arca.Execution",
+    # A non-chat execution's result is kept as a payload once it completes.
+    "Arca.ExecutionPayloads",
     "Arca.QueryHelpers",
     "Arca.Repo",
     "Arca.Storage",

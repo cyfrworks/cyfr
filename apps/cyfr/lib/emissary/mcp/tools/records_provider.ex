@@ -175,7 +175,8 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           destructiveHint: false,
           actions: %{
             "get" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "list" => %{kind: :read, planes: [:external], permission: :storage_read}
+            "list" => %{kind: :read, planes: [:external], permission: :storage_read},
+            "payload" => %{kind: :read, planes: [:external], permission: :storage_read}
           }
         },
         input_schema: %{
@@ -183,12 +184,17 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["get", "list"],
+              "enum" => ["get", "list", "payload"],
               "description" => "Action to perform"
             },
             "id" => %{
               "type" => "string",
               "description" => "Execution ID"
+            },
+            "kind" => %{
+              "type" => "string",
+              "enum" => ["input", "result"],
+              "description" => "payload only: which retained payload (default result)"
             },
             "user_id" => %{
               "type" => "string",
@@ -371,6 +377,45 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("record", _ctx, %{"action" => "get"}) do
+    {:error, {:invalid_argument, "Missing required argument: id"}}
+  end
+
+  # A retained payload: the bytes an execution was given or answered,
+  # for a member of the athanor that ran it.
+  def handle("record", ctx, %{"action" => "payload", "id" => id} = args) do
+    kind = Map.get(args, "kind", "result")
+
+    with :ok <- Context.tenant_ok(ctx),
+         :ok <- storage_ctx_gate(ctx),
+         true <-
+           kind in ["input", "result"] ||
+             {:error, {:invalid_argument, "kind must be input or result"}} do
+      case Arca.ExecutionPayloads.get(ctx, id, kind) do
+        {:ok, row, bytes} ->
+          {:ok,
+           %{
+             execution_id: id,
+             kind: kind,
+             digest: row.digest,
+             bytes: row.bytes,
+             retention_class: row.retention_class,
+             content: Base.encode64(bytes),
+             mimeType: Cyfr.MediaType.binary()
+           }}
+
+        {:error, :not_found} ->
+          {:error, {:not_found, "Payload", "#{id}/#{kind}"}}
+
+        {:error, :database_error} ->
+          {:error, {:unavailable, "Storage"}}
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  def handle("record", _ctx, %{"action" => "payload"}) do
     {:error, {:invalid_argument, "Missing required argument: id"}}
   end
 

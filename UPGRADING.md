@@ -4,6 +4,20 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## An execution's result is a retained payload
+
+Migration `20260916000000` adds `execution_payloads`: a reference to an
+execution's retained input or result — digest, size, retention class,
+and where the bytes live under the athanor's new `payloads/` storage
+root (host-only; a guest never writes it). A completed non-chat
+execution keeps its result there (class `webhook` for a webhook's
+execution, `api` otherwise); a member reads it through
+`record.payload(id, kind)`. The `payload_days` retention setting
+(default 30) prunes the bytes and the rows by age. The `executions` row
+keeps answering as before: switching its readers to the payload store
+belongs to the loop's cutover, and chat executions stay the
+transcript's.
+
 ## The assistant's intent protocol is four modules
 
 `Aqua.Actions` is split along its seams: `Aqua.Wire` parses and

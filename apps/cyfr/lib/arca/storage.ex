@@ -235,6 +235,11 @@ defmodule Arca.Storage do
     # guest scope would make notes something an agent writes to itself;
     # host-only makes them something someone chose to keep.
     {"notes", :tenant, nil, nil},
+    # An execution's retained input and result bytes, referenced by an
+    # `execution_payloads` row. Host-only: what a component was given and
+    # what it answered is the estate's record, never a path a guest
+    # writes.
+    {"payloads", :tenant, nil, nil},
     {"guest", :tenant, "data", nil},
     {"meta", :tenant_reserved, nil, nil},
     {"cache", :global, nil, nil},
