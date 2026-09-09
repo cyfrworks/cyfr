@@ -21,14 +21,8 @@ defmodule Compendium.MCP.AquaTool do
   alias Compendium.AquaPath
   alias Sanctum.Context
 
-  # Repo root — used for compile-time doc embedding. Resolved by walking up
-  # from this file until a mix.exs with a component-guide.md beside it is
-  # found: the old marker was the generically-named guide alone, so a
-  # same-named file anywhere above the checkout silently redirected the
-  # embed — and a missing guide walked to `/` and failed as an :enoent on
-  # /component-guide.md, a path naming nothing about the cause. A tree
-  # without the marker fails the COMPILE with the reason spelled out
-  # (`Compendium.WITSource` sets the precedent).
+  # Find the repository root by mix.exs and component-guide.md for compile-time
+  # document embedding. Fail compilation if the root cannot be found.
   # arca:bypass-ok=C — compile-time repo-root discovery.
   project_root_walk =
     Enum.reduce_while(1..10, Path.expand(__DIR__), fn _, dir ->
@@ -143,10 +137,8 @@ defmodule Compendium.MCP.AquaTool do
             permission: :component_manage,
             consent: :interactive
           },
-          # Reverts edited copies of shipped units to shipped;
-          # member-created agents and skills are KEPT unless all=true
-          # deletes the whole upper layer (Compendium.AquaTemplate.reset/2)
-          # — which is why a standing credential never reaches it.
+          # Reset restores shipped units. With all=true it also deletes
+          # member-created agents and skills; the operation requires interactive consent.
           "reset" => %{
             kind: :destructive,
             planes: [:external],
@@ -282,10 +274,7 @@ defmodule Compendium.MCP.AquaTool do
     agent_guides =
       case AquaAgent.list(ctx) do
         {:ok, agents, _errors} ->
-          # `AquaAgent.list/1` already read every file — the detail flag
-          # only widens the projection. Without it the console fetched the
-          # summary and then re-read each agent with a get, an N+1 the
-          # server paid twice for data it was already holding.
+          # The detail flag widens the projection of the already-loaded agents.
           detail? = args["detail"] == true
           # Disabled roles are out of the closet: the model's roster never
           # holds them. A page that puts them back asks for them by flag,

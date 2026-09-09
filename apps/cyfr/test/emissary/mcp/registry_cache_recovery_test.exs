@@ -5,13 +5,8 @@ defmodule Emissary.MCP.RegistryCacheRecoveryTest do
   @moduledoc """
   The MCP catalogues live in `Arca.Cache`, which dies with its owner.
 
-  `Arca.Cache.Sweeper` owns the table; `ToolRegistry` and `ResourceRegistry`
-  sit below it in a `:rest_for_one` group, so a sweeper crash restarts the
-  registries with it and their init repopulates the fresh table. Without
-  that coupling the failure was silent: both registries write their
-  catalogue once at boot and refresh every 23 hours, and `Arca.Cache.get/1`
-  rescues the missing table into an ordinary miss — every tool read as
-  "Unknown tool" for up to a day.
+  The cache sweeper and registries form a rest_for_one group. A sweeper
+  restart must restart the registries and repopulate their catalogs.
   """
 
   use ExUnit.Case, async: false

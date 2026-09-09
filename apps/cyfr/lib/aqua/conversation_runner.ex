@@ -225,16 +225,8 @@ defmodule Aqua.ConversationRunner do
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           :ok | {:error, term()}
   def send_message(%Context{} = ctx, conversation_id, text, opts \\ []) do
-    # The orchestrator roster is an MCP call — resolved here, in the
-    # caller, never inside the runner's handle_call, where one slow
-    # resolve would block every member's sends.
-    #
-    # It belongs to THIS SENDER and is used for THIS message only. It used
-    # to seed a 60-second cache on the runner that every subsequent
-    # sender's mentions were then parsed against — so for up to a minute
-    # after Alice spoke, Bob's `@tom` resolved against Alice's roster.
-    # Harmless while every member shares one estate-wide roster; a
-    # cross-wiring the moment agents belong to people.
+    # Resolve the roster for this sender and message outside the runner
+    # process so a slow MCP call cannot block other sends.
     with :ok <- Cyfr.ControlPlane.assert_owner() do
       opts = Keyword.put_new_lazy(opts, :orchestrators, fn -> AquaTurn.roster(ctx) end)
       call(ctx, conversation_id, {:send, ctx, text, opts})

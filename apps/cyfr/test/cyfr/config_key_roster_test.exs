@@ -3,10 +3,8 @@
 
 defmodule Cyfr.ConfigKeyRosterTest do
   @moduledoc """
-  Every `:cyfr` application key the code reads, and what kind of thing it
-  is. A new key fails this test until it is classified — which is the
-  point: whether a value is an operator's to set is a decision, and it was
-  being made silently by whoever added the `Application.get_env` call.
+  Classifies every :cyfr application key read by the code.
+  Unclassified keys fail the roster check.
 
   The classes:
 

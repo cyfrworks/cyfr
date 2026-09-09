@@ -5,18 +5,10 @@ defmodule Opus.ExecutionEventBuffer.Sequence do
   @moduledoc """
   One monotonic sequence per execution **stream**.
 
-  Emit sequences used to come from an `:atomics` ref created once per
-  `Opus.FormulaHandler.build_formula_imports/3` — that is, once per *formula
-  execution*. But emits are addressed to the **root** execution id, so a
-  formula and the nested formula it invoked both counted 1, 2, 3… into the
-  same buffer and the same PubSub topic.
+  Allocates shared sequences by root execution id across parent and nested formula emissions.
 
-  Nothing noticed while a client stayed connected, because every event was
-  still delivered. It broke on reconnect:
-  `Opus.ExecutionEventBuffer.since/3` replays events with `sequence >
-  last_sequence`, so a client resuming from the outer formula's sequence 7
-  silently lost every event the inner formula had numbered 1..7 — and the
-  deeper the chain, the more of the stream disappeared.
+  `Opus.ExecutionEventBuffer.since/3` replays events with a sequence
+  greater than the client’s last received sequence.
 
   The stream owns its numbering, so the counter is keyed by the id the events
   are addressed to. `next/1` is a single atomic ETS increment, which is what
@@ -32,9 +24,7 @@ defmodule Opus.ExecutionEventBuffer.Sequence do
   @doc """
   The next sequence for `execution_id`, starting at 1.
 
-  Falls back to a node-monotonic integer if the table is gone (the tree is
-  restarting): still unique and still increasing, which is all `since/3`
-  needs — the alternative is duplicate numbers, the bug this exists to end.
+  Falls back to a node-monotonic integer when the table is unavailable.
   """
   @spec next(String.t()) :: pos_integer()
   def next(execution_id) when is_binary(execution_id) do

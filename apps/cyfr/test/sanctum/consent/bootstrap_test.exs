@@ -84,9 +84,8 @@ defmodule Sanctum.Consent.BootstrapTest do
   end
 
   test "every local component is considered, past the default listing page", %{ctx: ctx} do
-    # Minimal rows are enough: a component that fails to activate lands in
-    # `skipped`, so the witness is that all 101 were even looked at — the
-    # default 100-row listing page once silently dropped the tail.
+    # Use 101 rows to verify bootstrap traverses beyond one listing page,
+    # including components reported as skipped.
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     for i <- 1..101 do

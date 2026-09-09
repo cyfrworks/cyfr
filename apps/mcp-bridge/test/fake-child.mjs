@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// A stand-in for an npx MCP server, with one deliberately awkward
-// behaviour per mode. Real MCP servers are bidirectional peers and real
-// children die at inconvenient moments; both used to take the bridge down.
+// MCP child fixture with modes for peer requests, id collisions and process failures.
 
 const mode = process.argv[2] || "well-behaved";
 
@@ -53,12 +51,7 @@ process.stdin.on("data", (chunk) => {
     }
 
     if (msg.method === "tools/list") {
-      // The second collision, and the one with observable damage: the
-      // bridge is waiting on id 2 for THIS answer, so a peer request
-      // carrying id 2 resolves it with `undefined` and the catalogue is
-      // lost. (Colliding only on the handshake's id 1 is invisible here —
-      // tools/list still answers on its own id, which is why a test that
-      // stopped at id 1 passed with the guard removed.)
+      // Send a peer request matching the pending tools/list id to test bidirectional id isolation.
       if (mode === "rogue-request") {
         send({ jsonrpc: "2.0", id: 2, method: "roots/list" });
       }
@@ -69,10 +62,7 @@ process.stdin.on("data", (chunk) => {
         result: { tools: [{ name: "ping", description: "pong", inputSchema: { type: "object" } }] },
       });
 
-      // Handshake done, then gone — so the NEXT write from the bridge
-      // lands on a closed pipe. That EPIPE arrives asynchronously on the
-      // stream, which is the shape that used to reach uncaughtException
-      // and take every other backend down with it.
+      // Exit after the handshake so the next write exercises asynchronous EPIPE handling.
       if (mode === "die-after-handshake") {
         setTimeout(() => process.exit(0), 20);
       }

@@ -6,13 +6,9 @@ defmodule PrismWeb.FocusIntentTest do
   A `ui.*.focus` intent is only real if the page it lands on reads the key
   it carries.
 
-  `Aqua.Intents` mints a navigation for each focus intent — `?id=req_…`,
-  `?name=…`, `?publisher=&tincture_name=` — and `PrismWeb.ActiveContext`
-  parses exactly those keys back out of the URL to tell the command palette
-  which resource is in focus. Between those two ends sits the page, and for
-  five of the six intents the page's `handle_params/3` never looked: the
-  assistant navigated, the palette believed a resource was focused, and
-  the person saw a bare list. Nothing failed, which is why it lasted.
+  Checks that pages consume the focus parameters emitted by `Aqua.Intents`
+  and interpreted by `PrismWeb.ActiveContext`, displaying the resource
+  identified in the URL.
 
   This walks the seam end to end for every intent, without a hand-kept list
   of pages: mint the path through `Aqua.Intents`, hand it to a real

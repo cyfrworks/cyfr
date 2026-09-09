@@ -8,10 +8,8 @@ defmodule Sanctum.Authority.SelfInvocationPropertyTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
-  # §6 "Self-invocation (D2)": a sub-agent at the same activation identity
-  # keeps cursor and resources; the same ref at a *different* activation
-  # does not. Graphs are generated without self-edges so the wrong-digest
-  # case cannot be satisfied by a real edge and the distinction is sharp.
+  # Self-invocation preserves cursor and resources only when activation
+  # identity matches. Generate graphs without self-edges to isolate this rule.
 
   property "same activation inherits; same ref at a different activation does not" do
     check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 50) do
@@ -28,8 +26,7 @@ defmodule Sanctum.Authority.SelfInvocationPropertyTest do
            declared_needs: declared
          }}
 
-      # D2 bypasses the need rules even when needs are declared — the
-      # sub-agent case.
+      # Self-invocation bypasses need selection even when needs are declared.
       {:child, child} = Transition.step(auth, :call, same)
       assert child.cursor == auth.cursor
       assert child.resources == auth.resources
@@ -52,8 +49,7 @@ defmodule Sanctum.Authority.SelfInvocationPropertyTest do
           assert zero_child.resources == :none
 
         {:deny, {:need, :required}} ->
-          # Declared needs + omitted need: ordinary dispatch rules apply,
-          # which is exactly the point — D2 did not short-circuit them.
+          # A different activation uses ordinary need-dispatch rules.
           assert declared != []
 
         other ->

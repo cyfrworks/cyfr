@@ -113,9 +113,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 			return err
 		}
 
-		// Save the session token from the auth response — under the
-		// modern `token` field (SetToken also clears the legacy
-		// `session_id` spelling this flow used to re-create).
+		// Save the session token under `token` and clear the `session_id` alias.
 		sessionID, _ := pollResult["session_token"].(string)
 		if sessionID == "" {
 			sessionID = client.SessionID
@@ -180,11 +178,8 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 				return errors.New("Policy acceptance is required. Run `cyfr login` to try again.")
 			}
 
-			// Re-probe to mint push tokens now that the gate passes.
-			// MCP `registry.probe` writes credentials to the local
-			// CredentialStore for authenticated callers, so a single
-			// call replaces what session.device_poll's internal probe
-			// would have done if acceptance had been current.
+			// Re-probe after policy acceptance to mint push tokens and store them
+			// in the local CredentialStore.
 			probeResult, perr := client.CallTool(cmd.Context(), "registry", map[string]any{
 				"action":       "probe",
 				"provider":     provider,
@@ -261,12 +256,8 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 	},
 }
 
-// pollDeviceAuth polls session.device_poll every interval until the flow
-// completes (its result is returned), the device code expires or is denied,
-// the deadline passes, or ctx is cancelled. Transient errors — network blips
-// — keep the loop polling; a cancelled context ends it immediately. Ctrl-C
-// used to be read as one more transient error, spinning the loop until the
-// deadline.
+// pollDeviceAuth polls until completion, expiry, denial, deadline or
+// context cancellation. Transient network errors are retried.
 func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCode string, interval time.Duration, deadline time.Time, expiresIn float64) (map[string]any, error) {
 	for {
 		if time.Now().After(deadline) {

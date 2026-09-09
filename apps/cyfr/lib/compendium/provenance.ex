@@ -18,10 +18,8 @@ defmodule Compendium.Provenance do
   stale by then. The tree probe (`Arca.Overlay.unit_status/2`) is the
   SSOT; a row can cache the answer for display, but the tree wins.
 
-  This module is also the release-catalog seam the deleted
-  upstream-catalog module used to be: `shipped_versions/2` answers "what
-  does this install ship for that name", and `drift/2` answers "how far
-  is my copy from it".
+  `shipped_versions/2` lists bundled versions for a name; `drift/2` compares
+  the tenant copy with its shipped counterpart.
   """
 
   alias Compendium.ComponentPath

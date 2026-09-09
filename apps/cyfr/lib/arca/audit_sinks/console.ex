@@ -11,11 +11,9 @@ defmodule Arca.AuditSinks.Console do
   a fixed key set would print a sign-in with every field blank and drop
   the door-refusal's reason.
 
-  `user_id` and `athanor_id` ride Logger METADATA, not the message: they are
-  in `Cyfr.LoggerContext`'s roster, so `Cyfr.JsonFormatter` gives them their
-  own fields under `CYFR_LOG_FORMAT=json`. Interpolated into the sentence
-  they were unqueryable in exactly the plane that most needs to be queried
-  by who and by which athanor.
+  `user_id` and `athanor_id` are Logger metadata fields. With
+  `CYFR_LOG_FORMAT=json`, `Cyfr.JsonFormatter` emits them as structured
+  fields for filtering by caller and athanor.
 
   This sink logs at `:info`, so it is subject to the node's log level: a
   deployment that raises the level to `:warning` keeps its operational

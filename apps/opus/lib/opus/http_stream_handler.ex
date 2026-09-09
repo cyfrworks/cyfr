@@ -123,15 +123,8 @@ defmodule Opus.HttpStreamHandler do
     Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
   end
 
-  # The boundary promise every host function keeps: never raise into WASM.
-  # `Opus.HttpHandler.execute/5` and `Opus.StorageHandler.dispatch_caught/6`
-  # both do this; these three did not, and two of them matched hard on
-  # `Agent.start_link/1` and `Task.Supervisor.start_child/2` — both of which
-  # ANSWER `{:error, …}` rather than raising. Under memory pressure, or with
-  # `Opus.TaskSupervisor` mid-restart, that MatchError killed the Wasmex
-  # process and failed the whole execution where a `stream_error` the guest
-  # could act on was available. The message stays generic; the exception goes
-  # to the host log.
+  # Catch host-function failures and return stream_error to the guest.
+  # Keep fault details in the host log.
   defp guarded(component_ref, name, fun) do
     fun.()
   rescue

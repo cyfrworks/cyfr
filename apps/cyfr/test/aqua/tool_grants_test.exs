@@ -99,9 +99,7 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "a deny is not defeated, or inverted, by a glob" do
-      # The two shapes that used to fail: a deny against a globbed `ask`
-      # was re-offered every turn, and a deny against an exact `ask` under
-      # a globbed `auto` made the pair directly callable.
+      # Standing denies must override both exact and globbed ask/auto policies.
       deny = [%{effect: "deny", tool: "component", action: "pull"}]
 
       composed = ToolGrants.resolve(%{"component.*" => "ask"}, deny)

@@ -71,10 +71,8 @@ defmodule Sanctum.SignIn do
       user_id = user.id
       apply_platform(user_id, verdict)
 
-      # The invited seats activate on the next sign-in; refusing this one
-      # over a store blip would lock the person out. Loud, never silent —
-      # the assertive match this replaces could not fail (both arms were
-      # {:ok, _}), so a failed activation was invisible.
+      # Log invitation activation failures without refusing sign-in.
+      # Pending invitations can activate on the next sign-in.
       case Members.activate_invited(user) do
         {:ok, _n} ->
           :ok

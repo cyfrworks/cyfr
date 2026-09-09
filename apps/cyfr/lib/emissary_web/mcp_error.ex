@@ -5,12 +5,8 @@ defmodule EmissaryWeb.MCPError do
   @moduledoc """
   Sends a JSON-RPC error response from the MCP ingress plugs and controllers.
 
-  Every rejection before the router — bad protocol version, disallowed origin,
-  rate limit, auth failure — has to answer in JSON-RPC, and each site used to
-  hand-roll the envelope. Thirteen copies drifted in one specific way: twelve of
-  them hardcoded `"id" => nil`, so a client that sent `{"id": 7}` got back an
-  error it could not correlate to its request. JSON-RPC requires the id be
-  echoed.
+  Formats pre-router rejections as JSON-RPC errors and echoes a valid
+  request id so clients can correlate failures.
 
   The id is recovered from the parsed body, which is available here because
   `Plug.Parsers` runs in the endpoint, ahead of the router pipeline. It is
@@ -44,15 +40,8 @@ defmodule EmissaryWeb.MCPError do
     |> Phoenix.Controller.json(Message.encode_error(request_id(conn), code, message))
   end
 
-  # RFC 9110 §15.5.2: "The server generating a 401 response MUST send a
-  # WWW-Authenticate header field containing at least one challenge applicable
-  # to the target resource." A bare 401 leaves a client nothing to act on, and
-  # every rejection here used to send one.
-  #
-  # The scheme is all this endpoint can honestly advertise: the credential is an
-  # opaque bearer — a `cyfr_` API key or a Sanctum session token — not an OAuth
-  # access token. A server that also implemented OAuth 2.1 would add
-  # `resource_metadata=` here, pointing at its protected-resource document.
+  # HTTP 401 requires a WWW-Authenticate challenge (RFC 9110).
+  # Advertise Bearer for API keys and Sanctum session tokens.
   defp challenge(conn, 401), do: Plug.Conn.put_resp_header(conn, "www-authenticate", "Bearer")
   defp challenge(conn, _status), do: conn
 

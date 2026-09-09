@@ -3,14 +3,10 @@
 
 defmodule Compendium.Cascade do
   @moduledoc """
-  What follows a component name out of the registry: when the LAST
-  version of a name is removed, its profiles are revoked (§3.10 — consent
-  rows stay, insert-only history; vault entries stay, the operator's) and
-  its standing registrations are disabled (webhooks, cron schedules — a
-  registration outliving its target is an invocation channel pointed at
-  nothing, and one that would go live again the moment anyone republished
-  the name). `Compendium.Registry.delete/4` and the prune path call this;
-  the byte/row deletion itself stays the registry's.
+  Revokes profiles and disables webhook and cron registrations when the
+  last version of a component name is removed. Consent history and vault
+  entries remain. Called by registry deletion and pruning; the registry
+  owns removal of the component's bytes and row.
   """
 
   require Logger
@@ -42,10 +38,7 @@ defmodule Compendium.Cascade do
     :ok
   end
 
-  # §3.10: removing a component revokes its profiles. Consent rows stay —
-  # they are insert-only history, and the revoked profile status is the
-  # live gate. Vault entries stay too: they are the operator's, and they
-  # outlive any component that borrowed them.
+  # Revoke profiles while retaining consent history and vault entries.
   defp revoke_profiles(ctx, name_ref) do
     case Arca.ProfileStorage.list_for_source(ctx.athanor_id, name_ref) do
       {:ok, profiles} ->

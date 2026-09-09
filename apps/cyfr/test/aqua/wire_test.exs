@@ -58,7 +58,6 @@ defmodule Aqua.WireTest do
             String.starts_with?(path, @focus_prefix),
             do: String.replace_prefix(path, @focus_prefix, "")
 
-      # The old agents page is the stub this rule was written for.
       assert "/agents" in stubs
 
       for stub <- stubs do
@@ -462,10 +461,7 @@ defmodule Aqua.WireTest do
     end
 
     test "kind_for/2 returns nil for an internal tool with no annotation (no _default fallback)" do
-      # Sanity check: a known-internal tool with an action that doesn't
-      # exist in its `annotations.actions` returns nil. Previously this
-      # would have fallen back to `_default`; the audit_action_kinds/0
-      # startup check is what surfaces these gaps now.
+      # An unknown action has no kind; startup validation reports missing annotations.
       assert Aqua.Kinds.kind_for("session", "nonexistent_action") == nil
     end
 

@@ -2,10 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.RestartRequiredTest do
-  # §4.4: runtime consent does not resume the running execution. A delta
-  # revision commits for future roots; the in-flight execution — which may
-  # already have taken side effects under the authority it started with —
-  # terminates carrying restart_required, and the operator re-runs.
+  # Runtime consent ends the current execution with restart_required; only a new root uses the revision.
   use ExUnit.Case, async: false
 
   alias Opus.ExecutionRecord

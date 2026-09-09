@@ -2,11 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.TurnComposeTest do
-  # Composing a turn reads the estate's tree once and the catalyst listing
-  # once. It used to make a tool call per role — the orchestrator twice,
-  # the roster, the listing three times, the scroll index, one `get` per
-  # role — each minting a request-log row, so a six-role estate paid a
-  # dozen round trips before the model saw a token.
+  # Compose a turn with one roster read and one catalyst listing.
   use ExUnit.Case, async: false
 
   alias Aqua.Orchestrator

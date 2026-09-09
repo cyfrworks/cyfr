@@ -2,10 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.AuthorityExecutionCharacterizationTest do
-  # The surviving characterization: a real probe binary executed under a
-  # bootstrap-minted consent through the production DB source. Its legacy
-  # twin (the profile-less path's characterization) retired with that
-  # path; every property here is the authority path's intended behavior.
+  # Execute a real probe under bootstrap consent loaded from the database.
   use ExUnit.Case, async: false
 
   alias Opus.Test.NestedExecution, as: Probe
@@ -91,7 +88,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
              Cyfr.Execution.authority_for(ctx, {:id, profile_id}, @probe_node)
   end
 
-  test "a self-invoking chain rides D2: every level keeps the consented authority", %{ctx: ctx} do
+  test "a self-invoking chain keeps the consented authority at every level", %{ctx: ctx} do
     attach_witness()
 
     {:ok, run_result} =

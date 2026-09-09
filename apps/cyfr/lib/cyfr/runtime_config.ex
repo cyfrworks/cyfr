@@ -18,13 +18,10 @@ defmodule Cyfr.RuntimeConfig do
 
   This module holds two jobs, deliberately:
 
-  1. **Boot-time parsers** (the `getenv`-taking resolvers above) — env in,
-     validated config out, evaluated once by `runtime.exs`.
-  2. **Runtime accessors** (the zero-arity readers: `auth_provider/0`,
-     `cookie_secure?/0`, `cors_allowed_origins/0`, …) — added ONLY when a
-     default was being re-spelled at several call sites. A key with a
-     single reader stays with the module that owns it; blanket
-     centralization is not the pattern here, one-spelling-per-default is.
+  1. **Boot-time parsers** take environment values and return validated
+     configuration, evaluated once by `runtime.exs`.
+  2. **Runtime accessors**, such as `auth_provider/0` and `cookie_secure?/0`,
+     provide shared defaults for settings read by multiple modules.
   """
 
   @type getenv :: (String.t() -> String.t() | nil)
@@ -32,11 +29,8 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   Read an on/off switch from the environment.
 
-  Unset (or blank) takes `default`. A set value must spell a switch —
-  `on`/`off`, `true`/`false`, `yes`/`no`, `1`/`0`, any case — and anything
-  else is `{:error, message}`: a security toggle such as `CYFR_BUILDS`
-  must never read an unrecognised spelling as its default the way a
-  "false-or-truthy" parse does (`CYFR_BUILDS=off` once meant *on*).
+  Unset or blank values use `default`. Accepts `on`/`off`, `true`/`false`,
+  `yes`/`no`, and `1`/`0`, ignoring case. Other values return `{:error, message}`.
   """
   @spec switch(getenv, String.t(), boolean()) :: {:ok, boolean()} | {:error, String.t()}
   def switch(getenv, key, default) when is_function(getenv, 1) and is_boolean(default) do
@@ -128,13 +122,6 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   The configured auth provider module, or `nil` when the deployment runs
   without sign-in.
-
-  The most security-load-bearing key in the system, and it was read raw at
-  six call sites — the boot guard, the plug, the login page, the callback,
-  the session tool, and `Sanctum.auth_configured?/0` — each spelling the
-  default itself. This module exists because, as it says of the cookie
-  flag, a security default spelled out at several call sites is several
-  chances to spell it differently.
   """
   @spec auth_provider() :: module() | nil
   def auth_provider, do: Application.get_env(:cyfr, :auth_provider)
@@ -240,14 +227,9 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  The deployment's origin: `public_url/0` when the operator set one, else
-  a dev default derived from the endpoint's CONFIG — the `:url` host and
-  the `:http` port, as data. Deriving here (rather than the auth domain
-  calling `EmissaryWeb.Endpoint.url()`) keeps the deployment fact behind
-  this module and fixes what that call got wrong: the endpoint `:url`
-  carries no scheme, so it answered `http://…` even on the TLS profile.
-  The dev default is honestly `http` — a TLS deployment sets
-  CYFR_PUBLIC_URL, and `Cyfr.Application` warns at boot when it is unset.
+  Returns `public_url/0` when configured, otherwise an HTTP development
+  origin built from the endpoint’s configured host and port.
+  TLS deployments must set CYFR_PUBLIC_URL.
   """
   @spec origin() :: String.t()
   def origin do
@@ -293,11 +275,8 @@ defmodule Cyfr.RuntimeConfig do
   def sqlite_busy_timeout_ms, do: 5_000
 
   @doc """
-  The default per-window tincture invoke budget. Two ingress surfaces share
-  it — the HTTP pipeline keys it by IP (EmissaryWeb.Plugs.TinctureRateLimit),
-  the console shell keys it by person — deliberately separate buckets, one
-  number, in glue both may name (the console naming the transport's plug
-  was the one console→transport back-edge).
+  Returns the default per-window tincture invocation budget. HTTP uses
+  per-IP buckets; the console shell uses separate per-person buckets.
   """
   @spec tincture_default_invoke_max() :: pos_integer()
   def tincture_default_invoke_max, do: 120
@@ -400,10 +379,7 @@ defmodule Cyfr.RuntimeConfig do
     missing = for {var, key} <- required, is_nil(resolved[key]), do: var
 
     with [] <- missing,
-         # A distant or slow object store is the one storage failure an
-         # operator can fix from the outside. This lived as a top-level
-         # `:s3_receive_timeout_ms` that no config file set, while every other
-         # S3 setting was read from `config :cyfr, :s3`.
+         # Use the configured receive timeout for object-store requests.
          {:ok, receive_timeout_ms} <-
            positive_int(getenv.("CYFR_S3_RECEIVE_TIMEOUT_MS"), "CYFR_S3_RECEIVE_TIMEOUT_MS") do
       opts =

@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Framing, correlation and child lifecycle — the three things the CI smoke
-// test does not reach. Every case here is a bug that shipped: a child's own
-// request resolving the bridge's pending handshake, an EPIPE on a dead
-// child's stdin killing the whole process, and a string-typed response id
-// silently hanging a call.
+// Test framing, response correlation, and child-process lifecycle.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";

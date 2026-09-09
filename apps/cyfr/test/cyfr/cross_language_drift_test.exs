@@ -23,14 +23,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     elixir = read!("apps/cyfr/lib/sanctum/component_ref.ex")
     go = read!("apps/codex/internal/ref/ref.go")
 
-    # The grammar BODIES are byte-identical on both sides; the anchors are
-    # not, and must not be. Go's RE2 anchors `^`/`$` to the whole text
-    # already, but PCRE's `$` also matches before a trailing newline — so
-    # `"alice\n"` passed every one of these on the Elixir side, which is
-    # where the untrusted, untrimmed input actually arrives. Elixir spells
-    # `\A…\z`; Go keeps `^…$`; both mean the same rule. The name rule is
-    # structured differently per language (Go folds the length cap into the
-    # regex) and is covered by each side's own tests.
+    # Grammar bodies match across languages. Whole-input anchors are
+    # \A…\z in Elixir and ^…$ in Go. Name-length checks have separate tests.
     shared = [
       "[a-z0-9]+(-[a-z0-9]+)*",
       "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?",
@@ -142,9 +136,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert go =~ ~s(ns == "localhost")
   end
 
-  # ==========================================================================
-  # §4.3 authority-error vocabulary: one tag set across three boundaries
-  # ==========================================================================
+  # Authority error tags must agree across language boundaries.
 
   test "the consent-tag vocabulary agrees across Sanctum, the MCP boundary and the CLI" do
     # Sanctum.Consent declares the vocabulary; the tuples stay TYPED to the
@@ -194,7 +186,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # Opus.MCP spells the roster once, as the guard on format_root_result/1.
     assert opus_mcp =~
              "tag in [:setup_required, :consent_required, :consent_conflict, :restart_required]",
-           "opus/mcp.ex guard roster no longer spells the four §4.3 tags"
+           "opus/mcp.ex guard roster must include the four consent signal tags"
 
     # The payload keys Consent documents as normative are the ones the CLI
     # formatter reads — a renamed key degrades every explanation to the
@@ -210,11 +202,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # ==========================================================================
 
   test "the MCP conformance vocabulary is spelled the same in every client" do
-    # `Emissary.MCP.ClientProtocolDriftTest` pins the protocol REVISION;
-    # this pins the vocabulary AROUND it. Renaming a `_meta` key, a request
-    # header or the base64 sentinel on the Elixir side used to compile
-    # cleanly, pass the whole suite, and lock out both bundled clients at
-    # runtime with a -32602.
+    # Check shared metadata keys, request headers and binary sentinels across bundled clients.
     protocol = read!("apps/cyfr/lib/emissary/mcp/protocol.ex")
     message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
     mjs = read!("apps/mcp-bridge/server.mjs")

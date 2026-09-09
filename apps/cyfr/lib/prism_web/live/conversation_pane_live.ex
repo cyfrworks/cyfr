@@ -7,16 +7,9 @@ defmodule PrismWeb.ConversationPaneLive do
   the consent sheet and the uploads — a window onto `Aqua.ConversationRunner`
   for one thread, under one focused context.
 
-  A nested LiveView (`live_render/3` from its host), so the pane has a
-  mailbox of its own: the runner's broadcasts, a card's decision and the
-  consent sheet's outcome arrive here and apply at once, as they did when
-  the chat page was one process. It authenticates from the same session
-  cookie as any page and focuses on the estate the host names — through
-  `PrismWeb.AuthHelpers.authenticate_session/2`, membership checked — so a
-  page may host more than one pane on more than one estate: the room's
-  tape beside the person's own assistant. Nothing here reads the host's
-  focus; every runner call, every row read, every attachment write runs
-  under the pane's context, and two panes on two estates cannot bleed.
+  Each nested LiveView has its own mailbox, authenticated session context,
+  and membership-checked athanor focus. Runner calls, row reads, and
+  attachment writes use that context, independently of the host’s focus.
 
   One pane per estate (`id: "pane-<athanor id>"`): the host names the
   thread at mount and turns the pane to another with `{:switch_thread,

@@ -70,14 +70,8 @@ defmodule Opus.WasiCapabilitiesTest do
 
   describe "stdio isolation" do
     test "no component type inherits the host's stdout/stderr" do
-      # These were `true` on the reading that a guest needs somewhere to log.
-      # What it bought was an unbounded, unmasked, un-rate-limited write from
-      # every guest — reagents included, whose definition is compute with no
-      # I/O — straight into the operator's console and log aggregation,
-      # around `Opus.SecretMasker`, the emit rate limit and the emit size cap,
-      # and a trivial way to fill a disk. `wasmex` offers no capture pipe, so
-      # the choice is inherit-or-nothing; `emit` is the channel that carries
-      # the bounds.
+      # Keep inherited stdio disabled. Guest output uses emit for masking,
+      # rate limiting, and size bounds.
       for type <- [:catalyst, :reagent, :formula] do
         opts = ComponentType.wasi_options(type)
 

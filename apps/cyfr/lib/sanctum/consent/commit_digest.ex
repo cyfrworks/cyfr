@@ -20,35 +20,17 @@ defmodule Sanctum.Consent.CommitDigest do
   id alone would let a rebinding — the same entry pointed at a different
   account or different endpoints — inherit an existing consent silently.
 
-  ## `blob_digest` is what makes this closed
+  ## Policy blob
 
-  Every other field here is a decision *re-expressed*. `blob_digest` is the
-  hash of the resolved policy blob itself — the exact bytes
-  `Sanctum.Authority` will enforce — so the digest is a promise about what
-  runs **by construction** rather than by keeping this list in step with
-  the blob builder.
+  `blob_digest` hashes the resolved policy bytes enforced by `Sanctum.Authority`.
 
-  It is required, and this list is `only_keys`-closed, because the failure
-  it prevents happened twice in opposite directions. `limits` was once
-  threaded in from the decisions and never reached the blob, so a tightened
-  number was signed and then ignored. `durable_storage` was the mirror
-  image: never in this list, but read at `Commit.publish_edge/4` to decide
-  whether every edge's storage actions are filtered to read-only — so the
-  same plan token, proof and commit digest could be replayed with the flag
-  flipped and ship `write`/`delete` on a **public** profile to anonymous
-  callers. Neither is possible while the bytes themselves are hashed here.
+  Requires `blob_digest` and rejects keys outside the declared input set.
 
-  ## `label` is here because the blob cannot carry it
+  ## Target profile
 
-  `blob_digest` covers what a consent *grants*; `label` decides which
-  profile the grant lands on — `(athanor_id, source_ref, label, kind)` is
-  the profiles' active identity index. Two owner profiles on one
-  `source_ref` under different labels whose blobs are byte-identical
-  therefore produced the same digest, and on a first consent
-  `Plan.locate_profile/4` answers `{:ok, nil, 0}` for both, so the proof's
-  `profile_id` and `expected_revision` bindings matched too. A proof minted
-  for `"prod"` could be spent on `"staging"`. Capability-identical, so
-  nothing widened — but the operator's profile was not where they left it.
+  `label` binds the grant to its target profile identity,
+  `(athanor_id, source_ref, label, kind)`. Identical policy blobs under
+  different labels must have different commit digests.
 
   `scope` needs no entry: `ShapeDigest` carries it, and `shape_digest` is
   the first field here.
@@ -98,7 +80,6 @@ defmodule Sanctum.Consent.CommitDigest do
       ...> })
       iex> String.starts_with?(digest, "sha256:")
       true
-
   """
   @spec compute(commit()) :: {:ok, String.t()} | {:error, error()}
   def compute(commit) when is_map(commit) do

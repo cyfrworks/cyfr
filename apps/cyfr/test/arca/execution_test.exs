@@ -402,11 +402,8 @@ defmodule Arca.ExecutionTest do
     end
 
     test "the sweep is fenced on what it observed: a renewal in between wins" do
-      # The race the fence exists for: the sweeper lists a lapsed row, the
-      # runner renews, the sweeper writes. Without the fence the write
-      # matched `status = running` and failed a live execution — whose real
-      # result `record_complete/4` then refused. With it, the observed
-      # `lease_until` no longer matches and nothing is written.
+      # Renew the lease between the sweeper read and write. The stale lease
+      # fence must prevent the sweeper from failing a live execution.
       lapsed = DateTime.add(DateTime.utc_now(), -60, :second)
       id = running!(lapsed, attempt: "att_live")
 

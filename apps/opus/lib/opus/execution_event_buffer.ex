@@ -31,12 +31,7 @@ defmodule Opus.ExecutionEventBuffer do
       Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
   """
 
-  # `:transient` so the idle timeout actually reaps. `use GenServer`'s
-  # default is `:permanent`, and a DynamicSupervisor restarts a permanent
-  # child even on a `:normal` exit — so this process stopped after two
-  # minutes idle and came straight back, every two minutes, for the life of
-  # the node. One process per execution ever run, which is the accumulation
-  # the idle timeout was written to prevent. A crash still restarts.
+  # Restart on crashes, but allow normal idle-timeout exits to reap the buffer.
   use GenServer, restart: :transient
 
   require Logger
@@ -45,8 +40,7 @@ defmodule Opus.ExecutionEventBuffer do
   @buffer_ttl_ms :timer.minutes(10)
   @idle_timeout :timer.minutes(2)
 
-  # The application's single supervised PubSub. The old `:cyfr, :pubsub` knob was
-  # never set anywhere; the name is a compile-time constant.
+  # Use the application's supervised PubSub instance.
   defp pubsub, do: Emissary.PubSub
 
   defp put_provenance(event, opts) do
@@ -107,24 +101,14 @@ defmodule Opus.ExecutionEventBuffer do
 
     result = deliver(execution_id, ctx, event)
 
-    # The terminal event is the last thing this stream numbers, so the
-    # counter can go with it. Dropping it any earlier — the buffer process
-    # used to forget on its own death — reset the numbering while the
-    # replay cache was still alive: an execution that idled two minutes
-    # and emitted again restarted at 1, and a client resuming with a
-    # pre-idle Last-Event-ID silently lost everything after the gap.
+    # Retire the sequence counter only after the terminal event; idle buffer restarts must preserve it.
     Opus.ExecutionEventBuffer.Sequence.forget(execution_id)
 
     result
   end
 
-  # Buffer, then broadcast, both keyed by the athanor the producer carries.
-  # The buffered write must land first (and synchronously): broadcast-first
-  # left a window where a client that subscribed and replayed `since` saw
-  # neither the live event nor the buffered copy — a permanent gap. A
-  # producer without an athanor (a bug upstream — every execution belongs
-  # to one) has nowhere to route to: the event is dropped and logged rather
-  # than misrouted into some default tenant.
+  # Write to the athanor’s buffer synchronously before broadcasting.
+  # Drop and log events without an athanor; never use a default tenant.
   defp deliver(execution_id, ctx, event) do
     case extract_athanor_id(ctx) do
       {:ok, athanor_id} ->
@@ -251,12 +235,7 @@ defmodule Opus.ExecutionEventBuffer do
   def init({execution_id, athanor_id}) do
     Process.flag(:trap_exit, true)
 
-    # Resume from what is cached rather than starting empty. This process
-    # stops after two minutes idle and `terminate/2` merges its events into
-    # the cache, whose TTL is ten — so a long execution that goes quiet and
-    # then emits again restarts here, and an empty start would put that one
-    # new event over the whole history, erasing the replay a reconnecting
-    # SSE client asks for with Last-Event-ID.
+    # Restore cached events after an idle restart so reconnecting clients retain their replay window.
     events =
       case Arca.Cache.get(Arca.Cache.Keys.exec_events(execution_id, athanor_id)) do
         {:ok, cached} when is_list(cached) -> cached
@@ -312,11 +291,8 @@ defmodule Opus.ExecutionEventBuffer do
 
   @impl true
   def terminate(_reason, state) do
-    # The counter is NOT forgotten here. This process dies two minutes idle
-    # while the replay cache lives ten and the execution up to thirty —
-    # forgetting on death reset the numbering mid-window, and a client
-    # resuming with a pre-idle Last-Event-ID silently lost every post-idle
-    # event. The stream's terminal push is what retires the counter.
+    # Preserve the counter across idle buffer shutdown: replay entries and
+    # executions may outlive this process. Terminal pushes retire it.
     if state.events != [] do
       key = Arca.Cache.Keys.exec_events(state.execution_id, state.athanor_id)
 

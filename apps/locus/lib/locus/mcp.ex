@@ -330,9 +330,7 @@ defmodule Locus.MCP do
             wasm_path =
               Compendium.ComponentPath.wasm_path(type, publisher(), name, version)
 
-            # Bounded output (Locus.Builder caps dist size and the WASM
-            # validator caps binaries), so the store applies the ordinary
-            # tenant cap — the old blanket exemption is gone.
+            # Apply the tenant storage cap to bounded build output.
             Arca.put(ctx, wasm_path, result.wasm_bytes)
           end
 
@@ -579,11 +577,7 @@ defmodule Locus.MCP do
     end
   end
 
-  # Tincture-specific exclusions ON TOP of the shared droppings predicate:
-  # dist/ is the build's own output and data.db a runtime artifact — both
-  # tincture facts, not general ones. target/ rode in here through the
-  # shared predicate now; a tincture that once saw `cargo build` used to
-  # ship its whole Rust target tree into the build request.
+  # Exclude tincture dist/ and data.db in addition to shared build artifacts.
   @tincture_excluded ~w(dist data.db)
 
   defp collect_tincture_source(ctx, base) do

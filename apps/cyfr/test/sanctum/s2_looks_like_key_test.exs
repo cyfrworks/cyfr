@@ -3,10 +3,7 @@
 
 defmodule Sanctum.S2LooksLikeKeyTest do
   @moduledoc """
-  Phase 2 S2: `Sanctum.ApiKey.looks_like_key?/1` is the single prefix
-  predicate (shared by the MCP plug + tincture auth), and `validate/2`'s
-  malformed-key path performs a dummy hash so it is not timing-distinguishable
-  from the store-lookup path. No external contract change.
+  Checks shared API-key recognition and dummy hashing for malformed keys.
   """
   # async: false — the unknown-key path checks out a sandbox connection and sets
   # shared mode (a global mutation); running concurrently with other async tests

@@ -5,12 +5,9 @@ defmodule Sanctum.UnauthorizedError do
   @moduledoc """
   The raised form of a `Sanctum.Unauthorized` refusal.
 
-  Two control-flow shapes, one vocabulary. Most gates refuse with
-  `{:error, reason}`; the `!` accessors (`Sanctum.Context.require_tenant!/1`,
-  `athanor!/1`) have no tuple to return and raise instead. What raised used
-  to carry its own words — "Unauthorized for action: athanor_required" —
-  so the same refusal read one way when returned and another when raised,
-  and a surface that rescued it had nothing to branch on but the prose.
+  Carries `Sanctum.Unauthorized` reasons as exceptions for raising
+  accessors such as `Sanctum.Context.require_tenant!/1` and `athanor!/1`.
+  Returned and raised refusals share the same reason vocabulary.
 
   It now carries the reason itself: `Sanctum.Unauthorized.message/2` writes
   the sentence and `code/1` maps it to a JSON-RPC code, exactly as for the

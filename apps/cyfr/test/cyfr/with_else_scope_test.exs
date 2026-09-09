@@ -21,11 +21,8 @@ defmodule Cyfr.WithElseScopeTest do
       `headers`, so an upstream that echoed the Authorization header into
       its error body carried the credential out through `state.error`.
 
-  Both were fixed structurally rather than by remembering: the pipeline is
-  bound in the else *pattern* (`{:error, p, reason}`), and the connect
-  result is bound under its own name. This test keeps the shape from
-  coming back — any name a `with` binds via `<-` must not be read by its
-  own `else` unless that arm binds it too.
+  Names bound by a with expression must not be read by its own else
+  unless that arm independently binds them.
   """
 
   use ExUnit.Case, async: true

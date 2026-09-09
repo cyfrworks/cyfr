@@ -37,9 +37,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   alias Sanctum.Auth.Identity
   alias Sanctum.{Context, Session}
 
-  # The roster this module knows how to speak to. `@provider_urls` below is
-  # keyed by the same names; a provider in one and not the other is the
-  # drift `providers/0` used to invite by spelling its own list.
+  # Supported providers; @provider_urls must have the same keys.
   @known_providers ~w(github google)
 
   # Device-flow endpoints — per-provider URLs and scopes.
@@ -61,23 +59,9 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Default polling configuration
   @default_poll_interval 5
 
-  # Anonymous-surface budgets (checked before any provider round-trip;
-  # rationale at check_poll_budget/2 and check_init_budget/1).
-  #
-  # The invariant every number here keeps: THE GLOBAL CEILING SITS ABOVE
-  # WHAT ONE CLIENT IS ALLOWED TO SEND. It used to be inverted — a 60/min
-  # server-wide `device_init` ceiling under a 120/min per-IP transport
-  # budget (`EmissaryWeb.Plugs.MCPRateLimit`) — so one unauthenticated
-  # address could exhaust it without ever tripping the limiter and answer
-  # "Too many sign-in attempts" to every user on the server. The console
-  # was worse: `/live` is handled by the endpoint before the router, so it
-  # passes no limiter at all and a per-socket debounce is not a bound.
-  #
-  # `Cyfr.RateLimiter` is ETS and node-local, like every other limiter
-  # here, so on a multi-node deployment each of these is a per-node
-  # budget and the effective ceilings multiply by the node count. That is
-  # the same property the transport limiter has; it is recorded, not
-  # relied on.
+  # Check anonymous-surface budgets before contacting providers. Global
+  # ceilings must exceed individual-client budgets. Counters are node-local,
+  # so deployment-wide capacity scales with the number of nodes.
   @poll_per_code_max 30
   @poll_per_ip_max 90
   @poll_global_max 1_800
@@ -106,10 +90,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   config — declaring it would publish a module-swap hook as a supported
   setting. Same shape as `Sanctum.Consent.Source.impl/0`.
 
-  Every caller that starts or polls a flow goes through this, so a suite
-  that swaps it covers all of them; a caller that names this module
-  directly is one the fake cannot reach, which is what left the registry
-  appeal flow untestable while sign-in was covered.
+  Resolves the configured device-flow implementation for start and poll calls.
   """
   @spec impl() :: module()
   def impl, do: Application.get_env(:cyfr, :device_flow, __MODULE__)
@@ -131,7 +112,6 @@ defmodule Sanctum.Auth.DeviceFlow do
 
       {:ok, info} = DeviceFlow.init_device_flow("github", "203.0.113.7")
       # info contains: device_code, user_code, verification_uri, expires_in, interval
-
   """
   @spec init_device_flow(provider(), String.t() | nil) ::
           {:ok, device_code_response()} | {:error, term()}
@@ -197,7 +177,6 @@ defmodule Sanctum.Auth.DeviceFlow do
         {:ok, %{status: "expired"}} ->
           # Need to restart flow
       end
-
   """
   @spec poll_for_session(provider(), String.t(), String.t() | nil) ::
           {:ok, map()} | {:error, term()}
@@ -675,11 +654,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   @doc """
   The providers this server can actually start a flow with, as atoms.
 
-  The sign-in page had its own copy of this test, and the two had already
-  come apart: this module treats Google as usable on a client id alone
-  while the page also required the secret — which Google's token endpoint
-  requires, so the page was right and a flow started from anywhere else
-  would have failed at the token exchange.
+  Google device flow requires both the client id and token-exchange secret.
   """
   @spec configured_providers() :: [atom()]
   def configured_providers, do: Enum.filter([:github, :google], &configured?/1)
@@ -697,12 +672,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_), do: false
 
-  # The one gate every flow verb passes: a known provider, with credentials
-  # this server can actually present. It was written out three times as a
-  # bare `get_client_id` nil-check, which had no clause for a name this
-  # module does not know — and `session_tool`'s `device_init` takes its
-  # `provider` argument straight from the caller, so an unknown one was a
-  # FunctionClauseError out of an MCP tool rather than a refusal.
+  # Require a known provider with the credentials needed for token exchange.
   defp usable(provider) do
     provider = normalize_provider(provider)
 

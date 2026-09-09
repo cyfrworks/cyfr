@@ -10,29 +10,16 @@ defmodule PrismWeb.Ops do
   gate, the contract and the handler on the LiveView's own process, with
   no task, timeout or wire encoding between them.
 
-  ## Two planes, and which one a mutation belongs to
+  ## Mutation scope
 
-  Almost everything the console changes goes through a tool: components,
-  executions, schedules, keys, webhooks, connections, the door. Those are
-  the athanor's state, an agent can reach them too, and one gate should
-  answer for both.
+  Component, execution, schedule, credential, webhook, connection, and
+  admission changes use the operation catalog and its authorization gate.
 
-  What does not go through a tool is state that exists only because a
-  person is looking at a screen — their UI preferences, a cache key being
-  invalidated after a refresh, the chat they are typing into. Chat IS on
-  the wire (`Emissary.MCP.ConversationTool` — external-plane and
-  OIDC-interactive, so no agent and no API key reaches it), but the
-  console does not call its own tool for it: the LiveView already holds
-  an authenticated member context, so it is a deliberate in-process
-  client of the same domain functions the tool wraps. Same functions,
-  two doors — the registry gate exists for surfaces that arrive without
-  one.
+  UI preferences, cache invalidation, and authenticated chat operations
+  call their domain functions directly. ConversationTool exposes chat
+  operations separately to external OIDC-interactive clients.
 
-  The rule, then: **if an agent should be able to do it, it is a tool call.
-  If it exists only for the person at the keyboard, the console owns it
-  directly.** `PrismWeb.ToolSeamTest` pins the second list — the calls
-  that grow it are worth an argument. (The list itself lives in the test:
-  a count here drifted the moment it grew.)
+  PrismWeb.ToolSeamTest checks the allowed direct domain calls.
 
   ## Result keys
 
@@ -45,12 +32,8 @@ defmodule PrismWeb.Ops do
     * `Aqua.AgentConfig.call_aqua/2` deep-stringifies on the way out, so
       its consumers read string keys only.
 
-  An earlier version of this note claimed the pages' `x[:k] || x["k"]`
-  defenses were gone; they are not (a shared `f/2` helper is copy-pasted
-  across the feed pages), and some guard genuinely mixed shapes
-  (JSON-decoded columns inside atom-keyed rows). Removing one is safe only
-  after verifying that field's producer — do not delete them wholesale on
-  the strength of this paragraph.
+  Some nested JSON values remain string-keyed inside atom-keyed rows.
+  Check the field’s producer before removing mixed-key access handling.
   """
 
   require Logger
@@ -58,10 +41,7 @@ defmodule PrismWeb.Ops do
   @doc """
   Call an MCP tool with the socket's context, or with a context directly.
 
-  The second shape is for work a page hands to `Aqua.TaskSupervisor`: a
-  task has the context but no socket, which is why those call sites used to
-  reach past this module and spell the registry call themselves — losing
-  the `"tool/action"` split with them.
+  The context form supports supervised tasks that have no LiveView socket.
 
   Returns `{:ok, result}` or `{:error, reason}`.
   """
@@ -109,10 +89,7 @@ defmodule PrismWeb.Ops do
   def error_message(:no_context), do: "Not signed in."
 
   def error_message(reason) do
-    # The same renderer the wire and the guest use
-    # (`Cyfr.Ops.Error.render/1`): this used to carry its own `cond`,
-    # which had drifted — it knew nothing of the crash/exit/timeout tuples and
-    # showed the generic sentence for all three, losing the distinction.
+    # Use the shared wire, console and guest error renderer.
     case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[PrismWeb.Ops] tool call failed: #{inspect(reason)}")

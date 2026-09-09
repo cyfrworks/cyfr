@@ -15,26 +15,16 @@ defmodule Aqua.AgentConfig do
   every read made from outside the harness, still goes through the tool:
   `call_aqua/2` is the MCP door, kept for those.
 
-  One turn used to make a dozen tool calls to compose itself — the
-  orchestrator twice, the roster, the catalyst listing three times, the
-  scroll index, and one `get` per role — each minting a request-log row.
-  Now the tree is read once (`roster/1`), the catalyst listing once
-  (`catalyst_listing/1`), and the roles are built from the roster in hand
-  (`role_definitions/4`).
+  Each turn reads the roster and catalyst listing once, then builds role
+  definitions from those results with `role_definitions/4`.
   """
 
   alias Compendium.AquaAgent
   alias Compendium.AquaPath
   alias Sanctum.Context
 
-  # The agent's `tool_policy` is DECLARED policy — what the agent's author
-  # says it may do, edited on the AQUA page. A chat decision ("always
-  # approve", "never ask again") is not an edit to it: those are
-  # `Aqua.ToolGrants` rows, composed over this at use time. The two used to
-  # share this storage, so clicking a button in one conversation rewrote
-  # the agent's definition for every conversation and every member — and
-  # once agents belong to people rather than estates, it would have
-  # followed a borrowed agent home.
+  # The authored tool_policy is edited on the AQUA page. Chat approvals are
+  # stored separately in Aqua.ToolGrants and composed with it at use time.
 
   # What a storage fault reads as on the tape: the adapter's term is for
   # the log, the person gets the one sentence every storage-backed answer
@@ -246,11 +236,8 @@ defmodule Aqua.AgentConfig do
   def resolve_catalyst(_listing, nil), do: {:error, :no_catalyst_ref}
 
   @doc """
-  The working estate's installed catalysts, as `component.list` answers
-  them — read once per turn and handed to `resolve_catalyst/2` and
-  `role_definitions/4`, which used to fetch it each. Still a tool call:
-  components are the registry's, and this is the registry's own read of
-  them, one per turn.
+  Returns the working athanor's installed catalysts through `component.list`.
+  Read once per turn and pass to `resolve_catalyst/2` and `role_definitions/4`.
   """
   @spec catalyst_listing(Context.t()) :: {:ok, [map()]} | {:error, :catalyst_lookup_failed}
   def catalyst_listing(%Context{} = ctx) do
@@ -294,10 +281,8 @@ defmodule Aqua.AgentConfig do
   console's AQUA page). A turn's own reads are in-process
   (`roster/1`, `agent/2`).
 
-  Every aqua call goes through here so guide maps arrive with ONE key
-  spelling: in-process results are atom-keyed, wire round-trips
-  string-keyed, and consumers must not carry `m[:k] || m["k"]` pairs. The
-  console's AQUA page had a byte-identical private copy of this.
+  Normalizes atom-keyed in-process results and string-keyed wire results
+  to the same string-keyed representation.
   """
   @spec call_aqua(Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_aqua(ctx, args) do

@@ -1,13 +1,7 @@
 name: License Lint
 
-# The boundary this enforces is DIRECTORY membership: lib/sanctum +
-# test/sanctum are FSL-1.1-Apache-2.0, everything else Apache-2.0. It is a
-# licensing fact, not a code-dependency wall — the two sides deliberately
-# depend on each other at runtime in both directions (Sanctum resolves
-# components through Compendium; Compendium seals through Sanctum.Cipher),
-# and opus/locus capture Sanctum constants at compile time. Those crossings
-# are governed by the surface tests (Cyfr.SanctumSurfacesTest,
-# Arca.SanctumSurfaceTest, Opus.HostSurfaceTest), not by this lint.
+# Check directory-based licensing: lib/sanctum and test/sanctum use
+# FSL-1.1-Apache-2.0; all other source uses Apache-2.0.
 
 on:
   pull_request:
@@ -35,17 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # Single source of truth: every gated source file carries its own SPDX
-      # header in-band. The FSL moat is exactly apps/cyfr/lib/sanctum + its
-      # tests; everything else (including the tenancy migrations under
-      # priv/repo/migrations) is Apache-2.0. This one gate covers every tracked
-      # .ex/.exs in the repo — root mix.exs, config/, priv/, and all apps —
-      # plus the Go CLI (apps/codex), the mcp-bridge sources and tests, the WIT ABI
-      # definitions under wit/, and the console's own JavaScript
-      # (apps/cyfr/assets/js) — all of which sit outside the moat. The JS was
-      # the last first-party source in the repo carrying no licence marking
-      # at all. Seed components stay out: they are replaceable example
-      # content, not this repo's code.
+      # Verify SPDX headers in tracked Elixir, Go, bridge, WIT and console JS
+      # source. Seed examples are outside this lint's scope.
       - name: Assert SPDX license boundary
         run: |
           set -uo pipefail

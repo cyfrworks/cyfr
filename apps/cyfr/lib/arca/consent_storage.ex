@@ -62,18 +62,8 @@ defmodule Arca.ConsentStorage do
   end
 
   defp revision_row(attrs, athanor_id) do
-    # `blob_digest` is the only thing that detects a `resolved_policy`
-    # altered in place, so a revision without one is silently
-    # unverifiable and this raises rather than writing it.
-    #
-    # Checked for a VALUE, not just a key. `Map.fetch!` alone passes a
-    # present-but-nil key, and the insert below is a raw `struct/2` with
-    # no changeset and no `validate_required` — so `blob_digest: nil`
-    # would have written cleanly and produced a row `Consent.Loader`
-    # refuses forever. `""` is checked for the same reason: it is the
-    # column default the 20260901 migration needs in order to add a NOT
-    # NULL column to a table that already has rows, and no writer may
-    # leave it standing.
+    # A nonempty blob_digest is required to verify resolved_policy.
+    # Reject nil and empty strings before the raw struct insert.
     case Map.fetch!(attrs, :blob_digest) do
       digest when is_binary(digest) and digest != "" ->
         :ok

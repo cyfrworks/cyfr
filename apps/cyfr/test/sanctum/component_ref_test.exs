@@ -747,8 +747,7 @@ defmodule Sanctum.ComponentRefTest do
     end
 
     test "version-first-colon does not leak — publisher.name:version parses correctly" do
-      # Regression against an earlier bug where first-colon split mangled
-      # the version. Last-colon split fixes it.
+      # Split on the last colon to preserve the version segment.
       assert {:ok, %ComponentRef{version: "0.1.0-beta.1"}} =
                ComponentRef.parse("c:stripe.com.api:0.1.0-beta.1")
     end

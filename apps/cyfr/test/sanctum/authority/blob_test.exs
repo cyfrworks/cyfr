@@ -25,7 +25,7 @@ defmodule Sanctum.Authority.BlobTest do
     )
   end
 
-  # The model §3.3 example, completed with full limits.
+  # Authority graph fixture with full limits.
   defp golden do
     %{
       "canonical" => "jcs-1",

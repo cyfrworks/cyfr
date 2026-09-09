@@ -45,9 +45,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
 
     File.write!(Path.join(dir, "index.html"), "<html><body>log</body></html>")
 
-    # The shell no longer force-rescans on mount (the registry follows the
-    # tinctures topic in production); files planted directly on disk need
-    # the reload the AutoIndexer broadcast would otherwise trigger.
+    # Reload the registry after writing fixtures directly to disk without an AutoIndexer notification.
     Prism.TinctureRegistry.reload_athanor(home.id)
 
     on_exit(fn ->

@@ -373,10 +373,6 @@ defmodule Arca.TenantIsolationTest do
     end
   end
 
-  # (1c) retired with the legacy secrets plane: SecretStorage grant
-  # cleanup no longer exists; vault entries are the only credential store
-  # and their tenant scoping is covered by vault_storage_test.exs.
-
   # ============================================================================
   # MCP Log Retention Isolation (1d)
   # ============================================================================

@@ -73,9 +73,8 @@ defmodule Cyfr.PathSafety do
   end
 
   @typedoc """
-  Why a path was refused. The structured half of every refusal — prose is
-  for rendering, the atom is for deciding (a `true ->` fallback over the
-  wording once misreported seven distinct causes as a traversal).
+  Structured reasons for path refusals. Callers branch on these atoms
+  and render the accompanying message for display.
   """
   @type refusal ::
           :empty_segment

@@ -5,17 +5,10 @@ defmodule Sanctum.Atoms do
   @moduledoc """
   Safe string→atom conversion against an allowlist of known values.
 
-  Membership is checked FIRST, then converted — every allowlisted string
-  has its atom guaranteed at compile time by the module attributes below,
-  so `String.to_atom/1` never mints anything new. The old order (try
-  `String.to_existing_atom/1`, fall back to the list) meant any string
-  whose atom happened to exist anywhere in the VM converted — the
-  "allowlist" was really "the whole atom table", and retired permission
-  names kept round-tripping as long as some module or test mentioned them.
+  Checks membership before converting strings to atoms. All allowed atoms
+  exist at compile time; conversion cannot create arbitrary atoms.
 
-  Unknown strings are returned as-is; they won't match permission checks,
-  so a stored grant in a retired vocabulary silently drops rather than
-  resolving to a phantom atom.
+  Unknown strings remain strings and do not match permission checks.
 
   Non-MCP-surface permissions: `:execution_write` (granted to internal
   contexts for execution-record writes) and `:vault_read` (gates
@@ -29,7 +22,6 @@ defmodule Sanctum.Atoms do
 
       iex> Sanctum.Atoms.safe_to_permission_atom("unknown_permission")
       "unknown_permission"
-
   """
 
   # Known permission atoms — only scopes that are actually enforced via require_permission
@@ -78,9 +70,7 @@ defmodule Sanctum.Atoms do
   @doc """
   Convert a string to a permission atom safely.
 
-  Membership-first against the permission vocabulary — a retired or
-  foreign name comes back as the string, which no permission check
-  matches.
+  Converts allowlisted permission names to atoms; leaves unknown names as strings.
   """
   @spec safe_to_permission_atom(String.t() | atom()) :: atom() | String.t()
   def safe_to_permission_atom(str) when is_binary(str) do

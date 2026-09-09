@@ -13,9 +13,7 @@ defmodule Compendium.TinctureValidator do
 
   ## Two entry points
 
-    * `validate/1` — operates on a local filesystem directory. Used by
-      the OCI publish flow which extracts the tar archive to a tmp dir
-      before validation (Group D in the storage refactor).
+      * `validate/1` — validates a local filesystem directory.
 
     * `validate_from_pairs/1` — operates on a list of
       `{relative_segments, content}` pairs (the shape returned by
@@ -131,13 +129,8 @@ defmodule Compendium.TinctureValidator do
   # _s is reserved by the tincture asset router for signed-token path prefixes.
   @reserved_dirs ~w(_s)
 
-  # SQLite runtime artifacts: a tincture may ship `data.db` as an asset, but
-  # its write-ahead log and shared-memory file are a snapshot of one process's
-  # in-flight state and are never stored. The exclusion lived in
-  # `Compendium.Registry`, applied when collecting files to write — after this
-  # module had already hashed them. So the digest recorded at publish covered
-  # bytes the store then dropped, and re-validating the stored tree could
-  # never reproduce it. One rule, applied before the hash, on both paths.
+  # Exclude SQLite WAL and shared-memory files before hashing and storing
+  # the tree. A tincture may still ship data.db as an asset.
   @excluded_files ~w(data.db-wal data.db-shm)
 
   @doc """

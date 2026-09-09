@@ -269,9 +269,7 @@ defmodule Aqua.Wire do
 
   # carry a typed tag alongside the prose — the tripwire surface decides on
 
-  # the tag, never by matching the wording (rewording a reason once silently
-
-  # disabled the tripwire).
+  # the tag, never by matching the wording.
 
   defp lookup_proposal(policy, tool, action) do
     key = "#{tool}.#{action}"

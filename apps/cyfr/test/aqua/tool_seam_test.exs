@@ -7,11 +7,7 @@ defmodule Aqua.ToolSeamTest do
   surface — the same contract `PrismWeb.ToolSeamTest` pins for the
   console.
 
-  Aqua was the one domain namespace with a live tool-dispatch dependency
-  and no roster or helper: `Aqua.Turn`, `Aqua.AgentConfig`,
-  `Aqua.Kinds` and the conversation runner each spelled their
-  `Emissary.MCP.*` reaches themselves. This test is what keeps those
-  sites from coming back.
+  Checks that assistant-domain MCP dependencies use Aqua.Ops.
 
   Outside its scope, deliberately: `Emissary.PubSub` used as a process
   NAME (the application's one supervised PubSub, the posture

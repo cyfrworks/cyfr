@@ -24,7 +24,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
   describe "mcp_servers management requires :admin" do
     # Denials are asserted through the dispatcher — the permission gate lives
-    # in the action annotations, enforced by ToolRegistry, not in the handler.
+    # in the action annotations, enforced by the catalog, not in the handler.
     test "mutating actions are denied for an execute-only context" do
       ctx = execute_only_ctx()
 
@@ -125,8 +125,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                  })
                )
 
-      # The secrets plane is retired: a secret: reference is rejected at
-      # create with a message naming the vault: replacement.
+      # Reject secret: references with an error directing callers to vault:.
       assert {:error, msg} =
                Emissary.MCP.McpServersTool.handle(
                  "mcp_servers",

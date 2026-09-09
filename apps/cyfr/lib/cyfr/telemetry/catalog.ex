@@ -5,11 +5,8 @@ defmodule Cyfr.Telemetry.Catalog do
   @moduledoc """
   Every `[:cyfr, …]` telemetry event, and who consumes it.
 
-  The producers had quietly grown dozens of events consumed by nothing —
-  including the tenant-bypass trail and the audit plane's own alarm. The
-  catalog closes the roster: an event exists only if this table names it
-  (a drift test scans the source both ways), and every entry says who
-  attaches to it or why it is deliberately left for the operator.
+  Classifies every emitted telemetry event and identifies its consumers
+  or availability for operator-provided handlers.
 
   ## Consumers
 

@@ -3,13 +3,9 @@
 
 defmodule Sanctum.S4PlatformAuditTest do
   @moduledoc """
-  Phase 2 S4: platform-scope construction is closed and audited. Every
-  `scope: :platform` construction emits `[:cyfr, :sanctum, :platform_context]`
-  telemetry; the one sanctioned path (`Context.internal/1` /
-  `Sanctum.system_context/0`, fixtures via `Sanctum.TestContext.platform/1`)
-  is marked `sanctioned: true`, and a direct
-  `Context.build(scope: :platform, ...)` raises — the telemetry event still
-  fires first, so even a refused construction leaves a record of who tried.
+  Platform-context construction emits audit telemetry. Internal builders
+  are sanctioned; direct Context.build attempts emit an unsanctioned event
+  before raising.
   """
   use ExUnit.Case, async: false
 

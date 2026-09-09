@@ -295,7 +295,7 @@ defmodule Opus.Chain do
           :type,
           decision.component && Map.get(decision.component, "type")
         )
-        # Which edge authorized this hop, for the §4.5 audit line.
+        # Record the edge authorizing this hop for audit attribution.
         |> Arca.QueryHelpers.maybe_put(:dep_ref, decision.reference)
         |> Arca.QueryHelpers.maybe_put(:need, decision.need)
         # Who invoked this child, for what the row keeps of its output.
@@ -343,10 +343,8 @@ defmodule Opus.Chain do
         {:error, _other} -> {:error, {:incomplete, :invalid_graph}}
       end
 
-    # The live shape lets a versionless consent survive a release whose
-    # shape did not change (§2.6 allow-and-record). Derivation failure
-    # leaves it nil, which the loader treats as unknown — fail closed to
-    # needs_consent, never fail open.
+    # An unchanged live shape permits versionless consent. Derivation failure
+    # leaves the shape unknown and requires fresh consent.
     opts =
       Keyword.put_new_lazy(opts, :live_shape_digest, fn ->
         case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do

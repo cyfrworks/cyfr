@@ -5,14 +5,8 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   @moduledoc """
   Both ingresses hand a tool the same arguments.
 
-  `Emissary.MCP.Router` validates `arguments` against the tool's
-  `inputSchema` before dispatch; `Catalog.call_external/4` — the console's
-  path, through `PrismWeb.Ops` — did not. So a `phx-click` (or a
-  crafted channel frame, since event params are client-controlled) reached a
-  handler with arguments `POST /mcp` would have refused `-32602`, and every
-  handler had to defend twice. `tool_registry.ex`'s own comment named the gap
-  ("the HTTP path never gets here — InputValidator enforces the schema enum
-  first") without closing it.
+  Checks that HTTP and in-process calls enforce the same inputSchema
+  validation before dispatching to a handler.
   """
   use ExUnit.Case, async: false
 
@@ -58,8 +52,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   end
 
   test "a wrongly-typed argument is refused on the console path too", %{ctx: ctx} do
-    # The schema says `id` is a string. Over `POST /mcp` this is a -32602;
-    # through the console it used to reach the handler as an integer.
+    # Require string ids on both HTTP and console dispatch.
     assert {:error, _} =
              Catalog.call_external("ingress_probe", ctx, %{
                "action" => "echo",
@@ -70,10 +63,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   end
 
   test "an unknown action is still refused in its own vocabulary", %{ctx: ctx} do
-    # The annotation layer owns which actions exist, and says so as
-    # `{:unknown_action, …}`. Schema validation deliberately does not answer
-    # first here: unknown actions were never the gap, and two refusals for one
-    # condition is the drift `Cyfr.Ops.Error` exists to end.
+    # The catalog returns unknown_action for undeclared actions before schema validation.
     assert {:error, {:unknown_action, _}} =
              Catalog.call_external("ingress_probe", ctx, %{"action" => "nope"})
 

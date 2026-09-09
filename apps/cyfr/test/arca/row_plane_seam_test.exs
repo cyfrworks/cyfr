@@ -5,14 +5,7 @@ defmodule Arca.RowPlaneSeamTest do
   @moduledoc """
   Who is allowed to talk to the database.
 
-  The blob plane has had this for a while: every `File.*` outside the
-  storage adapters must carry an `arca:bypass-ok` tag, and CI greps for it.
-  The row plane had the same convention by habit and nothing enforcing it —
-  and habit is exactly what `Emissary.MCP.Tools.RecordsProvider` drifted
-  out of, writing `from(e in Arca.Execution, …) |> Arca.Repo.all()` inline
-  for two of its actions. Tenancy was applied correctly there, so nothing
-  was exposed; what was wrong is that an MCP tool handler had become a
-  query layer, and the next one to need a query would have copied it.
+  Checks that database queries stay in the storage layer or carry an explicit scoped exemption.
 
   Rows belong to `Arca` (its schemas and `*Storage` modules) and to
   `Sanctum`, whose tenancy fabric — users, memberships, athanors, the door

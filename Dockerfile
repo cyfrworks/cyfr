@@ -42,12 +42,8 @@ COPY wit/ wit/
 RUN mix compile && mix assets.deploy && mix release cyfr
 
 # ---- Stage 2: Runner ----
-# Runtime base inlined: shared libraries, locales and the runtime user —
-# and deliberately NO toolchains (cargo/npm live in Dockerfile.builder;
-# this image structurally cannot run builds). It used to be a separately
-# pushed cyfr-runner-base image, which earned its keep only while it
-# carried the minutes-long cargo-component compile; a 30-second apt layer
-# does not justify an out-of-band artifact the build must wait on.
+# Runtime libraries, locales and service user. Build toolchains are provided
+# by Dockerfile.builder.
 FROM debian:bookworm-slim AS runner
 
 RUN apt-get update && apt-get install -y \

@@ -5,9 +5,7 @@ defmodule Opus.WitResponse do
   @moduledoc """
   Shared WIT-boundary response encoding for catalyst host functions.
 
-  The `cyfr:http`, `cyfr:storage` and `cyfr:formula` host functions return a
-  JSON string. Two rules are shared across all of them and were previously
-  copied into each handler:
+  Shares JSON response rules across `cyfr:http`, `cyfr:storage` and `cyfr:formula` host functions:
 
     * an encode failure must still yield valid JSON (never a raised error across
       the WIT boundary), and

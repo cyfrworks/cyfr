@@ -54,11 +54,7 @@ defmodule Sanctum.WebhookTest do
 
     test "a webhook with no replay protection is refused unless it says so", %{ctx: ctx} do
       profile = @profile
-      # No timestamp header, no idempotency header, no acknowledgement.
-      # This used to succeed and log a warning AFTER the row was already
-      # committed — informative, but unable to refuse. An HMAC over a raw
-      # body stays valid forever, so a delivery captured off a proxy log
-      # re-fires the bound component as often as it is replayed.
+      # Creation without a replay-protection header or explicit acknowledgement must fail.
       assert {:error, :replay_protection_required} =
                Sanctum.Webhook.create(ctx, %{
                  name: "unstated",
@@ -513,10 +509,8 @@ defmodule Sanctum.WebhookTest do
       assert hook.timestamp_header == nil
     end
 
-    # Clearing still works — an empty string is still how you spell it —
-    # but it is now a decision rather than a side effect, because clearing
-    # the LAST header returns the webhook to accepting replays and nothing
-    # in the row would afterwards say that had happened.
+    # Clearing the final replay header requires an explicit choice
+    # to disable replay protection.
     test "update clears timestamp_header on an empty string, once the decision is stated",
          %{ctx: ctx} do
       {:ok, %{slug: slug}} =

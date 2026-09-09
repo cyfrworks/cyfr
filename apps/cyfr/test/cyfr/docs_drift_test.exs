@@ -3,23 +3,15 @@
 
 defmodule Cyfr.DocsDriftTest do
   @moduledoc """
-  CLAUDE.md is the operating manual every session reads before touching
-  the tree; a storage root it does not name is a root nobody defends.
-  This binds its storage-tree sentence to the layout SSOT the same way
-  the drift guards bind the protocol literals.
+  Checks documented storage roots and manifest fields against their
+  runtime definitions.
 
-  ## One of these guards is local-only, on purpose
+  ## Local documentation
 
-  `CLAUDE.md` is gitignored — it is the operator's own agent contract, not
-  repo content — so a fresh checkout does not have it and **CI never runs
-  that first test** (`:requires_local_docs`, excluded by `test_helper.exs`
-  when the file is absent). Do not mistake it for CI protection: it
-  catches drift on the machine that owns the file, and nowhere else.
+  The CLAUDE.md check runs only when that gitignored file exists.
+  `test_helper.exs` otherwise excludes the :requires_local_docs tag.
 
-  The other tests read tracked files (README and the three guides) and do
-  run everywhere. Before this tag the CLAUDE.md test was an unguarded
-  `File.read!`, so a clean clone raised `File.Error` and the whole module
-  — including those — protected nothing.
+  README and guide checks use tracked files and run in every checkout.
   """
   use ExUnit.Case, async: true
 
@@ -55,10 +47,7 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  # The three operator guides are compile-embedded reference material every
-  # athanor is given (@external_resource into the aqua tool) — they drift
-  # exactly like README did, and only CLAUDE.md/README were pinned here.
-  # component-guide's storage tree shipped without meta/ for that reason.
+  # Check storage trees in the three compile-embedded operator guides.
   @guides ~w(component-guide.md tincture-guide.md integration-guide.md)
 
   test "every guide that draws the athanor tree names every tenant root" do
@@ -210,10 +199,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   test "the guides' tincture-block keys are ones the code actually reads" do
-    # The truth roster: what the validator shape-checks plus what the
-    # registry/controller consume (entry, icon, tagline, public, build,
-    # window, connect, media). A key documented that nothing reads — the
-    # old `sandbox` row — teaches authors a knob that does not exist.
+    # Documented tincture keys must match validator and consumer support.
     documented_only = ~w(sandbox)
 
     for guide <- ~w(component-guide.md tincture-guide.md), key <- documented_only do

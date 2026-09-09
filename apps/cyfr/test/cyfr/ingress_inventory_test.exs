@@ -3,8 +3,7 @@
 
 defmodule Cyfr.IngressInventoryTest do
   @moduledoc """
-  The §6 "no credentialed execution without a grant" gate, first arm:
-  a mechanical inventory of everything that can start an execution.
+  Inventories execution entry points to verify credential-grant checks.
 
   A runtime registry of ingresses would be architecture invented for a
   test. Instead the source is scanned for callers of the run family and

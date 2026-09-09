@@ -3,15 +3,9 @@
 
 defmodule Emissary.MCP.VaultRef do
   @moduledoc """
-  The `vault:<name>` credential-reference grammar — one owner for a
-  spelling that was constructed and destructured at seven sites across two
-  apps, with nothing holding the reconciler's construction to the
-  resolver's parse. Pattern matches on the literal remain consumers (the
-  same rule `Cyfr.DigestSSOTTest` applies to `"sha256:"`); construction
-  and classification go through here.
+  Constructs and classifies `vault:<name>` credential references.
 
-  `secret:` is the retired sibling scheme, known only to refuse it loudly
-  where the message can explain the fix.
+  Rejects the unsupported `secret:` scheme with an actionable error.
   """
 
   @prefix "vault:"

@@ -145,9 +145,7 @@ defmodule Cyfr.Ops.ContractTest do
     end
 
     test "an invalid pattern in the schema refuses instead of silently passing" do
-      # A pattern the schema declared and nothing ran: the old behavior
-      # passed the field, so a typo'd pattern quietly disabled the
-      # validation it claimed. The schema author's defect fails the call.
+      # Invalid schema regexes must fail validation.
       schema = %{"properties" => %{"x" => %{"type" => "string", "pattern" => "["}}}
       assert {:error, message} = Contract.validate(%{"x" => "anything"}, schema)
       assert message =~ "invalid pattern"

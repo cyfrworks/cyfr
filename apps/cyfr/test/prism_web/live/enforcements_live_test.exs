@@ -5,10 +5,8 @@ defmodule PrismWeb.EnforcementsLiveTest do
   @moduledoc """
   The enforcements log and its filters.
 
-  Same defect as the activities page, in the same shape: `filters_path/1`
-  interpolated a list of `{key, value}` tuples into the query string, which
-  raises, so every filter that was not "all" crashed the LiveView. Neither
-  page had a test.
+  Checks filter changes update the query string without crashing
+  or resetting the LiveView.
   """
   use PrismWeb.ConnCase, async: false
 

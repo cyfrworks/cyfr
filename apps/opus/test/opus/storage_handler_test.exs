@@ -1029,12 +1029,7 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "the raw envelope is bounded before it is parsed", %{ctx: ctx, component_ref: ref} do
-      # `max_request_size` bounds the DECODED payload and is checked after
-      # parsing, which is right — but nothing bounded the string itself, so
-      # the guest's linear memory (64 MiB by default) was the only limit on
-      # what one call could make the host `Jason.decode/1`, times the
-      # concurrency cap. The envelope ceiling is deliberately generous: a
-      # payload at the consented ceiling always fits.
+      # Reject oversized encoded envelopes before JSON parsing; valid payloads within the consent limit must fit.
       huge =
         ~s({"action": "write", "path": "data/x.txt", "content": "#{String.duplicate("A", 200_000)}"})
 
@@ -1072,8 +1067,7 @@ defmodule Opus.StorageHandlerTest do
     } do
       quota = %{max_bytes: 100, max_files: 50}
 
-      # 60 bytes deep in a subdirectory — the old top-level listing counted
-      # this as zero.
+      # Count nested files toward the storage quota.
       assert %{"written" => true} = quota_write(ctx, ref, "data/nested/deep/a.txt", 60, quota)
 
       # 60 more would cross 100; the recursive usage must see the first file.

@@ -5,11 +5,8 @@ defmodule PrismWeb.ModelCatalog do
   @moduledoc """
   One loader for the model catalogue (`formula:local.list-models`).
 
-  It lived twice — ConversationPaneLive and AquaLive each spelled the ref,
-  the spawn, the decode and the timeout — and had drifted: 15s vs 60s
-  deadlines, and one copy dropped the `refs` half of the result the other
-  read. The caller asks through `load/1` and handles the one message
-  shape `parse/1` produces.
+  Callers use `load/1` to request models and `parse/1` to decode
+  the resulting message.
 
   The catalogue is a formula run against every provider the athanor holds
   a key for, and a pane asked for it on every mount — every thread switch.

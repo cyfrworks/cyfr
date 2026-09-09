@@ -5,8 +5,7 @@ defmodule Cyfr.MapUtil do
   @moduledoc """
   Small map- and keyword-building helpers shared across the umbrella.
 
-  One spelling of "add the entry only when there is a value", so the copies
-  that used to live beside every wire-map builder collapse into one.
+  Adds entries only when their values are present.
   """
 
   @doc """

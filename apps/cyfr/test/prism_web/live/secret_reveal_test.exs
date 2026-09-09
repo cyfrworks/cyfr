@@ -5,12 +5,8 @@ defmodule PrismWeb.SecretRevealTest do
   @moduledoc """
   The one-time reveal cards, and letting go of what they showed.
 
-  A minted API key and a webhook secret are shown once, in plaintext, from
-  socket assigns — and nothing ever cleared them. `Phoenix.LiveView.Socket`
-  derives Inspect with `:assigns` in its `only:` list, so the value stayed in
-  the process state (and so in any crash report) and in the DOM for the rest
-  of the session. The webhook one was cleared only by the unrelated "edit"
-  event. Both cards can be dismissed now.
+  Checks that dismissing a revealed API key or webhook secret removes
+  its plaintext from socket assigns and the DOM.
   """
   use PrismWeb.ConnCase, async: false
 

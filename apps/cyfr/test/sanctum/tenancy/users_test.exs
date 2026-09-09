@@ -39,11 +39,7 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert length(Users.list_by_email("SAME@example.com")) == 2
   end
 
-  # An assertion the provider did not make must not erase one it made
-  # before. AuthController builds `name` from the Ueberauth info, which
-  # carries neither :name nor :nickname for some identities — so a later
-  # sign-in wrote nil over a display name an earlier one recorded, and the
-  # row lost information by being refreshed.
+  # Missing provider fields must preserve previously recorded display data.
   test "a sign-in that asserts no name or email keeps what is already stored" do
     stored = person(41, %{email: "keep@example.com", name: "Keep Me"})
     assert stored.display_name == "Keep Me"

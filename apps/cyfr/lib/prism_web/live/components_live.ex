@@ -25,9 +25,7 @@ defmodule PrismWeb.ComponentsLive do
       socket
       |> assign(:page_title, "Components")
       |> assign(:active_nav, "components")
-      # In HEEx `@local_publisher` reads THIS assign — the same-named
-      # module attribute is invisible there, and expanding a row crashed
-      # on the missing key until this was assigned.
+      # HEEx reads assigns, so expose the publisher as an assign.
       |> assign(:local_publisher, @local_publisher)
       |> assign(:components, [])
       |> assign(:grouped, %{})
@@ -61,10 +59,7 @@ defmodule PrismWeb.ComponentsLive do
     {:ok, socket}
   end
 
-  # Arm a per-kind deadline carrying a generation token: a stale deadline —
-  # one whose operation completed, or that belongs to an earlier operation
-  # of the same kind — matches nothing and is dropped, instead of wiping a
-  # LATER operation's state (pull A's 120s timer used to fire mid-pull-B).
+  # Tag deadlines by operation generation so stale timers cannot clear a later run.
   defp arm_task_timeout(socket, kind) do
     token = make_ref()
     Process.send_after(self(), {:task_timeout, kind, token}, 120_000)
@@ -273,9 +268,7 @@ defmodule PrismWeb.ComponentsLive do
         Enum.find(socket.assigns.component_groups, fn g -> g.name_ref == name_ref end)
 
       if group do
-        # The row opens NOW; the two tool calls it needs run off the
-        # LiveView loop (the same discipline ExecutionsLive's expansion
-        # follows — this one used to block the whole page on them).
+        # Expand the row immediately and run its tool calls outside the LiveView loop.
         send(self(), {:load_expand, group})
 
         {:noreply,
@@ -769,9 +762,7 @@ defmodule PrismWeb.ComponentsLive do
     # Group versions under name-level refs
     groups = group_by_component(all_components)
 
-    # Derived views computed WHERE the data changes, not per render — the
-    # render used to rebuild this MapSet and digest map on every diff,
-    # including ones an unrelated progress line triggered.
+    # Recompute derived views when their source data changes.
     installed_refs = all_components |> Enum.map(&comp_ref/1) |> MapSet.new()
 
     installed_digests =
@@ -801,10 +792,7 @@ defmodule PrismWeb.ComponentsLive do
     Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
       Cyfr.LoggerContext.restore(logger_metadata)
 
-      # Bounded fan-out instead of one sequential pass: a page over N
-      # groups used to serialize N full tool dispatches, so one slow
-      # setup_plan blocked every later one and the map arrived only after
-      # ALL completed. Order is irrelevant — the result is a map.
+      # Fetch setup plans with bounded concurrency; result ordering is irrelevant.
       readiness =
         groups
         |> Task.async_stream(

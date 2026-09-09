@@ -3,11 +3,8 @@
 
 defmodule Cyfr.EnvExampleSecretsTest do
   @moduledoc """
-  `.env.example` is copied verbatim into every self-hosted install. A
-  credential-shaped value in it is a credential everyone shares — and a
-  Google OAuth client secret sat there for months while the enforced secret
-  scan stayed green. This is the repo-local rule: the shapes below may
-  appear in the file only behind a comment, never as a value.
+  Checks that active assignments in `.env.example` contain no values
+  matching the credential patterns below.
   """
   use ExUnit.Case, async: true
 

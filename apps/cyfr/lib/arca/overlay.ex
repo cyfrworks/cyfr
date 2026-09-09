@@ -218,21 +218,11 @@ defmodule Arca.Overlay do
     end
   end
 
-  # A tree delete ABOVE units — `aqua/`, `aqua/roles`, a component's name
-  # dir — rides no lock: the decorator locks one unit, and covering a tree
-  # would mean locking every unit beneath it in an order two processes
-  # could invert. So it is admitted only while the athanor holds no unit
-  # beneath the path — nothing a lock would cover: an empty name dir the
-  # registry tidies, a stray non-unit file — and refused as
-  # `{:error, :above_unit}` once a unit stands there. A caller clearing a
-  # populated subtree walks its units and drops them one at a time under
-  # each unit's own lock (`Compendium.AquaTemplate.reset/2`); the old
-  # wholesale form could land inside a concurrent commit and leave a unit
-  # reading complete while holding little more than its sentinel. The
-  # listing and the delete are still two steps — a unit landing between
-  # them is the same sub-second window the registry's empty-dir tidy
-  # already accepts. Only the internal-write scope keeps the wholesale
-  # form (its origin-mark sweep beneath a cleared root).
+  # Tree deletion above units is allowed only when no tenant units exist
+  # beneath the path; otherwise it returns `{:error, :above_unit}`.
+  # Clear populated subtrees one unit at a time under each unit’s lock.
+  # The empty-tree check and deletion are not atomic with a new unit commit.
+  # Internal writes may delete origin marks beneath a cleared root.
   defp tree_deletable(%Context{} = ctx, path) do
     if not internal_writes?() and Arca.Storage.locate(path) == :above_unit do
       case tenant().list_recursive(ctx, path) do
@@ -764,33 +754,14 @@ defmodule Arca.Overlay do
   # The unit lock, taken by the mutating callbacks themselves
   # ---------------------------------------------------------------------------
 
-  # Every write, append and delete at or inside a unit runs under that
-  # unit's lock. It did not before: only `commit_unit/4`, `materialize/2`
-  # and the two revert paths took it, so a plain `Arca.delete_tree` on a
-  # component version dir (`Compendium.Registry`'s publish rollback and its
-  # cleanup) could interleave with another member's commit and leave a unit
-  # reading COMPLETE while holding only its manifest — the exact scenario
-  # `do_commit_dir_unit/7` says the lock exists to prevent. A `put` was
-  # worse: `prepare_write/2` materialized under the lock and RELEASED it
-  # before the caller's `tenant().put`, so the write could land inside a
-  # unit someone else had clean-slated in between, with `:ok` already
-  # returned.
+  # Serialize writes, appends and deletes under the containing unit's lock.
+  # Materialization and the resulting write must share that lock.
   #
-  # `Arca.Overlay.UnitLock` is deliberately NOT reentrant — it logs an
-  # error and can only time out. The commit path writes every file of a
-  # unit through the public `Arca.put`, so taking the lock in the callback
-  # would make `clean_slate/2` queue behind its own holder for 30s. Hence
-  # this process-local register: a nested write into a unit this process
-  # already holds passes straight through, and the outer acquisition is
-  # what serialises against other processes.
+  # UnitLock is not reentrant. Track locks held by this process so nested
+  # Arca writes reuse the outer acquisition.
   #
-  # Scope is one unit. A `delete_tree` ABOVE units (the empty-parent tidy)
-  # takes no lock and cannot: covering it would mean locking every unit
-  # beneath, in an order two processes could invert — so `tree_deletable/2`
-  # admits one only while no unit stands beneath it. Callers that need to
-  # clear a whole subtree walk its units and drop them one at a time
-  # instead — `Compendium.AquaTemplate.reset/2` with `all: true` is the
-  # one that used to delete the root wholesale.
+  # Deletes above units are allowed only when no units remain beneath them.
+  # To clear a subtree, drop each unit under its own lock first.
   @held_units_key {__MODULE__, :held_unit_locks}
 
   defp with_unit_lock(%Context{} = ctx, path, fun) do
@@ -916,13 +887,9 @@ defmodule Arca.Overlay do
     )
   end
 
-  # The dir-unit order — sentinel, THEN mark — is the opposite of the
-  # file-unit CoW's mark-then-put, and deliberately so: here the commit
-  # controls the "after", so the mark lands only once completeness is
-  # durable ("marked ⇒ completed copy" holds by construction), the crash
-  # window between the two degrades to :own_shadowing (bytes kept), and a
-  # failed mark write still fails the commit into its rollback. Do not
-  # unify the two orders.
+  # Directory units write the completeness sentinel before the origin mark.
+  # A crash between them leaves :own_shadowing and preserves the bytes;
+  # a failed mark write triggers rollback. File units require mark-then-put.
   defp maybe_record_origin(_internal, _unit, :none), do: :ok
   defp maybe_record_origin(internal, unit, :seed), do: record_origin(internal, unit)
 
@@ -1055,24 +1022,9 @@ defmodule Arca.Overlay do
     end
   end
 
-  # Whether the SEED side owns this path, so the athanor's own bytes at it
-  # must not be served.
-  #
-  # The read plane and the listing plane disagreed about a half-written
-  # copy of a shipped unit. `at_unit_result/4` is seed-first for one (an
-  # incomplete copy reads through, so listings show the seed's leaves)
-  # while `get/2` was tenant-first unconditionally (any tenant hit
-  # answered). Since `read_subtree/2` is `list_recursive/2` composed with
-  # `get/2`, a half-materialized unit came back as the SEED's file names
-  # carrying TENANT bytes — a tree that exists on neither layer.
-  #
-  # Deciding it once is the fix. The rule is `at_unit_result/4`'s: a
-  # completed copy answers alone, an incomplete copy under a seed unit
-  # reads through to the seed, and a tenant-only partial (a crashed
-  # `commit_unit/4` with no shipped counterpart) still answers its own
-  # content — there is nothing else to serve, and hiding it would make a
-  # failed commit's remains invisible to the repair paths that must see
-  # them (`unit_status/2`, `diff_unit/2`, `drop_unit/2`).
+  # Select the same source for reads and listings. A complete tenant copy
+  # shadows the seed; an incomplete copy reads through to an existing seed.
+  # A tenant-only partial copy remains visible for inspection and repair.
   defp seed_shadows_tenant?(ctx, path) do
     case Arca.Storage.locate(path) do
       loc when loc in [:not_overlaid, :above_unit] ->
@@ -1306,10 +1258,7 @@ defmodule Arca.Overlay do
   defp delete_unit(ctx, {:file, unit}), do: Arca.delete(ctx, unit)
   defp delete_unit(ctx, {:dir, unit, _sentinel}), do: Arca.delete_tree(ctx, unit)
 
-  # The whole-unit clear rides the same per-unit lock as the commit. A
-  # drop interleaving a commit's clear-then-write once deleted files the
-  # commit had already written, then let the commit land its sentinel —
-  # a unit that read COMPLETE while holding little more than the sentinel.
+  # Serialize whole-unit deletion with commits using the same unit lock.
   defp delete_unit_locked(ctx, loc) do
     with_unit_lock_at(ctx, unit_of(loc), fn -> delete_unit(ctx, loc) end)
   end

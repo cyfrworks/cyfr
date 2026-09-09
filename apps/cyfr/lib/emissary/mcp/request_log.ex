@@ -9,10 +9,7 @@ defmodule Emissary.MCP.RequestLog do
   received, and each tool the running component reached from inside the
   sandbox. `id` is the call, `request_id` is the ingress request they share.
 
-  In-chain calls used to be invisible here. The row's primary key was the
-  request id, so a second row could not be written under it, and the dispatcher
-  skipped logging whenever the context already carried one — which an in-chain
-  call always does, having inherited it through the guest closure.
+  In-chain calls have their own log rows and share the root request id.
 
   Routes all persistent storage through `Arca.McpLog`. The start of a call
   is written synchronously (the row must exist); its completion or failure

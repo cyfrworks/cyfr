@@ -327,10 +327,7 @@ defmodule Opus.StorageHandler do
 
   defp validate_write_size(_action, _request, _limits), do: :ok
 
-  # Public profiles write under a byte and file ceiling. The flag rides explicit
-  # opts rather than a callee-derived `is_public` semantic, which no longer
-  # exists — public-ness is a property of the profile, threaded in as an opt.
-  # Read-only publishes never reach this.
+  # Public-profile writes use byte and file ceilings supplied through explicit options.
   defp validate_public_quota(action, request, ctx, opts) when action in @writing_actions do
     if Keyword.get(opts, :public?, false) do
       quota = Keyword.get(opts, :public_quota, default_public_quota())
@@ -592,11 +589,7 @@ defmodule Opus.StorageHandler do
             {name, :file} -> name
           end)
 
-        # A listing is a read, and the moduledoc says reads are bounded by
-        # `max_response_size` — but only `read` checked. A scope may hold up
-        # to `@max_scope_files` entries, and this import carries no rate
-        # limit, so an unbounded listing was a cheap way to build a very large
-        # response in host memory and hand it across the WIT boundary.
+        # Bound listing responses by max_response_size before crossing WIT.
         case check_read_size(limits, Enum.join(files, "\n")) do
           :ok ->
             {:ok,

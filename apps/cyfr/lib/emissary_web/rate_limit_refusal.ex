@@ -11,10 +11,7 @@ defmodule EmissaryWeb.RateLimitRefusal do
   IP plus publisher plus tincture, a webhook slug) and where the budget
   comes from (plug options, app config, a per-slug database column).
 
-  The refusal is not one of those differences. It was written out four
-  times, byte for byte, down to the sentence — so a change to the wording,
-  the header, or the status had four places to land and three of them would
-  have been missed.
+  Renders the shared rate-limit status, headers, and response body.
 
   The renderer stays a parameter, the way `EmissaryWeb.ErrorRenderer`
   intends: `/mcp` answers in JSON-RPC, everything else in

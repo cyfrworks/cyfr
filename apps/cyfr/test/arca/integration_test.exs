@@ -86,9 +86,6 @@ defmodule Arca.IntegrationTest do
       refute Arca.exists?(ctx, ["guest", "workflow", "test.txt"])
       {:error, :not_found} = Arca.get(ctx, ["guest", "workflow", "test.txt"])
     end
-
-    # Note: The storage MCP tool was removed in favor of the cyfr:storage/files
-    # host function for catalysts. File operations are tested via the Arca API test above.
   end
 
   # ============================================================================
@@ -478,10 +475,7 @@ defmodule Arca.IntegrationTest do
     test "get_json returns error for invalid JSON", %{ctx: ctx} do
       :ok = Arca.put(ctx, ["guest", "json_test", "invalid.json"], "not valid json {{{")
 
-      # `Cyfr.Json`'s spelling — the repo's one answer for a corrupt stored
-      # value. It used to hand back Jason's own struct inside a tagged tuple,
-      # which is a bare library type in the facade's vocabulary and a second
-      # thing for callers to match on.
+      # Return the shared :invalid_json error for corrupt stored JSON.
       assert {:error, :invalid_json} =
                Arca.get_json(ctx, ["guest", "json_test", "invalid.json"])
     end

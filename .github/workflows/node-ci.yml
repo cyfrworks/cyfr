@@ -1,8 +1,6 @@
 name: Node CI (mcp-bridge)
 
-# Syntax-check and smoke the mcp-bridge on every change so breakage is caught
-# at PR time. It also runs `npm audit` (report-only) so dependency advisories
-# are surfaced — the Elixir/Go supply-chain gate (security.yml) never saw them.
+# Syntax-check and test the MCP bridge; report npm dependency advisories.
 
 on:
   push:
@@ -42,11 +40,7 @@ jobs:
       - name: Syntax check
         run: node --check server.mjs
 
-      # Framing, correlation and child lifecycle against a fake stdio child.
-      # The smoke test below boots the bridge and checks auth; it never
-      # exercises a child, which is where the process-killing bugs lived: a
-      # peer's own JSON-RPC request resolving the bridge's pending call, and
-      # a call to a child that has gone away.
+      # Test framing, request correlation and child lifecycle with a fake stdio server.
       - name: Unit tests
         run: npm test
 
@@ -106,9 +100,7 @@ jobs:
         continue-on-error: true
         run: npm audit --audit-level=high
 
-  # The bridge image ships to every install (compose builds it locally), yet
-  # it was never built or scanned in CI — a broken Dockerfile.node surfaced
-  # on the user's first `cyfr up`, and its vulnerabilities surfaced nowhere.
+  # Build and scan the MCP bridge image shipped by Compose.
   image:
     name: Build + scan image (mcp-bridge)
     runs-on: ubuntu-latest

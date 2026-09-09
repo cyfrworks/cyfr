@@ -95,7 +95,7 @@ defmodule Opus.FormulaHandler do
   - `:limits` - The node's `Sanctum.Limits` (batch timeout, max concurrent tasks)
   - `:authority` - The `Sanctum.Authority` the chain runs under (required).
     Execution dispatch goes through `Opus.Chain` and every other tool through
-    `ToolRegistry.call_in_chain/5`. A formula run always carries one — the
+    `Cyfr.Ops.Catalog.call_in_chain/5`. A formula run always carries one — the
     executor raises before reaching here (`Opus.Executor.stage_enforce_policy`),
     and this fetch keeps a direct caller honest too.
   - `:declared_needs` / `:activation_digest` - host-derived transition inputs
@@ -234,14 +234,8 @@ defmodule Opus.FormulaHandler do
     {imports, tracker}
   end
 
-  # The raise/exit boundary every other WIT import already has
-  # (`HttpHandler`, `StorageHandler.dispatch_caught/6`,
-  # `HttpStreamHandler.guarded/3`). These closures reach the tracker with
-  # default 5s call timeouts while it can be blocked in an await, and a
-  # dead tracker answers `:noproc` — both arrive as exits, and an uncaught
-  # one killed the Wasmex process and failed the whole execution where a
-  # typed error the guest can act on was available. The message stays
-  # generic; the fault goes to the host log.
+  # Catch host-function raises and exits, including tracker call failures.
+  # Return a generic typed error to the guest and log fault details on the host.
   defp guarded(parent_execution_id, name, fun) do
     fun.()
   rescue
@@ -512,9 +506,7 @@ defmodule Opus.FormulaHandler do
     do: encode_error(:invalid_request, "Invalid reference: #{guest_reason(reason)}")
 
   defp encode_child_error({:setup_required, payload} = reason) do
-    # One remediation shape on the wire, whichever dispatch path failed:
-    # Opus.Remediation owns it (component-guide documents that shape).
-    # This clause used to hand-roll a second, incompatible object.
+    # Build the shared remediation payload through Opus.Remediation.
     case Opus.Remediation.analyze(reason) do
       {:setup_required, remediation} ->
         encode_error_with_remediation(
@@ -991,10 +983,7 @@ defmodule Opus.FormulaHandler do
           :untrusted -> [origin: "guest"]
         end
 
-      # Numbered by the stream these events are addressed to, not by this
-      # formula: a nested formula shares the root's id, so a per-formula
-      # counter made two producers emit the same sequence into one buffer and
-      # an SSE reconnect silently dropped the overlap.
+      # Use the root stream’s shared sequence counter for nested emits.
       seq = Opus.ExecutionEventBuffer.Sequence.next(execution_id)
       data = Opus.SecretMasker.mask(data, secrets)
       Opus.ExecutionEventBuffer.push(execution_id, data, seq, ctx, origin_opts)
@@ -1018,14 +1007,8 @@ defmodule Opus.FormulaHandler do
   defp check_emit_size(json_event, max_size) when byte_size(json_event) <= max_size, do: :ok
   defp check_emit_size(_json_event, _max_size), do: {:error, :event_too_large}
 
-  # D6's other half. The bucket is per execution and comes from platform
-  # config, NOT the node's consented rate_limit: that one is sized for
-  # invocations, while an agent emits a text_delta per token — reusing it
-  # would break streaming on day one.
+  # Use the platform per-execution emit budget, separately from the consented invocation rate limit.
   defp check_emit_rate(execution_id, ctx) do
-    # A constant, not config: the :emit_rate_limit key was documented by
-    # nothing, set by nothing, and readable only here. A knob that only
-    # looks turnable is worse than a number.
     limit = %{requests: 3000, window: "1m"}
 
     case Opus.RateLimiter.check(ctx.athanor_id, "emit:" <> execution_id, %{
@@ -1037,10 +1020,7 @@ defmodule Opus.FormulaHandler do
       {:error, :rate_limited, _retry_after} ->
         {:error, :emit_rate_limited}
 
-      # The limiter's third answer (`Opus.RateLimiter.check/3`'s spec names
-      # it): an athanor-less context cannot be metered. Unmatched, it was a
-      # CaseClauseError raised inside the emit host function — the executor
-      # and the egress gate both handle it, and both deny.
+      # Refuse emission when the context cannot be metered.
       {:error, :missing_tenant} ->
         {:error, :emit_rate_limited}
     end
@@ -1084,10 +1064,7 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  # Checked before `Jason.decode/1` sees the string. Only `emit` and the
-  # storage import had this: the guest's 64 MiB linear memory was the sole
-  # bound on what one `invoke.call`, `invoke.spawn` or await list could make
-  # the host parse, times the concurrency cap.
+  # Enforce the request size cap before JSON decoding.
   defp envelope_bound(json_string, %Limits{} = limits) do
     case Opus.EdgeGuard.check_envelope_size(limits, json_string) do
       :ok ->
@@ -1258,7 +1235,7 @@ defmodule Opus.FormulaHandler do
 
   defp stringify_reason(reason), do: render_reason(reason)
 
-  # Guest-facing reason text for terms below the ToolError vocabulary: a
+  # Guest-facing reason text for terms below the `Cyfr.Ops.Error` vocabulary: a
   # crafted binary passes, a bare reason atom names itself verbatim (the
   # "edge_only"/"depth_cap" class of transition denials is a token guests
   # branch on), and anything structured renders through the shared seam or
@@ -1283,10 +1260,7 @@ defmodule Opus.FormulaHandler do
   The guest's view of a refusal: the same sentence the wire and the console
   render, and never an internal term.
 
-  The same `cond` `Emissary.MCP.Router.format_error_reason/1` applies, for the
-  same reason — a typed reason has one spelling wherever it surfaces. The
-  catch-all used to `inspect/1`, so a guest formula could read an Elixir map,
-  struct or exit tuple, with whatever the reason happened to be carrying.
+  Render recognized typed errors consistently; unknown internal terms must not reach the guest.
   """
   @spec render_reason(term()) :: String.t()
   def render_reason(reason) do

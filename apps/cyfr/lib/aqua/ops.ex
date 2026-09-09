@@ -6,13 +6,7 @@ defmodule Aqua.Ops do
   The assistant's adapter onto the operation catalog — Aqua's
   `PrismWeb.Ops`.
 
-  Aqua was the one domain namespace with a live tool-dispatch dependency
-  and neither a helper nor a roster for it: `Aqua.Turn`,
-  `Aqua.AgentConfig`, `Aqua.Kinds` and the conversation runner each
-  spelled their `Emissary.MCP.*` reaches themselves — the drift class
-  `PrismWeb.ToolSeamTest` closed for the console. Every Emissary reach
-  the assistant makes goes through here now, and `Aqua.ToolSeamTest`
-  keeps it that way.
+  Provides the MCP dispatch operations used by the assistant domain.
 
   Two deliberate exceptions live outside this module: `Emissary.PubSub`
   used as a process NAME (the application's one supervised PubSub), and

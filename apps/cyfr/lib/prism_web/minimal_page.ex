@@ -5,13 +5,8 @@ defmodule PrismWeb.MinimalPage do
   @moduledoc """
   The one no-session HTML shell.
 
-  Login-flow refusals, OAuth-callback results and sign-in-unavailable
-  pages render here — the person has no session, so none of the console
-  is theirs to see, and the page must stand alone. Three hand-rolled
-  shells used to serve one login flow in three themes (two light `#222`
-  heredocs and a dark card), and one of them hand-rolled its own HTML
-  escaper that missed `&#39;`. One shell, in the console's own dark
-  palette; every dynamic value goes through `h/1`.
+  Renders standalone login, OAuth callback and sign-in error pages in the
+  console palette. Escape every dynamic value through `h/1`.
   """
 
   import Plug.Conn

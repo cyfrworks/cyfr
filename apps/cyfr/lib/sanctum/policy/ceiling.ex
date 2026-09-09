@@ -148,15 +148,9 @@ defmodule Sanctum.Policy.Ceiling do
     end)
   end
 
-  # The ceiling bounds both the BURST and the RATE. Clamping the count
-  # alone let a shrunken window multiply it — `%{requests: 10_000,
-  # window: "1ms"}` passed a 10k ceiling as six hundred million a minute —
-  # so a sub-minute window also scales the count to hold the per-minute
-  # rate; a window longer than a minute keeps the plain count cap (the
-  # burst bound the ceiling always meant). The declared window is kept;
-  # one too small to hold even a single request under the ceiling, or one
-  # the parser refuses, is replaced with the ceiling itself at one
-  # minute — fail closed, like the duration clamp above.
+  # Bound both burst count and per-minute rate. Scale the count for
+  # sub-minute windows; retain the count cap for longer windows. Invalid
+  # windows or rates too small for one request use the ceiling at one minute.
   defp clamp_rate_limit(limits, ceiling) do
     with %{requests: req, window: window} = rl <- limits.rate_limit,
          max_req when is_number(max_req) <- Map.get(ceiling, :rate_limit_requests) do

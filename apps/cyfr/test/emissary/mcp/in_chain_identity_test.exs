@@ -106,13 +106,9 @@ defmodule Emissary.MCP.InChainIdentityTest do
   end
 
   test "tincture_visibility.get reaches its handler from a chain" do
-    # Regression: the handler used to gate through Context.authorize, whose
-    # permission arm refuses the guest plane unconditionally — an in-chain
-    # annotation the gate contradicted. With the gate central (guest arm =
-    # identity conjunct) and the handler keeping only the tenant residual,
-    # a chain-granted read must get past the plane. Passing full args
-    # matters: the arg-matching clauses sit in front of the residual, so an
-    # action-only probe would prove nothing about it.
+    # A chain-granted read must pass the central identity gate and the
+    # handler's tenant check. Supply complete arguments to exercise the
+    # handler clause used by real requests.
     auth = granting_authority([{"tincture_visibility", "get"}])
 
     ctx =

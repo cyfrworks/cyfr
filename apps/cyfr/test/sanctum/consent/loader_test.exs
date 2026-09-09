@@ -234,7 +234,7 @@ defmodule Sanctum.Consent.LoaderTest do
                live_shape_digest: consent.shape_digest
              )
 
-    # What runs is the drifted activation — D2 must match against it.
+    # Self-invocation must match the running activation.
     assert auth.activation == drifted
     assert stamp.activation_digest == live_digest
     assert stamp.activation_graph == drifted

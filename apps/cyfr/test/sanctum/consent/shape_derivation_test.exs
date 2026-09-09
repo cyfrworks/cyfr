@@ -78,7 +78,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
              {:ok, consent.shape_digest}
   end
 
-  test "a new release with an unchanged shape allows and records (§2.6)", %{ctx: ctx} do
+  test "a new release with an unchanged shape allows and records", %{ctx: ctx} do
     publish!(ctx, "shape-roll", "1.0.0", %{manifest: Jason.encode!(roll_manifest("original"))})
     {:ok, _} = Bootstrap.run(ctx)
     {profile, consent} = head!(ctx, "reagent:local.shape-roll")

@@ -67,9 +67,7 @@ defmodule PrismWeb.SettingsLive do
   def handle_event("set_mode", %{"mode" => mode}, socket) when mode in ["lite", "dev"] do
     case Sanctum.Tenancy.Users.get(socket.assigns.context.user_id) do
       {:ok, user} ->
-        # A store failure here used to be a `{:ok, _} =` match — it took the
-        # settings page down and the person's next sight of it was a
-        # remount with the old mode and no explanation.
+        # Show storage errors without closing the settings page.
         case Sanctum.Tenancy.Users.put_prefs(user, %{"mode" => mode}) do
           {:ok, _} ->
             {:noreply,

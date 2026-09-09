@@ -183,11 +183,7 @@ defmodule Opus.EdgeGuard do
   The ENVELOPE ceiling for a host-function call: the bound on the raw JSON
   string, checked before `Jason.decode/1` ever sees it.
 
-  Distinct from `max_request_size`, which bounds the DECODED payload and is
-  checked after parsing (deliberately — a base64 body is measured as the bytes
-  it becomes, not the characters it arrives as). Without this, the guest's
-  linear memory — 64 MiB by default — was the only limit on what one call
-  could make the host parse, times the concurrency cap.
+  Bounds the encoded request before parsing. `max_request_size` separately limits the decoded payload.
 
   Generous on purpose: a payload at the consented ceiling must always fit,
   base64 overhead (4/3), JSON escaping and the scaffolding included. This

@@ -43,7 +43,6 @@ defmodule Emissary.MCP.Router do
   ## Dispatch Flow
 
       Request → Router.dispatch/2 → Handler module → Response
-
   """
 
   require Logger
@@ -122,10 +121,7 @@ defmodule Emissary.MCP.Router do
   # Lifecycle Methods
   # ============================================================================
 
-  # Version and capability discovery, without establishing anything. A client
-  # may call it before any other request to pick a mutually supported revision,
-  # or skip it and handle `UnsupportedProtocolVersion` on the request it wanted
-  # to make anyway. It replaces `initialize`, whose only remaining job this is.
+  # Discover versions and capabilities without creating a session.
   defp dispatch_method(_ctx, "server/discover", _params, _id) do
     {:ok,
      cacheable(
@@ -228,10 +224,7 @@ defmodule Emissary.MCP.Router do
                         {:error, Sanctum.Unauthorized.code(reason),
                          Sanctum.Unauthorized.message(reason, ctx.auth_method)}
 
-                      # A §4.3 consent signal is a protocol-level error a
-                      # client BRANCHES on: its own -335xx code and the
-                      # payload in error.data — never JSON smuggled through
-                      # isError prose for the CLI to grep back out.
+                      # Return the consent signal as a JSON-RPC code with structured error.data.
                       Emissary.MCP.ConsentSignal.signal?(reason) ->
                         {tag, _} = reason
 
@@ -273,13 +266,7 @@ defmodule Emissary.MCP.Router do
     paginate(templates, "resourceTemplates", params)
   end
 
-  # `uri` is required and must be a non-empty string.
-  # `ResourceRegistry.read/2` is guarded `when is_binary(uri)`, so anything
-  # else used to raise a FunctionClauseError in the request process — and
-  # the controller rescues only UnauthorizedError, with no action_fallback
-  # behind it, so a deliberate rejection came back as a 500 through
-  # ErrorJSON. That is the one shape `EmissaryWeb.ErrorRenderer` says is
-  # always a bug. Answered as invalid_params here, whatever the caller sent.
+  # Require a nonempty URI string; reject other values as invalid_params.
   defp dispatch_method(ctx, "resources/read", params, id) do
     case params do
       %{"uri" => uri} when is_binary(uri) and uri != "" ->
@@ -346,16 +333,8 @@ defmodule Emissary.MCP.Router do
     end
   end
 
-  # The same policy `resources/read` applies forty lines up, and for the
-  # same reason: a binary reason is a handler's crafted, client-safe
-  # diagnosis, and anything else is an internal term — an exit tuple, a
-  # struct, a changeset — that belongs in the log rather than in a reply to
-  # whoever called the tool. `inspect/1` on the catch-all made this the one
-  # place in the module where they were reflected.
-  # `{:timeout, _}`, `{:crashed, _}` and `{:exit, _}` used to be spelled out
-  # here; they are `Cyfr.Ops.Error` reasons now, so the typed clause
-  # below renders them — and the console and the guest render them the same
-  # way, which they did not while this was the only site that knew them.
+  # Render known typed errors through Cyfr.Ops.Error and pass client-safe
+  # strings through. Log unknown internal terms and return a generic reply.
   defp format_error_reason(reason) when is_binary(reason), do: reason
 
   defp format_error_reason(reason) do
@@ -399,14 +378,9 @@ defmodule Emissary.MCP.Router do
   # Helpers
   # ============================================================================
 
-  # Freshness hints. The specification requires both fields on every cacheable
-  # result; `ttlMs` is how long a client may skip re-fetching, `cacheScope`
-  # decides whether an intermediary may hold the answer for someone else.
-  #
-  # `cacheScope` is a disclosure decision, not a performance one: `public` means
-  # "this answer is the same for every caller and may be served to any of them".
-  # Getting it wrong hands one tenant's view to another, which is why nothing
-  # filtered by caller permissions is ever marked public.
+  # Cacheable results require ttlMs and cacheScope. ttlMs controls reuse
+  # duration; public scope permits serving the same answer to any caller.
+  # Permission-filtered results must not use public scope.
   defp cacheable(result, ttl_ms, scope) when is_map(result) do
     result
     |> Map.put("ttlMs", ttl_ms)

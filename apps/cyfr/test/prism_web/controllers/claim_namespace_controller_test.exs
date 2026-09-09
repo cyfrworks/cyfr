@@ -39,11 +39,8 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       assert body =~ "Claim your cyfr.run namespace"
       assert body =~ "name=\"_csrf_token\""
 
-      # Unanchored on purpose: the HTML `pattern` attribute anchors
-      # implicitly, and cannot parse the `\A`/`\z` the server-side regex
-      # now uses (PCRE's `$` matches before a trailing newline, so the
-      # validator had to stop spelling it `^..$`). Same source either way —
-      # `Sanctum.ComponentRefTest` pins the two to one string.
+      # HTML pattern attributes anchor implicitly and require the
+      # unanchored grammar without server-side \A/\z escapes.
       assert body =~ "pattern=\"[a-z0-9]+(-[a-z0-9]+)*\""
     end
 

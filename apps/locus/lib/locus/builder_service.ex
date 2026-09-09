@@ -22,11 +22,8 @@ defmodule Locus.BuilderService do
 
   use Plug.Router
 
-  # Sources are validated (and bounded) again by Locus.Builder; this parser
-  # cap only has to admit a legal source map with base64 overhead — the
-  # 1 MiB source ceiling at 4/3 encoding plus envelope headroom. It was
-  # 100 MB, which let an authenticated caller materialize ~75 MiB of
-  # decoded sources before the ceiling refused anything.
+  # Allow a 1 MiB source map with base64 overhead and envelope headroom.
+  # Locus.Builder also validates and bounds decoded sources.
   @max_body_bytes 8_000_000
 
   plug(:match)

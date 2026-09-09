@@ -9,11 +9,8 @@
 # General application configuration
 import Config
 
-# Register SSE MIME type for MCP server-sent events. COMPILE-TIME for the
-# :mime dep: it bakes this table into its own build, so changing it (or
-# building against a stale _build) needs `mix deps.clean mime --build` —
-# the :mcp and :authenticated_api pipelines' `accepts ["json",
-# "event-stream"]` silently stop negotiating SSE otherwise.
+# Register the SSE MIME type. This dependency configuration is compiled;
+# run `mix deps.clean mime --build` after changing it.
 config :mime, :types, %{
   "text/event-stream" => ["event-stream"]
 }
@@ -38,7 +35,7 @@ config :cyfr,
     Compendium.MCP,
     # External MCP server management. `Emissary.MCP.ExternalProvider` is not
     # here: it owns no tool of its own — the tools it discovers are the
-    # upstream servers', reached through `ToolRegistry.try_handle/3`.
+    # upstream servers', reached through `Cyfr.Ops.Catalog` on a lookup miss.
     Emissary.MCP.McpServersTool,
     # System/transport (cross-cutting)
     Emissary.MCP.Tools.SystemProvider
@@ -48,9 +45,7 @@ config :cyfr,
 # minutes and must survive a restart. Tests override to the ETS store.
 config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB
 
-# Consents themselves live in the database. Pinned here beside the proof
-# store rather than left to an inline default: two halves of one seam, and
-# only one of them was declared. Tests override to the Memory adapter.
+# Store consent revisions in the database; tests override this with the Memory adapter.
 config :cyfr, :consent_source, Sanctum.Consent.Source.DB
 
 # Configures the endpoint
@@ -66,9 +61,7 @@ config :cyfr, EmissaryWeb.Endpoint,
   pubsub_server: Emissary.PubSub,
   live_view: [signing_salt: "cyfrLVdev"]
 
-# Configures Elixir's Logger. `:module` rides on every event from the
-# runtime itself, so filtering by emitter needs no hand-typed "[Prefix]"
-# in the message — 287 of those had grown 119 spellings.
+# Include module metadata in Logger output for filtering by emitter.
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:module, :request_id, :user_id, :athanor_id, :auth_method, :execution_id]
@@ -76,11 +69,7 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# The execution engine, as configuration rather than a boot-time
-# registration — the endpoint must never be live before the engine is
-# named. `Cyfr.Execution.impl/0` answers nil until the module is actually
-# loadable, so a build without the opus app (a headless control plane,
-# the cyfr app's own test runs) still reports the engine unavailable.
+# Configure the execution implementation before endpoint startup; unavailable code reports no engine.
 config :cyfr, :execution_impl, Opus
 
 # Inbound request-param redaction (:filter_parameters) is set at boot by
@@ -126,24 +115,15 @@ config :cyfr,
   base_path: Path.expand("./data"),
   seed_path: Path.expand("../seed", __DIR__)
 
-# The unit grammar of each seed-overlaid root (`Arca.Storage.locate/1`):
-# the domain module that owns the root's path spelling answers where its
-# shadow units sit and how they are shaped (`Arca.Storage.UnitLocator`).
-# Config-wired so Arca never compile-depends on Compendium. Every root the
-# layout table marks `:overlay` must have a row here — a missing one
-# raises on first touch.
+# Map each overlaid root to its unit locator. Every overlay root requires
+# a locator defining its unit boundaries.
 config :cyfr, :overlay_locators, %{
   "aqua" => Compendium.AquaPath,
   "components" => Compendium.ComponentPath
 }
 
-# Storage-adjacent knobs, spelled out so the defaults are discoverable —
-# the readers fall back to the same values, but an invisible knob is a knob
-# nobody knows to turn.
-#
-# The recursive file/byte ceiling for unauthenticated (public tincture)
-# guest writes (`Opus.StorageHandler`); the operator's per-athanor cap for
-# authenticated writes is CYFR_ATHANOR_STORAGE_BYTES.
+# Recursive file and byte ceilings for public-profile guest writes.
+# Authenticated tenant storage uses CYFR_ATHANOR_STORAGE_BYTES.
 config :cyfr, :public_storage_quota, %{max_bytes: 26_214_400, max_files: 200}
 
 # Concurrent object reads in the shared subtree dump
@@ -173,11 +153,7 @@ config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
 config :cyfr, :returning_probe_ms, 5_000
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 
-# What each retention sweep keeps. These were read by the five
-# `Cyfr.Retention.*` modules and declared nowhere, so the only way to learn
-# an athanor's conversations are pruned at a year was to read the source —
-# the "invisible knob" this file's own standard exists to prevent. The
-# readers still fall back to exactly these values.
+# Default retention windows used by Cyfr.Retention sweeps.
 config :cyfr, Cyfr.Retention,
   # Newest N executions kept per athanor.
   executions: 10_000,

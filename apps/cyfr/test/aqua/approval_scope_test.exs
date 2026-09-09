@@ -14,8 +14,6 @@ defmodule Aqua.ApprovalScopeTest do
   end
 
   test "never is a scope of its own, not a once" do
-    # One decoder used to lack it and turned a person's "never" into a
-    # single decline — the reason the codec exists.
     assert ApprovalScope.parse("never") == :never
     assert ApprovalScope.standing?(:never) == false
   end

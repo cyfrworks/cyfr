@@ -166,7 +166,6 @@ defmodule Sanctum.Context do
 
       iex> Sanctum.Context.build(user_id: "user_1", permissions: [:execute], auth_method: :oidc, authenticated: true)
       %Sanctum.Context{user_id: "user_1", permissions: MapSet.new([:execute]), auth_method: :oidc, authenticated: true}
-
   """
   @spec build(keyword() | map()) :: t()
   def build(attrs) when is_list(attrs) do
@@ -175,9 +174,7 @@ defmodule Sanctum.Context do
 
   @valid_scopes Sanctum.Atoms.scope_atoms()
 
-  # Mirrors the `auth_method()` type. Guarded at the construction site so a
-  # typo or a removed value (e.g. the old `:local`) can't enter a Context and
-  # silently bypass auth_method-keyed logic.
+  # Validate auth_method against its declared vocabulary at context construction.
   @valid_auth_methods [:oidc, :api_key, :scheduled, :webhook, :tincture, :system, :session, nil]
 
   # Mirrors the `plane()` type, guarded for the same reason.
@@ -315,7 +312,6 @@ defmodule Sanctum.Context do
       iex> ctx = Sanctum.Context.internal()
       iex> {ctx.auth_method, ctx.scope, ctx.user_id, ctx.athanor_id}
       {:system, :platform, "system", nil}
-
   """
   @spec internal(keyword()) :: t()
   def internal(opts \\ []) do
@@ -357,7 +353,6 @@ defmodule Sanctum.Context do
       true
       iex> Sanctum.Context.has_permission?(ctx, :any_permission)
       true
-
   """
   def has_permission?(%__MODULE__{permissions: perms}, permission) do
     MapSet.member?(perms, :*) or MapSet.member?(perms, permission)
@@ -398,7 +393,6 @@ defmodule Sanctum.Context do
   @spec require_permission(t(), atom(), :external | :in_chain) ::
           :ok | {:error, Sanctum.Unauthorized.reason()}
   def require_permission(ctx, permission, plane \\ :external)
-
   def require_permission(%__MODULE__{plane: :guest}, permission, :external) do
     {:error, {:guest_plane, permission}}
   end
@@ -487,14 +481,9 @@ defmodule Sanctum.Context do
   end
 
   @doc """
-  Narrow onto another athanor for a domain read or write on a tree the
-  caller can already name — the chokepoint for what used to be scattered
-  `%{ctx | athanor_id: …}` struct updates (a roster read of your own crew,
-  an agent resolved from its owner's tree, an editor write that follows
-  the agent home). Two raw swaps remain by design, each rostered with its
-  reason in `Cyfr.ContextSwapTest`: `Sanctum.MCP.AthanorTool.resolve/3`
-  opening an archived athanor for `get`/`unarchive` (which `focus/2`
-  rightly refuses), and `Sanctum.Tenancy`'s test-only resolver override.
+  Focuses the caller on another athanor for domain reads or writes after
+  checking membership and archive status. Archived-athanor management uses
+  `Sanctum.MCP.AthanorTool.resolve/3`, which permits get and unarchive.
 
   A user context goes through `focus/2` whole: membership or the audited
   operator open, and an archived athanor refused. A **system** context
@@ -589,7 +578,6 @@ defmodule Sanctum.Context do
   """
   @spec authorize(t(), atom(), term()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
   def authorize(%__MODULE__{} = ctx, action), do: authorize(ctx, action, nil)
-
   # Unauthenticated contexts are never authorized. This MUST precede the
   # generic clause so an unauthenticated context is never authorized.
   def authorize(%__MODULE__{authenticated: false}, _action, _resource) do
@@ -655,17 +643,9 @@ defmodule Sanctum.Context do
     {:error, :untagged_tenant_resource}
   end
 
-  # Fallback: a resource shape that carries no tenant identity — `nil`, or an
-  # untagged value (a plain map, struct, id, …). The contract is explicit:
-  # `authorize/3` enforces permission + tenant *presence* here; a resource
-  # that DOES carry a tenant must be passed as `{:execution|:tenant,
-  # record}` so it is tenant-checked authoritatively above (a malformed
-  # tuple or an untagged athanor-bearing map fails closed in the clauses
-  # directly above, not here). The storage
-  # primitive (`Arca.QueryHelpers.where_tenant/2` / `Arca.Storage.tenant_segments/1`)
-  # remains a fail-closed *backstop* — it scopes every query by athanor and
-  # rejects an athanor-less tenant context — but it is no longer the control
-  # for any caller that passes a tenant-bearing record.
+  # For resources without tenant identity, enforce permission and tenant
+  # presence. Pass tenant-owned records as {:execution | :tenant, record}
+  # for ownership checks. Storage queries also enforce the context's athanor.
   defp do_authorize(%__MODULE__{} = ctx, action, _resource) do
     do_authorize(ctx, action, nil)
   end
@@ -688,10 +668,7 @@ defmodule Sanctum.Context do
     Sanctum.TenantPolicy.verify(ctx, record)
   end
 
-  # Callers pass real permission atoms (the Sanctum.Atoms vocabulary), not
-  # action verbs — the verb-alias mapping (:read → :storage_read, :cancel →
-  # :execute, …) is retired, so a permission spelled here is the permission
-  # checked, with no second vocabulary to drift.
+  # Accept permission atoms from Sanctum.Atoms directly.
   defp action_to_permission(action) when is_atom(action), do: action
 
   # user_id and auth_method ride the rostered Logger metadata — the

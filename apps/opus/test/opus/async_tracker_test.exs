@@ -110,11 +110,7 @@ defmodule Opus.AsyncTrackerTest do
     end
 
     test "max_tasks=0 denies every spawn" do
-      # It used to mean "unlimited": the guard read `max_tasks > 0 and …`, so
-      # zero skipped the check. But the cap is the consented
-      # `max_concurrent_tasks`, and `Sanctum.Authority` reads 0 there as "no
-      # invokes" — the tightest grant a person can write turned into the
-      # loosest the runtime can give.
+      # A zero max_concurrent_tasks grant must prohibit task creation.
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 0)
 
       assert {:error, :max_tasks_exceeded} =
@@ -315,13 +311,7 @@ defmodule Opus.AsyncTrackerTest do
       GenServer.stop(tracker)
     end
 
-    # A completion belonging to a task this await is NOT watching used to be
-    # handed back to the mailbox with `send(self(), msg)` and immediately
-    # re-received, spinning a core until something else arrived. The wait
-    # still ended at the right moment, so only the work done gives it away:
-    # a blocked `receive` costs almost nothing, a spin costs millions of
-    # reductions. A guest can trigger it by awaiting one task while another
-    # finishes.
+    # Unrelated task completions must not cause the await loop to spin; measure scheduler reductions.
     test "a completion for an unwatched task does not spin the await" do
       {:ok, tracker} = AsyncTracker.start_link([])
 

@@ -5,16 +5,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   @moduledoc """
   Which way the dependency arrows point between the umbrella's apps.
 
-  `:opus` is the WASM engine and `:locus` the build toolchain; both depend
-  on `:cyfr`, and `Cyfr.Execution` is the behaviour that keeps cyfr from
-  depending on them back. What that leaves open is *where inside cyfr* they
-  reach, and two answers were wrong in a way nothing caught: the engine took
-  its PubSub topic names from `Prism`, the LiveView console, and every
-  persistence path in the system took its id generator from `Emissary`, the
-  MCP and HTTP surface. Neither is a compile-time cycle, so neither broke
-  anything — the arrows just pointed at the wrong things, and the "a worker
-  on another node would implement this surface" story quietly stopped being
-  true.
+  Checks that Opus and Locus depend on CYFR domain interfaces rather than web or console modules.
 
   The rule this pins is narrow and checkable: an engine does not depend on
   a user interface. `Emissary` is deliberately NOT on the forbidden list —
@@ -155,12 +146,7 @@ defmodule Cyfr.NamespaceDirectionTest do
            """
   end
 
-  # The inverse the siblings already assert (`Cyfr.EmissarySurfaceTest`,
-  # `Compendium.ReverseSurfaceTest`, `Opus.HostSurfaceTest`) and this one did
-  # not. An exemption whose call is gone stops describing the tree and starts
-  # holding the door open for it: the `oauth_grant.ex → EmissaryWeb.Endpoint`
-  # row outlived its call by a refactor to `Cyfr.RuntimeConfig.origin/0`,
-  # and nothing here noticed.
+  # Reject exemptions that no longer correspond to a dependency.
   test "every domain→web exemption still names a live reach" do
     reached = MapSet.new(domain_web_reaches(), fn {pair, _n} -> pair end)
 

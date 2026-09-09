@@ -20,8 +20,7 @@ defmodule Compendium.ReleaseDigest do
   | `needs` | named roles the operator satisfies with vault entries |
   | `caps` | the declared capability ask the operator consents to |
 
-  The retired `setup`/`oauth`/`wasi` blocks are rejected at registration,
-  so they can never reach a digest.
+  Registration rejects `setup`, `oauth` and `wasi` blocks.
 
   Everything else — description, schema, examples, tags — is presentational
   and deliberately excluded, so re-describing a release does not change its
@@ -35,8 +34,7 @@ defmodule Compendium.ReleaseDigest do
 
   alias Sanctum.JCS
 
-  # Registration rejects the retired setup/oauth/wasi blocks, so the
-  # subset is exactly what a publishable manifest can carry.
+  # Include only supported manifest fields in the digest.
   @security_blocks ~w(dependencies needs caps)
 
   @type error :: {:invalid_manifest, JCS.error()} | {:invalid_artifact_digest, term()}
@@ -55,7 +53,6 @@ defmodule Compendium.ReleaseDigest do
 
       iex> Compendium.ReleaseDigest.compute("sha256:abc", %{"caps" => %{"limits" => %{"timeout" => 1.5}}})
       {:error, {:invalid_manifest, {:invalid_value, ["caps", "limits", "timeout"], :float_not_permitted}}}
-
   """
   @spec compute(String.t(), map() | nil) :: {:ok, String.t()} | {:error, error()}
   def compute(artifact_digest, manifest)

@@ -6,8 +6,7 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
   alias Sanctum.Authority
   alias Sanctum.Limits
 
-  # §6 "ZeroAuthority" gate: no resources, no control plane, and the exact
-  # model §3.5 constants — asserted as literals on BOTH sides, never derived.
+  # Zero authority has no resources or control-plane access and uses the specified limit constants.
 
   test "zero/0 carries nothing" do
     zero = Authority.zero()
@@ -27,7 +26,7 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
     assert Authority.current_node(zero) == :unbound
   end
 
-  test "zero_limits/0 are exactly the model §3.5 literals" do
+  test "zero_limits/0 returns the specified limit values" do
     expected = %Limits{
       timeout: "30s",
       max_memory_bytes: 67_108_864,

@@ -226,13 +226,8 @@ defmodule Opus.ExecutorCascadeTest do
 
   describe "a normal completion is not a cascade" do
     test "only the abnormal endings cascade" do
-      # `run_child_stream/5` returns an execution id and a stream URL so the
-      # child can outlive the call that started it. Cascading on the parent's
-      # SUCCESS marked that live child failed without stopping it, so the
-      # child then wrote its real result over a row an SSE subscriber had
-      # already been shown as failed. Failure and cancel still cascade — the
-      # parent's chain is gone there — and a genuinely abandoned child is
-      # reaped by Opus.ExecutionSweeper on its lease.
+      # Successful parents leave asynchronous children running. Failure and
+      # cancellation cascade; abandoned children are reaped by lease expiry.
       source =
         [__DIR__, "../../lib/opus/executor.ex"]
         |> Path.join()

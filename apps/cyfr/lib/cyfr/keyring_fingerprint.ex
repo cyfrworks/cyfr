@@ -5,13 +5,9 @@ defmodule Cyfr.KeyringFingerprint do
   @moduledoc """
   Which keyring this database was sealed with, checked at every boot.
 
-  The at-rest cipher labels every envelope with its key's label, and the
-  derived zero-config key and an explicit keyring's primary can both be
-  called `default`. So an explicit `CYFR_CRYPTO_KEYRING` that went missing
-  — unset, blanked by a bad `.env`, dropped by a deploy template — was
-  silently replaced by a different key under the same label: rows sealed
-  before failed to open while new writes succeeded, and the athanor forked
-  into two key generations with no boundary event and nothing to say so.
+  Compares key material rather than labels: both derived and explicit keys
+  can use the label `default`. A mismatch refuses boot before new rows can
+  be sealed under a key different from the database's recorded primary.
 
   The fingerprint is of the PRIMARY only — `sha256("cyfr-keyring-fingerprint|"
   <> label <> "|" <> key)` — so a keyring that gains a decrypt-only

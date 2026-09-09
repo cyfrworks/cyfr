@@ -147,8 +147,7 @@ defmodule Sanctum.Authority.RootSelectTest do
     test "a public route selects the public profile regardless of authentication" do
       candidates = [@owner, @public]
 
-      # §6 "Public routing" (pure half): a valid owner cookie on a public
-      # route still selects the public profile.
+      # A public route selects the public profile even with a valid owner cookie.
       assert {:ok, @public} = RootSelect.select_for_route(candidates, :public, true)
       assert {:ok, @public} = RootSelect.select_for_route(candidates, :public, false)
     end

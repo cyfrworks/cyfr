@@ -5,10 +5,8 @@ defmodule Arca.Schemas.Component do
   @moduledoc """
   Ecto schema for the `components` table (backs `Arca.ComponentStorage`).
 
-  `inserted_at`/`updated_at` are declared `:utc_datetime_usec` so reads are
-  uniformly `%DateTime{}` on both adapters. (This used to cite an
-  `align_timestamp_precision` migration; there is no such file — the
-  baseline collapse absorbed it.)
+  `inserted_at` and `updated_at` use `:utc_datetime_usec`, returning
+  `DateTime` values on both adapters.
   """
 
   use Ecto.Schema

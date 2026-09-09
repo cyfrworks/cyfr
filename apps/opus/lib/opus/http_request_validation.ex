@@ -96,12 +96,8 @@ defmodule Opus.HttpRequestValidation do
     end
   end
 
-  # The one resolve→validate→pin call, with the guest's consent policy
-  # closed over the edge. `pin_req_opts` carries the pinned URL and the
-  # full fail-closed transport policy — before this the handlers rebuilt
-  # their own Req options and silently inherited Req's auto-retry (one
-  # fetch could become four wire requests, invisible to the rate limiter)
-  # and auto-decode (response size measured on re-encoded bytes).
+  # Resolve, validate and pin through Cyfr.Network with the guest consent
+  # policy. Use its Req options, including explicit retry and decode behavior.
   defp pin_url(url, edge) do
     case Cyfr.Network.pin(url,
            private_policy: {:fun, &EdgeGuard.allows_private_ip?(edge, &1)},
@@ -352,10 +348,7 @@ defmodule Opus.HttpRequestValidation do
     end
   end
 
-  # The edge allowlist check (validate_method/2) runs first; this maps the
-  # allowed method string to the Req atom and rejects anything outside the
-  # supported verb set. Runs after DNS resolution to preserve the handlers'
-  # historical error precedence.
+  # After policy and DNS validation, map supported HTTP method strings to Req atoms.
   defp validated_method_atom(method) do
     case Map.fetch(@valid_http_methods, method) do
       {:ok, atom} -> {:ok, atom}

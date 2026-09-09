@@ -34,16 +34,7 @@ config :cyfr, :tincture_rate_limit_max, 1_000_000
 # in a suite. Surfaces render its "unknown" answer.
 config :cyfr, :registry_health_probe, false
 
-# And the same for the REST host: the discard port refuses immediately, so
-# a surface that reads cyfr.run takes its error path deterministically
-# instead of depending on what this machine's DNS does with a real name —
-# a captive portal that answers everything and a laptop with no network
-# gave different results before. Two suites already set this by hand for
-# their own pages; the default belonged here.
-#
-# `:oci_registry_url` deliberately stays at its shipped default: the
-# registry-host allowlist is what `Compendium.OCI.Client` and the component
-# tool enforce, and their suites pin the refusal against the real host.
+# Use an unreachable REST registry for deterministic failure paths; keep the OCI host default for allowlist tests.
 config :cyfr, :registry_url, "127.0.0.1:19"
 
 # Configure Arca for tests (use sandboxed pool). The adapter is selected at
@@ -74,13 +65,7 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
       queue_target: 500,
       queue_interval: 5_000,
       journal_mode: :wal,
-      # WAL gives concurrent readers but still one writer, and the suite runs
-      # up to 20 async cases against one file — so a fixture doing a wide
-      # upsert can genuinely queue behind others for a while. At 5s that
-      # surfaced as an occasional `Database busy` in whichever test lost the
-      # race, which reads exactly like a real failure and is not one. The
-      # wait only happens when contended, so a green run pays nothing for
-      # the larger budget.
+      # Allow SQLite writers to wait for contention between concurrent test fixtures.
       busy_timeout: 20_000
 
   :postgres ->
@@ -122,9 +107,8 @@ config :cyfr, retention_scheduler_enabled: false
 # starts it explicitly.
 config :cyfr, external_server_reconciler_enabled: false
 
-# Same reason, sharper teeth: the cron scheduler is lent a test's sandbox
-# connection and then outlives it, so the connection dies mid-query and
-# the NEXT test fails. cron_scheduler_test.exs starts it itself.
+# Start the cron scheduler only within its tests so its database work
+# stays within the owning test's sandbox lifetime.
 config :cyfr, cron_scheduler_enabled: false
 
 # Boot-time Home provisioning writes rows before any test's sandbox

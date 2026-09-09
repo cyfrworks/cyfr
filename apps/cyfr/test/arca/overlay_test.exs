@@ -266,9 +266,7 @@ defmodule Arca.OverlayTest do
 
     test "a generic system writer copy-on-writes like any caller — only the lexical scope is exempt",
          %{ctx: ctx} do
-      # The old sharp edge — any system context skipping copy-on-write —
-      # is closed: a server-internal writer that is not inside
-      # `with_internal_writes/1` materializes the unit like everyone else.
+      # System writers outside with_internal_writes/1 must materialize units before writing.
       generic =
         Sanctum.internal_context(user_id: "_test", athanor_id: ctx.athanor_id, scope: :athanor)
 
@@ -280,11 +278,8 @@ defmodule Arca.OverlayTest do
       assert {"own.txt", :file} in entries
     end
 
-    test "the old magic-string context shape carries no exemption", %{ctx: ctx} do
-      # A context spelled exactly like the materializer's own
-      # (auth_method: :system, user_id: "_overlay") used to skip
-      # copy-on-write and the :bundled refusal. The exemption is lexical
-      # now — this shape copy-on-writes and refuses like anyone.
+    test "a forged magic-string context carries no exemption", %{ctx: ctx} do
+      # A system-shaped context still copies on write and obeys bundled-write restrictions.
       shaped =
         Sanctum.internal_context(user_id: "_overlay", athanor_id: ctx.athanor_id, scope: :athanor)
 
@@ -517,11 +512,7 @@ defmodule Arca.OverlayTest do
       ctx: ctx,
       seed_dir: seed
     } do
-      # The regression this pins: both adapters answer {:ok, []} for a
-      # subtree read of a FILE path, so a depth-based diff once saw both
-      # sides of an edited agent as empty — pristine — and boot-time
-      # collapse deleted the member's edits. Shape now comes from the
-      # locator, and the file unit compares actual bytes.
+      # Compare file-unit bytes directly so an edited file cannot be classified as pristine.
       agents = Path.join(seed, "aqua/roles")
       File.mkdir_p!(agents)
       File.write!(Path.join(agents, "a.md"), "shipped body")
@@ -712,15 +703,9 @@ defmodule Arca.OverlayTest do
       assert statuses[other_dir] == :materialized
     end
 
-    # The test above races two DIFFERENT units, which never contended. Two
-    # writers into the SAME unmaterialized unit is where the bytes went:
-    # both see it incomplete, both materialize, and the second one's
-    # clean-slate deletes the file the first writer was already told had
-    # been written. Its caller had an :ok in hand.
-    #
-    # Driven rather than raced: the window is microseconds wide, so the
-    # adapter parks the second commit at the moment it is about to clear
-    # the unit and the test steps the two through the exact interleaving.
+    # Interleave two writes to the same unmaterialized unit. The adapter
+    # pauses the second commit before clearing the unit so the test can
+    # verify that materialization preserves the first successful write.
     test "a commit cannot clear a unit under a write that already returned :ok", %{ctx: ctx} do
       Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.GatedCleanSlateAdapter)
 
@@ -792,11 +777,8 @@ defmodule Arca.OverlayTest do
     end
 
     test "a commit cannot clear an ALREADY-materialized unit under a live write", %{ctx: ctx} do
-      # The gap the first-write test above cannot reach. Once a unit is
-      # materialized, `prepare_write/2` is a no-op — so before the mutating
-      # callbacks took the lock themselves, an ordinary `Arca.put` into a
-      # materialized unit ran with NO lock at all, and a concurrent commit's
-      # `clean_slate/2` could delete a write that had already returned `:ok`.
+      # Verify ordinary writes to materialized units serialize with
+      # concurrent commits, even when prepare_write/2 does no materialization.
       assert :ok = Arca.put(ctx, @version_dir ++ ["seed_it.txt"], "x")
       assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
 
@@ -947,10 +929,7 @@ defmodule Arca.OverlayTest do
       # Reads stay ordinary tenant reads.
       assert {:error, :not_found} = Arca.get(ctx, mark)
 
-      # A system context is refused too: `auth_method == :system` used to be
-      # a second key to this gate, which made the forge surface every
-      # system-context caller in the codebase. Only the overlay's lexical
-      # internal-write scope writes here.
+      # Reserved writes require the lexical internal-write scope, including for system contexts.
       system =
         Sanctum.internal_context(user_id: "_test", athanor_id: ctx.athanor_id, scope: :athanor)
 
@@ -1458,11 +1437,7 @@ defmodule Arca.OverlayTest do
   end
 
   describe "the lock's refusal reaches a caller as something actionable" do
-    # `:unit_locked` escapes every overlay mutator now that the lock is on
-    # the callbacks, not just `commit_unit/4`. It rendered as `nil`, so
-    # each surface fell back to its own generic "failed" sentence — on
-    # exactly the paths where concurrent contention is expected. Contention
-    # is retryable; an outage is not.
+    # Render :unit_locked as retryable contention on every overlay mutation path.
     test "unit_locked is a recognised refusal with a retry sentence" do
       assert Cyfr.Ops.Error.reason?(:unit_locked)
 

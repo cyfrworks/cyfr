@@ -80,7 +80,7 @@ defmodule Opus.Executor do
   end
 
   defp admitted_run(ctx, reference, input, opts) do
-    # Ensure request_id exists — MCP callers already have one from ToolRegistry,
+    # Ensure request_id exists — MCP callers already have one from the catalog,
     # but direct callers (tincture invoke, cron, etc.) may not.
     ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Cyfr.UUID7.request_id()}
 
@@ -412,9 +412,7 @@ defmodule Opus.Executor do
     end
   end
 
-  # §4.5: what only the running chain knows. Everything attributable —
-  # who granted it, when, how — is joined from the immutable consent at
-  # read, so this hot-path write stays small.
+  # Store runtime facts and join attribution from immutable consent rows on read.
   defp authority_audit(%ExecutionPipeline{} = p, %Sanctum.Authority{} = authority) do
     %{
       consent_id: authority.consent_id,
@@ -637,15 +635,8 @@ defmodule Opus.Executor do
       result =
         if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
 
-      # No cascade here. A formula that finished normally did not terminate
-      # anything: `Opus.Chain.run_child_stream/5` hands the guest an
-      # execution id and a stream URL precisely so the child outlives the
-      # call that started it, and the cascade never killed it — it only
-      # marked the row, so the child went on to write its real result over a
-      # row an SSE subscriber had already been shown as failed. The abnormal
-      # endings (`handle_failure/2`, `cancel/3`) still cascade: there the
-      # parent's chain is gone. A child genuinely abandoned is reaped by
-      # `Opus.ExecutionSweeper` when its lease lapses.
+      # Successful parents leave asynchronous children running. Failure
+      # and cancellation cascade; lease expiry reaps abandoned children.
       {:ok, result}
     end
   end
@@ -929,17 +920,9 @@ defmodule Opus.Executor do
     Cyfr.Digest.sha256(wasm_bytes)
   end
 
-  # The recorded attestation is read on EVERY execution, not only when a
-  # caller asked to pin a signer. `:verify` has exactly one producer —
-  # `Opus.MCP`, from a client's own tool argument — so gating the check on it
-  # meant children (`Opus.Chain`), schedules (`Opus.CronScheduler`) and
-  # tincture ingress (`run_root_edge`) never checked anything, and
-  # `Compendium.OCI.Client` was storing unsigned pulls on the stated grounds
-  # that this check would catch them.
-  #
-  # Only the unsigned-OCI arm is the operator's call. A pinned signer that
-  # does not match, and a source this verifier cannot classify, refuse
-  # whatever the knob says.
+  # Check recorded attestations for every execution. The signed-pulls
+  # setting controls unsigned OCI admission. Signer mismatches and
+  # unclassifiable sources always refuse.
   defp verify_attestation(%ExecutionPipeline{} = p) do
     {identity, issuer} = pinned_signer(p.opts[:verify])
 
@@ -1073,12 +1056,9 @@ defmodule Opus.Executor do
     end
   end
 
-  # Every execution registers its driving process under its execution_id so
-  # cancel/2 can actually kill it. run_stream and cron register their task
-  # before calling into the executor (same process, so the second register
-  # is a no-op here and they keep owning their entry); this covers the paths
-  # that previously never registered — synchronous execution.run and every
-  # formula child, which cancel could mark in the DB but not terminate.
+  # Register each execution's driving process for cancellation, including
+  # synchronous runs and children. Existing registration by the same process
+  # is a no-op.
   @runtime_opt_keys [
     :component_type,
     :max_memory_bytes,
@@ -1248,11 +1228,7 @@ defmodule Opus.Executor do
       )
     end
 
-    # And the streaming ref, for the same reason. The timeout path cleans this
-    # up; cancel could not, because it only ever saw what the registry held —
-    # so a cancelled execution's in-flight streaming task kept fetching from
-    # the guest's allowed domain until its own receive timeout, after the row
-    # had already been stamped cancelled.
+    # Register the streaming ref so cancellation stops in-flight fetching.
     if cleanup_refs[:stream_exec_ref] do
       update_registry_meta(
         runtime_opts,
@@ -1425,13 +1401,8 @@ defmodule Opus.Executor do
   defp vault_setup_reason(reason) when is_atom(reason), do: reason
   defp vault_setup_reason(reason), do: inspect(reason)
 
-  # Failure is an egress like success: the error message reaches the
-  # execution row, telemetry, and the terminal event stream, and it can
-  # carry guest-influenced text (an application error, an exception whose
-  # message echoes a request) — so it is masked with the same
-  # dispensed-secret set as completed output. `secrets/1` also drains the
-  # OAuth tracker, which this function previously did with a bare
-  # collect-and-discard.
+  # Mask failure messages with dispensed secrets before recording or
+  # broadcasting them. secrets/1 also drains the OAuth token tracker.
   defp handle_failure(%ExecutionPipeline{} = p, error_msg) do
     record = p.record
     error_msg = Opus.SecretMasker.mask(error_msg, ExecutionPipeline.secrets(p))
@@ -1545,11 +1516,9 @@ defmodule Opus.Executor do
   @doc """
   Terminate a running execution because its consent changed underneath it.
 
-  A delta revision commits for FUTURE roots; it must never re-bind the
-  execution already in flight, which may have taken side effects under
-  the authority it started with (§4.4). The running one ends carrying the
-  typed `restart_required` payload — the surface says "approved, re-run
-  to continue" — and the re-run picks up the new revision.
+  Commits consent for future roots and ends the current execution with
+  `restart_required`. Rerunning selects the new revision; in-flight authority
+  is never rebound.
   """
   @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def cancel_for_restart(%Context{} = ctx, execution_id, payload) when is_map(payload) do

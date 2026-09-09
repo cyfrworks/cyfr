@@ -15,13 +15,8 @@ defmodule Cyfr.OtelTenantHandler do
 
   @handler_id "cyfr-otel-tenant"
 
-  # The :stop events, deliberately: Phoenix emits router_dispatch :start
-  # BEFORE the pipeline runs (deps/phoenix router.ex — the conn in the
-  # :start metadata predates every plug), so `assigns[:context]` — set by
-  # EmissaryWeb.Plugs.Authenticate inside the pipeline — was always nil
-  # there and no tenant attribute was ever written. The :stop metadata
-  # carries the post-pipeline conn; :endpoint :stop fires via
-  # register_before_send, so a request halted by auth still lands here.
+  # Use :stop events with the post-pipeline connection and resolved context.
+  # Endpoint :stop also covers requests halted during authentication.
   @events [
     [:phoenix, :endpoint, :stop],
     [:phoenix, :router_dispatch, :stop]

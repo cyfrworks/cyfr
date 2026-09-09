@@ -317,23 +317,10 @@ defmodule Aqua.ToolGrants do
   # Internal
   # ---------------------------------------------------------------------------
 
-  # A standing ALLOW for a destructive or external action is refused at
-  # the write itself — the runner's card handler checks the same rule on
-  # the intent's stored kind, but this is the SSOT for grant writes and a
-  # future surface must not be able to hand one past it. The kind comes
-  # from `Aqua.Kinds.kind_for/2` — the SAME classifier the card derives
-  # its risk from: the virtual-tool catalog (`files`/`storage`/`http` are
-  # callable but live in the formula, not the registry), then the
-  # `server:tool` external namespace, then the registry annotation. A nil
-  # kind is refused too: "not known" and "registry not up yet" read the
-  # same here, and only the second could otherwise write a standing allow
-  # for something destructive. A deny needs no kind — "never do this" is
-  # always recordable.
-  #
-  # Past the kind, the action's own `standing:` declaration has the last
-  # word — `false` refuses every standing allow, `:conversation` refuses
-  # the agent scope — read through `Aqua.Kinds.standing_for/2`, the
-  # sibling of the kind classifier, so the card and this write agree.
+  # Standing allows require a known read, write or execute kind and must
+  # satisfy the action's standing declaration. Destructive and external
+  # actions always require approval; standing denies can always be recorded.
+  # Use Aqua.Kinds for both the kind and standing limits.
   defp check_standing(_attrs, _scope, "deny"), do: :ok
 
   # A row whose scope or effect is outside the vocabulary — nothing writes

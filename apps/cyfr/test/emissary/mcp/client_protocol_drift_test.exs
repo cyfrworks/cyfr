@@ -9,11 +9,7 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
   the server's version so a revision bump cannot strand a bundled client on
   a version the server refuses.
 
-  Outbound legacy support is deliberate — third-party servers and npx
-  children are on their own release cadence — but it is *one* legacy
-  revision, and that is bound here too. It used to be two: the bridge
-  offered its children 2024-11-05 while cyfr offered peers 2025-03-26, so
-  "the legacy version" named two different dates depending on the hop.
+  Pins the shared outbound fallback revision used for third-party MCP peers and children.
   """
   use ExUnit.Case, async: true
 

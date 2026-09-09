@@ -72,10 +72,7 @@ defmodule Sanctum.TinctureAuth do
   the same secret the endpoint signs with (runtime.exs and dev.exs set both
   from one value), read through the domain's own key.
 
-  Public because the `/_s/` asset token in `EmissaryWeb.TinctureController` is
-  the sibling of the `?_t=` token minted here — same feature, same lifetime,
-  same tincture. They were drawing their key from two different places, which
-  is one change away from being two different keys.
+  Provides the signing key shared by tincture access and asset tokens.
   """
   @spec signing_secret() :: binary()
   def signing_secret, do: Application.fetch_env!(:cyfr, :secret_key_base)

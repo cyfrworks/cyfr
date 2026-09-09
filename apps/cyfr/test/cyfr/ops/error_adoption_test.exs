@@ -5,15 +5,8 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
   @moduledoc """
   A ratchet on the conversion to `Cyfr.Ops.Error`.
 
-  Adoption is deliberately incremental: a provider converts an action by
-  returning a typed tuple instead of a sentence, and unconverted strings
-  keep flowing through the renderers' binary clauses. That works, but it
-  has no direction of its own — nothing stopped a NEW module from being
-  written against the old shape, and the worklist lived in a moduledoc
-  that named `Opus.MCP` as the remaining surface while two larger ones
-  (`Opus.CronMCP`, `Sanctum.MCP.WebhookTool`) went unmentioned. Prose
-  cannot be the record of a migration in progress; it went stale the first
-  time somebody converted an action without rereading it.
+  Limits plain-string error returns per provider and rejects unlisted
+  producers. Providers may reduce their allowance as they adopt typed errors.
 
   So the roster is here, it is checked, and it only goes down:
 

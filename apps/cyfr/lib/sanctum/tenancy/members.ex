@@ -274,14 +274,9 @@ defmodule Sanctum.Tenancy.Members do
 
   def add(_athanor, _target, _added_by), do: {:error, :athanor_archived}
 
-  # Seating by email is a grant keyed on the address alone, so it takes the
-  # proof the door and `activate_invited/1` take: the provider said `true`.
-  # A known person whose issuer never asserts verification is not refused —
-  # they fall through to an invited row that activates the moment a sign-in
-  # proves the address — but they are not seated on the spot: that was an
-  # active membership handed out on an unverified claim. An issuer that
-  # omits the claim wants `user_id:`, not `email:`. One that says `false`
-  # still refuses.
+  # Seat by email only when the provider verifies it. Unknown verification
+  # creates an invitation pending a verified sign-in; explicit false refuses.
+  # Use user_id for providers that omit email verification.
   defp known_and_active?(%User{} = user),
     do: user.email_verified == true and user.status == "active"
 
@@ -438,11 +433,7 @@ defmodule Sanctum.Tenancy.Members do
          :ok <- end_if_frozen(athanor),
          :ok <- Arca.TopicSubscriptionStorage.unfollow_all(athanor_id, user_id),
          {:ok, _} <- remove(row) do
-      # The established-context memo would otherwise serve the removed
-      # member their cached, athanor-focused context on the stateless
-      # surfaces for its TTL — the one revocation path the door's
-      # session-revoking siblings didn't already cover. The sessions
-      # themselves stay; the next request re-derives via revalidate/1.
+      # Invalidate cached contexts after membership removal; retain sessions for revalidation.
       Sanctum.Session.invalidate_memo_for_user(user_id)
       broadcast_change(user_id, athanor_id, :left)
       Sanctum.Notify.member_changed(athanor_id)
@@ -646,12 +637,8 @@ defmodule Sanctum.Tenancy.Members do
   @doc """
   Whether exactly one human is in this estate.
 
-  The one derivation of "is there anybody else here?", which two questions
-  turn on: whether a message addresses the agent without naming it, and
-  whether the turn's task prefixes each line with who said it. Both used to
-  read stored state — an `answer_mode` setting and the athanor's `kind` —
-  which said nothing true once an agent could belong to a person rather
-  than an estate.
+  Returns whether the athanor has a single human member. Used for implicit
+  agent addressing and speaker prefixes in turn tasks.
 
   Active memberships only: an `invited` row is a seat nobody is sitting in.
   Fails toward "several", so an unanswerable count costs an `@` rather than

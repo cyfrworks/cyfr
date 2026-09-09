@@ -29,16 +29,9 @@ defmodule Opus.CronScheduler do
   @db_fire_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError]
   @db_timer_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError, ArgumentError]
 
-  # The claim no longer has to outlive the execution: `Arca.CronSchedule.claim/4`
-  # advances `next_run_at` in the same compare-and-set, so the OCCURRENCE is
-  # what is taken and `claimed_by` is only a liveness marker. It is released
-  # as soon as the occurrence is won (`run_claimed_schedule/6`), which is why
-  # this is a short lease rather than `ceiling + headroom`: it now covers the
-  # gap between the CAS and that release, not a 30-minute run.
-  #
-  # A node that dies inside that window strands the marker for this long —
-  # and strands nothing else, because the occurrence has already moved and
-  # the next one is a different row value.
+  # Claiming advances next_run_at atomically. The short lease covers only
+  # the interval between claiming and releasing the liveness marker, not
+  # the execution duration.
   @claim_lease_seconds 60
   def claim_ttl_seconds, do: @claim_lease_seconds
 
@@ -296,23 +289,10 @@ defmodule Opus.CronScheduler do
     %{state | load_retry_count: 0}
   end
 
-  # Guarded per schedule: a raise mid-reduce used to unwind the whole load
-  # into the outer rescue, discarding the accumulated state and with it the
-  # refs of every timer already created — untracked timers that still fire
-  # and can never be cancelled. One bad schedule now logs and the rest keep
-  # their timers.
+  # Handle failures per schedule so other schedules retain their armed timers.
   defp load_one_schedule(schedule, acc) do
-    # `next_run_at` is the occurrence cursor the claim CAS competes over, so
-    # this no longer writes it. It used to recompute from `now` on every boot
-    # and every `:reload`, with a plain `update/3` and no compare — the same
-    # separate-writer shape `Arca.CronSchedule.claim/4` was introduced to
-    # remove. On a multi-node deployment a restarting node could move the
-    # cursor out from under another node's in-flight firing, and on any node
-    # it silently skipped an occurrence that was already due.
-    #
-    # A schedule whose cursor is NULL or stale is repaired by the claim
-    # itself: the CAS refuses it, and `Opus.CronMcp` sets the cursor on
-    # create and resume. Booting only arms the timer.
+    # Boot only arms timers. Claiming advances next_run_at atomically;
+    # create and resume initialize the occurrence cursor.
     case compute_next_run(schedule.cron_expression) do
       {:ok, _next_run} ->
         schedule_timer(schedule.id, acc)
@@ -525,16 +505,10 @@ defmodule Opus.CronScheduler do
   defp run_claimed_schedule(schedule_id, schedule, ctx, exec_reference, input, state) do
     execution_id = Opus.ExecutionRecord.generate_id()
 
-    # The occurrence is already ours — `claim_occurrence/2` advanced
-    # `next_run_at` in the same statement that took it, so no other node can
-    # win this firing whatever `claimed_by` says. Give the marker back now
-    # rather than at :DOWN: held for the whole run it would serialize every
-    # LATER occurrence across nodes too, which is the stall the moduledoc
-    # says was declined, and a hard kill would strand it for the lease.
-    #
-    # Same-node overlap is still prevented by the `running` MapSet; a run
-    # that outlives its own interval can overlap the next occurrence on
-    # ANOTHER node, which is the trade `Arca.CronSchedule.claim/4` states.
+    # The atomic claim has advanced next_run_at. Release its marker before
+    # spawning so later occurrences remain claimable across nodes.
+    # The running MapSet prevents same-node overlap; another node may run
+    # a later occurrence while this one is still executing.
     _ = Arca.CronSchedule.release_claim(schedule_id, node_name())
 
     # Record execution start on schedule
@@ -548,12 +522,7 @@ defmodule Opus.CronScheduler do
         )
     end
 
-    # `next_run_at` is NOT advanced here any more: `claim_occurrence/2`
-    # moved it in the same compare-and-set that took the occurrence. Doing
-    # it separately was the double-fire — the claim guarded the execution,
-    # so a run shorter than the inter-node jitter released before another
-    # node's timer for the same occurrence arrived, and that node found a
-    # free claim and an unadvanced `next_run_at`.
+    # next_run_at was advanced atomically when claiming the occurrence.
 
     # Spawn monitored task
     logger_metadata = Cyfr.LoggerContext.capture()
@@ -761,16 +730,9 @@ defmodule Opus.CronScheduler do
   # bridges into the athanor's badges (`Prism.TelemetryBridge`), beside the
   # scheduler-internal `fire_failed`. The athanor is always known here.
   @doc false
-  # Whether a task's exit reason means the run failed.
-  #
-  # `:noproc` does not: the task is monitored a moment AFTER it is spawned, so
-  # one that finished inside that window makes the monitor fire immediately
-  # with `:noproc` — the run succeeded and was simply over first. Reading any
-  # non-`:normal` reason as a failure wrote `record_error(":noproc")` onto
-  # rows whose run had just completed, and fast-failing schedules (a bad
-  # reference, a denied consent — the ones that return quickest) collected a
-  # phantom second error every time. `:shutdown` is the scheduler's own
-  # teardown, not the schedule's.
+  # Classify task exits. :noproc can mean the task finished before its
+  # monitor was installed; :shutdown is scheduler teardown. Neither
+  # counts as a schedule failure.
   @spec failed_run?(term()) :: boolean()
   def failed_run?(:normal), do: false
   def failed_run?(:noproc), do: false

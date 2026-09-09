@@ -56,15 +56,8 @@ defmodule EmissaryWeb.HealthController do
     })
   end
 
-  # Memoized in the shared ETS cache rather than a persistent term.
-  # `:persistent_term.put/2` forces a global garbage collection whenever it
-  # replaces an existing value — so this rewrote itself every five seconds,
-  # and under a burst every concurrent miss wrote again, on an endpoint that
-  # is anonymous and internet-reachable by design.
-  #
-  # Using the cache to memoize a check OF the cache is not circular in the
-  # direction that matters: a broken table misses, the checks run, and this
-  # answers `cache: failed`. It cannot report ready off a cache that is down.
+  # Cache readiness results in ETS. If the table is unavailable,
+  # run the checks and report the cache failure.
   defp cached_checks do
     case Arca.Cache.get(@ready_cache_key) do
       {:ok, checks} ->
@@ -120,10 +113,8 @@ defmodule EmissaryWeb.HealthController do
   end
 
   @doc """
-  Where the readiness probe writes — under the `system/` global root.
-  The spelling lives in `Cyfr.HealthProbe` (glue): the retention sweep
-  consumes it too, and asking this controller for it was glue reaching
-  upward into the web layer.
+  Returns the readiness probe’s key under the `system/` global root.
+  `Cyfr.HealthProbe` also supplies this key to the retention sweep.
   """
   @spec probe_dir() :: [String.t()]
   defdelegate probe_dir, to: Cyfr.HealthProbe, as: :dir

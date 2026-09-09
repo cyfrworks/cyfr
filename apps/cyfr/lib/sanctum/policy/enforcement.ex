@@ -121,9 +121,7 @@ defmodule Sanctum.Policy.Enforcement do
       decision: to_string(decision),
       host_policy_snapshot: snapshot,
       decision_reason: attrs[:decision_reason],
-      # §4.5 runtime facts. Everything attributable — who granted, when,
-      # how, under which profile kind — is joined from the immutable
-      # consent at read instead, keeping this hot-path write small.
+      # Store runtime facts; join attribution from immutable consent rows on read.
       consent_id: attrs[:consent_id],
       activation_digest: attrs[:activation_digest],
       dep_ref: attrs[:dep_ref],

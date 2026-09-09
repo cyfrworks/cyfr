@@ -5,16 +5,9 @@ defmodule Emissary.Tincture.Invoke do
   @moduledoc """
   The one tincture-invoke ingress implementation.
 
-  Two surfaces reach it — `POST /t/.../invoke` (EmissaryWeb.TinctureController)
-  and the console shell's iframe bridge (PrismWeb.ShellLive) — and both are
-  classified execution ingresses. They used to carry separate copies that
-  drifted four ways: the console emitted no telemetry (so its invocations
-  were invisible to the activity feed and the topbar indicator), passed no
-  client identity, skipped the engine-readiness gate, and the controller's
-  audit row skipped the sanitizer the console applied. One implementation
-  owns validation, the context build, the request log, the telemetry pair,
-  the readiness gate and the sanitize-then-inspect audit discipline; the
-  surfaces keep only their own rendering and their own rate budgets.
+  Shared by `POST /t/.../invoke` and the console iframe bridge. Owns input
+  validation, context construction, request logging, telemetry, readiness
+  checks and sanitized audit records. Callers own rendering and rate limits.
 
   Returns `{:ok, result}` or `{:error, code, message}` where `code` is the
   stable slug both surfaces render their own way (`ApiError` with a status,
@@ -153,9 +146,7 @@ defmodule Emissary.Tincture.Invoke do
   end
 
   defp finish({:error, reason}, ctx, telemetry_meta, duration_ms, _route) do
-    # Sanitized BEFORE inspect, for the reason spelled out six lines down:
-    # once flattened to a string the sanitizer cannot see the map it protects.
-    # This log line was the one place in the function that skipped it.
+    # Sanitize structured payloads before inspect removes their field boundaries.
     Logger.warning("[Tincture.Invoke] error: #{inspect(Sanctum.Sanitizer.sanitize(reason))}")
 
     # Sanitize BEFORE inspect: once flattened to a string, the sanitizer's

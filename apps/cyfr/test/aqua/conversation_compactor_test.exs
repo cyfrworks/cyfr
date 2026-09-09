@@ -401,11 +401,7 @@ defmodule Aqua.ConversationCompactorTest do
 
   describe "size estimation of blocks it does not recognise" do
     test "a tool-call block is measured, not charged a flat 50 characters" do
-      # A `tool_use` carrying its arguments is the bulk of a tool-heavy
-      # history. Charging each one 50 characters meant a megabyte of
-      # arguments estimated as a few hundred bytes, compaction concluded it
-      # was well under budget, and the provider rejected the request nobody
-      # had trimmed.
+      # Include serialized tool arguments in the history-size estimate.
       big_args = %{"path" => String.duplicate("x", 40_000)}
 
       messages =

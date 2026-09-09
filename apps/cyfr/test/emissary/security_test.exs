@@ -12,14 +12,7 @@ defmodule Emissary.SecurityTest do
   """
   use EmissaryWeb.ConnCase
 
-  # The `Mcp-Session-Id` header used to authenticate, so it had an attack surface
-  # worth probing: forged ids, SQL injection, oversized values. The specification
-  # removed protocol sessions and requires a server to ignore the header
-  # entirely, so what has to hold now is narrower and stronger — whatever is in
-  # it, it changes nothing.
-  #
-  # That is a better property than the ones it replaces: those asserted the
-  # server rejected a bad value, which still meant the value reached a lookup.
+  # The Mcp-Session-Id header must have no effect on authentication, regardless of its value.
   describe "the retired session header is inert" do
     @hostile [
       "sess_00000000-0000-0000-0000-000000000000",
@@ -159,11 +152,8 @@ defmodule Emissary.SecurityTest do
             }
           })
 
-        # `system/status` declares no `path`, so the argument is dropped:
-        # the call succeeds and answers about the server, never about a
-        # file. Both halves are the contract, and `status in [200, 400]`
-        # asserted neither — a 200 that had opened the path and a 400 that
-        # had rejected the whole call would both have passed.
+        # Drop the undeclared path argument. The call must succeed and
+        # report server status without accessing the path.
         body = json_response(response_conn, 200)
         assert body["id"] == 2
         assert is_map(body["result"]), "the tool refused instead of ignoring #{inspect(payload)}"

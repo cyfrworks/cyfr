@@ -5,14 +5,8 @@ defmodule MultiTenantIsolationTest do
   @moduledoc """
   Cross-athanor isolation smoke test.
 
-  Every athanor on a server shares one database and one blob store. The
-  architectural invariant is that every read is scoped by the caller's
-  `athanor_id` — through `Arca.QueryHelpers.where_tenant/2` for rows and
-  `Arca.Storage.tenant_segments/1` + `authorize_path/2` for blobs. A
-  regression in any storage module that drops that filter would let one
-  athanor see another's data — a confidentiality bug serious enough to
-  warrant a dedicated test even though the helpers are well-covered in unit
-  tests.
+  Checks isolation across shared row and blob stores. Reads must use the
+  caller's athanor through query scoping and storage path authorization.
 
   This test exercises the *real* `Sanctum.Webhook` / `Sanctum.ApiKey` /
   `Sanctum.Vault` / `Arca` API with two athanor contexts and confirms that
@@ -390,8 +384,7 @@ defmodule MultiTenantIsolationTest do
       # No raise; context returned unchanged.
       assert ^sys = Sanctum.Context.require_tenant!(sys)
 
-      # The exact regression that broke API-key auth: Namespace.lookup
-      # (CredentialStore under system context) must not raise.
+      # Namespace lookup must succeed under the API-key context.
       result = Sanctum.Namespace.lookup("nobody|x|y")
       assert is_nil(result) or is_binary(result)
     end

@@ -1,10 +1,8 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.AuthzTest do
-  # The model §6 "Consent authorization" gate: an admin key is rejected,
-  # `:oidc` is accepted, the tincture `:session` upgrade is rejected, a
-  # caveated key is accepted only within its envelope, and overrides are
-  # rejected from any key.
+  # Consent requires an interactive caller or a capability within its exact
+  # envelope. Reject ordinary admin keys, tincture sessions and key overrides.
   use ExUnit.Case, async: true
 
   alias Sanctum.Consent.Authz

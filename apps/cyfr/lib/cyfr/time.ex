@@ -5,11 +5,8 @@ defmodule Cyfr.Time do
   @moduledoc """
   The one spelling of "this timestamp, as ISO-8601 or nil".
 
-  Six modules had grown private `format_datetime/1` copies that disagreed
-  on nil, on `NaiveDateTime`, and on the fallback — one had no catch-all
-  at all, so a shape its siblings tolerated raised there. Rendering (a
-  text `"N/A"`, a display string) belongs at the call site; the
-  conversion belongs here.
+  Converts supported date/time values to a shared representation.
+  Callers choose display text and fallback rendering.
   """
 
   @doc """

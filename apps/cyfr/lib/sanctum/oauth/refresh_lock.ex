@@ -18,10 +18,7 @@ defmodule Sanctum.OAuth.RefreshLock do
   Registry entry dies with the leader's task, so a crashed refresh never
   leaves a stuck lock.
 
-  Node-local by design: clustering is not currently possible (no
-  distribution config, SQLite default, bare-name singletons), and the
-  deployment-wide, vault-entry-keyed version belongs to the Vault redesign.
-  Keys are opaque terms so that migration only narrows the key.
+  Locks are node-local and do not serialize refreshes across nodes. Keys are opaque terms.
   """
 
   require Logger
@@ -71,11 +68,8 @@ defmodule Sanctum.OAuth.RefreshLock do
         end
       end)
 
-    # The margin over timeout_ms covers the leader's full worst case — the
-    # provider POST (15s receive ceiling) plus the CAS write-back and a
-    # possible conflict merge. A margin of one second used to let this
-    # brutal-kill land between the POST and the write, losing a refresh
-    # token the provider had already rotated.
+    # Allow time for the provider response, CAS write and conflict merge before
+    # terminating the task; a rotated token must be persisted.
     case Task.yield(task, timeout_ms + 15_000) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:leader, result}} ->
         result

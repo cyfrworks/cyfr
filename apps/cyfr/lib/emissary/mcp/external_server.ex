@@ -36,9 +36,7 @@ defmodule Emissary.MCP.ExternalServer do
   @default_max_in_flight 8
   @registry Emissary.MCP.ExternalServerRegistry
 
-  # The revision to offer a peer that turns out not to speak the current one.
-  # `2025-03-26` rather than the newest legacy revision because it is the widest
-  # common denominator among third-party servers still on the handshake.
+  # Offer 2025-03-26 to peers requiring the legacy handshake.
   @legacy_protocol_version "2025-03-26"
 
   # Matched in a pattern, so it has to be a compile-time literal — but it is
@@ -794,15 +792,8 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
-  # The JSON-RPC response out of an `text/event-stream` reply.
-  #
-  # Two things the previous line-at-a-time reading got wrong. SSE folds a
-  # multi-line payload across consecutive `data:` lines within one event —
-  # they are joined with newlines, not separate messages — so a pretty-
-  # printed body was read as several fragments and all but the last thrown
-  # away. And a conformant server may send progress events before the
-  # result, separated by blank lines; the answer is the last EVENT, not the
-  # last line.
+  # Extract the JSON-RPC response from the last SSE event.
+  # Join consecutive data: lines within each event using newlines.
   defp extract_sse_data(sse_body) do
     sse_body
     # Normalize CRLF: the wire form is \r\n and the split below is on \n.

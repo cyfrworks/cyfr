@@ -32,9 +32,7 @@ defmodule PrismWeb.BuildsLive do
   def handle_event("compile", %{"reference" => reference}, socket) do
     build_id = Cyfr.Hex.short()
 
-    # One build's topic at a time: every click used to add a subscription the
-    # socket kept for its whole life, all fanning into a handle_info that
-    # distinguishes messages by tag rather than by build id.
+    # Keep only the selected build subscription active.
     if previous = socket.assigns[:build_id] do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,

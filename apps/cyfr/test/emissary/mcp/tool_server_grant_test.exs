@@ -2,11 +2,9 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Emissary.MCP.ToolServerGrantTest do
-  # The §6 "External MCP gated" arms that become testable once the server
-  # digest is real: a consent edge naming server A's digest authorizes A's
-  # tools (through the transition — upstream dispatch then fails on the
-  # unreachable server, which is NOT a denial), never B's; and editing the
-  # server's config moves the digest so the old grant stops matching.
+  # A server grant authorizes only its matching configuration digest.
+  # Changing the server configuration invalidates the grant; an unreachable
+  # but authorized server returns an upstream error, not an authorization denial.
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog

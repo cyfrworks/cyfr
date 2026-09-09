@@ -61,9 +61,7 @@ defmodule Emissary.MCPTest do
       assert decoded["status"] in ["ok", "degraded"]
     end
 
-    # `ping` was removed in 2026-07-28. It is not merely unimplemented — a server
-    # that still answers it tells a client the wrong thing about which revision
-    # it speaks, so the rejection is the correct behaviour and worth pinning.
+    # The current protocol rejects ping as an unsupported method.
     test "ping is gone", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "2.0",

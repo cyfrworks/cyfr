@@ -41,9 +41,8 @@ defmodule Opus.OAuthTokenTrackerTest do
 
   test "a TTL below the execution ceiling is clamped — live rows survive the sweep" do
     original = Application.get_env(:cyfr, :oauth_token_ttl_ms)
-    # Below the 30-minute execution ceiling: unclamped, this swept tokens
-    # while their execution still ran, and the finalize-time collect had
-    # nothing left to mask.
+    # Token retention must cover the 30-minute execution ceiling so
+    # finalization can still collect tokens for masking.
     Application.put_env(:cyfr, :oauth_token_ttl_ms, -1)
 
     on_exit(fn ->
@@ -67,11 +66,7 @@ defmodule Opus.OAuthTokenTrackerTest do
   end
 
   test "the executor never drains the tracker without masking with the result" do
-    # `Opus.Executor.handle_failure/2` masks the failure message with
-    # `ExecutionPipeline.secrets/1`, which drains the tracker — so a bare
-    # collect-and-discard anywhere else silently empties it first and leaves
-    # the masker with nothing. The timeout path kept one such call after the
-    # others were removed; its own comment says they were.
+    # Failure masking must collect OAuth tokens before any cleanup drains the tracker.
     source =
       [__DIR__, "../../lib/opus/executor.ex"]
       |> Path.join()

@@ -168,8 +168,7 @@ defmodule Opus.CronParserTest do
     end
 
     test "a leap-day schedule finds the next Feb 29 after firing" do
-      # Consecutive Feb-29s are 1461 days apart; the old 4x365-day horizon
-      # declared the next one unreachable and orphaned the schedule.
+      # Consecutive leap-day occurrences can be 1461 days apart.
       {:ok, cron} = CronParser.parse("0 0 29 2 *")
 
       assert {:ok, next} = CronParser.next_run(cron, ~U[2028-03-01 00:00:00Z])

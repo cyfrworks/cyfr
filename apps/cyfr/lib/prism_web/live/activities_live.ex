@@ -10,11 +10,8 @@ defmodule PrismWeb.ActivitiesLive do
   calls `mcp_log/correlate` to fetch the full causal tree (executions +
   policy logs).
 
-  Complements ExecutionsLive (`/executions`): that page groups by
-  execution for operating on runs (expand, correlate); this one is the
-  flat causal feed. (An earlier note here claimed this page replaced it —
-  the two are deliberately distinct, as ExecutionsLive's own moduledoc
-  says.)
+  Shows a flat causal feed. `ExecutionsLive` at `/executions` groups
+  activity by execution for run inspection and control.
   """
 
   use PrismWeb, :live_view
@@ -652,9 +649,7 @@ defmodule PrismWeb.ActivitiesLive do
     """
   end
 
-  # Annotate the executions list with per-row depth, ordered parent-first.
-  # Replaces the old ordered_executions/exec_depth/parent_depth trio with a
-  # single depth-first walk, mirroring ExecutionsLive's pattern.
+  # Order executions parent-first and annotate depth in a single traversal.
   defp annotated_executions(executions) do
     by_parent = Enum.group_by(executions, fn e -> f(e, :parent_execution_id) end)
     exec_ids = MapSet.new(Enum.map(executions, &f(&1, :id)))

@@ -6,11 +6,7 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
   The shell's postMessage invoke path carries its own rate limit, keyed by
   person rather than by IP like the HTTP route's.
 
-  It had no coverage at all: `config/test.exs` sets
-  `:tincture_rate_limit_max` to 1_000_000 for the whole suite, and
-  `invoke_throttled?/2` reads that key — so the limiter answered `false` in
-  every test and could have been deleted without turning anything red. This
-  drives it through the socket with the budget turned down.
+  Lower the test budget and exercise throttling through the socket.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -51,9 +47,7 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
     original_max = Application.get_env(:cyfr, :tincture_rate_limit_max)
     Application.put_env(:cyfr, :tincture_rate_limit_max, 1)
 
-    # The shell no longer force-rescans on mount (the registry follows the
-    # tinctures topic in production); files planted directly on disk need
-    # the reload the AutoIndexer broadcast would otherwise trigger.
+    # Reload the registry after writing fixtures directly to disk without an AutoIndexer notification.
     Prism.TinctureRegistry.reload_athanor(home.id)
 
     on_exit(fn ->

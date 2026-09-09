@@ -674,11 +674,7 @@ defmodule Emissary.MCP.McpServersTool do
   defp format_server_info(%{server_info: info}), do: info
   defp format_server_info(_), do: nil
 
-  # Topic name is `mcp_servers`, not `prism:mcp_servers`: the console was the
-  # only listener when this was written, but adding or removing a server changes
-  # which `server:tool` names exist, so an MCP client holding a
-  # `subscriptions/listen` stream is a listener too. The event was never
-  # console-specific.
+  # Publish mcp_servers updates for both console and MCP subscription clients.
   defp broadcast_mcp_servers_changed(ctx) do
     topic = Cyfr.Topics.mcp_servers(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :mcp_servers_changed)

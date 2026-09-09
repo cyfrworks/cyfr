@@ -34,11 +34,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     seed_home()
   end
 
-  # A file created under the previous schema still has `memberships` (and
-  # the retired tenant tables) but no `athanors`. Ecto sees this baseline's
-  # new version as pending and would otherwise CREATE TABLE on top of it.
-  # There is no upgrade path: drop the database (or the volume) and boot
-  # onto an empty one.
+  # Refuse applying the baseline to a database containing an incompatible tenant schema.
   defp refuse_pre_baseline! do
     tables = existing_tables()
 
@@ -268,8 +264,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :name, :string, null: false
       add :version, :string, null: false
       add :component_type, :string, null: false
-      # `:text` from the start: these outgrew varchar(255) once already, and
-      # the correction had to be a Postgres-only migration.
+      # Use text columns for values that may exceed 255 characters.
       add :description, :text
       add :tags, :text
       add :category, :string

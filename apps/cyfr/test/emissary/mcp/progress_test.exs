@@ -5,10 +5,7 @@ defmodule Emissary.MCP.ProgressTest do
   @moduledoc """
   Progress belongs to a request, not to a connection.
 
-  The design this replaced keyed a buffer on `context.session_id` and expected a
-  separate `GET /mcp` stream keyed the same way. Two properties are asserted here
-  because both were broken then: a channel reaches exactly the request that owns
-  it, and having no listener is never an error.
+  A progress channel reaches only its owning request; an absent listener is not an error.
   """
   use ExUnit.Case, async: true
 

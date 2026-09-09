@@ -6,22 +6,11 @@ defmodule Arca.TenantTables do
   The closed roster of athanor-scoped tables, and the one verb that
   deletes an athanor's rows from every one of them.
 
-  ## Why this exists
+  ## Scope
 
-  Nothing deleted them. `Sanctum.Tenancy.Athanors.purge_storage/1`
-  reclaims `athanors/{id}/` from the volume and says so — *"its rows are
-  untouched — this deletes blobs only"* — while `Cyfr.Retention` skips
-  archived athanors because *"purging is the deliberate reclaim"*. Each
-  contract deferred to the other, so after archive + purge the UI showed
-  the athanor gone and disk usage dropped while every
-  `vault_entries.sealed_payload`, `webhooks.secret_encrypted`,
-  `oauth_provider_credentials.payload_ciphertext`,
-  `registry_tokens.credential_ciphertext`, execution input/output,
-  message and log stayed in `cyfr.db` and in every backup taken
-  afterwards.
-
-  Per-entry tombstones, conversation deletes and key revocation all
-  existed. What did not was **tenant-wide erasure**.
+  Purges athanor-owned database rows, including credentials, execution
+  records, messages, and logs. Blob deletion is handled separately by
+  `Sanctum.Tenancy.Athanors.purge_storage/1`.
 
   ## Order
 
@@ -34,12 +23,9 @@ defmodule Arca.TenantTables do
 
   ## What this does NOT promise
 
-  Deleting a row removes it from every query. It does not scrub the bytes
-  from the file: SQLite leaves freed pages until `VACUUM`, and Postgres
-  until the tuple is vacuumed and the page reused. An operator whose
-  threat model includes someone reading the raw volume must run the
-  backend's own reclaim afterwards. Saying otherwise would be the same
-  kind of promise `purge_storage/1` made.
+  Row deletion does not guarantee erasure of bytes from database files
+  or backups. Physical reclamation depends on the database backend and
+  the operator’s storage lifecycle.
   """
 
   import Ecto.Query

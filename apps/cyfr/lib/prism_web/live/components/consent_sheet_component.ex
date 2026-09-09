@@ -3,14 +3,12 @@
 
 defmodule PrismWeb.ConsentSheetComponent do
   @moduledoc """
-  The operator's consent sheet: the three §4.4 moments — grant, the
-  embedded vault-entry picker, and the delta shown when a component asks
-  for something new — over one plan → preview → commit walk.
+  Consent sheet for grants, vault-entry selection and requested capability
+  changes, using a plan, preview and commit flow.
 
-  Vocabulary is the operator column of §4.4: Profile, Vault entry,
-  Consent rev N, Grant. Copy never suggests a credential is hidden from
-  the operator (§2.9 physics): what the sheet promises is that material
-  is sealed at rest and that components see only what was granted.
+  Displays profiles, vault entries and consent revisions. Credentials are
+  sealed at rest; components receive only granted material. Operators can
+  access the credentials they manage.
   """
 
   use PrismWeb, :live_component
@@ -128,11 +126,8 @@ defmodule PrismWeb.ConsentSheetComponent do
         assign(socket, error: nil, plan: nil, preview: nil)
 
       {:error, message} ->
-        # A conflict means the world moved under the sheet — re-plan so
-        # the operator decides against what is true now, never against
-        # what they were shown a minute ago. The refusal is assigned AFTER
-        # the re-plan: load_plan's success arm clears :error, which used to
-        # silently reset the sheet with no word on why.
+        # Re-plan after a conflict, then assign the error so load_plan does not
+        # clear the explanation shown to the operator.
         socket
         |> assign(plan: nil, preview: nil)
         |> load_plan(socket.assigns.ref)
@@ -151,8 +146,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     %{"ref" => socket.assigns.ref, "bindings" => bindings}
   end
 
-  # The socket carries the operator's :oidc context, which is what makes
-  # this surface able to consent at all (§4.1).
+  # Use the operator socket context (:oidc) for interactive consent.
   defp call(socket, tool_action, args) do
     Ops.call_tool(socket, tool_action, args)
   end

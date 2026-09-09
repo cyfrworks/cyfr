@@ -292,8 +292,7 @@ defmodule Compendium.AutoIndexerTest do
           else: Application.delete_env(:cyfr, :storage_adapter)
       end)
 
-      # An unreadable tree is an outage, never an empty roster — the scan
-      # that used to read it as empty pruned every filesystem row.
+      # An unreadable tree is an outage and must not trigger registry pruning.
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert {:error, {:discovery_failed, :injected_outage}} = AutoIndexer.scan(ctx: ctx)

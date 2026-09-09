@@ -8,9 +8,7 @@ defmodule Sanctum.Authority.InvocationPropertyTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
-  # §6 "Separate properties", arm 1 — invocation authority alone: which
-  # targets may be invoked at all, decided by edge presence and
-  # invoke_mode, independent of what any edge carries.
+  # Invocation permission depends on edge presence and invoke_mode, independently of edge resources.
 
   property "edge presence and invoke_mode fully decide invocability" do
     check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 50) do
@@ -27,8 +25,7 @@ defmodule Sanctum.Authority.InvocationPropertyTest do
                "consented edge #{source} -> #{to} (#{inspect(need)}) was not invocable"
       end
 
-      # A §2.7 consequence, pinned: once a manifest declares needs, its
-      # unnamed edges are dead — omission is rejected outright.
+      # Declared needs require an explicit need name; unnamed edges cannot satisfy the call.
       for {to, ""} <- Gen.unreachable_edges(meta, source) do
         assert {:deny, {:need, :required}} =
                  Transition.step(open, :call, Gen.invoke_at(open, meta, to, nil))

@@ -901,9 +901,7 @@ defmodule Compendium.RegistryTest do
     end
 
     test "the 'cyfr' namespace is reserved for platform-scoped callers", %{ctx: ctx} do
-      # The gate used to ask for a `:cyfr_publish` permission no vocabulary
-      # contains, so only the `:*` wildcard every interactive login carries
-      # ever passed it — the reservation held against nobody.
+      # Publishing in the cyfr namespace requires platform scope.
       assert {:error, {:namespace_reserved, _}} =
                Registry.publish_bytes(ctx, @valid_wasm, %{
                  name: "reserved-test",
@@ -1201,8 +1199,7 @@ defmodule Compendium.RegistryTest do
                  manifest: manifest
                })
 
-      # The row never landed and the committed unit rolled back — this
-      # ingress used to save the row before validating and leave BOTH.
+      # Validation failure leaves neither a registry row nor a committed unit.
       assert {:error, :not_found} = Registry.get(ctx, "dep-broken", "1.0.0")
 
       assert {:ok, []} =

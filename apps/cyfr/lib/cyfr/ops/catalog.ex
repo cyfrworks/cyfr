@@ -24,18 +24,14 @@ defmodule Cyfr.Ops.Catalog do
   ## Usage
 
       # List all tools
-      ToolRegistry.list_tools()
+      Cyfr.Ops.Catalog.list_tools()
 
       # Call a tool
       Cyfr.Ops.Catalog.call_external("retention", context, %{"action" => "get"})
 
   ## One node, honestly
 
-  This registry is single-node by design. An earlier note here promised
-  :pg/Horde routing across workers; `Opus.HostSurfaceTest` records why
-  that framing was wrong by two orders of magnitude — the engine names
-  ~40 cyfr modules, so a remote worker is a protocol project, not a
-  routing patch on this table.
+  The catalog routes calls within the local node.
 
   ## The gate, as it is
 
@@ -549,8 +545,7 @@ defmodule Cyfr.Ops.Catalog do
 
       :ok
     else
-      # No baseline to compare against — this grant predates description
-      # pinning, or names no tool server. Nothing to check.
+      # Without a pinned baseline or tool server, skip the drift check.
       nil ->
         :ok
 
@@ -575,10 +570,7 @@ defmodule Cyfr.Ops.Catalog do
         :ok
     end
   rescue
-    # Best-effort, but never mute: this is a supply-chain check (upstream
-    # servers rewriting tool descriptions fed to a model holding profile
-    # authority), and a bare `rescue _ -> :ok` made a permanently broken
-    # check indistinguishable from "no drift".
+    # Log drift-check failures; the check remains best-effort.
     e ->
       Logger.warning(
         "[Cyfr.Ops.Catalog] description-drift check failed: " <>
@@ -635,7 +627,7 @@ defmodule Cyfr.Ops.Catalog do
       is_nil(annotation) ->
         # Default-deny: an action without an access declaration is not
         # dispatchable, whatever the handler would have said. The HTTP path
-        # never gets here (InputValidator enforces the schema enum first);
+        # never gets here (Cyfr.Ops.Contract enforces the schema enum first);
         # this refuses the in-process callers.
         {:error, {:unknown_action, "#{name}.#{action}"}}
 
@@ -648,15 +640,8 @@ defmodule Cyfr.Ops.Catalog do
     end
   end
 
-  # The tool's declared `inputSchema`, applied on every path into a handler.
-  #
-  # `Emissary.MCP.Router` validates before dispatch, so `POST /mcp` was already
-  # held to it; the console (`PrismWeb.Ops` → `call_external/4`) and the
-  # other in-process callers were not, and LiveView event params are as
-  # client-controlled as a request body. A handler should not have to defend
-  # twice, and the two ingresses should not disagree about what is a valid
-  # call. A tool that declares no schema is unconstrained here, exactly as it
-  # is over HTTP.
+  # Validate declared input schemas for HTTP and in-process calls.
+  # Tools without a schema are unconstrained here.
   defp validate_against_schema(meta, args) do
     case Map.get(meta, :input_schema) do
       schema when is_map(schema) and map_size(schema) > 0 ->
@@ -670,13 +655,8 @@ defmodule Cyfr.Ops.Catalog do
     end
   end
 
-  # `action` belongs to the annotation layer, whole. It answers a missing one
-  # as `:action_missing` and an unannotated one as `{:unknown_action, …}`,
-  # and `ToolVisibility` prunes the enum per caller — so letting the schema
-  # answer first would give one condition two vocabularies, which is the drift
-  # `Cyfr.Ops.Error` exists to end. Neither case was the gap either:
-  # both were already refused before dispatch. What was NOT checked is every
-  # other field, and that is what this validates.
+  # The annotation layer validates action and returns its typed errors.
+  # Schema validation covers the remaining input fields.
   defp without_action_rules(schema) do
     schema
     |> update_in_if(["properties", "action"], &Map.delete(&1, "enum"))
@@ -715,17 +695,10 @@ defmodule Cyfr.Ops.Catalog do
     end
   end
 
-  # A consent refusal stays typed here — `Sanctum.Consent.Authz`'s own
-  # vocabulary wrapped in the `Sanctum.Unauthorized` reason it maps to —
-  # and the wire boundary renders it through `Authz.message/1`. This gate
-  # used to flatten it to prose bound to ProfileTool's spelling by comment
-  # alone.
-  #
-  # In-chain, the interactive class keeps its surface half and drops its
-  # plane half: an approved proposal runs guest-planed under the chain's
-  # authority, and the click was the consent. A `:staging` action has no
-  # in-chain arm — none is reachable from a chain — so it keeps the full
-  # check, plane included.
+  # Preserve typed consent refusals for rendering through Authz.message/1.
+  # In-chain interactive calls retain the surface check; the approved
+  # proposal supplies consent for the guest plane. Staging actions require
+  # the full surface and plane checks and are unavailable in-chain.
   defp check_consent(ctx, annotation, in_chain?) do
     case Map.get(annotation, :consent) do
       nil ->
@@ -759,13 +732,9 @@ defmodule Cyfr.Ops.Catalog do
     own_root? = is_nil(ctx.request_id)
     ctx = if own_root?, do: %{ctx | request_id: Cyfr.UUID7.request_id()}, else: ctx
 
-    # Who logs what: a transport logs the request it received, and each
-    # in-chain call logs itself. Without the second arm nothing recorded a
-    # component's own tool calls at all — the context they run under inherits
-    # the root's request id through the guest closure, which the guard used to
-    # read as "the transport already logged this".
-    #
-    # `mcp_log` never logs, or it would record its own listing every time.
+    # Transports log incoming requests; in-chain calls log themselves even
+    # when they inherit the root request id. Exclude mcp_log to avoid logging
+    # its own queries.
     should_log? = name != "mcp_log" and (in_chain? or own_root?)
 
     # A root call *is* its request, so it is filed under the request id. An
@@ -990,9 +959,7 @@ defmodule Cyfr.Ops.Catalog do
     # Load all configured providers into Arca.Cache
     load_providers()
     schedule_refresh()
-    # Audit deferred to handle_continue so a bug in the audit (or in any
-    # provider's tools/0) can't take down ToolRegistry at boot. Worst case,
-    # a future refactor logs a warning instead of crashing the supervisor.
+    # Defer provider auditing to handle_continue and log failures without stopping the catalog.
     {:ok, %{}, {:continue, :audit_action_kinds}}
   end
 
@@ -1006,7 +973,7 @@ defmodule Cyfr.Ops.Catalog do
   # audit never raises from this hook — drift is surfaced through logs (or,
   # for tests, by calling `audit_action_kinds/0` directly and asserting on
   # the result). Wrapped in try/rescue so a malformed tool definition can't
-  # bring down ToolRegistry.
+  # bring down the catalog.
   defp log_action_kinds_audit do
     case audit_action_kinds() do
       :ok ->
@@ -1140,7 +1107,7 @@ defmodule Cyfr.Ops.Catalog do
 
           # The tuple carries only the tool's name — the exception's own
           # message can hold a query, a path, or the offending bytes, and
-          # this tuple renders verbatim on the wire (`ToolError.message/1`).
+          # this tuple renders verbatim on the wire (`Cyfr.Ops.Error.message/1`).
           {:error, {:crashed, "Tool #{name} crashed"}}
 
         {:exit, :cancelled} ->

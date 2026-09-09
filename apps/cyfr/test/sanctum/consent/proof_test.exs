@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.ProofTest do
-  # The model §6 "Proof binds commit" gate: a proof minted for one commit
-  # digest is rejected for another, and replay and expiry are rejected.
+  # Reject a proof for a different commit digest, a replayed proof or an expired proof.
   use ExUnit.Case, async: false
 
   alias Sanctum.Consent.Proof

@@ -43,12 +43,7 @@ defmodule Sanctum.Tenancy.Users do
   `email_verified` as the provider's own three answers, so "it never said"
   is not recorded as "it said no".
 
-  An assertion the provider did NOT make leaves the stored value alone. The
-  same reasoning as `email_verified`: `AuthController` builds `name` from
-  the Ueberauth info, which carries neither `:name` nor `:nickname` for
-  some identities, so an absent claim used to write `nil` over a display
-  name an earlier sign-in had recorded — the row lost information by being
-  refreshed.
+  An absent provider claim preserves the stored value, including name and email verification.
   """
   @spec upsert_from_provider(provider_info()) :: {:ok, User.t()} | {:error, term()}
   def upsert_from_provider(%{id: key, provider: provider} = info) when is_binary(key) do

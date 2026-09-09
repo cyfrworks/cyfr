@@ -12,7 +12,6 @@ defmodule Prism do
   - `Prism.Labels` / `Prism.Tray` — mode vocabulary and the notification
     tray's badge state.
 
-  Agent orchestration used to live here too; it is the `Aqua` domain now —
-  the console renders it, the domain never names the console.
+  `Aqua` owns agent orchestration; Prism renders its state.
   """
 end

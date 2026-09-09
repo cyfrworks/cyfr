@@ -30,19 +30,9 @@ defmodule Sanctum.Sanitizer do
     derived_key key_material keystore passphrase
   )
 
-  # Keys sensitive only when they are the WHOLE key. `code` is the OAuth
-  # authorization code — a single-use credential — but it is also the tail of
-  # `error_code`, `status_code` and `code_challenge`, none of which are
-  # secret and all of which are worth reading in a log. Whole-token matching
-  # is not enough to tell those apart; exact matching is. `state` is the
-  # vault-OAuth CSRF binding — but "state" as a token inside a longer key
-  # (an execution's state, a connection state) is ordinary data.
-  #
-  # `key` is a credential wherever it stands alone: it is the `key` argument
-  # of `key.validate` (an API key value, which reached `mcp_logs` in the
-  # clear) and the `_key` tincture query param — separators are stripped
-  # before this comparison, so both spellings land here. `keyboard` and
-  # `monkey` are words and keep reading.
+  # Match code, state and key only as whole keys after stripping separators.
+  # These can carry credentials; longer names such as error_code, keyboard
+  # and connection_state must remain readable.
   @exact_sensitive_keys ~w(code state key)
 
   # Compared against the key as written, separators and all. `_t` and
@@ -81,7 +71,6 @@ defmodule Sanctum.Sanitizer do
 
       iex> Sanctum.Sanitizer.sanitize(%{"nested" => %{"api_key" => "abc123"}})
       %{"nested" => %{"api_key" => "[REDACTED]"}}
-
   """
   @spec sanitize(term()) :: term()
   # Structs are traversed field-by-field and rebuilt, so one carrying a
@@ -111,21 +100,9 @@ defmodule Sanctum.Sanitizer do
     Enum.map(data, &sanitize/1)
   end
 
-  # Tuples are traversed for the same reason maps and lists are: `{:error, %{...}}`
-  # is the canonical Elixir error shape, so a credential that reaches a log
-  # almost always arrives inside one. Without this clause the term fell through
-  # to the catch-all untouched — which went unnoticed because the one struct that
-  # carried a credential also derived `Inspect` redaction, so the *struct* hid
-  # the value and the sanitizer never had to. That struct no longer holds a
-  # credential, and the next one that does would not be protected.
-  #
-  # Structs match the clause above and never reach here.
-  #
-  # A 2-tuple is checked as a key/value pair first. `Plug.Conn`'s
-  # `req_headers` is a list of `{name, value}` — the single most likely shape
-  # for a credential to arrive in — and the general tuple clause below
-  # sanitizes each element independently, so the name was never consulted as
-  # a key and `{"authorization", "Bearer …"}` went to the log intact.
+  # Check two-tuples as key/value pairs before traversing general tuples.
+  # This redacts credential headers such as {"authorization", "Bearer ..."}.
+  # Structs are handled by the preceding clause.
   def sanitize({key, value}) when is_binary(key) or is_atom(key) do
     if sensitive_key?(key), do: {key, "[REDACTED]"}, else: {key, sanitize(value)}
   end
@@ -142,12 +119,9 @@ defmodule Sanctum.Sanitizer do
   @doc """
   Check if a key matches a known sensitive pattern.
 
-  Single-word patterns (`auth`, `token`, `secret`, …) must match a WHOLE token —
-  so `auth` no longer redacts `authentication_method` / `device_auth_endpoint`.
-  Multi-word patterns (`api_key`, `access_token`, …) keep substring matching on
-  the separator-stripped key, so smushed variants (`apiKey`, `x-api-key`) stay
-  covered. The net effect removes the common false positives without
-  under-redacting real secret keys (which always carry a token boundary).
+  Single-word patterns (`auth`, `token`, `secret`) match whole tokens.
+  Multi-word patterns (`api_key`, `access_token`) match substrings after
+  separator removal, including `apiKey` and `x-api-key`.
 
   A third rule covers keys sensitive only in full: `code` is an OAuth
   authorization code, but `error_code` and `code_challenge` are not secrets.

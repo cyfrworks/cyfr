@@ -6,19 +6,13 @@ defmodule Cyfr.Topics do
   Every PubSub topic in the system, named once, with the messages each one
   carries.
 
-  A topic is two halves of one contract: the name a producer broadcasts on and
-  a consumer subscribes to, and the shape of what travels over it. Both used to
-  be free text — a producer in one sliver and a consumer in another agreeing by
-  spelling, with the vocabulary written down in two prose tables that were both
-  incomplete. Renaming one was silent; the page just stopped updating.
+  Defines topic names and message shapes for publishers and subscribers.
 
   Naming them here makes a rename a compile error. `Sanctum.Notify` proves the
   shape: one function for the topic, a `@type` for what rides on it.
 
-  The `"prism:"` string prefix is historical and deliberately stable: it is
-  an in-VM PubSub address, not a module reference, and the aqua domain and
-  the console both speak it through this module — the one place its
-  spelling exists.
+  The `prism:` prefix is an in-VM PubSub address shared by the AQUA domain
+  and console, independent of module names.
 
   ## Athanor-scoped topics
 

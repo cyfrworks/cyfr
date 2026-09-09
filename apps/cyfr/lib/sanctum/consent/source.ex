@@ -19,7 +19,7 @@ defmodule Sanctum.Consent.Source do
   alias Sanctum.Context
 
   @typedoc """
-  One immutable consent revision, §2.5-shaped.
+  One immutable consent revision.
 
   `vault_refs` carries the derived reverse-index rows for the revision —
   the loader's blob/refs equality check needs both sides, and delivering

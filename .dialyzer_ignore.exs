@@ -1,17 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The dialyzer ratchet: every finding standing the day the gate was turned
-# on, so the job is green now and red on anything new. `.github/workflows/
-# dialyzer.yml` runs it; `mix.exs` points at this file.
-#
-# An entry is {file, warning_kind}, with the file spelled the way dialyzer
-# reports it — app-relative, not umbrella-relative. Fixing a file's last
-# finding of a kind means DELETING its line; `list_unused_filters: true`
-# fails the build on a line that no longer matches, so the record cannot
-# drift away from the tree in either direction. Never add a line without
-# reading the finding first: this tail is dead defensive clauses and specs
-# narrower than their code, and two of them were real bugs.
+# Dialyzer warning filters, configured by mix.exs.
+# Each entry is {app_relative_file, warning_kind}. Remove an entry when its
+# last matching warning is fixed; list_unused_filters fails on unused entries.
+# Review the reported warning before adding a filter.
 [
   {"lib/aqua/actions.ex", :pattern_match},
   {"lib/aqua/actions.ex", :pattern_match_cov},

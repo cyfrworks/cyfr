@@ -122,7 +122,6 @@ defmodule Opus do
 
       ctx = Sanctum.TestContext.local()
       {:ok, records} = Opus.list(ctx, limit: 10)
-
   """
   @spec list(Context.t(), keyword()) :: {:ok, [ExecutionRecord.t()]} | {:error, term()}
   @impl Cyfr.Execution
@@ -135,7 +134,6 @@ defmodule Opus do
 
       ctx = Sanctum.TestContext.local()
       {:ok, record} = Opus.get(ctx, "exec_abc123")
-
   """
   @spec get(Context.t(), String.t()) :: {:ok, ExecutionRecord.t()} | {:error, term()}
   @impl Cyfr.Execution
@@ -150,7 +148,6 @@ defmodule Opus do
 
       ctx = Sanctum.TestContext.local()
       {:ok, record} = Opus.cancel(ctx, "exec_abc123")
-
   """
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   @impl Cyfr.Execution
@@ -159,9 +156,8 @@ defmodule Opus do
   @doc """
   Terminate a running execution because its consent changed underneath it.
 
-  The delta revision applies to future roots; this one ends carrying
-  `restart_required` so its surface can say "approved — re-run to
-  continue" (§4.4).
+  The new consent revision applies to future roots. This execution ends
+  with `restart_required`; rerun it to use the approved authority.
   """
   @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   @impl Cyfr.Execution

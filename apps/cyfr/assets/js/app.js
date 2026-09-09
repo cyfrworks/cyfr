@@ -113,10 +113,7 @@ function showConfirmDialog(message) {
     overlay.appendChild(panel)
     document.body.appendChild(overlay)
 
-    // The document-level listener is removed by cleanup itself, not only by
-    // the Escape branch that installed the removal: clicking Cancel, Confirm
-    // or the overlay used to leave it attached, so every dialog the page ever
-    // opened kept a live handler closed over its removed DOM.
+    // Remove the document listener on every dialog close path.
     function onKeydown(e) {
       if (e.key === "Escape") cleanup(false)
     }

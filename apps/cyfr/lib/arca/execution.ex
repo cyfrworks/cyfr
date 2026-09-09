@@ -287,11 +287,8 @@ defmodule Arca.Execution do
   The executions a request id started, newest first, scoped to the caller's
   athanor.
 
-  What `mcp_log.correlate` shows beside the log lines for a request. It
-  lives here, with the schema, because `Emissary.MCP.Tools.RecordsProvider`
-  was writing the Ecto for it inline — an MCP tool handler as a query
-  layer, and the only place in the transport namespace that touched the
-  Repo besides the health check's `SELECT 1`.
+  Returns execution records associated with an MCP request for
+  `mcp_log.correlate`.
   """
   @spec list_by_request(Sanctum.Context.t(), String.t(), non_neg_integer()) ::
           [%__MODULE__{}] | {:error, :database_error}
@@ -537,13 +534,9 @@ defmodule Arca.Execution do
     end)
   end
 
-  # The fence a writer proves it still owns the row with. `attempt` is the
-  # id minted when the row was opened; `runner_id` the boot the attempt
-  # runs on; `lease_until` the exact value the sweeper observed — a
-  # renewal in between changes it, and the sweep then matches nothing,
-  # which is the whole point. A nil value is "no fence on this key": a
-  # caller that does not know the attempt (a person's cancel of a row
-  # opened before the column existed) fences on the status alone.
+  # Fence writes by attempt id, runner boot id, and observed lease value.
+  # A lease renewal invalidates a sweep using the old value. Nil keys add
+  # no fence; without an attempt id, cancellation checks status alone.
   defp fenced(query, fence) do
     Enum.reduce(fence, query, fn
       {_key, nil}, q -> q

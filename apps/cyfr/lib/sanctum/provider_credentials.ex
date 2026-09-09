@@ -7,11 +7,7 @@ defmodule Sanctum.ProviderCredentials do
   (client id/secret at Google, GitHub, ...), one sealed blob per
   `(athanor, provider)`.
 
-  These are deployment-level credentials, not component-delegable secrets.
-  They used to live in the `secrets` table and were read under the
-  *executing caller's* context during token refresh, which let any
-  execute-permission context (public tinctures, webhooks, cron) read the
-  client secret by name. This store separates the planes:
+  Stores deployment-level credentials, which cannot be delegated to components:
 
   - **Management** is caller-gated on tenant scope plus the class the write
     deserves. `put/4` and `delete/2` are **interactive** (`Consent.Authz`),

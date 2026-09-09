@@ -2,9 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Policy.EnforcementAuditTest do
-  # §4.5: the enforcement row stores the runtime facts and JOINS the
-  # attribution. What a chain knows goes in the row; who granted it, when
-  # and how comes from the immutable consent at read.
+  # Store runtime facts and join attribution from the immutable consent on read.
   use ExUnit.Case, async: false
 
   alias Sanctum.Policy.Enforcement

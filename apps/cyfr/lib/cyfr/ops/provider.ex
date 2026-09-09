@@ -155,10 +155,7 @@ defmodule Cyfr.Ops.Provider do
   @type handle_result :: {:ok, map()} | {:error, String.t()}
 
   @doc """
-  The service this provider belongs to — the label `system.status` groups
-  by and the request log's `routed_to` carries. Each provider owns its own
-  name (like it owns its tools); the old central map fell back to
-  "emissary" silently when a module was renamed.
+  Returns the service label used by `system.status` grouping and request-log `routed_to`.
   """
   @callback service() :: String.t()
 
@@ -233,19 +230,13 @@ defmodule Cyfr.Ops.Provider do
     fine when the domain warrants them; ship them with an explicit `kind`
     matching the closest canonical bucket.
 
-  > #### Before adding `x-mcp-header` to an input schema {: .warning}
-  >
-  > No tool declares one today, which is why the server has nothing to check.
-  > The moment one does, the specification's rule bites: "Any server that
-  > processes the message body **MUST** validate that encoded header values,
-  > after decoding if Base64-encoded, match the corresponding values in the
-  > request body", and a client that omits the header while sending the value
-  > **MUST** be rejected. Inbound validation lives in
-  > `EmissaryWeb.Plugs.MCPRequestMetadata.check_mirrored_headers/2`, which currently
-  > covers only `Mcp-Method` and `Mcp-Name`; extend it in the same change that
-  > adds the annotation, or the mirrored header becomes a routing input nothing
-  > verifies. `Emissary.MCP.ExternalServer` already implements the *client* half
-  > for upstream servers that declare it.
+  Tools with `x-mcp-header` annotations require validation that decoded
+  header values match the corresponding request body values. Missing headers
+  for supplied values must be rejected. The inbound validator,
+  `EmissaryWeb.Plugs.MCPRequestMetadata.check_mirrored_headers/2`, currently
+  covers `Mcp-Method` and `Mcp-Name` only; no local tool declares custom
+  mirrored headers. `Emissary.MCP.ExternalServer` handles these annotations
+  when calling upstream servers.
   """
   @callback tools() :: [tool_definition()]
 

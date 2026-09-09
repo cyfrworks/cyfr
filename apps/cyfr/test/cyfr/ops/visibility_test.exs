@@ -9,12 +9,7 @@ defmodule Cyfr.Ops.VisibilityTest do
   alias Cyfr.Ops.Visibility
   alias Sanctum.Context
 
-  # ============================================================================
-  # Fixtures — live registry, not hand-copied samples. A hand-kept fixture
-  # list drifted (it taught retired actions for years); deriving from
-  # Catalog.list_tools/0 means these tests exercise the same tool
-  # definitions production serves.
-  # ============================================================================
+  # Derive fixtures from Catalog.list_tools/0 to check the definitions served at runtime.
 
   defp live_tools do
     Catalog.list_tools()

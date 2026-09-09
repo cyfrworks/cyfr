@@ -45,24 +45,10 @@ defmodule Compendium.MCP.ComponentTool do
             permission: :component_manage
           },
           "push" => %{kind: :write, planes: [:external], permission: :component_manage},
-          # `register` is a SCANNER run over the athanor's overlay
-          # `components/` tree, not a bytes upload: it indexes whatever
-          # arrived there by any means. A catalyst holding a storage write
-          # grant over that root can put bytes there, and
-          # `Compendium.Source` cannot tell them from the operator's seed —
-          # both stamp `"filesystem"`.
-          #
-          # The two changes are independent, and the second is not implied
-          # by the first. `consent: :staging` admits `:oidc` and `:api_key`
-          # and refuses `Context.plane: :guest`, which stops a WASM formula
-          # — but AQUA is not a guest: it runs host-side with the person's
-          # own `:external` context, so an approved proposal would still
-          # have registered. Dropping `:in_chain` is what closes that, at
-          # the cost of AQUA no longer being able to offer the action at
-          # all (`Aqua.Kinds.proposable?/1` derives from this list, so
-          # the approval card disappears rather than failing on the click).
-          # Registering stays a console or CLI act. Note `planes:` here and
-          # `Context.plane` are different axes despite the shared word.
+          # Registration indexes the athanor's components tree without granting
+          # consent. It requires a console or CLI caller: staging consent refuses
+          # guests, and omitting :in_chain excludes formula and AQUA invocation.
+          # Operation planes and Context.plane are separate checks.
           "register" => %{
             kind: :write,
             planes: [:external],
@@ -199,11 +185,8 @@ defmodule Compendium.MCP.ComponentTool do
             "type" => "boolean",
             "description" => "Include README.md content in inspect result (default false)"
           },
-          # No "verify" knob: signature policy is the server's
-          # (`Cyfr.RuntimeConfig.require_signed_pulls?/0`, re-checked at
-          # execute), never a per-call argument. It was advertised here and
-          # read by nothing, so a caller passing `verify: false` was told
-          # it had turned verification off.
+          # Signature verification is controlled by the server’s
+          # require_signed_pulls setting and rechecked at execution.
           "digest" => %{
             "type" => "string",
             "description" => "Component digest (get_blob action)"
@@ -920,15 +903,8 @@ defmodule Compendium.MCP.ComponentTool do
 
     broadcast_components_changed(ctx)
 
-    # Registration does NOT mint consent. It used to, "so it is invocable
-    # without a manual step" — but this is a scanner over the athanor's
-    # own `components/` tree, so it consented to whatever arrived there,
-    # and a catalyst with a storage write grant over that root can arrive
-    # there. `Sanctum.Consent.Bootstrap` still mints for the seed bundle
-    # at provisioning, where the bytes are operator-shipped, immutable per
-    # the `seed-guards` CI job and auditable once at build time. What a
-    # person registers gets a consent walk, like anything else they were
-    # not handed by the operator.
+    # Registration does not mint consent. Registered components require a
+    # consent walk; provisioning bootstraps consent only for the seed bundle.
     dep_fields =
       case dep_info do
         {:error, {:dependency_check_failed, reason}} ->

@@ -249,10 +249,8 @@ defmodule EmissaryWeb.WebhookControllerTest do
       request_id = response["request_id"]
       assert is_binary(request_id)
 
-      # Async path: target component does not exist, so Opus.Executor returns
-      # `{:error, _}`. The spawned task records this via `[:invoke, :stop]`
-      # telemetry with `status: :error`. The HTTP response went out before
-      # this fired — async dispatch is the whole point of P0.2.
+      # The missing target produces an async execution error reported through
+      # [:invoke, :stop] telemetry after the HTTP response has been sent.
       assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,
                       %{request_id: ^request_id, status: :error}},
                      2_000

@@ -101,11 +101,8 @@ defmodule Cyfr.BootstrapTest do
   end
 
   describe "the boot child gates the web tier" do
-    # It is the last child of the infra tier under a `:rest_for_one` root, so
-    # this child returning is what holds `EmissaryWeb.Endpoint` back. As a
-    # `Task` it returned the instant the process spawned, and the endpoint
-    # began answering while Home was still being seeded and before a
-    # de-listed operator's sessions had been revoked.
+    # Synchronous initialization must finish before the web tier starts
+    # accepting requests.
 
     test "start_link does its work before returning, and leaves nothing behind" do
       me = self()
@@ -123,9 +120,7 @@ defmodule Cyfr.BootstrapTest do
     end
 
     test "a raise inside the boot work does not take the server down with it" do
-      # The old temporary Task crashed loudly and the app kept serving. Now
-      # that this runs inside a supervisor's start, a bug must not turn
-      # "Home was not seeded" into "the server does not boot".
+      # A bootstrap failure must not prevent the server from starting.
       Application.put_env(:cyfr, :platform_admin_emails, :not_a_list)
 
       assert :ignore = Cyfr.Bootstrap.start_link([])

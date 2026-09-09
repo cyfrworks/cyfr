@@ -3,10 +3,8 @@
 
 defmodule PrismWeb.VaultLiveTest do
   @moduledoc """
-  The Vault page: gated behind sign-in; each vault entry says which
-  MCP servers draw on it (so revoking is done knowing what it breaks); the
-  operator's OAuth client credentials are stored, listed by provider and
-  removed from here — the `lite` sheet's client-credentials arm.
+  Tests sign-in gating, vault-entry server references and management of
+  operator OAuth client credentials on the Vault page.
   """
   use PrismWeb.ConnCase, async: false
 

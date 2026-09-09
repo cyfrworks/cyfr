@@ -162,16 +162,9 @@ defmodule Arca.ConversationStorage do
   defp do_delete(ctx, id) do
     with {:ok, conv} <- get(ctx, id),
          :ok <- delete_blobs(ctx, conv.id) do
-      # arca:unscoped-ok the rows are scoped transitively — `get(ctx, id)`
-      # above already proved this conversation is the caller's athanor's,
-      # and a message, a follow, or a conversation-scope grant belongs to
-      # exactly one conversation.
-      #
-      # Messages cascade through the FK; delete them explicitly as well so
-      # SQLite files opened without foreign_keys=ON cannot leave orphans.
-      # Follows and this thread's grants go with the thread — until the
-      # athanor's own destroy they had nothing else to reclaim them, so a
-      # deleted topic left rows behind that named it forever.
+      # arca:unscoped-ok get(ctx, id) above establishes conversation ownership.
+      # Delete its messages, follows, and grants. Explicit message deletion
+      # also covers SQLite connections without foreign_keys=ON.
       Repo.transaction(fn ->
         Repo.delete_all(from(m in Message, where: m.conversation_id == ^conv.id))
         delete_conversation_satellites([conv.id])

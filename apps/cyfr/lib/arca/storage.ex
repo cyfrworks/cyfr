@@ -155,7 +155,6 @@ defmodule Arca.Storage do
 
       # Global (no tenant prefix)
       Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
-
   """
 
   alias Sanctum.Context
@@ -223,17 +222,8 @@ defmodule Arca.Storage do
     {"aqua", :tenant, nil, :overlay},
     {"components", :tenant, "components", :overlay},
     {"conversations", :tenant, nil, nil},
-    # What somebody kept out of a conversation, as opposed to the
-    # transcript it was kept from. A tape is a record of what was said and
-    # can be erased; a note survives that erasure — which is the whole
-    # reason it is a separate root rather than a compaction of
-    # `conversations/`.
-    #
-    # Host-only (`nil` guest name), deliberately. A note lands in the
-    # estate in focus and nowhere else, and it lands because a person kept
-    # it or approved keeping it — never because a guest wrote to a path. A
-    # guest scope would make notes something an agent writes to itself;
-    # host-only makes them something someone chose to keep.
+    # Host-only notes belong to the athanor in focus and survive conversation
+    # deletion. Guests have no direct storage scope for this root.
     {"notes", :tenant, nil, nil},
     # An execution's retained input and result bytes, referenced by an
     # `execution_payloads` row. Host-only: what a component was given and
@@ -360,15 +350,8 @@ defmodule Arca.Storage do
   def classify([]), do: :tenant
   def classify(_), do: :invalid
 
-  # Seed media: install media read in place from local disk, never tenant
-  # state and never adapter-stored. Every root is a subdirectory of the one
-  # seed tree (`:seed_path`), named after its logical root — the rows of
-  # `@layout` whose seed column is set.
-  # Derived by the SAME filter as @overlay_roots below, deliberately: the
-  # seed column's whole domain is `:overlay | nil`, so "has a seed
-  # counterpart" and "is overlaid" are one fact — two filters (`!= nil` vs
-  # `== :overlay`) were the one place the derived rosters could silently
-  # diverge if the column ever grew a value.
+  # Seed roots are local subdirectories of :seed_path, read in place.
+  # They use the same :overlay layout filter as overlay_roots/0.
   @seed_roots for {root, _class, _guest, :overlay} <- @layout, do: root
 
   @doc """
@@ -392,7 +375,6 @@ defmodule Arca.Storage do
 
       iex> Arca.Storage.seed_prefix("components")
       ["seed", "components"]
-
   """
   @spec seed_prefix(String.t()) :: path()
   def seed_prefix(root) when root in @seed_roots, do: ["seed", root]
@@ -406,7 +388,6 @@ defmodule Arca.Storage do
 
       iex> Arca.Storage.seed_logical(["seed", "aqua", "aqua.md"])
       ["aqua", "aqua.md"]
-
   """
   @spec seed_logical(path()) :: path()
   def seed_logical(["seed" | rest]), do: rest
@@ -514,7 +495,6 @@ defmodule Arca.Storage do
 
       iex> Arca.Storage.valid_guest_path?("aqua/agent.json")
       false
-
   """
   @spec valid_guest_path?(String.t()) :: boolean()
   def valid_guest_path?(""), do: true
@@ -687,7 +667,6 @@ defmodule Arca.Storage do
 
       iex> Arca.Storage.validate_path!(["guest", "..", "..", "etc", "passwd"])
       ** (ArgumentError) Path traversal rejected: segment \"..\" is not allowed
-
   """
   defdelegate validate_path!(segments), to: Cyfr.PathSafety, as: :validate_segments!
 

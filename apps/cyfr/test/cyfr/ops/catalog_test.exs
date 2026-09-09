@@ -437,11 +437,7 @@ defmodule Cyfr.Ops.CatalogTest do
       on_exit(fn -> Catalog.unregister_tool(@blocking_tool) end)
     end
 
-    # The transport cancels a request by request id when its caller closes the
-    # response stream, so in-flight work has to be findable under that same id.
-    # It used to be registered under the *client-supplied* JSON-RPC id, which
-    # two callers can trivially pick the same value for. The supervised run
-    # is the wire's choice: an in-process caller runs the handler itself.
+    # Supervised work must be registered under the server request id used for cancellation.
     test "in-flight work is registered under the context's request id, and cancellable" do
       register_blocking_tool()
       ctx = %{Sanctum.TestContext.local() | request_id: "req_tracked"}

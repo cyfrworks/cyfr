@@ -3,10 +3,8 @@
 
 defmodule Cyfr.ContextSwapTest do
   @moduledoc """
-  A raw `%{ctx | athanor_id: …}` update is a cross-tenant narrowing with
-  none of `Sanctum.Context.focus/2`'s checks: no membership, no archived
-  refusal, no operator audit. Each site that carried one was individually
-  safe by construction — which is exactly how the next copy stops being.
+  Checks context changes use Sanctum.Context.refocus/2 so membership,
+  archive state, and operator access are validated.
 
   The chokepoint is `Sanctum.Context.refocus/2` (focus for a person,
   archive-checked crossing for the system plane). This pins that the
@@ -33,10 +31,8 @@ defmodule Cyfr.ContextSwapTest do
 
   # Raw swaps that stay, by file and exact count.
   @allowlisted %{
-    # The chokepoint's own body: `focus/2`'s two admitting arms,
-    # `refocus/2`'s system arm, and one line of doc prose naming the
-    # banned shape.
-    "apps/cyfr/lib/sanctum/context.ex" => 4,
+    # focus/2's two admitting arms and refocus/2's system arm.
+    "apps/cyfr/lib/sanctum/context.ex" => 3,
     # The tenancy-resolver override exists only when compiled with
     # `:allow_tenancy_resolver_override` (test builds); production
     # compiles the branch out entirely.
@@ -69,11 +65,7 @@ defmodule Cyfr.ContextSwapTest do
           {line, n} <-
             path
             |> File.read!()
-            |> String.split("\n")
-            |> Enum.with_index(1),
-          # Comment lines are prose, not reaches — the modules document the
-          # banned shape by name.
-          not String.match?(line, ~r/^\s*#/),
+            |> Cyfr.Test.CodeLines.code_lines(),
           String.match?(line, @pattern) do
         {rel, "#{rel}:#{n}: #{String.trim(line)}"}
       end

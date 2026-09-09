@@ -6,12 +6,7 @@ defmodule Arca.UnscopedQuerySeamTest do
   Every row-plane query over a tenant-keyed table either scopes itself or
   says why it does not.
 
-  This used to be a hand-kept roster of five files, counted by literal —
-  and it under-counted, because a query only entered the roster if someone
-  remembered to tag it first. `Arca.CronSchedule`'s four daemon queries had
-  their reasons written out in prose docs and no tag at all, so the marker
-  the seam existed to keep greppable was not on the sites that most needed
-  it. Counting tags cannot find a query that was never tagged.
+  Discovers unscoped queries directly, including calls without exemption tags.
 
   What makes the check possible without drowning in false positives is that
   the tenant-keyed tables name themselves: a schema with `field :athanor_id`
@@ -29,17 +24,9 @@ defmodule Arca.UnscopedQuerySeamTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  # `Repo.` as well as `Arca.Repo.` — half the modules alias it. Writes
-  # count too: an unscoped `insert_all`/`update`/`delete` into a tenant
-  # table is exactly as tenant-relevant as a read, and the original verb
-  # list silently exempted them.
-  # `exists?` and `query!` need their own alternative WITHOUT the trailing
-  # `\b`: after `?` or `!` the next character is `(`, and two non-word
-  # characters assert no boundary — so `Repo.exists?(` could never match
-  # this at all, and `query`/`query!` were simply absent. The first
-  # `Repo.exists?` in the tree arrived with `Users.personal_athanor?/1`
-  # and the first raw `Repo.query!` with `Arca.TenantTables`; both were
-  # invisible here.
+  # Match reads and writes through Repo and Arca.Repo.
+  # exists? and query! need alternatives without a trailing word boundary
+  # between their punctuation and the opening parenthesis.
   @repo_verbs ~r/\bRepo\.(?:(?:all|one|update_all|delete_all|aggregate|get|get_by|insert|insert_all|update|delete|transaction)\b|exists\?|query!?)/
   # Scoped means the athanor column is USED — compared, bound or set —
   # not merely mentioned (a `select:` naming athanor_id once counted).
@@ -179,18 +166,9 @@ defmodule Arca.UnscopedQuerySeamTest do
            """
   end
 
-  # A schema with no athanor column is out of this seam's scope by
-  # construction — which is exactly why the set needs naming. Nothing was
-  # checking it, so a new tenant-adjacent table could be added with no
-  # athanor column and no scoping, and the seam test would report it as
-  # clean because it never saw the table at all.
-  #
-  # Each entry says what addresses the row instead of a tenant. The first
-  # four are the identity/platform plane. The fifth is the one that is
-  # genuinely tenant-*adjacent*: `webhook_deliveries` is keyed by a
-  # `webhooks` FK with `on_delete: :delete_all`, so a row is reachable only
-  # through a tenant-owned parent and dies with it — the same reasoning the
-  # baseline migration gives for `memberships` and `sessions`.
+  # List schemas without athanor_id explicitly. Identity and platform rows
+  # are globally addressed; webhook_deliveries are scoped through their
+  # tenant-owned webhook and cascade when it is deleted.
   @athanor_less %{
     "Arca.Schemas.Athanor" => "the tenant itself — it cannot carry a reference to itself",
     "Arca.Schemas.User" => "a person, addressed by their own id; people are not tenant-owned",

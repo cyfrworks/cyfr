@@ -359,9 +359,7 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
   end
 
-  # A follow is the person's own row in an athanor — sidebar state, never
-  # access — and it must not outlive the seat: left standing, it resumed
-  # silently the moment the person was re-added.
+  # Topic follows must be removed when membership ends.
   describe "follows end with the seat" do
     test "remove_member/2 drops the leaver's follows and nobody else's", %{athanor: athanor} do
       n = System.unique_integer([:positive])

@@ -11,20 +11,15 @@ defmodule Compendium.Registry.CredentialStore do
 
   ## Stored shape
 
-  Post-auth-refactor, only push tokens are stored. A user legitimately holds
-  multiple entries — one personal-namespace token plus one per publisher
-  membership, keyed `(user_id, registry, namespace_slug)` so each namespace
-  gets an independent credential slot.
+  Stores push tokens keyed by `(user_id, registry, namespace_slug)`.
+  Personal and publisher namespaces have independent credential slots.
 
   Stored value:
 
       %{type: :push_token, token: "cyfr_pt_...", namespace: "alice",
         issued_at: iso8601, label: "host-name"}
 
-  `get_for_registry/1` has been removed: the cross-user fallback was a
-  privacy leak in any shared-deployment scenario, and with single-registry
-  scope (cyfr.run apex or a self-deployed cyfr.run) there is no
-  cross-registry fallback use case either.
+  Credentials are looked up only for the current user and configured registry.
   """
 
   require Logger
@@ -75,7 +70,6 @@ defmodule Compendium.Registry.CredentialStore do
           issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
           label: "laptop"}
       )
-
   """
   @spec put(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
   def put(user_id, registry, namespace_slug, credential)
@@ -258,8 +252,7 @@ defmodule Compendium.Registry.CredentialStore do
         {:ok, json}
 
       {:error, reason} ->
-        # Sealing "{}" here used to report :ok while destroying the token
-        # at rest — the next push decoded a credential with no token field.
+        # Reject encoding failures without overwriting the stored token.
         Logger.warning("[CredentialStore] unencodable credential: #{inspect(reason)}")
         {:error, :unencodable_credential}
     end
@@ -288,9 +281,7 @@ defmodule Compendium.Registry.CredentialStore do
     ArgumentError -> :not_found
   end
 
-  # Coerce stored `type` to a known atom. `nil`/unknown values default to
-  # `:push_token` (the only legal type post-auth-refactor) but are logged so
-  # data corruption doesn't get silently masked.
+  # Normalize credential types; log nil or unknown values and default to :push_token.
   defp normalize_type(t) when is_atom(t), do: t
 
   defp normalize_type(t) when is_binary(t) do

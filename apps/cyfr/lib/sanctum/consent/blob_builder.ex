@@ -47,12 +47,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   @doc """
   Assemble and JCS-encode the final blob from built nodes.
 
-  A dep edge whose key names no node in the graph answers
-  `{:error, {:dangling_dep, key}}` — the shape every caller here already
-  handles. It used to be a `nil.resources` UndefinedFunctionError, which
-  `Consent.Bootstrap.run_components/2` does not catch (it takes typed skips
-  and refusals), so provisioning crashed instead of recording a skip and
-  `Commit.build_blob/2` answered a 500 rather than a refusal.
+  Returns `{:error, {:dangling_dep, key}}` when a dependency edge names no graph node.
   """
   @spec encode(map()) :: {:ok, binary()} | {:error, term()}
   def encode(nodes) do
@@ -90,16 +85,9 @@ defmodule Sanctum.Consent.BlobBuilder do
   @doc """
   The derived vault references for `consent_vault_refs`, deduplicated.
 
-  `uniq: true` is over the whole `{entry_id, binding_digest}` pair, while
-  the table's unique index is `(consent_id, vault_entry_id)` — narrower.
-  Those agree only because a consent carries **at most one** vault
-  resource: `Sanctum.Consent.Commit` attaches it to the source node alone,
-  having already refused a second binding, so there is never a second row
-  to collide with. If a `vault_fn` ever binds more than one node, that
-  invariant goes and two nodes sharing an entry under different digests
-  would survive this `uniq` only to violate the index — a data-shape bug
-  reaching the operator as a generic `:database_error`. Dedup on
-  `vault_entry_id` then, and decide which digest wins.
+  Deduplicates by {entry_id, binding_digest}. A consent contains at most
+  one vault resource, attached to its source node, satisfying the table’s
+  unique (consent_id, vault_entry_id) key.
   """
   @spec vault_refs(map()) :: [%{vault_entry_id: String.t(), binding_digest: String.t()}]
   def vault_refs(nodes) do

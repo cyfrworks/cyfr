@@ -36,9 +36,8 @@ defmodule Compendium.Registry do
   component deletes bytes FIRST, then rows, so the DB can never claim a
   deletion the tree didn't make.
 
-  Sibling homes for what used to live here: canonical hostnames —
-  `Compendium.RegistryHost`; archive mechanics — `Compendium.Archive`;
-  the name-level removal cascade — `Compendium.Cascade`.
+  Hostname normalization uses `Compendium.RegistryHost`, archive handling
+  uses `Compendium.Archive`, and name-level removal uses `Compendium.Cascade`.
   """
 
   require Logger
@@ -480,9 +479,8 @@ defmodule Compendium.Registry do
   def search(%Context{} = ctx, filters \\ %{}) do
     limit = Map.get(filters, :limit, 20)
 
-    # Tag/license filter in memory, AFTER the query — so the DB limit must
-    # not run first: rows past the first `limit` never got to match. With
-    # a post-filter, fetch the whole candidate set and take at the end.
+    # Apply tag/license filters before the result limit. Fetch the full
+    # candidate set when these filters run in memory.
     post_filtered? = filters[:tags] not in [nil, []] or not is_nil(filters[:license])
 
     opts = [limit: if(post_filtered?, do: :none, else: limit)]
@@ -529,9 +527,7 @@ defmodule Compendium.Registry do
       case Arca.ComponentStorage.get_component(ctx, name, version, publisher, component_type) do
         {:ok, row} -> {:ok, decode_row_json_fields(row)}
         {:error, :not_found} -> {:error, :not_found}
-        # A database fault must propagate as itself — it once raised
-        # CaseClauseError here while release_status/7 handled it two
-        # screens away.
+        # Propagate database faults unchanged.
         {:error, reason} -> {:error, reason}
       end
     end
@@ -669,20 +665,12 @@ defmodule Compendium.Registry do
   @doc """
   Delete a component from the registry — and "deleted" means GONE.
 
-  Provenance decides first (`Compendium.Provenance`): a `:bundled`
-  component is the release's, not the athanor's — refused as
-  `{:error, :bundled}` before anything is touched (deleting its row would
-  only be resurrected by the next scan, while §3.10's profile revocation
-  would silently outlive it). A `:bundled_modified` copy refuses as
-  `{:error, :bundled_modified}` — "delete" never means "revert"; the
-  revert is `reset/4`. A `:user`/`:remote` component deletes bytes FIRST
-  (any storage failure keeps the row, so the DB can never claim a
-  deletion the tree didn't make), then the row and its associations.
-  Answers `{:ok, :deleted}` — or `{:ok, :revealed_shipped}` when the
-  deleted unit was the athanor's own work shadowing a shipped
-  counterpart, which the delete has just uncovered (the next scan
-  re-registers it as bundled): the surface must say so, or shipped
-  components look deletable.
+  Returns `{:error, :bundled}` for bundled components and
+  `{:error, :bundled_modified}` for modified bundled copies; use `reset/4`
+  to revert a modified copy. User and remote components are deleted from
+  storage before their rows and associations; storage failure retains the row.
+  Returns `{:ok, :deleted}`, or `{:ok, :revealed_shipped}` when deletion
+  exposes a seed counterpart that the next scan will register as bundled.
 
   Optionally pass a publisher to disambiguate components with the same
   name/version.
@@ -908,10 +896,7 @@ defmodule Compendium.Registry do
           {:error, "Failed to decompress tincture archive"}
       end
     rescue
-      # The block spans validation, the caller's before_store and the unit
-      # commit — a raise anywhere in it used to be reported as a
-      # decompression failure (the genuine decompression cases already
-      # have their typed arms above). Log the truth; answer generically.
+      # Log failures from validation, before_store or commit; return a generic error.
       e ->
         Logger.error(
           "[Compendium.Registry] tincture publish raised: " <>
@@ -957,12 +942,8 @@ defmodule Compendium.Registry do
     end
   end
 
-  # Walks the tar-extract scratch dir into `{relative_segments, path}`
-  # pairs for the unit commit — validation-side exclusions and the
-  # symlink backstop live here; the write discipline is the commit's.
-  # The 256 MB gunzip ceiling bounds BYTES; this bounds files — a tarball
-  # of a million one-byte entries passed the size check and then got walked
-  # (quadratically, before the prepend-and-reverse below) with no ceiling.
+  # Collect relative paths for unit commit, applying exclusions, symlink
+  # checks, and a file-count cap in addition to the 256 MB gunzip limit.
   @max_tincture_entries 5_000
 
   defp collect_tincture_entries(base_dir, current_dir) do
@@ -1085,9 +1066,7 @@ defmodule Compendium.Registry do
     source = Keyword.get(opts, :source, Compendium.Source.published())
     manifest = Keyword.get(opts, :manifest)
 
-    # The closed source roster is enforced where rows are written
-    # (`Arca.ComponentStorage`), so a value outside it cannot land from
-    # any door — this builder no longer keeps its own copy of the gate.
+    # Arca.ComponentStorage validates the source value when writing the row.
 
     # Every ingress converges here, so this is the one place activation
     # identity is computed. Callers pass the already-decoded manifest so the
@@ -1247,13 +1226,8 @@ defmodule Compendium.Registry do
     end
   end
 
-  # The "cyfr" namespace is reserved for first-party components: only a
-  # platform-scoped caller may publish there. The gate used to ask for a
-  # `:cyfr_publish` permission that appears in no vocabulary and can be
-  # granted to nobody — `Sanctum.Atoms` would strip it off a key — so the
-  # only thing that ever passed was the `:*` wildcard every interactive
-  # login carries, which is to say the reservation held against no one.
-  # "local" is unrestricted; all other namespaces are open.
+  # Only platform-scoped callers may publish in the reserved "cyfr"
+  # namespace. Other namespaces, including "local", pass this check.
   defp validate_publish_namespace("cyfr", %Context{scope: :platform}), do: :ok
   defp validate_publish_namespace("cyfr", %Context{platform_admin: true}), do: :ok
 
@@ -1572,13 +1546,8 @@ defmodule Compendium.Registry do
     )
   end
 
-  # List-then-delete is a real (accepted) race: a concurrent publish into
-  # a just-emptied name dir can land between the empty listing and the
-  # tree delete and be removed with it. The window is sub-second, needs
-  # two members deleting and publishing the same component name at once,
-  # only matters on the Local adapter (an object store has no directories
-  # to tidy), and heals on republish — the tree is rewritten whole. An
-  # atomic remove-if-empty would mean new adapter surface for that margin.
+  # Local directory cleanup is a non-atomic list-then-delete. A concurrent
+  # publish between those operations can be removed by the delete.
   defp maybe_remove_empty_dir(ctx, dir_path) do
     case Arca.list(ctx, dir_path) do
       {:ok, []} ->

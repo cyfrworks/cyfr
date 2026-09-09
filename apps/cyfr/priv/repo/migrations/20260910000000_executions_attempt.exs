@@ -4,22 +4,9 @@
 defmodule Arca.Repo.Migrations.ExecutionsAttempt do
   use Ecto.Migration
 
-  # The fence on a running execution.
-  #
-  # A row's lease said WHEN a runner last renewed it, but nothing said
-  # WHICH runner attempt the row belonged to: every write matched on
-  # `status = 'running'` alone, `runner_id` was `node()` — the same
-  # `nonode@nohost` on every node, distribution being unconfigured — and
-  # the sweeper's read and write were two statements. So a sweep that
-  # observed a lapsed lease could fail an execution that had renewed in
-  # between, and the completion guard then refused that execution's real
-  # result as "not running".
-  #
-  # `attempt` is minted with the row and carried by the one attempt that
-  # opened it. Renewal, completion and the sweep all name it (and the
-  # sweep names the exact `lease_until` it observed), so a stale owner's
-  # write matches nothing. Nullable: rows opened before the column existed
-  # fence on status alone, as they always did.
+  # Adds an attempt id for execution write fencing. Renewal, completion,
+  # and sweeping match the attempt; sweeps also match the observed lease.
+  # Rows without an attempt id retain status-based fencing.
   def up do
     alter table(:executions) do
       add :attempt, :string

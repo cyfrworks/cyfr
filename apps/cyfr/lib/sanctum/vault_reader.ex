@@ -29,9 +29,7 @@ defmodule Sanctum.VaultReader do
   requested scopes must be a subset of what the entry was authorized
   for, because an issued token cannot be attenuated after the fact.
 
-  A retired pre-capability-model v1 pointer payload decodes to
-  `{:error, :legacy_pointer_retired}` inside `Sanctum.Vault.Payload` itself —
-  nothing here needs to know that document shape existed.
+  `Sanctum.Vault.Payload` rejects version-1 pointers as `{:error, :legacy_pointer_retired}`.
   """
 
   require Logger
@@ -145,12 +143,8 @@ defmodule Sanctum.VaultReader do
   end
 
   @doc """
-  Would this athanor's entry resolve for the given consent binding right
-  now? The read-side half of `load_and_unseal/2` — status `active`, and the
-  entry's derived binding digest equal to the consent's — exposed so the
-  readiness projections stop re-implementing the decision
-  (`Compendium.ConsentSetupPlan` carried its own copy, which was also the
-  only non-Sanctum reach into `Arca.VaultStorage`).
+  Checks whether an active vault entry’s binding digest matches the
+  consent binding, using the same read checks as `load_and_unseal/2`.
   """
   @spec usable(String.t(), String.t(), String.t()) ::
           {:ok, map()}
@@ -228,9 +222,7 @@ defmodule Sanctum.VaultReader do
     {:ok, projected}
   end
 
-  # The payload never rides in the tuple: it is decrypted material, and a
-  # defensive error one refactor away from an `inspect` must not be the
-  # thing that leaks it.
+  # Exclude decrypted material from error tuples.
   defp resolve_secrets(_ctx, _entry, _payload, _fields), do: {:error, :invalid_payload}
 
   # ---------------------------------------------------------------------------

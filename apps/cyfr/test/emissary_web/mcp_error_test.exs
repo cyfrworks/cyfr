@@ -3,9 +3,7 @@
 
 defmodule EmissaryWeb.MCPErrorTest do
   @moduledoc """
-  JSON-RPC requires an error response to echo the id of the request that caused
-  it. Every ingress rejection used to hand-roll its envelope with `"id" => nil`,
-  so a client could not correlate the failure to the call it made.
+  Checks that JSON-RPC error responses echo valid request ids.
   """
   use EmissaryWeb.ConnCase, async: true
 
@@ -80,11 +78,8 @@ defmodule EmissaryWeb.MCPErrorTest do
   end
 
   describe "parser failures on /mcp" do
-    # These once escaped to Phoenix's {"errors":{"detail":"Bad Request"}} —
-    # no envelope, no -32700, the id lost. The id genuinely cannot be
-    # echoed (it was inside the body that failed to parse), so null is the
-    # honest value; the envelope and the code are what a JSON-RPC client
-    # can branch on.
+    # Malformed bodies must return a JSON-RPC parse error with a null id,
+    # since the request id cannot be recovered from the body.
     test "malformed JSON answers -32700 in the JSON-RPC envelope", %{conn: conn} do
       conn =
         conn

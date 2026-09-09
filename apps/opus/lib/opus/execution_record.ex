@@ -243,14 +243,9 @@ defmodule Opus.ExecutionRecord do
 
   This must be called before starting WASM execution to ensure crash resilience.
 
-  The row carries an ENVELOPE of the input, never the input: the reference,
-  a digest, sizes, the top-level keys and the attachments' digests. The
-  assistant's root turn used to persist its whole composed prompt, the
-  compacted history, every attachment as base64 and the room excerpt the
-  guest was told was transient — and every model call, the full provider
-  request — unredacted, ten thousand rows deep per athanor. Conversation
-  content lives in `messages`; a component's input is the caller's to
-  keep.
+  Records an input envelope containing the reference, digest, sizes,
+  top-level keys and attachment digests. Raw prompts, conversation history,
+  attachment bytes and transient room excerpts are excluded from this row.
   """
   @spec write_started(t()) :: :ok | {:error, term()}
   def write_started(%__MODULE__{} = record) do
@@ -291,10 +286,8 @@ defmodule Opus.ExecutionRecord do
   def lease_seconds, do: @lease_seconds
 
   @doc """
-  This boot's name on an execution row (`Cyfr.Boot`), never `node()`:
-  distribution is not configured, so every node was `nonode@nohost` and
-  the sweeper could not tell its own lapsed lease from another node's
-  crash. A restart is a different runner, which is what the sweeper needs.
+  Returns the application boot id stored as the execution’s runner id.
+  Each restart has a different id.
   """
   @spec runner_id() :: String.t()
   def runner_id, do: Cyfr.Boot.id()
@@ -562,11 +555,7 @@ defmodule Opus.ExecutionRecord do
   @doc """
   Generate a unique execution ID.
 
-  Through `Cyfr.UUID7` like every other id in the system. It was the one
-  holdout on `Ecto.UUID.generate/0` — random v4, so execution ids neither
-  sorted by time nor inserted in index order, which is the property v7 was
-  chosen for and which execution records, queried by time more than
-  anything else, want most.
+  Uses `Cyfr.UUID7` for time-ordered execution identifiers.
   """
   @spec generate_id() :: String.t()
   def generate_id, do: Cyfr.UUID7.execution_id()

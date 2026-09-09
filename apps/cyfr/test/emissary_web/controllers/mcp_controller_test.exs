@@ -573,10 +573,8 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
-      # 50 levels of nesting is data, not a request the parser has to
-      # understand: it rides through as one unknown `nested` argument and
-      # `system/status` ignores it. Accepting 400 as well left the test
-      # unable to say whether the depth had been handled or rejected.
+      # Nested data remains an unknown argument ignored by system/status.
+      # The request must succeed even at 50 levels of nesting.
       assert conn.status == 200
       assert json_response(conn, 200)["id"] == 4
     end
@@ -1008,10 +1006,7 @@ defmodule EmissaryWeb.MCPControllerTest do
     test "CYFR error codes keep their numbers" do
       alias Emissary.MCP.Message
 
-      # The wire numbers are a contract with clients; a live code must not
-      # drift. Codes with no producer were retired rather than kept as an
-      # aspirational table, and retired numbers are never reallocated.
-      # Transport: -33300 to -33399 (-33301/-33302 were the session pair).
+      # Wire error codes are stable client contracts; unused numbers must not be reassigned.
       assert Message.error_code(:rate_limited) == -33304
       assert Message.error_code(:request_cancelled) == -33305
 

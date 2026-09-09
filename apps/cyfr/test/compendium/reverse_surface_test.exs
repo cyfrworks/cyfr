@@ -45,14 +45,8 @@ defmodule Compendium.ReverseSurfaceTest do
     "Compendium.Registry",
     "Compendium.Resolver",
 
-    # Provisioning seeds a new athanor's AQUA from the install template,
-    # scans the overlay tree it just wrote, and pulls the bundle's
-    # dependency closure. These two were reached through
-    # `alias Compendium.{AutoIndexer, Pull}` (`Sanctum.Provisioning`), which
-    # no roster regex could see, so they were absent from this list while
-    # being called five times.
-    # Provisioning re-derives the estate's agent index once the seed has
-    # filled its tree, and the seed sync does the same after a release.
+    # Provisioning uses AutoIndexer and Pull for component scans and
+    # dependency closure, and AgentIndex to derive the agent roster.
     "Compendium.AgentIndex",
     "Compendium.AquaTemplate",
     "Compendium.AutoIndexer",

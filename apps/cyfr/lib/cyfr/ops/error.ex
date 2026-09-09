@@ -5,42 +5,20 @@ defmodule Cyfr.Ops.Error do
   @moduledoc """
   Typed tool-refusal vocabulary: reasons stay data until a renderer.
 
-  The heavy-traffic providers produce this vocabulary now — `component`,
-  `mcp_servers`, `vault`, the records provider, `build` (Locus), the
-  execution tool's validation arms, and the tenancy and registry surfaces
-  (`athanor`, `member`, `door`, `session`, `registry`, `aqua`) — with
-  `{:invalid_argument, msg}` chosen where the wire sentence had to stay
-  byte-identical, and `{:not_found, …}` / `{:unavailable, …}` where the
-  typed sentence is the better one. Crafted operator sentences that fit no
-  member (compiler output, remediation hints, an upstream provider's own
-  error code, a partial-failure count) deliberately stay strings, as does
-  the registry's "Unknown tool" spelling.
-  What is left is NOT listed here. A migration in progress cannot be
-  recorded in prose — this paragraph named `Opus.MCP` as the remaining
-  surface long after two larger ones had appeared — so the worklist lives
-  in `Cyfr.Ops.ErrorAdoptionTest`, where every module and its
-  count are checked against the tree and may only go down. Read it for the
-  real number and the order worth working in.
+  Providers return typed errors for invalid arguments, missing resources
+  and unavailable services. Compiler output, upstream error codes and
+  other specific diagnostics may remain client-safe strings.
 
-  `Sanctum.ComponentRef`'s parse prose stays as it is (pinned by
-  exact-string tests; convert with its own renderer when a caller needs to
-  branch). `Sanctum.Unauthorized` and `Compendium.OCI.Errors` prove the
-  same shape end-to-end.
-
-  Adoption stays incremental — a provider converts an action by returning
-  one of these tuples instead of a sentence; unconverted strings keep
-  flowing through the renderers' binary clauses unchanged. The three
-  consumers of a provider's error all render it:
+  Renderers accept typed refusals and client-safe strings. The three
+  consumers of a provider's error are:
 
     * `Emissary.MCP.Router.format_error_reason/1` (the external wire)
     * `PrismWeb.Ops.error_message/1` (the console)
-    * `Opus.FormulaHandler.stringify_reason/1` (the in-chain guest view)
+    * `Opus.FormulaHandler.render_reason/1` (the in-chain guest view)
 
-  The §4.3 consent signals are their own vocabulary
-  (`Emissary.MCP.ConsentSignal`): protocol-level errors with a -335xx code
-  and the payload in `error.data`. `render/2` gives them their sentence for
-  the console and the guest; the wire router promotes them past isError
-  entirely.
+  Consent signals use `Emissary.MCP.ConsentSignal`: protocol errors with a
+  -335xx code and structured `error.data`. `render/2` provides their console
+  and guest text; the wire router emits them as JSON-RPC errors.
   """
 
   @type t ::
@@ -88,37 +66,20 @@ defmodule Cyfr.Ops.Error do
   def message({:corrupt, what}),
     do: "#{what} does not match its recorded digest and was not served"
 
-  # `Cyfr.Ops.Catalog` mints these three when a tool crashes, exits
-  # or overruns its deadline. Each already carries a crafted, client-safe
-  # sentence (the tool's name and what happened, never the exception's own
-  # message), so rendering is the identity — the point of naming them here is
-  # that all three surfaces recognise them. Only the router did: the console
-  # collapsed them into "The request failed — try again.", losing the
-  # timeout-vs-crash distinction, and the guest saw Elixir term syntax.
+  # Catalog failures carry client-safe messages without raw exception details.
   def message({:crashed, message}), do: message
   def message({:exit, message}), do: message
   def message({:timeout, message}), do: message
 
-  # `Arca.Overlay.UnitLock` timed out waiting for another writer on the
-  # same unit. It escapes every overlay `put`/`append`/`delete`/
-  # `delete_tree` now that the lock sits on the callbacks, and it rendered
-  # as `nil` — so a caller saw whatever generic "failed" sentence its
-  # surface had, on exactly the paths (component publish, aqua edit) where
-  # concurrent contention is the expected case. Contention is retryable
-  # and an outage is not; the two must not read the same.
+  # An overlay unit-lock timeout is retryable write contention.
   def message(:unit_locked),
     do: "Another write to this component is in progress — retry shortly"
 
-  # The registry's own dispatch refusals. They used to be rendered by the
-  # wire router alone, so the console and the guest showed a generic
-  # sentence where the wire named the missing/unknown action.
+  # Render registry dispatch refusals consistently across all surfaces.
   def message(:action_missing), do: "Missing required argument: action"
   def message({:unknown_action, name_action}), do: "Unknown action: #{name_action}"
 
-  # `Cyfr.ControlPlane.assert_owner/0`: this boot's lease on the database
-  # lapsed, so it admits nothing until it wins the claim back. Retryable,
-  # and worth saying so on every surface — the chat pane rendered it as a
-  # generic failure.
+  # A lost control-plane lease blocks admission until ownership is restored.
   def message(:control_plane_lost),
     do: "This server does not currently own its database's control plane — retry shortly"
 
@@ -126,13 +87,8 @@ defmodule Cyfr.Ops.Error do
   The client-safe sentence for ANY refusal a tool can produce, or `nil` when
   the term is internal and must not be reflected.
 
-  The rendering surfaces named above each used to carry their own `cond`
-  over the same vocabularies, and they had drifted: the console knew
-  nothing of the crash tuples, and the guest view `inspect`ed whatever it
-  did not recognise. (Many more modules call this today — every consumer
-  renders through those surfaces' rule.) This is that decision, once — so a surface only has to decide
-  what to say when the answer is `nil` (log it, and offer its own generic
-  sentence), not what each vocabulary means.
+  Returns a client-safe sentence for recognized errors, or `nil` for an
+  unknown term. Callers log unknown terms and provide a generic fallback.
 
   Keeping it here also keeps `apps/opus` off the vocabularies' own modules:
   `Opus.HostSurfaceTest` pins what opus may reach into, and a renderer is

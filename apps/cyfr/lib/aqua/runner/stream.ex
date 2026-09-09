@@ -18,10 +18,7 @@ defmodule Aqua.Runner.Stream do
   # own speech, and the runner's voice.
   @agent_author Arca.Schemas.Message.agent_author()
   @system_author Arca.Schemas.Message.system_author()
-  # A turn's streamed text and tool feed are model-driven — without caps
-  # they were the only two unbounded accumulations in a runner that bounds
-  # its queue, its task window and its persisted history. Applied BEFORE
-  # the broadcast, so every subscribed viewer inherits the same bound.
+  # Cap streamed text and tool output before broadcasting to viewers.
   @max_streaming_text_bytes 512 * 1024
   @max_tool_activity 200
 
@@ -115,11 +112,8 @@ defmodule Aqua.Runner.Stream do
       %{state | running: false, execution_id: nil}
   end
 
-  # The turn's row, closed the way the turn ended, under the execution id
-  # the row was accepted with — named explicitly, because the state's own
-  # is cleared by `finish_turn/1` and a close that read it afterwards
-  # closed nothing. Bookkeeping never fails the turn: a store hiccup is
-  # logged and the turn goes on.
+  # Close the turn row using the execution id captured before
+  # `finish_turn/1` clears it. Log storage failures without failing the turn.
   @doc false
   def close_turn_row(state, execution_id, status, error) when is_binary(execution_id) do
     case Arca.TurnStorage.close(state.system_ctx, execution_id, status, error) do
@@ -364,10 +358,7 @@ defmodule Aqua.Runner.Stream do
         _ -> Aqua.Runner.Shared.broadcast(state, {:error, text})
       end
 
-    # What this turn consumed stays in the agent's memory, the same fold
-    # cancel_turn does: the thread still shows the person's message, and a
-    # failed turn used to drop it from the history — so the next answer had
-    # amnesia about exactly the message that failed.
+    # Preserve the consumed task in history when a turn fails.
     user_turn =
       if state.last_task,
         do: [%{"role" => "user", "content" => state.last_task}],
@@ -386,10 +377,7 @@ defmodule Aqua.Runner.Stream do
         notes_in_flight: []
     }
 
-    # A failure never launches what was queued (start_next's rule) — but it
-    # must not strand it either: stranded entries sat as a stale badge, a
-    # later send jumped them, and a delayed launch then regressed the
-    # cursor and fed consumed messages twice. Dropped, with a note.
+    # On failure, drop queued entries with a note instead of launching them.
     state =
       if state.queue != [] do
         state
@@ -475,9 +463,7 @@ defmodule Aqua.Runner.Stream do
   # Persist the history and clear the running execution; broadcast the end.
   @doc false
   def finish_turn(state) do
-    # Bounded at the point of persistence, not only on the way into the
-    # model: without this the row, the runner heap and every future JSON
-    # decode of the history grew without limit.
+    # Bound history before persisting it and retaining it in the runner.
     history = Aqua.ConversationCompactor.compact(state.history)
 
     Conversations.update(state.system_ctx, state.id, %{
@@ -495,19 +481,10 @@ defmodule Aqua.Runner.Stream do
         streaming_text: "",
         tool_activity: [],
         turn_ctx: nil,
-        # Cleared here, not only where a note happens to be merged. A note
-        # that landed between this turn's `conversation_complete` (which
-        # merges and clears) and its `complete` stayed in the list while
-        # already being part of `history`, so every later turn's merge
-        # appended it again — the same "[System: …]" line accreting once per
-        # turn for the rest of the conversation.
+        # Clear merged notes so subsequent turns do not append them again.
         notes_in_flight: [],
-        # Same reason, for the task itself. `conversation_complete` REPLACES
-        # history with the model's own list, which already contains this
-        # turn's user message; a later `fail_turn`/`cancel_turn` fold would
-        # then append it a second time and every subsequent turn would read
-        # it twice. The fold is for turns that ended before the model
-        # spoke, so the task is consumed once the turn is over.
+        # Clear the consumed task after completion. The returned history already
+        # contains it; failure and cancellation recovery must not append it again.
         last_task: nil
     }
     |> Aqua.Runner.Shared.broadcast({:turn_finished})

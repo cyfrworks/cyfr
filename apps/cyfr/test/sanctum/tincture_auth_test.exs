@@ -66,10 +66,7 @@ defmodule Sanctum.TinctureAuthTest do
     end
   end
 
-  # The `Mcp-Session-Id` header used to be a third way to present exactly this
-  # credential. It went out with the protocol session it was named for, so the
-  # bearer branch is now the only route a session token takes — which makes it
-  # worth asserting directly rather than only through a controller.
+  # Session tokens authenticate through the Authorization header.
   describe "authenticate/1 — session-token path" do
     test "a bearer session token authenticates, carrying the recorded namespace",
          %{ctx: ctx} do

@@ -18,14 +18,9 @@ defmodule Sanctum.Authority.RootSelect do
 
   ## The selector vocabulary
 
-  This module owns `t:selector/0` — the one spelling of "which profile".
-  It used to be `String.t() | nil`, where `nil` meant "the single active
-  owner". That default was invisible at every call site, and it is only
-  ever *correct* while a source ref has exactly one owner profile: the
-  active-identity index is `(athanor_id, source_ref, label, kind)`, so a
-  second owner label already turns the default into `{:ambiguous, _}`.
-  Naming it `:default` makes the intent greppable and refusable where a
-  caller must pin instead.
+  Defines `t:selector/0`. `:default` selects the single active owner
+  profile; multiple owner labels return `{:ambiguous, _}`. Callers that
+  must preserve a selected authority pass an explicit profile id.
 
   `{:id, _}` and `{:label, _}` are strict — a stored id matches an id and
   nothing else. `decode/1` is the one place a caller-supplied string

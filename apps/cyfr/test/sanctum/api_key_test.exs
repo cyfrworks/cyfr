@@ -207,11 +207,7 @@ defmodule Sanctum.ApiKeyTest do
       assert {:error, :revoked} = ApiKey.validate(active.api_key)
     end
 
-    # A3: revocation must take effect on the IMMEDIATELY following request.
-    # validate/1 reads the live DB row (no cache today); this test warms a
-    # successful validation first so that if a key-hash cache is ever added,
-    # this fails unless the cache is invalidated on revoke — a regression
-    # guard against silently reintroducing a stale-auth window.
+    # Warm validation before revocation; the immediately following request must reject the key.
     test "a validated key fails on the very next request after revoke", %{ctx: ctx} do
       {:ok, created} = ApiKey.create(ctx, %{name: "warm-then-revoke", scope: []})
 
@@ -505,11 +501,7 @@ defmodule Sanctum.ApiKeyTest do
       refute ApiKey.ip_allowed?("2001:db9::1", allowlist)
     end
 
-    # S15: an out-of-range / malformed prefix must fail CLOSED. Before the
-    # parse_cidr bound it flowed into bsl(1, bit_size - prefix), collapsing
-    # the mask toward 0 and matching ANY IP (silent fail-open / allowlist
-    # widening). Every malformed entry must match NOTHING — not even the
-    # network address itself.
+    # Malformed or out-of-range CIDR prefixes must match no address, including the network address.
     test "malformed CIDR fails closed (no fail-open / allowlist widening)" do
       for bad <- [
             "192.168.1.0/99",

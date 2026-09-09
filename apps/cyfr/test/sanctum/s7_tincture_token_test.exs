@@ -3,10 +3,8 @@
 
 defmodule Sanctum.S7TinctureTokenTest do
   @moduledoc """
-  Phase 2 S7 (additive increment): header-preferred resolution + the
-  short-lived `?_t=` access token. Raw `?_session=`/`?_key=` still work
-  (removed in the later cross-component step), so this proves the new paths
-  without breaking existing clients.
+  Checks header credentials and short-lived tincture access tokens.
+  Raw account credentials in query parameters are rejected.
   """
   use ExUnit.Case, async: false
 

@@ -245,8 +245,6 @@ defmodule Arca.McpLog do
       query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
       query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
 
-      # One aggregate pass, not three — the same filter used to run as
-      # three separate queries.
       row =
         query
         |> select([l], %{

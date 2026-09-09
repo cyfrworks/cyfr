@@ -27,7 +27,6 @@ defmodule Sanctum do
 
       config :cyfr,
         auth_provider: Sanctum.Auth.OAuth  # or the configured auth provider
-
   """
 
   alias Sanctum.Context
@@ -85,10 +84,8 @@ defmodule Sanctum do
   serving a tincture's static assets / looking it up without executing anything,
   use `Cyfr.TinctureHelpers.build_public_context/2` instead.
 
-  Single source of truth (previously duplicated in the tincture controller
-  and the Prism shell LiveView). Uses the dedicated `:tincture` auth_method
-  so it is valid whether or not an auth provider is configured and flows
-  through the unified authorization path.
+  Uses `:tincture` authentication through the shared authorization path,
+  with or without an auth provider configured.
 
   For an authenticated request, the caller's real `user_id` and `namespace`
   are carried through for the audit trail (namespace is identity-only and may

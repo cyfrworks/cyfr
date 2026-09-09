@@ -381,9 +381,7 @@ defmodule Aqua.Turn do
   agent's tools honestly.
 
   `:default` selects the single active owner profile of the agent formula.
-  Two active owner labels answer `{:ambiguous, ids}`, and a turn **refuses**
-  rather than picking: which authority a person's agent runs under is not
-  something to guess at, and the guess used to be invisible.
+  Multiple active owner profiles return `{:ambiguous, ids}` and refuse the turn.
 
   Returns the resolved `Sanctum.Authority` — the profile id to pin is its
   `:profile_id`.
@@ -442,8 +440,6 @@ defmodule Aqua.Turn do
   def unsubscribe(execution_id, %Context{} = ctx),
     do: Cyfr.Execution.unsubscribe_events(execution_id, ctx)
 
-  # The port answers `{:ok, map()}`, not `:ok` — the spec said the opposite
-  # in both directions, so a caller matching on it was matching on fiction.
   @doc "Cancel a running turn."
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def cancel(%Context{} = ctx, execution_id), do: Cyfr.Execution.cancel(ctx, execution_id)
@@ -507,11 +503,9 @@ defmodule Aqua.Turn do
     }
   end
 
-  # Only request_approval drops whose proposal violated policy are surfaced
-  # — those are the security-relevant ones, told by the drop's typed tag,
-  # never by matching the reason's wording (a rewording in AquaActions once
-  # silently disabled this). Routine drops (malformed JSON, an action the
-  # chat plane refuses) stay in the log.
+  # Surface request_approval policy violations by their typed drop tag.
+  # Other drops, including malformed JSON and unsupported actions, stay
+  # in the log.
   defp tripwires(drops) do
     drops
     |> Enum.filter(fn
@@ -565,13 +559,8 @@ defmodule Aqua.Turn do
   unavailable (no profile, revoked, re-consent required) this FAILS CLOSED
   — never falling back to the approver's own context.
 
-  `profile_id` is the profile the *turn* pinned, and passing it is what
-  makes "the same consented authority" true. This used to re-derive the
-  authority with no selector, which resolves to the single active owner
-  profile — correct only while there is exactly one. With a second profile
-  on the agent formula, an approval would silently root a graph the turn
-  never ran under, and "fails closed" would not have caught it: the
-  re-derivation succeeds, at the wrong profile.
+  Pass the `profile_id` pinned by the turn so approval uses the same
+  consented authority, even when the formula has multiple profiles.
   """
   @spec run_approved(map(), Context.t(), String.t()) :: {:ok, term()} | {:error, term()}
   def run_approved(proposal, ctx, profile_id)

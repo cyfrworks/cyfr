@@ -4,14 +4,9 @@
 defmodule Arca.Repo.Migrations.ExecutionReferences do
   use Ecto.Migration
 
-  # An execution is named together with its athanor, so the rows that
-  # reference one — its events, its retained payloads — are held to the
-  # same estate by the database, as every other child table is to its
-  # parent. Both tables are recreated with that constraint: events had no
-  # writer before it, and the payload store's rows are carried over. A
-  # payload row is not deleted with its execution — its bytes must go
-  # first (`Arca.ExecutionPayloads`), and a delete that forgot them is
-  # refused rather than left as orphan bytes.
+  # Enforces athanor-scoped execution references for events and payloads.
+  # Recreates both tables and preserves payload rows. Payload bytes must
+  # be removed before their rows permit execution deletion.
   @payload_columns ~w(id athanor_id execution_id kind digest bytes blob_ref retention_class inserted_at)
 
   def up do

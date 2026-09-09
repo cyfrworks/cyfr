@@ -5,10 +5,9 @@ defmodule Opus.HttpHandler do
   @moduledoc """
   Host function HTTP handler for WASM components.
 
-  Provides a `cyfr:http/fetch` WASI host function import that replaces the
-  TCP HTTP proxy. The host receives the full structured request (method, URL,
-  headers, body) before any network call, enabling complete enforcement for
-  both HTTP and HTTPS.
+  Provides the `cyfr:http/fetch` WASI host import. Validates the full
+  request, including method, URL, headers, and body, before network I/O
+  for both HTTP and HTTPS.
 
   ## Security Properties
 
@@ -302,12 +301,8 @@ defmodule Opus.HttpHandler do
   end
 
   defp build_req_opts(request, limits) do
-    # The pinned URL and the fail-closed transport policy come from
-    # `Cyfr.Network.pin/2` via validation (`request.pin_req_opts`) — one
-    # implementation of IP pinning for both outbound planes. Rebuilding
-    # options here once silently inherited Req's auto-retry and
-    # auto-decode defaults, so a guest fetch could hit the wire four
-    # times and its response size was measured on re-encoded bytes.
+    # Preserve the pinned URL and transport options from Cyfr.Network.pin/2,
+    # including disabled automatic retries and response decoding.
     base_opts =
       request.pin_req_opts
       |> Keyword.put(:method, request.method_atom)

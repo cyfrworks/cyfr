@@ -32,13 +32,7 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
 
   ## Why the claim is released on failure
 
-  The row goes in *before* the controller runs, because that is what makes two
-  concurrent deliveries of one key resolve to a single execution. But a claim
-  staked ahead of the work is a claim that can outlive work which never
-  happened: if the controller then answered 4xx/5xx — target component
-  missing, execution refused, an internal error — the row stood, and the
-  sender's retry, which is the entire reason it sent an idempotency key, got
-  `{"status": "duplicate"}` while the target had never run once.
+  Claim before dispatch to serialize duplicate deliveries. Failed requests release their claim for retry.
 
   So a non-2xx response gives the claim back on the way out, and the retry is
   a fresh delivery. A hard crash still leaves the row, which the TTL sweep
@@ -150,16 +144,9 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
     end
   end
 
-  # Registered on the fresh path only: a duplicate never staked a claim in
-  # this request, and must not release the one the original delivery holds.
-  #
-  # This can only see SYNCHRONOUS refusals — a 503 when the engine is not
-  # up, a 500 from a spawn failure. The controller answers `200 accepted`
-  # the moment the task spawns, so a 2xx here means "handed off", never
-  # "delivered", and every execution outcome happens afterwards. That is
-  # why the task settles the claim itself; without it, a component that
-  # raised kept its claim and the sender's retry read as a duplicate for
-  # the full TTL.
+  # Register only for fresh claims. Duplicate requests must not release
+  # the original delivery’s claim. This callback handles synchronous
+  # refusals; spawned tasks settle their own claims after execution.
   defp release_claim_unless_delivered(conn, webhook_id, key) do
     register_before_send(conn, fn sent ->
       if sent.status in 200..299 do

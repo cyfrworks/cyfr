@@ -19,13 +19,10 @@ defmodule Opus.RateLimiter do
   The GenServer only owns the table and sweeps expired entries; no request
   flows through it. Consequences, both acceptable for a rate limiter:
 
-  - Counters reset if the limiter process restarts (the table dies with its
-    owner). A dead table fails CLOSED: ETS raises, which the API converts to
-    the same `:exit` a dead GenServer used to produce, so the executor's
-    rate-limit chokepoint (`Opus.Executor`) denies exactly as before.
-  - Concurrent checks at the limit boundary can overshoot by up to the number
-    of simultaneous callers (non-atomic count-then-insert) — the same
-    acceptance already documented in the transport-limit plugs.
+  - Counters reset when the owning process restarts. A missing table causes
+    an exit that the executor treats as a rate-limit failure.
+  - Concurrent count-then-insert checks can overshoot the limit by up to the
+    number of simultaneous callers.
 
   ## Usage
 
@@ -82,7 +79,6 @@ defmodule Opus.RateLimiter do
       # After 10 requests...
       iex> Opus.RateLimiter.check("ath_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:error, :rate_limited, 45000}
-
   """
   @spec check(String.t(), String.t(), map() | nil) ::
           {:ok, non_neg_integer() | :unlimited}

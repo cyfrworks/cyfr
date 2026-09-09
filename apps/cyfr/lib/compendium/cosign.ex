@@ -16,13 +16,8 @@ defmodule Compendium.Cosign do
 
   ## Keyless verification names a signer
 
-  Keyless verification used to pass `.*` for both the certificate identity
-  and the OIDC issuer, which accepts a signature from *anyone* who can get
-  a Sigstore certificate — that is, from anyone at all. "Verified" then
-  meant only "this artifact was signed", not "signed by someone this
-  operator trusts", while the row it wrote said `signature_verified: true`.
-  An operator who wants keyless now says whose signature counts; unset is
-  refused rather than quietly meaning "any".
+  Keyless verification requires an explicit trusted certificate identity
+  and OIDC issuer. Missing values refuse verification.
   """
 
   require Logger

@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Compendium.OCILocalNamespaceTest do
-  # The model §6 "Local exemption keying" gate (D4): the exemption that lets
-  # local components register from the filesystem must be keyed on the
-  # ingress path, never on the publisher string — otherwise a remote pull
-  # whose ref merely *names* `local` mints a remote component into the
-  # highest-trust namespace.
+  # The filesystem-registration exemption depends on ingress, never the publisher string.
   use ExUnit.Case, async: false
 
   alias Compendium.OCI

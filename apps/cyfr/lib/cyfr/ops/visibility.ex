@@ -11,15 +11,11 @@ defmodule Cyfr.Ops.Visibility do
   reading the action's annotation (`auth`, `permission`, `consent`), so a
   caller is shown exactly the doors dispatch would open for them:
 
-  - `auth: :anonymous` actions are visible to everyone, and they are the
-    only thing an uncredentialed caller sees or may invoke.
-  - `permission:` actions are visible to holders of that permission.
-  - `consent:` actions are visible to the surfaces `Sanctum.Consent.Authz`
-    admits (`:interactive` → OIDC sessions; `:staging` → OIDC or API key).
-    An `:admin` API key being shown `vault.rotate` and then refused on call
-    was exactly the drift this derivation exists to prevent.
-  - An action with no annotation is visible to no one — the dispatcher
-    refuses it too (default-deny at both gates).
+  - `auth: :anonymous` actions are visible to everyone.
+  - `permission:` actions require the named permission.
+  - `consent:` actions require an admitted surface: `:interactive` accepts
+    OIDC sessions; `:staging` accepts OIDC sessions or API keys.
+  - Unannotated actions are invisible and refused by dispatch.
 
   The completeness audit (`Cyfr.Ops.Catalog.audit_action_kinds/0`,
   asserted `:ok` in CI) guarantees every registered action carries a full

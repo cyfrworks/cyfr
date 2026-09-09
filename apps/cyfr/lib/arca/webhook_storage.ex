@@ -240,11 +240,8 @@ defmodule Arca.WebhookStorage do
           {:error, :not_found}
 
         current_secret ->
-          # Compare-and-swap on the secret this call read: two concurrent
-          # rotations both wrote `previous_secret_encrypted: S0` from the
-          # same stale read, so the intermediate secret's grace window
-          # vanished and requests signed with it failed verification. The
-          # loser of the race sees zero rows and answers `:conflict`.
+          # Compare against the secret read by this call. A concurrent rotation
+          # returns :conflict without overwriting the other rotation's grace secret.
           result =
             from(w in query, where: w.secret_encrypted == ^current_secret)
             |> Arca.Repo.update_all(

@@ -12,11 +12,7 @@ config :cyfr, EmissaryWeb.Endpoint,
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
-  # Same value as `:cyfr, :secret_key_base` below: prod derives both the
-  # endpoint's and the cipher's key base from the one CYFR_SECRET_KEY_BASE
-  # (runtime.exs), so dev mirrors that single-value shape. The cipher's
-  # string is the one kept — changing it would orphan every dev-encrypted
-  # vault blob, while re-keying dev cookies costs nothing.
+  # Use the same development key base for endpoint signing and at-rest encryption.
   secret_key_base: "dev_secret_key_base_min_64_chars_for_aes256_key_derivation_padding!",
   watchers: [
     esbuild: {Esbuild, :install_and_run, [:prism, ~w(--sourcemap=inline --watch)]},
@@ -35,12 +31,7 @@ config :phoenix, :stacktrace_depth, 20
 # Initialize plugs at runtime for faster development compilation
 config :phoenix, :plug_init_mode, :runtime
 
-# Configure Arca for development. One database, one name: runtime.exs
-# resolves the same data/cyfr.db (CYFR_DATABASE_PATH-overridable) for dev
-# and prod alike; this line only adds the dev-only connection option, since
-# config/2 merges keyword lists. Expanded at config time — an unexpanded
-# relative path resolves against whichever umbrella app's CWD loads it and
-# litters apps/*/data/ with stray databases.
+# Add development connection options; runtime.exs resolves the database path.
 config :cyfr, Arca.Repo,
   database: Path.expand("data/cyfr.db"),
   show_sensitive_data_on_connection_error: true
@@ -49,10 +40,7 @@ config :cyfr, Arca.Repo,
 config :cyfr,
   secret_key_base: "dev_secret_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
-# No timestamps in development logs, but keep $metadata: LoggerContext's
-# request/user/athanor tags are exactly what debugging needs, and dropping
-# them made the structured-logging SSOT invisible in the one environment
-# where people read logs.
+# Omit timestamps in development logs; retain request, user and athanor metadata.
 config :logger, :default_formatter, format: "$metadata[$level] $message\n"
 
 # Enable telemetry console reporter in development

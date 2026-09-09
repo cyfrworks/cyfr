@@ -3,14 +3,8 @@
 
 defmodule Cyfr.VocabularyDriftTest do
   @moduledoc """
-  The product has one assistant, its roles, its scrolls and its notes.
-  Three of the four readers of the old `type` vocabulary failed open — a
-  renamed string rendered an empty closet, an empty crew, a silent
-  fallback — so the words are held out of the code by test rather than by
-  memory: no `"sub-agent"` literal anywhere under `lib/`, and the
-  `"orchestrator"` literal only where it is a persisted payload key the
-  runner reads back from rows written before the rename (identifiers such
-  as `conversations.orchestrator` are not literals and are not renamed).
+  Checks assistant, role, scroll and note terminology in code and product
+  copy. Persisted payload keys are explicitly exempted where required.
 
   The agent-type values are held the same way: `"soul"` and `"role"` are
   `Compendium.AquaAgent`'s (`soul_type/0`, `role_type/0`, `type_of/1`),

@@ -177,10 +177,7 @@ defmodule PrismWeb.TopbarLiveTest do
     {view, _html} = mount_athanor(conn, "")
     bar = topbar(view)
 
-    # This bar is mounted on every page and a single request fans out to
-    # several telemetry events, so a reload here is the most-multiplied read
-    # in the console. Each event used to reload on arrival: ten of them cost
-    # twenty tool calls per open page.
+    # Coalesce bursts of telemetry into one reload.
     for _ <- 1..10, do: send(bar.pid, {:request, %{}, %{}})
     :sys.get_state(bar.pid)
 

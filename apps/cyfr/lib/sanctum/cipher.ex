@@ -165,32 +165,16 @@ defmodule Sanctum.Cipher do
         dk
 
       _ ->
-        # Miss, or the same label now maps to different key material (only
-        # possible across a redeploy/test reconfig — the keyring is otherwise
-        # boot-immutable). Keying the memo on the master binary keeps a stale
-        # derived key from ever being returned.
-        # Load-bearing literal: this info string is baked into every derived
-        # key, so renaming it (even to match the envelope version) orphans every
-        # blob encrypted so far. Pinned by test; change only with a
-        # rotate-everything migration.
+        # Memoize by master material so a changed key cannot reuse a stale result.
+        # The derivation info string is part of every encrypted blob's key contract.
+        # Changing it requires re-encryption of all affected blobs.
         #
-        # Note what is NOT here: the key label. The derived key is a function
-        # of the master material and the purpose alone, so two labels over the
-        # same bytes are one key with two names — a "rotation" onto such a
-        # label re-encrypts every row under the key it already had. The label
-        # is bound in the AAD (so a row cannot be read under a different
-        # label), which is the property that matters at read time; the
-        # ineffective-rotation case is refused where it is detectable, at boot,
-        # by `Cyfr.Application.refuse_duplicate_key_material!/1`. Binding the
-        # label here would be defence in depth, and costs an envelope version
-        # plus a full re-encryption of every sealed row.
+        # Key labels are bound through AAD, not key derivation. Duplicate master
+        # material under different labels is rejected at boot.
         info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
 
-        # The iteration count is fixed on purpose: it is baked into every
-        # derived key, and no knob may lower it — the old
-        # `:pbkdf2_iterations` config could only ever raise it (a `max/2`
-        # floor), which made it a lying knob. Raising it is a
-        # rotate-everything migration, not a config change.
+        # The fixed iteration count is part of key derivation. Changing it requires
+        # re-encrypting existing blobs.
         dk = :crypto.pbkdf2_hmac(:sha256, master, info, @default_iterations, @key_len)
         :persistent_term.put(pt_key, {master, dk})
         dk

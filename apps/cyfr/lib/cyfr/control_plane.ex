@@ -5,34 +5,17 @@ defmodule Cyfr.ControlPlane do
   @moduledoc """
   Which boot owns this database's control plane.
 
-  Much of the tree assumes one control plane per database: the
-  conversation registry, the overlay's single-writer lock, the OAuth
-  refresh lock, the budget table and the retention sweep are all
-  node-local. That was remembered, not enforced — two processes pointed at
-  one database both boot, both run every sweep, and both accept turns. A
-  node NAME is no signal (a named single-node release has one and an empty
-  `Node.list/0`; two undistributed processes both have an empty list), so
-  ownership is a lease row in the database (`Arca.ServerMetaStorage`),
-  claimed at boot, renewed while this boot runs, and given up when it
-  stops.
+  Claims one control plane per database using an Arca.ServerMetaStorage
+  lease. Ownership is claimed at boot, renewed while running, and released
+  on shutdown. This coordinates admission for services with node-local state.
 
-  * A second live claimant refuses to boot, unless `CYFR_CLUSTER=1` says
-    the nodes share the database by design (then nothing is claimed and
-    every node owns the plane — the posture the multi-node work lifts). A
-    holder that stopped without releasing — it was killed — is waited out
-    once, for the remainder of its own lease, and its row is taken if it
-    did not renew meanwhile; a holder that renews is live and is refused.
-  * Ownership is the lease deadline, not a flag: `owner?/0` answers true
-    only while the lease this boot last wrote has not expired on this
-    clock. A renewal that stalls therefore stops authorizing work at the
-    same instant a successor may take the row, whether or not the renewal
-    tick has noticed. The endpoint answers 503
-    (`EmissaryWeb.Plugs.ControlPlaneOwnership`), readiness reports it, no
-    turn or execution is admitted, and no catalog operation is dispatched
-    (`Cyfr.Ops.Catalog`) until the claim is won back.
-  * Until the claim has run, the boot owns nothing — unless no claim is
-    configured at all (`control_plane_claim_enabled: false`, the test
-    suite's posture), in which case there is nothing to lose.
+  * A second live claimant refuses boot. An expired lease may be claimed
+    after one bounded wait. `CYFR_CLUSTER=1` disables exclusive claiming.
+  * `owner?/0` requires an unexpired local lease deadline. After expiry,
+    the endpoint returns 503, readiness reports the loss, and turn,
+    execution, and catalog admission stop until ownership is restored.
+  * Before claiming, the boot owns nothing. Setting
+    `control_plane_claim_enabled: false` disables these ownership checks.
   """
 
   use GenServer

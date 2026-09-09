@@ -59,15 +59,9 @@ defmodule Cyfr.SanctumSurfacesTest do
       Sanctum.Provisioning Sanctum.Sanitizer Sanctum.SignIn Sanctum.ToolPattern
       Sanctum.VaultReader
     ),
-    # `Sanctum.Cipher` is here for `Cyfr.Release` alone: boot tells an
-    # operator with no explicit keyring that rotating their secret orphans
-    # every sealed blob, and that advice needs a rotation they can actually
-    # run. `Sanctum.Cipher.Rotation` had no caller outside its own tests, so
-    # the release task is what makes the warning actionable.
-    # `lib/cyfr/ops` is the operation catalog: the annotation gate reads
-    # consent classes and chain authority, the error vocabulary renders
-    # the authorization refusals, and the catalog implements the port
-    # consent reads it through (`Sanctum.Catalog`).
+    # Cyfr.Release uses Sanctum.Cipher for key rotation. Cyfr.Ops uses
+    # consent classes, chain authority, authorization rendering, and
+    # the Sanctum.Catalog port.
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cidr
       Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
@@ -76,10 +70,7 @@ defmodule Cyfr.SanctumSurfacesTest do
       Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy Sanctum.ToolServerDigest
       Sanctum.Unauthorized Sanctum.UnauthorizedError
     ),
-    # The notes tool no longer reaches `Sanctum.Tenancy`: reading "your
-    # own" notes resolves `users.personal_athanor_id`, and that read lives
-    # with the domain (`Aqua.Notes`, under the `aqua` surface) rather than
-    # the door.
+    # Aqua.Notes resolves personal notes through users.personal_athanor_id.
     "emissary" => ~w(
       Sanctum.ComponentRef Sanctum.Context Sanctum.Sanitizer Sanctum.ToolPattern
       Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.VaultReader
@@ -161,15 +152,8 @@ defmodule Cyfr.SanctumSurfacesTest do
     end
   end
 
-  # Compendium's two SENSITIVE reaches get third-level pins on top of the
-  # namespace roster above: `Sanctum.Cipher` seals registry credentials at
-  # rest, and the `Sanctum.Consent` submodules it may touch are exactly the
-  # read-side trio below — the consent WRITE plane (Commit, Plan, Authz)
-  # must never be reachable from the Apache registry domain.
-  # `Sanctum.Consent.Bootstrap` was here for `component.register`'s mint.
-  # That call is gone — registering now earns a consent walk like anything
-  # else — so the entry goes with it. This assertion only checks the
-  # `extra` direction, so a survivor would have sat here unnoticed.
+  # Restrict Compendium's sensitive Sanctum calls to credential encryption
+  # and the listed consent readers. Consent write operations are excluded.
   @compendium_consent_allowed ~w(
     Sanctum.Consent.ShapeDerivation
     Sanctum.Consent.Source

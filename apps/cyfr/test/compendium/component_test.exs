@@ -3,12 +3,9 @@
 
 defmodule Compendium.ComponentTest do
   @moduledoc """
-  Component resolution has one owner: every error class — malformed
-  reference, not found, storage fault — answers a human-readable
-  `{:error, binary}`, never a raise, and the MCP tool surface
-  (`Compendium.MCP.Shared`) delegates here so the two can never drift.
-  The duplicated MCP copy this replaces lacked the storage-fault clause
-  and raised CaseClauseError in every tool resolve path.
+  Component resolution returns human-readable `{:error, binary}` results
+  for malformed references, missing components, and storage faults.
+  `Compendium.MCP.Shared` delegates resolution to this module.
   """
 
   use ExUnit.Case, async: false

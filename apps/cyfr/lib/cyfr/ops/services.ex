@@ -41,8 +41,7 @@ defmodule Cyfr.Ops.Services do
     end
   end
 
-  # Module introspection ran on the hot path for every tools/call; the
-  # provider set is fixed at boot, so the label is derived once.
+  # Cache the service label derived from the provider set fixed at boot.
   defp resolve_service_name(module) do
     if Code.ensure_loaded?(module) and function_exported?(module, :service, 0) do
       {:ok, module.service()}

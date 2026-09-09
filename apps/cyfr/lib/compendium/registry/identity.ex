@@ -62,17 +62,9 @@ defmodule Compendium.Registry.Identity do
         %{authenticated: false, user_id: ctx.user_id, personal_namespace: nil, memberships: []}
 
       creds ->
-        # Parallelize per-token HTTP confirmation so whoami latency stays
-        # bounded by the slowest single call (3s) rather than N×3s. Users
-        # with many publisher memberships feel this most — a 10-membership
-        # whoami used to serialize up to ~30s of timeouts; now it's ~3s.
-        #
-        # `max_concurrency: 8` tunes for typical Finch pool size without
-        # flooding the cyfr.run REST tier. `ordered: false` lets the stream
-        # return as results arrive. `on_timeout: :kill_task` caps stragglers
-        # at @whoami_timeout_ms + 500ms grace. `:exit` tuples are dropped —
-        # same as the per-call `nil` return for revoked tokens (see
-        # confirm_namespace/2 below).
+        # Confirm tokens concurrently, with at most eight requests in flight.
+        # Results are unordered; timed-out tasks are killed after the request
+        # timeout plus 500 ms. Failed confirmations are omitted.
         entries =
           creds
           |> Task.async_stream(&confirm_namespace(rest_host, &1),

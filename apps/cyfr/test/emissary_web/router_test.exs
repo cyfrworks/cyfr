@@ -20,10 +20,7 @@ defmodule EmissaryWeb.RouterTest do
       assert mcp_post.plug_opts == :handle
     end
 
-    # GET opened the standalone notification stream and DELETE terminated a
-    # session; both were removed from the transport. They stay routed so the
-    # server can answer 405 — a route-miss 404 reads as "wrong URL" and sends an
-    # older client looking for an endpoint that does not exist elsewhere.
+    # GET and DELETE on /mcp return 405 for unsupported HTTP methods.
     test "answers GET and DELETE /mcp with 405 rather than dropping the routes" do
       routes = Phoenix.Router.routes(Router)
 
@@ -62,9 +59,7 @@ defmodule EmissaryWeb.RouterTest do
     end
 
     test "the 405 methods on /mcp ride the same pipeline as POST" do
-      # GET /mcp is the retired notification stream, kept routed only to
-      # answer 405 — it must see the same plugs as the live method, not a
-      # phantom SSE pipeline.
+      # GET /mcp uses the same ingress checks before returning 405.
       %{pipe_through: post_pipelines} = Phoenix.Router.route_info(Router, "POST", "/mcp", nil)
 
       for verb <- ["GET", "DELETE"] do

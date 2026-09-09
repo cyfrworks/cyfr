@@ -128,12 +128,8 @@ defmodule Opus.CronSchedulerTest do
 
   describe "which task exits mean the run failed" do
     test "a task that finished before its monitor is not a failure" do
-      # `Process.monitor/1` runs just AFTER `Task.Supervisor.start_child/2`,
-      # so a task that completed inside that window makes the monitor fire at
-      # once with `:noproc`. Reading every non-`:normal` reason as a failure
-      # wrote `record_error(":noproc")` onto rows whose run had just
-      # succeeded — and the schedules that return quickest (a bad reference, a
-      # denied consent) collected that phantom error every single time.
+      # A task may finish before Process.monitor/1 is installed. The resulting
+      # :noproc must not add an execution error.
       refute Opus.CronScheduler.failed_run?(:noproc)
       refute Opus.CronScheduler.failed_run?(:normal)
 
@@ -174,9 +170,8 @@ defmodule Opus.CronSchedulerTest do
       assert DateTime.compare(row.next_run_at, past) == :gt
     end
 
-    # The marker is given back as soon as the occurrence is won, so it can
-    # never serialize LATER occurrences across nodes. Held for the run it
-    # would have — the stall `claim/4`'s doc says was declined.
+    # Release the claim marker immediately after winning the occurrence
+    # so later occurrences remain claimable across nodes.
     test "the winner does not hold the marker across the run" do
       {:ok, schedule} = create_schedule("release-#{System.unique_integer([:positive])}")
       due!(schedule.id, DateTime.add(DateTime.utc_now(), -60, :second))

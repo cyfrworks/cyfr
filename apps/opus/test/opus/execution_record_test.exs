@@ -360,8 +360,7 @@ defmodule Opus.ExecutionRecordTest do
 
       :ok = ExecutionRecord.write_started(record)
 
-      # The declared struct field survives a read — it used to be silently
-      # nil on every get, though the row carried it.
+      # The declared struct field must survive a database read.
       assert {:ok, read} = ExecutionRecord.get(ctx, record.id)
       assert read.activation_graph == graph
 

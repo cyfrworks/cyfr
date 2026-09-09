@@ -14,9 +14,8 @@ defmodule Sanctum.Consent.ShapeDiff do
   that only gained entries is `:widened`, one that only lost them is
   `:narrowed`, and both is `:changed`.
 
-  Advisory by construction: this explains a decision the §2.6 table
-  already made. A derivation failure yields an empty diff, never a
-  different decision.
+  Explains the loader's decision without changing it. A derivation failure
+  returns an empty diff.
   """
 
   alias Sanctum.Authority.Blob

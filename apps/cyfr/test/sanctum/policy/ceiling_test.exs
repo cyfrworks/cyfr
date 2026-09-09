@@ -153,8 +153,7 @@ defmodule Sanctum.Policy.CeilingTest do
     end
 
     test "a shrunken window cannot multiply the rate past the ceiling" do
-      # %{requests: 10_000, window: "1ms"} used to pass untouched — the
-      # count was under the ceiling while the rate was 600M/minute.
+      # Rate limits must account for the window duration as well as the request count.
       limits = limits(rate_limit: %{requests: 10_000, window: "1s"})
       ceiling = %{rate_limit_requests: 10_000}
 

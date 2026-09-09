@@ -9,11 +9,7 @@ defmodule Sanctum.Authority.TransitionTotalityTest do
   alias Sanctum.Test.AuthorityFixtures, as: Fixtures
   alias Sanctum.Test.AuthorityGen, as: Gen
 
-  # §6 "Transition relation is total": every (cursor, guest function,
-  # target) combination has a defined, asserted outcome. The relation is a
-  # literal map with no catch-all, so totality is checked by enumeration —
-  # first structurally against the cross product, then behaviorally by
-  # driving step/3 through every combination.
+  # Enumerate every cursor, guest-function and target combination and verify its defined outcome.
 
   test "the relation enumerates exactly the full cross product" do
     expected =

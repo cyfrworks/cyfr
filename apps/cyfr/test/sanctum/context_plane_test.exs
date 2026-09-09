@@ -5,12 +5,8 @@ defmodule Sanctum.ContextPlaneTest do
 
   alias Sanctum.Context
 
-  # The D1 plane split, Context half: a context that has entered a guest
-  # closure can never authorize an external-plane call — even with the :*
-  # wildcard, which short-circuits every permission check. Every builder
-  # defaults to :external; the guest plane is stamped one-way by
-  # enter_guest/1 (Opus.Executor before a guest run, the conversation runner
-  # before an approved in-chain call).
+  # Guest contexts cannot authorize external-plane operations, including
+  # with wildcard permissions. enter_guest/1 only transitions into the guest plane.
 
   describe "defaults" do
     test "every construction path starts on the external plane" do

@@ -5,14 +5,9 @@ defmodule EmissaryWeb.Plugs.ParserErrors do
   @moduledoc """
   `Plug.Parsers`, with the MCP endpoint's failures answered in JSON-RPC.
 
-  A malformed body used to raise `Plug.Parsers.ParseError` out of the
-  endpoint and render Phoenix's `{"errors":{"detail":"Bad Request"}}` —
-  no envelope, no `-32700`, and the request id lost, which is exactly the
-  drift `EmissaryWeb.MCPError` exists to prevent (the id cannot be echoed
-  here: it was inside the body that failed to parse, so `null` is the
-  honest value). The same path also gates the content type: `pass:
-  ["*/*"]` let a `text/plain` POST reach the controller with empty params
-  and be misreported as "Missing jsonrpc field".
+  Returns JSON-RPC parse errors (-32700) for malformed MCP request bodies.
+  The id is null because it cannot be read from an unparseable body.
+  Rejects unsupported content types before controller dispatch.
 
   Every other path keeps Phoenix's behaviour — the failure re-raises.
   """

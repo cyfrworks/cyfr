@@ -31,7 +31,6 @@ defmodule Sanctum.Auth.OIDC do
   This provider proves an identity for `EmissaryWeb.AuthController.callback/2`,
   which then asks the door (`Sanctum.Door.admit_identity/2`) and only on
   admission mints the session. The provider itself never creates one.
-
   """
 
   @behaviour Sanctum.Auth
@@ -58,7 +57,6 @@ defmodule Sanctum.Auth.OIDC do
       {:ok, ctx} = Sanctum.Auth.OIDC.authenticate(auth)
       ctx.user_id
       #=> "github|https://github.com|12345"
-
   """
   def authenticate(%{__struct__: Ueberauth.Auth} = auth) do
     provider = auth.provider

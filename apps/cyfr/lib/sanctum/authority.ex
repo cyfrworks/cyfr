@@ -228,9 +228,8 @@ defmodule Sanctum.Authority do
   end
 
   @doc """
-  Self-invocation at the same activation identity (D2): cursor and
-  resources are preserved; only chain and depth advance. A component is not
-  a boundary against itself.
+  Self-invocation at the same activation identity preserves the cursor
+  and resources; only chain and depth advance.
   """
   @spec self_child(t(), String.t()) :: t()
   def self_child(%__MODULE__{cursor: {:bound, _}} = auth, reference) do

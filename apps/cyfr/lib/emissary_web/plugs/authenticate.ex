@@ -21,11 +21,8 @@ defmodule EmissaryWeb.Plugs.Authenticate do
 
   ## Options
 
-  - `:errors` — the module that renders a rejection, defaulting to
-    `EmissaryWeb.MCPError`. `EmissaryWeb.ApiError` is the plain-HTTP
-    counterpart. This is the only thing that differs between the MCP endpoint
-    and an ordinary authenticated route, which is why it is a parameter rather
-    than a second copy of the credential logic.
+  - `:errors` — rejection renderer, defaulting to `EmissaryWeb.MCPError`.
+    Use `EmissaryWeb.ApiError` for ordinary authenticated HTTP routes.
 
   This plug carries no protocol knowledge. The MCP endpoint's own conformance
   rules — the per-request `_meta`, the mirrored headers — live in

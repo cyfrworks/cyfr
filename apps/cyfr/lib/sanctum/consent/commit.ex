@@ -47,12 +47,8 @@ defmodule Sanctum.Consent.Commit do
           optional(:durable_storage) => boolean()
         }
 
-  # §3.5 ZeroAuthority constants as blob limits — derived from the one
-  # literal source (`Sanctum.Authority.zero_limits/0`), never from Policy
-  # defaults (which are looser on three of the seven fields). What a public
-  # profile's source node runs under until the consent sheet grows a
-  # raise-to-ceiling knob. Derivation keeps the blob a user consented to
-  # and the ceiling the runtime enforces from ever drifting apart.
+  # Derive public-source limits from Sanctum.Authority.zero_limits/0.
+  # Policy defaults may be less restrictive.
   @public_limits Sanctum.Authority.zero_limits()
                  |> Map.from_struct()
                  |> Map.new(fn
@@ -206,11 +202,9 @@ defmodule Sanctum.Consent.Commit do
   end
 
   @doc """
-  Stage a publish: the §4.2 `profile.publish` front half. Derives the
-  forced decisions (`kind: :public`, `edge_only`, pinned) from an owner
-  profile, keeping credentials only for `need_ids`, and mints the plan
-  token — the caller then walks preview and commit with these decisions
-  exactly like any other consent.
+  Stages `profile.publish` from an owner profile with public, edge-only,
+  pinned decisions. Retains credentials only for `need_ids` and returns a
+  plan token for preview and commit.
   """
   @spec stage_publish(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def stage_publish(%Context{} = ctx, %{profile_id: profile_id} = params) do
@@ -299,11 +293,7 @@ defmodule Sanctum.Consent.Commit do
          declared = declared_needs(component),
          {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published, declared),
          {:ok, tool_servers} <- resolve_tool_servers(ctx, decisions),
-         # The blob is built HERE, not at commit. The digest has to cover
-         # the bytes, and `commit/3` checks the presented digest two steps
-         # before it used to build them — so a blob hashed at persist time
-         # would be hashed after every check that could have refused it.
-         # Preview needs the same bytes anyway, to render the grants.
+         # Build the blob before digest validation; preview renders these same bytes.
          blob_inputs = %{
            source_ref: source_ref,
            activation: activation,
@@ -381,12 +371,7 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # Anything that is not a list is refused rather than ignored. It used to
-  # return `config` — the same answer an ABSENT key gets — so a wire value
-  # of `"storage.*"` (a bare string, the obvious typo) silently failed to
-  # narrow and the operator was shown the server's full set. Nothing
-  # widened past the ceiling, but a caller who asked to narrow was told
-  # they had, and were not.
+  # Reject non-list narrowing values; only an absent key uses the configured set.
   defp narrow_tool_patterns(_not_a_list, _config), do: :error
 
   defp covered_by_config?(pattern, config) do
@@ -402,10 +387,8 @@ defmodule Sanctum.Consent.Commit do
 
   defp dot_prefix(pattern), do: String.trim_trailing(pattern, "*")
 
-  # A tool-server decision names the server; the digest is ALWAYS resolved
-  # live at prepare — like binding digests, a caller-supplied one could pin
-  # a consent to a configuration the server no longer has. The D8 baseline
-  # rides along when the catalogue was reachable.
+  # Resolve tool-server digests live during preparation. Include a
+  # description baseline when the catalog is reachable.
   defp resolve_tool_servers(ctx, decisions) do
     decisions
     |> Map.get(:tool_servers, [])
@@ -414,12 +397,8 @@ defmodule Sanctum.Consent.Commit do
 
       case Emissary.MCP.ExternalProvider.consent_candidate(ctx, name || "") do
         {:ok, %{server_digest: digest} = candidate} when is_binary(digest) ->
-          # Intersected with the server's own configured patterns, never
-          # taken verbatim. `ExternalProvider.try_handle/4` re-checks the
-          # live config at dispatch, so an over-broad pattern granted no
-          # extra reach — but it was recorded, digested and shown to the
-          # operator as a wider grant than the one they could actually
-          # give. Narrowing here makes the consent say what it means.
+          # Intersect granted patterns with the server’s configured patterns.
+          # Dispatch also rechecks the live configuration.
           case narrow_tool_patterns(Map.get(raw, :tool_patterns), candidate.tool_patterns) do
             {:ok, patterns} ->
               grant = %{
@@ -460,12 +439,9 @@ defmodule Sanctum.Consent.Commit do
     |> Compendium.Manifest.Needs.from_manifest()
   end
 
-  # Transform the owner's head blob into the public one: the source node
-  # drops to the §3.5 constants, storage attenuates to read-only unless
-  # durable writes were explicitly enabled, and vault resources survive
-  # only on the edges named by need_ids — with their binding digests
-  # re-verified against the live rows, because a consent must never be
-  # minted around a digest the entry no longer has.
+  # Apply public limits to the source and make storage read-only unless
+  # durable writes are enabled. Retain vault resources only for need_ids,
+  # verifying their binding digests against live entries.
   defp publish_nodes(ctx, owner_consent, decisions, source_ref) do
     need_ids = Map.get(decisions, :need_ids, [])
     durable? = Map.get(decisions, :durable_storage, false)
@@ -522,9 +498,7 @@ defmodule Sanctum.Consent.Commit do
           edge
       end
 
-    # Public profiles get no external MCP reach: an anonymous caller
-    # driving upstream tools through the operator's server credentials is
-    # exactly the §1 shape. Re-granting is a deliberate future decision.
+    # Public profiles grant no external MCP access.
     edge = Map.delete(edge, "tool_servers")
 
     if edge_key in need_ids do
@@ -578,15 +552,12 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # Pinned means the activation digest (D7); the version string rides along
-  # as the display identity the shape shows.
+  # Pin by activation digest; retain the version for display.
   defp shape_for_scope(shape_input, :versionless, _component) do
     ShapeDigest.compute(shape_input)
   end
 
-  # Pinned means the activation identity (D7), so the release digest IS
-  # the identity the shape carries; a release that never got one cannot
-  # be pinned to.
+  # Pinned profiles require a release digest.
   defp shape_for_scope(shape_input, :pinned, component) do
     case component.release_digest do
       digest when is_binary(digest) and digest != "" ->
@@ -600,12 +571,8 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # Binding digests are ALWAYS derived from the live row here — a caller-
-  # supplied digest could pin a consent to a binding the entry no longer
-  # has. With no needs block the single slot is spelled "@ingress"; a
-  # manifest that declares needs retires the implicit slot entirely
-  # (§2.7's omission rule mirrored: every binding must name a declared
-  # need), and an unknown need fails, never binds somewhere surprising.
+  # Derive binding digests from live rows. Use @ingress only when the
+  # manifest declares no needs; otherwise each binding must name a declared need.
   defp resolve_bindings(ctx, decisions, declared) do
     decisions
     |> Map.get(:bindings, [])
@@ -630,13 +597,7 @@ defmodule Sanctum.Consent.Commit do
     end)
     |> case do
       {:ok, [_, _ | _], _entries} ->
-        # One credential per execution closure (§3.11): a direct-run source
-        # holds exactly one, so a second binding has nowhere to ride. This
-        # was guarded `when declared != nil`, which exempted the very case
-        # the sentence describes — a manifest with no needs block, whose
-        # bindings are all the implicit "@ingress" slot. Two of them passed,
-        # both entered the approved digest, and `build_blob/2` rode the
-        # first: a consent that says it approved a credential it did not.
+        # Allow only one credential binding per direct-run execution closure.
         {:error, :multiple_source_bindings_unrepresentable}
 
       {:ok, bindings, entries} ->
@@ -682,19 +643,8 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # `blob_digest` is the hash of the bytes `build_blob/2` just produced, so
-  # the digest is a promise about what will run BY CONSTRUCTION — no field
-  # here can drift out of step with the blob, and no new decision can
-  # escape it by being forgotten.
-  #
-  # It had to: `limits` was once threaded in from the decisions and never
-  # reached the blob, so a tightened number was signed and ignored. And
-  # `durable_storage` was the mirror image — absent here, but read at
-  # `publish_edge/4`, so the same plan token, proof and commit digest
-  # replayed with the flag flipped shipped `write`/`delete` on a public
-  # profile. The remaining fields stay because they are what the operator
-  # is shown and what a proof binds; the blob hash is what makes the set
-  # closed rather than merely current.
+  # Include the built blob's digest alongside the displayed decisions so
+  # the proof binds every runtime grant.
   defp commit_input(
          shape_digest,
          blob_digest,
@@ -1010,15 +960,7 @@ defmodule Sanctum.Consent.Commit do
   # Rendering + helpers
   # ---------------------------------------------------------------------------
 
-  # What the operator is shown immediately before approving.
-  #
-  # This used to be a header plus one "Uses <entry>" line per vault
-  # binding — so a publish with `need_ids: []` rendered a SINGLE line as
-  # the whole consent sheet, while the blob behind it granted egress,
-  # storage, tools and the manifest caps of every node in the activation
-  # closure. Approving what you cannot see is not consent, so the grants
-  # are read back out of the blob the digest now covers: whatever is
-  # rendered here is exactly what will run.
+  # Render grants from the same blob covered by the approved digest.
   defp render_summary(prep) do
     header =
       "Grant #{prep.source_ref} — #{prep.kind}, #{prep.scope}, revision #{prep.expected_revision + 1}"
@@ -1058,10 +1000,7 @@ defmodule Sanctum.Consent.Commit do
       |> Enum.flat_map(fn {_key, edge} -> render_edge(edge) end)
       |> Enum.uniq()
 
-    # `limits` is an @enforce_keys field of every node and was rendered
-    # nowhere, so a publish — whose entire attenuation story is dropping the
-    # source node to `@public_limits` — showed the operator the narrowed
-    # storage and egress and nothing about the budget they were approving.
+    # Include each node’s limits in the consent summary.
     lines = grants ++ render_limits(node.limits)
 
     case lines do

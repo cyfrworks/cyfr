@@ -341,11 +341,7 @@ defmodule Opus.CronMCPTest do
     end
 
     test "update that re-points the reference re-runs the binding gate", %{ctx: ctx} do
-      # Re-pointing is the same act as binding: the gate runs against the
-      # target the row will have after the update. It used to run only when
-      # the update ALSO carried a profile_id, so an update naming just a new
-      # reference moved a standing, timer-fired conduit onto a target its
-      # bound profile's consent never authorized.
+      # Revalidate profile binding when a schedule target changes, even without a profile_id update.
       Compendium.Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "unblessed",
         version: "1.0.0",
@@ -495,11 +491,7 @@ defmodule Opus.CronMCPTest do
     end
 
     test "re-resolve re-checks the profile binding against the new version", %{ctx: ctx} do
-      # Re-pointing a schedule is the same act as binding one, and answers to
-      # the same gates `create` and `update` run. It ran neither, so a bound
-      # schedule could be moved onto a version its consent had never been
-      # authorized for — the binding was checked once, at creation, against
-      # the version the schedule had then.
+      # Changing a schedule version must pass the same profile-binding gates as creation and update.
       {:ok, created} =
         CronMCP.handle("schedule", ctx, %{
           "action" => "create",

@@ -6,11 +6,8 @@ defmodule PrismWeb.WebhooksLiveTest do
   The route is wired and gated, and the create form can express the
   replay-protection decision `Sanctum.Webhook.create/2` requires.
 
-  That second part is not incidental. `create/2` refuses a webhook naming
-  neither replay header unless the caller states `replay_protection`, and
-  the form had no control for it and did not send the key — so the console
-  could not create a webhook at all, while its own copy described leaving
-  the headers unset as merely risky.
+  The form must submit an explicit replay-protection choice when
+  neither replay header is configured.
   """
 
   use PrismWeb.ConnCase, async: false

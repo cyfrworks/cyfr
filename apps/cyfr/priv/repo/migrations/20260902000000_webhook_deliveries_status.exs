@@ -4,25 +4,9 @@
 defmodule Arca.Repo.Migrations.WebhookDeliveriesStatus do
   use Ecto.Migration
 
-  # The idempotency claim followed the RESPONSE, not the work.
-  #
-  # `EmissaryWeb.WebhookController` answers `200 accepted` the instant
-  # `Task.Supervisor.start_child/2` returns, so the plug's
-  # `register_before_send` release — gated on a non-2xx status — could
-  # never fire for a delivery that failed inside the task. Every execution
-  # outcome happens after the response. A delivery whose component raised
-  # kept its claim, and the sender's retry was answered `"duplicate"` for
-  # the full TTL: the exact case the plug's own moduledoc says it exists to
-  # handle.
-  #
-  # A claim needs a lifecycle to be releasable by the thing that knows the
-  # outcome. `claimed` is staked before the work, `succeeded` holds the
-  # claim, `failed` makes the delivery re-deliverable so a retry re-claims
-  # it rather than being told it already ran.
-  #
-  # `default: "claimed"` is what lets an existing table take a NOT NULL
-  # column, and it is also the right reading of a row written before this
-  # existed: it was staked, and nothing recorded that it finished.
+  # Track asynchronous delivery outcomes independently of HTTP acceptance.
+  # A claimed or succeeded delivery retains its idempotency claim; a failed
+  # delivery can be reclaimed by a retry. Existing rows default to claimed.
   def up do
     alter table(:webhook_deliveries) do
       add :status, :string, null: false, default: "claimed"

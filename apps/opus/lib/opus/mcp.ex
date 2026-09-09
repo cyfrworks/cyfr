@@ -64,9 +64,7 @@ defmodule Opus.MCP do
   end
 
   def read(%Context{authenticated: false}, "opus://executions/" <> _rest) do
-    # Typed (a bare atom, keeping opus off Sanctum's vocabulary module):
-    # the router renders the one auth prose and answers auth_required —
-    # the bare string was mislabeled resource_not_found.
+    # Return a typed auth refusal for the router to render.
     {:error, :unauthenticated}
   end
 
@@ -609,9 +607,7 @@ defmodule Opus.MCP do
   # Private Helpers
   # ============================================================================
 
-  # Every execution roots under a profile's consent — there is no other
-  # path. No profile means nothing was granted: the §4.3 vocabulary names
-  # the fix instead of running with the caller's ambient authority.
+  # Execution requires a profile; return a typed setup error when none is selected.
   defp run_root_formatted(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
@@ -640,10 +636,7 @@ defmodule Opus.MCP do
   # is what keeps it from being a guess.
   defp profile_selector(args), do: Sanctum.Authority.RootSelect.decode(args["profile"])
 
-  # The §4.3 signals stay TYPED to the boundary: the wire router promotes
-  # them to protocol-level errors (-335xx + error.data), the console and
-  # the guest render them through the shared seam. They used to be
-  # stringified here as "tag: {json}" for the CLI to grep back out.
+  # Keep consent signals typed for protocol codes, structured data and shared rendering.
   defp format_root_result({:error, {tag, payload}})
        when tag in [:setup_required, :consent_required, :consent_conflict, :restart_required] and
               is_map(payload) do
@@ -669,9 +662,8 @@ defmodule Opus.MCP do
   end
 
   defp format_root_result({:error, reason}) when not is_binary(reason) do
-    # A typed refusal renders through the shared seam; an internal term is
-    # logged, never reflected to the MCP client (`inspect/1` here was the
-    # one place this module put Elixir terms on the wire).
+    # Render typed refusals through the shared seam. Log internal terms
+    # without returning them to the client.
     case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[Opus.MCP] unrenderable authority error: #{inspect(reason)}")

@@ -3,10 +3,8 @@
 
 defmodule PrismWeb.ChatRedirectLive do
   @moduledoc """
-  `/a/<athanor>` used to be that athanor's chat. Chat is one global zone
-  now (`PrismWeb.ChatLive` at `/chat`), so the old address forwards to it
-  with the estate named first and the rest of the query — the topic, and
-  anything else the address carried — kept as it was.
+  Redirects `/a/<athanor>` to `/chat` with the athanor selected and the
+  remaining query parameters preserved.
   """
 
   use PrismWeb, :live_view

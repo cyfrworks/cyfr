@@ -88,13 +88,8 @@ defmodule Prism.TinctureRegistry do
   @doc """
   Rescan one athanor's tinctures and replace exactly that athanor's rows.
 
-  Registering a tincture is a single-tenant act, but it used to rescan the
-  whole roster: every active athanor walked and every manifest re-read,
-  inside one `handle_call` on a global singleton — O(athanors × tinctures)
-  object-store round trips for one athanor's write, with every other
-  athanor's registration queued behind it. The prune is scoped to the same
-  athanor, so a tincture removed elsewhere is still dropped by its own
-  reload (or by the next full `reload/1`).
+  Reloads and prunes only the specified athanor's tinctures. Other
+  athanors are refreshed by their own reload or a full `reload/1`.
   """
   @spec reload_athanor(atom(), String.t()) :: :ok
   def reload_athanor(server \\ __MODULE__, athanor_id) when is_binary(athanor_id) do
@@ -442,15 +437,7 @@ defmodule Prism.TinctureRegistry do
 
   defp blocked_image?(_), do: false
 
-  # When multiple versions of the same tincture exist, keep only the latest.
-  #
-  # `Compendium.Semver` is the one comparator. The split-on-"." key this
-  # replaced ran `Integer.parse/1` over each part, so "1.0.0-rc1" reduced to
-  # [1, 0, 0] — indistinguishable from "1.0.0". `Enum.max_by/2` returns the
-  # FIRST maximal element, so which of the two the tincture router served at
-  # /t/{athanor}/{publisher}/{name} came down to the order the storage walk
-  # happened to return, and the console could disagree with the router about
-  # what "latest" meant.
+  # Select the latest tincture version using Compendium.Semver.
   defp pick_latest_versions(tinctures) do
     tinctures
     |> Enum.group_by(fn t -> {t.athanor_id, t.publisher, t.name} end)

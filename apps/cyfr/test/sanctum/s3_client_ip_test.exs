@@ -3,10 +3,8 @@
 
 defmodule Sanctum.S3ClientIpTest do
   @moduledoc """
-  Phase 2 S3: `Sanctum.ClientIp` is the single client-IP resolver applying the
-  X-Forwarded-For trust boundary. It NEVER returns nil — a no-IP context
-  yields "0.0.0.0", which fails an API-key allowlist *closed*. This closes the
-  tincture-path bypass where a nil client_ip silently disabled the allowlist.
+  Checks trusted proxy handling and non-nil client-IP resolution.
+  A missing address resolves to `0.0.0.0` for allowlist checks.
   """
   use ExUnit.Case, async: false
 
@@ -132,9 +130,7 @@ defmodule Sanctum.S3ClientIpTest do
       {:ok, %{api_key: key}} =
         Sanctum.ApiKey.create(ctx, %{name: "ip-key", ip_allowlist: ["203.0.113.0/24"]})
 
-      # Pre-S3 the tincture path passed client_ip: nil here, and
-      # ApiKey.validate skips the allowlist when client_ip is nil → {:ok,_}.
-      # Now ClientIp.resolve yields "0.0.0.0", which is not in the allowlist.
+      # Resolve the missing IP before validation; 0.0.0.0 must fail this allowlist.
       no_ip = ClientIp.resolve(conn(nil))
       assert no_ip == "0.0.0.0"
       assert Sanctum.ApiKey.validate(key, client_ip: no_ip) == {:error, :ip_not_allowed}

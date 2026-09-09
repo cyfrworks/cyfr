@@ -170,10 +170,8 @@ func renderResult(result map[string]any) error {
 	return nil
 }
 
-// The four §4.3 signals arrive as typed protocol errors (mcp.ConsentError,
-// codes -33501..-33504, payload from error.data). Render them as something
-// an operator can act on; they used to be "tag: {json}" grepped out of the
-// message text.
+// Render typed consent errors (codes -33501..-33504) using the
+// remediation payload in error.data.
 func explainConsentError(err error) (string, bool) {
 	var ce *mcp.ConsentError
 	if !errors.As(err, &ce) {

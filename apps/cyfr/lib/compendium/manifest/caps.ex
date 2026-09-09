@@ -39,9 +39,8 @@ defmodule Compendium.Manifest.Caps do
   # publish while downstream accepts it.
   @limit_int_keys ~w(max_memory_bytes max_request_size max_response_size max_concurrent_tasks)
   @limit_duration_keys ~w(timeout batch_timeout)
-  # One grammar with `Sanctum.Limits.parse_duration/1`: unit-suffixed or
-  # bare integer seconds — publish used to refuse "30" that every
-  # downstream reader accepted. \A..\z, not ^..$: "30s\n" must not match.
+  # Accept unit-suffixed durations or bare integer seconds, matching
+  # Sanctum.Limits.parse_duration/1. Anchor the whole input to reject newlines.
   @duration_re ~r/\A\d+(ms|s|m|h)?\z/
 
   @type error :: {:invalid_caps, term()}

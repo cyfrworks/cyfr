@@ -8,12 +8,10 @@ defmodule Arca.CronSchedule do
   Stores an athanor's recurring schedules for WASM component execution;
   `user_id` records who created a schedule (attribution), the athanor owns it.
 
-  Speaks the row-plane convention (`Arca.QueryHelpers`): every entry point
-  is rescued to `{:error, :database_error}`, absence is `{:error, :not_found}`
-  (never `nil`), and validation failures cross as
-  `{:error, {:validation, %{field => [message]}}}` — a raw changeset never
-  escapes the storage layer. This module once spoke five return conventions
-  and rescued nothing, so a SQLite hiccup raised straight into the scheduler.
+  Uses the `Arca.QueryHelpers` return convention: database failures return
+  `{:error, :database_error}`, missing rows return `{:error, :not_found}`,
+  and validation returns `{:error, {:validation, %{field => [message]}}}`.
+  Raw changesets do not leave the storage layer.
   """
 
   use Ecto.Schema
@@ -206,10 +204,8 @@ defmodule Arca.CronSchedule do
   @doc """
   Returns all active schedules (unscoped).
 
-  Intentionally unscoped — called by the CronScheduler daemon which iterates
-  all tenants' schedules to determine what needs firing. The daemon constructs
-  a per-schedule `Context` from `user_id`/`athanor_id` before executing, same
-  rationale as `get_for_daemon/1`.
+  Unscoped daemon query. CronScheduler constructs a context from each
+  schedule's `user_id` and `athanor_id` before executing it.
   """
   @spec active_schedules() :: {:ok, [%__MODULE__{}]} | {:error, :database_error}
   # arca:unscoped-ok the firing loop walks every athanor by design, then runs
@@ -236,27 +232,19 @@ defmodule Arca.CronSchedule do
   `next_run` is the occurrence after the one being taken — the caller
   computes it from the cron expression.
 
-  ## Why the advance is part of the CAS
+  ## Atomic occurrence claim
 
-  It used to set only `claimed_by`/`claim_expires_at`, and `next_run_at`
-  moved later in a separate `update/3` from the scheduler. So the claim
-  guarded the EXECUTION, not the occurrence: node A could claim, fire,
-  finish and release inside a second, and node B's jittered timer for the
-  SAME occurrence then found a free claim and ran it again. Only the
-  per-node `running` MapSet stood in the way, and that is per node.
+  The claim and `next_run_at` advance atomically, preventing multiple nodes
+  from executing the same scheduled occurrence after a claim is released.
 
   With `next_run_at <= now` in the `where` and the advance in the `set`,
   the loser's CAS matches nothing and answers `:held`.
 
-  ## The trade this makes: at-least-once becomes at-most-once
+  ## Delivery semantics
 
-  The occurrence is consumed at claim time, so a node that claims and
-  advances and then dies before its task runs SKIPS that occurrence rather
-  than having another node repeat it. That is the deliberate choice — a
-  duplicate side effect is worse here than a missed one — and it is why
-  `Opus.CronScheduler` releases claims in `terminate/2`: a clean shutdown
-  should not leave a stale claimant behind, even though the occurrence
-  itself has already moved on.
+  Occurrences are consumed at claim time, giving at-most-once delivery.
+  A node crash after the claim and before task execution skips that
+  occurrence. Clean shutdown releases outstanding claim markers.
 
   A run that outlives its own interval can still overlap the next
   occurrence on ANOTHER node; the per-node `running` set prevents it on
@@ -264,12 +252,9 @@ defmodule Arca.CronSchedule do
   the whole run, which trades the overlap for a stall whenever a node dies
   mid-execution.
 
-  That is not hypothetical bookkeeping: `Opus.CronScheduler` gives the
-  marker back in `run_claimed_schedule/6`, immediately after this returns
-  `:claimed` and before the task is spawned. Held for the run instead, the
-  `claim_expires_at` guard above would make every LATER occurrence answer
-  `:held` cluster-wide until the run finished — the stall this paragraph
-  says was declined — so the release point is what keeps it honest.
+  `Opus.CronScheduler.run_claimed_schedule/6` releases the marker after
+  `:claimed` and before spawning the task, allowing later occurrences
+  to be claimed while this run executes.
   """
   @spec claim(String.t(), String.t(), pos_integer(), DateTime.t()) ::
           :claimed | :held | {:error, :database_error}
@@ -316,16 +301,8 @@ defmodule Arca.CronSchedule do
   @spec record_run(Context.t(), String.t(), String.t()) ::
           {:ok, %__MODULE__{}}
           | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
-  #
-  # `inc:` rather than read-then-write. `schedule.run_count + 1` over a row
-  # read a moment earlier is a lost update whenever two nodes fire two
-  # schedules' runs concurrently — and this file already argues the
-  # pattern: `claim/4` above is a compare-and-set precisely because
-  # "several nodes sharing the database race here". There are no row locks
-  # anywhere in this repo (a deliberate SQLite+Postgres choice), so
-  # read-then-write is never safe; `update_all` with `inc:` is atomic in
-  # one round-trip and drops the SELECT.
+  # arca:unscoped-ok get_tenant/2 in the same with establishes row ownership.
+  # Increment atomically; concurrent runs must not overwrite each other’s counts.
   def record_run(%Context{} = ctx, id, execution_id) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
       with {:ok, schedule} <- get_tenant(ctx, id) do
@@ -378,9 +355,8 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Counts the athanor's schedules that occupy a cap slot — everything not
-  deleted. A paused schedule keeps its seat, which is why `resume` needs
-  no cap check of its own.
+  Counts non-deleted schedules occupying the athanor’s cap slots.
+  Paused schedules retain their slots; resuming does not require a cap check.
   """
   @spec count_active(Context.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
   def count_active(%Context{} = ctx) do

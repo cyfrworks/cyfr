@@ -11,16 +11,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// whoamiCmd composes output from two MCP actions post auth-refactor:
-//
-//   - `session.whoami` — local cyfr identity (user_id, email, provider).
-//   - `registry.whoami` — cyfr.run identity (authenticated, personal_namespace,
-//     memberships). Lives under the Compendium registry tool because the
-//     auth sliver (Sanctum) is intentionally Compendium-free.
-//
-// Failures on the registry call are soft — they print a warning but don't
-// abort, so users who are logged in to cyfr locally but have no push tokens
-// (e.g. first login before probe) still see their local identity.
+// whoamiCmd displays local session identity and registry namespace memberships.
+// Registry failures produce a warning while preserving the local identity output.
 var whoamiCmd = &cobra.Command{
 	Use:     "whoami",
 	Short:   "Show current identity",

@@ -8,11 +8,8 @@ defmodule Sanctum.DeviceFlowProvidersTest do
   through unchanged, so it reached a `get_client_id/1` with clauses only for
   `:github` and `:google` — a FunctionClauseError out of an MCP tool.
 
-  Separately, "known provider" and "provider this server can use" were the
-  same test in two places that had already come apart: this module treated
-  Google as usable on a client id alone, while the sign-in page also required
-  the secret. Google's token endpoint requires it, so a flow started from
-  anywhere but the page would have failed at the exchange.
+  Provider availability requires credentials sufficient for token exchange,
+  including both a client id and secret for Google.
   """
 
   use ExUnit.Case, async: false

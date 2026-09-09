@@ -5,11 +5,8 @@ defmodule Sanctum.MCPDispatchContractTest do
   @moduledoc """
   Frozen external contract for `Sanctum.MCP`.
 
-  This is THE regression gate for the MCP decomposition (Phase 3 #11): the
-  registry calls `tools/0`, `handle/3`, `resources/0`, `resource_templates/0`,
-  `read/2` by module name, and MCP clients depend on the exact tool names,
-  per-tool action vocabularies, and terminal error strings. The split must
-  keep every assertion below byte-identical.
+  Checks provider exports, tool names, action vocabularies and error
+  contracts used by the registry and MCP clients.
   """
   # async: false — the setups set shared sandbox mode (a global mutation), which
   # would corrupt other async tests' connection ownership if run concurrently.

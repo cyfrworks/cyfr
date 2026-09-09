@@ -5,14 +5,9 @@ defmodule Cyfr.EmissarySurfaceTest do
   @moduledoc """
   The auth domain's reach into the transport, written down.
 
-  `Cyfr.SanctumSurfacesTest` pins every Apache namespace's reach INTO
-  `lib/sanctum`; this is the reverse crossing — the one direction that had
-  no guard. It matters twice over: `lib/sanctum` is the FSL security
-  domain leaning on Apache transport internals, and the sharpest entry
-  (consent shape derivation reading `ToolRegistry.available_providers/0`)
-  makes what a consent can NAME depend on what the bus can SERVE. That
-  dependency is deliberate — a shape must not name actions the registry
-  cannot dispatch — but it widens only by decision, not by drift.
+  Checks Sanctum’s dependencies on the Apache transport namespace.
+  Consent shape derivation uses available providers to restrict actions
+  to those the registry can dispatch.
 
   The roster records today's reality, one reason per module. A new reach
   fails here until someone decides it belongs; a module Sanctum stops
@@ -30,8 +25,6 @@ defmodule Cyfr.EmissarySurfaceTest do
   # under `Cyfr.Ops` now, so its modules are not Emissary's surface):
   #   ExternalProvider — consent candidates come from the live
   #     external-server plane.
-  #   ToolError — the shared refusal renderer (one sentence per reason).
-  #   ToolProvider — Sanctum.MCP implements the provider behaviour.
   #   Emissary.PubSub — the global PubSub server's process name (the
   #     vocabulary moved to Cyfr.Topics; the name did not).
 

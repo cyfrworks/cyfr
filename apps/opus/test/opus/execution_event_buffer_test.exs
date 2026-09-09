@@ -62,11 +62,7 @@ defmodule Opus.ExecutionEventBufferTest do
     assert_raise ArgumentError, fn -> ExecutionEventBuffer.topic(exec_id, %{}) end
   end
 
-  # A buffer stops after two minutes idle and merges its events into the
-  # cache, whose TTL is ten. A long execution that goes quiet and then emits
-  # again restarts the process — which used to begin with an empty list and
-  # put that one new event over the whole history, so a client reconnecting
-  # with Last-Event-ID replayed a run that appeared to start in the middle.
+  # An idle buffer restart must restore cached events for Last-Event-ID replay.
   test "a buffer that restarts resumes the history instead of erasing it" do
     exec_id = "exec_evt_restart_#{System.unique_integer([:positive])}"
     record = %{id: exec_id, athanor_id: "ath_evt_x"}
@@ -124,11 +120,7 @@ defmodule Opus.ExecutionEventBufferTest do
   describe "Sequence — one numbering per stream" do
     alias Opus.ExecutionEventBuffer.Sequence
 
-    # Emit sequences used to come from an `:atomics` ref created once per
-    # formula execution, while emits are addressed to the ROOT execution id.
-    # A formula and the nested formula it invoked therefore both counted
-    # 1, 2, 3… into the same buffer, and `since/3` — which replays events with
-    # `sequence > last_sequence` — silently dropped the overlap on reconnect.
+    # Parent and nested formula emissions must share one increasing root sequence.
 
     test "every emitter under one root shares the numbering" do
       root = "exec_seq_shared_#{System.unique_integer([:positive])}"
@@ -184,12 +176,7 @@ defmodule Opus.ExecutionEventBufferTest do
       assert Sequence.next(root) == 1
     end
 
-    # The counter used to be forgotten when the buffer process died — but the
-    # buffer idle-stops after two minutes while the replay cache lives ten and
-    # the execution up to thirty. An execution that idled and emitted again
-    # restarted at 1 under sequences already in the window, and a client
-    # resuming with a pre-idle Last-Event-ID silently lost every post-idle
-    # event. The terminal push is what retires the counter now.
+    # Preserve sequence state across idle buffer restarts; retire it only at terminal completion.
     test "an idle-stop does not reset the numbering inside a live replay window" do
       root = "exec_seq_idle_#{System.unique_integer([:positive])}"
       record = %{id: root, athanor_id: "ath_seq"}

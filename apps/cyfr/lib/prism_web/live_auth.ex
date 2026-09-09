@@ -93,18 +93,9 @@ defmodule PrismWeb.LiveAuth do
     end
   end
 
-  # Any other membership change — joined a group, the operator bit granted —
-  # re-derives the caller instead of trusting the Context assigned at mount
-  # for the socket's lifetime, so the page hears of the change under the
-  # fresh context.
-  #
-  # From the Context, not from the session token. Memberships, the operator
-  # bit and whether the focused athanor is still granted are all `revalidate/1`
-  # answers, and the two questions a token would additionally settle already
-  # have their own clauses above: a revoked session arrives as
-  # `:sessions_revoked`, a lost seat as `:left`. Keeping the raw token in
-  # assigns for this one call put a live bearer credential in every page
-  # socket's state, which `Phoenix.LiveView.Socket` prints in a crash report.
+  # Revalidate membership changes from the assigned context. Session
+  # revocation and lost-seat events have dedicated handlers above.
+  # Do not retain the raw session token in socket assigns.
   defp standing_changed({:membership_changed, _}, socket) do
     case Sanctum.Tenancy.revalidate(socket.assigns.context) do
       {:ok, %Sanctum.Context{authenticated: true, athanor_id: id} = ctx} when is_binary(id) ->

@@ -172,9 +172,7 @@ defmodule Arca.CronScheduleTest do
       assert :held = CronSchedule.claim(schedule.id, "node-b", 60, next_occurrence())
       :ok = CronSchedule.release_claim(schedule.id, "node-a")
 
-      # Released — but the OCCURRENCE has moved on, so there is nothing to
-      # take until the next one falls due. That is the fix: releasing the
-      # claim no longer re-offers the firing that was already run.
+      # Releasing the claim must not make the completed occurrence available again.
       assert :held = CronSchedule.claim(schedule.id, "node-b", 60, next_occurrence())
     end
 

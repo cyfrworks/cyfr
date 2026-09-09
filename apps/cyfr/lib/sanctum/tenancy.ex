@@ -333,11 +333,7 @@ defmodule Sanctum.Tenancy do
   Whether this person holds the operator capability — an ACTIVE platform
   membership row.
 
-  The one derivation: callers used to re-spell it (dropping the status
-  check, which only held because `Members.list_by_user/1` happens to
-  filter active) and each copy could silently widen the moment that query
-  changed. A failed read answers `false` — a capability check fails
-  closed.
+  Returns false on a failed membership read; capability checks fail closed.
   """
   @spec platform_admin?(String.t() | [map()]) :: boolean()
   def platform_admin?(user_id) when is_binary(user_id) do

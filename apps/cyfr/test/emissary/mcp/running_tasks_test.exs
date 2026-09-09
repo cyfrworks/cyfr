@@ -64,10 +64,7 @@ defmodule Emissary.MCP.RunningTasksTest do
     end
 
     test "concurrent requests are independent — no shared key" do
-      # The whole reason the key is the server-minted request id: two callers
-      # sending `{"id": 1}` used to collide on one ETS row, so the second
-      # registration evicted the first and a cancellation reached the wrong
-      # task. Distinct ids must never interfere.
+      # Distinct server request ids must isolate tasks even when client JSON-RPC ids are identical.
       %Task{ref: ref_a} = a = forever()
       b = forever()
 
@@ -82,11 +79,7 @@ defmodule Emissary.MCP.RunningTasksTest do
     end
 
     test "a nested call registers alongside its parent — one request, several tasks" do
-      # An in-chain tool call inherits its root's request id (that is what
-      # keeps a chain attributable to its ingress). Under the old `:set`
-      # table the nested registration evicted the parent's row AND
-      # demonitored it, so a caller hanging up mid-chain killed the inner
-      # task and left the outer one running forever.
+      # Nested calls sharing a root request id must preserve the parent registration and cancellation monitor.
       %Task{ref: ref_outer} = outer = forever()
       %Task{ref: ref_inner} = inner = forever()
 

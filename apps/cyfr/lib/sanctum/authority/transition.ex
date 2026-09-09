@@ -15,12 +15,8 @@ defmodule Sanctum.Authority.Transition do
   invoke, emitting a task id) is a *defined* `{:invalid, _}` outcome, not a
   default.
 
-  This module returns the **Authority-side verdict only**. The in-chain
-  authorization equation is `identity permission AND Authority tool action`
-  (model §3.9); the identity-permission conjunct belongs to
-  `Sanctum.Context` and composes with this verdict at the dispatch layer.
-  Context alone never authorizes an in-chain operation — and an allow here
-  never bypasses the Context check.
+  Returns the authority verdict. In-chain dispatch also requires identity
+  permission from `Sanctum.Context`; both checks must allow the operation.
 
   ## Resolver-supplied inputs
 
@@ -44,12 +40,10 @@ defmodule Sanctum.Authority.Transition do
   the slot via `Sanctum.Authority.release_invoke/1` when the spawned work
   completes.
 
-  ## Phase notes
+  ## Event attribution
 
-  `emit` outcomes model provenance only (`{:attributed, node}` vs
-  `:untrusted`); size caps, rate limits and the envelope `origin` marker
-  are enforcement-layer work. External tool patterns use a provisional
-  exact/prefix glob until the consolidated pattern module lands.
+  `emit` returns `{:attributed, node}` or `:untrusted`. The host enforces
+  size caps, rate limits and the envelope's origin marker.
   """
 
   alias Sanctum.Authority
@@ -299,9 +293,7 @@ defmodule Sanctum.Authority.Transition do
   defp apply_handler(:reject_malformed, _auth, fun, target),
     do: {:invalid, {:malformed_target, fun, target_tag(target)}}
 
-  # ============================================================================
-  # Invoke — bound: depth → D2 → needs → edge (each step fail-closed)
-  # ============================================================================
+  # Bound invocation checks depth, self-invocation, needs, then the consent edge.
 
   defp invoke_bound(auth, inv) do
     {:ok, node} = Authority.current_node(auth)
@@ -311,9 +303,7 @@ defmodule Sanctum.Authority.Transition do
         deny
 
       :ok ->
-        # D2 before the need rules: self-invocation bypasses edge selection
-        # entirely, so the callee's need vocabulary does not apply to it —
-        # otherwise an agent with named needs could not spawn sub-agents.
+        # Self-invocation bypasses need and edge selection.
         if self_invocation?(auth, node, inv) do
           {:child, Authority.self_child(auth, inv.reference)}
         else
@@ -358,23 +348,14 @@ defmodule Sanctum.Authority.Transition do
     end
   end
 
-  # D2: keyed on activation identity, never on ref equality — the same ref
-  # at a different activation is a different node and gets no inheritance.
-  #
-  # The converse is accepted deliberately: a DIFFERENT reference whose
-  # activation digest matches is treated as self too. The digest
-  # (Compendium.ReleaseDigest) covers the artifact bytes AND the
-  # dependencies/needs/caps blocks, so a colliding "twin" republished under
-  # another name is the same code declaring the same capability — it can
-  # inherit nothing the current node was not already consented to run.
-  # What the twin costs is bookkeeping (its record names the other
-  # reference), not authority.
+  # Self-invocation matches activation digests, not reference strings.
+  # Different references with identical artifact and capability digests
+  # inherit the same authority.
   defp self_invocation?(auth, node, %{activation_digest: digest}) do
     is_binary(digest) and Map.get(auth.activation, node) == digest
   end
 
-  # §2.7: omission is valid only when the callee declares no named needs;
-  # a need the callee does not declare is rejected, never coerced.
+  # Omitting a need is valid only when none are declared; reject undeclared names.
   defp check_need(%{need: need, declared_needs: declared}) do
     cond do
       declared != [] and need in [nil, ""] -> {:error, :required}

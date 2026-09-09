@@ -6,12 +6,8 @@ defmodule Emissary.MCP.ChainLoggingTest do
   A chain is one ingress request and every call made beneath it, and the log
   has to show all of them.
 
-  It used not to. `mcp_logs.id` was the request id, so a second row could not
-  be written under one request, and the dispatcher skipped logging whenever the
-  context already carried a request id — which an in-chain call always does,
-  having inherited it through the guest closure. A formula that called
-  `files.write` and `http.fetch` left one row behind: the `execution.run` that
-  started it.
+  Every in-chain tool call must have its own log row and share the
+  outer request id for correlation.
   """
   use ExUnit.Case, async: false
 

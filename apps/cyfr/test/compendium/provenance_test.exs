@@ -3,11 +3,8 @@
 
 defmodule Compendium.ProvenanceTest do
   @moduledoc """
-  Provenance is derived from the tree, never stored: bundled vs
-  bundled-modified vs user vs remote — and the delete/reset semantics that
-  hang off it. Includes the resurrection-bug regression: deleting a
-  bundled component must refuse (row intact, bytes untouched), never
-  report "deleted" and quietly come back at the next scan.
+  Checks tree-derived provenance and its delete/reset behavior. Bundled
+  component deletion must be refused without changing rows or bytes.
   """
 
   use ExUnit.Case, async: false
@@ -344,9 +341,7 @@ defmodule Compendium.ProvenanceTest do
   end
 
   test "the fork stamp reads through the manifest decode, whatever the shape", %{ctx: ctx} do
-    # An already-decoded map answers; malformed JSON that merely CONTAINS
-    # the substring answers nil (the old substring guard's false-positive
-    # class); a non-string value answers nil.
+    # Decode provenance from valid maps; malformed JSON and non-string values return nil.
     map_row = %{manifest: %{"forked_from" => "reagent:acme.up:1.0.0"}, name: "x", version: "1"}
     assert %{forked_from: "reagent:acme.up:1.0.0"} = lineage(ctx, map_row)
 

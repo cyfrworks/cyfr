@@ -47,9 +47,7 @@ defmodule Opus.ExecutorRegistrationTest do
     {:ok, ctx: ctx}
   end
 
-  # Every execution now registers its driving process in ExecutionRegistry so
-  # cancel/2 can kill it — previously only run_stream and cron registered,
-  # leaving synchronous runs and all formula children uncancellable.
+  # Every execution process must register for cancellation, including synchronous runs and children.
 
   test "a synchronous run leaves no registry entry behind", %{ctx: ctx} do
     execution_id = "exec_reg_sync_#{System.unique_integer([:positive])}"

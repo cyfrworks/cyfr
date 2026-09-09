@@ -150,11 +150,7 @@ defmodule Sanctum.Tenancy.Athanors do
   — a pair is what a frozen estate holds, and a key over any other number
   would name nothing `create_pair/2` can find.
 
-  The hash is over the JSON encoding of the sorted ids, so each id is
-  delimited by the encoding rather than by a separator an id could
-  contain. Keys minted under the earlier newline-joined form were re-keyed
-  by the `pair_key_rehash` migration, so an existing pair is still found
-  by its members.
+  Hashes the JSON encoding of sorted member ids, preserving unambiguous boundaries.
   """
   @spec pair_key([String.t()] | String.t(), String.t() | nil) :: String.t()
   def pair_key(user_a, user_b) when is_binary(user_a) and is_binary(user_b),
@@ -784,13 +780,8 @@ defmodule Sanctum.Tenancy.Athanors do
   defp put_settings_cas(_athanor, _patch, 0), do: {:error, :settings_conflict}
 
   defp put_settings_cas(%Athanor{} = athanor, patch, attempts) do
-    # Merge over what the row says NOW, and land only if it still says so.
-    # The earlier fix closed the stale-struct case (a caller merging over a
-    # copy read a dozen steps ago); this closes the concurrent one — two
-    # simultaneous merges each read-modify-write, and the second used to
-    # overwrite the first within milliseconds. The compare-and-set is
-    # `Arca.ProfileStorage.advance_head/4`'s shape. A read failure falls
-    # back to the caller's copy: the write is still better than none.
+    # Merge against the current row with compare-and-set to avoid lost updates.
+    # If the read fails, fall back to the caller's copy.
     current =
       case get(athanor.id) do
         {:ok, fresh} -> fresh

@@ -497,7 +497,7 @@ defmodule Opus.MCPTest do
 
     test "execution.status denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
       # Through the dispatcher — the :execute gate lives in the action
-      # annotation, enforced by ToolRegistry, not in the handler.
+      # annotation, enforced by the catalog, not in the handler.
       assert {:error, {:missing_permission, :execute}} =
                Cyfr.Ops.Catalog.call_external("execution", no_execute_ctx, %{
                  "action" => "status"

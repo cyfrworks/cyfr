@@ -22,7 +22,7 @@ defmodule Sanctum.RedactionRosterTest do
              Sanitizer.filter_parameters()
   end
 
-  test "the keys that used to slip past request-param filtering are covered" do
+  test "sensitive request-param keys are redacted" do
     for key <- ~w(api_key authorization code_verifier bearer credential cookie) do
       assert Sanitizer.sensitive_key?(key), "#{key} must be in the roster"
 

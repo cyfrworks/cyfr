@@ -140,9 +140,7 @@ defmodule Sanctum.MCP.SessionTool do
     {:ok, %{message: "Login requires browser authentication", redirect: "/auth/login"}}
   end
 
-  # The MCP transport is stateless; a Sanctum session is not. This action
-  # used to report success without retiring anything, so `cyfr logout`
-  # left a working 30-day credential behind.
+  # Revoke the Sanctum session authenticated by this request.
   def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
       when is_binary(hash) do
     case Sanctum.Session.destroy_by_hash(hash) do

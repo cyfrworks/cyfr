@@ -5,13 +5,9 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
   @moduledoc """
   The refusal vocabulary and its `@type reason` union stay one thing.
 
-  `{:authorization_required, _}` was produced at six sites and handled by
-  `reason?/1`, `code/1` and `message/2` — while the union omitted it, so
-  every `@spec` naming `Sanctum.Unauthorized.reason()` understated its
-  return type. The exemplar table below is the roster: each member must be
-  accepted by all three functions, and the union in the source must name
-  exactly as many members as the table — a new reason lands in both or
-  fails here.
+  Each exemplar must be accepted by `reason?/1`, `code/1`, and `message/2`.
+  The `Sanctum.Unauthorized.reason()` union must contain the same number
+  of variants as the exemplar roster.
   """
 
   use ExUnit.Case, async: true

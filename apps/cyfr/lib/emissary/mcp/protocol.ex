@@ -6,11 +6,7 @@ defmodule Emissary.MCP.Protocol do
   The MCP protocol revision this server speaks, and the vocabulary that goes
   with it.
 
-  The version used to be a `@protocol_version` module attribute copy-pasted into
-  five modules — the router, the controller, the session plug, the origin plug
-  and the SSE controller — with three more literals in the clients and the
-  bridge. Eight copies of one fact is how a server ends up announcing one
-  revision while validating another.
+  Defines the protocol revision used for request validation and discovery.
 
   Everything that needs the version reads it here. The plugs still bind it to a
   module attribute because they match it in a pattern, which a function call
@@ -36,9 +32,7 @@ defmodule Emissary.MCP.Protocol do
   # and the encoder does not have to grow a second shape later.
   @result_types %{complete: "complete", input_required: "input_required"}
 
-  # The server's own identity, reported in every result's `_meta`. The version is
-  # read from the application rather than written down: a hardcoded one was
-  # announcing 0.1.0 from a 0.5.8 build, which is worse than announcing nothing.
+  # Read the server version from application metadata for result _meta.
   @server_name "CYFR"
 
   @doc "The `_meta` key carrying the protocol version of a request."
@@ -163,11 +157,8 @@ defmodule Emissary.MCP.Protocol do
   The value a request's `Mcp-Name` header must carry, or `nil` when the method
   does not name a subject.
 
-  `tools/call` names it in `params.name`; `resources/read` names it in
-  `params.uri`. The specification also names `prompts/get`, which this server
-  does not implement and does not advertise a `prompts` capability for — a rule
-  for a method that answers `404` is a rule for nobody, so it is added with the
-  handler or not at all.
+  `tools/call` uses `params.name`; `resources/read` uses `params.uri`.
+  This server does not implement or advertise prompts/get.
   """
   @spec named_subject(term()) :: String.t() | nil
   def named_subject(%{"method" => "tools/call", "params" => %{"name" => name}})

@@ -272,12 +272,8 @@ defmodule Arca.ComponentStorage do
 
     query =
       if search = Keyword.get(opts, :query) do
-        # Case-insensitive on both adapters: SQLite LIKE folds ASCII case but
-        # Postgres LIKE does not, so lower() both sides rather than rely on LIKE.
-        # LIKE metacharacters in the QUERY are literals: the search box is
-        # a search box, not a pattern language, and `%` alone used to match
-        # every component. (Parameterized throughout — this is about what
-        # the wildcards mean, never injection.)
+        # Fold ASCII case on both sides for consistent SQLite/Postgres search.
+        # Escape LIKE metacharacters so search text is matched literally.
         escaped =
           search
           |> String.downcase()

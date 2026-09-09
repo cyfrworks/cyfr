@@ -4,11 +4,7 @@
 defmodule EmissaryWeb.Router do
   use EmissaryWeb, :router
 
-  # ==========================================================================
-  # Pipelines — every auth posture in one place, above the scopes that
-  # compose them. Reading a route's posture used to require scanning the
-  # whole file (`RouteAuthInventoryTest` exists because it did).
-  # ==========================================================================
+  # Pipelines define authentication and transport rules for the scopes below.
 
   # The browser pipeline serves the Prism LiveViews and the auth pages.
   # LiveView mounts are gated in `PrismWeb.LiveAuth`, because the LiveView
@@ -42,9 +38,8 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
-  # The MCP endpoint. POST is the only verb this revision defines for it; the
-  # `GET`/`DELETE` routes exist solely to answer 405 to clients written against
-  # the previous transport, and a preflight must not suggest otherwise.
+  # MCP accepts POST only. GET and DELETE return 405; preflight must
+  # advertise only the supported method.
   pipeline :mcp do
     plug :accepts, ["json", "event-stream"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
@@ -56,16 +51,8 @@ defmodule EmissaryWeb.Router do
     plug EmissaryWeb.Plugs.MCPRequestMetadata
   end
 
-  # Authenticated HTTP that is not MCP. `/api/executions/:id/events` used to
-  # ride the `:mcp` pipeline "so the session plug establishes the caller's
-  # context" — which worked, but handed an SSE endpoint the whole protocol:
-  # a rejected request answered in JSON-RPC with a null id, the per-request
-  # `_meta` rules applied to it (passing only because a GET has no body to
-  # carry an id), it spent the MCP rate-limit budget, and `GET` had to stay
-  # allowed on a POST-only protocol to accommodate it.
-  #
-  # It needs exactly one thing from that pipeline — a resolved context — and
-  # that is the one plug here that it shares.
+  # Authenticated HTTP routes use the shared context resolver with API
+  # error rendering and a separate rate-limit bucket.
   pipeline :authenticated_api do
     plug :accepts, ["json", "event-stream"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
@@ -123,11 +110,8 @@ defmodule EmissaryWeb.Router do
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
   end
 
-  # A device ticket is 32 random bytes and browser-bound, so guessing one is
-  # not a takeover path — but `apply_device_ticket` CONSUMES the ticket it
-  # looks up, so an unmetered guesser can burn other people's pending
-  # tickets, and this was the one pre-session auth route with no budget at
-  # all while every sibling had one.
+  # Meter ticket adoption before authentication. Looking up a ticket
+  # consumes it, so attempts need their own request budget.
   pipeline :device_complete_throttle do
     plug EmissaryWeb.Plugs.AuthRateLimit,
       bucket: :device_complete,
@@ -296,10 +280,9 @@ defmodule EmissaryWeb.Router do
     end
   end
 
-  # Policy-acceptance gate (R1.11 / cyfr.run §3.12). Hit when cyfr.run
-  # returns 412 POLICY_ACCEPTANCE_REQUIRED on a claim attempt, or
-  # proactively from the post-login flow. Renders the bundled policies
-  # for read + clickwrap, then POSTs to cyfr.run /v1/legal/accept.
+  # Policy acceptance: renders bundled policies and posts acceptance to
+  # cyfr.run /v1/legal/accept. Used after a 412 POLICY_ACCEPTANCE_REQUIRED
+  # response or during post-login setup.
   scope "/legal/accept", PrismWeb do
     pipe_through [:browser, :legal_accept_throttle]
 
@@ -402,10 +385,9 @@ defmodule EmissaryWeb.Router do
       live "/chat", ChatLive, :index
 
       scope "/a/:athanor" do
-        # An athanor's chat used to live here; it forwards to the chat zone
-        # with the estate named.
+        # Forward to /chat with the athanor selected.
         live "/", ChatRedirectLive, :index
-        # The estate's AQUA; the old name forwards.
+        # AQUA page and agents-path redirect.
         live "/aqua", AquaLive, :index
         live "/agents", AquaRedirectLive, :index
         # /activities: unified activities feed (mcp_log + execution fan-out).

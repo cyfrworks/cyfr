@@ -131,7 +131,6 @@ defmodule Sanctum.ApiKey do
       iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "backend-key", type: :service})
       iex> String.starts_with?(result.api_key, "cyfr_sk_")
       true
-
   """
   def create(%Context{} = ctx, %{name: name} = opts) when is_binary(name) do
     case Context.tenant_ok(ctx) do
@@ -160,10 +159,8 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  # A consent capability is itself a grant of consent authority, so minting
-  # one requires the interactive class — an admin key must not be able to
-  # mint the thing that substitutes for interactivity. The envelope is one
-  # exact commit digest plus a mandatory expiry (§4.1).
+  # Minting a consent capability requires interactive consent authority.
+  # The capability binds an exact commit digest and requires an expiry.
   defp validate_consent_capability(_ctx, nil), do: {:ok, nil}
 
   defp validate_consent_capability(ctx, %{commit_digest: digest, expires_at: expires_at})
@@ -448,7 +445,6 @@ defmodule Sanctum.ApiKey do
       iex> {:ok, meta} = Sanctum.ApiKey.validate("cyfr_ak_...", client_ip: "192.168.1.10")
       iex> meta.name
       "admin-key"
-
   """
   def validate(key, opts \\ []) when is_binary(key) do
     key_type = detect_key_type(key)
@@ -479,9 +475,7 @@ defmodule Sanctum.ApiKey do
       {:error, :not_found} ->
         {:error, :invalid_key}
 
-      # The store could not answer — refuse the credential without
-      # judging it. This is the authentication hot path: the missing
-      # clause used to be a CaseClauseError on a DB blip.
+      # Return a storage outage without treating the credential as invalid.
       {:error, :database_error} ->
         {:error, :database_error}
 
@@ -517,15 +511,10 @@ defmodule Sanctum.ApiKey do
   @doc """
   Build an athanor-scoped `Sanctum.Context` from validated API-key metadata.
 
-  Single source of truth for the API-key→Context mapping (used by the MCP
-  session plug and the tincture auth resolver — previously two divergent
-  copies). API keys belong to an **athanor**: `athanor_id` comes from the
-  stored key row (set at creation, gated by the tenant gate), NEVER from the
-  request or the creating user's *current* membership. The namespace segment
-  is the creator's personal slug (`Sanctum.Namespace.lookup/1`) with a
-  `"_system"` orphan fallback when the creator's users row records none
-  (deleted user / wiped slug) so storage path construction fails safe rather
-  than crashing.
+  Builds an API-key context from the stored key row. The `athanor_id` comes
+  from that row, independent of the creator's current membership. The
+  namespace is the creator's personal slug from `Sanctum.Namespace.lookup/1`,
+  with `_system` as the fallback when no slug is recorded.
 
   The caller is responsible for the tenant gate
   (`Sanctum.Context.require_tenant!/1`) after building — an athanor-less key
@@ -596,7 +585,6 @@ defmodule Sanctum.ApiKey do
 
       iex> Sanctum.ApiKey.ip_allowed?("192.168.1.10", ["192.168.1.10"])
       true
-
   """
   def ip_allowed?(client_ip, allowlist) when is_binary(client_ip) and is_list(allowlist) do
     Enum.any?(allowlist, fn pattern ->

@@ -1,26 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Optimistic active-class swap for sidebar nav links.
+// Update sidebar active classes immediately on click. LiveView reconciles
+// them from the same data-active-class and data-inactive-class attributes.
+// PageLoadingIndicator handles loading feedback.
 //
-// On click, immediately move the active CSS classes to the clicked link
-// before the server round-trip completes. LiveView's diff reconciles the
-// swap invisibly because the server's eventual class string matches what
-// we applied (both read from data-active-class / data-inactive-class on
-// the element).
-//
-// Loading feedback is deliberately NOT this hook's job. PageLoadingIndicator
-// (mounted on #page-loading in the app layout) already listens for LiveView's
-// phx:page-loading-start/stop and overlays the content area on every live
-// navigation, sidebar clicks included. This hook used to also inject its own
-// spinner into #page-content, so a slow sidebar navigation stacked two
-// "Loading…" affordances; the spinner and its phx:page-loading-stop failsafe
-// were removed so each transition has exactly one — the overlay, whose grace
-// timer and guaranteed stop-event cleanup this hook couldn't match.
-//
-// We listen on the capture phase so the handler runs before LiveView's own
-// click handler kicks off the navigation. We do NOT preventDefault —
-// <.link navigate> proceeds normally.
+// Capture clicks before LiveView starts navigation, without preventing it.
 
 const OptimisticNav = {
   mounted() {

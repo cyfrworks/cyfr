@@ -14,12 +14,8 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
   Start an external server process if not already running, restarting it
   when its stored configuration has changed.
 
-  Each server process registers the digest of the config it booted with as
-  its Registry value. Callers rebuild the config from the stored row on
-  every call, so comparing digests here reconciles a changed URL, header
-  template, or timeout by replacing the process — previously a running
-  process served its boot-time config for its whole lifetime and
-  `mcp_servers.refresh` could never apply a template change.
+  Registers each server's configuration digest. A changed URL, header
+  template or timeout replaces the process before the next call.
 
   Returns `{:ok, pid}` if started, already running, or restarted.
   """

@@ -6,29 +6,20 @@ defmodule Emissary.MCP.RunningTasks do
   Tracks the process doing the work for an in-flight request, so the transport
   can stop it when the caller goes away.
 
-  Keyed on `%Sanctum.Context{}.request_id` — the server-minted UUID7 that
-  `EmissaryWeb.MCPController` stamps on every request. It used to be keyed on
-  the *client-supplied* JSON-RPC `id`, which two callers can trivially pick the
-  same value for: `{"id": 1}` is the most common request id there is. Two
-  concurrent calls then shared one ETS row, so the second registration silently
-  evicted the first and a cancellation reached whichever task happened to own
-  the key. A server-minted id cannot collide.
+  Keyed by the server-minted `Sanctum.Context.request_id`, stamped by
+  `EmissaryWeb.MCPController`. Client JSON-RPC ids may repeat across callers
+  and must not identify running tasks.
 
   ## Why one request may hold several tasks
 
   A server-minted id cannot collide *across* requests, but one request can
   hold more than one task at a time: an in-chain tool call inherits its
-  root's `request_id` rather than minting a new one (`ToolRegistry.do_call/4`
-  — `own_root?` is false when a transport already set it), which is what
+  root's `request_id` rather than minting a new one (`Cyfr.Ops.Catalog` mints one
+  only when no transport did), which is what
   keeps a whole chain attributable to the ingress that started it.
 
-  With a `:set` table that made nesting destructive: registering the nested
-  task overwrote the outer task's row and demonitored it, and the nested
-  call's `unregister` then deleted the row outright. A caller who hung up
-  during a nested call killed the inner task and left the outer one running;
-  after it returned, cancelling reached nothing at all. The table is a `:bag`
-  keyed on the request, `unregister/2` removes one task rather than the key,
-  and `cancel/1` stops every task the request still holds.
+  The ETS bag stores every active task for a request. `unregister/2`
+  removes one task, and `cancel/1` stops all tasks still held by the request.
 
   Uses a GenServer to monitor task processes and auto-clean ETS entries when
   tasks die. The main ETS table remains `:public` for fast reads from any process.

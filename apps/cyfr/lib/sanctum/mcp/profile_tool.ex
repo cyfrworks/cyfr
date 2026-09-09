@@ -6,10 +6,9 @@ defmodule Sanctum.MCP.ProfileTool do
   Profile tool handlers for the Sanctum MCP provider — the consent walk
   over `Sanctum.Consent.{Plan,Commit}` plus thin list/revoke.
 
-  The §4.3 error payloads cross this boundary verbatim in the
-  `tag: {json}` convention the execution surface already speaks. A
-  key-authenticated commit loads its consent capability from the key
-  row itself — callers never supply their own capability.
+  Consent errors remain typed across this boundary. A key-authenticated
+  commit loads its consent capability from the stored key row, never from
+  caller input.
   """
 
   alias Sanctum.Consent.Commit
@@ -263,12 +262,8 @@ defmodule Sanctum.MCP.ProfileTool do
     end
   end
 
-  # A limits decision used to travel into the commit digest and no further:
-  # the blob is built from the manifest's caps and `Limits.defaults`, so a
-  # tightened number was signed, proofed and recorded while the runtime kept
-  # the manifest's. Refuse it rather than keep signing a knob nothing turns.
-  # The manifest's own limits are already covered by `shape_digest`; raising
-  # or lowering them per consent is an unbuilt sheet feature, not a silent one.
+  # Reject per-consent limits overrides. Runtime limits come from manifest
+  # caps and defaults and are covered by the shape digest.
   defp refuse_limits(raw) do
     case Map.get(raw, "limits") do
       nil ->
@@ -307,28 +302,9 @@ defmodule Sanctum.MCP.ProfileTool do
 
   defp decode_tool_servers(_), do: {:error, "tool_servers must be a list"}
 
-  # `put_present` for the projection keys, as `decode_tool_servers/1` above
-  # already does. Writing `fields: []` unconditionally meant
-  # `Consent.Commit`'s `Map.get(raw, :fields, default_fields(need))` could
-  # never fire its default: an omitted key arrived as `[]`, which is the
-  # same value "no narrowing declared" carries, so the manifest's declared
-  # subset was overwritten with "all fields" — an empty projection is
-  # dropped from the blob and `Sanctum.VaultReader` reads its absence as
-  # `:all`. An absent key now means "the manifest decides".
-  #
-  # This was the WIRE path only. A caller building decisions in Elixir
-  # (`Consent.Commit` directly, and every fixture that walks it) already
-  # omitted the key and always got the manifest's list — which is why
-  # `flow_test`'s "defaulted to the need's declared fields" passed
-  # throughout. Only MCP clients were widened.
-  #
-  # `[]` still reads as "no narrowing", here and everywhere else: a
-  # manifest need that omits `fields` decodes to `[]`
-  # (`Compendium.Manifest.Needs`), and `render_summary/1` prints `[]` as
-  # "all fields". There is deliberately no way to spell "narrow to
-  # nothing" — a binding that grants no field is a binding with no
-  # purpose, and reading `[]` as "none" here would silently empty every
-  # need whose manifest omits the key.
+  # Preserve absent projection keys so Consent.Commit applies manifest
+  # defaults. An explicit empty list means no narrowing (all fields);
+  # it does not grant an empty set of fields.
   defp decode_bindings(list) when is_list(list) do
     decoded =
       Enum.map(list, fn binding ->
@@ -375,13 +351,9 @@ defmodule Sanctum.MCP.ProfileTool do
 
   defp key_capability(_ctx), do: {:ok, nil}
 
-  # ---------------------------------------------------------------------------
-  # Error rendering — §4.3 payloads verbatim in the tag: json convention
-  # ---------------------------------------------------------------------------
+  # Error rendering
 
-  # The §4.3 signals pass through TYPED — the wire router promotes them to
-  # protocol errors (-335xx + error.data); the console renders them via the
-  # shared seam. This fmt used to stringify them as "tag: {json}".
+  # Preserve typed consent signals for wire and console rendering.
   defp fmt({tag, payload} = signal)
        when tag in [:setup_required, :consent_required, :consent_conflict, :restart_required] and
               is_map(payload),

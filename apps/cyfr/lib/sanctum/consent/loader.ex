@@ -111,17 +111,9 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  # The blob is the only thing on the row that says what may run, and until
-  # this check existed nothing verified it. `commit_digest` covers the
-  # decisions that produced the blob, not the blob; `check_blob_refs_equality/2`
-  # below covers vault refs alone. So caps, egress domains, storage actions
-  # and node limits could all be edited in place — by a hand edit, a
-  # restored backup, or any write path that reaches the column — and the
-  # loader would build an Authority from them.
-  #
-  # Runs BEFORE `parse_blob/1` deliberately: a tampered blob should be
-  # refused as tampered, not reported as whatever parse error the edit
-  # happened to produce.
+  # Verify blob integrity before parsing. The blob defines capabilities,
+  # resources, and limits; commit_digest covers the decisions, not these bytes.
+  # Tampering returns an integrity error regardless of parse validity.
   defp check_blob_digest(%{blob_digest: stored, resolved_policy: policy})
        when is_binary(stored) and is_binary(policy) do
     if Plug.Crypto.secure_compare(JCS.hash_binary(policy), stored) do
@@ -237,9 +229,7 @@ defmodule Sanctum.Consent.Loader do
     end
   rescue
     e ->
-      # Decorates an already-made refusal — a swallowed failure degrades
-      # the operator's diff display, never the decision. Said out loud all
-      # the same: this was the one rescue in Sanctum with no signal at all.
+      # Log diff-rendering failures without changing the authorization refusal.
       Logger.warning("[Consent.Loader] shape diff failed: #{Exception.message(e)}")
       []
   end
@@ -269,8 +259,7 @@ defmodule Sanctum.Consent.Loader do
       source_ref: profile.source_ref,
       kind: profile.kind,
       invoke_mode: consent.invoke_mode,
-      # D2 keys self-invocation on what is actually running, which under a
-      # versionless consent may be newer than what the revision recorded.
+      # Use the running activation for self-invocation under versionless consent.
       activation: running.graph
     }
 

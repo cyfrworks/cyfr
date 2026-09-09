@@ -124,7 +124,7 @@ defmodule Sanctum.VaultTest do
     end
   end
 
-  describe "rotate — material only, no re-consent (D3)" do
+  describe "rotate changes material without requiring re-consent" do
     test "replaces material under CAS; the binding digest does not move", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "old-material"}})
       resource = resource_for(ctx, view.id)
@@ -201,7 +201,7 @@ defmodule Sanctum.VaultTest do
     end
   end
 
-  describe "rebind — always a re-consent (D3)" do
+  describe "rebind requires re-consent" do
     test "moves the derived digest and blocks affected head profiles", %{ctx: ctx} do
       view = create!(ctx)
       old_resource = resource_for(ctx, view.id)

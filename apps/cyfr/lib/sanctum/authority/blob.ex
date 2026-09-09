@@ -84,11 +84,8 @@ defmodule Sanctum.Authority.Blob do
   @ingress_key "@ingress"
 
   @doc """
-  The reserved ingress edge-key STRING. This module reads the edge for you
-  (`ingress/2`), but the consent writers (blob builder, commit, plan) and
-  the profile tool construct nodes carrying the key — seven sites used to
-  hardcode the literal, so renaming the slot would compile everywhere and
-  silently split the consent graph in two.
+  Returns the reserved ingress edge-key string used by consent writers
+  and profile-tool node construction. `ingress/2` reads this edge.
   """
   @spec ingress_key() :: String.t()
   def ingress_key, do: @ingress_key
@@ -463,11 +460,9 @@ defmodule Sanctum.Authority.Blob do
   defp validate_resource(_kind, raw),
     do: {:error, "unexpected shape: #{inspect(Sanctum.Sanitizer.sanitize(raw))}"}
 
-  # `server_name` exists so a digest mismatch is distinguishable from
-  # never-granted (drift explanation, §4.6 display, and the D8 baseline
-  # anchor); matching stays digest-keyed. `descriptions_digest` is the D8
-  # baseline over the granted tools' descriptions — advisory, absent when
-  # the catalogue was unreachable at commit.
+  # Match grants by server digest. server_name identifies configuration
+  # drift; descriptions_digest records an advisory description baseline
+  # when the catalog is reachable at commit.
   defp validate_tool_server(raw) when is_map(raw) do
     with :ok <-
            keys_or_reason(raw, [

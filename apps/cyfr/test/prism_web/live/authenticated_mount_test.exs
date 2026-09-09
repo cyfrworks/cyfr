@@ -57,8 +57,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
              "the #{name} socket holds the raw session token in assigns"
     end
 
-    # ...and it still re-derives standing when a membership changes, which is
-    # what it used to keep the token for.
+    # Re-derive standing after membership changes.
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Re #{user.namespace}")
 
     {:ok, _} =

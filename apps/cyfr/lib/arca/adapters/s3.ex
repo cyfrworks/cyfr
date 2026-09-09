@@ -328,13 +328,9 @@ defmodule Arca.Adapters.S3 do
   # Private — HTTP / SigV4
   # ============================================================================
 
-  # Sign and send one request. Everything S3-bound goes through here: one
-  # header set, one SigV4 signing, one Req call — an operation contributes
-  # only its method, URL, body, and any extra headers the signature must
-  # cover. Transport policy is explicit: `retry: false` (callers own retry,
-  # same as Cyfr.Network's outbound path — Req's silent :safe_transient
-  # default re-sent GETs up to three times) and a configured receive
-  # timeout instead of Req's unstated 15s.
+  # Sign and send each request with shared headers and SigV4 signing.
+  # Retries are disabled; callers own retry policy. The receive timeout
+  # comes from the storage configuration.
   defp signed_request(method, url, body, extra_headers \\ []) do
     base_headers =
       [{"host", host_for(url)}, {"x-amz-content-sha256", sha256_hex(body)}] ++ extra_headers
@@ -550,11 +546,7 @@ defmodule Arca.Adapters.S3 do
   defp host_only("http://" <> rest), do: String.split(rest, "/", parts: 2) |> List.first()
   defp host_only(other), do: other
 
-  # RFC 9110 §7.2: the Host header carries the port when it is not the
-  # scheme default. SigV4 stays valid either way (the signer canonicalizes
-  # the header we send, and the server verifies against what arrived), but
-  # dropping the port disagreed with `host_only/1`'s virtual-host URLs and
-  # broke any vhost-routing proxy in front of a non-default-port endpoint.
+  # Include non-default ports in the Host header, as required by RFC 9110.
   defp host_for(url) do
     case URI.parse(url) do
       %URI{host: host, port: port, scheme: scheme}
@@ -608,11 +600,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   defp log_and_error(op, status, body) do
-    # An S3 error body is XML that can echo request parameters — a presigned
-    # URL's `X-Amz-Credential` among them. Truncation alone was the whole
-    # mitigation, and it is not one: those parameters appear EARLY in the
-    # echo, so they survive a 500-byte slice. Scrub them by name, then
-    # truncate to keep the code and message without the rest of the echo.
+    # Scrub credentials from the XML error body before truncating it.
     scrubbed =
       body
       |> to_string()

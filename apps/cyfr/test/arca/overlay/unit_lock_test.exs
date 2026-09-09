@@ -5,15 +5,9 @@ defmodule Arca.Overlay.UnitLockTest do
   @moduledoc """
   The lock has three release paths and needs all three.
 
-  Two are obvious: `with_lock/3` releases when its function returns, and the
-  monitor reclaims the turn when a holder dies. The third is the one that was
-  missing — a caller whose `GenServer.call` timed out at the same moment
-  `hand_over/3` gave it the turn. That caller is the holder and does not know
-  it: `with_lock/3` already took its `{:error, :unit_locked}` branch, so it
-  will never cast `{:release, …}`. `{:abandon, …}` used to filter only the
-  waiter queue, so the unit stayed locked until the caller PROCESS died — and
-  the callers are `Aqua.ConversationRunner`, Prism LiveViews and
-  `Opus.CronScheduler`, which do not die.
+  Checks lock release after callback completion, holder death and a timeout
+  racing with handover. An abandoning caller must release a lock handed to
+  it even if its GenServer.call has already timed out.
 
   Runs against the supervised singleton (`start_link/1` pins the name), so
   every key here is unique to its test.

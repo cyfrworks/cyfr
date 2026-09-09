@@ -257,11 +257,7 @@ defmodule Sanctum.Caller do
   end
 
   def establish_context(%Context{} = ctx, opts) do
-    # A membership read that failed and a person who belongs to no athanor
-    # both leave the context athanor-less, and the tenant gate below refuses
-    # both — but they are not the same refusal. The first is retryable and
-    # says so; the second used to speak for it, telling someone to contact
-    # an operator about a database blip.
+    # Distinguish a retryable membership-read failure from having no athanor membership.
     with {:ok, ctx} <- resolve(ctx),
          ctx = ensure_namespace(ctx),
          :ok <- tenant_ok(ctx),

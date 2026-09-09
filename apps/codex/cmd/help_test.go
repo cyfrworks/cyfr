@@ -5,11 +5,8 @@ package cmd
 
 import "testing"
 
-// TestGroupCommandOrderCoversEveryCommand pins groupCommandOrder to the
-// registered command set, in both directions: a command missing from its
-// group's order silently sorts last in `cyfr --help` (how the map drifted
-// out of date before), and a stale name is a rename or removal the map
-// didn't follow.
+// TestGroupCommandOrderCoversEveryCommand checks for missing commands
+// and stale names in each help group.
 func TestGroupCommandOrderCoversEveryCommand(t *testing.T) {
 	listed := map[string]map[string]bool{}
 	for group, names := range groupCommandOrder {

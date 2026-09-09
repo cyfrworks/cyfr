@@ -53,7 +53,7 @@ defmodule Aqua.ConversationCompactor do
     split_at = max(count - @preserve_recent, 0)
     {older, recent} = Enum.split(messages, split_at)
 
-    # Phase 1: Truncate tool results in older messages
+    # Truncate older tool results first.
     truncated_older = Enum.map(older, &truncate_tool_results/1)
 
     # Check if truncation alone brought us under budget
@@ -63,14 +63,12 @@ defmodule Aqua.ConversationCompactor do
     if total_chars <= @token_budget_chars do
       candidate
     else
-      # Phase 2: Drop oldest message groups until under budget
+      # Drop the oldest message groups until within budget.
       groups = group_messages(truncated_older)
       compacted = drop_groups_until_fits(groups, recent)
 
-      # Phase 3: the preserved window can hold the budget many times over
-      # by itself — twenty messages each carrying a multi-hundred-KB tool
-      # result passed phases 1 and 2 untouched, and the row never shrank.
-      # Recent prose is always kept; oversized recent tool results are not.
+      # If the preserved window still exceeds the budget, truncate its tool
+      # results while retaining recent prose.
       if estimate_chars(compacted) <= @token_budget_chars do
         compacted
       else
@@ -134,9 +132,7 @@ defmodule Aqua.ConversationCompactor do
   defp drop_groups_until_fits([], recent), do: recent
 
   defp drop_groups_until_fits(groups, recent) do
-    # Each group is measured once and its size subtracted as it drops —
-    # re-measuring the whole remainder on every drop made this quadratic
-    # in message count.
+    # Measure each group once and subtract its size when dropping it.
     sized = Enum.map(groups, fn group -> {group, estimate_chars(group)} end)
     total = estimate_chars(recent) + Enum.sum(Enum.map(sized, &elem(&1, 1)))
 
@@ -262,11 +258,7 @@ defmodule Aqua.ConversationCompactor do
   defp block_chars(%{"functionResponse" => %{"response" => resp}}) when is_map(resp),
     do: encoded_size(resp)
 
-  # Every other block — a `tool_use` carrying its arguments, a `tool_calls`
-  # entry, an image part — was charged a flat 50 characters. A tool-heavy
-  # history is mostly those, so a megabyte of arguments estimated as a few
-  # hundred bytes, compaction concluded it was well under budget, and the
-  # provider rejected the request nobody had trimmed.
+  # Charge structured blocks by their serialized size, including tool arguments.
   defp block_chars(block), do: encoded_size(block)
 
   # The size the thing will actually be on the wire. `Jason.encode/1` rather

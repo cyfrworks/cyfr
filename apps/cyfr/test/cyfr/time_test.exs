@@ -6,10 +6,7 @@ defmodule Cyfr.TimeTest do
   `Cyfr.Time.iso8601/1` is the one timestamp renderer for the wire, so what
   it does to a string it did not produce matters.
 
-  Its string arm exists to repair a datetime that arrived without an
-  offset. It used to append "Z" to anything that did not already end in one
-  — which turned a bare date into the invalid "2026-01-01Z" and any
-  non-timestamp string into nonsense with the authority of a formatter.
+  Checks offset repair for datetime strings and rejects non-timestamp input.
   """
   use ExUnit.Case, async: true
 

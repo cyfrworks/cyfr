@@ -5,12 +5,8 @@ defmodule Emissary.MCP.ConversationTool do
   @moduledoc """
   Chat on the wire: the `conversation` tool.
 
-  AQUA is the agent runtime, and Prism is a client of it — the first one,
-  not the boundary. Until this existed there were twelve MCP tools and none
-  of them was chat, so a headless caller could start an *execution* but
-  could not talk to an agent: no addressing, no queue, no history window,
-  no approvals. The harness owned all of that and only a LiveView could
-  reach it.
+  Exposes AQUA conversation addressing, queuing, history and approvals to
+  MCP clients through the conversation runner.
 
   Every turn-shaped action here **wraps `Aqua.ConversationRunner`** — there
   is no second implementation of a turn, and no path that starts one
@@ -26,15 +22,11 @@ defmodule Emissary.MCP.ConversationTool do
   arrow pointing this way — the assistant reaches MCP only through
   `Aqua.Ops`, never by owning a provider.
 
-  ## Why this is not `execution.run_stream`
+  ## Starting turns
 
-  A client must not start a turn by running the agent formula directly.
-  That path re-roots the target's own consented authority, which is right
-  for launching an app and wrong for a chat turn: the turn's profile is
-  pinned once, at its start, and an approval later in the turn roots that
-  same pin. Going around the runner would produce a turn nothing had
-  pinned. (The harness still uses `run_stream` internally — that path is
-  not being removed, it is just not a client's door.)
+  Start chat turns through the runner so the turn pins a profile and later
+  approvals use that same authority. Direct execution of the agent formula
+  does not establish this conversation state.
 
   ## Two gates, on different axes
 

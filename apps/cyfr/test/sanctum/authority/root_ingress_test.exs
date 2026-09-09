@@ -8,9 +8,7 @@ defmodule Sanctum.Authority.RootIngressTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityFixtures, as: Fixtures
 
-  # §6 "Root ingress": authority always comes from an edge — a directly
-  # invoked catalyst receives its resources exactly as a nested one does,
-  # through the synthetic @ingress edge. One rule, no new entity.
+  # Direct catalyst invocation receives resources through the synthetic @ingress edge.
 
   @catalyst "catalyst:supabase.com.database"
 

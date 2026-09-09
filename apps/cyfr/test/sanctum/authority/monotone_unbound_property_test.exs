@@ -8,11 +8,7 @@ defmodule Sanctum.Authority.MonotoneUnboundPropertyTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
-  # §6 "Monotone unbound": boundness is never regained without a new
-  # consent and a new root execution. Structurally, an unbound Authority
-  # has `policy: :none` — nothing to consult — so along any randomized
-  # walk, once a step lands unbound every later step stays unbound, runs
-  # under the zero constants, and never yields a bound child.
+  # Once unbound, every subsequent transition stays unbound and uses zero-authority limits.
 
   property "unboundness is absorbing along any walk" do
     check all(

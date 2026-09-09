@@ -67,14 +67,9 @@ services:
     # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
     # port and the probed path have one author.
 
-  # Toolchain builds isolated from the app image: cargo/npm run here, not
-  # in cyfr's container. Opt in with
-  #   docker compose --profile builder up -d
-  # and set CYFR_BUILDER_URL=http://builder:4100 in .env plus the shared
-  # CYFR_BUILDER_TOKEN in BOTH .env and .env.builder. The builder reads
-  # only .env.builder — the blast-radius container must not be handed the
-  # app's secrets (key base, DB URL, OAuth) alongside the one it needs.
-  #                                                     [profile: builder]
+  # Optional builder: `docker compose --profile builder up -d`.
+  # Set CYFR_BUILDER_URL=http://builder:4100 and CYFR_BUILDER_TOKEN in .env.
+  # Compose forwards the token; put builder-only overrides in .env.builder.
   builder:
     container_name: cyfr-builder
     build:
@@ -124,19 +119,9 @@ services:
       target: mcp-bridge
     expose:
       - "8001"
-    # node is PID 1 in this image (the entrypoint `exec`s it), and the
-    # children are `sh -c npx …` — so when an intermediate sh or npx exits,
-    # its still-running descendants reparent to node, which reaps only what
-    # it spawned itself. Those orphans became permanent zombies, one per
-    # restart_backend and per failed download, until the container hit its
-    # PID limit. Docker's own init is the reaper, and forwards signals.
+    # Use Docker init to reap orphaned descendants and forward signals to Node.
     init: true
-    # The bridge reads ONLY .env.bridge (copy .env.bridge.example to set its
-    # knobs). It runs `sh -c` for any backend a member registers, and while
-    # it read the project .env its children inherited the app's keyring,
-    # key base, database URL and OAuth secrets. The builder profile follows
-    # the same rule. MCP_BRIDGE_TOKEN is forwarded from the project .env
-    # below so one value serves both ends.
+    # Read bridge-only settings from .env.bridge; forward MCP_BRIDGE_TOKEN from .env below.
     env_file:
       - path: .env.bridge
         required: false

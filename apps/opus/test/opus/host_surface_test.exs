@@ -5,12 +5,7 @@ defmodule Opus.HostSurfaceTest do
   @moduledoc """
   What opus actually needs from cyfr, written down.
 
-  `Opus.Host` declares eight delegates and used to claim a worker on
-  another node "would implement exactly this surface". It would not: opus
-  names cyfr modules in roughly 270 places across the namespaces below, so
-  a worker built to those eight functions would come up with no blob
-  storage, no cache, no schedule table, no egress policy and no id
-  generator.
+  Inventories direct CYFR dependencies in Opus beyond the delegates exposed by `Opus.Host`.
 
   The claim is fixed. This is what keeps it fixed: a namespace opus starts
   reaching into that is not on this list fails here, and adding it means

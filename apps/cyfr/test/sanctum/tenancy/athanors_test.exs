@@ -128,12 +128,8 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
 
     test "a long name whose truncation lands on a hyphen still takes the next free slug" do
-      # `resolve_slug/2` truncates to 36 characters before appending `-N`.
-      # When the cut falls on a hyphen the result was `"...--2"`, a double
-      # hyphen the slug grammar rejects — so the SECOND athanor with a long
-      # name failed on a format error instead of taking the next name.
-      # Reached by any name over the limit; a pair estate named from two
-      # email-derived display names is over it before it starts.
+      # Truncating a long slug at a hyphen must still produce a valid
+      # collision suffix without doubled hyphens.
       n = System.unique_integer([:positive])
       name = "alice-#{n}@example.com & bob-#{n}@example.com"
 

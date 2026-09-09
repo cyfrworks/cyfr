@@ -6,11 +6,7 @@ defmodule Locus.Application do
   Locus's own supervision tree: the build-slot limiter and the task pool
   builds run on.
 
-  A component build is `cargo component build` or npm+Vite — minutes, not
-  milliseconds — so builds get their own pool rather than riding the MCP
-  request pool. These children used to be grafted onto cyfr's tree behind
-  a `Code.ensure_loaded?` guard; the app that owns the processes now
-  supervises them.
+  Supervises dedicated build workers for cargo-component and npm/Vite jobs.
   """
 
   use Application

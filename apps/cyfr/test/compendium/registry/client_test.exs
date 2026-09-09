@@ -194,14 +194,7 @@ defmodule Compendium.Registry.ClientTest do
     end
   end
 
-  # ============================================================================
-  # Post-auth-refactor endpoints — error paths
-  #
-  # These tests mirror the existing error-path philosophy (set :registry_url to
-  # an unreachable host; assert %Errors{} shape). Happy-path HTTP responses
-  # aren't covered here — the repo has no Finch mocking infrastructure and
-  # adding one is out of scope; integration coverage lands with codex work.
-  # ============================================================================
+  # Registry endpoint error paths against an unreachable host.
 
   describe "probe_identity/3 - error handling" do
     test "returns %Errors{} when cyfr.run is unreachable" do

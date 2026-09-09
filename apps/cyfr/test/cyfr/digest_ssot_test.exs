@@ -16,12 +16,8 @@ defmodule Cyfr.DigestSSOTTest do
   # apps/cyfr/test/cyfr -> umbrella root
   @umbrella_root Path.expand("../../../..", __DIR__)
 
-  # Migrations are scanned too, and exempted BY NAME rather than by not
-  # being looked at. A migration is frozen history: it must keep producing
-  # the bytes it produced the day it ran, even if `Cyfr.Digest`'s spelling
-  # is ever revised — so inlining is correct there and nowhere else. The
-  # glob used to stop at `lib/`, which meant this exemption was invisible
-  # rather than argued.
+  # Scan migrations and exempt their inline hashing by name. Migration
+  # output must remain stable when application helpers change.
   @frozen_history [
     "apps/cyfr/priv/repo/migrations/20260901000000_consents_blob_digest.exs"
   ]

@@ -294,10 +294,7 @@ defmodule Aqua.ConversationRunnerTest do
 
   test "a bare line in a shared estate is talk, not a turn — there is no setting to change that",
        %{alice: alice, bob: bob, conv: conv} do
-    # Addressing follows the roster: two people are here, so a message has
-    # to say who it is for. This replaced a stored `answer_mode` whose
-    # `"all"` could not answer "whose agent?" once an agent could belong to
-    # a person rather than an estate.
+    # With two human members, agent turns require an explicit mention.
     refute ConversationRunner.state(conv.id, conv.athanor_id).solo_human
 
     :ok = ConversationRunner.send_message(alice, conv.id, "just chatting")
@@ -421,9 +418,7 @@ defmodule Aqua.ConversationRunnerTest do
     assert_receive {:conversation, _, {:grants, grants}}, 5_000
     assert MapSet.member?(grants, {"aqua", "component", "pull"})
 
-    # And it is a ROW, not this process's memory. A `:conversation` grant
-    # used to live in a `MapSet` that a deploy, a crash or an idle timeout
-    # discarded — reverting an explicit human decision with nothing said.
+    # Conversation-scoped grants must persist across runner restarts.
     assert {:ok, [%{scope: "conversation", effect: "allow", tool: "component", action: "pull"}]} =
              Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
 
@@ -739,9 +734,7 @@ defmodule Aqua.ConversationRunnerTest do
 
     :ok = ConversationRunner.decline(bob, conv.id, apr.id, "never", :never)
 
-    # "Never" is a deny ROW now. It used to delete the key from the agent's
-    # authored markdown — the same file the agents page edits — so a
-    # decline in one chat quietly rewrote the agent for everyone.
+    # Record a standing deny without editing the authored agent definition.
     assert {:ok, [%{scope: "agent", effect: "deny", tool: "component", action: "pull"}]} =
              Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
 
@@ -1302,9 +1295,7 @@ defmodule Aqua.ConversationRunnerTest do
     bob: bob,
     conv: conv
   } do
-    # fail_turn used to strand the queue (stale badge; a later send jumped
-    # it; the delayed launch regressed the cursor and fed consumed messages
-    # twice) and drop the consumed task from the agent's memory.
+    # After failure, advance the queued turn and preserve the consumed task in history.
     {eid, runner, _input} = start_turn(alice, conv, "remember this ask")
 
     :ok = ConversationRunner.send_message(bob, conv.id, "@aqua me too")
@@ -1341,10 +1332,8 @@ defmodule Aqua.ConversationRunnerTest do
     alice: alice,
     conv: conv
   } do
-    # `conversation_complete` REPLACES history with the model's own list,
-    # which already contains this turn's user message. `fail_turn` then
-    # folded the task in again, so the person's message was read twice by
-    # every later turn. The task is consumed once the turn is over.
+    # Completion history already contains the user message. Failure
+    # cleanup must not append the consumed task again.
     {eid, runner, _input} = start_turn(alice, conv, "only once please")
 
     emit(runner, "conversation_complete", %{

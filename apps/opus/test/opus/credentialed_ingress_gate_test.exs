@@ -3,13 +3,11 @@
 
 defmodule Opus.CredentialedIngressGateTest do
   @moduledoc """
-  The §6 "no credentialed execution without a grant" gate, second arm.
+  Verifies that execution entry points require a grant before dispensing credentials.
 
-  For each classified ingress, an execution that has no consent edge
-  naming a vault entry receives no credential material — whatever the
-  legacy grant plane would have handed it. The first arm
-  (`Cyfr.IngressInventoryTest`) is what makes this list total: a new
-  ingress fails there until it is classified and covered here.
+  Every classified ingress must withhold credentials when its consent
+  edge names no vault entry. Cyfr.IngressInventoryTest checks the roster
+  for complete ingress coverage.
   """
 
   use ExUnit.Case, async: false

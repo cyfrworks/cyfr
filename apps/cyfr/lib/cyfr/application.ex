@@ -120,10 +120,8 @@ defmodule Cyfr.Application do
       # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
       # process, so a vanished client frees its slot without bookkeeping.
       {Registry, keys: :duplicate, name: Emissary.MCP.SubscriptionRegistry},
-      # External MCP servers: the name registry, the server processes
-      # registered in it, and the reconciler that restarts them when a
-      # vault mutation must bite (§4.6) — one :rest_for_one group, so a
-      # dead registry never leaves live servers unfindable.
+      # Use :rest_for_one for the external-server registry, servers and
+      # reconciler. Registry failure restarts its dependents.
       group(Emissary.MCP.ExternalServerTree, [
         {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
         {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
@@ -263,16 +261,9 @@ defmodule Cyfr.Application do
     end
   end
 
-  # Run migrations before the connection pool starts to avoid
-  # "database is locked" errors from pool connections racing with
-  # migration DDL statements on first startup. `CYFR_AUTO_MIGRATE=false`
-  # leaves the step to the operator (`Cyfr.Release.migrate/0`).
-  #
-  # A database created before the baseline has older versions in
-  # `schema_migrations` but not this file's version, so Ecto would try to
-  # apply the baseline on top of the old schema. Baseline.up refuses that.
-  # There is no upgrade path: drop the database (or the volume) and let it
-  # be created fresh.
+  # Run migrations before the connection pool starts to avoid concurrent
+  # DDL and database-lock errors. CYFR_AUTO_MIGRATE=false leaves migration
+  # to the operator via Cyfr.Release.migrate/0.
   defp maybe_migrate_before_pool do
     if Application.get_env(:cyfr, :auto_migrate, true) do
       config = Application.get_env(:cyfr, Arca.Repo, [])
@@ -281,14 +272,8 @@ defmodule Cyfr.Application do
       {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 1))
       Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
       configure_database()
-      # Right after the migrations, while the repo that ran them is still
-      # up and the schema is definitive: every table carrying `athanor_id`
-      # must be one `Sanctum.Tenancy.Athanors.destroy/1` deletes. A new
-      # athanor-scoped table that nobody added to the roster would
-      # otherwise survive an erasure that reported success — which is
-      # precisely how the original gap went unnoticed. Raises: a boot that
-      # fails is recoverable, a backup full of data somebody was told was
-      # deleted is not.
+      # Verify the tenant-table roster against the migrated schema.
+      # Refuse boot if an athanor-scoped table would escape tenant deletion.
       Arca.TenantTables.verify_roster!()
       # Stop the temporary repo so the supervisor can start the real one
       Supervisor.stop(repo_pid)
@@ -587,15 +572,9 @@ defmodule Cyfr.Application do
        "CYFR_AUTH_PROVIDER=oidc is selected but :cyfr, :oidc_issuer is absent or blank. " <>
          "Set CYFR_OIDC_ISSUER to your identity provider's issuer URL."}
 
-  # Resolve and pin `:cyfr, :crypto_keyring`. Idempotent — re-runs on app
-  # restart simply re-derive (or re-parse) the same keyring.
-  #
-  # `nil` and `""` both fall through to derivation, and the derived key is
-  # labelled "default" like an explicit keyring's primary can be — so an
-  # explicit keyring that went missing used to be replaced by a different
-  # key under the same label, silently. `Cyfr.KeyringFingerprint`, run right
-  # after the migrations, compares what this boot resolved with what the
-  # database was sealed under and refuses the boot on a mismatch.
+  # Resolve and pin :cyfr, :crypto_keyring. Nil or empty configuration derives
+  # a key labelled "default" from :secret_key_base; explicit JSON is parsed.
+  # KeyringFingerprint checks the result against the database before writes.
   defp resolve_crypto_keyring! do
     case Application.get_env(:cyfr, :crypto_keyring) do
       %{primary: _, keys: _} = keyring when map_size(keyring.keys) > 0 ->

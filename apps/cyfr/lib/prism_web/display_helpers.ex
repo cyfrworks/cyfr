@@ -9,11 +9,8 @@ defmodule PrismWeb.DisplayHelpers do
   @doc """
   Read `key` from a map that may carry atom keys or string keys.
 
-  Tool results arrive decoded from JSON with string keys; the same shapes
-  built in Elixir carry atoms, and a page renders both. Five LiveViews had
-  defined this privately, byte for byte, and `SettingsLive` had a sixth
-  spelling under another name — so it lives here, where
-  `PrismWeb.__using__` already imports it into every one of them.
+  Reads atom-keyed Elixir values and string-keyed JSON values.
+  Imported into LiveViews through `PrismWeb.__using__/1`.
 
   Nil-tolerant, as all six were: a page that renders before its data has
   loaded reads `nil` rather than raising.

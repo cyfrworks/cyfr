@@ -5,12 +5,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @moduledoc """
   The one computation of a component's consent *shape* from live state.
 
-  Both sides of the §2.6 versionless comparison call this module: consent
-  time (bootstrap, and the plan verb) computes the shape it stores, and
-  the loader computes the live shape to compare against. One code path is
-  what makes "the release changed but the shape did not → allow and
-  record" checkable at all — two implementations would drift and either
-  re-consent every release (worst case) or falsely allow (unacceptable).
+  Derives the shape at consent time and at load time. The loader compares
+  these digests to decide whether a versionless release requires consent.
 
   The shape is manifest-sourced: it carries the declared needs, the
   flattened caps, the caps tools expanded against the live catalog, and
@@ -18,14 +14,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   `caps` blocks derives the empty ask — deny-all resources, no needs —
   exactly as if it declared empty blocks.
 
-  It also carries the activation closure's other releases
-  (`dependency_releases/3`) — the source's own is excluded. That is not a
-  manifest fact but a *world* fact, and it is here because the shape was
-  otherwise derived from ONE registry row: a versionless dependency could
-  be re-released with different code, the shape would match, and the
-  loader would run it under the grant frozen at consent time. Excluding
-  the source's own release is what keeps a versionless consent
-  versionless.
+  Includes releases from the activation closure via `dependency_releases/3`,
+  excluding the source’s own release. Dependency code changes alter the shape;
+  source releases remain versionless when consent is versionless.
 
   The canonical caps encoding is dotted flat keys (`"egress.domains"`,
   `"limits.rate_limit.requests"`, …) over the digest's existing flat caps
@@ -104,13 +95,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   ## Why the source is excluded, and why that keeps versionless working
 
-  The shape derived here used to come from ONE registry row: the source
-  ref's. So a dependency could be re-released with different code and the
-  shape did not move — `Sanctum.Consent.Loader.Decision` saw "activation
-  digest changed, shape matched" and answered `{:allow_record, …}`, which
-  records the new graph and runs the new code under the blob frozen at
-  consent time. New code, no re-consent, and the operator was never shown
-  the dependency's capabilities in the first place.
+  Include dependency releases in the shape so changed dependency code requires consent.
 
   Excluding the source's own release is what preserves the point of a
   versionless consent: re-publishing the source itself still moves the

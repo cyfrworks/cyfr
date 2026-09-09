@@ -268,8 +268,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "http://unreachable.invalid/webhook"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
   end
@@ -285,8 +284,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "http://169.254.169.254/latest/meta-data/"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
 
@@ -300,8 +298,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "http://10.0.0.1/internal"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
 
@@ -315,8 +312,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "http://127.0.0.1/admin"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
 
@@ -330,8 +326,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "file:///etc/passwd"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
   end

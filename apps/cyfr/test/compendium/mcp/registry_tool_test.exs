@@ -13,12 +13,7 @@ defmodule Compendium.MCP.RegistryToolTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # The four gated mutations' success clauses were once shadowed by the
-  # @identity_mutations dispatch head: valid args still answered the
-  # arg-missing error, so token revocation and publisher member management
-  # were dead over MCP. These pin that valid args reach the real handler —
-  # with no stored push token that is the credential refusal, never the
-  # arg-missing sentence.
+  # Valid mutation arguments must reach the credential check, not the missing-argument handler.
   describe "gated identity mutations reach their handlers with valid args" do
     test "tokens_revoke", %{ctx: ctx} do
       assert {:error, reason} =

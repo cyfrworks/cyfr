@@ -10,14 +10,8 @@ ITEMS=(
   component-guide.md tincture-guide.md integration-guide.md
   LICENSE LICENSES/ FAIR_SOURCE.md
   wit/
-  # Deploy files: `cyfr init` lays these down so `cyfr up` brings up the full
-  # self-hosted stack (cyfr + mcp-bridge, plus caddy in TLS mode).
-  # They are the single source of truth — the codex binary no longer embeds
-  # its own copies. Dockerfile.node builds the mcp-bridge image;
-  # apps/mcp-bridge/ is the Node source for the bridge. Dockerfile.builder and
-  # .env.builder.example back the compose file's `builder` profile — shipping
-  # the compose file without them broke `docker compose --profile builder up`
-  # in scaffolded projects.
+  # Package deployment files for cyfr init: the app, MCP bridge, TLS proxy
+  # and optional builder profile, including their Dockerfiles and env examples.
   docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/
   Dockerfile.builder .env.builder.example .env.bridge.example
 )

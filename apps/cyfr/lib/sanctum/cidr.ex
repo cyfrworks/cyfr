@@ -6,12 +6,7 @@ defmodule Sanctum.Cidr do
   Single source of truth for CIDR / IP-allowlist matching and link-local
   detection.
 
-  Consolidates the previously-divergent hand-rolled implementations
-  (`Sanctum.ApiKey`, `Cyfr.Network`, and a since-removed policy matcher)
-  into one IPv4 + IPv6, prefix-family-bounded, fail-closed primitive. The
-  divergence was security-relevant: an IPv4-only matcher silently never
-  matched an IPv6 CIDR allowlist entry, and one link-local check omitted
-  IPv6 `fe80::/10`.
+  Matches IPv4 and IPv6 CIDRs with family-specific prefix bounds; invalid input fails closed.
 
   `Cyfr.Network` keeps its own private/reserved-range SSRF *policy*
   (`@private_ranges`) — a different question — and only delegates the

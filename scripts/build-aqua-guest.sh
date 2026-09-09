@@ -1,23 +1,14 @@
 #!/usr/bin/env bash
-# Rebuild the shipped AQUA formula guest from its Rust source, and stamp it.
-#
-# The guest is trusted code: its policy guard is half of what keeps a
-# person's "never" and the kind ceiling true inside a turn, so the binary
-# the seed ships must be the one the reviewed source builds. This is the
-# one way it is rebuilt. A build writes `formula.wasm` and, beside the
-# source, `build.stamp`: the digest of the source tree it was built from,
-# the digest of the binary it produced, and the toolchain. `--check`
-# recomputes both digests and compares them with the stamp — a source
-# edit without a rebuild, or a binary this script did not write, fails —
-# and needs no toolchain, so CI runs it on every push. `--rebuild-check`
-# builds and `cmp`s against the shipped binary, for a machine with the
-# recorded toolchain (a wasm build is byte-stable only for one toolchain).
-#
-# Toolchain: stable Rust with the `wasm32-wasip2` target and
-# `cargo-component` (`rustup target add wasm32-wasip2 && cargo install
-# cargo-component`). The versions used for a release are in the stamp.
+# Rebuild the shipped AQUA formula guest and write build.stamp with
+# source and binary digests plus toolchain versions.
 #
 # Usage: scripts/build-aqua-guest.sh [--check | --rebuild-check]
+#   --check: verify digests against the stamp without a toolchain.
+#   --rebuild-check: rebuild and compare bytes using the recorded toolchain.
+#
+# Requires Rust with wasm32-wasip2 and cargo-component:
+#   rustup target add wasm32-wasip2
+#   cargo install cargo-component
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"

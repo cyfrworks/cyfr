@@ -2,10 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.RemediationTypedTest do
-  # The typed §4.3 path: an unbound need or a drifted consent is known
-  # structurally at resolution time, so remediation is built from the
-  # payload rather than recovered from prose. Typed terms are the only
-  # source — string reasons always report :not_setup_error.
+  # Typed consent errors produce remediation; string errors return :not_setup_error.
   use ExUnit.Case, async: false
 
   alias Opus.Remediation

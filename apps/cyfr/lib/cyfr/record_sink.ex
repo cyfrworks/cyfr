@@ -5,15 +5,10 @@ defmodule Cyfr.RecordSink do
   @moduledoc """
   The write-behind for the hot path's bookkeeping rows.
 
-  Every tool call and every allowed policy check used to cost its own
-  round trip (and, on SQLite, its own fsync) in the request's process.
-  Now the request enqueues and moves on; this process writes the batch —
-  every 250 ms or every 200 items, whichever comes first — inside one
-  transaction. What goes through here is *bookkeeping*: an allowed
-  policy-log line, the completion of an MCP log row that was started
-  synchronously, a vault entry's `last_used_at`. Denials and starts stay
-  synchronous — a denial must be on disk before the refusal returns, and a
-  started row must exist before its completion is queued.
+  Batches bookkeeping writes every 250 ms or 200 items in one transaction:
+  allowed policy checks, MCP log completions and vault last-used timestamps.
+  Denials and request starts remain synchronous; a start row must exist
+  before its completion is queued.
 
   `flush/0` drains synchronously (the retention scheduler runs it before a
   sweep; tests use it for ordering); `terminate/2` drains the buffered
@@ -176,12 +171,9 @@ defmodule Cyfr.RecordSink do
       {:ok, _} ->
         :ok
 
-      # A rollback without a raise: on Postgres an inner failure aborts the
-      # transaction even when the write's own error was rescued, and the
-      # commit answers {:error, _}. Discarding that dropped the whole batch
-      # silently — no retry, no counter. Retry each row on its own
-      # transaction so one poisoned item cannot take the rest; a single row
-      # that still rolls back is counted as shed, not hidden.
+      # A rescued write error can still abort a Postgres transaction.
+      # Retry each row separately after a batch rollback and count
+      # persistent failures as shed records.
       {:error, reason} ->
         Logger.error("[Cyfr.RecordSink] batch rolled back: #{inspect(reason)}")
 

@@ -109,8 +109,7 @@ defmodule Arca.AuditHandlerTest do
       assert event.user_id == "test_user"
       # A credential riding the emitter's metadata never reaches a sink…
       assert event.metadata[:access_token] == "[REDACTED]"
-      # …and no Sanctum context is constructed on the way (constructing one
-      # would recurse now that :platform_context is on the roster).
+      # Audit handling must not construct a context and recursively emit another audit event.
       refute Map.has_key?(event.metadata, :context)
     end
 

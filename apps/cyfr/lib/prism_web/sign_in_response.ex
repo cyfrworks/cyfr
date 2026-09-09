@@ -123,11 +123,7 @@ defmodule PrismWeb.SignInResponse do
           {:error, reason} ->
             Logger.error("[PrismWeb.SignInResponse] session create failed: #{inspect(reason)}")
 
-            # A page, not JSON. This module's whole contract is that every
-            # outcome of a browser sign-in is a redirect or a page, and this
-            # arm was dumping an error object into the person's window —
-            # in a third envelope shape besides, neither ApiError's nor the
-            # JSON-RPC one.
+            # Render browser sign-in failures as a page.
             PrismWeb.MinimalPage.send_page(
               conn,
               500,

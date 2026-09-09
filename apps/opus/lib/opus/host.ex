@@ -8,14 +8,9 @@ defmodule Opus.Host do
   tool call, a vault edge unsealed, a policy decision recorded, an execution
   row opened and closed, an event delivered.
 
-  Every one of these is a delegate today, because opus and cyfr are one
-  release. What they are not is the whole of what opus needs from cyfr.
-  This module used to say a worker on another node "would implement exactly
-  this surface", and that was wrong by two orders of magnitude: opus names
-  cyfr modules in ~270 places across the namespaces
-  `Opus.HostSurfaceTest` enumerates. A worker built to these eight
-  functions alone would come up with no blob storage, no cache, no schedule
-  table, no egress policy and no id generator.
+  Delegates selected host operations within the combined Opus/CYFR release.
+  This module is not the complete dependency interface; Opus also calls
+  CYFR storage, policy, scheduling and utility modules directly.
 
   The honest statement is narrower and still useful: **this is the plane a
   component's execution crosses, and it is the one that would go over the

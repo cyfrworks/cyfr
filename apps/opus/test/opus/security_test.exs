@@ -101,10 +101,8 @@ defmodule Opus.SecurityTest do
     end
 
     test "no component type inherits the host's stdout/stderr" do
-      # Inheriting them was an unbounded write from every guest straight into
-      # the operator's console and log aggregation, around `Opus.SecretMasker`,
-      # the emit rate limit and the emit size cap. `emit` is the channel that
-      # carries those bounds.
+      # Guest output must use emit, which applies masking, rate limits,
+      # and size bounds before reaching operator logs.
       opts = ComponentType.wasi_options(:catalyst)
 
       assert opts.inherit_stdout == false

@@ -6,12 +6,8 @@ defmodule Cyfr.SeedWitDriftTest do
   Every WIT file a seed component vendors matches the canonical `wit/`
   tree — the ABI is the host's, not the component's.
 
-  `Locus.Builder` prefers a source-local `wit/` over
-  `Compendium.WITSource` when one exists, and every seed component ships
-  one. Nothing kept them identical: the http seed's `interfaces.wit` had
-  gone stale (missing the whole `streaming` interface), so a rebuild of
-  the shipped catalyst would have compiled against an ABI the host had
-  outgrown.
+  Checks source-local seed WIT matches Compendium.WITSource.
+  Locus.Builder uses source-local WIT when present.
 
   Two rules, matching what the copies actually are:
 

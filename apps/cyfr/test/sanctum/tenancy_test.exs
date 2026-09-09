@@ -148,9 +148,7 @@ defmodule Sanctum.TenancyTest do
 
   describe "platform_admin?/1" do
     test "requires an ACTIVE platform row, not merely a platform row" do
-      # The predicate's one derivation. Callers used to re-spell it without
-      # the status check, which only held because list_by_user/1 happens to
-      # filter active — each copy could silently widen if that query changed.
+      # Platform-admin status requires an active platform membership.
       assert Tenancy.platform_admin?([%{scope: "platform", status: "active"}])
       refute Tenancy.platform_admin?([%{scope: "platform", status: "invited"}])
       refute Tenancy.platform_admin?([%{scope: "athanor", status: "active"}])

@@ -3,10 +3,8 @@
 
 defmodule PrismWeb.LiveEventCatchallTest do
   @moduledoc """
-  A LiveView's event names are client-supplied, and an unmatched name is a
-  `FunctionClauseError` that kills the LiveView process — the client
-  remounts, and whatever the person had on screen and unsent is gone.
-  Twenty-three console LiveViews had no last clause for that.
+  Unknown client-supplied event names must be handled without
+  crashing or remounting the LiveView.
 
   It is one clause now, appended after each module's own by
   `PrismWeb.LiveDefaults`. This test is what keeps it appended: a LiveView

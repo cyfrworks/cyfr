@@ -94,9 +94,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   Read a resource by URI.
   """
   def read(%Context{authenticated: false}, "arca://files/" <> _path) do
-    # Typed, so the router renders the one auth prose AND answers with the
-    # auth_required code — the bare string used to ride out mislabeled as
-    # resource_not_found.
+    # Preserve the typed auth_required error for the wire renderer.
     {:error, :unauthenticated}
   end
 

@@ -3,11 +3,8 @@
 
 defmodule PrismWeb.LegalLive do
   @moduledoc """
-  Legal copy browser. Fetches markdown from cyfr.run via the
-  `registry/legal_page` MCP action and renders it in-client. Closed-
-  platform posture: cyfr.run no longer hosts /legal/* HTML pages, so the
-  cyfr client is the canonical disclosure surface for ToS / Privacy /
-  AUP / Content Policy / DMCA / Cookies / Transparency.
+  Fetches legal Markdown through `registry/legal_page` and renders it in
+  the client, including terms, privacy, acceptable use and content policies.
 
   Each tab triggers a fresh fetch (cached server-side at 5min by the
   upstream Cache-Control); markdown is rendered by the existing

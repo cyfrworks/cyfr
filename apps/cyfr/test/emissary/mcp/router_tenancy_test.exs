@@ -6,11 +6,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
   What a caller with no credential may reach, and that the answer is the
   same one discovery gives.
 
-  These tests used to assert that component browsing was open on an install
-  with no auth provider. It never was: the Router waved the call through and
-  the dispatcher refused it a moment later for want of `requires_auth: false`,
-  so the assertion — "the Router did not say auth_required" — held while the
-  call still failed. The promise is gone now, and the surface is one list.
+  Checks anonymous access against the catalog's declared public actions.
   """
   use ExUnit.Case, async: false
 

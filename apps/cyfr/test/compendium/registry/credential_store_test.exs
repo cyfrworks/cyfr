@@ -154,10 +154,7 @@ defmodule Compendium.Registry.CredentialStoreTest do
       a_cred = push_token_cred("alice")
       assert :ok = CredentialStore.put(@user, @reg, "alice", a_cred)
 
-      # User B has no credential for "alice" on this registry. The pre-refactor
-      # `get_for_registry/1` cross-user fallback would have leaked A's token to
-      # B; post-refactor, get/3 must return :not_found so callers surface
-      # `:no_push_token` and prompt B to log in / claim. Privacy guarantee.
+      # A user without their own credential must not receive another user's token.
       assert :not_found = CredentialStore.get(@user2, @reg, "alice")
     end
   end

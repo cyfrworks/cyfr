@@ -1,32 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package cmd — cyfr.run namespace + push-token management subcommands.
-//
-// This file is the client side of the MCP `registry` tool. Each cobra
-// command delegates to an action on that tool (defined on the server in
-// apps/cyfr/lib/compendium/mcp.ex); no authentication is performed
-// locally — the server resolves the caller's bearer from CredentialStore
-// based on Context.user_id.
-//
-// The existing `registry` cobra root lives in cmd/component.go (alongside
-// `registry discover`). This file ADDS subcommands under the same root:
-//
-//	cyfr registry whoami
-//	cyfr registry probe
-//	cyfr registry get-namespace <slug>
-//	cyfr registry publisher claim <domain>
-//	cyfr registry publisher verify <domain>
-//	cyfr registry tokens list   <namespace>
-//	cyfr registry tokens issue  <namespace> [--label TEXT]
-//	cyfr registry tokens revoke <namespace> <token_id>
-//	cyfr registry members list   <namespace>
-//	cyfr registry members add    <namespace> <target-personal-slug> [--role admin|member]
-//	cyfr registry members update <namespace> <target-personal-slug> [--role admin|member]
-//	cyfr registry members remove <namespace> <target-personal-slug>
-//
-// `registry login` (pre-refactor Basic-auth-over-OCI) is intentionally gone.
-// Push credentials are per-user opaque tokens provisioned by `cyfr login`.
+// Registry namespace and push-token management commands.
+// Each command delegates to the MCP registry tool. The server resolves
+// credentials for the authenticated user; cyfr login provisions push tokens.
 package cmd
 
 import (

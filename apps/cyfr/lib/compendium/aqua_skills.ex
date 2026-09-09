@@ -7,10 +7,8 @@ defmodule Compendium.AquaSkills do
   `aqua/skills/<name>/SKILL.md` (`Compendium.AquaPath`), served through the
   seed overlay like the soul and the roles.
 
-  Two readers used to walk the tree: the `aqua` tool's `skill_list` and the
-  turn's prompt index, the second through a tool round trip on every turn.
-  This is the one reader both share — the index a turn is shown, and the
-  manifest one scroll is read from.
+  Shared by the `aqua` tool's `skill_list` and the turn's prompt index.
+  Reads the scroll index and individual scroll manifests.
   """
 
   alias Compendium.AquaAgent

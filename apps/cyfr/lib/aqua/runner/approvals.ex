@@ -240,10 +240,7 @@ defmodule Aqua.Runner.Approvals do
 
   def apply_scope(state, _ctx, _msg, _proposal, _scope), do: state
 
-  # Decline "never": a standing DENY, which the resolver drops from the
-  # policy outright. It used to delete the key from the agent's markdown —
-  # the same file the AQUA page edits, so a decline in a chat quietly
-  # rewrote the agent's definition for everyone.
+  # Declining with "never" records a standing deny in Aqua.ToolGrants.
   @doc false
   def deny_standing(state, ctx, msg) do
     case proposal_of(approval_intent(msg)) do

@@ -5,14 +5,8 @@ defmodule Opus.OAuthHandlerTest do
   @moduledoc """
   The `cyfr:oauth/token` host boundary.
 
-  `wit/catalyst/deps/cyfr-oauth/token.wit` declares `result<string, string>`,
-  so the error arm has to be a string. `Sanctum.VaultReader.oauth_token/3`
-  answers in atoms and tuples — `:binding_mismatch`, `{:provider_mismatch, p}`,
-  `{:scope_projection_unsatisfiable, […]}` — and those were passed straight
-  through: the lowering had no string to build, so the fault took the Wasmex
-  process and the guest got an opaque failure instead of the `err(…)` it was
-  promised. Every sibling import coerces, rescues and bounds; this one did
-  none of the three.
+  Checks that typed vault refusals become bounded string errors at the
+  WIT result<string, string> boundary without raising into the guest.
   """
   use ExUnit.Case, async: true
 

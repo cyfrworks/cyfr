@@ -100,14 +100,10 @@ defmodule Cyfr.TinctureHelpers do
   end
 
   @doc """
-  Whether a `tincture.connect` entry is a bare (optionally `*.`-prefixed)
-  domain — the grammar the served page's CSP builder applies, and the one
-  the manifest validator holds entries to at publish. Rejects bare
-  wildcards, IP addresses, paths, ports, and schemes. `\\A…\\z`, not
-  `^…$`: in Elixir `$` also matches before a trailing newline, so
-  "evil.com\\n" once passed, was interpolated into the CSP, and
-  `put_resp_header/3` raised on the control character — a manifest could
-  500 its own tincture's index for good.
+  Whether a `tincture.connect` entry is a bare domain with an optional
+  `*.` prefix. Used by manifest validation and CSP generation. Rejects
+  wildcards without a domain, IP addresses, paths, ports, schemes, and
+  trailing characters outside the domain grammar.
   """
   @spec valid_connect_domain?(term()) :: boolean()
   def valid_connect_domain?(domain) when is_binary(domain) do
@@ -146,12 +142,8 @@ defmodule Cyfr.TinctureHelpers do
   The entry a manifest names, or the default — one reading, for publish and
   for serve.
 
-  These were three separate rules. Publish checked path safety only, serve
-  added a denylist and refused dotfiles, and the registry's indexer checked
-  nothing at all — so a manifest with `entry: "cyfr-manifest.json"` or
-  `entry: ".env"` published cleanly, indexed cleanly, and 404'd the first
-  time anyone opened it. A rule that only the last reader applies is a rule
-  the author finds out about last.
+  The same entry validation applies during publishing, indexing,
+  and serving.
   """
   @spec entry_of(map()) :: {:ok, String.t()} | {:error, String.t()}
   def entry_of(manifest) when is_map(manifest) do
@@ -183,9 +175,7 @@ defmodule Cyfr.TinctureHelpers do
 
   def validate_entry(_other), do: {:error, "entry must be a string"}
 
-  # Branches on the typed refusal, never on the message's wording — a
-  # `true ->` fallback over prose once misreported seven distinct causes
-  # as a traversal.
+  # Branch on the typed refusal, independently of message wording.
   defp path_safe(entry) do
     case Cyfr.PathSafety.validate_relative_path(entry) do
       :ok ->

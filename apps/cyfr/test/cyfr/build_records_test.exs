@@ -85,10 +85,7 @@ defmodule Cyfr.BuildRecordsTest do
   end
 
   test "a foreign start cannot overwrite another athanor's record", %{ctx: ctx} do
-    # `build_id` is caller-supplied — `Locus.MCP` takes `args["build_id"]`
-    # straight off the request — so a start had to be scoped like every other
-    # verb here. Upserting on the id alone let anyone who knew a build id
-    # reset another athanor's row to "started" and blank its result.
+    # Caller-supplied build ids must be scoped to the caller’s athanor.
     :ok = BuildRecords.record_started(ctx, "build_shared", "reagent:local.demo:0.1.0")
     :ok = BuildRecords.record_finished(ctx, "build_shared", "compiled", %{"digest" => "sha256:a"})
 

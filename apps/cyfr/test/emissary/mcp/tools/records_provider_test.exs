@@ -414,10 +414,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "cannot set retention settings", %{app_ctx: app_ctx} do
-      # Through the dispatcher: the gate is the :storage_write annotation.
-      # (The old handler gate checked :storage_write too but answered with a
-      # message claiming admin was required — the denial now names the real
-      # permission.)
+      # The dispatcher must enforce the declared :storage_write permission.
       assert {:error, {:missing_permission, :storage_write}} =
                Cyfr.Ops.Catalog.call_external("retention", app_ctx, %{
                  "action" => "set",
@@ -663,10 +660,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
   describe "retired write/delete verbs are unknown at dispatch" do
     test "kernel-only and append-only verbs no longer exist on the surface", %{ctx: ctx} do
-      # These clauses used to live in the handler as polite refusals, but
-      # their verbs are absent from every action enum: the dispatcher's
-      # default-deny (and the HTTP schema validator) refuse them before any
-      # handler could. The audit pins that they stay unknown.
+      # Undeclared actions must be refused before handler dispatch.
       retired = [
         {"record", "record_start"},
         {"record", "record_complete"},

@@ -528,13 +528,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       {:ok, preview} = Commit.preview(ctx, staged.decisions)
 
-      # Now commit the SAME plan token, proof and commit digest with the
-      # flag flipped. Nothing else moves: the shape is manifest-derived,
-      # bindings are empty, tool servers are empty, the target profile and
-      # its expected revision are identical. Before `blob_digest`, the
-      # recomputed digest was therefore identical too — every check passed
-      # and the public profile shipped `write` and `delete` on every
-      # storage path to anonymous callers.
+      # Reuse the plan token, proof and digest with durable_storage flipped; commit must reject it.
       widened = Map.put(staged.decisions, :durable_storage, true)
 
       # `check_presented_digest/2` is the gate: the recomputed digest no
@@ -614,7 +608,7 @@ defmodule Sanctum.Consent.FlowTest do
   end
 
   describe "decision validation" do
-    test "an unknown need fails like §2.7 says", %{ctx: ctx} do
+    test "rejects an undeclared need", %{ctx: ctx} do
       publish!(ctx, "flow-need")
       entry = entry!(ctx)
 
@@ -649,8 +643,7 @@ defmodule Sanctum.Consent.FlowTest do
     "caps" => %{"egress" => %{"domains" => ["api.anthropic.com"]}}
   }
 
-  # A manifest whose egress reaches private space and names its schemes —
-  # the two fields the sheet used to compute and never show.
+  # Include private egress and scheme constraints in the displayed consent.
   @private_egress_manifest %{
     "caps" => %{
       "egress" => %{
@@ -699,15 +692,9 @@ defmodule Sanctum.Consent.FlowTest do
       assert Enum.any?(plan.warnings, &(&1 =~ "api_key"))
     end
 
-    # The direct-Elixir walk above omits `:fields` and always got the
-    # manifest's list. The MCP wire did not: `decode_bindings/1` wrote
-    # `fields: []` whether the client sent the key or not, and `[]` is the
-    # same value "no narrowing declared" carries — so the declared subset
-    # was overwritten with "all fields" for every MCP-minted consent. This
-    # walks the tool, not `Commit`, because that is where the widening was.
-    # The sheet is what the operator approves. A grant it computes and does
-    # not print is a grant nobody agreed to — which is how an egress reaching
-    # RFC1918 space, and every node's limits, stayed invisible.
+    # Exercise projection defaults through the MCP tool. Omitted fields
+    # must retain the manifest’s subset, and the consent sheet must show
+    # every granted resource and node limit.
     test "the summary discloses private egress, schemes and the node's limits",
          %{ctx: ctx} do
       publish_private_egress!(ctx, "flow-private-egress")
@@ -782,7 +769,7 @@ defmodule Sanctum.Consent.FlowTest do
       assert auth.resources.egress.domains == ["api.anthropic.com"]
     end
 
-    test "the implicit slot retires when needs are declared (§2.7)", %{ctx: ctx} do
+    test "the implicit slot retires when needs are declared", %{ctx: ctx} do
       publish_needs!(ctx, "flow-needs-implicit")
       entry = entry!(ctx)
 
@@ -866,12 +853,7 @@ defmodule Sanctum.Consent.FlowTest do
   end
 
   describe "the digest covers which profile the grant lands on" do
-    # Two labels on one source_ref can produce byte-identical blobs, and on
-    # a FIRST consent `Plan.locate_profile/4` answers `{:ok, nil, 0}` for
-    # both — so `profile_id` is dropped by `put_present` and
-    # `expected_revision` is 0 either way. Without `label` in the commit
-    # input the proof bound nothing that told them apart, and one minted
-    # for "prod" was spendable on "staging".
+    # Proofs must distinguish profile labels even when their policy blobs are identical.
     test "a proof minted for one label does not commit under another", %{ctx: ctx} do
       publish!(ctx, "flow-labelled")
       ref = "reagent:local.flow-labelled"
@@ -908,10 +890,7 @@ defmodule Sanctum.Consent.FlowTest do
   end
 
   describe "every minted revision carries a blob digest" do
-    # The X1 regression pair. `Commit.persist/6` and
-    # `Consent.Bootstrap.insert/6` are the only two writers, and Bootstrap
-    # never reaches `persist/6` — so hashing on the commit path alone would
-    # have left every provisioning mint undigested and unverifiable.
+    # Verify blob digests on both commit and bootstrap writes.
     test "an operator walk and a machine mint both store one", %{ctx: ctx} do
       publish!(ctx, "flow-walked")
       {:ok, _} = walk!(ctx, "reagent:local.flow-walked")

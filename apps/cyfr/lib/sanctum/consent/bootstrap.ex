@@ -22,17 +22,8 @@ defmodule Sanctum.Consent.Bootstrap do
   immutable, and its caps are auditable once at build time rather than per
   athanor.
 
-  `component.register` used to call this too, for "what a person registers
-  later". That did not hold. `register` is a scanner over the athanor's own
-  overlay `components/` tree, so it consented to whatever had arrived
-  there — and a catalyst holding a storage write grant over that root can
-  arrive there, under a `"filesystem"` source stamp that
-  `Compendium.Source` cannot tell from the seed's. A registered component
-  now gets a consent walk like anything else.
-
-  There is deliberately no `run_for/2`: a function that mints owner
-  consent for caller-named refs is the shape that hole had, and the next
-  caller would reopen it.
+  Bootstrap consent applies only to the operator's seed bundle.
+  Components discovered by `component.register` require explicit consent.
   """
 
   require Logger

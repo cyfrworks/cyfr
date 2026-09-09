@@ -112,8 +112,7 @@ defmodule Cyfr.TopicsTest do
     end
 
     test "the tray topic is tenant-prefixed and agrees with Sanctum.Notify" do
-      # `Notify.topic/1` used to spell the `tenant:` prefix itself; it now
-      # goes through the same builder as everything else.
+      # Notify.topic/1 uses the shared tenant-topic builder.
       assert Topics.notify("ath_1") == Sanctum.Notify.topic("ath_1")
       assert String.starts_with?(Topics.notify("ath_1"), "tenant:ath_1:")
     end

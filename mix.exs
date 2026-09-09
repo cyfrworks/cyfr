@@ -26,21 +26,14 @@ defmodule Cyfr.MixProject do
     ]
   end
 
-  # The tree carries ~1,000 `@spec`s that nothing had ever checked, so a
-  # wrong one misled the reader with the authority of a type. The PLT is
-  # cached under `_build` so CI builds it once per OTP/Elixir/deps change.
-  #
-  # `:underspecs` and friends are deliberately off: the goal is to catch
-  # specs that contradict the code, not to argue about ones that are merely
-  # wider than it.
+  # Cache Dialyzer PLTs under _build and check for specs that contradict the code.
   defp dialyzer do
     [
       plt_local_path: "_build/plts",
       plt_core_path: "_build/plts",
       plt_add_apps: [:mix, :ex_unit, :eex],
       flags: [:error_handling, :extra_return, :missing_return],
-      # The findings standing when the gate was turned on, so the job can be
-      # green today and red on anything new. See `.dialyzer_ignore.exs`.
+      # Apply reviewed warning filters and fail on unused entries.
       ignore_warnings: ".dialyzer_ignore.exs",
       list_unused_filters: true
     ]

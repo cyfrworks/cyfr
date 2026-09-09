@@ -501,9 +501,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "single-user pull failure returns a binary error with the reference", %{ctx: ctx} do
-      # Post-refactor the anonymous-probe is namespace-scoped and logs a
-      # warning rather than appending a hint to the pull error. We just
-      # check the pull fails cleanly against an unreachable registry.
+      # An unreachable registry must return a clean pull error.
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "pull",
@@ -601,10 +599,7 @@ defmodule Compendium.MCPTest do
           "reference" => "c:local.my-tool:1.0.0"
         })
 
-      # Regression: a `local` ref is pushed under the caller's claimed personal
-      # namespace, not the literal "local". With no namespace claimed the error
-      # must guide the user to claim one — never the old, misleading
-      # "No push token for namespace 'local'".
+      # A local publish requires a claimed personal namespace; the error must explain that requirement.
       refute err_msg(msg) =~ "No push token for namespace 'local'"
       assert err_msg(msg) =~ "personal namespace"
       assert err_msg(msg) =~ "cyfr login"
@@ -693,7 +688,7 @@ defmodule Compendium.MCPTest do
 
     test "register action does not require directory parameter" do
       tool = Enum.find(MCP.tools(), &(&1.name == "component"))
-      # directory property should no longer exist in schema
+      # The schema does not accept a directory property.
       refute Map.has_key?(tool.input_schema["properties"], "directory")
     end
   end
@@ -2107,11 +2102,7 @@ defmodule Compendium.MCPTest do
     end
   end
 
-  # Bypass-based wire tests for the post-refactor error-formatting fixes:
-  # the MCP layer must surface registry errors as readable strings (not
-  # inspected struct dumps), and registry.probe must surface 412
-  # POLICY_ACCEPTANCE_REQUIRED structurally so codex can route into
-  # the clickwrap UI without parsing strings.
+  # Registry errors must be readable and policy-acceptance refusals must carry structured data.
   describe "registry MCP — error formatting + structured probe 412 (Bypass)" do
     setup do
       bypass = Bypass.open()

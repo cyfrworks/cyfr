@@ -38,8 +38,7 @@ defmodule Sanctum.MCPTest do
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
-      # No "secret" tool: the legacy secrets plane retired; vault entries
-      # are the only credential store.
+      # The vault tool owns credential storage.
       refute "secret" in tool_names
       # No "permission" tool: memberships are presence-only, there are no
       # roles, and the decorative RBAC store is gone.
@@ -47,8 +46,7 @@ defmodule Sanctum.MCPTest do
       assert "key" in tool_names
       assert "vault" in tool_names
       assert "profile" in tool_names
-      # No "policy" tool: the legacy policy plane retired; consents carry
-      # the effective capability.
+      # Consents carry effective capabilities.
       refute "policy" in tool_names
       assert "oauth" in tool_names
       assert "tincture_visibility" in tool_names
@@ -202,12 +200,6 @@ defmodule Sanctum.MCPTest do
       assert err_msg(msg) =~ "Unknown action: session.invalid"
     end
   end
-
-  # ============================================================================
-  # Retired: the "secret" tool. The legacy secrets plane is gone — vault
-  # entries (sealed, consent-bound) are the only credential store, managed
-  # through the "vault" tool (covered in mcp_vault_profile_test.exs).
-  # ============================================================================
 
   describe "secret tool retired" do
     test "the secret tool is no longer routable", %{ctx: ctx} do

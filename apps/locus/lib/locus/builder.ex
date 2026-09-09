@@ -52,9 +52,7 @@ defmodule Locus.Builder do
 
   require Logger
 
-  # Compile-time constants. Both were written as `compile_env` on keys no
-  # config file sets, which cannot be changed by an operator and cannot be
-  # changed by a test either — the ceremony bought nothing.
+  # Compile-time build limits.
   @max_source_size 1_024 * 1_024
   # 30s under the MCP tool layer's 5-minute brutal-kill deadline, so a build
   # that exhausts its budget dies here — a graceful {:error, :compilation_timeout}
@@ -310,12 +308,8 @@ defmodule Locus.Builder do
     end
   end
 
-  # `do_compile/5` cleans its tree in an `after` — which never runs when the
-  # MCP tool layer brutal-kills the provider task on its own deadline, so a
-  # multi-hundred-MB node_modules/target tree outlived every build that was
-  # killed rather than finished. Same shape as `watch_for_orphans/2`: an
-  # unlinked janitor survives the kill and sweeps when the owner dies for
-  # any reason (a second rm_rf after the happy path's `after` is a no-op).
+  # An unlinked janitor removes the build tree when its owner exits,
+  # including kills that skip do_compile/5’s after block.
   defp watch_tmp_dir(owner, dir) do
     spawn(fn ->
       ref = Process.monitor(owner)
@@ -585,25 +579,16 @@ defmodule Locus.Builder do
   defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do
     logger_metadata = Cyfr.LoggerContext.capture()
 
-    # `async_nolink`, not `async`: a linked task that exits abnormally — a
-    # `Port.open/2` that cannot spawn because the executable vanished between
-    # `toolchain_available?/1` and here, or because the node is out of ports
-    # or fds — took its caller down with it, so `do_compile/5`'s
-    # `after File.rm_rf(tmp_dir)` never ran and the whole build tree was left
-    # behind. Nothing here needs the link; the timeout path already reaps the
-    # OS process group itself.
+    # Run unlinked so spawn failures do not kill the caller or skip
+    # its build-tree cleanup.
     task =
       Task.Supervisor.async_nolink(Locus.TaskSupervisor, fn ->
         Cyfr.LoggerContext.restore(logger_metadata)
         executable = System.find_executable(command) || command
 
-        # Lead a fresh process group when the platform can (setsid ships in
-        # every Linux/util-linux image; macOS dev hosts have none): the
-        # timeout/orphan kill targets `-os_pid`, and without a group led by
-        # the child that kill was ESRCH on every invocation — grandchildren
-        # (npm, node, rustc, cargo's job servers) survived every timeout.
-        # setsid execs in place, so os_pid == pgid and the port's fds and
-        # exit_status are unchanged.
+        # Use a process group when setsid is available. Timeout and orphan
+        # cleanup target -os_pid to include toolchain descendants.
+        # setsid execs in place, preserving the port and making os_pid the group id.
         {spawn_exec, spawn_args} =
           case System.find_executable("setsid") do
             nil -> {executable, args}
@@ -698,9 +683,7 @@ defmodule Locus.Builder do
     end
   end
 
-  # What a build's toolchain may see of this node's environment. The port
-  # would otherwise hand user-run build scripts every secret the BEAM was
-  # started with.
+  # Allowlist the environment exposed to build scripts; exclude server secrets.
   @build_env_allowlist ~w(
     PATH HOME LANG LC_ALL LC_CTYPE TMPDIR TERM
     CARGO_HOME RUSTUP_HOME CARGO_TARGET_DIR

@@ -172,9 +172,7 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "listing starts no server processes", %{ctx: ctx} do
-      # A read must read: listing used to ensure_started every enabled
-      # server, so any authenticated caller could open outbound connections
-      # as a side effect. Invocation starts servers on demand instead.
+      # Listing servers must not start processes or open outbound connections.
       Arca.McpServerStorage.put(ctx, %{name: "lazy-1", url: "https://a.com/mcp", enabled: true})
 
       assert {:ok, %{servers: [server]}} =

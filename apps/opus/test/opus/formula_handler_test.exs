@@ -606,12 +606,8 @@ defmodule Opus.FormulaHandlerTest do
       spawn_result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
       task_id = Jason.decode!(spawn_result)["task_id"]
 
-      # Poll until the task leaves `pending` rather than sleeping past it.
-      # `completed` or `error` — math.wasm is a core module, so which one is
-      # not this test's business; that poll STOPS saying pending, and says
-      # so about the right task, is. Admitting "pending" in the assertion
-      # too made it a list of the whole status vocabulary, which no
-      # behaviour could fail.
+      # Poll until the named task leaves pending. This fixture may complete
+      # or error; either terminal result verifies task-status progress.
       wait_until(
         fn -> Jason.decode!(poll_fn.(task_id))["status"] != "pending" end,
         5_000,

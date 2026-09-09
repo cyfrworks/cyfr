@@ -159,9 +159,7 @@ defmodule Cyfr.Ops.Contract do
               else: {:error, "Field '#{key}' does not match the required pattern"}
 
           :error ->
-            # An uncompilable pattern used to PASS the field silently — a
-            # validation the schema declared and nothing ran. The schema
-            # author's defect refuses the call instead.
+            # Reject the call when the schema declares an invalid regular expression.
             {:error, "Field '#{key}' has an invalid pattern in its schema"}
         end
 

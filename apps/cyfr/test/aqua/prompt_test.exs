@@ -25,9 +25,7 @@ defmodule Aqua.PromptTest do
 
       assert prompt =~ "File paths: none"
 
-      # The regression: this section used to name every guest scope from
-      # `Arca.Storage.guest_scopes/0` on every turn, whatever the edge
-      # granted. A model told it has files will try to read them.
+      # Describe only scopes granted by the current authority.
       for scope <- Map.keys(Arca.Storage.guest_scopes()) do
         refute prompt =~ scope <> "/ for",
                "the prompt still advertises #{scope}/ with no grant behind it"

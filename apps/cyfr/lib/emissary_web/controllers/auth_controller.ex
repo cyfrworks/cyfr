@@ -37,9 +37,7 @@ defmodule EmissaryWeb.AuthController do
   Ueberauth handles the redirect automatically based on the :provider param.
   """
   def request(conn, _params) do
-    # Ueberauth plug handles the redirect; this is the no-strategy branch.
-    # A browser pipeline answers in HTML — these arms used to dump JSON
-    # into the person's window.
+    # Render the no-strategy branch as HTML; Ueberauth handles configured redirects.
     PrismWeb.MinimalPage.send_page(
       conn,
       404,
@@ -115,9 +113,7 @@ defmodule EmissaryWeb.AuthController do
 
   defp apply_device_ticket(conn, %{session_token: token, outcome: outcome} = payload)
        when is_binary(token) do
-    # The one outcome→response mapping the callback uses — so the device
-    # path's proceed report flashes its warnings here too, instead of
-    # silently dropping them as the ticket's :next flag once did.
+    # Render the sign-in outcome and any warnings, including device flow.
     SignInResponse.respond(conn, outcome,
       session: {:token, token},
       access_token: payload[:access_token]
@@ -278,11 +274,7 @@ defmodule EmissaryWeb.AuthController do
   @doc """
   Logout - destroys the session.
 
-  The credential comes from `Authorization: Bearer` and nowhere else. It
-  used to be accepted from the request body too, which put a live session
-  token into access logs and `Referer` headers for the one request whose
-  whole purpose is retiring it — and `whoami`, next door, has always
-  required the header.
+  Accepts the credential only from the `Authorization: Bearer` header.
   """
   def logout(conn, _params) do
     token = get_bearer_token(conn)

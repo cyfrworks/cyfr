@@ -89,12 +89,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     end
   end
 
-  # The defect these pin: the server-wide `device_init` ceiling was 60/min
-  # while `EmissaryWeb.Plugs.MCPRateLimit` already lets ONE address send
-  # 120/min, so a single unauthenticated IP could exhaust the global budget
-  # without tripping any limiter and answer "Too many sign-in attempts" to
-  # every user on the server. The console was worse: `/live` is handled by
-  # the endpoint before the router, so it passes no limiter at all.
+  # Check per-address device-flow limits and the independent global
+  # sign-in budget on MCP and LiveView surfaces.
   describe "anonymous sign-in budgets are per-address, and the global sits above them" do
     setup do
       Application.delete_env(:cyfr, :github_client_id)
@@ -126,8 +122,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
       for _ <- 1..200, do: init_from(noisy)
 
-      # THE invariant. Before the fix this failed: the noisy address spent
-      # the one server-wide bucket and everyone else got the refusal.
+      # One client must not exhaust the sign-in budget available to other clients.
       assert admitted?(init_from(innocent)),
              "a second address must still be able to start a sign-in"
     end
@@ -267,11 +262,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
   end
 
   describe "the MCP surface charges an address too" do
-    # `/mcp` meters every method together at 120/min per IP, so one address
-    # was bounded but several between them were not: the global sign-in
-    # ceiling is a circuit breaker, not a per-caller budget. The context
-    # carries the resolved address now, so `device_init` gets its own
-    # bucket on every surface rather than only in the console.
+    # Device initialization needs its own per-address budget on every surface.
     test "session.device_init charges the context's client_ip" do
       ctx = %{Sanctum.TestContext.local() | client_ip: "203.0.113.9", authenticated: false}
 

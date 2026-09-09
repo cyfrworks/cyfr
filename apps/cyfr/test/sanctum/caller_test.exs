@@ -251,10 +251,7 @@ defmodule Sanctum.CallerTest do
     end
 
     test "a plain member removal drops the memo like the door's revocations do" do
-      # Removal was the one revocation in the set that skipped the memo: a
-      # removed member kept their cached, athanor-focused context on the
-      # stateless surfaces for the TTL — and the test env pins the TTL to
-      # zero, so only a warm-memo test can see it.
+      # Warm the context memo with a nonzero TTL before checking immediate membership revocation.
       {user, home} = new_user() |> claim!() |> member!()
       user = Map.put(user, :namespace, user.slug)
       session = session_for(user)

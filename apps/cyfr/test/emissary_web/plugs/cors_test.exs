@@ -77,12 +77,7 @@ defmodule EmissaryWeb.Plugs.CORSTest do
     end
   end
 
-  # The regression this guards: `Mcp-Method` / `Mcp-Name` / `MCP-Protocol-Version`
-  # became mandatory, `MCPRequestMetadata` began rejecting requests that omit them, and
-  # the preflight was not updated — so every cross-origin client failed in the
-  # browser before reaching any code that could report why. The bundled compose
-  # deployment proxies the PWA same-origin, so nothing preflights there and
-  # nothing caught it.
+  # CORS preflight must allow every header required by MCP request validation.
   describe "preflight advertises every header the server requires" do
     test "allow-headers is a superset of Protocol.request_headers/0" do
       advertised = preflight_headers("access-control-allow-headers")

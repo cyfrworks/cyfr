@@ -3,12 +3,8 @@
 
 defmodule Cyfr.Boot do
   @moduledoc """
-  This boot's name: one id minted when the application starts, carried by
-  every row this process opens (execution attempts, the control-plane
-  claim). Never `node()` — distribution is not configured, so every node
-  was `nonode@nohost` and nothing could tell its own lapsed lease from
-  another node's crash. A restart is a different boot, which is exactly
-  what a lease sweeper needs to know.
+  Identifies this application boot. Execution attempts and control-plane
+  claims carry this id; each restart receives a different id.
   """
 
   @key {__MODULE__, :id}

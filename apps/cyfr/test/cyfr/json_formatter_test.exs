@@ -55,9 +55,7 @@ defmodule Cyfr.JsonFormatterTest do
     end
 
     test "metadata values with no String.Chars implementation do not crash the handler" do
-      # `:pid` and `:mfa` are standard Logger metadata; a roster that names
-      # one used to raise Protocol.UndefinedError inside the formatter, which
-      # takes the logger handler down with it.
+      # Logger metadata may contain pid and mfa terms that need safe encoding.
       original = Application.get_env(:logger, :default_formatter)
 
       on_exit(fn ->

@@ -46,9 +46,7 @@ defmodule Opus.ChainTest do
         description: "Chain root test component"
       })
 
-    # A distinct manifest subset gives the target its own release digest —
-    # identical bytes AND subset would be the same activation identity, and
-    # D2 would (correctly) treat invoking it as self-invocation.
+    # Give the target a distinct manifest digest so the call cannot match self-invocation.
     {:ok, target_component} =
       Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
         name: "chain-target",

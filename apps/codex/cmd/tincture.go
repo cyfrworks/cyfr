@@ -62,9 +62,7 @@ var tinctureVisibilitySetCmd = &cobra.Command{
 	Short: "Retired — publishing is a consent decision",
 	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Visibility is not a policy bit anymore: public-ness IS an active
-		// public profile. Point old muscle memory at the consent walk
-		// instead of round-tripping to a server verb that no longer exists.
+		// Public visibility requires an active public profile.
 		fmt.Fprintln(os.Stderr, "  To publish:   run profile.publish on the tincture's owner profile (plan -> preview -> commit)")
 		fmt.Fprintln(os.Stderr, "  To unpublish: run profile.revoke on the tincture's public profile")
 		fmt.Fprintln(os.Stderr, "  To check:     cyfr tincture visibility get <publisher> <name>")

@@ -85,19 +85,11 @@ defmodule Compendium.Manifest do
 
   The refusals, in order:
 
-    * a retired `setup`/`oauth`/`wasi` block — the frozen model has no arm
-      that could honor it, so accepting one would register a component
-      whose declared ask silently never applies;
-    * an unknown top-level key — a typo'd `nedes` block must refuse, not
-      register as "no needs";
-    * a malformed `needs`/`caps` block, refused by its owning validator;
-    * a malformed `tincture` or `dependencies` block — both feed
-      security-relevant readers (the CSP builder and the activation
-      graph/release digest) that used to shape-check lazily, per caller,
-      or drop bad entries silently.
-
-  "Is this manifest valid?" used to depend on which of five call paths
-  you asked.
+      * unsupported `setup`, `oauth` or `wasi` blocks;
+      * unknown top-level keys;
+      * malformed `needs` or `caps` blocks;
+      * malformed `tincture` or `dependencies` blocks, which feed CSP,
+        activation-graph and release-digest validation.
   """
   @spec validate(map()) :: :ok | {:error, term()}
   def validate(manifest) when is_map(manifest) do

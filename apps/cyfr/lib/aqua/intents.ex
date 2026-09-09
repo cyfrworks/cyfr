@@ -221,13 +221,8 @@ defmodule Aqua.Intents do
     |> String.trim_trailing("\n")
   end
 
-  # A full component ref (`type:ns.name:version` — the grammar the prompt
-
-  # teaches, validated by its owner) or a bare dotted name. The generic
-
-  # id-shape regex alone refused `:`, so every full ref was silently
-
-  # dropped.
+  # Accept a full component ref (`type:ns.name:version`), validated by
+  # its owner, or a bare dotted name.
 
   defp component_focus_ref(ref) do
     case Sanctum.ComponentRef.parse(ref) do

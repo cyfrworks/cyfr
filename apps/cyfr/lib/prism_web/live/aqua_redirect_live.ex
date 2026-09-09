@@ -3,9 +3,7 @@
 
 defmodule PrismWeb.AquaRedirectLive do
   @moduledoc """
-  `/a/<athanor>/agents` used to be the agents page. The estate's AQUA lives
-  at `/a/<athanor>/aqua` now (`PrismWeb.AquaLive`); the old address
-  forwards there, query and all.
+  Redirects `/a/<athanor>/agents` to `/a/<athanor>/aqua`, preserving the query.
   """
 
   use PrismWeb, :live_view

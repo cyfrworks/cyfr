@@ -60,9 +60,7 @@ defmodule Sanctum.Consent.ShapeDigestTest do
     end
   end
 
-  # ============================================================================
-  # §6 "Tool-group stability"
-  # ============================================================================
+  # Tool-group stability
 
   describe "tool-group stability" do
     test "a group name is structurally unrepresentable" do

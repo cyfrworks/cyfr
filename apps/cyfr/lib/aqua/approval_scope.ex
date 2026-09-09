@@ -5,13 +5,9 @@ defmodule Aqua.ApprovalScope do
   @moduledoc """
   How far an approval reaches, spelled once.
 
-  A person answers a card `:once`, `:conversation` ("always for this
-  chat"), `:always` (the agent, everywhere in this estate) or `:never`.
-  The wire, the card, the pane and the runner all carry the answer as a
-  string somewhere, and each used to decode it on its own — one of them
-  without `never`, which turned a "never" into a "once". This is the one
-  codec. (An action's `standing` declaration has its own, in
-  `Cyfr.Ops.Annotations.standing/1`.)
+  Encodes and decodes `:once`, `:conversation`, `:always` and `:never` for
+  the wire, cards, panes and runner. Action standing declarations use
+  `Cyfr.Ops.Annotations.standing/1`.
   """
 
   @type t :: :once | :conversation | :always | :never

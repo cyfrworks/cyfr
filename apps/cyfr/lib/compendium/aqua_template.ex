@@ -8,13 +8,9 @@ defmodule Compendium.AquaTemplate do
   repo's `seed/aqua/` on a checkout, the operator-editable `/app/seed/aqua`
   mount in Docker.
 
-  Provisioning copies nothing: the athanor's `aqua/` is served through the
-  seed overlay (`Arca.Overlay`, per-file shadow units), so the soul, every
-  role and every scroll the seed ships is visible immediately, an edited
-  file shadows only itself, an unedited one tracks the operator's mount
-  live, and deleting an edited copy reverts it to shipped. Upgrades are
-  therefore per-file and automatic — the digest-stamp machinery this
-  module used to carry is gone with the copies it compared.
+  The athanor's `aqua/` uses the seed overlay (`Arca.Overlay`). Unedited
+  files track the mounted seed; edits shadow their units, and deleting a
+  shadow restores the shipped content. Provisioning does not copy files.
 
   What remains here is the seed-side surface: `seed_check/0` (is the
   install's template well-formed — provisioning fails loud on a mount
@@ -135,13 +131,8 @@ defmodule Compendium.AquaTemplate do
     with :ok <- seed_check(),
          {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "aqua") do
       if Keyword.get(opts, :all, false) do
-        # Unit by unit, not one `delete_tree` on the aqua root. That root is
-        # ABOVE units, so `Arca.Overlay`'s lock does not cover it — the
-        # decorator locks a unit, and locking every unit beneath a tree
-        # would mean taking them in an order two processes could invert.
-        # `drop_unit/2` takes each unit's own lock in turn, so a reset can
-        # no longer land inside a concurrent `commit_unit/4` and leave a
-        # skill holding its manifest and nothing else.
+        # Drop each unit under its own lock. The aqua root is above the units
+        # and cannot be deleted while units remain beneath it.
         statuses
         |> Enum.sort_by(fn {unit, _state} -> unit end)
         |> Enum.reduce_while({:ok, []}, fn

@@ -3,13 +3,8 @@
 
 defmodule Arca.AppendParityTest do
   @moduledoc """
-  `append/3` behaves the same on both adapters where the guest can reach
-  it. The S3 adapter has always refused an append past
-  `Sanctum.Limits.default_max_response_size/0` (its read-modify-write must
-  bound the object it re-uploads); Local's `O_APPEND` had no ceiling, so
-  the same guest program grew a file on a laptop that an object-store
-  deployment refused — a divergence that was documented rather than
-  closed. Both now refuse `{:error, :object_too_large}` at the same bound.
+  Both adapters reject append operations above
+  `Sanctum.Limits.default_max_response_size/0` with `{:error, :object_too_large}`.
   """
   use ExUnit.Case, async: false
 

@@ -229,10 +229,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert html =~ "has no model yet"
     assert html =~ "Connect a model"
 
-    # Two people are in Home, so a message has to say who it is for. This
-    # is derived from the roster now rather than a per-athanor setting:
-    # Home used to answer every bare line by flag, which stopped meaning
-    # anything once "whose agent answers?" had more than one answer.
+    # With multiple human members, Home requires an explicit agent mention.
     assert html =~ "Talk to the group"
 
     pane(alice_view)

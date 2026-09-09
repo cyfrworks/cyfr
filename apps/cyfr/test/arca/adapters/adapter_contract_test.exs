@@ -7,14 +7,9 @@ defmodule Arca.Adapters.ContractTest do
   body per case, so an invariant cannot be added to one adapter's suite and
   forgotten in the other's.
 
-  The adapters disagreed on several answers before this file existed: a
-  path that is a file answered `{:error, :enotdir}` on one and `{:ok, []}`
-  on the other; `exists?` counted directories on one; a missing-key delete
-  was a silent `:ok`; a console-written directory marker (`foo/`) was a
-  zero-byte file in one walk and nothing in the other. Every case here is
-  a question both adapters must answer identically. (`list/2` no longer
-  appears here: the behaviour dropped the callback — names are derived from
-  `list_typed/2` in the `Arca` facade, one walk, nothing to diverge.)
+  Checks shared Local and S3 behavior for object reads, existence, deletion,
+  typed listings and path validation. Names-only listings derive from
+  `list_typed/2` in the Arca facade.
 
   The shared fixture tree under `guest/`: `a.txt` = "a", `b.txt` = "b",
   `sub/c.txt` = "c" (and, on S3, a `marker/` directory-marker object).
@@ -34,11 +29,8 @@ defmodule Arca.Adapters.ContractTest do
     assert {:ok, "round-trip"} = adapter.get(ctx, ["guest", "rt.txt"])
   end
 
-  # Both adapters create on first append and concatenate on the next. The
-  # ceilings diverge by design — S3's read-modify-write refuses past
-  # `:object_too_large` while Local's O_APPEND is unbounded — and each
-  # adapter's own suite asserts its side; concurrency semantics diverge the
-  # same way (last-writer-wins on S3) and are likewise not a shared case.
+  # Both adapters create on first append and concatenate subsequent data.
+  # Their separate suites cover size limits and concurrency semantics.
   defp contract_append_roundtrip(adapter, ctx) do
     assert :ok = adapter.append(ctx, ["guest", "log.jsonl"], "one\n")
     assert :ok = adapter.append(ctx, ["guest", "log.jsonl"], "two\n")
@@ -58,8 +50,7 @@ defmodule Arca.Adapters.ContractTest do
     assert {:error, :enotdir} = adapter.list_typed(ctx, ["guest", "a.txt"])
   end
 
-  # A directory is not a readable object: S3 has no key there and answers
-  # :not_found — Local used to leak a raw :eisdir for the same question.
+  # Both adapters return :not_found when reading a directory as an object.
   defp contract_get_directory_is_not_found(adapter, ctx) do
     assert {:error, :not_found} = adapter.get(ctx, ["guest", "sub"])
   end
@@ -130,10 +121,7 @@ defmodule Arca.Adapters.ContractTest do
     assert {:ok, []} = Arca.Storage.read_subtree_via(adapter, ctx, ["guest", "nope"])
   end
 
-  # A 300-byte name used to store fine on S3 (1024-byte keys) and
-  # `:enametoolong` on Local — exactly the divergence this file exists to
-  # prevent. Both adapters now refuse it identically at validation, before
-  # any I/O.
+  # Both adapters reject overlong names during validation, before I/O.
   defp contract_overlong_segment_refused(adapter, ctx) do
     long = String.duplicate("a", 300)
 

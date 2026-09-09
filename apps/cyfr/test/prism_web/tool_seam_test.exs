@@ -3,19 +3,17 @@
 
 defmodule PrismWeb.ToolSeamTest do
   @moduledoc """
-  `PrismWeb.Ops` is the console's seam onto the MCP tool surface —
-  one place that splits `"tool/action"`, one `error_message/1` vocabulary.
-
-  Eight console call sites reached past it and spelled
-  `ToolRegistry.call_external/3` themselves, all for the same reason:
-  `call_tool/3` wanted a socket, and work handed to `Aqua.TaskSupervisor`
-  has a context and no socket. The seam takes a context now, so the reason
-  is gone — and this test is what keeps the sites from coming back.
+  `PrismWeb.Ops` is the console's seam onto the operation catalog — one
+  place that splits `"tool/action"`, one `error_message/1` vocabulary.
+  `call_tool/3` takes a context, so work handed to `Aqua.TaskSupervisor`
+  has no reason to reach past it; this test keeps every other console
+  module from calling the catalog directly.
   """
 
   use ExUnit.Case, async: true
 
-  @seam "apps/cyfr/lib/prism_web/mcp_helpers.ex"
+  @seam "apps/cyfr/lib/prism_web/ops.ex"
+  @direct_call ~r/\bCatalog\.call_external\(/
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -23,21 +21,21 @@ defmodule PrismWeb.ToolSeamTest do
     offenders =
       [Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")]
       |> Enum.flat_map(&Path.wildcard/1)
-      |> Enum.reject(&String.ends_with?(&1, "mcp_helpers.ex"))
+      |> Enum.reject(&String.ends_with?(&1, "/ops.ex"))
       |> Enum.flat_map(fn path ->
         path
         |> Cyfr.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.with_index(1)
         |> Enum.filter(fn {line, _n} ->
-          String.contains?(line, "ToolRegistry.call_external")
+          Regex.match?(@direct_call, line)
         end)
         |> Enum.map(fn {_line, n} -> "#{Path.relative_to(path, root())}:#{n}" end)
       end)
 
     assert offenders == [],
            """
-           These console modules call the tool registry directly instead of
+           These console modules call the catalog directly instead of
            `PrismWeb.Ops.call_tool/3`:
 
            #{Enum.map_join(offenders, "\n", &"  #{&1}")}
@@ -115,11 +113,8 @@ defmodule PrismWeb.ToolSeamTest do
   # Any `Module.function(` call, whatever the module is called locally.
   @any_call ~r/\b([A-Z]\w*(?:\.[A-Z]\w+)*)\.([a-z_]\w*[!?]?)\(/
 
-  # `alias A.B.C`, `alias A.B.C, as: D`, `alias A.{B, C}` — the local name a
-  # module goes by in this file. Without this the guard anchored on literal
-  # roots, so one `alias Arca.ConversationStorage, as: Conversations` hid
-  # every call through it, and the roster read as two entries when it was
-  # really more.
+  # Resolve plain, renamed, and braced aliases before matching
+  # module dependencies.
   defp aliases(source) do
     simple =
       ~r/^\s*alias\s+([A-Z][\w.]*?)(?:,\s*as:\s*([A-Z]\w*))?\s*$/m

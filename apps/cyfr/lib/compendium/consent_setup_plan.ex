@@ -5,11 +5,9 @@ defmodule Compendium.ConsentSetupPlan do
   @moduledoc """
   The consent-sourced half of `Compendium.Component.setup_plan/2`.
 
-  When a component has a profile, "is it ready" stops being a question
-  about declared secrets and stored policy and becomes the §4.3 one:
-  does every bound need still have a live vault entry whose derived
-  binding digest matches what the consent recorded? A rebind or a
-  revocation makes a profile not-ready without touching the manifest.
+  A profile is ready only when every required need has a live vault binding
+  whose digest matches the consent. Rebinding or revocation can make it
+  unready without changing the manifest.
 
   `Compendium.Component.setup_plan/2` embeds this as the `consent` section
   of its response and derives the top-level `ready` from it — the consent
@@ -91,11 +89,8 @@ defmodule Compendium.ConsentSetupPlan do
     end)
   end
 
-  # A consent with no bound vault entry used to read vacuously ready. The
-  # declared needs are the missing half of the join: a required need with
-  # nothing bound is unsatisfied, per need, by name. With a binding
-  # present it necessarily names a declared need (commit refused anything
-  # else, and refused a second), so bound rows cover the declared side.
+  # Check each required need for a binding. Commit validation ensures each
+  # binding names a declared need and that no need has duplicate bindings.
   defp unbound_required(ctx, source_ref, bound) do
     with [] <- bound,
          {:ok, declared, _caps} when is_list(declared) <-
@@ -113,9 +108,7 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   defp check_ref(ctx, ref) do
-    # One owner for "would this entry resolve?" — this module used to carry
-    # its own status+binding copy, and a change to what "usable" means had
-    # to land in two files across the license boundary.
+    # Use the shared vault resolution check for status and binding validity.
     case VaultReader.usable(ctx.athanor_id, ref.vault_entry_id, ref.binding_digest) do
       {:ok, entry} ->
         {true, "bound to #{entry.name}"}

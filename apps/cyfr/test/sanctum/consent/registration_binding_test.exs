@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.RegistrationBindingTest do
-  # D5: binding a webhook or schedule to a profile mints a standing,
-  # attacker-timed invocation conduit carrying the profile's consented
-  # resources — so it takes the consent authorization class, and the
-  # profile must belong to the registration's own target.
+  # Binding a webhook or schedule requires consent authority and a profile matching its target.
   use ExUnit.Case, async: false
 
   alias Sanctum.Consent.RegistrationBinding

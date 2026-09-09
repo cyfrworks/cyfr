@@ -3,9 +3,7 @@
 
 defmodule EmissaryWeb.TinctureAccessTokenTest do
   @moduledoc """
-  Phase 2 S7: the cross-origin token-mint endpoint. A client exchanges its
-  Bearer/session credential (sent as a header, never a URL) for a short-lived
-  ?_t= token.
+  Tests exchanging a header credential for a short-lived tincture `?_t=` token.
   """
   use EmissaryWeb.ConnCase, async: false
 

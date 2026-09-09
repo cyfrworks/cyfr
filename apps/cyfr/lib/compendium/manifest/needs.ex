@@ -32,11 +32,8 @@ defmodule Compendium.Manifest.Needs do
 
   @name_re ~r/^[a-z][a-z0-9_-]{0,31}$/
   @type_re ~r/^[a-z_]+:[a-z0-9._-]+$/
-  # Credential kinds, then every executable component type — a need is
-  # either something from the vault or a component the graph must supply.
-  # The executable half was spelled out here, so adding a component type
-  # would have left this list one short and the need's type rejected as
-  # unknown. `Sanctum.ComponentRef` is where the types live.
+  # Needs accept credential kinds and the executable types defined by
+  # Sanctum.ComponentRef.
   @credential_kinds ~w(api_key oauth bundle)
   @kinds @credential_kinds ++ Sanctum.ComponentRef.executable_types()
   @entry_keys ~w(type reason fields scopes required)

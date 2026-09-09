@@ -109,7 +109,6 @@ defmodule Arca do
       config :cyfr, Cyfr.Retention,
         executions: 10_000,
         builds: 100
-
   """
 
   alias Sanctum.Context
@@ -124,7 +123,6 @@ defmodule Arca do
       :ok
       iex> Arca.get(ctx, ["guest", "file.txt"])
       {:ok, "hello"}
-
   """
   @spec get(Context.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
   def get(%Context{} = ctx, path),
@@ -140,16 +138,11 @@ defmodule Arca do
       :ok
       iex> Arca.get_json(ctx, ["guest", "data.json"])
       {:ok, %{"key" => "value"}}
-
   """
   @spec get_json(Context.t(), Arca.Storage.path()) :: {:ok, term()} | {:error, term()}
   def get_json(%Context{} = ctx, path) do
     with {:ok, content} <- get(ctx, path) do
-      # `Cyfr.Json.decode/1`, whose moduledoc names host-side storage as
-      # exactly its business. It used to tag Jason's own struct into the
-      # facade's vocabulary — a bare library struct inside a tagged tuple,
-      # and a second spelling of "that column is corrupt" for callers to
-      # match on.
+      # Normalize storage JSON errors through Cyfr.Json.decode/1.
       Cyfr.Json.decode(content)
     end
   end
@@ -178,7 +171,6 @@ defmodule Arca do
       iex> ctx = Sanctum.TestContext.local()
       iex> Arca.put(ctx, ["guest", "nested", "path", "file.txt"], "content")
       :ok
-
   """
   @spec put(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
   def put(%Context{} = ctx, path, content, opts \\ []),
@@ -195,7 +187,6 @@ defmodule Arca do
       iex> ctx = Sanctum.TestContext.local()
       iex> Arca.put_json(ctx, ["guest", "data.json"], %{"key" => "value"})
       :ok
-
   """
   @spec put_json(Context.t(), Arca.Storage.path(), term(), keyword()) :: :ok | {:error, term()}
   def put_json(%Context{} = ctx, path, data, opts \\ []) do
@@ -228,7 +219,6 @@ defmodule Arca do
       :ok
       iex> Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
       :ok
-
   """
   @spec append(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
   def append(%Context{} = ctx, path, content, opts \\ []),
@@ -249,7 +239,6 @@ defmodule Arca do
       :ok
       iex> Arca.get(ctx, ["guest", "file.txt"])
       {:error, :not_found}
-
   """
   @spec delete(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, path),
@@ -271,7 +260,6 @@ defmodule Arca do
       iex> {:ok, files} = Arca.list(ctx, ["guest", "listdir"])
       iex> Enum.sort(files)
       ["a.txt", "b.txt"]
-
   """
   # Names are the typed listing minus its kinds — one adapter callback, not
   # two spellings of the same walk.
@@ -327,7 +315,6 @@ defmodule Arca do
       iex> ctx = Sanctum.TestContext.local()
       iex> Arca.exists?(ctx, ["guest", "..", "aqua"])
       false
-
   """
   @spec exists?(Context.t(), Arca.Storage.path()) :: boolean()
   def exists?(%Context{} = ctx, path) do
@@ -359,7 +346,6 @@ defmodule Arca do
       :ok
       iex> Arca.delete_tree(ctx, ["conversations", "conv_1"])
       :ok
-
   """
   @spec delete_tree(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
   def delete_tree(%Context{} = ctx, path),
@@ -541,14 +527,9 @@ defmodule Arca do
       Arca.Storage.classify(path) == :seed ->
         {:error, :seed_read_only}
 
-      # The reserved tenant roots (`meta/` — the overlay's origin marks)
-      # mutate ONLY under the overlay's lexical internal-write scope: a
-      # forged mark would turn "reset to shipped" into deleting member
-      # work. Every legitimate mark writer already rides
-      # `with_internal_writes/1`, so the `auth_method == :system` key this
-      # gate once also accepted only widened the forge surface to every
-      # system-context caller in the codebase. Reads stay ordinary tenant
-      # reads.
+      # Reserved tenant roots mutate only within `with_internal_writes/1`.
+      # Origin marks control reset behavior and must not be forgeable by callers.
+      # Reads use ordinary tenant access checks.
       List.first(path) in Arca.Storage.reserved_roots() and
           not Arca.Overlay.internal_writes?() ->
         {:error, :forbidden}

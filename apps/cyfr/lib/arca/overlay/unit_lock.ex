@@ -5,45 +5,23 @@ defmodule Arca.Overlay.UnitLock do
   @moduledoc """
   Serializes writes to one unit, one unit at a time.
 
-  Every mutating callback on `Arca.Overlay` takes this — `put`, `append`,
-  `delete`, `delete_tree` — not only whole-unit replacement. The
-  replacement case below is why it exists; the rest are why it is on the
-  callbacks rather than on `commit_unit/4` alone.
+  Every mutating overlay callback takes the unit lock, including put,
+  append, delete, and delete_tree.
 
-  `Arca.Overlay.commit_unit/4` replaces a unit wholesale: it clears what is
-  there, writes the new content, and lands the sentinel last. Two of those
-  running against the same unit interleave, and the second one's clearing
-  step deletes the first one's files.
+  `Arca.Overlay.commit_unit/4` clears a unit, writes its contents, then
+  writes its sentinel. Commits to the same unit must be serialized.
 
-  The sharp case is copy-on-write materialization, because nobody asked for
-  it. Two writers touch a seed-backed unit the athanor has not materialized
-  yet; both see it incomplete, both materialize, and the second one's clear
-  removes the file the first writer had already been told was written. The
-  caller had its `:ok`. The bytes are gone.
+  The lock also serializes copy-on-write materialization with the write
+  that triggered it, preserving successful writes by concurrent callers.
 
-  A sentinel cannot close that window: it marks the end of a commit, and the
-  damage happens at the start of the next one. What is needed is that the
-  two commits do not overlap at all.
+  Callers perform storage work in their own processes while holding
+  the mutex. The coordinator only grants and releases locks.
 
-  So this is a mutex, not a single-flight — both commits are real writes and
-  both must happen, in some order. Callers do their own work in their own
-  process (storage I/O, the Ecto sandbox owner, the internal-writes process
-  flag and Logger metadata all stay where they belong); this process only
-  hands out the turn. Acquire and release are map operations, so the
-  coordinator never sits in front of the I/O it is ordering.
+  Locks are node-local and keyed by storage path; they do not coordinate
+  writes from separate server processes.
 
-  Node-local, like `Sanctum.OAuth.RefreshLock` and for the same reason:
-  there is no clustering to be had (no distribution config, SQLite by
-  default, bare-name singletons). A key is a storage path, so a
-  deployment-wide version would only need a different holder.
-
-  **Single-writer-node is therefore an invariant of overlaid storage**, not
-  a convenience: `Arca.CronSchedule.claim/4` lets several nodes share one
-  Postgres and race for schedules, but nothing serializes `commit_unit`
-  across nodes — node B's clean-slate can delete files node A already
-  acknowledged. Until this lock has a shared holder (a Postgres advisory
-  lock is the natural one), a multi-node deployment must keep component
-  writes — registration, pulls, builds — on one node.
+  Shared overlaid storage requires one writer node for registration,
+  pulls, builds, and other component mutations.
   """
 
   use GenServer
@@ -60,12 +38,9 @@ defmodule Arca.Overlay.UnitLock do
   Run `fun` with the lock on `key` held, waiting for it if another process
   holds it.
 
-  Returns whatever `fun` returns, or `{:error, :unit_locked}` if the wait
-  times out. The lock is released three ways, and it needs all three: when
-  `fun` returns, when the caller dies, and when a caller that timed out is
-  handed the turn anyway — `acquire/2`'s `catch :exit` says so, and the
-  server acts on it whether the abandoning process was still queued or had
-  just become the holder.
+  Returns the result of `fun`, or `{:error, :unit_locked}` on timeout.
+  Releases the lock when the function finishes, the caller dies, or
+  a timed-out caller abandons a grant.
   """
   @spec with_lock(term(), (-> result), non_neg_integer()) :: result | {:error, :unit_locked}
         when result: term()
@@ -140,15 +115,8 @@ defmodule Arca.Overlay.UnitLock do
   @impl true
   def handle_cast({:abandon, key, pid}, state) do
     case state[key] do
-      # The hand-off won the race: `hand_over/3` replied `:ok` and installed
-      # this process as the holder while its `GenServer.call` was already
-      # timing out, so the grant went to a caller that had stopped waiting.
-      # `with_lock/3` took its `{:error, :unit_locked}` branch, so it will
-      # never cast `{:release, …}`, and the monitor is all that is left —
-      # which held the unit until the caller PROCESS died rather than until
-      # its commit finished. For a long-lived caller (a conversation runner,
-      # a LiveView, the cron scheduler) that is the rest of the node's life.
-      # Filtering only the waiter queue could not see this case at all.
+      # The caller may time out after hand-over installs it as holder.
+      # Release that abandoned grant as well as removing queued waiters.
       {^pid, ref, waiters} ->
         Process.demonitor(ref, [:flush])
         {:noreply, hand_over(state, key, waiters)}

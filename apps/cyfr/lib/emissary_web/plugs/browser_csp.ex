@@ -3,12 +3,10 @@
 
 defmodule EmissaryWeb.Plugs.BrowserCSP do
   @moduledoc """
-  The content-security policy of the Prism pages: everything from this
-  origin and nothing else — scripts, styles (Tailwind's inline utilities
-  need `'unsafe-inline'`), images (plus `data:` for the inline icons),
-  fonts, the LiveView socket, and tincture iframes, which are same-origin
-  now that one endpoint serves them. Placed after
-  `put_secure_browser_headers`, whose own CSP it replaces.
+  Sets the Prism pages' same-origin content security policy for scripts,
+  styles, images, fonts, LiveView and tincture iframes. Allows inline styles
+  and data-URL images. Install after `put_secure_browser_headers` to replace
+  its default CSP.
   """
 
   @behaviour Plug

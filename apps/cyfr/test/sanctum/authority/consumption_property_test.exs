@@ -9,10 +9,7 @@ defmodule Sanctum.Authority.ConsumptionPropertyTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
-  # §6 "Separate properties", arm 2 — consumable authority: a child
-  # receives exactly the selected edge's resources, no more and no less,
-  # and every resource traces to the one consent revision the root was
-  # built from.
+  # A child receives exactly its selected edge's resources from the root consent revision.
 
   property "a child's resources are structurally the selected edge, on one consent" do
     check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 50) do

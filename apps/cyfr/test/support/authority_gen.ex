@@ -4,11 +4,9 @@ defmodule Sanctum.Test.AuthorityGen do
   @moduledoc """
   StreamData generators for the Authority property suite.
 
-  Generates randomized consented graphs — small ref alphabet so repeated
-  refs, self-edges and cycles occur naturally — together with a `meta`
-  oracle (source node, edge list, per-node declared needs, activation) the
-  properties check outcomes against. Digests are fabricated; real release
-  digests arrive with the digest phase.
+  Generates small randomized consent graphs with repeated references,
+  self-edges and cycles, plus metadata used as the property-test oracle.
+  Digests are synthetic fixture values.
   """
 
   import StreamData
@@ -82,11 +80,9 @@ defmodule Sanctum.Test.AuthorityGen do
   @doc """
   A randomized graph: `{graph_map, meta}`.
 
-  `meta` carries `source`, `nodes`, `edges` (as `{from, to, need}`),
-  `declared_needs` (per node: the slots of its outgoing named edges) and
-  `activation`. Pass `self_edges: false` to exclude self-edges (the D2
-  property needs graphs where the same-ref-different-digest case cannot be
-  satisfied by a real edge).
+  `meta` includes `source`, `nodes`, `edges` as `{from, to, need}`,
+  `declared_needs` per node and `activation`. `self_edges: false` excludes
+  self-edges so tests can isolate activation-identity matching.
   """
   def graph(opts \\ []) do
     allow_self = Keyword.get(opts, :self_edges, true)
@@ -234,8 +230,7 @@ defmodule Sanctum.Test.AuthorityGen do
   end
 
   @doc """
-  A need that passes the §2.7 rules at `auth`'s current node: `nil` when
-  the node declares no needs, otherwise its first declared need.
+  Returns nil when the current node declares no needs, otherwise its first declared need.
   """
   def compliant_need(auth, meta) do
     case Authority.current_node(auth) do
@@ -326,10 +321,7 @@ defmodule Sanctum.Test.AuthorityGen do
   end
 
   @doc """
-  The edges actually invocable from `node` under the §2.7 rules: all of
-  them when the node declares no needs; only the named ones otherwise —
-  a needs-declaring manifest must name every dependency, so its unnamed
-  edges are unreachable (omission is rejected).
+  Returns all edges for a node with no declared needs, otherwise only its named edges.
   """
   def reachable_edges(meta, node) do
     edges = outgoing(meta)[node] || []

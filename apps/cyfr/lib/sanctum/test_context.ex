@@ -1,16 +1,9 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# Compiled only in :test (and :dev to keep IEx playable). The production
-# release MUST NOT contain this module — Sanctum.TestContext.local/0
-# synthesises a permissive single-user Context with namespace `"testns"`,
-# which would violate the "every authenticated user has a real claimed
-# namespace" invariant if reachable from production code paths.
-#
-# Cross-app sharing rationale: lives in cyfr/lib/ rather than
-# apps/cyfr/test/support/ so opus, locus, and add-on tests can call
-# `Sanctum.TestContext.local/0` without each app maintaining its own copy.
-# The compile-time guard is the safety mechanism, not the directory.
+# Available only in :test and :dev for shared cross-app fixtures.
+# The compile-time guard must exclude this permissive context builder
+# from production releases.
 if Mix.env() in [:test, :dev] do
   defmodule Sanctum.TestContext do
     @moduledoc """

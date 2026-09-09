@@ -10,12 +10,8 @@ defmodule Emissary.MCP.ResourceRegistry do
 
   ## Configuration
 
-  None of its own. The resource roster DERIVES from the one provider
-  declaration (`config :cyfr, :tool_providers`): the configured tool
-  providers that export `read/2` with a non-empty resource surface serve
-  resources. The separate `:resource_providers` key was documented,
-  settable, set by nothing anywhere, and shadowed by a second shorter
-  hardcoded list — a knob that only looked turnable.
+  Resource providers derive from `config :cyfr, :tool_providers`: a
+  provider must export `read/2` and declare a non-empty resource surface.
 
   Providers must implement the `Emissary.MCP.ResourceProvider` behaviour.
   """
@@ -30,7 +26,7 @@ defmodule Emissary.MCP.ResourceRegistry do
   @cache_ttl :timer.hours(24)
   # Refresh 1 hour before TTL expires to prevent cache misses
   @refresh_interval :timer.hours(23)
-  # Timeout for resource read calls (matches ToolRegistry)
+  # Timeout for resource read calls (matches Cyfr.Ops.Catalog)
   @resource_timeout_ms :timer.minutes(5)
   # ============================================================================
   # Public API

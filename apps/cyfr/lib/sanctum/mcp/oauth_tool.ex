@@ -125,9 +125,7 @@ defmodule Sanctum.MCP.OAuthTool do
 
   defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
 
-  # An authorization refusal stays a vocabulary term — the dispatcher
-  # renders it with the auth code. `to_string/1` here used to crash on a
-  # refusal tuple whenever the annotation chokepoint was bypassed.
+  # Keep authorization refusals typed for dispatch error rendering.
   defp format_reason(reason) when is_binary(reason), do: reason
 
   defp format_reason(reason) do

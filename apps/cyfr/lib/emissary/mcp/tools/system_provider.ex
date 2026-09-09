@@ -335,11 +335,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     end
   end
 
-  # Through `Cyfr.Network` like every other outbound call in this tree. The
-  # raw `:httpc.request/4` this replaces passed no `ssl:` options at all —
-  # no verify_peer, no CA store, no hostname check — so its TLS posture was
-  # whatever the release's OTP defaults happened to be, and it was the one
-  # egress that skipped the SSRF and DNS-pinning policy the others share.
+  # Apply shared TLS verification, SSRF checks, and DNS pinning.
   defp do_probe_registry_health do
     url = registry_url()
 
@@ -364,12 +360,8 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       "error"
   end
 
-  # "ok" means the provider module is loaded and answers the provider
-  # contract — nothing deeper. (An optional health/0 callback once offered
-  # more; nothing ever implemented it, so status reported loadedness while
-  # reading as health. Before that, this called `handle/3` with an
-  # undeclared "ping" action — an entry point absent from every schema,
-  # invisible to the action audit and unreachable from the wire.)
+  # Status reports whether the module is loaded and implements the
+  # provider contract; it does not probe downstream service health.
   defp check_service(module) do
     cond do
       not Code.ensure_loaded?(module) ->

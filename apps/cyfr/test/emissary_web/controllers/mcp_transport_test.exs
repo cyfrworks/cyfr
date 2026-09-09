@@ -79,15 +79,9 @@ defmodule EmissaryWeb.MCPTransportTest do
       assert json_response(conn, 404)["error"]["code"] == -32_601
     end
 
-    # Progress must reach the client *while* the work runs. It used to be
-    # delivered by draining the mailbox after the handler had already returned,
-    # which turned a progress stream into one burst at the end — and left
-    # nothing open for a client to close, so cancellation had no signal.
-    #
-    # `Phoenix.ConnTest` dispatches inline, so the test process is the
-    # connection process; the handler runs in a task and reports back to it.
-    # Seeding the mailbox before dispatch is exactly the state the pump finds
-    # when a handler reports progress before the result is ready.
+    # Progress must reach the client while work runs. Phoenix.ConnTest uses
+    # this process as the connection; preload its mailbox to exercise progress
+    # that arrives before the task result.
     test "progress reported during the call is written before the response", %{conn: conn} do
       send(self(), {:mcp_progress, %{"method" => "notifications/progress", "seq" => 1}})
       send(self(), {:mcp_progress, %{"method" => "notifications/progress", "seq" => 2}})

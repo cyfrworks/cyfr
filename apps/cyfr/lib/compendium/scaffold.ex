@@ -66,8 +66,7 @@ defmodule Compendium.Scaffold do
       rel_files =
         Enum.map(files, fn {path, content} -> {Enum.drop(path, length(base_path)), content} end)
 
-      # Scaffolds stay cap-exempt — the enforcement roster in
-      # `Sanctum.Tenancy.Caps` is unchanged by the commit migration.
+      # Scaffolds are exempt from Sanctum.Tenancy.Caps.
       case Arca.Overlay.commit_unit(ctx, base_path, {:files, rel_files}, cap: :exempt) do
         {:ok, written} ->
           reference = local_ref(type, name, version)
@@ -120,9 +119,7 @@ defmodule Compendium.Scaffold do
       {:error,
        "Invalid component type: '#{type}'. Must be: reagent, catalyst, formula, or tincture"}
 
-  # The one version grammar — `Sanctum.ComponentRef.validate_version/1`,
-  # which every other ingress (registry, fork, path) already uses. Scaffold
-  # once carried its own `Version.parse` spelling, the sole outlier.
+  # Use the shared component version grammar.
   defp validate_version(version) when is_binary(version) do
     case Sanctum.ComponentRef.validate_version(version) do
       :ok -> :ok

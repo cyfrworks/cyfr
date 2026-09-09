@@ -3,10 +3,7 @@
 
 defmodule Sanctum.AuthTenantResolutionTest do
   @moduledoc """
-  Regression: every auth path that produces a `Sanctum.Context` from a fresh
-  login must call `Sanctum.Tenancy.resolve_status/2` with `force: true` so the
-  caller's scope/athanor is resolved from their memberships before any
-  tenant-scoped operation runs.
+  Fresh login contexts must resolve membership with force: true before tenant-scoped operations.
 
   `Sanctum.Context.build/1` leaves `athanor_id` nil when none is supplied, so an
   unresolved context is rejected by the tenant gate — the auth path is

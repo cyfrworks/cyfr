@@ -27,10 +27,8 @@ func init() {
 	rootCmd.AddCommand(pushCmd)
 	rootCmd.AddCommand(registryCmd)
 	registryCmd.AddCommand(registryDiscoverCmd)
-	// Note: `registry login` (interactive username/password prompt) was removed.
-	// Push credentials for cyfr.run are now per-user opaque push tokens,
-	// provisioned automatically by `cyfr login` (device-flow) via the
-	// /v1/identity/probe handoff.
+	// cyfr.run push tokens are provisioned by `cyfr login` through
+	// /v1/identity/probe.
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
 	newCmd.Flags().String("template", "", "Scaffold template (tincture only: react)")
 	rootCmd.AddCommand(newCmd)
@@ -157,7 +155,6 @@ var searchCmd = &cobra.Command{
 					continue
 				}
 				name := strVal(comp, "name")
-				// See the namespace_slug comment above — same rationale.
 				publisher := strVal(comp, "namespace_slug")
 				if publisher == "" {
 					publisher = strVal(comp, "publisher")
@@ -566,12 +563,6 @@ var registryDiscoverCmd = &cobra.Command{
 	},
 }
 
-// `registry login <registry>` removed post auth-refactor. cyfr.run push
-// credentials are now per-user opaque push tokens (`cyfr_pt_*`), provisioned
-// automatically after `cyfr login` via the device-flow probe handoff.
-// Namespace management (publisher claim/verify, tokens, members) lives under
-// `cyfr registry ...` subcommands defined in cmd/registry.go.
-
 // printDependencyInfo displays auto-pulled dependencies and warnings after a pull.
 func printDependencyInfo(result map[string]any) {
 	if pulled, ok := result["pulled_dependencies"].([]any); ok && len(pulled) > 0 {
@@ -599,9 +590,8 @@ func printDependencyInfo(result map[string]any) {
 	}
 }
 
-// printInspectDependencies displays dependency information when inspecting a component.
-// Prefers resolved dependency data (top-level fields from inspect enrichment),
-// falls back to raw manifest data for backward compatibility.
+// printInspectDependencies displays a component's dependencies.
+// Uses resolved inspect fields when available, otherwise the raw manifest.
 func printInspectDependencies(result map[string]any) {
 	// Check for resolved dependency fields (enriched inspect response)
 	if deps, ok := result["dependencies"]; ok {
@@ -758,15 +748,10 @@ func resolveAllVersions(_ *mcp.Client, s string) []string {
 	return []string{parsed.NameRef()}
 }
 
-// resolveComponentRef resolves a component reference, auto-resolving the
-// version when it's missing. If the ref already contains an explicit version,
-// returns it as-is. If the version is omitted:
-//   - Non-interactive mode: passes the version-less ref through to the server
-//     for auto-resolution (the server resolves to latest)
-//   - Interactive mode: fetches installed versions and asks for confirmation
-//
-// Refs containing '@' are passed through unchanged — see resolveAllVersions
-// for the rationale.
+// resolveComponentRef fills in an omitted component version.
+// Explicit versions pass through unchanged. Non-interactive mode leaves
+// resolution to the server; interactive mode uses the latest installed
+// version, falling back to server resolution when none is installed.
 func resolveComponentRef(ctx context.Context, client *mcp.Client, s string) (string, error) {
 	parsed := ref.ParseRef(s)
 	if parsed.HasVersion {

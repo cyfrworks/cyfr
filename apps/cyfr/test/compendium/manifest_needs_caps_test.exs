@@ -198,9 +198,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
     test "the retired blocks no longer contribute to the digest (subtractive change)" do
       legacy = %{"setup" => %{"policy" => %{"timeout" => "30s"}}, "wasi" => %{"http" => true}}
 
-      # Registration rejects these blocks, so only historical rows carry
-      # them — and the backfill recomputes those rows to the block-free
-      # digest below, converging old and new identities.
+      # Unsupported manifest blocks do not contribute to the release digest.
       {:ok, with_legacy} = Compendium.ReleaseDigest.compute("sha256:abc", legacy)
       {:ok, without} = Compendium.ReleaseDigest.compute("sha256:abc", %{})
       assert with_legacy == without
@@ -367,9 +365,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
     end
 
     test "one duration grammar: unit-suffixed and bare integer seconds both parse" do
-      # `Sanctum.Limits.parse_duration/1` accepts both; publish used to
-      # refuse the bare form. The two must agree, including the
-      # trailing-newline refusal (\A..\z, not ^..$).
+      # Match duration parsing at publish and runtime, including rejection of trailing newlines.
       for {value, ok?} <- [
             {"30s", true},
             {"500ms", true},

@@ -5,12 +5,8 @@ defmodule Cyfr.Json do
   @moduledoc """
   One spelling for "decode this stored JSON" and "encode or say so".
 
-  Six modules had grown six private `decode_json` copies with divergent
-  failure semantics — one silently surfaced the raw string into a
-  policy-audit field, and two decoded the SAME cron columns with opposite
-  postures — and the encode-failure fallback was spelled several ways,
-  one of which wrote `inspect/1` output into a stored log column, where
-  Elixir term syntax reads as data.
+  Provides JSON encoding and decoding with explicit fallback behavior
+  for callers handling stored values and log payloads.
 
   The failure posture is the caller's visible choice, not an accident of
   which private copy it reached:
@@ -78,11 +74,8 @@ defmodule Cyfr.Json do
   end
 
   @doc """
-  Strict encode, the write-side twin of `decode/1`: the caller owns what an
-  unencodable value means, and the reason is this module's one atom rather
-  than a `%Jason.EncodeError{}` escaping into caller error tuples
-  (`Arca.put_json` used to answer with the library's struct while its
-  read side spoke `:invalid_json`).
+  Encodes a value, returning `:invalid_json` for unencodable input.
+  Callers handle this error using the same vocabulary as `decode/1`.
   """
   @spec encode(term()) :: {:ok, String.t()} | {:error, :unencodable}
   def encode(value) do

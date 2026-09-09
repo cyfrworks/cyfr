@@ -31,7 +31,6 @@ defmodule Arca.Adapters.Local do
         storage_adapter: Arca.Adapters.Local,
         base_path: "./data",
         seed_path: "./seed"
-
   """
 
   @behaviour Arca.Storage
@@ -84,17 +83,9 @@ defmodule Arca.Adapters.Local do
     # No symlink guard needed here: the write lands at a temp name and
     # `File.rename/2` REPLACES a link at the target rather than following it.
     with :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
-      # Write-then-rename keeps the object atomic: a concurrent reader sees
-      # either the old or the new content, never a torn file, and a crash
-      # mid-write can't leave a partial artifact at the real path (matching
-      # the all-or-nothing semantics of an S3 object PUT).
-      #
-      # Atomic against readers, NOT against power loss: nothing fsyncs the
-      # file or its directory, so a crash can lose a write the caller saw
-      # succeed (a committed row may briefly reference a vanished blob).
-      # Accepted deliberately — every blob consumer tolerates a missing
-      # blob, the row plane is SQLite-journaled, and a datasync per publish
-      # tree was judged not worth its cost.
+      # Write-then-rename is atomic for readers: they see complete old or new
+      # content. Files and directories are not fsynced, so a power failure can
+      # lose a write that returned success.
       tmp_path = "#{full_path}.tmp.#{System.unique_integer([:positive])}"
 
       case File.write(tmp_path, content) do
@@ -397,9 +388,7 @@ defmodule Arca.Adapters.Local do
                   if File.rm(full) == :ok, do: acc + 1, else: acc
 
                 {:ok, %File.Stat{type: :directory, mtime: mtime}} when mtime < cutoff ->
-                  # A tmp-named directory predates the facade reserving the
-                  # shape on every segment; nothing can list it or count it,
-                  # so reclaim the whole subtree once it has aged out.
+                  # Reclaim the whole temporary subtree after it ages out.
                   case File.rm_rf(full) do
                     {:ok, _} -> acc + 1
                     {:error, _, _} -> acc

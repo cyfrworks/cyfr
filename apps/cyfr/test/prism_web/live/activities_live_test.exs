@@ -5,11 +5,8 @@ defmodule PrismWeb.ActivitiesLiveTest do
   @moduledoc """
   The activities log and its filters.
 
-  `filters_path/1` built the query string by interpolating a list of
-  `{key, value}` tuples, which raises — `String.Chars` has no implementation
-  for a list of tuples. Every filter that was not "all" therefore crashed the
-  LiveView on `push_patch`, the client reconnected with the filters reset, and
-  the page had no test to say so.
+  Checks that filter changes update the query string and preserve
+  the LiveView session.
   """
   use PrismWeb.ConnCase, async: false
 

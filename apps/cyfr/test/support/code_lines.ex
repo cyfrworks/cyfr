@@ -5,26 +5,14 @@ defmodule Cyfr.Test.CodeLines do
   @moduledoc """
   The one line filter behind every architecture roster test.
 
-  Eight tests each carried a private copy, in three quietly divergent
-  variants — some stripped one-line `@doc` strings and some did not, so a
-  `@doc "pinned by Sanctum.VaultTest"` counted as a reach in half the
-  rosters, while every copy's comment claimed it matched the siblings.
-  One spelling, the strict one: heredoc prose, `#` comments and one-line
-  `@doc`/`@moduledoc` strings are ABOUT a dependency, never a reach.
+  Excludes heredocs, line comments, and one-line documentation attributes
+  from dependency and source-pattern scans.
 
-  A kept line also has its multi-aliases expanded — `alias Foo.{A, B}`
-  becomes `alias Foo.A Foo.B` — because every roster matches a fully
-  qualified name by regex, and after `Foo.` a `{` is not `[A-Z]`. A plain
-  `alias Foo.Bar` names itself and so stays visible; the braced form named
-  nothing a roster could see, and `Sanctum.Provisioning` had been reaching
-  `Compendium.AutoIndexer` and `Compendium.Pull` through one for long
-  enough that `Compendium.ReverseSurfaceTest` passed while the license
-  boundary it guards had widened by two namespaces. Expanding here rather
-  than in each test keeps the twelve matchers reading one filter.
+  Expands multi-aliases: `alias Foo.{A, B}` becomes `alias Foo.A Foo.B`.
+  Source inventory matchers can then detect fully qualified names in
+  both plain and braced aliases.
 
-  Canonical copy: `apps/cyfr/test/support/code_lines.ex`. The other apps
-  load it through a `Code.require_file` shim (the `component_helpers`
-  precedent) so per-app `mix test` still works.
+  Other apps load this module through `Code.require_file` for per-app tests.
   """
 
   # `Foo.Bar.{A, B}` → the base and the brace body. Members are split on the

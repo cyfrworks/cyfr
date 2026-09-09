@@ -56,9 +56,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest.Probes do
 end
 
 defmodule Emissary.MCP.PlaneTaxonomyTest do
-  # The model §6 "Plane taxonomy" gate, both arms: every registered action
-  # is annotated, and the agent's virtual tools — which never reach the tool
-  # registry and so are invisible to its audit — are covered too.
+  # Require annotations on registered actions and agent virtual tools.
   use ExUnit.Case, async: true
 
   alias Emissary.MCP.ExternalProvider

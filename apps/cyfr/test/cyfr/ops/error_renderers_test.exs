@@ -5,13 +5,8 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
   @moduledoc """
   One refusal, one sentence, whichever surface renders it.
 
-  `Cyfr.Ops.Error`'s moduledoc names the three consumers that must
-  agree: the wire (`Emissary.MCP.Router`), the console
-  (`PrismWeb.Ops`) and the in-chain guest view
-  (`Opus.FormulaHandler`). `ToolRegistry` mints a fourth vocabulary of its own
-  for a crashed, exited or timed-out tool — and only the router knew it. The
-  console showed "The request failed — try again." for all three, losing the
-  timeout-vs-crash distinction, and the guest got Elixir term syntax.
+  Checks that MCP, console, and guest surfaces render typed tool errors
+  consistently and preserve the distinction between timeouts and crashes.
   """
   use ExUnit.Case, async: true
 
@@ -43,7 +38,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
       end
     end
 
-    test "keeps the distinction the console used to lose" do
+    test "distinguishes tool timeouts from crashes" do
       timeout = PrismWeb.Ops.error_message({:timeout, "Tool x timed out after 1ms"})
       crash = PrismWeb.Ops.error_message({:crashed, "Tool x crashed: boom"})
 

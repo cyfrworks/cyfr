@@ -19,7 +19,6 @@ defmodule Emissary.MCP.Message do
       iex> encoded = Emissary.MCP.Message.encode_result(1, %{"tools" => []})
       iex> encoded["result"]["resultType"]
       "complete"
-
   """
 
   alias Emissary.MCP.Protocol
@@ -47,9 +46,7 @@ defmodule Emissary.MCP.Message do
     method_not_found: -32601,
     invalid_params: -32602,
     internal_error: -32603,
-    # MCP's own resource-not-found code. It once aliased -32602, so a
-    # client could not tell "that URI does not exist" from "your params
-    # were malformed".
+    # MCP resource-not-found code.
     resource_not_found: -32002,
     header_mismatch: -32020,
     unsupported_protocol_version: -32022
@@ -77,11 +74,8 @@ defmodule Emissary.MCP.Message do
     execution_failed: -33100
   }
 
-  # Consent signals: -33500 to -33599 — the §4.3 remediation vocabulary
-  # (Emissary.MCP.ConsentSignal). Protocol-level so clients branch on the
-  # code and read the payload from `error.data`, instead of parsing
-  # "tag: {json}" back out of isError prose. (-333xx is the transport band
-  # above; integration-guide's error table also names -333xx/-334xx rows.)
+  # Consent remediation signals use codes -33500 to -33599.
+  # Clients read their structured payloads from error.data.
   @cyfr_consent_codes %{
     setup_required: -33501,
     consent_required: -33502,
@@ -89,10 +83,7 @@ defmodule Emissary.MCP.Message do
     restart_required: -33504
   }
 
-  # Combined CYFR error codes for lookup. (A -33200..-33299 registry band
-  # once lived here — component_not_found / registry_unavailable — with no
-  # producer anywhere: registry failures travel as %Compendium.OCI.Errors{}
-  # rendered to isError text. Deleted rather than kept decorative.)
+  # Combined CYFR error codes for lookup.
   @cyfr_error_codes @cyfr_transport_codes
                     |> Map.merge(@cyfr_auth_codes)
                     |> Map.merge(@cyfr_execution_codes)

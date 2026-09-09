@@ -66,21 +66,9 @@ defmodule Aqua.Runner.Addressing do
   def attachment_payload([]), do: nil
   def attachment_payload(refs) when is_list(refs), do: %{"attachments" => refs}
 
-  # What a message means for AQUA: `:post` (people talking), or a turn for
-  # an orchestrator.
-  #
-  # An estate with exactly one human addresses its agent with every
-  # message — there is nobody else the message could be for. Any other
-  # estate requires a mention, every time. There is deliberately no
-  # "follow-up" rule that keeps addressing the last agent: once sticky, a
-  # person who said `@tom` could not say anything to the people in the room
-  # without starting a turn, and there is no un-mention. Nothing is lost by
-  # it — `task_of/2` carries every human line since the last turn, so a
-  # bare follow-up reaches the agent on the next mention.
-  #
-  # This used to read a stored `answer_mode` and the athanor's `kind`. Both
-  # are derivable, and `"all"` stopped meaning anything once an agent could
-  # belong to a person: whose agent answers every line?
+  # A single-human athanor addresses its agent on every message.
+  # Other athanors require an explicit mention. task_of/2 includes all human
+  # messages since the last turn, including those without a mention.
   @doc false
   def addressing(state, _ctx, text, opts) do
     roster = Keyword.get(opts, :orchestrators, [])
@@ -99,10 +87,8 @@ defmodule Aqua.Runner.Addressing do
   @doc false
   def solo_human?(state), do: Members.solo?(state.athanor_id)
 
-  # Several people speak here, so the task prefixes each line with a name
-  # and the prompt says so. The same derivation as `solo_human?/1` —
-  # "whose message is this?" and "does the agent need to be told who is
-  # talking?" are one fact, and they used to be two stored ones.
+  # Prefix task lines with speaker names when several people are present,
+  # using the same membership count as solo_human?/1.
   @doc false
   def multi_author?(rows) do
     rows |> Enum.map(& &1.author) |> Enum.uniq() |> length() > 1
@@ -170,10 +156,8 @@ defmodule Aqua.Runner.Addressing do
   def clear_queue(%{queue: []} = state), do: state
   def clear_queue(state), do: %{state | queue: []} |> Aqua.Runner.Shared.broadcast({:queued, 0})
 
-  # Engine work pushed out of the runner's loop (turn starts, cancels,
-  # approvals). The WORK reports back by message; the SPAWN is checked
-  # here — a supervisor at its ceiling used to drop the work silently,
-  # leaving whatever waited on the message waiting forever.
+  # Run engine work outside the runner loop and check task creation.
+  # Supervisor capacity errors must reach the caller waiting for completion.
   @doc false
   def start_task(fun) do
     logger_metadata = Cyfr.LoggerContext.capture()
@@ -239,10 +223,7 @@ defmodule Aqua.Runner.Addressing do
           rescue
             e -> {:error, Exception.message(e)}
           catch
-            # The loads and the start reach GenServers and MCP: a call
-            # timeout or a dead process arrives as an exit, not an
-            # exception. Uncaught, the task died silently and the runner
-            # waited forever on a result that was never coming.
+            # Catch GenServer exits as well as exceptions so the runner receives a start result.
             kind, reason ->
               Logger.warning("[Aqua.ConversationRunner] turn start #{kind}: #{inspect(reason)}")
               {:error, "the engine did not respond while starting the turn"}

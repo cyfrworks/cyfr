@@ -19,10 +19,9 @@ defmodule Emissary.MCP.Progress do
 
   ## Contract
 
-  A caller opts in by sending `_meta.progressToken`. Without it the server has no
-  permission to stream and answers with a single JSON object — which is why
-  `emit/2` is a silent no-op when nobody is registered, rather than an error.
-  Progress is a courtesy; losing it must never fail the work.
+  Callers opt in to streaming with `_meta.progressToken`. Without it, the
+  server returns one JSON object and `emit/2` is a no-op. Lost progress
+  notifications must not fail the underlying work.
   """
 
   require Logger

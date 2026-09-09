@@ -459,12 +459,8 @@ defmodule Opus.CronMCP do
     end
   end
 
-  # Re-pointing a schedule at a newly resolved version is the same act as
-  # binding one, so it answers to the same two gates `create` and `update`
-  # run. It ran neither: a schedule could be silently moved onto a component
-  # version that does not exist, or onto one its bound profile's consent was
-  # never authorized for — the binding was checked once, against the version
-  # the schedule had when it was created.
+  # Apply component existence and profile-consent checks when rebinding
+  # a schedule to a resolved version.
   defp re_resolve_to(ctx, schedule, pinned, id) do
     with :ok <- verify_component_exists(ctx, pinned),
          :ok <- authorize_profile_binding(ctx, pinned, schedule.profile_id),

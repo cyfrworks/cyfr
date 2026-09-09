@@ -5,14 +5,9 @@ defmodule Sanctum.Unauthorized do
   @moduledoc """
   The authorization-refusal vocabulary and its one prose renderer.
 
-  `Sanctum.Context.authorize/3`, the permission gates, the tool dispatch
-  gates and `Sanctum.TenantPolicy.verify/2` refuse with `{:error, reason}`
-  where `reason` is a term from this vocabulary — data a caller can branch
-  on (`Sanctum.TinctureAccess` turns it into 403-vs-404, the MCP router
-  into a JSON-RPC auth code). Prose is a rendering concern: the boundary
-  that answers a human or a wire calls `message/2`. English used to be the
-  contract itself — one consumer matched on the `"Unauthorized"` prefix —
-  so rewording a refusal could silently turn a 403 into a 404.
+  Authorization gates return typed `{:error, reason}` values. Callers branch
+  on those reasons for status and protocol codes; `message/2` renders the
+  client-facing text.
   """
 
   @type reason ::
@@ -86,10 +81,7 @@ defmodule Sanctum.Unauthorized do
 
   def message(:missing_tenant, _), do: "Unauthorized: a resolved athanor_id is required"
 
-  # The person authenticated but no membership names an athanor — the one
-  # :missing_tenant surface its holder can act on, so the remediation rides
-  # in the vocabulary (the same pattern as the API-key scope hint below).
-  # The ingress plugs used to spell their own sentence for this.
+  # An authenticated person with no athanor membership needs operator assistance.
   def message({:missing_tenant, :no_membership}, _),
     do: "Unauthorized: your account has no athanor — contact your administrator"
 
@@ -137,11 +129,7 @@ defmodule Sanctum.Unauthorized do
     Sanctum.Consent.Authz.message(refusal)
   end
 
-  # A stored OAuth credential that can no longer be refreshed. It used to
-  # travel as the string `"authorization_required: <detail>"` — a type
-  # encoded in a prefix that nothing anywhere parsed, which is the shape this
-  # module exists to end. `detail` is the crafted half; the sentence is one
-  # spelling of the half that matters, so a caller can act on it.
+  # Render a stored OAuth credential that requires reauthorization with its supplied detail.
   def message({:authorization_required, detail}, _) do
     "Unauthorized: this connection must be re-authorized (#{detail})"
   end

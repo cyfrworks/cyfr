@@ -163,9 +163,6 @@ defmodule Sanctum.Auth.OAuth do
 
   defp extract_user_info(_), do: {:error, :invalid_auth_data}
 
-  # `Authorization: Bearer` and nothing else. The cookie fallback that used
-  # to sit here read `"cyfr_session_token"`, a key nothing has ever written —
-  # every writer and reader uses `:sanctum_session_token` — so it always
-  # returned nil. Restoring it under the real key would hand `POST /mcp`,
-  # which carries no CSRF protection, an ambient browser credential.
+  # Accept Authorization: Bearer only. This endpoint has no CSRF
+  # protection and must not authenticate using ambient browser cookies.
 end

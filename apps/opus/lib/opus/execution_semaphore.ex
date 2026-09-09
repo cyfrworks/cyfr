@@ -39,15 +39,10 @@ defmodule Opus.ExecutionSemaphore do
   refused, so a flock of same-minute schedules can never turn the next
   message in the chat into a refusal.
 
-  What this bounds, precisely, is an athanor's **roots**. Children are exempt
-  from the per-tenant count on purpose — a chain that could not get a child
-  slot would wait while holding its own root slot, which is a deadlock rather
-  than a limit — so an athanor's real footprint reaches `per_tenant ×
-  depth_cap` (`max_tenant_footprint/1`). With the shipped 128 / 16 / 8 that is
-  128: the whole node. The claim this section used to make — "it can exhaust
-  its own slots, never the node's" — was false for a tenant running deep
-  chains. `init/1` warns when the configured ratio allows it; the lever is to
-  lower `per_tenant` or raise the global pool, never to cap children.
+  The per-tenant limit counts roots; child executions are exempt to avoid
+  waiting for a child slot while holding a root slot. A tenant can therefore
+  occupy up to `per_tenant * depth_cap` slots. `init/1` warns if this can
+  exhaust the global pool; lower the per-tenant cap or enlarge the pool.
 
   ## Configuration
 
@@ -66,19 +61,12 @@ defmodule Opus.ExecutionSemaphore do
 
   ## Unreaped kills
 
-  Wasmex exposes no epoch interruption, so a timeout-killed execution's
-  component call keeps spinning on a detached native thread until node
-  restart (`Opus.SharedEngine` says why at length). The kill releases the
-  BEAM-side slot — which, uncorrected, lets one athanor cycle its full
-  per-tenant cap of killed executions indefinitely and accumulate spinning
-  cores. The executor therefore notes every timeout kill here
-  (`note_unreaped/0`), and a tenant with too many recent unreaped kills is
-  refused new root/background slots with `{:error, :tenant_unreaped_limit}`.
-  Entries decay after #{div(10 * 60 * 1000, 60_000)} minutes — there is no
-  completion signal to decrement on (the thread's JoinHandle is dropped), so
-  decay is what keeps a run of benign timeouts from locking a tenant out
-  forever. A real preemption fix is upstream (wasmex epoch support), or
-  recycling the process that holds the wedged native thread.
+  Wasmex has no epoch interruption: a timeout kill may leave native work
+  running after the BEAM-side slot is released. `note_unreaped/0` records
+  these kills, and excessive recent kills refuse new root/background slots
+  with `{:error, :tenant_unreaped_limit}`. Entries expire after
+  #{div(10 * 60 * 1000, 60_000)} minutes; native completion is not observable,
+  so expiry does not confirm that the work has stopped.
   """
 
   use GenServer
@@ -253,11 +241,7 @@ defmodule Opus.ExecutionSemaphore do
     try do
       GenServer.call(__MODULE__, :status)
     catch
-      # Same keys as the live reply, so a reader can narrow or render this
-      # without asking whether the semaphore answered. The one that mattered
-      # was `:tenants`: `Opus.MCP` reads `status.tenants` to show a member
-      # their own athanor's count, and its absence here was a KeyError at
-      # exactly the moment this clause exists to survive.
+      # Keep the same reply keys, including per-tenant counts, when unavailable.
       :exit, _reason ->
         %{
           max: 0,

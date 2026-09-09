@@ -10,13 +10,8 @@ defmodule Arca.WebhookDeliveryStorage do
   inserts safe — the second one fails with a unique-constraint violation
   and the caller treats it as a duplicate.
 
-  A claim has a `status`, because the delivery it guards outlives the HTTP
-  response. The controller answers `200 accepted` when the task SPAWNS, so
-  a claim released on a non-2xx response could never be released for work
-  that failed inside the task — the retry was answered `"duplicate"` for
-  the full TTL instead. `settle/3` is called by the task that knows the
-  outcome: `succeeded` keeps the claim, `failed` makes the delivery
-  re-deliverable so the sender's retry re-claims it.
+  The claim status tracks work that outlives the HTTP response. Tasks
+  call `settle/3`: success retains the claim, while failure permits retry.
 
   Rows are swept UNCONDITIONALLY on the `Cyfr.RetentionScheduler` cadence
   (its sweep roster runs whether or not per-kind retention policy is set),
@@ -83,10 +78,8 @@ defmodule Arca.WebhookDeliveryStorage do
   because a delivery that did not run is one the sender is entitled to
   retry.
 
-  This exists because `release/2` cannot be reached for the case it was
-  written for. The controller answers `200 accepted` when the task spawns,
-  so the plug's `register_before_send` — gated on a non-2xx — never fires
-  for work that failed inside the task. Only the task knows.
+  The controller returns 200 when it spawns the task. The task must
+  report its own failure to release the claim for retry.
   """
   @spec settle(String.t(), String.t(), :succeeded | :failed) :: :ok | {:error, term()}
   def settle(webhook_id, idempotency_key, outcome)
