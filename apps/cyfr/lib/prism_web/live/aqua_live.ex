@@ -142,13 +142,21 @@ defmodule PrismWeb.AquaLive do
   # The consent sheet for the soul's catalyst: the model got its key. The
   # kept catalogue predates the key, so it is dropped before the re-read —
   # a key bound here shows in the picker now, not when the entry lapses.
-  def handle_info({:consent_granted, _ref, _result}, socket) do
+  # The same sheet binds a model's key and re-consents a formula whose
+  # closure moved, so what it says names what was consented.
+  def handle_info({:consent_granted, ref, _result}, socket) do
     PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
+
+    said =
+      case ref do
+        "formula:local." <> name -> "#{name} consented again."
+        _ -> "Model connected."
+      end
 
     {:noreply,
      socket
      |> assign(:consent_sheet_ref, nil)
-     |> put_flash(:info, "Model connected.")
+     |> put_flash(:info, said)
      |> load_section(:agents)
      |> load_models()}
   end

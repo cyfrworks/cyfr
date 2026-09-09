@@ -141,8 +141,12 @@ defmodule Sanctum.Provisioning do
   #
   # Only automatic fills back off. `athanor.provision` reaches `provision/2`
   # directly, so a person who asks is never told to wait.
+  # `settings` is a document members write through `athanor.settings`, so
+  # nothing here may assume the shape provisioning left: anything that is
+  # not a timestamp reads as "no recent failure", and the next attempt
+  # replaces it with one that is.
   defp recently_failed?(athanor) do
-    with %{"at" => at} <- Athanors.settings(athanor)["provisioning_error"],
+    with %{"at" => at} when is_binary(at) <- Athanors.settings(athanor)["provisioning_error"],
          {:ok, failed_at, _} <- DateTime.from_iso8601(at) do
       DateTime.diff(DateTime.utc_now(), failed_at, :millisecond) < @retry_after_failure_ms
     else
@@ -210,7 +214,15 @@ defmodule Sanctum.Provisioning do
   defp claim_and_provision(%{id: athanor_id} = athanor, ctx) do
     case Registry.register(Sanctum.ProvisioningRegistry, athanor_id, :filling) do
       {:ok, _} ->
-        provision(athanor, ctx)
+        # Released when this attempt ends, not when the process does: one
+        # task fills several estates in turn (a sign-in retries a person's
+        # groups), and a key held past its own attempt would keep the next
+        # caller out of an estate nobody is filling.
+        try do
+          provision(athanor, ctx)
+        after
+          Registry.unregister(Sanctum.ProvisioningRegistry, athanor_id)
+        end
 
       {:error, {:already_registered, _}} ->
         {:error, :provisioning_busy}

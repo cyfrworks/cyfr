@@ -81,38 +81,63 @@ defmodule Sanctum.ProvisioningReadinessTest do
     send(holder, :release)
   end
 
-  test "a sign-in's own fill is claimed like any other", %{ctx: ctx, group: group} do
-    # Every filler asks for the claim, not only the readers: a sign-in fills
-    # the estate it just minted, and a reader arriving mid-fill must join
-    # that attempt rather than queue a second one behind the same lock.
+  test "a sign-in's own fill asks for the claim like any other" do
+    # Every filler asks for the claim, not only the readers. Pinned on the
+    # estate the sign-in actually fills: mint it first, hold ITS claim, then
+    # sign in again. A sign-in that filled unclaimed would fill it anyway.
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|claimed-#{n}",
+        provider: "github",
+        email: "claimed#{n}@example.com",
+        verified: true
+      })
+
+    assert {:ok, own} = Sanctum.Provisioning.ensure_personal_athanor(user)
+
+    # The fill that just ran failed (this suite ships no bundle), so clear
+    # the record: what is under test is the claim, not the backoff.
+    {:ok, own} = Athanors.put_settings(own, %{"provisioning_error" => nil})
+    refute own.provisioned_at
+
     parent = self()
 
     holder =
       spawn_link(fn ->
-        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
+        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, own.id, :filling)
         send(parent, :claimed)
         receive do: (:release -> :ok)
       end)
 
     assert_receive :claimed
 
-    {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: "github|https://github.com|claimed-#{System.unique_integer([:positive])}",
-        provider: "github",
-        email: "claimed#{System.unique_integer([:positive])}@example.com",
-        verified: true
-      })
-
-    # Its own estate is a different athanor, so this one is untouched: what
-    # is pinned here is that the claim, not the lock, is what a fill asks
-    # for first.
     assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user)
-    assert {:ok, %{provisioned_at: nil}} = Athanors.get(group.id)
-    assert :ok = Sanctum.Provisioning.start_provisioning(ctx)
-    assert {:ok, %{provisioned_at: nil}} = Athanors.get(group.id)
+    assert {:ok, %{provisioned_at: nil}} = Athanors.get(own.id)
+    assert Athanors.settings(Athanors.get(own.id) |> elem(1))["provisioning_error"] == nil
 
     send(holder, :release)
+  end
+
+  test "a claim is released when its attempt ends, not when its task does" do
+    # One task fills several estates in turn — a sign-in retries a person's
+    # groups — so a key held for the life of the task would keep the next
+    # caller out of an estate nobody is filling.
+    n = System.unique_integer([:positive])
+    creator = "github|https://github.com|serial-#{n}"
+    {:ok, first} = Athanors.create_group(creator, "Serial one #{n}")
+    {:ok, second} = Athanors.create_group(creator, "Serial two #{n}")
+
+    ctx = fn id -> %{Sanctum.TestContext.local() | user_id: creator, athanor_id: id} end
+
+    # Fill both from one process, as the group retry does.
+    assert :ok = Sanctum.Provisioning.start_provisioning(ctx.(first.id))
+    assert :ok = Sanctum.Provisioning.start_provisioning(ctx.(second.id))
+
+    # Neither key outlives its own attempt.
+    assert Registry.lookup(Sanctum.ProvisioningRegistry, first.id) == []
+    assert Registry.lookup(Sanctum.ProvisioningRegistry, second.id) == []
   end
 
   test "a fill that failed is not started again by the notice it caused",
@@ -136,6 +161,22 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert {:error, {:provisioning_failed, _, _}} = Sanctum.Provisioning.provision(again, ctx)
     {:ok, retried} = Athanors.get(group.id)
     assert Athanors.settings(retried)["provisioning_error"]["at"] != first_at
+  end
+
+  test "settings a member wrote cannot break the readiness read", %{ctx: ctx, group: group} do
+    # `settings` is a document any member writes through `athanor.settings`,
+    # so nothing reading it may assume the shape provisioning left. A
+    # timestamp that is not one reads as "no recent failure", and the next
+    # attempt replaces it with one that is.
+    for junk <- [42, "not a date", %{"nested" => true}, nil, []] do
+      {:ok, _} = Athanors.put_settings(group, %{"provisioning_error" => %{"at" => junk}})
+      assert {:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx)
+      assert Sanctum.Provisioning.provisioned?(ctx) == false
+    end
+
+    # The whole record being nonsense is no different.
+    {:ok, _} = Athanors.put_settings(group, %{"provisioning_error" => "wat"})
+    assert {:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx)
   end
 
   test "a context with no athanor is never ready" do
