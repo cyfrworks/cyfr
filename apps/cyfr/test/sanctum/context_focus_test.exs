@@ -180,12 +180,12 @@ defmodule Sanctum.ContextFocusTest do
     ctx: ctx
   } do
     c = ctx.(alice, a.id, true)
-    out = Sanctum.Tenancy.revalidate(c)
+    {:ok, out} = Sanctum.Tenancy.revalidate(c)
     assert out.athanor_id == a.id
     refute out.platform_admin
 
     :ok = Members.remove_member(a, user_id: alice)
-    out = Sanctum.Tenancy.revalidate(c)
+    {:ok, out} = Sanctum.Tenancy.revalidate(c)
     assert out.athanor_id == nil
   end
 

@@ -251,6 +251,29 @@ defmodule Sanctum.ProvisioningTest do
     assert profile.kind == "owner"
   end
 
+  test "with a registry that does not answer, an OPTIONAL dependency is left out and the estate still provisions",
+       %{bundle_dir: bundle_dir} do
+    # The suite's registry host is a closed port: configured, unreachable.
+    assert Compendium.RegistryHost.configured?()
+
+    write_bundle!(bundle_dir,
+      deps: [%{"ref" => "catalyst:someone.elsewhere", "optional" => true}]
+    )
+
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
+
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Unreachable #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.ensure_provisioned(in_group)
+
+    {:ok, group} = Athanors.get(group.id)
+    assert group.provisioned_at
+    refute Map.has_key?(Jason.decode!(group.settings || "{}"), "provisioning_error")
+    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+    assert profile.kind == "owner"
+  end
+
   test "a bundle whose closure cannot be pulled leaves the athanor unprovisioned, loudly, and retries",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir, deps: ["catalyst:someone.elsewhere"])

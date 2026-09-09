@@ -39,6 +39,10 @@ defmodule Opus.Host do
     to: Cyfr.Ops.Catalog,
     as: :call_in_chain
 
+  @doc "Whether the host, not the catalog, runs `tool.action` for a chain."
+  @spec host_intercepted?(String.t(), String.t() | nil) :: boolean()
+  defdelegate host_intercepted?(name, action), to: Cyfr.Ops.Catalog
+
   @doc "The material a consented vault edge projects for this execution."
   @spec unseal(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   defdelegate unseal(ctx, vault_resource), to: Sanctum.VaultReader, as: :fetch

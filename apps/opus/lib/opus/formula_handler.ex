@@ -337,12 +337,15 @@ defmodule Opus.FormulaHandler do
 
   # Execution dispatch never rides the tool registry: the invocation is
   # decided by the transition relation and executed by Opus.Chain with
-  # host-threaded lineage. Everything else — including a parse failure —
+  # host-threaded lineage. Which actions that is, the catalog says — the
+  # ones annotated `host: :intercepted` — so the host and the annotation
+  # cannot drift apart. Everything else — including a parse failure —
   # goes to the in-chain registry chokepoint.
   defp authority_execution_request(json_request, opts) do
     with authority when not is_nil(authority) <- opts[:authority],
-         {:ok, %{tool: "execution", action: action, args: args}}
-         when action in ["run", "run_stream"] <- parse_mcp_request(json_request, opts[:limits]) do
+         {:ok, %{tool: "execution", action: action, args: args}} <-
+           parse_mcp_request(json_request, opts[:limits]),
+         true <- Opus.Host.host_intercepted?("execution", action) do
       {:intercept, action, args}
     else
       _ -> :registry
@@ -479,7 +482,11 @@ defmodule Opus.FormulaHandler do
       parent_execution_id: Keyword.fetch!(opts, :parent_execution_id),
       root_execution_id: opts[:root_execution_id],
       declared_needs: opts[:declared_needs] || [],
-      activation_digest: opts[:activation_digest]
+      activation_digest: opts[:activation_digest],
+      # Who invoked the child — this formula — for what its row keeps of
+      # its output: a model call the assistant made is kept as a digest
+      # and its usage, never the provider's reply.
+      parent_reference: opts[:parent_reference]
     ]
   end
 

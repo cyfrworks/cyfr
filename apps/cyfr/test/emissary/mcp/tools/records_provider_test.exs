@@ -143,6 +143,20 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     # execution's id; another estate reads nothing.
     test "record.payload answers a retained result to a member of the athanor", %{ctx: ctx} do
       exec = "exec_payload_#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Execution, [
+          %{
+            id: exec,
+            athanor_id: ctx.athanor_id,
+            user_id: ctx.user_id,
+            reference: "reagent:local.pay:0.1.0",
+            status: "completed",
+            started_at: now
+          }
+        ])
+
       {:ok, _} = Arca.ExecutionPayloads.put(ctx, exec, "result", ~s({"answer":42}), "api")
 
       assert {:ok, %{execution_id: ^exec, kind: "result", bytes: 13, content: content}} =
@@ -818,7 +832,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     # tool crashed". Dropping the table inside the sandbox transaction is
     # the outage: it rolls back with the test, on both adapters.
     test "record.get", %{ctx: ctx} do
-      Arca.Repo.query!("DROP TABLE executions")
+      drop_executions!()
 
       assert {:error, reason} = MCP.handle("record", ctx, %{"action" => "get", "id" => "exec_x"})
       assert err_msg(reason) =~ "unavailable"
@@ -838,5 +852,14 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   defp err_msg(reason) do
     Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
+  end
+
+  # An outage, simulated: the table is gone. Postgres holds the tables that
+  # reference `executions` to it and drops them along; SQLite has no such
+  # clause and no such need.
+  defp drop_executions! do
+    if Arca.Repo.__adapter__() == Ecto.Adapters.Postgres,
+      do: Arca.Repo.query!("DROP TABLE executions CASCADE"),
+      else: Arca.Repo.query!("DROP TABLE executions")
   end
 end

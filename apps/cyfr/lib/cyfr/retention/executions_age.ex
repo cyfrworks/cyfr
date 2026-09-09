@@ -26,6 +26,11 @@ defmodule Cyfr.Retention.ExecutionsAge do
 
     if dry_run,
       do: Arca.Execution.count_older_than_days(days, opts),
-      else: Arca.Execution.delete_older_than_days(days, opts)
+      else:
+        Cyfr.Retention.ExecutionRows.delete(
+          ctx,
+          fn -> Arca.Execution.ids_older_than_days(days, opts) end,
+          opts
+        )
   end
 end

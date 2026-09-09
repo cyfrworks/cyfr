@@ -33,13 +33,6 @@ if config_env() != :test do
   env_str = fn key, default -> env!(key, :string?, nil) || default end
   env_int = fn key, default -> env!(key, :integer?, nil) || default end
 
-  env_bool = fn key, default ->
-    case env!(key, :boolean?, nil) do
-      nil -> default
-      value -> value
-    end
-  end
-
   # Comma-separated lists: origins, CIDRs, egress targets, operator emails.
   # The split-trim-reject-empty was written out five times; a list that reads
   # one way in four places and another in the fifth is the shape of a
@@ -54,6 +47,15 @@ if config_env() != :test do
   # Reader handed to `Cyfr.RuntimeConfig` so the pure resolvers (auth provider,
   # storage, repo) read the same Dotenvy-merged environment this file does.
   getenv = fn key -> env_str.(key, nil) end
+
+  # A switch is `on`/`off` (or true/false, yes/no, 1/0); an unrecognised
+  # spelling refuses the boot rather than reading as the default.
+  env_bool = fn key, default ->
+    case Cyfr.RuntimeConfig.switch(getenv, key, default) do
+      {:ok, value} -> value
+      {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+    end
+  end
 
   # Which release evaluates this file: "cyfr" (the app), "builder" (the
   # build-isolation container), or nil under plain `mix` (dev). Set by the

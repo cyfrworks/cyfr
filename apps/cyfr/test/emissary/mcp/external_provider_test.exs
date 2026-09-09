@@ -35,6 +35,27 @@ defmodule Emissary.MCP.ExternalProviderTest do
                ExternalProvider.try_handle("disabled-srv:tool", ctx, %{}, :in_chain)
     end
 
+    test "a row handed in is the revision dispatch speaks to, not a second read", %{ctx: ctx} do
+      {:ok, stored} =
+        Arca.McpServerStorage.put(ctx, %{name: "one-rev", url: "https://x.com/mcp", enabled: true})
+
+      # The caller judged a revision that is now disabled: dispatch sees
+      # that revision, whatever the row says by now.
+      assert {:error, "Server 'one-rev' is disabled"} =
+               ExternalProvider.try_handle("one-rev:tool", ctx, %{}, :in_chain,
+                 server: %{stored | enabled: false}
+               )
+
+      # A row for another server is nobody's revision of this one.
+      assert {:error, msg} =
+               ExternalProvider.try_handle("one-rev:tool", ctx, %{}, :in_chain,
+                 server: %{stored | name: "other"}
+               )
+
+      refute msg =~ "disabled"
+      Emissary.MCP.ExternalServerSupervisor.stop("one-rev", ctx.athanor_id)
+    end
+
     test "refuses an external-plane call unless the server opts in", %{ctx: ctx} do
       Arca.McpServerStorage.put(ctx, %{
         name: "chain-only",

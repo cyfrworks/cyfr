@@ -250,7 +250,7 @@ defmodule Sanctum.Tenancy.UsersTest do
       )
 
     {:ok, _} = Users.deny(u)
-    out = Sanctum.Tenancy.revalidate(ctx)
+    {:ok, out} = Sanctum.Tenancy.revalidate(ctx)
     refute out.authenticated
     assert out.athanor_id == nil
   end

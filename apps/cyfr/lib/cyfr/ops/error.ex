@@ -47,11 +47,13 @@ defmodule Cyfr.Ops.Error do
           {:not_found, resource :: String.t(), id :: String.t()}
           | {:invalid_argument, message :: String.t()}
           | {:unavailable, what :: String.t()}
+          | {:corrupt, what :: String.t()}
           | {:crashed, message :: String.t()}
           | {:exit, message :: String.t()}
           | {:timeout, message :: String.t()}
           | :action_missing
           | {:unknown_action, name_action :: String.t()}
+          | :control_plane_lost
 
   @doc "Whether a term is this vocabulary — the renderers' dispatch test."
   @spec reason?(term()) :: boolean()
@@ -59,12 +61,14 @@ defmodule Cyfr.Ops.Error do
   def reason?({:invalid_argument, message}) when is_binary(message), do: true
   def reason?({:conflict, message}) when is_binary(message), do: true
   def reason?({:unavailable, what}) when is_binary(what), do: true
+  def reason?({:corrupt, what}) when is_binary(what), do: true
   def reason?({:crashed, message}) when is_binary(message), do: true
   def reason?({:exit, message}) when is_binary(message), do: true
   def reason?({:timeout, message}) when is_binary(message), do: true
   def reason?(:unit_locked), do: true
   def reason?(:action_missing), do: true
   def reason?({:unknown_action, name_action}) when is_binary(name_action), do: true
+  def reason?(:control_plane_lost), do: true
   def reason?(_), do: false
 
   @doc """
@@ -78,6 +82,11 @@ defmodule Cyfr.Ops.Error do
   # The write met a newer version than the one the caller edited.
   def message({:conflict, message}), do: message
   def message({:unavailable, what}), do: "#{what} is unavailable — retry shortly"
+  # Stored bytes that no longer match the digest their row recorded: an
+  # integrity refusal, not an outage — a retry will not help, and the
+  # bytes are not served under the digest a caller would trust.
+  def message({:corrupt, what}),
+    do: "#{what} does not match its recorded digest and was not served"
 
   # `Cyfr.Ops.Catalog` mints these three when a tool crashes, exits
   # or overruns its deadline. Each already carries a crafted, client-safe
@@ -105,6 +114,13 @@ defmodule Cyfr.Ops.Error do
   # sentence where the wire named the missing/unknown action.
   def message(:action_missing), do: "Missing required argument: action"
   def message({:unknown_action, name_action}), do: "Unknown action: #{name_action}"
+
+  # `Cyfr.ControlPlane.assert_owner/0`: this boot's lease on the database
+  # lapsed, so it admits nothing until it wins the claim back. Retryable,
+  # and worth saying so on every surface — the chat pane rendered it as a
+  # generic failure.
+  def message(:control_plane_lost),
+    do: "This server does not currently own its database's control plane — retry shortly"
 
   @doc """
   The client-safe sentence for ANY refusal a tool can produce, or `nil` when

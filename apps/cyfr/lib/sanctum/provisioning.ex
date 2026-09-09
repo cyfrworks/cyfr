@@ -198,12 +198,15 @@ defmodule Sanctum.Provisioning do
 
     with {:ok, _scan} <- register_bundle(athanor_id),
          :ok <- aqua_definitions(ctx),
-         %{failed: []} = closure <- Pull.ensure_published_deps(ctx, bundle_deps_to_pull(ctx)),
+         %{failed: []} = closure <-
+           Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx, :required)),
+         optional <- pull_optional_deps(ctx),
          {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx),
          :ok <- all_minted(bootstrap) do
       Logger.info(
         "[Provisioning] #{athanor_id} provisioned " <>
-          "(pulled #{length(closure.pulled)}, minted #{length(bootstrap.minted)})"
+          "(pulled #{length(closure.pulled)} required and #{optional} optional, " <>
+          "minted #{length(bootstrap.minted)})"
       )
 
       index_agents(ctx)
@@ -467,21 +470,17 @@ defmodule Sanctum.Provisioning do
       # something — a transient registry outage at the previous sync must
       # not leave the closure missing until the next release. Both are
       # cheap no-ops when nothing is missing.
-      case bundle_deps_to_pull(ctx) do
-        [] ->
+      case Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx, :required)) do
+        %{failed: []} ->
           :ok
 
-        missing ->
-          case Pull.ensure_published_deps(ctx, missing) do
-            %{failed: []} ->
-              :ok
-
-            %{failed: failed} ->
-              Logger.warning(
-                "[Provisioning] #{athanor.id}: dep pull after sync failed: #{inspect(failed)}"
-              )
-          end
+        %{failed: failed} ->
+          Logger.warning(
+            "[Provisioning] #{athanor.id}: dep pull after sync failed: #{inspect(failed)}"
+          )
       end
+
+      _ = pull_optional_deps(ctx)
 
       bootstrap_synced(ctx, athanor.id)
       collapse_pristine(ctx, athanor.id)
@@ -542,19 +541,55 @@ defmodule Sanctum.Provisioning do
     :ok
   end
 
-  # Every static dependency the athanor's local components declare that
-  # is not present — the published catalysts the bundled AQUA depends on.
-  # What the bundle needs pulled before it can be consented: every missing
-  # required dependency, plus the optional ones (the model catalysts) when
-  # a registry is configured to pull them from — then a failed pull leaves
-  # the estate unprovisioned and retried, as for any dependency. With no
-  # registry the optional ones are left out: the estate boots on what the
-  # bundle ships, and its activations cover what is there.
-  defp bundle_deps_to_pull(ctx) do
-    include = if Compendium.RegistryHost.configured?(), do: :all, else: :required
-    missing_bundle_deps(ctx, include)
+  # The bundle's optional dependencies — the model catalysts — are pulled
+  # when a registry is configured to pull them from, as a courtesy with a
+  # budget: a registry that is slow, unreachable or unset-by-default and
+  # absent leaves the estate provisioned on what the bundle ships, its
+  # activations covering what is there, and the catalysts arrive when a
+  # model is connected. A required dependency that fails to pull is a
+  # provisioning failure, retried; an optional one never is.
+  @optional_pull_budget_ms 10_000
+
+  defp pull_optional_deps(ctx) do
+    optional =
+      if Compendium.RegistryHost.configured?(),
+        do: missing_bundle_deps(ctx, :all) -- missing_bundle_deps(ctx, :required),
+        else: []
+
+    case optional do
+      [] ->
+        0
+
+      refs ->
+        task = Task.async(fn -> Pull.ensure_published_deps(ctx, refs) end)
+
+        case Task.yield(task, @optional_pull_budget_ms) || Task.shutdown(task, :brutal_kill) do
+          {:ok, %{pulled: pulled, failed: []}} ->
+            length(pulled)
+
+          {:ok, %{pulled: pulled, failed: failed}} ->
+            Logger.warning(
+              "[Provisioning] #{length(failed)} optional dependencies not pulled " <>
+                "(#{inspect(Enum.map(failed, &elem(&1, 0)))}); the estate provisions without them"
+            )
+
+            length(pulled)
+
+          _ ->
+            Logger.warning(
+              "[Provisioning] optional dependencies not pulled within " <>
+                "#{@optional_pull_budget_ms} ms; the estate provisions without them"
+            )
+
+            0
+        end
+    end
   end
 
+  # Every static dependency the athanor's local components declare that
+  # is not present — the published catalysts the bundled AQUA depends on;
+  # `include: :required` names those the bundle cannot run without,
+  # `:all` adds the optional ones.
   defp missing_bundle_deps(ctx, include) do
     case Arca.ComponentStorage.list_components(ctx,
            publisher: Compendium.ComponentPath.default_publisher(),

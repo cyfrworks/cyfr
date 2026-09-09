@@ -5,8 +5,8 @@ defmodule Sanctum.Test.FailingResolver do
   @moduledoc """
   Test double that always returns `{:error, :resolve_failed}` from `resolve/1`.
   Wired via `config :cyfr, :tenancy_resolver_override`. Used by tests that
-  exercise the resolver-failure logging path (`Sanctum.Tenancy.resolve_into/1`
-  graceful degradation: log, then return the unmodified context).
+  exercise the resolver-failure path (`Sanctum.Tenancy.resolve_status/2`
+  refusing, and logging, when the resolver cannot answer).
   """
   def resolve(_user_id), do: {:error, :resolve_failed}
 end

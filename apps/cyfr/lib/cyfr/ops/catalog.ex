@@ -271,7 +271,7 @@ defmodule Cyfr.Ops.Catalog do
       |> put_lineage(Keyword.get(opts, :lineage))
 
     with :ok <- check_in_chain_reachable(name, args),
-         {:ok, target} <- in_chain_target(ctx, name, args) do
+         {:ok, target, server} <- in_chain_target(ctx, name, args) do
       case Sanctum.Authority.Transition.step(authority, guest_fn, target) do
         {:allow_tool, resource} ->
           warn_on_description_drift(ctx, authority, resource)
@@ -286,7 +286,13 @@ defmodule Cyfr.Ops.Catalog do
               name,
               ctx,
               args,
-              opts |> Keyword.delete(:guest_fn) |> Keyword.put(:in_chain, true)
+              opts
+              |> Keyword.delete(:guest_fn)
+              |> Keyword.put(:in_chain, true)
+              # The server row the transition was judged on is the one
+              # dispatch speaks to — one revision per call, never a
+              # second read that a change in between could answer.
+              |> Keyword.put(:server, server)
             )
             |> prune_in_chain_discovery(name, args, ctx, authority)
           after
@@ -492,20 +498,21 @@ defmodule Cyfr.Ops.Catalog do
     end
   end
 
+  # The transition's target, and — for a proxied tool — the server row
+  # its digest was derived from, so dispatch speaks to that revision.
   defp in_chain_target(ctx, name, args) do
     case String.split(name, ":", parts: 2) do
       [server_name, remote_tool] ->
         # The edge names the server by digest, so patterns match the
         # REMOTE tool name — the server prefix would make every pattern
         # server-qualified twice.
-        {:ok,
-         {:external_tool,
-          %{server_digest: resolve_server_digest(ctx, server_name), tool: remote_tool}}}
+        {server, digest} = resolve_server(ctx, server_name)
+        {:ok, {:external_tool, %{server_digest: digest, tool: remote_tool}}, server}
 
       _ ->
         case args["action"] || args[:action] do
           action when is_binary(action) and action != "" ->
-            {:ok, {:tool, %{tool: name, action: action}}}
+            {:ok, {:tool, %{tool: name, action: action}}, nil}
 
           _ ->
             {:error, "In-chain call to '#{name}' requires an action"}
@@ -513,7 +520,7 @@ defmodule Cyfr.Ops.Catalog do
     end
   end
 
-  # D8: within granted patterns an upstream server can rewrite tool
+  # Within granted patterns an upstream server can rewrite tool
   # descriptions at will, and agents feed those strings to a model holding
   # the profile's authority. The config digest defends the transport;
   # this defends nothing — it NAMES the residual: warn on drift from the
@@ -589,19 +596,22 @@ defmodule Cyfr.Ops.Catalog do
 
   defp warn_on_description_drift(_ctx, _authority, _resource), do: :ok
 
-  # The consent identity of the named server, derived from its stored
-  # configuration at every read: the row is the one revision authorization
-  # and dispatch both see, and a cached digest is the copy someone forgets
-  # to drop when the row changes. A missing or unreadable server resolves
-  # to a sentinel no edge can name — fail closed, not fail absent.
-  defp resolve_server_digest(ctx, server_name) do
+  # The named server's row and its consent identity, derived from the
+  # row's stored configuration at every read: a cached digest is the copy
+  # someone forgets to drop when the row changes, and the row itself is
+  # handed on to dispatch so both see one revision. A missing or
+  # unreadable server resolves to no row and a digest no edge can name —
+  # fail closed, not fail absent.
+  defp resolve_server(ctx, server_name) do
     with {:ok, server} <- Arca.McpServerStorage.get(ctx, server_name),
          {:ok, digest} <- Sanctum.ToolServerDigest.from_server(server) do
-      digest
+      {server, digest}
     else
-      _ -> "sha256:unresolved-server"
+      _ -> {nil, "sha256:unresolved-server"}
     end
   end
+
+  defp resolve_server_digest(ctx, server_name), do: elem(resolve_server(ctx, server_name), 1)
 
   @doc false
   # The dispatch gate: enforce the action's access annotation — auth,
@@ -778,8 +788,13 @@ defmodule Cyfr.Ops.Catalog do
     Emissary.MCP.RequestLog.around(should_log?, ctx, call_id, started, fn ->
       case lookup(name) do
         {:ok, {module, meta}} ->
+          # A boot that lost its database's control plane dispatches
+          # nothing: the endpoint's plug refuses new requests, but a
+          # connected console, an in-process caller and a running chain's
+          # next call all arrive here without passing it.
           result =
-            with :ok <- validate_against_schema(meta, args),
+            with :ok <- Cyfr.ControlPlane.assert_owner(),
+                 :ok <- validate_against_schema(meta, args),
                  :ok <- authorize_annotated_action(name, meta, ctx, args, in_chain?) do
               execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
             else
@@ -808,7 +823,9 @@ defmodule Cyfr.Ops.Catalog do
                 plane = if Keyword.get(opts, :in_chain, false), do: :in_chain, else: :external
 
                 execute_tool_call(name, ctx, opts, fn ->
-                  Emissary.MCP.ExternalProvider.try_handle(name, ctx, args, plane)
+                  Emissary.MCP.ExternalProvider.try_handle(name, ctx, args, plane,
+                    server: Keyword.get(opts, :server)
+                  )
                 end)
             end
 

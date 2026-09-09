@@ -1115,6 +1115,13 @@ defmodule Aqua.ConversationRunnerTest do
     {:ok, row} = Conversations.get(alice, conv.id)
     assert row.execution_id == nil
 
+    # ...and the turn's own row is closed as cancelled, under the execution
+    # the row was accepted with.
+    assert {:ok, [%{execution_id: ^eid, status: "cancelled", error: why, ended_at: %DateTime{}}]} =
+             Arca.TurnStorage.list(alice, conv.id)
+
+    assert why =~ "the server stopped"
+
     # a crash writes nothing and cancels nothing: the row still names the
     # execution, and the restarted runner recovers it — here the fake says
     # the engine no longer runs it, so recovery closes it off as a restart.
@@ -1126,6 +1133,13 @@ defmodule Aqua.ConversationRunnerTest do
     assert_receive {:conversation, _, {:message, %{kind: "system", content: recovered}}}, 10_000
     assert recovered =~ "restarted"
     refute recovered =~ "the server stopped"
+
+    # A turn recovery could not re-follow is closed as failed, never left
+    # accepted forever.
+    assert {:ok, [%{execution_id: ^eid2, status: "failed", error: why2} | _]} =
+             Arca.TurnStorage.list(alice, conv.id)
+
+    assert why2 =~ "restarted"
   end
 
   test "archiving the athanor ends the runner: the turn is interrupted, the queue dropped, later sends refused",

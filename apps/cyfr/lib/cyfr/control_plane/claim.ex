@@ -65,6 +65,36 @@ defmodule Cyfr.ControlPlane.Claim do
     end
   end
 
+  @doc """
+  Give `me`'s lease up: the row is left already expired, so the next boot
+  claims it at once. `:not_held` when the row is no longer `me`'s.
+  """
+  @spec release(String.t()) :: :ok | :not_held | {:error, term()}
+  def release(me) do
+    case Arca.ServerMetaStorage.get(@key) do
+      {:ok, previous} ->
+        case decode(previous) do
+          {:ok, ^me, _until} ->
+            {value, _expired} = lease(me, -1)
+
+            case Arca.ServerMetaStorage.compare_and_put(@key, previous, value) do
+              :ok -> :ok
+              {:error, :stale} -> :not_held
+              {:error, reason} -> {:error, reason}
+            end
+
+          _ ->
+            :not_held
+        end
+
+      {:error, :not_found} ->
+        :not_held
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   @doc "The current holder, for diagnostics."
   @spec holder() :: {:ok, String.t(), DateTime.t()} | :none
   def holder do

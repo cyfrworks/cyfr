@@ -247,7 +247,7 @@ defmodule Sanctum.Context do
     # The athanor is taken as given. There is no sentinel to coerce into:
     # `""` is an invalid value, not a tenant, and is rejected here; `nil` is
     # the transient state before the caller's athanor is resolved (auth paths
-    # start there and `Sanctum.Tenancy.resolve_into/2` fills it) or a
+    # start there and `Sanctum.Tenancy.resolve_status/2` fills it) or a
     # platform context working in no athanor — the tenant gate refuses it
     # wherever an athanor is required.
     athanor_id =

@@ -9,6 +9,33 @@ defmodule Cyfr.RuntimeConfigTest do
   # Build a getenv reader over a plain map (blank/absent both read as nil-ish).
   defp env(map), do: fn key -> Map.get(map, key) end
 
+  describe "switch/3 — on or off, never a silent default" do
+    test "unset and blank take the default" do
+      assert {:ok, true} = RuntimeConfig.switch(env(%{}), "CYFR_BUILDS", true)
+
+      assert {:ok, false} =
+               RuntimeConfig.switch(env(%{"CYFR_BUILDS" => "  "}), "CYFR_BUILDS", false)
+    end
+
+    test "every spelling of on and off, any case" do
+      for on <- ~w(on ON true True yes 1) do
+        assert {:ok, true} = RuntimeConfig.switch(env(%{"K" => on}), "K", false)
+      end
+
+      for off <- ~w(off OFF false False no 0) do
+        assert {:ok, false} = RuntimeConfig.switch(env(%{"K" => off}), "K", true)
+      end
+    end
+
+    test "an unrecognised spelling is an error naming the key, not the default" do
+      assert {:error, message} =
+               RuntimeConfig.switch(env(%{"CYFR_BUILDS" => "disabled"}), "CYFR_BUILDS", true)
+
+      assert message =~ "CYFR_BUILDS"
+      assert message =~ "disabled"
+    end
+  end
+
   describe "resolve_auth_provider/1 — set-or-default, fail loud" do
     test "unset + no credentials => no auth (default)" do
       assert {:ok, nil} = RuntimeConfig.resolve_auth_provider(env(%{}))

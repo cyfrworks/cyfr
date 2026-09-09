@@ -19,7 +19,9 @@ defmodule Arca.Schemas.Message do
   @primary_key {:id, :string, autogenerate: false}
 
   @type t :: %__MODULE__{}
-  @kinds ~w(text approval error system)
+  # `tool_call`, `tool_result`, `compaction` and `turn_aborted` are the
+  # rows the loop that will own a turn writes; nothing writes them yet.
+  @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted)
   @statuses ~w(pending running approved declined error)
   @agent_author "aqua"
   @system_author "system"

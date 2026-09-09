@@ -214,27 +214,38 @@ defmodule Sanctum.Tenancy do
   request (both indexed). It trades those for immediate revocation instead
   of waiting out the session TTL.
 
-  Failing safe: on a transient read error the context is returned unchanged
-  rather than locking the user out or silently re-resolving.
+  A store that cannot answer is `{:error, :unavailable}`, never the
+  context as it was: every caller is a credential path, and a context kept
+  unchanged would outlive a denial or a removal the store could not
+  report. The caller answers 503 and the client's own retry asks again.
   """
-  @spec revalidate(Context.t()) :: Context.t()
+  @spec revalidate(Context.t()) :: {:ok, Context.t()} | {:error, :unavailable}
   def revalidate(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
     case user_row(user_id) do
       {:ok, %{status: "denied"}} ->
-        %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}
+        {:ok, %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}}
 
       {:ok, user} ->
         case Members.list_by_user(user_id) do
-          {:ok, memberships} -> apply_membership(ctx, memberships, user)
-          {:error, _} -> ctx
+          {:ok, memberships} -> {:ok, apply_membership(ctx, memberships, user)}
+          {:error, reason} -> unavailable("memberships", user_id, reason)
         end
 
-      {:error, _} ->
-        ctx
+      {:error, reason} ->
+        unavailable("user", user_id, reason)
     end
   end
 
-  def revalidate(%Context{} = ctx), do: ctx
+  def revalidate(%Context{} = ctx), do: {:ok, ctx}
+
+  defp unavailable(what, user_id, reason) do
+    Logger.warning(
+      "[Sanctum.Tenancy] #{what} read failed during revalidation for user=#{user_id}: " <>
+        "#{inspect(reason)} — refusing"
+    )
+
+    {:error, :unavailable}
+  end
 
   @doc """
   Whether a standing channel (a webhook, an API key, a tincture token) may
@@ -242,18 +253,20 @@ defmodule Sanctum.Tenancy do
   this server.
 
   Channels are athanor-owned: a creator who merely leaves the group leaves
-  the channel running for the members who remain. `created_by` may be nil or
-  a synthetic principal (`webhook:<slug>`, `_seed`, `system`) — those are
-  never denied. A real person's id has the IdP shape
-  `provider|issuer|subject`, and that row is read.
+  the channel running for the members who remain. `created_by` is nil or
+  one of the server's synthetic principals (`system`, `_seed`,
+  `webhook:<slug>`) for a channel nobody signed in to create — those are
+  never denied. Any other id names a person, and that row is read: a
+  denied person's channels stop, whether the row carries an id minted
+  here (`usr_…`) or the IdP composite a server upgraded in place still
+  holds. A minted id with no row is refused — rows are never deleted, so
+  such an id was never a person. An id of any other shape with no row (a
+  fixture, an imported row) was never a signed-in person here, and the
+  channel is the athanor's regardless.
 
-  Every caller is a credential path, so a store that cannot answer FAILS
-  CLOSED: the firing is refused and the sender's own retry asks again. A
-  person the store has never seen is not a denied one — `users` rows are
-  never deleted, only marked denied, so an unknown id is a creator who was
-  never a signed-in person here (a fixture, an imported row), and the
-  channel is the athanor's regardless. Schedules do not consult this
-  check — the cron row's claim is theirs.
+  Every caller is a credential path — a webhook, an API key, a tincture
+  token, a schedule about to fire — so a store that cannot answer FAILS
+  CLOSED: the firing is refused and the sender's own retry asks again.
   """
   @spec channel_active?(String.t() | nil, String.t() | nil) :: boolean()
   def channel_active?(athanor_id, created_by) do
@@ -280,11 +293,16 @@ defmodule Sanctum.Tenancy do
 
   defp athanor_active?(_), do: false
 
-  # A person's id is minted by `Sanctum.Tenancy.Users`; the server's
-  # synthetic principals (`system`, `_seed`, `webhook:<slug>`, …) are never
-  # people, so they are never denied.
+  # The server's synthetic principals are never people, so they are never
+  # denied. Every other id is read as a person's — the shape of the id
+  # decides nothing, or a denied person whose row predates minted ids
+  # would keep every channel they created.
+  @synthetic_principals ["system", "_seed"]
+
   defp creator_not_denied?(user_id) when is_binary(user_id) do
-    if Arca.Schemas.User.person_id?(user_id) do
+    if synthetic_principal?(user_id) do
+      true
+    else
       case Users.get(user_id) do
         {:ok, %{status: "denied"}} ->
           false
@@ -293,7 +311,7 @@ defmodule Sanctum.Tenancy do
           true
 
         {:error, :not_found} ->
-          true
+          not Arca.Schemas.User.person_id?(user_id)
 
         {:error, reason} ->
           Logger.warning(
@@ -303,12 +321,13 @@ defmodule Sanctum.Tenancy do
 
           false
       end
-    else
-      true
     end
   end
 
   defp creator_not_denied?(_), do: true
+
+  defp synthetic_principal?(id),
+    do: id in @synthetic_principals or String.starts_with?(id, "webhook:")
 
   @doc """
   Whether this person holds the operator capability — an ACTIVE platform

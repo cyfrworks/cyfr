@@ -4,6 +4,69 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## The foundation holds across its call paths and failure transitions
+
+Eleven defects in the foundation the last fifteen releases laid are
+closed; none changes a surface, all change what holds under failure.
+
+**Control plane.** `Cyfr.ControlPlane` releases its database lease when
+the server stops, so a restart claims at once; a boot that finds the row
+held waits out the holder's own deadline once and takes the row if nobody
+renewed it (a killed predecessor), and refuses only a holder that renews
+(a live second server). Ownership is the lease deadline, not a flag: a
+renewal that stalls stops authorizing work at the instant a successor may
+claim. Until the claim has run a boot owns nothing, and every catalog
+dispatch — a connected console, an in-process caller, a running chain's
+next call — is refused with `control_plane_lost` while the plane is not
+held, as the endpoint's plug, turns and executions already were.
+
+**Switches.** Every boolean environment variable (`CYFR_BUILDS`,
+`CYFR_CLUSTER`, `CYFR_AUTO_MIGRATE`, `CYFR_REQUIRE_SIGNED_PULLS`,
+`CYFR_BUILDER_LISTEN`, `CYFR_ALLOW_IN_PROCESS_BUILDS`, `CYFR_HEADLESS`,
+`CYFR_BEHIND_PROXY`) is `on`/`off` (also true/false, yes/no, 1/0, any
+case); any other spelling refuses the boot. `CYFR_BUILDS=off` used to read
+as *on*.
+
+**Standing.** A channel's creator is read by their row whatever the shape
+of their id — a person denied on a server upgraded in place, whose row
+still carries the IdP composite, stops their webhooks and keys as a minted
+`usr_…` id does; a minted id with no row is refused. Revalidation of a
+session, a page socket or a person-derived tincture token answers 503
+when the store cannot say, never the context as it was.
+
+**Records.** A child the assistant invoked is recorded as a digest of its
+reply and its usage on every path, not only when the record was built by
+hand: the formula host and the executor now carry the invoking reference
+through. A `turns` row is closed under the execution it was accepted
+with — shutdown closes it `cancelled`, an interruption recovery cannot
+re-follow closes it `failed` — where before both left it `accepted`.
+
+**Payloads.** Migration `20260917000000` names an execution with its
+athanor (`executions (id, athanor_id)`) and holds `execution_events` and
+`execution_payloads` to that pair; a payload row is not deleted with its
+execution — the retention kinds release the bytes first, and an
+execution whose bytes could not be deleted is kept for the next sweep.
+An object is named by its content's digest, so two writers never
+overwrite each other; a read verifies the bytes against the row's digest
+and refuses a mismatch (`record.payload` says so); the `payloads/` root
+is reserved, writable only by the store itself. A payload names an
+execution the athanor holds.
+
+**External servers.** An in-chain call to a proxied tool is judged and
+dispatched on one `mcp_servers` row: the revision the transition stepped
+on is the one handed to dispatch, and the server process called is the
+one that revision started, never a second read or a lookup by name that a
+change in between could answer differently.
+
+**Provisioning.** A registry that is configured but does not answer no
+longer leaves a new athanor unprovisioned: the bundle's required
+dependencies must pull, its optional ones (the model catalysts) are a
+courtesy with a ten-second budget, and the estate provisions on what it
+ships. The formula host intercepts exactly the execution actions the
+catalog annotates `host: :intercepted`, asking the catalog instead of
+keeping a list. `messages.kind` accepts `tool_call`, `tool_result`,
+`compaction` and `turn_aborted`, as the turns migration said it would.
+
 ## An execution's result is a retained payload
 
 Migration `20260916000000` adds `execution_payloads`: a reference to an

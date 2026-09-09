@@ -176,7 +176,7 @@ defmodule Sanctum.TenancyTest do
         authenticated: true
       }
 
-      out = Tenancy.revalidate(ctx)
+      {:ok, out} = Tenancy.revalidate(ctx)
       assert out.platform_admin
       assert out.scope == :athanor
     end
@@ -193,14 +193,14 @@ defmodule Sanctum.TenancyTest do
         authenticated: true
       }
 
-      assert Tenancy.revalidate(ctx).platform_admin
+      assert {:ok, %{platform_admin: true}} = Tenancy.revalidate(ctx)
 
       [m] = rows!(Members.list_by_user(uid))
       {:ok, _} = Members.remove(m)
 
       # No memberships → no capability, no athanor; the tenant gate then
       # rejects tenant-scoped routes.
-      revalidated = Tenancy.revalidate(ctx)
+      {:ok, revalidated} = Tenancy.revalidate(ctx)
       refute revalidated.platform_admin
       assert revalidated.athanor_id == nil
     end
@@ -218,7 +218,7 @@ defmodule Sanctum.TenancyTest do
         authenticated: true
       }
 
-      revalidated = Tenancy.revalidate(ctx)
+      {:ok, revalidated} = Tenancy.revalidate(ctx)
       refute revalidated.platform_admin
       assert revalidated.athanor_id == athanor.id
     end
@@ -231,7 +231,7 @@ defmodule Sanctum.TenancyTest do
       # Session points at an athanor the user is NOT a member of.
       ctx = %Context{user_id: uid, athanor_id: "ath_other", scope: :athanor, authenticated: true}
 
-      revalidated = Tenancy.revalidate(ctx)
+      {:ok, revalidated} = Tenancy.revalidate(ctx)
       assert revalidated.scope == :athanor
       assert revalidated.athanor_id == athanor.id
     end
@@ -296,12 +296,31 @@ defmodule Sanctum.TenancyTest do
       assert Tenancy.channel_active?(athanor.id, "webhook:abc")
       assert Tenancy.channel_active?(athanor.id, nil)
 
-      # a person the store never saw is not a denied one: rows are never
-      # deleted, so an unknown id was never a signed-in person here
-      assert Tenancy.channel_active?(athanor.id, "usr_never-seen")
+      # an id minted here always has its row: one without was never a person
+      refute Tenancy.channel_active?(athanor.id, "usr_never-seen")
 
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
       refute Tenancy.channel_active?(athanor.id, user.id)
+
+      # a denied person whose row predates minted ids — an in-place upgrade —
+      # is read by the row, never waved through by the shape of the id
+      legacy = "github|https://github.com|legacy-#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.User, [
+          %{
+            id: legacy,
+            provider: "github",
+            status: "denied",
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          }
+        ])
+
+      refute Tenancy.channel_active?(athanor.id, legacy)
 
       {:ok, _} = Athanors.archive(athanor)
       refute Tenancy.channel_active?(athanor.id, "someone-else")

@@ -376,6 +376,10 @@ defmodule Opus.ExecutionRecord do
         {:ok, _} ->
           :ok
 
+        # A completion driven twice keeps the payload it already has.
+        {:error, :exists} ->
+          :ok
+
         {:error, reason} ->
           Logger.warning(
             "[Opus.ExecutionRecord] result payload of #{record.id} not retained: #{inspect(reason)}"

@@ -13,8 +13,9 @@ defmodule Arca.Repo.Migrations.Turns do
   # names its parent together with the athanor, so nothing here can point
   # across estates. The runner writes `turns` rows at accept, complete,
   # fail and cancel; the other tables wait for the loop that will own
-  # them. `messages.kind` grows `tool_call`, `tool_result` and
-  # `turn_aborted` beside `text`, `approval`, `error` and `system`.
+  # them. `messages.kind` grows `tool_call`, `tool_result`, `compaction`
+  # and `turn_aborted` beside `text`, `approval`, `error` and `system`
+  # (`Arca.Schemas.Message`; the column is a free string).
   def change do
     # A parent row is named with its athanor.
     create unique_index(:conversations, [:id, :athanor_id])

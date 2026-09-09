@@ -367,6 +367,46 @@ defmodule Arca.Execution do
     end)
   end
 
+  @doc "The ids `delete_older_than/2` would remove, for what must go before them."
+  @spec stale_ids(non_neg_integer(), keyword()) :: {:ok, [String.t()]} | {:error, :database_error}
+  def stale_ids(keep, opts) when is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Execution.stale_ids", fn ->
+      {:ok, Arca.Repo.all(from(e in stale_query(keep, opts), select: e.id))}
+    end)
+  end
+
+  @doc "The ids `delete_older_than_days/2` would remove, for what must go before them."
+  @spec ids_older_than_days(pos_integer(), keyword()) ::
+          {:ok, [String.t()]} | {:error, :database_error}
+  def ids_older_than_days(days, opts) when is_integer(days) and days > 0 and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Execution.ids_older_than_days", fn ->
+      {:ok, Arca.Repo.all(from(e in aged_query(days, opts), select: e.id))}
+    end)
+  end
+
+  @doc """
+  Deletes the named executions of an athanor — the retention kinds' write,
+  after the payloads those rows reference were released
+  (`Arca.ExecutionPayloads.release/2`; the database refuses a row whose
+  payload is still held).
+  """
+  @spec delete_ids([String.t()], keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
+  def delete_ids([], _opts), do: {:ok, 0}
+
+  def delete_ids(ids, opts) when is_list(ids) and is_list(opts) do
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.Execution.delete_ids", fn ->
+      {count, _} =
+        from(e in __MODULE__, where: e.id in ^ids)
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.delete_all()
+
+      {:ok, count}
+    end)
+  end
+
   @doc "How many rows `delete_older_than_days/2` would remove — the dry-run count."
   @spec count_older_than_days(pos_integer(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}

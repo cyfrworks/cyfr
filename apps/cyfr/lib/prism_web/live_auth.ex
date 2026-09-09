@@ -107,7 +107,7 @@ defmodule PrismWeb.LiveAuth do
   # socket's state, which `Phoenix.LiveView.Socket` prints in a crash report.
   defp standing_changed({:membership_changed, _}, socket) do
     case Sanctum.Tenancy.revalidate(socket.assigns.context) do
-      %Sanctum.Context{authenticated: true, athanor_id: id} = ctx when is_binary(id) ->
+      {:ok, %Sanctum.Context{authenticated: true, athanor_id: id} = ctx} when is_binary(id) ->
         Cyfr.LoggerContext.set_from_context(ctx)
         {:cont, assign(socket, :context, ctx)}
 

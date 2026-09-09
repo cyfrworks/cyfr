@@ -540,7 +540,8 @@ defmodule Sanctum.Auth.DeviceFlow do
           user_id: user.id,
           email: user_info.email,
           provider: to_string(provider),
-          # Start athanor-less; resolve_into/2 fills the athanor from memberships.
+          # Start athanor-less; the establish recipe fills the athanor from
+          # memberships (`Sanctum.Caller.establish/2`).
           athanor_id: nil,
           permissions: [:*]
         )

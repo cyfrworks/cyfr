@@ -21,6 +21,11 @@ defmodule Cyfr.Retention.Executions do
 
     if dry_run,
       do: Arca.Execution.count_stale(keep, opts),
-      else: Arca.Execution.delete_older_than(keep, opts)
+      else:
+        Cyfr.Retention.ExecutionRows.delete(
+          ctx,
+          fn -> Arca.Execution.stale_ids(keep, opts) end,
+          opts
+        )
   end
 end

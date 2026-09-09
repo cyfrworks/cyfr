@@ -64,7 +64,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
     assert src =~ "env_str = fn key, default -> env!(key, :string?, nil) || default end"
     assert src =~ "env_int = fn key, default -> env!(key, :integer?, nil) || default end"
-    assert src =~ "case env!(key, :boolean?, nil) do"
+    assert src =~ "case Cyfr.RuntimeConfig.switch(getenv, key, default) do"
   end
 
   test "CYFR_BEHIND_PROXY is read as a boolean, once" do

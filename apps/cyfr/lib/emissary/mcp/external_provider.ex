@@ -267,14 +267,18 @@ defmodule Emissary.MCP.ExternalProvider do
   not part of the server's consent digest (`Sanctum.ToolServerDigest`
   pins url/enabled/headers/patterns), so setting it never invalidates
   existing grants.
+
+  `server:` is the row a caller already read and judged — an in-chain
+  call's transition was stepped on that row's digest — and dispatch then
+  speaks to exactly that revision; without it the row is read here, once.
   """
-  @spec try_handle(String.t(), Context.t(), map(), :in_chain | :external) ::
+  @spec try_handle(String.t(), Context.t(), map(), :in_chain | :external, keyword()) ::
           {:ok, map()} | {:error, :not_external | String.t()}
-  def try_handle(tool_name, %Context{} = ctx, args, plane)
+  def try_handle(tool_name, %Context{} = ctx, args, plane, opts \\ [])
       when plane in [:in_chain, :external] do
     case String.split(tool_name, ":", parts: 2) do
       [server_name, remote_tool] ->
-        case Arca.McpServerStorage.get(ctx, server_name) do
+        case server_row(ctx, server_name, Keyword.get(opts, :server)) do
           {:ok, server} ->
             patterns = Sanctum.ToolServerDigest.tool_patterns(server)
 
@@ -307,6 +311,9 @@ defmodule Emissary.MCP.ExternalProvider do
     end
   end
 
+  defp server_row(_ctx, server_name, %{name: server_name} = server), do: {:ok, server}
+  defp server_row(ctx, server_name, _none), do: Arca.McpServerStorage.get(ctx, server_name)
+
   # Whether the server's tools may be called from the external plane (the
   # console). Absent means no — the in-chain default holds unless the row
   # says otherwise.
@@ -318,15 +325,11 @@ defmodule Emissary.MCP.ExternalProvider do
     server_config = ExternalServers.server_config(server, ctx)
 
     case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
-      {:ok, _pid} ->
-        arguments = Map.delete(args, "action")
-
-        Emissary.MCP.ExternalServer.call_tool(
-          server_name,
-          ctx.athanor_id,
-          remote_tool,
-          arguments
-        )
+      {:ok, pid} ->
+        # The process started from THIS row's configuration is the one
+        # called — never a lookup by name that a replacement in between
+        # could answer with another revision's process.
+        Emissary.MCP.ExternalServer.call_tool(pid, remote_tool, Map.delete(args, "action"))
 
       {:error, reason} ->
         {:error, "Failed to start server '#{server_name}': #{inspect(reason)}"}

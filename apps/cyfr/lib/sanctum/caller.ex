@@ -219,7 +219,8 @@ defmodule Sanctum.Caller do
 
   defp standing(%Context{} = ctx, athanor_id, _person) do
     case Sanctum.Tenancy.revalidate(ctx) do
-      %Context{authenticated: true, athanor_id: ^athanor_id} = current -> {:ok, current}
+      {:ok, %Context{authenticated: true, athanor_id: ^athanor_id} = current} -> {:ok, current}
+      {:error, :unavailable} -> {:error, :unavailable}
       _ -> {:error, :not_standing}
     end
   end

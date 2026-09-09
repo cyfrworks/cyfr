@@ -30,6 +30,31 @@ defmodule Cyfr.RuntimeConfig do
   @type getenv :: (String.t() -> String.t() | nil)
 
   @doc """
+  Read an on/off switch from the environment.
+
+  Unset (or blank) takes `default`. A set value must spell a switch —
+  `on`/`off`, `true`/`false`, `yes`/`no`, `1`/`0`, any case — and anything
+  else is `{:error, message}`: a security toggle such as `CYFR_BUILDS`
+  must never read an unrecognised spelling as its default the way a
+  "false-or-truthy" parse does (`CYFR_BUILDS=off` once meant *on*).
+  """
+  @spec switch(getenv, String.t(), boolean()) :: {:ok, boolean()} | {:error, String.t()}
+  def switch(getenv, key, default) when is_function(getenv, 1) and is_boolean(default) do
+    case getenv.(key) do
+      nil ->
+        {:ok, default}
+
+      raw when is_binary(raw) ->
+        case raw |> String.trim() |> String.downcase() do
+          "" -> {:ok, default}
+          on when on in ["on", "true", "yes", "1"] -> {:ok, true}
+          off when off in ["off", "false", "no", "0"] -> {:ok, false}
+          _ -> {:error, "#{key}=#{inspect(raw)} is not a switch; use on or off."}
+        end
+    end
+  end
+
+  @doc """
   Resolve the auth provider module from the environment.
 
   - unset `CYFR_AUTH_PROVIDER` → auto-detect: GitHub/Google client present ⇒

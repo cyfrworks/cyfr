@@ -99,9 +99,17 @@ defmodule Emissary.MCP.ExternalServer do
   """
   def call_tool(name, athanor_id, tool_name, arguments) do
     case lookup(name, athanor_id) do
-      {:ok, pid} -> GenServer.call(pid, {:call_tool, tool_name, arguments}, @call_timeout_ms)
+      {:ok, pid} -> call_tool(pid, tool_name, arguments)
       {:error, _} = err -> err
     end
+  end
+
+  @doc "Call a tool on the server process a caller already holds."
+  @spec call_tool(pid(), String.t(), map()) :: {:ok, term()} | {:error, term()}
+  def call_tool(pid, tool_name, arguments) when is_pid(pid) do
+    GenServer.call(pid, {:call_tool, tool_name, arguments}, @call_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:server_exited, reason}}
   end
 
   @doc """

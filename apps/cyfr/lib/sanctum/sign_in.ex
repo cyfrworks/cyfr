@@ -26,7 +26,7 @@ defmodule Sanctum.SignIn do
   That row is what every request reads (`Sanctum.Namespace`).
 
   Providers call `admitted/2` between `Sanctum.Door.admit/3` and building
-  the context. `Sanctum.Tenancy.resolve_into/2` — which runs per request —
+  the context. `Sanctum.Caller.establish/2` — which runs per request —
   only ever reads what this wrote.
   """
 

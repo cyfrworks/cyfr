@@ -45,7 +45,7 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
       # Dropping the table inside the sandbox transaction is deterministic and
       # rolls back with the test; `sessions` is untouched, so the request still
       # authenticates on its way in.
-      Arca.Repo.query!("DROP TABLE executions")
+      drop_executions!()
 
       conn = get(conn, "/api/executions/exec_anything/events")
 
@@ -93,5 +93,14 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
       refute Map.has_key?(body, "jsonrpc")
       assert body["code"] == "not_found"
     end
+  end
+
+  # An outage, simulated: the table is gone. Postgres holds the tables that
+  # reference `executions` to it and drops them along; SQLite has no such
+  # clause and no such need.
+  defp drop_executions! do
+    if Arca.Repo.__adapter__() == Ecto.Adapters.Postgres,
+      do: Arca.Repo.query!("DROP TABLE executions CASCADE"),
+      else: Arca.Repo.query!("DROP TABLE executions")
   end
 end

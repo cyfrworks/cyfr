@@ -440,13 +440,14 @@ defmodule Sanctum.Session do
             auth_method: surface_auth_method(surface),
             authenticated: true
           )
-          # Re-validate the persisted athanor against the person's CURRENT
-          # standing so a denial, a revoked membership or an archived athanor
-          # takes effect immediately (no waiting for TTL). Keeps the selected
-          # athanor when still authorized; re-derives the platform capability.
-          |> Sanctum.Tenancy.revalidate()
 
-        {:ok, ctx}
+        # Re-validated against the person's CURRENT standing, so a denial,
+        # a revoked membership or an archived athanor takes effect at once;
+        # a store that cannot say is a 503, never yesterday's answer.
+        case Sanctum.Tenancy.revalidate(ctx) do
+          {:ok, revalidated} -> {:ok, revalidated}
+          {:error, :unavailable} -> {:error, :database_error}
+        end
 
       {:error, _reason} ->
         # The users row could not be read — distinct from "no namespace".

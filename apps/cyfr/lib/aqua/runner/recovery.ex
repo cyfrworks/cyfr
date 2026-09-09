@@ -187,7 +187,12 @@ defmodule Aqua.Runner.Recovery do
     do: Enum.reduce(events, state, &Aqua.Runner.Stream.apply_sequenced_event(&2, &1))
 
   @doc false
-  def interrupted(state, execution_id, why) do
+  # A turn that will not finish: what was streamed is kept, the room is
+  # told, and the turn's row is closed as `status` — `failed` for an
+  # interruption nobody asked for, `cancelled` when the server stopped it.
+  def interrupted(state, execution_id, why, status \\ "failed") do
+    Aqua.Runner.Stream.close_turn_row(state, execution_id, status, "interrupted — #{why}")
+
     state =
       if state.streaming_text != "" do
         append_and_broadcast(state, %{

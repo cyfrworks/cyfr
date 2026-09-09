@@ -406,6 +406,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         {:error, :not_found} ->
           {:error, {:not_found, "Payload", "#{id}/#{kind}"}}
 
+        {:error, :payload_corrupt} ->
+          {:error, {:corrupt, "Payload #{id}/#{kind}"}}
+
         {:error, :database_error} ->
           {:error, {:unavailable, "Storage"}}
 

@@ -288,7 +288,7 @@ defmodule Arca.StorageTest do
       assert Enum.sort(Storage.global_prefixes()) == ~w(cache system)
       assert Enum.sort(Storage.seed_roots()) == ~w(aqua components)
       assert Enum.sort(Storage.overlay_roots()) == ~w(aqua components)
-      assert Storage.reserved_roots() == ~w(meta)
+      assert Storage.reserved_roots() == ~w(payloads meta)
       assert Storage.guest_scopes() == %{"data" => "guest", "components" => "components"}
 
       # The classes partition: no root is both tenant and global; every

@@ -86,14 +86,13 @@ defmodule Aqua.Runner.Stream do
     state =
       state
       |> Aqua.Runner.Addressing.clear_queue()
-      |> Aqua.Runner.Recovery.interrupted(exec_id, why)
+      |> Aqua.Runner.Recovery.interrupted(exec_id, why, "cancelled")
 
     if exec_id do
       state.turn.unsubscribe(exec_id, ctx)
       state.turn.cancel(ctx, exec_id)
     end
 
-    close_turn_row(state, "cancelled", why)
     state
   rescue
     e ->
@@ -116,10 +115,13 @@ defmodule Aqua.Runner.Stream do
       %{state | running: false, execution_id: nil}
   end
 
-  # The turn's row, closed the way the turn ended. Bookkeeping never
-  # fails the turn: a store hiccup is logged and the turn goes on.
-  defp close_turn_row(%{execution_id: execution_id} = state, status, error)
-       when is_binary(execution_id) do
+  # The turn's row, closed the way the turn ended, under the execution id
+  # the row was accepted with — named explicitly, because the state's own
+  # is cleared by `finish_turn/1` and a close that read it afterwards
+  # closed nothing. Bookkeeping never fails the turn: a store hiccup is
+  # logged and the turn goes on.
+  @doc false
+  def close_turn_row(state, execution_id, status, error) when is_binary(execution_id) do
     case Arca.TurnStorage.close(state.system_ctx, execution_id, status, error) do
       {:ok, _} ->
         :ok
@@ -129,7 +131,7 @@ defmodule Aqua.Runner.Stream do
     end
   end
 
-  defp close_turn_row(_state, _status, _error), do: :ok
+  def close_turn_row(_state, _execution_id, _status, _error), do: :ok
 
   # ---------------------------------------------------------------------------
   # Emits
@@ -222,7 +224,7 @@ defmodule Aqua.Runner.Stream do
   def complete_turn(state) do
     ctx = state.turn_ctx || state.system_ctx
     if state.execution_id, do: state.turn.unsubscribe(state.execution_id, ctx)
-    close_turn_row(state, "completed", nil)
+    close_turn_row(state, state.execution_id, "completed", nil)
 
     %{text: text, approvals: approvals, intents: intents, tripwires: tripwires} =
       AquaTurn.parse_completion(state.streaming_text, state.tool_policy)
@@ -350,7 +352,7 @@ defmodule Aqua.Runner.Stream do
   def fail_turn(state, text) do
     ctx = state.turn_ctx || state.system_ctx
     if state.execution_id, do: state.turn.unsubscribe(state.execution_id, ctx)
-    close_turn_row(state, "failed", text)
+    close_turn_row(state, state.execution_id, "failed", text)
 
     state =
       case Conversations.append(ctx, state.id, %{
@@ -414,7 +416,7 @@ defmodule Aqua.Runner.Stream do
     exec_id = state.execution_id
     turn_ctx = state.turn_ctx || ctx
     turn = state.turn
-    close_turn_row(state, "cancelled", nil)
+    close_turn_row(state, state.execution_id, "cancelled", nil)
 
     if exec_id do
       turn.unsubscribe(exec_id, turn_ctx)

@@ -158,7 +158,9 @@ defmodule Opus.Executor do
       root_execution_id: opts[:root_execution_id],
       # Set by `Opus.Chain.run_root/5` only: a child walks its parent's
       # authority and roots no profile of its own, so it records none.
-      profile_id: opts[:profile_id]
+      profile_id: opts[:profile_id],
+      # Who invoked this child, for what the row keeps of its output.
+      parent_reference: opts[:parent_reference]
     ]
 
     record_opts =

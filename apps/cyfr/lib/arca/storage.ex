@@ -238,8 +238,10 @@ defmodule Arca.Storage do
     # An execution's retained input and result bytes, referenced by an
     # `execution_payloads` row. Host-only: what a component was given and
     # what it answered is the estate's record, never a path a guest
-    # writes.
-    {"payloads", :tenant, nil, nil},
+    # writes — and reserved, so only the payload store's own writes
+    # (`Arca.ExecutionPayloads`, under the internal-write scope) change
+    # bytes a row names by digest.
+    {"payloads", :tenant_reserved, nil, nil},
     {"guest", :tenant, "data", nil},
     {"meta", :tenant_reserved, nil, nil},
     {"cache", :global, nil, nil},

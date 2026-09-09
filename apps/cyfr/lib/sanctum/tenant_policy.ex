@@ -10,7 +10,7 @@ defmodule Sanctum.TenantPolicy do
   - `:platform` scope bypasses tenant checks (system/operator tasks).
   - `athanor_id` is required: `nil`/`""` are rejected with `:missing_tenant`.
     An authenticated context that has not resolved its athanor (via
-    `Sanctum.Tenancy.resolve_into/2`) carries `nil` and is rejected here.
+    `Sanctum.Tenancy.resolve_status/2`) carries `nil` and is rejected here.
   - A record must carry `:athanor_id` and it must equal the context's —
     strict equality, no normalization: there is no sentinel a missing value
     could stand for, so a record without an athanor is malformed and refused.
