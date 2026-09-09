@@ -16,17 +16,16 @@ defmodule Cyfr.DocsDriftTest do
   when the file is absent). Do not mistake it for CI protection: it
   catches drift on the machine that owns the file, and nowhere else.
 
-  The other four read tracked files (README and the three guides) and do
+  The other tests read tracked files (README and the three guides) and do
   run everywhere. Before this tag the CLAUDE.md test was an unguarded
   `File.read!`, so a clean clone raised `File.Error` and the whole module
-  — including those four — protected nothing.
+  — including those — protected nothing.
   """
   use ExUnit.Case, async: true
 
   @repo_root Path.expand("../../../..", __DIR__)
   @claude_md Path.join(@repo_root, "CLAUDE.md")
   @readme Path.join(@repo_root, "README.md")
-  @upgrading Path.join(@repo_root, "UPGRADING.md")
 
   @tag :requires_local_docs
   test "CLAUDE.md's storage tree names every tenant root and global prefix" do
@@ -43,43 +42,6 @@ defmodule Cyfr.DocsDriftTest do
       assert doc =~ prefix,
              "global prefix #{prefix} is missing from CLAUDE.md's storage tree"
     end
-  end
-
-  test "UPGRADING's roster of the aqua tool's writes and reads is the tool's own" do
-    # The note that says which `aqua` verbs need a person's session, and
-    # which stay open to a key, is read by operators writing scripts; it
-    # is bound to the tool's enum and consent classes so it cannot name a
-    # verb the tool lost or miss one it gained.
-    doc = File.read!(@upgrading)
-
-    [section] =
-      Regex.run(~r/### Writes to the AQUA tree are a person's act\n(.*?)\n### /s, doc,
-        capture: :all_but_first
-      )
-
-    actions = Compendium.MCP.AquaTool.definition().annotations.actions
-
-    {writes, reads} =
-      actions
-      |> Map.keys()
-      |> Enum.split_with(&(actions[&1][:consent] == :interactive))
-
-    [write_sentence] =
-      Regex.run(~r/Every write on the `aqua` tool — (.*?) — now requires/s, section,
-        capture: :all_but_first
-      )
-
-    [read_sentence] =
-      Regex.run(~r/the reads \((.*?)\) are unchanged/s, section, capture: :all_but_first)
-
-    assert Enum.sort(backticked(write_sentence)) == Enum.sort(writes)
-    assert Enum.sort(backticked(read_sentence)) == Enum.sort(reads)
-  end
-
-  defp backticked(text) do
-    ~r/`([a-z_]+)`/
-    |> Regex.scan(text, capture: :all_but_first)
-    |> List.flatten()
   end
 
   test "README's storage tree names every tenant root and global prefix" do

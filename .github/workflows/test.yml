@@ -33,9 +33,6 @@ on:
       - 'tests/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
-      # Cyfr.DocsDriftTest binds UPGRADING's roster of the aqua tool's verbs
-      # to the tool's own enum.
-      - 'UPGRADING.md'
       - '.gitignore'
       - '.dockerignore'
   pull_request:
@@ -70,9 +67,6 @@ on:
       - 'tests/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
-      # Cyfr.DocsDriftTest binds UPGRADING's roster of the aqua tool's verbs
-      # to the tool's own enum.
-      - 'UPGRADING.md'
       - '.gitignore'
       - '.dockerignore'
   # Callable, so the tag-triggered publish workflows can require this

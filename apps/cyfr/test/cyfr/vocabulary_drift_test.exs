@@ -83,8 +83,7 @@ defmodule Cyfr.VocabularyDriftTest do
 
   # The product's words reach the person through the seed, the CLI, the
   # guides and the formula's manifest as well as the code; none of them
-  # may say what the code no longer does. `UPGRADING.md` is the one file
-  # that keeps the old words on purpose — it explains the rename.
+  # may say what the code no longer does.
   @product_files [
     "seed/aqua/**/*.md",
     "apps/codex/**/*.go",

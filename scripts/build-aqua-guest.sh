@@ -15,8 +15,7 @@
 #
 # Toolchain: stable Rust with the `wasm32-wasip2` target and
 # `cargo-component` (`rustup target add wasm32-wasip2 && cargo install
-# cargo-component`). The versions used for a release are in the stamp and
-# in UPGRADING.md beside the formula version.
+# cargo-component`). The versions used for a release are in the stamp.
 #
 # Usage: scripts/build-aqua-guest.sh [--check | --rebuild-check]
 set -euo pipefail

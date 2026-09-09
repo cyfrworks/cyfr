@@ -361,7 +361,7 @@ docker compose --profile tls up -d
 
 Then open `https://<your-domain>/` (TLS) or `http://localhost:4000/` (direct), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). In TLS mode caddy proxies everything to `cyfr:4000` — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
 
-**Upgrading.** `cyfr update` pulls the latest images, then `cyfr up`. From a source checkout: `docker compose pull && docker compose up -d` (add `--profile tls` if you're running with caddy). Check [UPGRADING.md](UPGRADING.md) — what each release changes for a running server and what to do about it — and the [release notes](https://github.com/cyfrworks/cyfr/releases) first.
+**Upgrading.** `cyfr update` pulls the latest images, then `cyfr up`. From a source checkout: `docker compose pull && docker compose up -d` (add `--profile tls` if you're running with caddy). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server.
 
 ### Wrapping stdio / npx MCP servers (filesystem, github, …)
 
