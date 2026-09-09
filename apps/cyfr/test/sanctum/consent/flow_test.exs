@@ -83,6 +83,57 @@ defmodule Sanctum.Consent.FlowTest do
     })
   end
 
+  describe "grant" do
+    test "binds a credential to an unmoved owner consent as the next revision", %{ctx: ctx} do
+      publish!(ctx, "flow-grant")
+      entry = entry!(ctx)
+      ref = "reagent:local.flow-grant"
+      assert {:ok, %{profile_id: profile_id, revision: 1}} = walk!(ctx, ref)
+
+      grant = %{
+        profile_id: profile_id,
+        bindings: [%{need: "@ingress", entry_id: entry.id}],
+        expected_consent_revision: 1
+      }
+
+      assert {:ok, %{profile_id: ^profile_id, revision: 2}} = Commit.grant(ctx, grant)
+
+      {:ok, head} = Source.DB.head_consent(ctx, profile_id)
+      assert head.revision == 2
+      assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
+
+      # The revision is the compare-and-set: the same grant again is stale.
+      assert {:error, {:consent_conflict, %{cause: :stale_plan}}} = Commit.grant(ctx, grant)
+
+      # A moved shape refuses the grant — a new version with a different ask.
+      publish!(ctx, "flow-grant", "1.1.0", %{
+        manifest:
+          Jason.encode!(%{
+            "name" => "flow-grant",
+            "version" => "1.1.0",
+            "type" => "reagent",
+            "caps" => %{"egress" => %{"domains" => ["api.example"], "methods" => ["GET"]}}
+          })
+      })
+
+      assert {:error, :shape_moved} = Commit.grant(ctx, %{grant | expected_consent_revision: 2})
+    end
+
+    test "only an active owner profile takes a grant", %{ctx: ctx} do
+      publish!(ctx, "flow-grant-owner")
+      entry = entry!(ctx)
+      assert {:ok, %{profile_id: profile_id}} = walk!(ctx, "reagent:local.flow-grant-owner")
+      :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, profile_id, "revoked")
+
+      assert {:error, :profile_revoked} =
+               Commit.grant(ctx, %{
+                 profile_id: profile_id,
+                 bindings: [%{need: "@ingress", entry_id: entry.id}],
+                 expected_consent_revision: 1
+               })
+    end
+  end
+
   describe "plan → preview → commit" do
     test "mints a loadable first revision with a bound vault entry", %{ctx: ctx} do
       publish!(ctx, "flow-happy")

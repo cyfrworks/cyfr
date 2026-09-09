@@ -39,6 +39,7 @@ defmodule Sanctum.MCP.ProfileTool do
           "plan" => %{kind: :write, planes: [:external], consent: :staging},
           "preview" => %{kind: :write, planes: [:external], consent: :staging},
           "commit" => %{kind: :write, planes: [:external], consent: :staging},
+          "grant" => %{kind: :write, planes: [:external], consent: :interactive},
           "publish" => %{kind: :write, planes: [:external], consent: :staging},
           "list" => %{kind: :read, planes: [:external], consent: :staging},
           "revoke" => %{kind: :destructive, planes: [:external], consent: :interactive}
@@ -49,7 +50,7 @@ defmodule Sanctum.MCP.ProfileTool do
         "properties" => %{
           "action" => %{
             "type" => "string",
-            "enum" => ["plan", "preview", "commit", "publish", "list", "revoke"],
+            "enum" => ["plan", "preview", "commit", "grant", "publish", "list", "revoke"],
             "description" => "Action to perform"
           },
           "need_ids" => %{
@@ -70,7 +71,13 @@ defmodule Sanctum.MCP.ProfileTool do
           },
           "label" => %{"type" => "string", "description" => "Profile label (default 'default')"},
           "kind" => %{"type" => "string", "enum" => ["owner", "public"]},
-          "profile_id" => %{"type" => "string", "description" => "Profile id (list/revoke)"},
+          "profile_id" => %{"type" => "string", "description" => "Profile id (grant/list/revoke)"},
+          "bindings" => %{
+            "type" => "array",
+            "description" =>
+              "grant only: the credentials to bind, " <>
+                "[{need:'@ingress', entry_id, fields, scopes}]"
+          },
           "decisions" => %{
             "type" => "object",
             "description" =>
@@ -146,6 +153,28 @@ defmodule Sanctum.MCP.ProfileTool do
   def handle(_ctx, %{"action" => "commit"}) do
     {:error,
      "commit requires decisions, plan_token, proof, commit_digest and expected_consent_revision"}
+  end
+
+  # The simple grant: a credential bound to an existing owner consent
+  # whose shape has not moved, with the revision as the compare-and-set.
+  def handle(%Context{} = ctx, %{"action" => "grant", "profile_id" => profile_id} = args) do
+    with {:ok, bindings} <- decode_bindings(Map.get(args, "bindings", [])) do
+      params = %{
+        profile_id: profile_id,
+        bindings: bindings,
+        expected_consent_revision: args["expected_consent_revision"]
+      }
+
+      case Commit.grant(ctx, params) do
+        {:ok, result} -> {:ok, Map.put(result, :status, "granted")}
+        {:error, reason} -> {:error, fmt(reason)}
+      end
+    end
+  end
+
+  def handle(_ctx, %{"action" => "grant"}) do
+    {:error,
+     {:invalid_argument, "grant requires profile_id, bindings and expected_consent_revision"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "publish", "profile_id" => profile_id} = args) do
@@ -386,6 +415,16 @@ defmodule Sanctum.MCP.ProfileTool do
   defp fmt({:entry_unavailable, id, status}),
     do: "entry_unavailable: #{id} is #{inspect(status)}"
 
+  defp fmt(:shape_moved),
+    do:
+      "shape_moved: the component's shape changed since this revision — plan, preview and commit again"
+
+  defp fmt(:grant_requires_full_commit),
+    do:
+      "grant_requires_full_commit: this profile grants external tool servers, which a grant cannot carry — plan, preview and commit"
+
+  defp fmt(:grant_requires_owner_profile), do: "grant_requires_owner_profile"
+  defp fmt(:profile_revoked), do: "profile_revoked"
   defp fmt({:component_not_found, _reason}), do: "component_not_found"
   defp fmt({:invalid_ref, reason}), do: "invalid_ref: #{reason}"
   defp fmt(reason), do: inspect(reason)

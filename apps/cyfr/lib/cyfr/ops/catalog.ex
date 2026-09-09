@@ -27,7 +27,7 @@ defmodule Cyfr.Ops.Catalog do
       ToolRegistry.list_tools()
 
       # Call a tool
-      ToolRegistry.call_external("retention", context, %{"action" => "get"})
+      Cyfr.Ops.Catalog.call_external("retention", context, %{"action" => "get"})
 
   ## One node, honestly
 

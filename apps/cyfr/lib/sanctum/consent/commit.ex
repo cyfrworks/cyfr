@@ -125,6 +125,87 @@ defmodule Sanctum.Consent.Commit do
   end
 
   @doc """
+  Grant a credential to a profile whose shape has not moved: the simple
+  verb for binding a vault entry to a need on an existing owner consent,
+  without a fresh plan, preview and proof.
+
+  It reuses the commit's binding resolution, its compare-and-set on the
+  consent revision and its digests, and re-issues the head's scope and
+  invoke mode. It refuses when the revision is stale (a consent
+  conflict), when the component's shape moved since the head
+  (`:shape_moved` — plan, preview and commit again), when the profile is
+  not an active owner profile, or when the head grants external tool
+  servers, which a grant does not carry (`:grant_requires_full_commit`).
+
+  Params: `:profile_id`, `:bindings` (the commit's binding shape) and
+  `:expected_consent_revision`.
+  """
+  @spec grant(Context.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def grant(%Context{} = ctx, %{profile_id: profile_id} = params, _opts \\ []) do
+    with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
+         {:ok, profile} <- Arca.ProfileStorage.get(ctx.athanor_id, profile_id),
+         :ok <- check_grantable_profile(profile),
+         {:ok, head} <- Source.impl().head_consent(ctx, profile_id),
+         :ok <- check_no_tool_servers(head, profile.source_ref),
+         decisions = grant_decisions(profile, head, Map.get(params, :bindings, [])),
+         {:ok, prep} <- prepare(ctx, decisions),
+         :ok <- check_expected_revision(params, prep),
+         :ok <- check_shape_unmoved(prep, head),
+         {:ok, activation_json} <- JCS.encode(prep.activation.graph),
+         {:ok, consent} <-
+           persist(ctx, prep, prep.blob_json, prep.blob_refs, activation_json, :interactive) do
+      reactivate_profile(ctx, prep)
+
+      {:ok,
+       %{
+         profile_id: consent.profile_id,
+         revision: consent.revision,
+         commit_digest: prep.commit_digest
+       }}
+    end
+  end
+
+  defp check_grantable_profile(%{kind: "owner", status: status}) when status != "revoked",
+    do: :ok
+
+  defp check_grantable_profile(%{kind: "owner"}), do: {:error, :profile_revoked}
+  defp check_grantable_profile(_profile), do: {:error, :grant_requires_owner_profile}
+
+  # The head's decisions, with the new bindings in place of its own: an
+  # owner profile, the label it carries, and the scope and invoke mode the
+  # head was committed under.
+  defp grant_decisions(profile, head, bindings) do
+    %{
+      ref: profile.source_ref,
+      label: profile.label,
+      kind: :owner,
+      scope: head.scope,
+      invoke_mode: head.invoke_mode,
+      bindings: bindings,
+      tool_servers: []
+    }
+  end
+
+  # A tool-server grant lives on the head's ingress edge and is not a
+  # binding; re-issuing the head without it would silently drop it.
+  defp check_no_tool_servers(head, source_ref) do
+    with {:ok, %{"nodes" => nodes}} <- Jason.decode(head.resolved_policy),
+         %{"edges" => edges} <- Map.get(nodes, source_ref, %{}),
+         %{} = ingress <- Map.get(edges, Sanctum.Authority.Blob.ingress_key(), %{}) do
+      case Map.get(ingress, "tool_servers") do
+        [_ | _] -> {:error, :grant_requires_full_commit}
+        _ -> :ok
+      end
+    else
+      _ -> :ok
+    end
+  end
+
+  defp check_shape_unmoved(prep, head) do
+    if prep.shape_digest == head.shape_digest, do: :ok, else: {:error, :shape_moved}
+  end
+
+  @doc """
   Stage a publish: the §4.2 `profile.publish` front half. Derives the
   forced decisions (`kind: :public`, `edge_only`, pinned) from an owner
   profile, keeping credentials only for `need_ids`, and mints the plan

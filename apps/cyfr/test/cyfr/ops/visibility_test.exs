@@ -185,7 +185,7 @@ defmodule Cyfr.Ops.VisibilityTest do
     test "an OIDC session sees the whole vault and profile surface" do
       ctx = ctx_with([], :oidc)
       assert length(visible_actions("vault", ctx)) == 8
-      assert length(visible_actions("profile", ctx)) == 6
+      assert length(visible_actions("profile", ctx)) == 7
     end
 
     test "an API key sees only the staging arms — whatever its permissions" do

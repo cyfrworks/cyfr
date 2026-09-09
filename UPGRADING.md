@@ -4,6 +4,23 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## A simple `profile.grant`, and every spelled operation is bound to the catalog
+
+`profile.grant(profile_id, bindings, expected_consent_revision)` binds a
+vault entry to a need on an existing owner consent as its next revision,
+without a fresh plan, preview and proof. It reuses the commit's binding
+resolution, its compare-and-set on the revision and its digests, and
+refuses when the revision is stale, when the component's shape moved
+since the head (`shape_moved` — plan, preview and commit again), when
+the profile is not an active owner profile, or when the head grants
+external tool servers, which a grant does not carry. The `profile` tool
+now does what its documentation said.
+
+Every `tool.action` the CLI spells as a literal, and the one library
+site that dispatches by name across an app boundary (the build host
+registering a compiled component), is bound to the loaded catalog by a
+test: a renamed or retired action fails the suite naming the file.
+
 ## The estate's agents have a derived index
 
 Migration `20260915000000` adds `agents`: one row per soul or role in
