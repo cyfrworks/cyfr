@@ -323,23 +323,22 @@ defmodule Sanctum.ProvisioningTest do
     {:ok, group} = Athanors.create_group(ctx.user_id, "Held #{n}")
     in_group = %{ctx | athanor_id: group.id}
 
-    # Another caller holds the estate's provisioning lock for the whole
-    # test — the shape of two people opening a fresh estate at once.
+    # Another caller is already filling this estate — the shape of two
+    # people opening a fresh one at once. Holding the CLAIM, not the lock:
+    # the claim is what a starting fill asks for first, so the attempt this
+    # test starts returns there instead of running a fill it never awaits,
+    # which would reach the database without the connection the test owns.
     parent = self()
 
     holder =
       spawn_link(fn ->
-        Arca.Overlay.UnitLock.with_lock({group.id, :provisioning}, fn ->
-          send(parent, :held)
-          receive do: (:release -> :ok)
-        end)
+        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
+        send(parent, :held)
+        receive do: (:release -> :ok)
       end)
 
     assert_receive :held
 
-    # The attempt the call starts finds the lock held and gives up without
-    # touching the database, so nothing outlives this test holding a
-    # connection it does not own.
     started = System.monotonic_time(:millisecond)
     assert :ok = Provisioning.start_provisioning(in_group)
 

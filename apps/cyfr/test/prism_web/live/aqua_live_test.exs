@@ -87,6 +87,45 @@ defmodule PrismWeb.AquaLiveTest do
     assert {:ok, %{files: 0}} = Arca.usage(group_ctx, ["aqua"])
   end
 
+  # Point the soul at a catalyst this estate does not hold, and put it back
+  # afterwards: the agent files live in the suite's shared tree, so a write
+  # left behind is the next test's starting state.
+  defp soul_names_missing_catalyst!(ctx) do
+    {:ok, soul} = Aqua.AgentConfig.agent(ctx, "aqua")
+    was = soul["catalyst_ref"] || ""
+
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "catalyst_ref" => "catalyst:moonmoon69.claude"
+      })
+
+    on_exit(fn ->
+      Aqua.AgentConfig.call_aqua(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "catalyst_ref" => was
+      })
+    end)
+
+    :ok
+  end
+
+  # The page talks to its sections with `send_update`; a test that is about
+  # a section's own state says so the same way.
+  defp send_update_agents(view, assigns) do
+    :sys.replace_state(view.pid, & &1)
+
+    Phoenix.LiveView.send_update(
+      view.pid,
+      PrismWeb.AquaLive.AgentsComponent,
+      Keyword.put(Enum.to_list(assigns), :id, "aqua-agents")
+    )
+
+    render(view)
+  end
+
   describe "the estate's page" do
     setup %{conn: conn} do
       user = test_user()
@@ -441,12 +480,7 @@ defmodule PrismWeb.AquaLiveTest do
          %{conn: conn, ctx: ctx} do
       # The soul names a model catalyst nothing here holds: the page says so
       # and offers to fetch it, rather than leaving a dead end.
-      {:ok, _} =
-        Aqua.AgentConfig.call_aqua(ctx, %{
-          "action" => "update",
-          "name" => "aqua",
-          "catalyst_ref" => "catalyst:moonmoon69.claude"
-        })
+      :ok = soul_names_missing_catalyst!(ctx)
 
       previous = Application.get_env(:cyfr, :registry_url)
       Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
@@ -476,6 +510,28 @@ defmodule PrismWeb.AquaLiveTest do
       # The button comes back: a refused fetch must not leave the page
       # showing "Installing…" with nothing to click.
       refute html =~ "Installing…"
+      assert has_element?(view, "button[phx-click=install_catalyst]:not([disabled])")
+    end
+
+    test "an unrelated reload does not re-enable Install while its fetch is running",
+         %{conn: conn, ctx: ctx} do
+      :ok = soul_names_missing_catalyst!(ctx)
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      # The section is told an install started, then reloaded for an
+      # unrelated reason. A button re-enabled here invites a second
+      # download of the same component.
+      send_update_agents(view, installing: "catalyst:moonmoon69.claude")
+      send_update_agents(view, load: true)
+
+      assert has_element?(view, "button[phx-click=install_catalyst][disabled]")
+
+      # The install that ends is the one named, and only then.
+      send_update_agents(view, installed: "catalyst:someone.else")
+      assert has_element?(view, "button[phx-click=install_catalyst][disabled]")
+
+      send_update_agents(view, installed: "catalyst:moonmoon69.claude")
       assert has_element?(view, "button[phx-click=install_catalyst]:not([disabled])")
     end
 

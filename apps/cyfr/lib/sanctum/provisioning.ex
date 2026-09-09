@@ -70,8 +70,10 @@ defmodule Sanctum.Provisioning do
          {:ok, _} <- record_personal(user, athanor) do
       # The row and its seat are the sign-in's business and are written
       # here; filling it is not, and a sign-in must not wait on a registry.
-      # A failure lands on the row and the next read retries.
-      in_background(fn -> provision(athanor, person_ctx(user_id, athanor.id)) end)
+      # A failure lands on the row and the next read retries. Claimed like
+      # every other filler, so a reader arriving mid-fill joins it rather
+      # than queueing a second attempt behind the same lock.
+      in_background(fn -> claim_and_provision(athanor, person_ctx(user_id, athanor.id)) end)
       {:ok, athanor}
     end
   end
@@ -116,7 +118,10 @@ defmodule Sanctum.Provisioning do
         :ok
 
       {:ok, athanor} ->
-        in_background(fn -> claim_and_provision(athanor, ctx) end)
+        unless recently_failed?(athanor) do
+          in_background(fn -> claim_and_provision(athanor, ctx) end)
+        end
+
         :ok
 
       _ ->
@@ -125,6 +130,25 @@ defmodule Sanctum.Provisioning do
   end
 
   def start_provisioning(_ctx), do: :ok
+
+  # How long an automatic fill stays out of the way after one failed.
+  @retry_after_failure_ms :timer.minutes(1)
+
+  # A fill that failed recorded why on the row, and recording it announces
+  # the row changed — which is what a console page reloads on. Without this
+  # the reload's reads would start another attempt, fail the same way, and
+  # announce again: a loop nobody asked for, from one failure.
+  #
+  # Only automatic fills back off. `athanor.provision` reaches `provision/2`
+  # directly, so a person who asks is never told to wait.
+  defp recently_failed?(athanor) do
+    with %{"at" => at} <- Athanors.settings(athanor)["provisioning_error"],
+         {:ok, failed_at, _} <- DateTime.from_iso8601(at) do
+      DateTime.diff(DateTime.utc_now(), failed_at, :millisecond) < @retry_after_failure_ms
+    else
+      _ -> false
+    end
+  end
 
   @doc """
   Start the fill if needed, and say whether the estate can run a turn yet.
@@ -175,10 +199,14 @@ defmodule Sanctum.Provisioning do
     end)
   end
 
-  # One attempt per athanor at a time. Several readers ask on one page load,
-  # and without this each would start a task that waits out the lock and
-  # then repeats work the first attempt already did — or already failed.
-  # A caller that finds an attempt running adds nothing and says so.
+  # One attempt per athanor at a time, and the only way a fill is started.
+  # Several readers ask on one page load, and a sign-in fills the estate it
+  # just minted; without this each would start a task that waits out the
+  # lock and then repeats work another attempt already did — or already
+  # failed. A caller that finds an attempt running adds nothing and says so.
+  #
+  # The lock still serializes what the claim lets through: `sync_seeds/0`
+  # takes it for estates that are already filled, which is not an attempt.
   defp claim_and_provision(%{id: athanor_id} = athanor, ctx) do
     case Registry.register(Sanctum.ProvisioningRegistry, athanor_id, :filling) do
       {:ok, _} ->
@@ -220,14 +248,21 @@ defmodule Sanctum.Provisioning do
       )
 
       index_agents(ctx)
-      filled = Athanors.mark_provisioned(athanor)
 
       # The estate's own topic, the kind every console subscriber already
       # re-reads the row on: a page rendering "still being prepared" clears
-      # itself rather than waiting for a reload.
-      Sanctum.Notify.broadcast(athanor_id, :athanor_changed, %{name: athanor.name})
+      # itself rather than waiting for a reload. Only when the mark landed —
+      # announcing a fill that did not finish would have every listener read
+      # the bundle again and start another attempt.
+      case Athanors.mark_provisioned(athanor) do
+        {:ok, filled} ->
+          Sanctum.Notify.broadcast(athanor_id, :athanor_changed, %{name: filled.name})
+          {:ok, filled}
 
-      filled
+        {:error, _} = error ->
+          Logger.error("[Provisioning] #{athanor_id} filled but not marked: #{inspect(error)}")
+          error
+      end
     else
       %{failed: failed} ->
         record_failure(athanor, :closure, failed)
@@ -275,7 +310,9 @@ defmodule Sanctum.Provisioning do
 
     if pending != [] do
       in_background(fn ->
-        Enum.each(pending, fn group -> provision(group, person_ctx(user_id, group.id)) end)
+        Enum.each(pending, fn group ->
+          claim_and_provision(group, person_ctx(user_id, group.id))
+        end)
       end)
     end
 

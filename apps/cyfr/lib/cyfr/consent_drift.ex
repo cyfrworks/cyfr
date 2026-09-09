@@ -33,7 +33,36 @@ defmodule Cyfr.ConsentDrift do
   end
 
   @doc """
-  What stands between this estate's AQUA and the authority a turn pins.
+  Every local formula whose consent no longer answers, with what is wrong.
+
+  Installing a component widens the closure a consent was minted against,
+  and it widens it for every formula that names the component — the
+  assistant and the model listing both. Recovery is per formula, so the
+  caller is told which, not just that something drifted.
+  """
+  @spec stale_refs(Context.t()) :: [{String.t(), {:drifted, [String.t()]} | :stale}]
+  def stale_refs(%Context{} = ctx) do
+    for ref <- local_formula_refs(ctx),
+        state = state(ctx, ref),
+        state != :ok and state != :unknown,
+        do: {ref, state}
+  end
+
+  # The estate's own formulas: what a fill consents, and what installing a
+  # component can therefore invalidate.
+  defp local_formula_refs(%Context{} = ctx) do
+    case Arca.ComponentStorage.list_components(ctx,
+           publisher: Compendium.ComponentPath.default_publisher(),
+           component_type: "formula",
+           limit: :none
+         ) do
+      {:ok, rows} -> rows |> Enum.map(&"formula:local.#{&1.name}") |> Enum.uniq()
+      _ -> []
+    end
+  end
+
+  @doc """
+  What stands between a formula and the authority a turn pins.
 
   `:ok` — the consented set covers what the shipped manifest declares.
   `{:drifted, actions}` — the consent predates the manifest and lacks these.
@@ -44,9 +73,10 @@ defmodule Cyfr.ConsentDrift do
   unreadable manifest, a store that did not answer).
   """
   @spec state(Context.t()) :: :ok | {:drifted, [String.t()]} | :stale | :unknown
-  def state(%Context{} = ctx) do
-    ref = Aqua.VirtualTools.aqua_formula()
+  def state(%Context{} = ctx), do: state(ctx, Aqua.VirtualTools.aqua_formula())
 
+  @spec state(Context.t(), String.t()) :: :ok | {:drifted, [String.t()]} | :stale | :unknown
+  def state(%Context{} = ctx, ref) when is_binary(ref) do
     with {:ok, _needs, caps} <- Sanctum.Consent.ShapeDerivation.manifest_blocks(ctx, ref) do
       case Cyfr.Execution.authority_for(ctx, :default, ref) do
         {:ok, authority} ->

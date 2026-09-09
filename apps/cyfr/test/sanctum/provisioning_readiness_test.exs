@@ -5,10 +5,12 @@ defmodule Sanctum.ProvisioningReadinessTest do
   @moduledoc """
   What an estate answers while it is being filled.
 
-  The tree reads through the seed overlay from the moment the row exists,
-  so a roster and a component listing are real straight away. What
-  provisioning adds is the baseline consent a turn pins, so a turn is what
-  waits — and it says so, rather than failing later as a missing profile.
+  The agent tree reads through the seed overlay from the moment the row
+  exists, so a roster is real straight away. A component listing is
+  database rows and answers what is registered, which on a bare estate is
+  nothing until its scan lands. What provisioning adds is the baseline
+  consent a turn pins, so a turn is what waits — and it says so, rather
+  than failing later as a missing profile.
   """
   use ExUnit.Case, async: false
 
@@ -77,6 +79,63 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert {:ok, %{provisioned_at: nil}} = Athanors.get(group.id)
 
     send(holder, :release)
+  end
+
+  test "a sign-in's own fill is claimed like any other", %{ctx: ctx, group: group} do
+    # Every filler asks for the claim, not only the readers: a sign-in fills
+    # the estate it just minted, and a reader arriving mid-fill must join
+    # that attempt rather than queue a second one behind the same lock.
+    parent = self()
+
+    holder =
+      spawn_link(fn ->
+        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
+        send(parent, :claimed)
+        receive do: (:release -> :ok)
+      end)
+
+    assert_receive :claimed
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|claimed-#{System.unique_integer([:positive])}",
+        provider: "github",
+        email: "claimed#{System.unique_integer([:positive])}@example.com",
+        verified: true
+      })
+
+    # Its own estate is a different athanor, so this one is untouched: what
+    # is pinned here is that the claim, not the lock, is what a fill asks
+    # for first.
+    assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user)
+    assert {:ok, %{provisioned_at: nil}} = Athanors.get(group.id)
+    assert :ok = Sanctum.Provisioning.start_provisioning(ctx)
+    assert {:ok, %{provisioned_at: nil}} = Athanors.get(group.id)
+
+    send(holder, :release)
+  end
+
+  test "a fill that failed is not started again by the notice it caused",
+       %{ctx: ctx, group: group} do
+    # Recording a failure writes the row, and writing the row announces it —
+    # which is what a console page reloads on. Its reads must not start
+    # another attempt, or one failure becomes an endless retry.
+    assert {:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx)
+
+    {:ok, failed} = Athanors.get(group.id)
+    refute failed.provisioned_at
+    assert %{"at" => first_at} = Athanors.settings(failed)["provisioning_error"]
+
+    # Everything the reload would do, several times over.
+    for _ <- 1..5, do: assert({:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx))
+
+    {:ok, again} = Athanors.get(group.id)
+    assert Athanors.settings(again)["provisioning_error"]["at"] == first_at
+
+    # A person who asks is never told to wait: the explicit verb fills now.
+    assert {:error, {:provisioning_failed, _, _}} = Sanctum.Provisioning.provision(again, ctx)
+    {:ok, retried} = Athanors.get(group.id)
+    assert Athanors.settings(retried)["provisioning_error"]["at"] != first_at
   end
 
   test "a context with no athanor is never ready" do

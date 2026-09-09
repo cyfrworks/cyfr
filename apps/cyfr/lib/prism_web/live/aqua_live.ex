@@ -51,7 +51,7 @@ defmodule PrismWeb.AquaLive do
       |> assign(:active_nav, "aqua")
       |> assign(:loading, true)
       |> assign(:provenance, %{})
-      |> assign(:consent_state, :unknown)
+      |> assign(:stale_consents, [])
       |> assign(:models_by_provider, %{})
       |> assign(:catalyst_refs, %{})
       |> assign(:models_loaded, false)
@@ -121,6 +121,9 @@ defmodule PrismWeb.AquaLive do
           put_flash(socket, :error, "Could not install #{ref}: #{error_message(reason)}")
       end
 
+    # The section that owns the button hears which install ended, so an
+    # unrelated reload cannot re-enable it mid-download.
+    send_update(AgentsComponent, id: "aqua-agents", installed: ref)
     send(self(), {:refresh, :agents})
     {:noreply, load_models(socket)}
   end
@@ -201,7 +204,7 @@ defmodule PrismWeb.AquaLive do
 
     socket
     |> assign(:provenance, provenance)
-    |> assign(:consent_state, Cyfr.ConsentDrift.state(socket.assigns.context))
+    |> assign(:stale_consents, Cyfr.ConsentDrift.stale_refs(socket.assigns.context))
   end
 
   # Each section reads itself when told, with the provenance as it is now.
@@ -237,9 +240,8 @@ defmodule PrismWeb.AquaLive do
     end
   end
 
-  # The sentence for a consent that no longer answers, or nil when there is
-  # nothing to say. `:unknown` says nothing: the question could not be asked.
-  defp consent_warning({:drifted, missing}) do
+  # The sentence for a consent that no longer answers, named by its formula.
+  defp consent_warning(ref, {:drifted, missing}) do
     shown = missing |> Enum.take(4) |> Enum.join(", ")
     rest = if length(missing) > 4, do: ", …", else: ""
 
@@ -249,16 +251,17 @@ defmodule PrismWeb.AquaLive do
         _many -> "#{length(missing)} actions the shipped manifest grants are"
       end
 
-    "This estate consented to an older AQUA formula: #{count} not in its consent " <>
+    "This estate consented to an older #{short_ref(ref)}: #{count} not in its consent " <>
       "(#{shown}#{rest}), so a card for one is denied on Approve until a member re-consents."
   end
 
-  defp consent_warning(:stale) do
+  defp consent_warning(ref, :stale) do
     "This estate's components changed since it consented — installing one does that — " <>
-      "so AQUA cannot start a turn until a member consents again."
+      "so #{short_ref(ref)} cannot run until a member consents again."
   end
 
-  defp consent_warning(_state), do: nil
+  defp short_ref("formula:local." <> name), do: name
+  defp short_ref(ref), do: ref
 
   # ============================================================================
   # Render
@@ -281,17 +284,20 @@ defmodule PrismWeb.AquaLive do
             shipped manifest: a policy may name an action the chain
             authority will deny on the click. Re-consenting is the fix,
             and the sheet is one click away. --%>
+      <%!-- One row per formula whose consent no longer answers. Installing a
+            component widens the closure every formula that names it was
+            consented against, so recovery is per formula. --%>
       <div
-        :if={consent_warning(@consent_state)}
-        id="aqua-consent-drift"
+        :for={{ref, state} <- @stale_consents}
+        id={"aqua-consent-drift-" <> ref}
         role="status"
         class="rounded border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200 flex items-start justify-between gap-3"
       >
-        <p>{consent_warning(@consent_state)}</p>
+        <p>{consent_warning(ref, state)}</p>
         <button
           type="button"
           phx-click="open_consent"
-          phx-value-ref={Aqua.VirtualTools.aqua_formula()}
+          phx-value-ref={ref}
           class="shrink-0 rounded bg-amber-700 hover:bg-amber-600 px-2 py-1 text-[11px] font-medium text-white"
         >
           Re-consent

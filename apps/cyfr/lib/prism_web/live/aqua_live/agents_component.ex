@@ -37,22 +37,27 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:default_start, nil)
      |> assign(:tool_actions, nil)
      |> assign(:model_status, %{})
-     |> assign(:installing, false)
+     |> assign(:installing, nil)
      |> assign(:editor_editing_prompt, nil)
      |> assign(:editor_prompt_content, "")
      |> assign(:editor_prompt_digest, nil)}
   end
 
   @impl true
-  def update(%{load: true} = assigns, socket) do
-    # A load ends any install this section was showing: the parent asks for
-    # one when the fetch answers, whether it landed or not.
+  # The install this section is showing ended — the parent says so when the
+  # fetch answers, landed or refused. Named by its ref, because an ordinary
+  # section reload (an edit, a role created) must not re-enable a button
+  # whose download is still running and invite a second one.
+  def update(%{installed: ref}, socket) do
     {:ok,
-     socket
-     |> assign(Map.delete(assigns, :load))
-     |> assign(:installing, false)
-     |> load_agents()
-     |> assign(:loaded, true)}
+     if(socket.assigns.installing == ref,
+       do: assign(socket, :installing, nil),
+       else: socket
+     )}
+  end
+
+  def update(%{load: true} = assigns, socket) do
+    {:ok, socket |> assign(Map.delete(assigns, :load)) |> load_agents() |> assign(:loaded, true)}
   end
 
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}
@@ -78,7 +83,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       send(lv, {:catalyst_installed, ref, result})
     end)
 
-    {:noreply, assign(socket, :installing, true)}
+    {:noreply, assign(socket, :installing, ref)}
   end
 
   # A new role gets its hands in the same flow: the policy it starts from
@@ -781,7 +786,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :is_soul, :boolean, default: false
   attr :roles, :list, default: []
   attr :model_status, :any, default: nil
-  attr :installing, :boolean, default: false
+  attr :installing, :any, default: nil
   attr :athanor, :any, default: nil
 
   defp agent_card(assigns) do
@@ -902,7 +907,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           phx-click="install_catalyst"
           phx-value-ref={elem(@model_status, 1)}
           phx-target={@myself}
-          disabled={@installing}
+          disabled={@installing != nil}
           class="rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-2 py-1 text-[11px] font-medium text-white"
         >
           {if @installing, do: "Installing…", else: "Install"}

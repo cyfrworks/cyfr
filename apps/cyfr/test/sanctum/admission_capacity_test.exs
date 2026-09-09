@@ -14,7 +14,7 @@ defmodule Sanctum.AdmissionCapacityTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.SignIn
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -44,9 +44,11 @@ defmodule Sanctum.AdmissionCapacityTest do
 
     assert {:error, {:limit_reached, :max_athanors, 1}} = SignIn.admitted(info(n), :allowed)
 
-    # Nothing half-made: no estate, and nothing to sign in to.
-    assert {:error, :not_found} =
-             Athanors.get_by_owner("github|https://github.com|cap-#{n}")
+    # Nothing half-made. The person's row is written before the mint is
+    # attempted, so the estate is what to look for — under their minted id,
+    # never the IdP identity they arrived with.
+    {:ok, user} = Users.get_by_identity("github|https://github.com|cap-#{n}")
+    assert {:error, :not_found} = Athanors.get_by_owner(user.id)
   end
 
   test "an operator is minted past the caps" do

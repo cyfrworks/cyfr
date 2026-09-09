@@ -171,6 +171,17 @@ defmodule Sanctum.ConsentAfterInstallTest do
              Cyfr.Execution.authority_for(in_group, :default, "formula:local.aqua")
 
     assert Cyfr.ConsentDrift.state(in_group) == :stale
+
+    # And it is not AQUA's alone: the model listing names the same provider,
+    # so its own consent went stale too. Recovery is offered per formula
+    # rather than for the assistant alone, or the picker stays empty after
+    # a person installs the very catalyst it lists.
+    stale = Cyfr.ConsentDrift.stale_refs(in_group)
+    refs = Enum.map(stale, &elem(&1, 0))
+
+    assert "formula:local.aqua" in refs
+    assert "formula:local.list-models" in refs
+    assert Enum.all?(stale, fn {_ref, state} -> state == :stale end)
   end
 
   defp fixtures do

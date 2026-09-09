@@ -85,7 +85,8 @@ defmodule Cyfr.Ops.Error do
   def message(:control_plane_lost),
     do: "This server does not currently own its database's control plane — retry shortly"
 
-  # The estate exists and is being filled; the read is not refused, only early.
+  # The estate exists and is being filled. A turn waits for that; reads of
+  # the tree answer meanwhile.
   def message(:not_provisioned),
     do: "This estate is still being prepared — retry shortly"
 
