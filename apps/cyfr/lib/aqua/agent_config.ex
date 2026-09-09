@@ -238,6 +238,9 @@ defmodule Aqua.AgentConfig do
   @doc """
   Returns the working athanor's installed catalysts through `component.list`.
   Read once per turn and pass to `resolve_catalyst/2` and `role_definitions/4`.
+
+  Each row names its release in `component_ref`; that is the key the
+  resolvers match on.
   """
   @spec catalyst_listing(Context.t()) :: {:ok, [map()]} | {:error, :catalyst_lookup_failed}
   def catalyst_listing(%Context{} = ctx) do
@@ -264,14 +267,14 @@ defmodule Aqua.AgentConfig do
 
     match =
       components
-      |> Enum.filter(fn c -> String.starts_with?(c["reference"] || "", prefix) end)
+      |> Enum.filter(fn c -> String.starts_with?(c["component_ref"] || "", prefix) end)
       # Semver precedence, not lexicographic max — "10.0.0" outranks "9.0.0".
       |> Compendium.Semver.sort_desc_by(fn c -> c["version"] || "0" end)
       |> List.first()
 
     case match do
       nil -> {:error, :catalyst_not_found}
-      c -> {:ok, c["reference"]}
+      c -> {:ok, c["component_ref"]}
     end
   end
 

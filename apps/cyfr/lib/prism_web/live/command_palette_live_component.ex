@@ -197,7 +197,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     case call_tool(ctx, "component/list", %{"limit" => @max_recent}) do
       {:ok, %{components: list}} when is_list(list) ->
         Enum.map(list, fn comp ->
-          ref = comp[:reference] || ""
+          ref = comp[:component_ref] || ""
 
           %{
             kind: :component,

@@ -62,6 +62,35 @@ defmodule Aqua.AgentConfigTest do
     assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
   end
 
+  # Minimal valid WASM with a `run` export — enough to publish a row.
+  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+  test "a catalyst the estate holds resolves to its newest installed release", %{ctx: ctx} do
+    for version <- ["9.0.0", "10.0.0"] do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "resolver-model",
+          version: version,
+          type: "catalyst",
+          description: "Test catalyst"
+        })
+    end
+
+    # `component.list` names a row by `component_ref`. A resolver reading any
+    # other key matches nothing, and every installed model reads as missing.
+    {:ok, listing} = AgentConfig.catalyst_listing(ctx)
+
+    assert {:ok, "catalyst:local.resolver-model:10.0.0"} =
+             AgentConfig.resolve_catalyst(listing, "catalyst:local.resolver-model")
+
+    assert {:error, :catalyst_not_found} =
+             AgentConfig.resolve_catalyst(listing, "catalyst:local.absent")
+  end
+
   test "put_formula_tool_surface always attaches the policy, never a tool list" do
     # `tool_policy` is the only tool surface: a native-search grant rides in
     # the same map as everything else, and an absent policy becomes the

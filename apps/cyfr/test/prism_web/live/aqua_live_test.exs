@@ -87,10 +87,10 @@ defmodule PrismWeb.AquaLiveTest do
     assert {:ok, %{files: 0}} = Arca.usage(group_ctx, ["aqua"])
   end
 
-  # Point the soul at a catalyst this estate does not hold, and put it back
-  # afterwards: the agent files live in the suite's shared tree, so a write
-  # left behind is the next test's starting state.
-  defp soul_names_missing_catalyst!(ctx) do
+  # Point the soul at `ref`, and put it back afterwards: the agent files live
+  # in the suite's shared tree, so a write left behind is the next test's
+  # starting state.
+  defp soul_names_catalyst!(ctx, ref) do
     {:ok, soul} = Aqua.AgentConfig.agent(ctx, "aqua")
     was = soul["catalyst_ref"] || ""
 
@@ -98,7 +98,7 @@ defmodule PrismWeb.AquaLiveTest do
       Aqua.AgentConfig.call_aqua(ctx, %{
         "action" => "update",
         "name" => "aqua",
-        "catalyst_ref" => "catalyst:moonmoon69.claude"
+        "catalyst_ref" => ref
       })
 
     on_exit(fn ->
@@ -111,6 +111,17 @@ defmodule PrismWeb.AquaLiveTest do
 
     :ok
   end
+
+  defp soul_names_missing_catalyst!(ctx),
+    do: soul_names_catalyst!(ctx, "catalyst:moonmoon69.claude")
+
+  # Minimal valid WASM with a `run` export — enough to publish a row, which
+  # is what a pull that lands leaves behind.
+  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
   # The page talks to its sections with `send_update`; a test that is about
   # a section's own state says so the same way.
@@ -511,6 +522,53 @@ defmodule PrismWeb.AquaLiveTest do
       # showing "Installing…" with nothing to click.
       refute html =~ "Installing…"
       assert has_element?(view, "button[phx-click=install_catalyst]:not([disabled])")
+    end
+
+    test "an install that lands leaves the model asking for a key, not asking to be installed",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.newmodel"
+      :ok = soul_names_catalyst!(ctx, ref)
+
+      {view, html} = mount_athanor(conn, "/aqua")
+      assert html =~ "not installed here yet"
+
+      # What a pull that succeeds leaves behind: the row, with a required
+      # need and no consent bound to it yet.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "newmodel",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "api_key" => %{
+                  "type" => "api_key:newmodel.test",
+                  "reason" => "to call the model with your key",
+                  "fields" => ["NEWMODEL_API_KEY"],
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      send(view.pid, {:catalyst_installed, ref, {:ok, %{}}})
+
+      html = settled_render(view)
+      assert html =~ "Installed #{ref}."
+      refute html =~ "not installed here yet"
+      assert html =~ "the model has no key yet"
+      refute has_element?(view, "button[phx-click=install_catalyst]")
+
+      # And the way on is live: the sheet opens on the release that landed.
+      view
+      |> element("button[phx-click=open_consent]", "Connect a model")
+      |> render_click()
+
+      html = render(view)
+      assert html =~ "#{ref}:0.1.0"
+      assert html =~ "to call the model with your key"
     end
 
     test "an unrelated reload does not re-enable Install while its fetch is running",
