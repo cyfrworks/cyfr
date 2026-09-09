@@ -37,6 +37,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:default_start, nil)
      |> assign(:tool_actions, nil)
      |> assign(:model_status, %{})
+     |> assign(:installing, false)
      |> assign(:editor_editing_prompt, nil)
      |> assign(:editor_prompt_content, "")
      |> assign(:editor_prompt_digest, nil)}
@@ -51,6 +52,27 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   @impl true
   def handle_event("dismiss_flash", _params, socket), do: {:noreply, clear_flash(socket)}
+
+  # Installing a model catalyst is an OCI fetch that can take seconds, so it
+  # runs as a supervised task and answers into the page's mailbox — never
+  # inline in the click, which would hold the LiveView. With no registry
+  # configured the refusal comes back without a request being made.
+  def handle_event("install_catalyst", %{"ref" => ref}, socket) when is_binary(ref) do
+    ctx = socket.assigns.context
+    lv = self()
+    logger_metadata = Cyfr.LoggerContext.capture()
+
+    Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
+      Cyfr.LoggerContext.restore(logger_metadata)
+
+      result =
+        PrismWeb.Ops.call_tool(ctx, "component/pull", %{"reference" => ref})
+
+      send(lv, {:catalyst_installed, ref, result})
+    end)
+
+    {:noreply, assign(socket, :installing, true)}
+  end
 
   # A new role gets its hands in the same flow: the policy it starts from
   # (a role in the roster, or none), and leave for the soul to clone into
@@ -676,6 +698,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         is_soul={true}
         roles={@roles}
         model_status={Map.get(@model_status, @soul["catalyst_ref"])}
+        installing={@installing}
         athanor={@athanor}
       />
 
@@ -751,6 +774,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :is_soul, :boolean, default: false
   attr :roles, :list, default: []
   attr :model_status, :any, default: nil
+  attr :installing, :boolean, default: false
   attr :athanor, :any, default: nil
 
   defp agent_card(assigns) do
@@ -865,6 +889,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:missing, _}, @model_status)} class="text-amber-300">
           The model's catalyst is not installed here yet
         </span>
+        <button
+          :if={match?({:missing, _}, @model_status)}
+          type="button"
+          phx-click="install_catalyst"
+          phx-value-ref={elem(@model_status, 1)}
+          phx-target={@myself}
+          disabled={@installing}
+          class="rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-2 py-1 text-[11px] font-medium text-white"
+        >
+          {if @installing, do: "Installing…", else: "Install"}
+        </button>
         <button
           :if={match?({status, _} when status in [:ready, :needs_key], @model_status)}
           type="button"

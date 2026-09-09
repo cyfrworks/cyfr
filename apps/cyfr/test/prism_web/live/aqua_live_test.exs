@@ -437,6 +437,42 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "form[phx-submit=editor_create_role]")
     end
 
+    test "a catalyst the estate does not hold is offered an Install, which refuses without a registry",
+         %{conn: conn, ctx: ctx} do
+      # The soul names a model catalyst nothing here holds: the page says so
+      # and offers to fetch it, rather than leaving a dead end.
+      {:ok, _} =
+        Aqua.AgentConfig.call_aqua(ctx, %{
+          "action" => "update",
+          "name" => "aqua",
+          "catalyst_ref" => "catalyst:moonmoon69.claude"
+        })
+
+      previous = Application.get_env(:cyfr, :registry_url)
+      Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:cyfr, :registry_url, previous),
+          else: Application.delete_env(:cyfr, :registry_url)
+      end)
+
+      {view, html} = mount_athanor(conn, "/aqua")
+      assert html =~ "not installed here yet"
+      assert has_element?(view, "button[phx-click=install_catalyst]")
+
+      # With no registry the refusal is the outcome, and it never became a
+      # request: `Compendium.Pull` asks before it resolves a tag.
+      assert {:error, %Compendium.OCI.Errors{reason: :registry_unconfigured}} =
+               Compendium.Pull.oci_reference_for("catalyst:moonmoon69.claude")
+
+      view
+      |> element("button[phx-click=install_catalyst]")
+      |> render_click()
+
+      assert render(view) =~ "Could not install"
+    end
+
     test "a key bound from the page drops the kept catalogue, so the picker is read again",
          %{conn: conn, ctx: ctx} do
       estate = seated_athanor()

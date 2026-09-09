@@ -107,6 +107,24 @@ defmodule PrismWeb.AquaLive do
 
   def handle_info(:loaded, socket), do: {:noreply, assign(socket, :loading, false)}
 
+  # A model catalyst arrived (or did not): the agents section reads its
+  # status again either way, and the picker's kept catalogue is dropped so
+  # the new provider is offered.
+  def handle_info({:catalyst_installed, ref, result}, socket) do
+    socket =
+      case result do
+        {:ok, _} ->
+          PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
+          put_flash(socket, :info, "Installed #{ref}.")
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Could not install #{ref}: #{error_message(reason)}")
+      end
+
+    send(self(), {:refresh, :agents})
+    {:noreply, load_models(socket)}
+  end
+
   # The estate's row changed. A fill completing mints the consents the
   # page reports on, so it is read again.
   def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do

@@ -159,7 +159,12 @@ defmodule Compendium.Pull do
   defp to_oci_ref(%Sanctum.ComponentRef{version: nil} = cref) do
     registry = Compendium.RegistryHost.canonical_host()
 
-    with {:ok, oci_ref} <- Reference.from_component_ref(cref, registry) do
+    # Ask whether there is a registry BEFORE resolving a tag: the tag list is
+    # an HTTP call of its own, made before `Client.pull/2` reaches its own
+    # host check, so an appliance with no registry would dial one to be told
+    # it has none.
+    with :ok <- registry_configured(),
+         {:ok, oci_ref} <- Reference.from_component_ref(cref, registry) do
       case resolve_latest_oci_tag(oci_ref) do
         {:ok, tag} -> {:ok, Reference.to_string(%{oci_ref | tag: tag})}
         {:error, _} -> {:ok, Reference.to_string(oci_ref)}
@@ -170,9 +175,16 @@ defmodule Compendium.Pull do
   defp to_oci_ref(%Sanctum.ComponentRef{} = cref) do
     registry = Compendium.RegistryHost.canonical_host()
 
-    with {:ok, oci_ref} <- Reference.from_component_ref(cref, registry) do
+    with :ok <- registry_configured(),
+         {:ok, oci_ref} <- Reference.from_component_ref(cref, registry) do
       {:ok, Reference.to_string(oci_ref)}
     end
+  end
+
+  defp registry_configured do
+    if Compendium.RegistryHost.configured?(),
+      do: :ok,
+      else: {:error, Compendium.OCI.Errors.unconfigured()}
   end
 
   # Resolve the latest semver tag from an OCI repository (for versionless pulls).
