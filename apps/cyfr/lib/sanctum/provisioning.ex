@@ -206,6 +206,7 @@ defmodule Sanctum.Provisioning do
           "(pulled #{length(closure.pulled)}, minted #{length(bootstrap.minted)})"
       )
 
+      index_agents(ctx)
       Athanors.mark_provisioned(athanor)
     else
       %{failed: failed} ->
@@ -227,6 +228,18 @@ defmodule Sanctum.Provisioning do
   # The row exists whether or not provisioning succeeded: the caller gets
   # it either way (a failure is on the row's settings and in the log), and a
   # later sign-in or focus retries.
+  # The estate's agents as rows, derived from the tree the seed just
+  # filled or the release just moved. Never provisioning's failure.
+  defp index_agents(ctx) do
+    case Compendium.AgentIndex.sync(ctx) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Provisioning] agent index not synced: #{inspect(reason)}")
+    end
+  end
+
   defp row_after({:ok, athanor}, _), do: {:ok, athanor}
 
   defp row_after({:error, _}, athanor) do
@@ -472,6 +485,7 @@ defmodule Sanctum.Provisioning do
 
       bootstrap_synced(ctx, athanor.id)
       collapse_pristine(ctx, athanor.id)
+      index_agents(ctx)
     end
 
     :ok

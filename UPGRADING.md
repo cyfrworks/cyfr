@@ -4,6 +4,18 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## The estate's agents have a derived index
+
+Migration `20260915000000` adds `agents`: one row per soul or role in
+the estate's `aqua/` tree, with the digest of the file's bytes (its
+revision) and the digest of its security-relevant subset (its
+capability: type, catalyst, model, whether disabled, tool policy —
+`Compendium.AquaAgent.to_manifest/1`). The tree stays the source; the
+index is rewritten from it after every `aqua.create`, `aqua.update` and
+`aqua.delete`, at provisioning and at the seed sync, and it is never a
+second mutable source for consent or prompt composition. A turn still
+pins `formula:local.aqua`.
+
 ## A turn has a row, and the grant migrations are collapsed
 
 Migration `20260914000000` adds the durable shape of a turn as

@@ -419,6 +419,7 @@ defmodule Compendium.MCP.AquaTool do
          :ok <- validate_tool_policy(args["tool_policy"], type),
          :ok <- validate_patch(args["tool_policy_patch"]),
          :ok <- Arca.Overlay.update(ctx, AquaPath.agent_file(name), rewrite) do
+      resync_index(ctx)
       {:ok, %{updated: name}}
     else
       {:error, :not_found} ->
@@ -451,9 +452,11 @@ defmodule Compendium.MCP.AquaTool do
     with :ok <- validate_name(name) do
       case Arca.Overlay.drop_unit(ctx, AquaPath.agent_file(name)) do
         {:ok, :revealed_shipped} ->
+          resync_index(ctx)
           {:ok, %{deleted: name, restored: "shipped"}}
 
         {:ok, :deleted} ->
+          resync_index(ctx)
           {:ok, %{deleted: name}}
 
         {:error, :bundled} ->
@@ -725,6 +728,15 @@ defmodule Compendium.MCP.AquaTool do
           "disable it instead (update name=#{name} disabled=true)"
   end
 
+  # The tree changed; the derived index follows it. Never the write's
+  # failure: an index that lags is re-synced by the next write or sync.
+  defp resync_index(ctx) do
+    case Compendium.AgentIndex.sync(ctx) do
+      {:ok, _} -> :ok
+      {:error, reason} -> Logger.warning("[AquaTool] agent index not synced: #{inspect(reason)}")
+    end
+  end
+
   defp create_role(ctx, name, args) do
     role = %{
       name: name,
@@ -750,7 +762,9 @@ defmodule Compendium.MCP.AquaTool do
            if_absent: true
          ) do
       {:ok, _written} ->
-        {:ok, Map.merge(%{created: name, type: AquaAgent.role_type()}, clone_leave(ctx, name))}
+        answer = Map.merge(%{created: name, type: AquaAgent.role_type()}, clone_leave(ctx, name))
+        resync_index(ctx)
+        {:ok, answer}
 
       {:error, :exists} ->
         {:error, {:invalid_argument, "Role '#{name}' already exists"}}

@@ -51,6 +51,9 @@ defmodule Compendium.ReverseSurfaceTest do
     # `alias Compendium.{AutoIndexer, Pull}` (`Sanctum.Provisioning`), which
     # no roster regex could see, so they were absent from this list while
     # being called five times.
+    # Provisioning re-derives the estate's agent index once the seed has
+    # filled its tree, and the seed sync does the same after a release.
+    "Compendium.AgentIndex",
     "Compendium.AquaTemplate",
     "Compendium.AutoIndexer",
     "Compendium.Pull",

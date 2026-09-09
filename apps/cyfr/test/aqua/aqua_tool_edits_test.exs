@@ -46,6 +46,31 @@ defmodule Aqua.AquaToolEditsTest do
     assert policy(ctx, AquaPath.soul_name())[AquaAgent.clone_glob("scout")] == "auto"
   end
 
+  # The derived index follows every write to the tree: a created role has a
+  # row with its two digests, an edit moves them, a delete removes the row.
+  test "the agent index follows the tree", %{ctx: ctx} do
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    assert %{kind: "role", disabled: false} = scout = Enum.find(rows, &(&1.name == "scout"))
+    assert String.starts_with?(scout.revision_digest, "sha256:")
+    assert scout.capability_digest =~ "sha256:"
+
+    assert {:ok, _} =
+             call(ctx, %{
+               "action" => "update",
+               "name" => "scout",
+               "tool_policy_patch" => %{"files.read" => "auto"}
+             })
+
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    edited = Enum.find(rows, &(&1.name == "scout"))
+    refute edited.revision_digest == scout.revision_digest
+    refute edited.capability_digest == scout.capability_digest
+
+    assert {:ok, _} = call(ctx, %{"action" => "delete", "name" => "scout"})
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    refute Enum.any?(rows, &(&1.name == "scout"))
+  end
+
   test "two members toggling different keys keep both", %{ctx: ctx} do
     assert {:ok, _} =
              call(ctx, %{

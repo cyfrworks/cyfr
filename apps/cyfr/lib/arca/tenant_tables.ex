@@ -52,6 +52,7 @@ defmodule Arca.TenantTables do
     "approvals",
     "turn_steps",
     "turns",
+    "agents",
     "consent_vault_refs",
     "consents",
     "profiles",

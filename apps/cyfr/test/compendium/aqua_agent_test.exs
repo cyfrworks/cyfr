@@ -111,4 +111,37 @@ defmodule Compendium.AquaAgentTest do
     assert {:error, {:tool_policy_invalid_key, 1}} = AquaAgent.check_tool_policy(%{1 => "auto"})
     assert {:error, :tool_policy_not_a_map} = AquaAgent.check_tool_policy("auto")
   end
+
+  # The security-relevant subset: what an agent is and may do, never what
+  # it says. Two agents that differ only in prose share a capability.
+  test "to_manifest/1 projects the capability and nothing of the prose" do
+    role = %{
+      name: "scout",
+      title: "Scout",
+      description: "Looks around",
+      disabled: false,
+      catalyst_ref: "catalyst:moonmoon69.claude",
+      model: "claude-sonnet-4-6",
+      tool_policy: %{"files.read" => "auto"},
+      prompt: "You look around."
+    }
+
+    manifest = AquaAgent.to_manifest(role)
+    assert manifest["name"] == "scout"
+    assert manifest["type"] == AquaAgent.role_type()
+    assert manifest["catalyst_ref"] == "catalyst:moonmoon69.claude"
+    assert manifest["tool_policy"] == %{"files.read" => "auto"}
+    refute Map.has_key?(manifest, "prompt")
+    refute Map.has_key?(manifest, "title")
+
+    {:ok, digest} = AquaAgent.capability_digest(role)
+
+    {:ok, same} =
+      AquaAgent.capability_digest(%{role | prompt: "Something else.", title: "Renamed"})
+
+    assert digest == same
+
+    {:ok, other} = AquaAgent.capability_digest(%{role | tool_policy: %{"files.read" => "ask"}})
+    refute digest == other
+  end
 end

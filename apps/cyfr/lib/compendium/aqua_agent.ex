@@ -221,6 +221,32 @@ defmodule Compendium.AquaAgent do
   @spec type_of(t()) :: String.t()
   def type_of(agent), do: if(soul?(agent), do: @soul_type, else: @role_type)
 
+  @doc """
+  The security-relevant subset of an agent, as a manifest: what it is
+  (soul or role), which catalyst and model run it, whether it is
+  disabled, and its tool policy. Nothing else — not the prompt, the title
+  or the description, which change what the agent says and never what it
+  may do. Pure: the same agent projects to the same map, so a digest of
+  it is the agent's capability revision.
+  """
+  @spec to_manifest(t()) :: map()
+  def to_manifest(%{name: name} = agent) do
+    # An unset catalyst or model is absent, never a null: the projection
+    # names what the agent declares, and its digest is canonical JSON.
+    %{
+      "name" => name,
+      "type" => type_of(agent),
+      "disabled" => agent.disabled == true,
+      "tool_policy" => agent.tool_policy || %{}
+    }
+    |> Cyfr.MapUtil.put_present("catalyst_ref", agent.catalyst_ref)
+    |> Cyfr.MapUtil.put_present("model", agent.model)
+  end
+
+  @doc "The digest of `to_manifest/1`: the agent's capability revision."
+  @spec capability_digest(t()) :: {:ok, String.t()} | {:error, term()}
+  def capability_digest(agent), do: Sanctum.JCS.hash(to_manifest(agent))
+
   @doc "One agent by name — the soul or a role, whichever the name is — through the overlay union."
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get(%Context{} = ctx, name) when is_binary(name) do
