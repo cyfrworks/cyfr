@@ -36,6 +36,20 @@ defmodule Cyfr.Ops.Catalog do
   that framing was wrong by two orders of magnitude — the engine names
   ~40 cyfr modules, so a remote worker is a protocol project, not a
   routing patch on this table.
+
+  ## The gate, as it is
+
+  Who may run an operation is decided once, here, and the answer has
+  three arms. A guest-planed context with no Authority is denied every
+  operation: a component reaches nothing by itself. A guest-planed
+  context with an Authority reaches the in-chain set — the actions whose
+  annotation names the `:in_chain` plane, derived from the declarations
+  and nothing else — and only through `Sanctum.Authority.Transition.step/3`,
+  which answers for the chain's grants; the identity conjunct is then
+  the caller's own permission. An external-plane caller, a person or a
+  key, is judged by the annotations alone: plane, auth, permission,
+  consent class, scope. There is no rule that depends on which runner is
+  asking.
   """
 
   use GenServer
