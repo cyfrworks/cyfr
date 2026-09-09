@@ -59,19 +59,31 @@ if Mix.env() in [:test, :dev] do
       # second app's helper runs in the same BEAM.
       Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fn ->
         for {id, slug} <- @well_known do
-          case Sanctum.Tenancy.Athanors.get(id) do
-            {:ok, _} ->
-              :ok
+          athanor =
+            case Sanctum.Tenancy.Athanors.get(id) do
+              {:ok, existing} ->
+                existing
 
-            {:error, :not_found} ->
-              {:ok, _} =
-                Sanctum.Tenancy.Athanors.create(%{
-                  id: id,
-                  kind: "group",
-                  name: "Test #{slug}",
-                  slug: slug,
-                  created_by: "system"
-                })
+              {:error, :not_found} ->
+                {:ok, created} =
+                  Sanctum.Tenancy.Athanors.create(%{
+                    id: id,
+                    kind: "group",
+                    name: "Test #{slug}",
+                    slug: slug,
+                    created_by: "system"
+                  })
+
+                created
+            end
+
+          # These stand for estates that exist and are set up: a turn pins
+          # the baseline consent provisioning mints, and every fixture built
+          # on them presupposes a working estate. What provisioning itself
+          # does is covered by its own suite. Marked on every run, since the
+          # rows are committed and outlive the one that created them.
+          if is_nil(athanor.provisioned_at) do
+            {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
           end
         end
       end)

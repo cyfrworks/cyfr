@@ -57,10 +57,19 @@ defmodule PrismWeb.AquaLive do
       |> assign(:models_loaded, false)
       |> assign(:consent_sheet_ref, nil)
 
-    # Paint first, load after: five tool reads and a registry walk stand
-    # between the mount and the roster, and the frame shows its spinner
-    # while they run.
-    if connected?(socket) and socket.assigns[:context], do: send(self(), :load)
+    # Subscribe before the load asks whether the estate is ready: a fill
+    # that finishes in between must still reach this page.
+    if connected?(socket) and socket.assigns[:context] do
+      Phoenix.PubSub.subscribe(
+        Emissary.PubSub,
+        Cyfr.Topics.notify(socket.assigns.context.athanor_id)
+      )
+
+      # Paint first, load after: five tool reads and a registry walk stand
+      # between the mount and the roster, and the frame shows its spinner
+      # while they run.
+      send(self(), :load)
+    end
 
     {:ok, socket}
   end
@@ -97,6 +106,13 @@ defmodule PrismWeb.AquaLive do
   end
 
   def handle_info(:loaded, socket), do: {:noreply, assign(socket, :loading, false)}
+
+  # The estate's row changed. A fill completing mints the consents the
+  # page reports on, so it is read again.
+  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+    if connected?(socket) and not socket.assigns.loading, do: send(self(), :load)
+    {:noreply, socket}
+  end
 
   def handle_info({:refresh, section}, socket) when section in @sections do
     {:noreply, load_section(socket, section)}

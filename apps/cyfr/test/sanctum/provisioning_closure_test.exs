@@ -63,6 +63,11 @@ defmodule Sanctum.ProvisioningClosureTest do
   @wasm Path.join(@repo_root, "apps/cyfr/test/support/test_wasm/math.wasm")
   @providers ~w(claude openai gemini grok openrouter)
 
+  # `claude` depends on a component NO local manifest mentions: the bundle
+  # names the five providers and nothing below them. Rediscovering it is
+  # only possible by reading an installed remote component's own manifest.
+  @below_remote "helper"
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -137,7 +142,7 @@ defmodule Sanctum.ProvisioningClosureTest do
     refute group.provisioned_at
 
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
 
     {:ok, group} = Athanors.get(group.id)
     assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
@@ -192,7 +197,7 @@ defmodule Sanctum.ProvisioningClosureTest do
 
       assert {:ok, group} = Athanors.create_group(ctx.user_id, "Offline #{n}")
       in_group = %{ctx | athanor_id: group.id}
-      :ok = Provisioning.ensure_provisioned(in_group)
+      :ok = Provisioning.start_provisioning(in_group)
 
       {:ok, group} = Athanors.get(group.id)
 
@@ -217,6 +222,50 @@ defmodule Sanctum.ProvisioningClosureTest do
     end
   end
 
+  test "a closure cut short below a remote component is completed on the next attempt" do
+    n = System.unique_integer([:positive])
+    user_id = "github|https://github.com|interrupted-#{n}"
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: user_id,
+        athanor_id: Sanctum.TestContext.athanor_id(),
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Interrupted #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.start_provisioning(in_group)
+
+    # A pull cut short between `claude` and what it depends on: claude is
+    # registered, its own dependency is not. The walk treats a present ref
+    # as done and never re-reads its manifest, and no local manifest names
+    # this one — so unless missing dependencies are rediscovered from what
+    # is INSTALLED, whoever published it, nothing looks for it again.
+    {:ok, helper} =
+      Compendium.Registry.get_latest(in_group, @below_remote, "moonmoon69", "catalyst")
+
+    :ok =
+      Arca.ComponentStorage.delete_component(
+        in_group,
+        @below_remote,
+        helper.version,
+        "moonmoon69",
+        nil
+      )
+
+    assert {:error, :not_found} =
+             Compendium.Registry.get_latest(in_group, @below_remote, "moonmoon69", "catalyst")
+
+    assert :ok = Provisioning.sync_seeds()
+
+    assert {:ok, %{publisher: "moonmoon69"}} =
+             Compendium.Registry.get_latest(in_group, @below_remote, "moonmoon69", "catalyst")
+  end
+
   test "sync_seeds heals a missing dep even when the scan registers nothing new" do
     n = System.unique_integer([:positive])
     user_id = "github|https://github.com|resync-#{n}"
@@ -233,7 +282,7 @@ defmodule Sanctum.ProvisioningClosureTest do
 
     assert {:ok, group} = Athanors.create_group(ctx.user_id, "Resync #{n}")
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
 
     # A transient registry outage at the previous sync leaves one dep of
     # the closure unpulled — dropping its row is exactly that state.
@@ -263,7 +312,16 @@ defmodule Sanctum.ProvisioningClosureTest do
   defp fixtures do
     wasm = File.read!(@wasm)
 
-    Map.new(@providers, fn name ->
+    Map.new([@below_remote | @providers], fn name ->
+      deps =
+        if name == "claude",
+          do: %{
+            "static" => [
+              %{"ref" => "catalyst:moonmoon69.#{@below_remote}", "optional" => false}
+            ]
+          },
+          else: %{"static" => []}
+
       config =
         Jason.encode!(%{
           "name" => name,
@@ -271,6 +329,7 @@ defmodule Sanctum.ProvisioningClosureTest do
           "type" => "catalyst",
           "publisher" => "moonmoon69",
           "description" => "#{name} (fixture)",
+          "dependencies" => deps,
           "caps" => %{
             "egress" => %{"domains" => ["api.#{name}.example"], "methods" => ["GET", "POST"]},
             "limits" => %{"timeout" => "1m"}

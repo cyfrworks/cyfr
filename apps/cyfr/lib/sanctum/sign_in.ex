@@ -82,10 +82,15 @@ defmodule Sanctum.SignIn do
           )
       end
 
-      # Provisioning failure is recorded on the athanor and retried on the
-      # next sign-in; it never refuses the sign-in itself.
-      _ = Sanctum.Provisioning.after_sign_in(user_id)
-      Users.get(user_id)
+      # Filling the athanor is a background job whose failure lands on the
+      # row and is retried; it never refuses the sign-in. Failing to MINT
+      # one does refuse it: the caps bound how fast strangers arrive and
+      # how many estates the server holds, and a person admitted without an
+      # athanor would hold a session with nowhere to work.
+      case Sanctum.Provisioning.after_sign_in(user_id) do
+        {:error, reason} -> {:error, reason}
+        _ -> Users.get(user_id)
+      end
     end
   end
 

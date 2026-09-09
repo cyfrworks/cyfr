@@ -44,6 +44,12 @@ defmodule PrismWeb.AquaPanelLiveTest do
       })
 
     {:ok, room} = Athanors.create_group(user.user_id, "Team #{n}")
+
+    # Both estates are set up: a turn pins the baseline consent, and the
+    # composer is held on an estate that is still being prepared.
+    {:ok, mine} = Athanors.mark_provisioned(mine)
+    {:ok, _} = Athanors.mark_provisioned(room)
+
     conn = log_in_user(conn, user, athanor_id: room.id)
 
     {:ok, u} = Sanctum.Tenancy.Users.get(user.user_id)

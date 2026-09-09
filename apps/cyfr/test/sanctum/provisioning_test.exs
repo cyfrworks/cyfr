@@ -96,7 +96,7 @@ defmodule Sanctum.ProvisioningTest do
     assert Members.member?(ctx.user_id, group.id)
 
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at
     {:ok, [row]} = Arca.ComponentStorage.list_components(in_group, publisher: "local")
@@ -126,7 +126,10 @@ defmodule Sanctum.ProvisioningTest do
     assert personal.slug == "prov#{n}"
     assert personal.owner_user_id == user.id
     assert personal.name == "Prov #{n}"
-    assert personal.provisioned_at
+
+    # The mint answers with the row; filling it is background work, so the
+    # mark is on the row rather than on what the mint returned.
+    assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(personal.id)
     assert Members.member?(user.id, personal.id)
     assert {:ok, %{personal_athanor_id: pid}} = Users.get(user.id)
     assert pid == personal.id
@@ -183,7 +186,7 @@ defmodule Sanctum.ProvisioningTest do
 
     {:ok, group} = Athanors.create_group(ctx.user_id, "Sync #{n}")
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
 
     # A member edited foo and reverted the edit by hand — a materialized,
     # byte-identical copy that costs quota and no longer tracks releases.
@@ -243,7 +246,7 @@ defmodule Sanctum.ProvisioningTest do
 
     assert {:ok, group} = Athanors.create_group(ctx.user_id, "Offline #{n}")
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
 
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at
@@ -265,7 +268,7 @@ defmodule Sanctum.ProvisioningTest do
 
     assert {:ok, group} = Athanors.create_group(ctx.user_id, "Unreachable #{n}")
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
 
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at
@@ -295,7 +298,7 @@ defmodule Sanctum.ProvisioningTest do
     # The mint answers a bare row; the failure surfaces at first need.
     assert {:ok, group} = Athanors.create_group(ctx.user_id, "Unpullable #{n}")
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
 
     assert_receive {:failed, %{step: :closure, athanor_id: id}}
     assert id == group.id
@@ -308,7 +311,13 @@ defmodule Sanctum.ProvisioningTest do
     assert {:error, {:provisioning_failed, :closure, _}} = Provisioning.provision(group, in_group)
   end
 
-  test "a first need that finds another caller filling the estate answers promptly" do
+  test "a first need never waits on the caller already filling the estate" do
+    # The suite runs provisioning inline so its assertions can read rows
+    # straight after the call; this one is about the real path, where the
+    # fill is a task and the caller does not await it.
+    Application.put_env(:cyfr, :provisioning_inline, false)
+    on_exit(fn -> Application.put_env(:cyfr, :provisioning_inline, true) end)
+
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
     {:ok, group} = Athanors.create_group(ctx.user_id, "Held #{n}")
@@ -329,11 +338,12 @@ defmodule Sanctum.ProvisioningTest do
     assert_receive :held
 
     started = System.monotonic_time(:millisecond)
-    assert :ok = Provisioning.ensure_provisioned(in_group)
-    # The first-need wait is a few seconds; the lock's own default is 30 s.
-    # The bound sits between the two — a LiveView mount is waiting on this
-    # — with room for a loaded box, where the short wait has taken 13 s.
-    assert System.monotonic_time(:millisecond) - started < 20_000
+    assert :ok = Provisioning.start_provisioning(in_group)
+
+    # Nothing waits: the fill is started, never awaited, so a page's mount
+    # cannot be held open by whoever else is filling the estate. Generous
+    # for a loaded box, and still far below the lock's own 30 s.
+    assert System.monotonic_time(:millisecond) - started < 5_000
 
     # Nothing was provisioned by this caller — the holder never let go.
     {:ok, group} = Athanors.get(group.id)
@@ -346,7 +356,7 @@ defmodule Sanctum.ProvisioningTest do
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
 
     assert {:ok, group} = Athanors.create_group(ctx.user_id, "No bundle #{n}")
-    :ok = Provisioning.ensure_provisioned(%{ctx | athanor_id: group.id})
+    :ok = Provisioning.start_provisioning(%{ctx | athanor_id: group.id})
 
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at == nil

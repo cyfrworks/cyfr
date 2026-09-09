@@ -934,7 +934,7 @@ defmodule Compendium.MCP.AquaTool do
   # reads the same tree in-process (`Aqua.AgentConfig.roster/1`) and hooks
   # itself the same way, so whichever reader comes first, the bundle is
   # there before anything roots an authority in it.
-  defp ensure_bundle(%Context{} = ctx), do: Sanctum.Provisioning.ensure_provisioned(ctx)
+  defp ensure_bundle(%Context{} = ctx), do: Sanctum.Provisioning.start_provisioning(ctx)
 
   defp validate_name(name) do
     if AquaPath.valid_name?(name),

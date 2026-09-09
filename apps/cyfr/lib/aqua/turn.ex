@@ -317,9 +317,13 @@ defmodule Aqua.Turn do
   `:history`, `:model`, `:group`, `:room_context` as `build_input/4`
   takes them.
 
-  Refusals: `{:error, :no_orchestrator}` for a name the estate's tree does
-  not hold; `pin_profile/1`'s, `build_input/4`'s and the engine's own on
-  `start/3` pass through unchanged.
+  Refusals: `{:error, :not_provisioned}` while the estate is still being
+  filled — the tree reads through the seed overlay from the first moment,
+  but the baseline consent a turn pins is minted by provisioning, so this
+  says what is happening rather than failing later as a missing profile;
+  `{:error, :no_orchestrator}` for a name the estate's tree does not hold;
+  `pin_profile/1`'s, `build_input/4`'s and the engine's own on `start/3`
+  pass through unchanged.
   """
   @spec begin(Context.t(), String.t(), Orchestrator.t(), String.t(), keyword()) ::
           {:ok, started()} | {:error, term()}
@@ -327,7 +331,8 @@ defmodule Aqua.Turn do
       when is_binary(conversation_id) and is_binary(task) do
     engine = Keyword.get(opts, :engine, __MODULE__)
 
-    with {:ok, orchestrator, roster} <- Orchestrator.resolve_with_roster(ctx, pick),
+    with :ok <- Sanctum.Provisioning.ready(ctx),
+         {:ok, orchestrator, roster} <- Orchestrator.resolve_with_roster(ctx, pick),
          {:ok, authority} <- engine.pin_profile(ctx),
          # Authored policy is the agent's markdown; the standing answers a
          # person already gave are rows — read ONCE for every agent of the

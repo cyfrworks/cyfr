@@ -169,7 +169,10 @@ defmodule PrismWeb.ConnCase do
             created_by: user.user_id
           })
 
-        athanor
+        # Signed in on an estate that is set up, which is what a console
+        # test is about; filling one is `Sanctum.Provisioning`'s own suite.
+        {:ok, provisioned} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+        provisioned
     end
   end
 

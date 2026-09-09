@@ -118,6 +118,15 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
+  # The row as it is now. Used after subscribing, so what the page renders
+  # is never older than the topic it is listening to.
+  defp reread(%{id: id} = athanor) do
+    case Athanors.get(id) do
+      {:ok, fresh} -> fresh
+      _ -> athanor
+    end
+  end
+
   defp open_estate(socket, focus, athanor, athanors, conversation_id) do
     ctx = socket.assigns.context
     conversations = topics(focus)
@@ -132,7 +141,10 @@ defmodule PrismWeb.ChatLive do
          |> assign(:loading?, false)
          |> subscribe_estate(athanor)
          |> assign(:focus, focus)
-         |> assign(:athanor, athanor)
+         # Re-read after subscribing, not before: a fill that completed
+         # between the two would otherwise leave the setup banner up until
+         # someone reloaded.
+         |> assign(:athanor, reread(athanor))
          |> assign(:athanor_route, Athanors.route_slug(athanor))
          |> assign(:athanor_label, estate_label(athanor, socket.assigns.mine, ctx))
          |> assign(:conversations, conversations)

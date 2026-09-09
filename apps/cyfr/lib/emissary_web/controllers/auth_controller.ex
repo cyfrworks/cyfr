@@ -419,6 +419,14 @@ defmodule EmissaryWeb.AuthController do
   defp friendly_error_message(:auth_provider_not_supported),
     do: "Authentication provider not supported"
 
+  # The server is at capacity: a real refusal with a cause the person can
+  # act on (wait, or ask the operator), not an unhandled term.
+  defp friendly_error_message({:limit_reached, :mint_per_hour, _cap}),
+    do: "This server is admitting new people slowly right now. Please try again shortly."
+
+  defp friendly_error_message({:limit_reached, _key, _cap}),
+    do: "This server is full and cannot make you an athanor. Ask its operator for room."
+
   defp friendly_error_message(:email_not_verified),
     do: "Your provider reported an unverified email. Please verify your email and try again."
 

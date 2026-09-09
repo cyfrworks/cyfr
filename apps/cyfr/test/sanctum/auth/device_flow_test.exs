@@ -290,4 +290,46 @@ defmodule Sanctum.Auth.DeviceFlowTest do
              "the MCP device flow was charged no address"
     end
   end
+
+  defmodule FullServerDeviceFlow do
+    # A server at capacity: the door refuses the mint, so `admitted/2`
+    # refuses the sign-in and the poll carries that reason out.
+    def poll_for_session(_provider, _device_code, _client_ip),
+      do: {:error, {:limit_reached, :max_athanors, 1}}
+  end
+
+  describe "a full server, seen from the CLI" do
+    setup do
+      prev_flow = Application.get_env(:cyfr, :device_flow)
+      prev_provider = Application.get_env(:cyfr, :auth_provider)
+      Application.put_env(:cyfr, :device_flow, FullServerDeviceFlow)
+      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+
+      on_exit(fn ->
+        if prev_flow,
+          do: Application.put_env(:cyfr, :device_flow, prev_flow),
+          else: Application.delete_env(:cyfr, :device_flow)
+
+        if prev_provider,
+          do: Application.put_env(:cyfr, :auth_provider, prev_provider),
+          else: Application.delete_env(:cyfr, :auth_provider)
+      end)
+
+      :ok
+    end
+
+    test "the poller is told the server is full, not that sign-in failed" do
+      ctx = %{Sanctum.TestContext.local() | authenticated: false}
+
+      assert {:error, message} =
+               Sanctum.MCP.SessionTool.handle(ctx, %{
+                 "action" => "device_poll",
+                 "provider" => "github",
+                 "device_code" => "dc_full"
+               })
+
+      assert message =~ "full"
+      refute match?({:unavailable, _}, message)
+    end
+  end
 end

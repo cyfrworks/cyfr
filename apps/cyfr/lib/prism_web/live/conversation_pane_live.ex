@@ -84,12 +84,21 @@ defmodule PrismWeb.ConversationPaneLive do
   defp open(socket, ctx, session) do
     dom = socket.assigns.dom
 
+    # Subscribe BEFORE reading the row: the fill may finish between the two,
+    # and a page that read "not yet" without listening would sit on it until
+    # someone reloaded.
+    if connected?(socket), do: subscribe_estate(ctx)
+
     athanor =
       case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
         {:ok, athanor} -> athanor
         _ -> nil
       end
 
+    # The tree reads through the seed overlay from the first moment, so the
+    # roster is real before anything is filled. What is not ready is the
+    # consent a turn pins, which is why sending is held rather than reading.
+    preparing? = preparing?(athanor)
     roster = if connected?(socket), do: Aqua.Turn.roster(ctx), else: []
 
     socket =
@@ -100,6 +109,7 @@ defmodule PrismWeb.ConversationPaneLive do
       |> assign(:conversation, nil)
       |> assign(:members, member_labels(ctx))
       |> assign(:roster, roster)
+      |> assign(:preparing?, preparing?)
       |> assign(:model_ready, model_ready(ctx, roster))
       |> assign(:solo_human, Sanctum.Tenancy.Members.solo?(ctx.athanor_id))
       |> assign(:own?, Users.own_athanor?(ctx.user_id, ctx.athanor_id))
@@ -122,6 +132,17 @@ defmodule PrismWeb.ConversationPaneLive do
 
     open_thread(socket, conversation_of(ctx, session["conversation_id"]))
   end
+
+  # The estate's own topic. `Sanctum.Provisioning` broadcasts
+  # `:athanor_changed` when a fill completes, which is what clears the
+  # preparing state without a reload.
+  defp subscribe_estate(%Sanctum.Context{athanor_id: id}) when is_binary(id) and id != "",
+    do: Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.notify(id))
+
+  defp subscribe_estate(_ctx), do: :ok
+
+  defp preparing?(%{provisioned_at: nil}), do: true
+  defp preparing?(_athanor), do: false
 
   # The thread a host names, under the pane's own context — so a thread
   # another estate holds is nothing here — or the blank slate, where the
@@ -454,6 +475,33 @@ defmodule PrismWeb.ConversationPaneLive do
 
   # The host page opened another thread: the room this pane reads changed.
   def handle_info({:room_in_view, room}, socket), do: {:noreply, assign(socket, :room, room)}
+
+  # The estate's row changed. When it was the fill completing, the reads
+  # skipped at mount are made now and the pane stops saying "preparing".
+  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+    ctx = socket.assigns.context
+
+    case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
+      {:ok, athanor} ->
+        socket = assign(socket, :athanor, athanor)
+
+        if socket.assigns.preparing? and not preparing?(athanor) do
+          roster = Aqua.Turn.roster(ctx)
+
+          {:noreply,
+           socket
+           |> assign(:preparing?, false)
+           |> assign(:roster, roster)
+           |> assign(:model_ready, model_ready(ctx, roster))
+           |> load_models()}
+        else
+          {:noreply, socket}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
 
   def handle_info(msg, socket) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
@@ -974,7 +1022,10 @@ defmodule PrismWeb.ConversationPaneLive do
           >
             {assistant_label(current_assistant(@assistant, @roster))}
           </span>
-          <span :if={@roster == []} class="text-xs text-amber-400">
+          <span :if={@preparing?} class="text-xs text-amber-400">
+            Still being prepared
+          </span>
+          <span :if={@roster == [] and not @preparing?} class="text-xs text-amber-400">
             No assistant here
           </span>
           <span
@@ -1059,21 +1110,26 @@ defmodule PrismWeb.ConversationPaneLive do
           :if={not @any_messages and @streaming_text == ""}
           class="flex flex-col items-center justify-center h-full gap-2 text-sm text-gray-500"
         >
-          <%= if @model_ready in [:no_model, :no_key] do %>
-            <span>{athanor_label(@athanor, @context)} has no model yet.</span>
-            <%!-- From the panel a navigate would leave the room being read. --%>
-            <.link
-              :if={not @panel?}
-              navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
-              class="text-blue-400 hover:text-blue-300"
-            >
-              Connect a model
-            </.link>
-            <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
+          <%= if @preparing? do %>
+            <span>{athanor_label(@athanor, @context)} is still being prepared.</span>
+            <span class="text-gray-600">Its agents and components are being installed.</span>
           <% else %>
-            <span>
-              Ask {assistant_label(current_assistant(@assistant, @roster))} anything.
-            </span>
+            <%= if @model_ready in [:no_model, :no_key] do %>
+              <span>{athanor_label(@athanor, @context)} has no model yet.</span>
+              <%!-- From the panel a navigate would leave the room being read. --%>
+              <.link
+                :if={not @panel?}
+                navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
+                class="text-blue-400 hover:text-blue-300"
+              >
+                Connect a model
+              </.link>
+              <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
+            <% else %>
+              <span>
+                Ask {assistant_label(current_assistant(@assistant, @roster))} anything.
+              </span>
+            <% end %>
           <% end %>
         </div>
 
@@ -1333,11 +1389,14 @@ defmodule PrismWeb.ConversationPaneLive do
               )
             }
             class="flex-1 resize-none rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none max-h-40 overflow-y-auto"
-            disabled={@roster == []}
+            disabled={@roster == [] or @preparing?}
           >{@input}</textarea>
           <button
             type="submit"
-            disabled={@roster == [] or (@input == "" and @uploads.attachments.entries == [])}
+            disabled={
+              @roster == [] or @preparing? or
+                (@input == "" and @uploads.attachments.entries == [])
+            }
             class="self-end rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Send

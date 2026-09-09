@@ -281,6 +281,10 @@ defmodule Aqua.ConversationRunnerStateTest do
         created_by: alice.user_id
       })
 
+    # A turn pins the baseline consent, so the estate this one runs in is
+    # set up like any estate a person actually chats in.
+    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(mine)
+
     {:ok, _} =
       Sanctum.Tenancy.Members.ensure(alice.user_id, scope: "athanor", athanor_id: mine.id)
 

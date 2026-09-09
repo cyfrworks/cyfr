@@ -35,6 +35,9 @@ defmodule PrismWeb.ChatLiveTest do
         created_by: "system"
       })
 
+    # Set up, like an estate people actually chat in: a turn pins the
+    # baseline consent, and sending is held while one is being prepared.
+    {:ok, estate} = Sanctum.Tenancy.Athanors.mark_provisioned(estate)
     Process.put(:chat_estate, estate)
 
     # The seeded agent names a catalyst this sandbox does not hold, and a
@@ -374,6 +377,7 @@ defmodule PrismWeb.ChatLiveTest do
     alice = test_user()
     bob = test_user()
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Two #{alice.namespace}")
+    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(group)
     unpin_catalyst(group.id)
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
     bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
@@ -446,6 +450,7 @@ defmodule PrismWeb.ChatLiveTest do
     {:ok, group} =
       Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Files #{alice.namespace}")
 
+    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(group)
     unpin_catalyst(group.id)
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
     bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
@@ -532,6 +537,38 @@ defmodule PrismWeb.ChatLiveTest do
     assert rendered =~ "last attempt failed at"
     {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
     assert Sanctum.Tenancy.Athanors.settings(row)["provisioning_error"]["step"]
+
+    # The pane holds its composer while the estate is being prepared, and
+    # says why instead of blaming a missing model.
+    pane_html = render(pane(view))
+    assert pane_html =~ "still being prepared"
+    assert pane_html =~ "Still being prepared"
+    refute pane_html =~ "has no model yet"
+
+    # The fill completing reaches both the page and its pane without a
+    # reload: provisioning broadcasts on the estate's own topic.
+    {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(row)
+    Sanctum.Notify.broadcast(group.id, :athanor_changed, %{name: filled.name})
+
+    refute render(view) =~ "still being set up"
+    refute render(pane(view)) =~ "Still being prepared"
+  end
+
+  test "a mount on an estate still being filled does not wait for the fill", %{conn: conn} do
+    # The real path: the fill is a task nothing awaits, so a mount cannot be
+    # held open by it. The suite otherwise fills inline so its assertions can
+    # read rows straight after the call.
+    Application.put_env(:cyfr, :provisioning_inline, false)
+    on_exit(fn -> Application.put_env(:cyfr, :provisioning_inline, true) end)
+
+    alice = test_user()
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Slow #{alice.namespace}")
+    conn = log_in_user(conn, alice, athanor_id: group.id)
+
+    started = System.monotonic_time(:millisecond)
+    {_view, html} = mount_chat(conn, group)
+    assert System.monotonic_time(:millisecond) - started < 5_000
+    assert html =~ "still being set up"
   end
 
   test "archiving the athanor sends every open chat away", %{conn: conn} do

@@ -51,7 +51,7 @@ defmodule Aqua.AgentConfig do
   """
   @spec roster(Context.t()) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
   def roster(%Context{} = ctx) do
-    Sanctum.Provisioning.ensure_provisioned(ctx)
+    Sanctum.Provisioning.start_provisioning(ctx)
 
     case AquaAgent.list(ctx) do
       {:ok, agents, errors} ->
@@ -79,7 +79,7 @@ defmodule Aqua.AgentConfig do
   @spec agent(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def agent(%Context{} = ctx, name) when is_binary(name) do
     if AquaPath.valid_name?(name) do
-      Sanctum.Provisioning.ensure_provisioned(ctx)
+      Sanctum.Provisioning.start_provisioning(ctx)
 
       with {:ok, agent} <- AquaAgent.get(ctx, name), do: {:ok, project(agent)}
     else

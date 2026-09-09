@@ -355,6 +355,24 @@ defmodule EmissaryWeb.AuthControllerTest do
       refute Plug.Conn.get_session(conn, "_csrf_token") == "pre-login-csrf"
     end
 
+    test "a full server turns a stranger away with a capacity answer and no session",
+         %{conn: conn} do
+      # Nothing is shared server-wide for a refused mint to fall back on, so
+      # admitting the person without an athanor would hand them a session
+      # with nowhere to work. The door says so instead.
+      previous = Application.get_env(:cyfr, :caps, [])
+      Application.put_env(:cyfr, :caps, max_athanors: 1)
+      on_exit(fn -> Application.put_env(:cyfr, :caps, previous) end)
+
+      n = System.unique_integer([:positive])
+      conn = callback(conn, verified_github_auth("full_#{n}", email: "full#{n}@example.com"))
+
+      body = html_response(conn, 401)
+      assert body =~ "full"
+      refute body =~ "An error occurred during authentication"
+      refute session_of(conn)
+    end
+
     test "an operator's first sign-in lands in their own athanor",
          %{conn: conn, bypass: bypass} do
       n = System.unique_integer([:positive])

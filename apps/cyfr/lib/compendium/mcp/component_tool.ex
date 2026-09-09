@@ -458,9 +458,10 @@ defmodule Compendium.MCP.ComponentTool do
 
   # List action - list all installed components (local-only, no remote search)
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
-    # First need, like the agent roster: without it a fresh estate shows an
-    # empty component list until somebody happens to start a turn.
-    Sanctum.Provisioning.ensure_provisioned(ctx)
+    # First need, like the agent roster: an estate nobody has opened starts
+    # filling from here. The listing itself reads through the seed overlay
+    # and does not wait for it.
+    Sanctum.Provisioning.start_provisioning(ctx)
 
     filters = %{
       type: args["type"],

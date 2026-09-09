@@ -32,6 +32,7 @@ defmodule Cyfr.Ops.Error do
           | :action_missing
           | {:unknown_action, name_action :: String.t()}
           | :control_plane_lost
+          | :not_provisioned
 
   @doc "Whether a term is this vocabulary — the renderers' dispatch test."
   @spec reason?(term()) :: boolean()
@@ -47,6 +48,7 @@ defmodule Cyfr.Ops.Error do
   def reason?(:action_missing), do: true
   def reason?({:unknown_action, name_action}) when is_binary(name_action), do: true
   def reason?(:control_plane_lost), do: true
+  def reason?(:not_provisioned), do: true
   def reason?(_), do: false
 
   @doc """
@@ -82,6 +84,10 @@ defmodule Cyfr.Ops.Error do
   # A lost control-plane lease blocks admission until ownership is restored.
   def message(:control_plane_lost),
     do: "This server does not currently own its database's control plane — retry shortly"
+
+  # The estate exists and is being filled; the read is not refused, only early.
+  def message(:not_provisioned),
+    do: "This estate is still being prepared — retry shortly"
 
   @doc """
   The client-safe sentence for ANY refusal a tool can produce, or `nil` when

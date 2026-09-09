@@ -43,7 +43,10 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/cyfr/lib/sanctum/mcp/oauth_tool.ex" => 3,
     "apps/cyfr/lib/sanctum/mcp.ex" => 2,
     "apps/cyfr/lib/sanctum/mcp/tincture_visibility_tool.ex" => 1,
-    "apps/cyfr/lib/sanctum/mcp/session_tool.ex" => 1,
+    # Two of the three are the capacity refusals a poller sees when the
+    # server will not mint them an athanor: remediation prose (wait, or ask
+    # the operator), not a resource that is missing or briefly away.
+    "apps/cyfr/lib/sanctum/mcp/session_tool.ex" => 3,
     "apps/cyfr/lib/sanctum/mcp/athanor_tool.ex" => 1
   }
 

@@ -248,6 +248,15 @@ defmodule Sanctum.MCP.SessionTool do
           Logger.warning("[SessionTool] Token exchange network error: #{inspect(reason)}")
           {:error, {:unavailable, "The sign-in provider"}}
 
+        # The server is at capacity: a person admitted without an athanor
+        # would hold a session with nowhere to work, so the door refuses and
+        # the poller is told why rather than "sign-in failed".
+        {:error, {:limit_reached, :mint_per_hour, _cap}} ->
+          {:error, "This server is admitting new people slowly right now — try again shortly"}
+
+        {:error, {:limit_reached, _key, _cap}} ->
+          {:error, "This server is full and cannot make you an athanor — ask its operator"}
+
         {:error, {:unknown_provider, name}} ->
           {:error, {:invalid_argument, unknown_provider_message(name)}}
 

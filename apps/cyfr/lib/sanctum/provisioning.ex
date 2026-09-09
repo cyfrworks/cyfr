@@ -68,91 +68,82 @@ defmodule Sanctum.Provisioning do
     with {:ok, athanor} <- find_or_create_personal(user),
          {:ok, _} <- Members.ensure(user_id, scope: "athanor", athanor_id: athanor.id),
          {:ok, _} <- record_personal(user, athanor) do
-      row_after(provision(athanor, person_ctx(user_id, athanor.id)), athanor)
+      # The row and its seat are the sign-in's business and are written
+      # here; filling it is not, and a sign-in must not wait on a registry.
+      # A failure lands on the row and the next read retries.
+      in_background(fn -> provision(athanor, person_ctx(user_id, athanor.id)) end)
+      {:ok, athanor}
     end
   end
 
-  # How long a first need waits for another caller already filling this
-  # athanor before rendering it unprovisioned and letting the next
-  # consumer try.
-  @first_need_wait_ms 3_000
+  # How long any caller waits for another already filling this athanor.
+  # Nothing waits on a request path now, so this bounds contention between
+  # a background fill and an explicit retry rather than a page's mount.
+  @lock_wait_ms 30_000
 
   @doc """
-  Fill the context's athanor if nothing has yet — the first-need hook.
+  Whether the context's athanor has been filled.
 
-  Called from the entry points that actually consume the bundle: the first
-  turn, the component listing, the agent roster. Deliberately **not** from
-  inside `Arca.Overlay`: `provision/2` walks the overlay itself
-  (`register_bundle/1` → `AutoIndexer.scan/1`), so a hook down there would
-  re-enter its own scan.
-
-  Single-flighted per athanor. `provision/2` is idempotent but unlocked, so
-  two people opening a fresh estate at once would each pull the dependency
-  closure; the lock makes the second wait briefly and find the work done.
-  A cheap `provisioned_at` read short-circuits the common case before
-  taking it. Always `:ok`: a first need must never take a page down, so a
-  wait that runs out renders the athanor unprovisioned this time and the
-  next consumer tries again.
+  The cheap read every consumer of the bundle makes before it reads the
+  bundle itself.
   """
-  @spec ensure_provisioned(Context.t()) :: :ok
-  def ensure_provisioned(%Context{athanor_id: athanor_id} = ctx)
+  @spec provisioned?(Context.t()) :: boolean()
+  def provisioned?(%Context{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
+    match?({:ok, %{provisioned_at: %DateTime{}}}, Athanors.get(athanor_id))
+  end
+
+  def provisioned?(_ctx), do: false
+
+  @doc """
+  Start filling the context's athanor if nothing has yet, and answer at
+  once — the first-need hook.
+
+  Never waits: provisioning walks the seed overlay and may pull a
+  dependency closure over the network, and no request path may hold a page
+  open for that. The work is single-flighted per athanor, so a second
+  caller finding it already running adds nothing.
+
+  Deliberately **not** called from inside `Arca.Overlay`: `provision/2`
+  walks the overlay itself (`register_bundle/1` → `AutoIndexer.scan/1`), so
+  a hook down there would re-enter its own scan.
+  """
+  @spec start_provisioning(Context.t()) :: :ok
+  def start_provisioning(%Context{athanor_id: athanor_id} = ctx)
       when is_binary(athanor_id) and athanor_id != "" do
     case Athanors.get(athanor_id) do
       {:ok, %{provisioned_at: %DateTime{}}} ->
         :ok
 
       {:ok, athanor} ->
-        provision_single_flight(athanor, ctx)
+        in_background(fn -> provision(athanor, ctx) end)
+        :ok
 
       _ ->
         :ok
     end
   end
 
-  def ensure_provisioned(_ctx), do: :ok
+  def start_provisioning(_ctx), do: :ok
 
-  defp provision_single_flight(%{id: athanor_id} = athanor, ctx) do
-    locked = fn ->
-      # Re-read inside the lock: the caller that just held it may have
-      # been provisioning this very athanor.
-      case Athanors.get(athanor_id) do
-        {:ok, %{provisioned_at: %DateTime{}}} -> :ok
-        {:ok, fresh} -> provision_quietly(fresh, ctx)
-        _ -> provision_quietly(athanor, ctx)
-      end
-    end
+  @doc """
+  Start the fill if needed, and say whether the bundle can be read yet.
 
-    case Arca.Overlay.UnitLock.with_lock({athanor_id, :provisioning}, locked, @first_need_wait_ms) do
-      :ok ->
-        :ok
-
-      {:error, :unit_locked} ->
-        Logger.warning(
-          "[Provisioning] #{athanor_id} is still being provisioned by another caller; " <>
-            "rendering it unprovisioned this time"
-        )
-
-        :ok
-
-      other ->
-        # The lock's body rescues its own failures; anything else that
-        # reaches here is logged and still costs the page nothing.
-        Logger.warning("[Provisioning] #{athanor_id} first-need answered #{inspect(other)}")
-        :ok
-    end
-  end
-
-  # First need must never take a page down: an unprovisioned athanor
-  # renders empty and the next consumer tries again, which is the same
-  # posture `after_sign_in/1` already has for a group whose provisioning
-  # failed.
-  defp provision_quietly(athanor, ctx) do
-    provision(athanor, ctx)
-    :ok
-  rescue
-    e ->
-      Logger.warning("[Provisioning] first-need provisioning failed: #{Exception.message(e)}")
+  What every reader of the bundle calls: `:ok` when the athanor is filled,
+  `{:error, :not_provisioned}` while it is not — with the work started, so
+  an estate first touched over the wire fills without a console ever
+  opening it. A reader answers the refusal rather than an empty tree: an
+  empty roster reads as "this estate has no agent", which is a different
+  and wrong answer.
+  """
+  @spec ready(Context.t()) :: :ok | {:error, :not_provisioned}
+  def ready(%Context{} = ctx) do
+    if provisioned?(ctx) do
       :ok
+    else
+      start_provisioning(ctx)
+      {:error, :not_provisioned}
+    end
   end
 
   @doc """
@@ -161,12 +152,42 @@ defmodule Sanctum.Provisioning do
   `acting_ctx` is the person's context focused on the athanor (their pull
   credential); `nil` provisions as the server (anonymous pulls). Returns
   the row either way; a failure is recorded on it and logged.
+
+  Single-flighted per athanor: `provision/2` is idempotent but the closure
+  pull is not free, so two callers finding a fresh estate at once would
+  each walk it. Everything that fills an athanor comes through here.
   """
   @spec provision(Arca.Schemas.Athanor.t(), Context.t() | nil) ::
           {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
   def provision(%{provisioned_at: %DateTime{}} = athanor, _ctx), do: {:ok, athanor}
 
   def provision(%{id: athanor_id} = athanor, acting_ctx) do
+    with_provisioning_lock(athanor_id, fn ->
+      # Re-read inside the lock: the caller that just held it may have been
+      # filling this very athanor.
+      case Athanors.get(athanor_id) do
+        {:ok, %{provisioned_at: %DateTime{}} = filled} -> {:ok, filled}
+        {:ok, fresh} -> do_provision(fresh, acting_ctx)
+        _ -> do_provision(athanor, acting_ctx)
+      end
+    end)
+  end
+
+  # The lock every filler shares. `sync_seeds/0` takes it too, but not
+  # `provision/2`'s already-filled short-circuit above: its whole job is to
+  # offer new seed media to estates that ARE filled.
+  defp with_provisioning_lock(athanor_id, fun) do
+    case Arca.Overlay.UnitLock.with_lock({athanor_id, :provisioning}, fun, @lock_wait_ms) do
+      {:error, :unit_locked} ->
+        Logger.warning("[Provisioning] #{athanor_id} is already being filled by another caller")
+        {:error, :provisioning_busy}
+
+      result ->
+        result
+    end
+  end
+
+  defp do_provision(%{id: athanor_id} = athanor, acting_ctx) do
     ctx = acting_ctx || seed_ctx(athanor_id)
 
     with {:ok, _scan} <- register_bundle(athanor_id),
@@ -183,7 +204,14 @@ defmodule Sanctum.Provisioning do
       )
 
       index_agents(ctx)
-      Athanors.mark_provisioned(athanor)
+      filled = Athanors.mark_provisioned(athanor)
+
+      # The estate's own topic, the kind every console subscriber already
+      # re-reads the row on: a page rendering "still being prepared" clears
+      # itself rather than waiting for a reload.
+      Sanctum.Notify.broadcast(athanor_id, :athanor_changed, %{name: athanor.name})
+
+      filled
     else
       %{failed: failed} ->
         record_failure(athanor, :closure, failed)
@@ -213,15 +241,6 @@ defmodule Sanctum.Provisioning do
 
       {:error, reason} ->
         Logger.warning("[Provisioning] agent index not synced: #{inspect(reason)}")
-    end
-  end
-
-  defp row_after({:ok, athanor}, _), do: {:ok, athanor}
-
-  defp row_after({:error, _}, athanor) do
-    case Athanors.get(athanor.id) do
-      {:ok, current} -> {:ok, current}
-      _ -> {:ok, athanor}
     end
   end
 
@@ -434,43 +453,52 @@ defmodule Sanctum.Provisioning do
   @spec sync_seeds() :: :ok
   def sync_seeds do
     for athanor <- Athanors.list_active(), not is_nil(athanor.provisioned_at) do
-      ctx = seed_ctx(athanor.id)
-
-      case AutoIndexer.scan(ctx: ctx) do
-        {:ok, %{registered: registered}} when registered > 0 ->
-          Logger.info("[Provisioning] #{athanor.id}: registered #{registered} bundle version(s)")
-
-        {:ok, %{errors: errors}} when errors > 0 ->
-          Logger.warning("[Provisioning] #{athanor.id}: bundle sync hit #{errors} error(s)")
-
-        {:ok, _scan} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("[Provisioning] #{athanor.id}: bundle sync skipped — #{inspect(reason)}")
-      end
-
-      # Deps and consents retry every boot, not only when the scan minted
-      # something — a transient registry outage at the previous sync must
-      # not leave the closure missing until the next release. Both are
-      # cheap no-ops when nothing is missing.
-      case Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx, :required)) do
-        %{failed: []} ->
-          :ok
-
-        %{failed: failed} ->
-          Logger.warning(
-            "[Provisioning] #{athanor.id}: dep pull after sync failed: #{inspect(failed)}"
-          )
-      end
-
-      _ = pull_optional_deps(ctx)
-
-      bootstrap_synced(ctx, athanor.id)
-      collapse_pristine(ctx, athanor.id)
-      index_agents(ctx)
+      # The same lock every fill takes, so a boot offering new media and a
+      # first-need fill cannot walk one estate at once. Not `provision/2`:
+      # this runs on athanors that are already filled, which is exactly what
+      # that function short-circuits.
+      with_provisioning_lock(athanor.id, fn -> sync_seed(athanor) end)
     end
 
+    :ok
+  end
+
+  defp sync_seed(athanor) do
+    ctx = seed_ctx(athanor.id)
+
+    case AutoIndexer.scan(ctx: ctx) do
+      {:ok, %{registered: registered}} when registered > 0 ->
+        Logger.info("[Provisioning] #{athanor.id}: registered #{registered} bundle version(s)")
+
+      {:ok, %{errors: errors}} when errors > 0 ->
+        Logger.warning("[Provisioning] #{athanor.id}: bundle sync hit #{errors} error(s)")
+
+      {:ok, _scan} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Provisioning] #{athanor.id}: bundle sync skipped — #{inspect(reason)}")
+    end
+
+    # Deps and consents retry every boot, not only when the scan minted
+    # something — a transient registry outage at the previous sync must
+    # not leave the closure missing until the next release. Both are
+    # cheap no-ops when nothing is missing.
+    case Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx, :required)) do
+      %{failed: []} ->
+        :ok
+
+      %{failed: failed} ->
+        Logger.warning(
+          "[Provisioning] #{athanor.id}: dep pull after sync failed: #{inspect(failed)}"
+        )
+    end
+
+    _ = pull_optional_deps(ctx)
+
+    bootstrap_synced(ctx, athanor.id)
+    collapse_pristine(ctx, athanor.id)
+    index_agents(ctx)
     :ok
   end
 
@@ -570,15 +598,19 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  # Every static dependency the athanor's local components declare that
-  # is not present — the published catalysts the bundled AQUA depends on;
-  # `include: :required` names those the bundle cannot run without,
-  # `:all` adds the optional ones.
+  # Every static dependency the athanor's components declare that is not
+  # present; `include: :required` names those the bundle cannot run
+  # without, `:all` adds the optional ones.
+  #
+  # Every component, not only the seeded ones: `Compendium.Pull` walks a
+  # closure by recursion and treats an already-present ref as done, so a
+  # pull cut short between a component and its own dependency would leave
+  # that dependency undiscoverable — the component is present, and nothing
+  # would re-read its manifest. Listing what is installed, whoever
+  # published it, is what makes an interrupted closure heal on the next
+  # attempt.
   defp missing_bundle_deps(ctx, include) do
-    case Arca.ComponentStorage.list_components(ctx,
-           publisher: Compendium.ComponentPath.default_publisher(),
-           limit: :none
-         ) do
+    case Arca.ComponentStorage.list_components(ctx, limit: :none) do
       {:ok, rows} ->
         rows
         |> Enum.flat_map(&Pull.missing_deps(ctx, &1, include: include))
