@@ -26,7 +26,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   (`:read | :write | :execute | :destructive`) sourced from
   `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).
   An action without a kind annotation is not policy-manageable — the
-  policy plane (`Aqua.Actions.kind_for/2`) refuses it, so it is
+  policy plane (`Aqua.Kinds.kind_for/2`) refuses it, so it is
   logged and left off this catalogue rather than mislabeled `:write`.
   """
   def enumerate_tool_actions do

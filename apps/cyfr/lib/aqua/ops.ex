@@ -8,7 +8,7 @@ defmodule Aqua.Ops do
 
   Aqua was the one domain namespace with a live tool-dispatch dependency
   and neither a helper nor a roster for it: `Aqua.Turn`,
-  `Aqua.AgentConfig`, `Aqua.Actions` and the conversation runner each
+  `Aqua.AgentConfig`, `Aqua.Kinds` and the conversation runner each
   spelled their `Emissary.MCP.*` reaches themselves — the drift class
   `PrismWeb.ToolSeamTest` closed for the console. Every Emissary reach
   the assistant makes goes through here now, and `Aqua.ToolSeamTest`
@@ -16,7 +16,7 @@ defmodule Aqua.Ops do
 
   Two deliberate exceptions live outside this module: `Emissary.PubSub`
   used as a process NAME (the application's one supervised PubSub), and
-  `Aqua.Actions`' read of the console route table, rostered in
+  `Aqua.Intents`' read of the console route table, rostered in
   `Cyfr.NamespaceDirectionTest`.
   """
 
@@ -43,7 +43,7 @@ defmodule Aqua.Ops do
   @doc """
   The registry's `kind` annotation for `tool`/`action` — nil when the tool
   or the annotation is unknown, so the gap stays visible (the
-  `Aqua.Actions.kind_for/2` rule: no `_default` fallback).
+  `Aqua.Kinds.kind_for/2` rule: no `_default` fallback).
   """
   @spec action_kind(String.t(), String.t()) :: atom() | nil
   def action_kind(tool, action) do

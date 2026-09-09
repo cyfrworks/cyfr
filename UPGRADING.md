@@ -4,6 +4,17 @@ What changes for an operator running a server, release by release. There
 is no compatibility layer for behaviour: each item says what is different
 and what, if anything, to do. Newest first.
 
+## The assistant's intent protocol is four modules
+
+`Aqua.Actions` is split along its seams: `Aqua.Wire` parses and
+validates the `aqua-actions` block and its approval proposal;
+`Aqua.Intents` judges the navigation and UI intents and owns the routes
+an agent may name (the web adapter maps an intent to a page);
+`Aqua.Kinds` answers what an operation is to the assistant — its kind,
+whether it may run without a card, the verbs a tool has, whether a chat
+can run it; `Aqua.Prelude` is the system-prompt text. The callerless
+`Aqua.Turn.orchestrator/2` is gone.
+
 ## A simple `profile.grant`, and every spelled operation is bound to the catalog
 
 `profile.grant(profile_id, bindings, expected_consent_revision)` binds a

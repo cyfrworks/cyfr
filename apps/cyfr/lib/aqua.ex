@@ -17,7 +17,7 @@ defmodule Aqua do
     resolved agent and the turn's pinned authority.
   - `Aqua.ToolGrants` — standing approvals as rows, composed over the
     agent's declared `tool_policy`.
-  - `Aqua.Actions` — validates the `aqua-actions` blocks a model emits
+  - `Aqua.Wire` — validates the `aqua-actions` blocks a model emits
     into typed client intents, against the agent's tool policy.
   - `Aqua.VirtualTools` — the UI-plane pseudo-tools those intents name.
   - `Aqua.AgentConfig` — the soul's and the roles' definitions and prompts.

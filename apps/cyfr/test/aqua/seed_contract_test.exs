@@ -101,12 +101,12 @@ defmodule Aqua.SeedContractTest do
   test "nothing shipped is automatic where the kind ceiling says it asks" do
     # Kind always wins: a destructive or external action is never `auto`
     # on any agent — the soul asks for it, and a role never holds it.
-    # `Aqua.Actions.auto_permitted?/2` is the one rule every door reads.
+    # `Aqua.Kinds.auto_permitted?/2` is the one rule every door reads.
     automatic =
       for {name, key, "auto"} <- seed_policy(),
           {tool, action} <- exact(key),
-          Aqua.Actions.kind_for(tool, action) != nil,
-          not Aqua.Actions.auto_permitted?(tool, action),
+          Aqua.Kinds.kind_for(tool, action) != nil,
+          not Aqua.Kinds.auto_permitted?(tool, action),
           do: "#{name}: #{key}"
 
     assert automatic == [], Enum.join(automatic, "\n")
@@ -115,7 +115,7 @@ defmodule Aqua.SeedContractTest do
       for {name, key, _mode} <- seed_policy(),
           name != Compendium.AquaPath.soul_name(),
           {tool, action} <- exact(key),
-          Aqua.Actions.kind_for(tool, action) in [:destructive, :external],
+          Aqua.Kinds.kind_for(tool, action) in [:destructive, :external],
           do: "#{name}: #{key}"
 
     assert destructive_on_roles == [], Enum.join(destructive_on_roles, "\n")

@@ -845,7 +845,7 @@ defmodule Cyfr.Ops.Catalog do
 
   Skips `Emissary.MCP.ExternalProvider` (its `mcp_servers` definition is
   audited; the upstream-tool proxy is exempt — those are classified as
-  `:external` by `Aqua.Actions.kind_for/2` via namespacing, and get
+  `:external` by `Aqua.Kinds.kind_for/2` via namespacing, and get
   their plane from `ExternalProvider.default_planes/0`).
 
   Returns `:ok` when all tools are clean, or `{:error, [missing]}` where

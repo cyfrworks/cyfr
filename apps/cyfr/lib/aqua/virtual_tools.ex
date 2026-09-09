@@ -13,7 +13,7 @@ defmodule Aqua.VirtualTools do
   is the host's copy of that contract, and it answers four questions from
   the same rows:
 
-    * **kind** — what `Aqua.Actions.kind_for/2` and the AQUA page classify
+    * **kind** — what `Aqua.Kinds.kind_for/2` and the AQUA page classify
       a `tool.action` as;
     * **child call** — the catalyst and the input the guest would build
       for it (`child_call/3`), so an approved card can be run by the host

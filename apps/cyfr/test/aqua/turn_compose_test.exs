@@ -33,6 +33,20 @@ defmodule Aqua.TurnComposeTest do
 
   # Every tool call the registry dispatches for this estate mints a row,
   # synchronously, before the call runs — so the rows ARE the round trips.
+  # The soul's run-time detail as a turn reads it: an in-process read of
+  # the tree, never a tool call.
+  defp soul(ctx) do
+    {:ok, detail} = Aqua.AgentConfig.agent(ctx, "aqua")
+
+    %{
+      "name" => "aqua",
+      "title" => detail["title"] || "aqua",
+      "catalyst_ref" => detail["catalyst_ref"],
+      "model" => detail["model"],
+      "tool_policy" => detail["tool_policy"] || %{}
+    }
+  end
+
   defp calls(ctx) do
     {:ok, rows} = Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 1_000)
     Map.new(rows, &{&1.id, &1.tool})
@@ -69,7 +83,7 @@ defmodule Aqua.TurnComposeTest do
     assert calls_since(ctx, mark) == ["aqua"]
 
     mark = calls(ctx)
-    soul = Turn.orchestrator(ctx, "aqua")
+    soul = soul(ctx)
     assert %{"name" => "aqua", "tool_policy" => policy} = soul
     assert is_map(policy)
     # Resolving the pick is an in-process read too.
@@ -171,7 +185,7 @@ defmodule Aqua.TurnComposeTest do
   test "a tree that cannot be read refuses the turn with a sentence — never an empty crew", %{
     ctx: ctx
   } do
-    soul = Turn.orchestrator(ctx, "aqua") |> Map.put("catalyst_ref", nil)
+    soul = soul(ctx) |> Map.put("catalyst_ref", nil)
 
     prev = Application.get_env(:cyfr, :storage_adapter)
     Application.put_env(:cyfr, :storage_adapter, UnreadableRolesAdapter)

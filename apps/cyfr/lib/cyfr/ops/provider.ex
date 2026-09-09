@@ -210,7 +210,7 @@ defmodule Cyfr.Ops.Provider do
 
     External upstream MCP tools (proxied through
     `Emissary.MCP.ExternalProvider` and namespaced as `server:tool`) are
-    classified as `:external` automatically by `Aqua.Actions.kind_for/2`
+    classified as `:external` automatically by `Aqua.Kinds.kind_for/2`
     and don't need per-action annotations.
 
   ### Canonical action verbs

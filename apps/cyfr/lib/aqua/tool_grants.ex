@@ -114,7 +114,7 @@ defmodule Aqua.ToolGrants do
     Enum.reduce(authored, %{}, fn {key, value}, acc ->
       case String.split(key, ".", parts: 2) do
         [tool, "*"] ->
-          case Aqua.Actions.actions_of(tool) do
+          case Aqua.Kinds.actions_of(tool) do
             # A role's glob, or a tool nobody catalogues: not a tool action.
             [] ->
               Map.put(acc, key, authored_decision(value))
@@ -147,13 +147,13 @@ defmodule Aqua.ToolGrants do
       case String.split(key, ".", parts: 2) do
         [tool, action] when action != "*" ->
           cond do
-            not Aqua.Actions.catalogued?(tool) ->
+            not Aqua.Kinds.catalogued?(tool) ->
               [decision]
 
-            action not in Aqua.Actions.actions_of(tool) ->
+            action not in Aqua.Kinds.actions_of(tool) ->
               []
 
-            mode == :auto and not Aqua.Actions.auto_permitted?(tool, action) ->
+            mode == :auto and not Aqua.Kinds.auto_permitted?(tool, action) ->
               [{key, {:ask, by}}]
 
             true ->
@@ -321,7 +321,7 @@ defmodule Aqua.ToolGrants do
   # the write itself — the runner's card handler checks the same rule on
   # the intent's stored kind, but this is the SSOT for grant writes and a
   # future surface must not be able to hand one past it. The kind comes
-  # from `Aqua.Actions.kind_for/2` — the SAME classifier the card derives
+  # from `Aqua.Kinds.kind_for/2` — the SAME classifier the card derives
   # its risk from: the virtual-tool catalog (`files`/`storage`/`http` are
   # callable but live in the formula, not the registry), then the
   # `server:tool` external namespace, then the registry annotation. A nil
@@ -332,7 +332,7 @@ defmodule Aqua.ToolGrants do
   #
   # Past the kind, the action's own `standing:` declaration has the last
   # word — `false` refuses every standing allow, `:conversation` refuses
-  # the agent scope — read through `Aqua.Actions.standing_for/2`, the
+  # the agent scope — read through `Aqua.Kinds.standing_for/2`, the
   # sibling of the kind classifier, so the card and this write agree.
   defp check_standing(_attrs, _scope, "deny"), do: :ok
 
@@ -344,7 +344,7 @@ defmodule Aqua.ToolGrants do
 
   defp check_standing(%{tool: tool, action: action}, scope, "allow")
        when is_binary(tool) and is_binary(action) and scope in @scopes do
-    case Aqua.Actions.kind_for(tool, action) do
+    case Aqua.Kinds.kind_for(tool, action) do
       k when k in [:destructive, :external] -> {:error, {:scope_not_permitted, k}}
       nil -> {:error, {:scope_not_permitted, :unknown_kind}}
       _ -> check_declared_standing(tool, action, scope)
@@ -352,7 +352,7 @@ defmodule Aqua.ToolGrants do
   end
 
   defp check_declared_standing(tool, action, scope) do
-    case Aqua.Actions.standing_for(tool, action) do
+    case Aqua.Kinds.standing_for(tool, action) do
       false -> {:error, {:scope_not_permitted, :never_standing}}
       :conversation when scope == "agent" -> {:error, {:scope_not_permitted, :conversation_only}}
       _ -> :ok

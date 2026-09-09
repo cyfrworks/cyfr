@@ -1,10 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Aqua.ActionsTest do
+defmodule Aqua.WireTest do
   use ExUnit.Case, async: true
-
-  alias Aqua.Actions, as: AquaActions
 
   # New-model allowlist: keys are `tool.action` (or `tool.*` globs), values are
   # "ask" (request approval) or "auto" (call directly). An absent key means the
@@ -26,22 +24,22 @@ defmodule Aqua.ActionsTest do
   describe "strip_blocks/1" do
     test "removes a complete block" do
       input = "before\n\n```aqua-actions\n[]\n```\n\nafter"
-      assert AquaActions.strip_blocks(input) == "before\n\n\n\nafter"
+      assert Aqua.Wire.strip_blocks(input) == "before\n\n\n\nafter"
     end
 
     test "removes an open-tail block (mid-stream)" do
       input = "before\n```aqua-actions\n[{\"kind\":\"ui.navigate"
-      assert AquaActions.strip_blocks(input) == "before\n"
+      assert Aqua.Wire.strip_blocks(input) == "before\n"
     end
 
     test "passes content with no block through unchanged" do
       input = "no actions here\nplain text"
-      assert AquaActions.strip_blocks(input) == input
+      assert Aqua.Wire.strip_blocks(input) == input
     end
 
     test "removes multiple blocks in one pass" do
       input = "a\n```aqua-actions\n[]\n```\nb\n```aqua-actions\n[]\n```\nc"
-      assert AquaActions.strip_blocks(input) == "a\n\nb\n\nc"
+      assert Aqua.Wire.strip_blocks(input) == "a\n\nb\n\nc"
     end
   end
 
@@ -49,7 +47,7 @@ defmodule Aqua.ActionsTest do
     @focus_prefix "/a/:athanor"
 
     test "no redirect stub is a target, and every page the nav offers is one" do
-      routes = AquaActions.allowed_routes()
+      routes = Aqua.Intents.allowed_routes()
 
       # Derived from the router the same way, so a new stub fails here.
       stubs =
@@ -78,7 +76,7 @@ defmodule Aqua.ActionsTest do
       input =
         "go now\n\n```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/activities\"}]\n```\n"
 
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
 
       assert result.stripped == "go now"
       assert result.intents == [%{kind: "navigate", to: "/activities"}]
@@ -89,7 +87,7 @@ defmodule Aqua.ActionsTest do
       # The chat has no estate in its address; it is in the allowlist by
       # its own path and is pushed without the focus prefix.
       input = "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/chat\"}]\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
 
       assert result.intents == [%{kind: "navigate", to: "/chat"}]
       assert result.drops == []
@@ -97,7 +95,7 @@ defmodule Aqua.ActionsTest do
 
     test "ui.navigate: disallowed path is dropped, block still stripped" do
       input = "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/etc/passwd\"}]\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
 
       assert result.stripped == ""
       assert result.intents == []
@@ -107,7 +105,7 @@ defmodule Aqua.ActionsTest do
 
     test "ui.navigate: a redirect stub is not a target" do
       input = "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/agents\"}]\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
 
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
@@ -118,19 +116,19 @@ defmodule Aqua.ActionsTest do
       input =
         "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/executions?id=exec_a\"}]\n```"
 
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == [%{kind: "navigate", to: "/executions?id=exec_a"}]
     end
 
     test "ui.execution.focus collapses to navigate with prefix-validated id" do
       input = "```aqua-actions\n[{\"kind\":\"ui.execution.focus\",\"id\":\"exec_abc\"}]\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == [%{kind: "navigate", to: "/executions?id=exec_abc"}]
     end
 
     test "ui.execution.focus rejects non-prefixed id" do
       input = "```aqua-actions\n[{\"kind\":\"ui.execution.focus\",\"id\":\"req_abc\"}]\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "must start with exec_"
@@ -140,7 +138,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.execution.focus","id":"exec_../etc/passwd"}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "disallowed characters"
@@ -150,7 +148,7 @@ defmodule Aqua.ActionsTest do
       input =
         "```aqua-actions\n[{\"kind\":\"ui.component.focus\",\"ref\":\"local.weather-app\"}]\n```"
 
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == [%{kind: "navigate", to: "/components/local.weather-app"}]
     end
 
@@ -158,7 +156,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.tincture.focus","publisher":"acme.co","name":"my-app"}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
 
       assert [%{kind: "navigate", to: to}] = result.intents
       assert to =~ "publisher=acme.co"
@@ -167,19 +165,19 @@ defmodule Aqua.ActionsTest do
 
     test "ui.overlay.open without state" do
       input = "```aqua-actions\n[{\"kind\":\"ui.overlay.open\"}]\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == [%{kind: "overlay_open"}]
     end
 
     test "ui.overlay.open with valid state" do
       input = "```aqua-actions\n[{\"kind\":\"ui.overlay.open\",\"state\":\"full\"}]\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == [%{kind: "overlay_open", state: "full"}]
     end
 
     test "ui.overlay.open rejects peek (post-removal)" do
       input = "```aqua-actions\n[{\"kind\":\"ui.overlay.open\",\"state\":\"peek\"}]\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "must be \"half\" or \"full\""
@@ -187,27 +185,27 @@ defmodule Aqua.ActionsTest do
 
     test "ui.overlay.close" do
       input = "```aqua-actions\n[{\"kind\":\"ui.overlay.close\"}]\n```"
-      assert AquaActions.parse(input, @policy).intents == [%{kind: "overlay_close"}]
+      assert Aqua.Wire.parse(input, @policy).intents == [%{kind: "overlay_close"}]
     end
 
     test "ui.copy_clipboard captures text" do
       input = "```aqua-actions\n[{\"kind\":\"ui.copy_clipboard\",\"text\":\"hello\"}]\n```"
 
-      assert AquaActions.parse(input, @policy).intents == [
+      assert Aqua.Wire.parse(input, @policy).intents == [
                %{kind: "copy_clipboard", text: "hello"}
              ]
     end
 
     test "unknown kind is dropped" do
       input = "```aqua-actions\n[{\"kind\":\"ui.lol.do_evil\"}]\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: "unknown kind: " <> _}] = result.drops
     end
 
     test "malformed JSON drops the entry but still strips the block" do
       input = "before\n```aqua-actions\nthis is not JSON\n```\nafter"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.stripped == "before\n\nafter"
       assert result.intents == []
       assert [%{reason: "JSON parse error: " <> _}] = result.drops
@@ -215,7 +213,7 @@ defmodule Aqua.ActionsTest do
 
     test "non-array JSON body is dropped" do
       input = "```aqua-actions\n{\"kind\":\"ui.navigate\",\"path\":\"/\"}\n```"
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: "block body is not a JSON array"}] = result.drops
     end
@@ -228,7 +226,7 @@ defmodule Aqua.ActionsTest do
   {"kind":"ui.copy_clipboard","text":"abc"}
 ]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
 
       assert result.intents == [
                %{kind: "navigate", to: "/executions"},
@@ -242,7 +240,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"Sure?","summary":"large refactor","risk":"medium","action_description":"begin work"}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
 
       assert [intent] = result.intents
       assert intent.kind == "request_approval"
@@ -257,7 +255,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"x","summary":"y","risk":"extreme","action_description":"z"}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "low|medium|high"
@@ -267,7 +265,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"Cancel run","summary":"the stuck one","risk":"low","action_description":"execution.cancel","proposal":{"tool":"execution","action":"cancel","args":{"id":"exec_1"}}}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
 
       assert [intent] = result.intents
       assert intent.proposal == %{tool: "execution", action: "cancel", args: %{"id" => "exec_1"}}
@@ -285,7 +283,7 @@ defmodule Aqua.ActionsTest do
         input = ~s(```aqua-actions
 [{"kind":"ui.request_approval","title":"t","summary":"s","risk":"low","action_description":"d","proposal":{"tool":"#{tool}","action":"#{action}","args":{}}}]
 ```)
-        assert [intent] = AquaActions.parse(input, policy).intents
+        assert [intent] = Aqua.Wire.parse(input, policy).intents
         intent
       end
 
@@ -300,7 +298,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"Pull","summary":"fetch it","risk":"medium","action_description":"component.pull","proposal":{"tool":"component","action":"pull","args":{"ref":"catalyst:local.x:1.0.0"}}}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
 
       assert [intent] = result.intents
 
@@ -317,7 +315,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"Push","summary":"ship it","risk":"medium","action_description":"component.push","proposal":{"tool":"component","action":"push","args":{}}}]
 ```)
-      result = AquaActions.parse(input, %{"component.*" => "ask"})
+      result = Aqua.Wire.parse(input, %{"component.*" => "ask"})
 
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
@@ -332,13 +330,13 @@ defmodule Aqua.ActionsTest do
 [{"kind":"ui.request_approval","title":"Clean","summary":"rm","risk":"low","action_description":"d","proposal":{"tool":"execution","action":"run","args":{"reference":"catalyst:local.files:0.5.1","input":{"action":"delete","path":"data/storage/k.json"}}}}]
 ```)
       policy = %{"execution.run" => "ask", "storage.delete" => "ask"}
-      assert [intent] = AquaActions.parse(input, policy).intents
+      assert [intent] = Aqua.Wire.parse(input, policy).intents
       assert intent.proposal == %{tool: "storage", action: "delete", args: %{"key" => "k"}}
       assert intent.action_kind == :destructive
 
       # With the canonical pair absent from the policy the card is refused,
       # however `execution.run` is held.
-      result = AquaActions.parse(input, %{"execution.run" => "ask"})
+      result = Aqua.Wire.parse(input, %{"execution.run" => "ask"})
       assert result.intents == []
       assert [%{tag: :not_in_allowlist}] = result.drops
     end
@@ -352,17 +350,17 @@ defmodule Aqua.ActionsTest do
 
       policy = %{"execution.run" => "ask", "files.*" => "ask"}
 
-      result = AquaActions.parse(card.("formula:local.aqua", %{"tool_policy" => %{}}), policy)
+      result = Aqua.Wire.parse(card.("formula:local.aqua", %{"tool_policy" => %{}}), policy)
       assert [%{tag: :not_in_allowlist, reason: reason}] = result.drops
       assert reason =~ "clone a role"
 
-      result = AquaActions.parse(card.("catalyst:local.files", %{"action" => "bogus"}), policy)
+      result = Aqua.Wire.parse(card.("catalyst:local.files", %{"action" => "bogus"}), policy)
       assert [%{tag: :not_in_allowlist, reason: reason}] = result.drops
       assert reason =~ "names no operation"
 
       # Any other reference is the app launch the policy holds at ask.
       assert [intent] =
-               AquaActions.parse(card.("formula:local.other", %{"x" => 1}), policy).intents
+               Aqua.Wire.parse(card.("formula:local.other", %{"x" => 1}), policy).intents
 
       assert intent.proposal.tool == "execution"
     end
@@ -374,10 +372,10 @@ defmodule Aqua.ActionsTest do
       agreed = %{"files.tree" => "ask", "files.list" => "ask"}
 
       assert [%{proposal: %{tool: "files", action: "tree"}}] =
-               AquaActions.parse(card, agreed).intents
+               Aqua.Wire.parse(card, agreed).intents
 
       split = %{"files.tree" => "ask", "files.list" => "auto"}
-      assert [%{reason: reason}] = AquaActions.parse(card, split).drops
+      assert [%{reason: reason}] = Aqua.Wire.parse(card, split).drops
       assert reason =~ "answers differently"
     end
 
@@ -387,11 +385,11 @@ defmodule Aqua.ActionsTest do
 ```)
 
       assert [%{proposal: %{tool: "storage", action: "delete", args: %{"key" => "k"}}}] =
-               AquaActions.parse(card, %{"files.delete" => "ask", "storage.delete" => "ask"}).intents
+               Aqua.Wire.parse(card, %{"files.delete" => "ask", "storage.delete" => "ask"}).intents
 
       # And files.delete alone does not cover it: the storage pair decides.
       assert [%{tag: :not_in_allowlist}] =
-               AquaActions.parse(card, %{"files.delete" => "ask"}).drops
+               Aqua.Wire.parse(card, %{"files.delete" => "ask"}).drops
     end
 
     test "a denied pair and a UI event are never proposable" do
@@ -402,7 +400,7 @@ defmodule Aqua.ActionsTest do
       end
 
       result =
-        AquaActions.parse(card.("component", "pull"), %{
+        Aqua.Wire.parse(card.("component", "pull"), %{
           "component.*" => "ask",
           "component.pull" => "deny"
         })
@@ -410,26 +408,26 @@ defmodule Aqua.ActionsTest do
       assert [%{tag: :not_in_allowlist, reason: reason}] = result.drops
       assert reason =~ "declined"
 
-      result = AquaActions.parse(card.("request_setup", "open"), %{"request_setup.open" => "ask"})
+      result = Aqua.Wire.parse(card.("request_setup", "open"), %{"request_setup.open" => "ask"})
       assert [%{tag: :auto_allowlisted}] = result.drops
 
       # And the prelude never lists it as something to ask for.
-      refute AquaActions.system_prelude(%{"request_setup.open" => "ask"}) =~ "request_setup.open"
+      refute Aqua.Prelude.system_prelude(%{"request_setup.open" => "ask"}) =~ "request_setup.open"
     end
 
     test "auto_permitted?/2 is the one kind rule" do
-      assert AquaActions.auto_permitted?("files", "read")
-      assert AquaActions.auto_permitted?("files", "write")
-      assert AquaActions.auto_permitted?("http", "post")
-      refute AquaActions.auto_permitted?("files", "delete")
-      refute AquaActions.auto_permitted?("notion:create_page", "call")
-      refute AquaActions.auto_permitted?("no_such_tool", "go")
+      assert Aqua.Kinds.auto_permitted?("files", "read")
+      assert Aqua.Kinds.auto_permitted?("files", "write")
+      assert Aqua.Kinds.auto_permitted?("http", "post")
+      refute Aqua.Kinds.auto_permitted?("files", "delete")
+      refute Aqua.Kinds.auto_permitted?("notion:create_page", "call")
+      refute Aqua.Kinds.auto_permitted?("no_such_tool", "go")
     end
 
     test "kind_for/2 looks up the right kind for virtual tools" do
-      assert AquaActions.kind_for("files", "read") == :read
-      assert AquaActions.kind_for("files", "delete") == :destructive
-      assert AquaActions.kind_for("storage", "write") == :write
+      assert Aqua.Kinds.kind_for("files", "read") == :read
+      assert Aqua.Kinds.kind_for("files", "delete") == :destructive
+      assert Aqua.Kinds.kind_for("storage", "write") == :write
     end
 
     test "a proposal for an external `server:tool` validates end to end" do
@@ -440,7 +438,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"Create page","summary":"in Notion","risk":"medium","action_description":"notion:create_page","proposal":{"tool":"notion:create_page","action":"call","args":{"title":"Hi"}}}]
 ```)
-      result = AquaActions.parse(input, %{"notion:create_page.call" => "ask"})
+      result = Aqua.Wire.parse(input, %{"notion:create_page.call" => "ask"})
 
       assert result.drops == []
       assert [intent] = result.intents
@@ -458,9 +456,9 @@ defmodule Aqua.ActionsTest do
       # External upstream MCP tools are namespaced server:tool. They have
       # no enumerable action verbs, so AQUA returns :external regardless of
       # the action arg — no _default annotation involved.
-      assert AquaActions.kind_for("notion:create_page", "x") == :external
-      assert AquaActions.kind_for("github:list_issues", "anything") == :external
-      assert AquaActions.kind_for("custom:weird-name", "") == :external
+      assert Aqua.Kinds.kind_for("notion:create_page", "x") == :external
+      assert Aqua.Kinds.kind_for("github:list_issues", "anything") == :external
+      assert Aqua.Kinds.kind_for("custom:weird-name", "") == :external
     end
 
     test "kind_for/2 returns nil for an internal tool with no annotation (no _default fallback)" do
@@ -468,14 +466,14 @@ defmodule Aqua.ActionsTest do
       # exist in its `annotations.actions` returns nil. Previously this
       # would have fallen back to `_default`; the audit_action_kinds/0
       # startup check is what surfaces these gaps now.
-      assert AquaActions.kind_for("session", "nonexistent_action") == nil
+      assert Aqua.Kinds.kind_for("session", "nonexistent_action") == nil
     end
 
     test "proposal for a tool/action not in the allowlist is dropped" do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"x","summary":"y","risk":"high","action_description":"z","proposal":{"tool":"unknown","action":"do","args":{}}}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "not in your tool allowlist"
@@ -485,7 +483,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"x","summary":"y","risk":"low","action_description":"z","proposal":{"tool":"files","action":"write","args":{}}}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "allowlisted as 'auto'"
@@ -497,7 +495,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"x","summary":"y","risk":"high","action_description":"z","proposal":{"tool":"files","action":"delete","args":{}}}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "not in your tool allowlist"
@@ -507,7 +505,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"x","summary":"y","risk":"high","action_description":"z","proposal":{"tool":"key","action":"revoke","args":"not-an-object"}}]
 ```)
-      result = AquaActions.parse(input, @policy)
+      result = Aqua.Wire.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "must be a JSON object"
@@ -517,7 +515,7 @@ defmodule Aqua.ActionsTest do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"x","summary":"y","risk":"high","action_description":"z","proposal":{"tool":"key","action":"revoke","args":{}}}]
 ```)
-      result = AquaActions.parse(input, %{})
+      result = Aqua.Wire.parse(input, %{})
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
       assert reason =~ "not in your tool allowlist"
@@ -526,17 +524,17 @@ defmodule Aqua.ActionsTest do
 
   describe "system_prelude/1" do
     test "is byte-stable for the same policy" do
-      assert AquaActions.system_prelude(@policy) == AquaActions.system_prelude(@policy)
+      assert Aqua.Prelude.system_prelude(@policy) == Aqua.Prelude.system_prelude(@policy)
     end
 
     test "mentions the protocol fence and an example kind" do
-      prelude = AquaActions.system_prelude(%{})
+      prelude = Aqua.Prelude.system_prelude(%{})
       assert prelude =~ "aqua-actions"
       assert prelude =~ "ui.execution.focus"
     end
 
     test "lists the 'ask' targets sorted; risk visualization is the harness's job" do
-      prelude = AquaActions.system_prelude(@policy)
+      prelude = Aqua.Prelude.system_prelude(@policy)
 
       assert prelude =~ "## Actions that need approval"
       assert prelude =~ "component.pull"
@@ -547,7 +545,7 @@ defmodule Aqua.ActionsTest do
       assert prelude =~ "component.*"
       # an action the chain cannot reach is not offered: the card would be
       # refused at the call, so the agent is not told to propose it
-      refute AquaActions.system_prelude(%{"key.create" => "ask"}) =~ "key.create"
+      refute Aqua.Prelude.system_prelude(%{"key.create" => "ask"}) =~ "key.create"
 
       # `component.register` is the deliberate instance of that rule.
       # It indexes whatever is sitting on the athanor's `components/` tree,
@@ -556,7 +554,7 @@ defmodule Aqua.ActionsTest do
       # `consent: :staging` alone would NOT have closed this: it refuses
       # `Context.plane: :guest`, and AQUA runs host-side with the person's
       # own external context.
-      refute AquaActions.system_prelude(%{"component.register" => "ask"}) =~
+      refute Aqua.Prelude.system_prelude(%{"component.register" => "ask"}) =~
                "component.register"
 
       # 'auto' actions are directly callable — they don't appear here
@@ -569,12 +567,12 @@ defmodule Aqua.ActionsTest do
     end
 
     test "empty policy omits the approval section heading" do
-      prelude = AquaActions.system_prelude(%{})
+      prelude = Aqua.Prelude.system_prelude(%{})
       refute prelude =~ "## Actions that need approval"
     end
 
     test "approval list is sorted (deterministic for prompt cache)" do
-      prelude = AquaActions.system_prelude(@policy)
+      prelude = Aqua.Prelude.system_prelude(@policy)
       # component.pull should appear before execution.cancel alphabetically
       pos_pull = :binary.match(prelude, "component.pull") |> elem(0)
       pos_cancel = :binary.match(prelude, "execution.cancel") |> elem(0)
@@ -585,7 +583,7 @@ defmodule Aqua.ActionsTest do
   describe "ui.copy_clipboard" do
     defp clipboard(text) do
       json = Jason.encode!([%{"kind" => "ui.copy_clipboard", "text" => text}])
-      AquaActions.parse("```aqua-actions\n#{json}\n```", @policy)
+      Aqua.Wire.parse("```aqua-actions\n#{json}\n```", @policy)
     end
 
     test "ordinary text passes through, newlines and tabs intact" do
@@ -619,7 +617,7 @@ defmodule Aqua.ActionsTest do
 
     test "a non-string is dropped" do
       block = "```aqua-actions\n[{\"kind\":\"ui.copy_clipboard\",\"text\":42}]\n```"
-      assert %{intents: [], drops: [%{reason: reason}]} = AquaActions.parse(block, @policy)
+      assert %{intents: [], drops: [%{reason: reason}]} = Aqua.Wire.parse(block, @policy)
       assert reason =~ "requires string"
     end
   end

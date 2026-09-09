@@ -6,7 +6,7 @@ defmodule Aqua.Prompt do
   The whole system prompt for one turn, composed in one place.
 
   It used to be four contributions concatenated at the call site —
-  `Aqua.AgentConfig.build_system_prompt/2`, `Aqua.Actions.system_prelude/1`,
+  `Aqua.AgentConfig.build_system_prompt/2`, `Aqua.Prelude.system_prelude/1`,
   a group prelude in `Aqua.Turn`, and the tool surface injected separately
   into the formula input. Nothing owned the result, so nothing could check
   it against what the turn may actually do.
@@ -63,7 +63,7 @@ defmodule Aqua.Prompt do
       base(ctx, agent),
       "\n\n---\n\n## Runtime Context\n\n",
       file_paths(authority),
-      Aqua.Actions.system_prelude(tool_policy),
+      Aqua.Prelude.system_prelude(tool_policy),
       several_people(Keyword.get(opts, :several_people?, false)),
       scrolls(ctx),
       notes(ctx),

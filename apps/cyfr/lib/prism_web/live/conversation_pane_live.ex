@@ -1383,7 +1383,7 @@ defmodule PrismWeb.ConversationPaneLive do
   defp message_bubble(assigns) do
     # Strip aqua-actions blocks for display, then trim — a stray block or the
     # model's surrounding whitespace would inflate the bubble.
-    display = assigns.content |> Aqua.Actions.strip_blocks() |> String.trim()
+    display = assigns.content |> Aqua.Wire.strip_blocks() |> String.trim()
     assigns = assign(assigns, :display_content, display)
 
     ~H"""

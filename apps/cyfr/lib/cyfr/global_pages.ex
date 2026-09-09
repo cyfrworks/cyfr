@@ -10,7 +10,7 @@ defmodule Cyfr.GlobalPages do
   chat is one. The engine needs the list too (a navigate intent to a global
   page is pushed as it is, never prefixed with the focus), and the engine
   must not name the console, so the list is glue: `PrismWeb.Nav` derives
-  its links from it, `Aqua.Actions` its allowlist.
+  its links from it, `Aqua.Intents` its allowlist.
   """
 
   @paths ~w(/chat)

@@ -9,13 +9,13 @@ defmodule Aqua.ToolSeamTest do
 
   Aqua was the one domain namespace with a live tool-dispatch dependency
   and no roster or helper: `Aqua.Turn`, `Aqua.AgentConfig`,
-  `Aqua.Actions` and the conversation runner each spelled their
+  `Aqua.Kinds` and the conversation runner each spelled their
   `Emissary.MCP.*` reaches themselves. This test is what keeps those
   sites from coming back.
 
   Outside its scope, deliberately: `Emissary.PubSub` used as a process
   NAME (the application's one supervised PubSub, the posture
-  `Cyfr.EmissarySurfaceTest` rosters for sanctum), and `Aqua.Actions`'
+  `Cyfr.EmissarySurfaceTest` rosters for sanctum), and `Aqua.Intents`'
   read of the console route table, rostered in
   `Cyfr.NamespaceDirectionTest`.
   """

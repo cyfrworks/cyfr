@@ -49,7 +49,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   # layer, and an engine that names it has taken the browser surface as a
   # dependency. Scoped to apps/opus and apps/locus only: inside cyfr,
   # Sanctum and Aqua legitimately name it today (the tincture token's
-  # asset sibling, the router introspection Aqua.Actions documents).
+  # asset sibling, the router introspection Aqua.Intents documents).
   @engine_apps ["apps/opus/lib", "apps/locus/lib"]
   @forbidden_web_from_engine_apps ~r/\bEmissaryWeb\.[A-Z]/
 
@@ -119,9 +119,9 @@ defmodule Cyfr.NamespaceDirectionTest do
   @domain_dirs ["apps/cyfr/lib/sanctum", "apps/cyfr/lib/aqua", "apps/cyfr/lib/compendium"]
 
   @domain_web_calls [
-    # `Aqua.Actions` validates an agent's navigation intents against the
+    # `Aqua.Intents` validates an agent's navigation intents against the
     # console's real route table, so a link it emits cannot 404.
-    {"apps/cyfr/lib/aqua/actions.ex", "EmissaryWeb.Router"}
+    {"apps/cyfr/lib/aqua/intents.ex", "EmissaryWeb.Router"}
   ]
 
   # `{rel, module}` for every live domain→web reach, with its line.

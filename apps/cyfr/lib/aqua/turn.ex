@@ -85,28 +85,6 @@ defmodule Aqua.Turn do
     end
   end
 
-  @doc "One agent's run-time detail — the soul or a role of the estate in focus — or `nil`."
-  @spec orchestrator(Context.t(), String.t() | nil) :: agent() | nil
-  def orchestrator(_ctx, nil), do: nil
-
-  def orchestrator(%Context{} = ctx, name) when is_binary(name) do
-    case Aqua.AgentConfig.agent(ctx, name) do
-      {:ok, detail} ->
-        %{
-          "name" => name,
-          "title" => detail["title"] || name,
-          "catalyst_ref" => detail["catalyst_ref"],
-          "model" => detail["model"],
-          "tool_policy" => detail["tool_policy"] || %{}
-        }
-
-      # Same deliberate fail-open as roster/1: nil means "run on the
-      # fallback prompt", never "refuse the turn".
-      _ ->
-        nil
-    end
-  end
-
   @doc """
   An explicit `@name` in the message names the orchestrator for this turn
   — the roster entry called `name`. Returns `{message_without_mention,
@@ -294,7 +272,7 @@ defmodule Aqua.Turn do
 
   defp strip_actions_in_message(%{"role" => "assistant", "content" => content} = msg)
        when is_binary(content) do
-    %{msg | "content" => Aqua.Actions.strip_blocks(content)}
+    %{msg | "content" => Aqua.Wire.strip_blocks(content)}
   end
 
   defp strip_actions_in_message(%{"role" => "assistant", "content" => parts} = msg)
@@ -305,7 +283,7 @@ defmodule Aqua.Turn do
   defp strip_actions_in_message(msg), do: msg
 
   defp strip_actions_in_part(%{"type" => "text", "text" => text} = part) when is_binary(text) do
-    %{part | "text" => Aqua.Actions.strip_blocks(text)}
+    %{part | "text" => Aqua.Wire.strip_blocks(text)}
   end
 
   defp strip_actions_in_part(part), do: part
@@ -494,7 +472,7 @@ defmodule Aqua.Turn do
   What a finished turn's text becomes: the display text with the
   aqua-actions block removed, the approval intents (each an
   `%{id, title, summary, proposal, action_kind, ...}` map from
-  `Aqua.Actions.parse/2`), the client intents (navigate/copy…), and
+  `Aqua.Wire.parse/2`), the client intents (navigate/copy…), and
   the tripwire notices — intents the agent tried outside its policy, which
   the thread shows as errors.
   """
@@ -506,7 +484,7 @@ defmodule Aqua.Turn do
         }
   def parse_completion(raw, tool_policy) when is_binary(raw) and is_map(tool_policy) do
     %{stripped: stripped, intents: intents, drops: drops} =
-      Aqua.Actions.parse(String.trim(raw), tool_policy)
+      Aqua.Wire.parse(String.trim(raw), tool_policy)
 
     # `drop.raw` is the model's verbatim entry — a rejected clipboard write
     # alone can carry 100KB — so the log gets the refusal and a bounded
@@ -610,7 +588,7 @@ defmodule Aqua.Turn do
     # Decided again here, whatever the card said: the assistant itself is
     # never launched as an app, and a wrapped catalyst is the virtual
     # action its input denotes — run under the kind ceiling and the pinned
-    # authority, never as a root. `Aqua.Actions` canonicalises a proposal
+    # authority, never as a root. `Aqua.Wire` canonicalises a proposal
     # before the card exists; this is the same rule at the last door.
     cond do
       is_binary(reference) and Aqua.VirtualTools.self_reference?(reference) ->

@@ -144,8 +144,8 @@ defmodule Aqua.Runner.Recovery do
 
   # The recorded pick — its identity — read back from the estate's tree as
   # the tree holds it NOW. A tree that no longer holds the agent recovers
-  # with no orchestrator — the same deliberate fail-open
-  # `Aqua.Turn.orchestrator/3` states.
+  # with no orchestrator: the turn runs on the fallback prompt rather than
+  # being refused, the same deliberate fail-open the roster takes.
   @spec resolve_stored(Context.t(), Orchestrator.t() | nil) :: Orchestrator.t() | nil
   def resolve_stored(_ctx, nil), do: nil
 

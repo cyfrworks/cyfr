@@ -59,7 +59,7 @@ defmodule Compendium.MCP.ComponentTool do
           # own `:external` context, so an approved proposal would still
           # have registered. Dropping `:in_chain` is what closes that, at
           # the cost of AQUA no longer being able to offer the action at
-          # all (`Aqua.Actions.proposable?/1` derives from this list, so
+          # all (`Aqua.Kinds.proposable?/1` derives from this list, so
           # the approval card disappears rather than failing on the click).
           # Registering stays a console or CLI act. Note `planes:` here and
           # `Context.plane` are different axes despite the shared word.

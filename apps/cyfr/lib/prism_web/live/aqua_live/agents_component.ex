@@ -174,7 +174,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # an "ask" on it is a hand it silently loses. A destructive or external
   # action is never added to a role at all: it always asks, and only the
   # soul can ask. The kind is DERIVED here from the action's own
-  # annotation (`Aqua.Actions.kind_for/2`), never taken off the wire. A
+  # annotation (`Aqua.Kinds.kind_for/2`), never taken off the wire. A
   # key that resolves to no known action is refused.
   def handle_event("editor_toggle_capability", %{"name" => name, "key" => key}, socket) do
     soul? = soul_name?(socket, name)
@@ -419,16 +419,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # has never heard of (fail closed).
   defp resolved_kind(key) when is_binary(key) do
     case String.split(key, ".", parts: 2) do
-      [tool, action] -> Aqua.Actions.kind_for(tool, action)
+      [tool, action] -> Aqua.Kinds.kind_for(tool, action)
       _ -> nil
     end
   end
 
   # "auto" (run with no card) is only for kinds a card can be skipped for —
-  # the one rule `Aqua.Actions.auto_permitted?/2` holds for every door.
+  # the one rule `Aqua.Kinds.auto_permitted?/2` holds for every door.
   defp auto_permitted?(key) do
     case String.split(key, ".", parts: 2) do
-      [tool, action] -> Aqua.Actions.auto_permitted?(tool, action)
+      [tool, action] -> Aqua.Kinds.auto_permitted?(tool, action)
       _ -> false
     end
   end
