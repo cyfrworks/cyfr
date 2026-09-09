@@ -120,10 +120,8 @@ defmodule Sanctum.Auth.OIDCTest do
 
       {:ok, ctx} = OIDC.authenticate(auth)
 
-      # Passing the operator's configured provider means full trust,
-      # matching the OAuth/DeviceFlow providers. (The old default granted
-      # :read, an atom nothing recognized.)
-      assert MapSet.equal?(ctx.permissions, MapSet.new([:*]))
+      # A configured OIDC provider grants the authenticated session's full permissions.
+      assert MapSet.equal?(ctx.permissions, MapSet.new(Sanctum.Context.person_permissions()))
       assert Sanctum.Context.has_permission?(ctx, :execute)
     end
 

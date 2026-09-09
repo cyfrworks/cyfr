@@ -625,8 +625,9 @@ defmodule Aqua.Turn do
 
   # An approved execution runs as a CHILD of the card's pinned authority
   # — the way the formula host runs one for a chain — with the card's own
-  # execution as lineage, never through the catalog from a guest-planed
-  # context.
+  # execution as lineage and the assistant as the invoking reference, so
+  # the child's row keeps a digest of its reply, never through the catalog
+  # from a guest-planed context.
   defp run_child_execution(%{args: args} = proposal, ctx, authority) do
     args = args || %{}
 
@@ -636,7 +637,7 @@ defmodule Aqua.Turn do
         execution_id = lineage[:execution_id] || lineage["execution_id"]
 
         opts =
-          [ctx: Context.enter_guest(ctx)]
+          [ctx: Context.enter_guest(ctx), parent_reference: @agent_ref]
           |> Arca.QueryHelpers.maybe_put(:parent_execution_id, execution_id)
           |> Arca.QueryHelpers.maybe_put(:root_execution_id, execution_id)
 
@@ -683,7 +684,7 @@ defmodule Aqua.Turn do
       execution_id = lineage[:execution_id] || lineage["execution_id"]
 
       opts =
-        [ctx: Context.enter_guest(ctx)]
+        [ctx: Context.enter_guest(ctx), parent_reference: @agent_ref]
         |> Arca.QueryHelpers.maybe_put(:parent_execution_id, execution_id)
         |> Arca.QueryHelpers.maybe_put(:root_execution_id, execution_id)
 

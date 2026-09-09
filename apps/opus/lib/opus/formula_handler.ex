@@ -346,6 +346,15 @@ defmodule Opus.FormulaHandler do
     end
   end
 
+  @doc false
+  # The host's arm for an action the catalog annotates `host: :intercepted`.
+  # An intercepted action the host has no arm for is a typed refusal, never
+  # a crash; a test pins that every intercepted action has one.
+  @spec child_runner(String.t()) :: {:ok, function()} | :error
+  def child_runner("run"), do: {:ok, &Opus.Chain.run_child/5}
+  def child_runner("run_stream"), do: {:ok, &Opus.Chain.run_child_stream/5}
+  def child_runner(_action), do: :error
+
   defp dispatch_child_call(action, args, ctx, opts) do
     authority = Keyword.fetch!(opts, :authority)
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
@@ -361,12 +370,9 @@ defmodule Opus.FormulaHandler do
       need = Map.get(args, "need")
 
       result =
-        case action do
-          "run" ->
-            Opus.Chain.run_child(authority, reference, need, input, child_opts)
-
-          "run_stream" ->
-            Opus.Chain.run_child_stream(authority, reference, need, input, child_opts)
+        case child_runner(action) do
+          {:ok, run} -> run.(authority, reference, need, input, child_opts)
+          :error -> {:error, {:invalid_argument, "execution.#{action} has no host dispatch"}}
         end
 
       case result do
@@ -581,6 +587,9 @@ defmodule Opus.FormulaHandler do
           :invalid_request,
           "run_stream cannot be spawned — spawn execution.run, or call run_stream directly"
         )
+
+      {:intercept, action, _args} ->
+        encode_error(:invalid_request, "execution.#{action} cannot be spawned")
 
       :registry ->
         spawn_via_registry(json_request, ctx, tracker, opts)

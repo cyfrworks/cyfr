@@ -299,16 +299,19 @@ defmodule Opus.ExecutionRecord do
   Renew the lease this attempt holds on its running row.
 
   `{:ok, until}` is the new expiry the row now carries. `:lost` means the
-  row is no longer this attempt's to renew — it finished, the sweeper
-  failed it, or the store could not answer — and the runner must stop
-  authorized work once the lease it last held lapses.
+  store answered and the row is no longer this attempt's to renew — it
+  finished, was cancelled, or the sweeper failed it — and the runner stops
+  authorized work at once. `:unavailable` means the store could not
+  answer; the runner keeps working only while the lease it last held still
+  holds.
   """
-  @spec renew_lease(String.t(), String.t() | nil) :: {:ok, DateTime.t()} | :lost
+  @spec renew_lease(String.t(), String.t() | nil) :: {:ok, DateTime.t()} | :lost | :unavailable
   def renew_lease(execution_id, attempt) when is_binary(execution_id) do
     until = lease_until()
 
     case Arca.Execution.renew_lease(execution_id, until, attempt: attempt, runner_id: runner_id()) do
       1 -> {:ok, until}
+      {:error, :database_error} -> :unavailable
       _ -> :lost
     end
   rescue
@@ -317,7 +320,7 @@ defmodule Opus.ExecutionRecord do
         "[ExecutionRecord] lease renewal failed for #{execution_id}: #{Exception.message(e)}"
       )
 
-      :lost
+      :unavailable
   end
 
   @doc """

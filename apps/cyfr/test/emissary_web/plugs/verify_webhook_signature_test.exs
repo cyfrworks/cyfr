@@ -69,6 +69,37 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignatureTest do
     assert result.resp_body =~ "not_found"
   end
 
+  test "503 when the rate limiter's cached lookup says the store could not answer" do
+    conn =
+      build_request("wh_any", "{}", [{"x-cyfr-signature", "sha256=00"}])
+      |> Plug.Conn.assign(:webhook_lookup, {:error, :database_error})
+
+    result = VerifyWebhookSignature.call(conn, [])
+
+    assert result.halted
+    assert result.status == 503
+    assert Plug.Conn.get_resp_header(result, "retry-after") == ["5"]
+    assert result.resp_body =~ "unavailable"
+  end
+
+  test "503 when the store cannot answer a fresh lookup, never a 404" do
+    drop_webhooks!()
+    conn = build_request("wh_any", "{}", [{"x-cyfr-signature", "sha256=00"}])
+
+    result = VerifyWebhookSignature.call(conn, [])
+
+    assert result.halted
+    assert result.status == 503
+  end
+
+  # An outage, simulated: the table is gone. Postgres drops the tables that
+  # reference `webhooks` along with it.
+  defp drop_webhooks! do
+    if Cyfr.RuntimeConfig.repo_adapter() == Ecto.Adapters.Postgres,
+      do: Arca.Repo.query!("DROP TABLE webhooks CASCADE"),
+      else: Arca.Repo.query!("DROP TABLE webhooks")
+  end
+
   test "404 on disabled webhook (no enumeration leak)", %{ctx: ctx} do
     %{slug: slug, secret: secret} = create_hook!(ctx, "to-disable")
     :ok = Webhook.revoke(ctx, "to-disable")

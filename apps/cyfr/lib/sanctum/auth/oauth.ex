@@ -49,7 +49,7 @@ defmodule Sanctum.Auth.OAuth do
         email: user_info.email,
         provider: to_string(provider),
         athanor_id: nil,
-        permissions: [:*]
+        permissions: Context.person_permissions()
       ]
     end
 

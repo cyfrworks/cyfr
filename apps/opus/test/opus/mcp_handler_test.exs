@@ -317,4 +317,23 @@ defmodule Opus.FormulaHandlerMcpTest do
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
     end
   end
+
+  # ============================================================================
+  # Host interception
+  # ============================================================================
+
+  describe "host interception" do
+    test "the host has an arm for exactly the execution actions the catalog intercepts" do
+      execution = Enum.find(Opus.MCP.tools(), &(&1.name == "execution"))
+      actions = execution |> Cyfr.Ops.Annotations.actions_of() |> Map.keys()
+
+      assert Enum.any?(actions, &Cyfr.Ops.Annotations.host_intercepted?(execution, &1))
+
+      for action <- actions do
+        assert match?({:ok, _}, FormulaHandler.child_runner(action)) ==
+                 Cyfr.Ops.Annotations.host_intercepted?(execution, action),
+               "execution.#{action}: the host's arm and the catalog's annotation disagree"
+      end
+    end
+  end
 end

@@ -209,21 +209,23 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @doc """
-  Note that an execution of `tenant`'s was killed with its native thread
-  unreaped (see the moduledoc): a timeout, or a cancel. Synchronous, and
-  charged to the tenant by name rather than looked up from the caller's
-  slot: the caller need not be the holder (a cancel runs in the
-  canceller's process), and the note is acknowledged before the kill it
-  precedes, so no ordering between this and the holder's release — or its
-  `:DOWN` — can lose it. A nil tenant charges nobody.
+  Note that execution `execution_id` of `tenant`'s was killed with its
+  native thread unreaped (see the moduledoc): a timeout, or a cancel.
+  Synchronous, and charged to the tenant by name rather than looked up
+  from the caller's slot: the caller need not be the holder (a cancel runs
+  in the canceller's process), and the note is acknowledged before the
+  kill it precedes, so no ordering between this and the holder's release —
+  or its `:DOWN` — can lose it. A nil tenant charges nobody.
+  `{:error, :unavailable}` means the semaphore did not answer and the kill
+  goes uncharged; the caller records that by execution.
   """
-  @spec note_unreaped(String.t() | nil) :: :ok
-  def note_unreaped(nil), do: :ok
+  @spec note_unreaped(String.t() | nil, String.t() | nil) :: :ok | {:error, :unavailable}
+  def note_unreaped(nil, _execution_id), do: :ok
 
-  def note_unreaped(tenant) when is_binary(tenant) do
-    GenServer.call(__MODULE__, {:unreaped, tenant})
+  def note_unreaped(tenant, execution_id) when is_binary(tenant) do
+    GenServer.call(__MODULE__, {:unreaped, tenant, execution_id})
   catch
-    :exit, _ -> :ok
+    :exit, _ -> {:error, :unavailable}
   end
 
   @doc """
@@ -445,18 +447,18 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @impl true
-  def handle_call({:unreaped, tenant}, _from, state) when is_binary(tenant) do
+  def handle_call({:unreaped, tenant, execution_id}, _from, state) when is_binary(tenant) do
     expiry = System.monotonic_time(:millisecond) + @unreaped_ttl_ms
 
     entries = [expiry | prune_unreaped(Map.get(state.tenant_unreaped, tenant, []))]
 
     Logger.warning(
-      "[Opus.ExecutionSemaphore] Unreaped kill noted for tenant " <>
+      "[Opus.ExecutionSemaphore] Unreaped kill of #{inspect(execution_id)} noted for tenant " <>
         "#{inspect(tenant)} (#{length(entries)}/#{state.unreaped_max} " <>
         "in the decay window)"
     )
 
-    Opus.Telemetry.unreaped_kill(tenant, length(entries))
+    Opus.Telemetry.unreaped_kill(tenant, execution_id, length(entries))
 
     {:reply, :ok, %{state | tenant_unreaped: Map.put(state.tenant_unreaped, tenant, entries)}}
   end

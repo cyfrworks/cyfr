@@ -381,7 +381,8 @@ defmodule Cyfr.RuntimeConfig do
     with [] <- missing,
          # Use the configured receive timeout for object-store requests.
          {:ok, receive_timeout_ms} <-
-           positive_int(getenv.("CYFR_S3_RECEIVE_TIMEOUT_MS"), "CYFR_S3_RECEIVE_TIMEOUT_MS") do
+           positive_int(getenv.("CYFR_S3_RECEIVE_TIMEOUT_MS"), "CYFR_S3_RECEIVE_TIMEOUT_MS"),
+         {:ok, path_style} <- switch(getenv, "CYFR_S3_PATH_STYLE", false) do
       opts =
         [
           bucket: resolved.bucket,
@@ -390,7 +391,7 @@ defmodule Cyfr.RuntimeConfig do
           secret_access_key: resolved.secret_access_key,
           endpoint: blank_to_nil(getenv.("CYFR_S3_ENDPOINT")),
           prefix: blank_to_nil(getenv.("CYFR_S3_PREFIX")),
-          path_style: getenv.("CYFR_S3_PATH_STYLE") in ["true", "1"],
+          path_style: path_style,
           receive_timeout_ms: receive_timeout_ms
         ]
         |> Enum.reject(fn {_k, v} -> is_nil(v) end)
@@ -419,17 +420,9 @@ defmodule Cyfr.RuntimeConfig do
            "(e.g. postgres://user:pass@host:5432/dbname)."}
 
       url ->
-        case parse_pool_size(getenv.("CYFR_DB_POOL_SIZE")) do
-          {:ok, pool_size} ->
-            {:ok,
-             [
-               url: url,
-               pool_size: pool_size,
-               ssl: getenv.("CYFR_DB_SSL") == "true"
-             ]}
-
-          {:error, _} = err ->
-            err
+        with {:ok, pool_size} <- parse_pool_size(getenv.("CYFR_DB_POOL_SIZE")),
+             {:ok, ssl} <- switch(getenv, "CYFR_DB_SSL", false) do
+          {:ok, [url: url, pool_size: pool_size, ssl: ssl]}
         end
     end
   end

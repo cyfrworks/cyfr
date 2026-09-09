@@ -69,7 +69,8 @@ defmodule Sanctum.SessionTest do
       refute Map.has_key?(session, :permissions)
 
       assert {:ok, %{permissions: permissions}} = Session.load(session.token, surface: :console)
-      assert MapSet.member?(permissions, :*)
+      assert MapSet.equal?(permissions, MapSet.new(Sanctum.Context.person_permissions()))
+      refute MapSet.member?(permissions, :*)
     end
   end
 

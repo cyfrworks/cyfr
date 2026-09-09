@@ -427,9 +427,10 @@ defmodule Sanctum.Session do
             email: row.email,
             provider: row.provider,
             namespace: ns,
-            # A person holds every permission; the gates that matter are
-            # membership, consent and policy, applied on every request.
-            permissions: [:*],
+            # A person holds every declared permission; the gates that
+            # matter are membership, consent and policy, applied on every
+            # request.
+            permissions: Context.person_permissions(),
             # The persisted athanor is a STARTING POINT, never trusted on its
             # own: revalidate/1 re-checks it against current memberships. A nil
             # means the session was never resolved (no membership at create

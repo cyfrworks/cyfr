@@ -54,4 +54,12 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
     ControlPlane.mark(:unclaimed)
     assert {:ok, _} = Cyfr.Ops.Catalog.call_external("system", ctx, %{"action" => "status"})
   end
+
+  test "a proxied external server is not dispatched for a boot that lost the plane" do
+    ctx = Sanctum.TestContext.local()
+    ControlPlane.mark(:lost)
+
+    assert {:error, :control_plane_lost} =
+             Cyfr.Ops.Catalog.call_external("notion:create_page", ctx, %{"action" => "create"})
+  end
 end

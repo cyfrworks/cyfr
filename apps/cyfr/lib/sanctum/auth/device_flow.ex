@@ -522,7 +522,7 @@ defmodule Sanctum.Auth.DeviceFlow do
           # Start athanor-less; the establish recipe fills the athanor from
           # memberships (`Sanctum.Caller.establish/2`).
           athanor_id: nil,
-          permissions: [:*]
+          permissions: Context.person_permissions()
         )
 
       {:ok, user, ctx}

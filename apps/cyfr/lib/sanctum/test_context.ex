@@ -118,7 +118,7 @@ if Mix.env() in [:test, :dev] do
         provider: "local",
         namespace: ns,
         athanor_id: @athanor_id,
-        permissions: [:*],
+        permissions: Context.person_permissions(),
         scope: :athanor,
         auth_method: :oidc,
         authenticated: true

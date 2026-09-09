@@ -83,7 +83,7 @@ defmodule Sanctum.Auth.OIDC do
             provider: to_string(provider),
             namespace: nil,
             athanor_id: nil,
-            permissions: default_permissions()
+            permissions: Context.person_permissions()
           )
 
         Sanctum.Telemetry.auth_event(provider, :success)
@@ -129,15 +129,6 @@ defmodule Sanctum.Auth.OIDC do
       true ->
         nil
     end
-  end
-
-  defp default_permissions do
-    # Anyone who passes the operator's configured OIDC provider is fully
-    # trusted, matching the OAuth/DeviceFlow providers — the console is a
-    # single-operator trust boundary, and consent has its own dedicated
-    # non-wildcard authorization path. (The previous [:execute, :read]
-    # granted :read, an atom nothing recognizes.)
-    [:*]
   end
 
   # Direct GitHub/Google OAuth strategies hardcode the provider's issuer.

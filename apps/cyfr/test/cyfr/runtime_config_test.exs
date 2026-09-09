@@ -190,6 +190,31 @@ defmodule Cyfr.RuntimeConfigTest do
       assert opts[:endpoint] == "http://minio:9000"
     end
 
+    test "CYFR_S3_PATH_STYLE is a switch: on in any spelling, off by default, a misspelling refuses" do
+      base = %{
+        "CYFR_STORAGE" => "s3",
+        "CYFR_S3_BUCKET" => "b",
+        "CYFR_S3_REGION" => "r",
+        "CYFR_S3_ACCESS_KEY_ID" => "ak",
+        "CYFR_S3_SECRET_ACCESS_KEY" => "sk"
+      }
+
+      for on <- ~w(on yes 1 TRUE) do
+        assert {:ok, {:s3, opts}} =
+                 RuntimeConfig.resolve_storage(env(Map.put(base, "CYFR_S3_PATH_STYLE", on)))
+
+        assert opts[:path_style] == true
+      end
+
+      assert {:ok, {:s3, opts}} = RuntimeConfig.resolve_storage(env(base))
+      assert opts[:path_style] == false
+
+      assert {:error, message} =
+               RuntimeConfig.resolve_storage(env(Map.put(base, "CYFR_S3_PATH_STYLE", "virtual")))
+
+      assert message =~ "CYFR_S3_PATH_STYLE"
+    end
+
     test "s3 omits absent optional keys" do
       assert {:ok, {:s3, opts}} =
                RuntimeConfig.resolve_storage(
@@ -276,6 +301,20 @@ defmodule Cyfr.RuntimeConfigTest do
 
       assert opts[:pool_size] == 10
       assert opts[:ssl] == true
+    end
+
+    test "CYFR_DB_SSL is a switch: on in any spelling, a misspelling refuses" do
+      url = %{"CYFR_DATABASE_URL" => "postgres://u:p@h:5432/db"}
+
+      for on <- ~w(on yes 1 TRUE) do
+        assert {:ok, opts} = RuntimeConfig.resolve_postgres(env(Map.put(url, "CYFR_DB_SSL", on)))
+        assert opts[:ssl] == true
+      end
+
+      assert {:error, message} =
+               RuntimeConfig.resolve_postgres(env(Map.put(url, "CYFR_DB_SSL", "enabled")))
+
+      assert message =~ "CYFR_DB_SSL"
     end
 
     # Set-or-default, never silent fallback: quietly serving 20 connections

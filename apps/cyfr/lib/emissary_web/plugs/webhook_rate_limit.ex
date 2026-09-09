@@ -56,16 +56,9 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   @unknown_max 10
   @unknown_window_ms 60_000
 
-  # Applies to every request regardless of slug validity — a circuit
-  # breaker for bulk probing rather than a delivery throttle.
-  #
-  # It is a KNOB, because it is checked before the per-slug bucket and
-  # therefore clamps it. An operator who sets `rate_limit: "1000/1m"` on a
-  # webhooks row — which `Sanctum.Webhook` accepts with no upper bound —
-  # was silently held to this number for any single sender, and one
-  # provider egressing from one stable address is the ordinary case, not
-  # an attack. Raise it when a real sender needs more; it only has to stay
-  # above the per-slug limits actually configured.
+  # Meter all requests per IP, including unknown slugs. This budget also
+  # limits valid deliveries; configure it above the per-slug throughput
+  # required from a single sender address.
   @default_per_ip_max 6_000
   @per_ip_window_ms 60_000
 
@@ -111,8 +104,8 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   # Database errors fall through to the *default* slug-keyed bucket (not the
   # tighter scan-evasion one): during a DB outage we don't know whether the
   # slug is legitimate, and rate-limiting legitimate traffic to 10/min would
-  # cascade the outage into rejected webhooks. The verify-signature plug will
-  # 500 on its own DB error — losing audit-correctness, not security.
+  # cascade the outage into rejected webhooks. The verify-signature plug
+  # answers 503 on the same error.
   defp bucket_for(%Plug.Conn{path_params: %{"slug" => slug}} = conn)
        when is_binary(slug) and slug != "" do
     lookup = Arca.WebhookStorage.get_by_slug(slug)

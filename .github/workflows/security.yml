@@ -13,6 +13,11 @@ on:
       - 'tests/**'
       - 'mix.exs'
       - 'mix.lock'
+      - '.env.example'
+      - '.env.*.example'
+      - 'trivy-secret.yaml'
+      - 'Dockerfile*'
+      - 'docker-compose.yml'
       - '.github/workflows/security.yml'
   push:
     branches: [main]
@@ -27,6 +32,11 @@ on:
       - 'tests/**'
       - 'mix.exs'
       - 'mix.lock'
+      - '.env.example'
+      - '.env.*.example'
+      - 'trivy-secret.yaml'
+      - 'Dockerfile*'
+      - 'docker-compose.yml'
       - '.github/workflows/security.yml'
   schedule:
     # Weekly on Monday at 08:00 UTC
@@ -67,30 +77,15 @@ jobs:
         run: mix compile
 
       - name: Check retired packages
-        # Newer Hex also checks security advisories in hex.audit (an id here
-        # matches the advisory's primary ID or any alias). Same accepted
-        # no-fix advisory as the deps.audit step below — see its comment.
+        # Suppress the same decimal advisory aliases as deps.audit below.
         env:
           HEX_IGNORE_ADVISORIES: "CVE-2026-32686"
         run: mix hex.audit
 
       - name: Check vulnerable dependencies
-        # ONE advisory has no actionable fix and is explicitly accepted, listed
-        # under BOTH its GHSA and EEF-CVE ids (the advisory DB re-keyed existing
-        # entries under EEF ids in 2026-07, which un-ignored them):
-        #   GHSA-rhv4-8758-jx7v / EEF-CVE-2026-32686 (decimal, moderate DoS) —
-        #     fixed only in decimal 3.x, which ecto's `decimal ~> 2.0`
-        #     requirement disallows; revisit when ecto supports decimal 3.
-        #     Verified still binding: mix.lock pins decimal 2.4.1, and ecto is
-        #     the only dependency in the lock that does not allow `~> 3.0`.
-        #
-        # The two cowlib entries that stood here — GHSA-g2wm-735q-3f56 /
-        # EEF-CVE-2026-43969 and EEF-CVE-2026-43966 — were justified with "no
-        # patched cowlib release exists yet (2.18.0 is latest)". That stopped
-        # being true when cowlib went to 2.19.0, and the suppressions outlived
-        # the fix by three weeks: an ignore list with no expiry keeps a gate
-        # quiet about the thing it was told to watch, and would have stayed
-        # quiet through a downgrade back under the patch.
+        # Suppress decimal advisory GHSA-rhv4-8758-jx7v / EEF-CVE-2026-32686.
+        # The fix requires decimal 3.x; the installed Ecto dependency requires 2.x.
+        # Remove the suppression when the dependency constraint permits the fix.
         run: mix deps.audit --ignore-advisory-ids "GHSA-rhv4-8758-jx7v,EEF-CVE-2026-32686"
 
       - name: Check unused dependencies
@@ -152,9 +147,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # Dependency vulnerabilities are covered per-language above (mix_audit,
-      # govulncheck, npm audit); this closes the two gaps none of them saw —
-      # committed secrets, and Dockerfile/compose misconfigurations.
+      # Scan committed secrets and container configuration.
       - name: Secret scan (enforced)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -164,9 +157,7 @@ jobs:
           exit-code: '1'
 
       - name: Misconfiguration scan (report-only)
-        # Visibility first: deliberate patterns (the entrypoint privilege
-        # drops, compose's upgrade-channel :latest tag) would read as
-        # findings; tighten to enforced once the accepted set is triaged.
+        # Report configuration findings without failing CI.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs

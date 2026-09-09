@@ -755,59 +755,65 @@ defmodule Cyfr.Ops.Catalog do
     }
 
     Emissary.MCP.RequestLog.around(should_log?, ctx, call_id, started, fn ->
-      case lookup(name) do
-        {:ok, {module, meta}} ->
-          # A boot that lost its database's control plane dispatches
-          # nothing: the endpoint's plug refuses new requests, but a
-          # connected console, an in-process caller and a running chain's
-          # next call all arrive here without passing it.
-          result =
-            with :ok <- Cyfr.ControlPlane.assert_owner(),
-                 :ok <- validate_against_schema(meta, args),
-                 :ok <- authorize_annotated_action(name, meta, ctx, args, in_chain?) do
-              execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
-            else
-              {:error, _} = refusal -> refusal
-            end
-
-          {result, %{routed_to: inspect(module)}}
-
-        :miss ->
-          # Try external provider for namespaced tools (e.g., "notion:create_page")
-          external_result =
-            cond do
-              String.contains?(name, ":") and not ctx.authenticated ->
-                # External tools carry no per-tool requires_auth metadata; all
-                # of them require authentication. The HTTP router never routes
-                # unknown names here, so this guards the in-process callers
-                # (FormulaHandler, LiveViews). Bare unknown names fall through
-                # so they still produce "Unknown tool".
-                {:error, {:tool_auth_required, name}}
-
-              true ->
-                # The caller's plane rides along: proxied tools are in-chain
-                # by declaration, and an external-plane call reaches one only
-                # when the server row opts in — enforced where the row is in
-                # hand, not left to the wiring.
-                plane = if Keyword.get(opts, :in_chain, false), do: :in_chain, else: :external
-
-                execute_tool_call(name, ctx, opts, fn ->
-                  Emissary.MCP.ExternalProvider.try_handle(name, ctx, args, plane,
-                    server: Keyword.get(opts, :server)
-                  )
-                end)
-            end
-
-          case external_result do
-            {:error, :not_external} ->
-              error = "Unknown tool: #{name}"
-              {{:error, error}, %{code: -32_601, error_text: error}}
-
-            result ->
-              {result, %{routed_to: "external:#{name}"}}
-          end
+      # A boot that lost its database's control plane dispatches nothing,
+      # catalogued or proxied: the endpoint's plug refuses new requests,
+      # but a connected console, an in-process caller and a running
+      # chain's next call all arrive here without passing it.
+      case Cyfr.ControlPlane.assert_owner() do
+        :ok -> route(name, ctx, args, opts, in_chain?)
+        {:error, _} = refusal -> {refusal, %{}}
       end
     end)
+  end
+
+  defp route(name, ctx, args, opts, in_chain?) do
+    case lookup(name) do
+      {:ok, {module, meta}} ->
+        result =
+          with :ok <- validate_against_schema(meta, args),
+               :ok <- authorize_annotated_action(name, meta, ctx, args, in_chain?) do
+            execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
+          else
+            {:error, _} = refusal -> refusal
+          end
+
+        {result, %{routed_to: inspect(module)}}
+
+      :miss ->
+        # Try external provider for namespaced tools (e.g., "notion:create_page")
+        external_result =
+          cond do
+            String.contains?(name, ":") and not ctx.authenticated ->
+              # External tools carry no per-tool requires_auth metadata; all
+              # of them require authentication. The HTTP router never routes
+              # unknown names here, so this guards the in-process callers
+              # (FormulaHandler, LiveViews). Bare unknown names fall through
+              # so they still produce "Unknown tool".
+              {:error, {:tool_auth_required, name}}
+
+            true ->
+              # The caller's plane rides along: proxied tools are in-chain
+              # by declaration, and an external-plane call reaches one only
+              # when the server row opts in — enforced where the row is in
+              # hand, not left to the wiring.
+              plane = if Keyword.get(opts, :in_chain, false), do: :in_chain, else: :external
+
+              execute_tool_call(name, ctx, opts, fn ->
+                Emissary.MCP.ExternalProvider.try_handle(name, ctx, args, plane,
+                  server: Keyword.get(opts, :server)
+                )
+              end)
+          end
+
+        case external_result do
+          {:error, :not_external} ->
+            error = "Unknown tool: #{name}"
+            {{:error, error}, %{code: -32_601, error_text: error}}
+
+          result ->
+            {result, %{routed_to: "external:#{name}"}}
+        end
+    end
   end
 
   @doc """

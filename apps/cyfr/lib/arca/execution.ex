@@ -516,15 +516,15 @@ defmodule Arca.Execution do
   Renew a running execution's lease: the runner is alive and the row is
   still its. Returns the number of rows touched — 0 once the execution has
   finished, been failed by the sweeper, or (with a fence) left this
-  attempt's hands. A store that cannot answer also renews nothing, and the
-  runner treats an unrenewed lease as one that lapses.
+  attempt's hands — or `{:error, :database_error}` when the store cannot
+  answer, so the runner can tell a refused renewal from an unanswered one.
   """
-  @spec renew_lease(String.t(), DateTime.t(), keyword()) :: non_neg_integer()
+  @spec renew_lease(String.t(), DateTime.t(), keyword()) ::
+          non_neg_integer() | {:error, :database_error}
   # arca:unscoped-ok the runner renews the lease on the row it is running;
   # the id comes from trusted runtime state, never from a request.
   def renew_lease(id, %DateTime{} = until, fence \\ []) do
-    # Fail-closed by shape: 0 rows, and the runner stops once its lease lapses.
-    Arca.Repo.Errors.with_db_rescue("Execution.renew_lease", 0, fn ->
+    Arca.Repo.Errors.with_db_rescue("Execution.renew_lease", fn ->
       {count, _} =
         from(e in __MODULE__, where: e.id == ^id and e.status == "running")
         |> fenced(fence)

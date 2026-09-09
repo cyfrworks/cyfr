@@ -1247,7 +1247,7 @@ defmodule Opus.Executor do
         # thread (no epoch interruption) — the semaphore records the
         # liability first, acknowledged, so the tenant's unreaped count
         # gates its next acquisition whatever order the release lands in.
-        Opus.ExecutionSemaphore.note_unreaped(tenant_of(runtime_opts))
+        charge_unreaped(tenant_of(runtime_opts), Keyword.get(runtime_opts, :execution_id))
         # Unlink first so the :killed EXIT signal doesn't propagate back and
         # terminate this process before handle_failure can write the DB record.
         Process.unlink(pid)
@@ -1261,10 +1261,11 @@ defmodule Opus.Executor do
 
   # Lease renewals while a long execution runs: every minute the row's
   # lease is pushed out, so the sweeper knows a slow execution from a dead
-  # runner. A renewal that does not land is not ignored: the runner keeps
-  # working only while the lease it LAST held is still good, and stops
-  # the moment that lapses — past it the row may be the sweeper's, and
-  # any result this attempt produced would be refused by the fence.
+  # runner. A renewal the store refuses stops the runner at once: the row
+  # is another's (cancelled, swept, finished) and any result this attempt
+  # produced would be refused by the fence. A renewal the store cannot
+  # answer keeps the runner working only while the lease it LAST held is
+  # still good.
   @lease_tick_ms 60_000
 
   # What `await_result/6` watches between ticks: the row, the attempt that
@@ -1306,7 +1307,7 @@ defmodule Opus.Executor do
       wait_ms ->
         cond do
           remaining_ms <= wait_ms ->
-            kill_unreaped(pid, cleanup_refs, watch && watch.tenant)
+            kill_unreaped(pid, cleanup_refs, watch)
             {:error, "Execution timeout after #{timeout_ms}ms"}
 
           is_nil(watch) ->
@@ -1318,22 +1319,27 @@ defmodule Opus.Executor do
                 await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, watch)
 
               :lapsed ->
-                kill_unreaped(pid, cleanup_refs, watch.tenant)
+                kill_unreaped(pid, cleanup_refs, watch)
                 {:error, "Execution lease lost: the row is no longer this attempt's to finish"}
             end
         end
     end
   end
 
-  defp renew_watch(watch) do
+  @doc false
+  @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed
+  def renew_watch(watch, now \\ DateTime.utc_now()) do
     case Opus.ExecutionRecord.renew_lease(watch.execution_id, watch.attempt) do
       {:ok, until} ->
         {:ok, %{watch | until: until}}
 
       :lost ->
+        :lapsed
+
+      :unavailable ->
         # Still inside the lease this attempt last held: the store may
         # merely be slow, and the next tick asks again. Past it, stop.
-        if DateTime.compare(DateTime.utc_now(), watch.until) == :lt,
+        if DateTime.compare(now, watch.until) == :lt,
           do: {:ok, watch},
           else: :lapsed
     end
@@ -1347,8 +1353,8 @@ defmodule Opus.Executor do
   # `ExecutionPipeline.secrets/1` — and that drains the tracker.
   # Collecting first threw the tokens away (collect is collect-and-delete)
   # and left the masker with an empty set for the rest of the execution.
-  defp kill_unreaped(pid, cleanup_refs, tenant) do
-    Opus.ExecutionSemaphore.note_unreaped(tenant)
+  defp kill_unreaped(pid, cleanup_refs, watch) do
+    charge_unreaped(watch && watch.tenant, watch && watch.execution_id)
     Process.unlink(pid)
     Process.exit(pid, :kill)
 
@@ -1534,6 +1540,22 @@ defmodule Opus.Executor do
     end
   end
 
+  # The liability is acknowledged before the kill. A semaphore that does
+  # not answer leaves the kill uncharged; that is said, by execution, never
+  # dropped silently.
+  defp charge_unreaped(tenant, execution_id) do
+    case Opus.ExecutionSemaphore.note_unreaped(tenant, execution_id) do
+      :ok ->
+        :ok
+
+      {:error, :unavailable} ->
+        Logger.error(
+          "[Executor] unreaped kill of #{inspect(execution_id)} for tenant " <>
+            "#{inspect(tenant)} is uncharged: the semaphore did not answer"
+        )
+    end
+  end
+
   # Kill the running BEAM process for an execution (if one is still registered)
   # and tear down its async tracker so spawned child tasks die too. Only called
   # after the tenant-scoped cancel above has authorized the operation.
@@ -1545,14 +1567,9 @@ defmodule Opus.Executor do
         runner_pid = if is_map(meta), do: meta[:runner_pid], else: nil
         stream_exec_ref = if is_map(meta), do: meta[:stream_exec_ref], else: nil
 
-        # A cancel kills the component call exactly as a timeout does, and
-        # leaves the same unreapable native thread behind (no epoch
-        # interruption). Recorded and acknowledged BEFORE the kill, and
-        # charged to the tenant by name: the old cast named the canceller's
-        # pid, which never held a slot, so the note was dropped and a
-        # tenant could cycle cancels to accumulate spinning cores without
-        # ever tripping the penalty box.
-        Opus.ExecutionSemaphore.note_unreaped(tenant)
+        # Cancellation leaves native work unreapable without epoch interruption.
+        # Record and acknowledge the tenant penalty before killing the caller.
+        charge_unreaped(tenant, execution_id)
 
         # The runner FIRST, and by name. It traps exits, so the kill of its
         # parent below reaches it as an ordinary message and it would keep

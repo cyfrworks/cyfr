@@ -338,7 +338,8 @@ defmodule Sanctum.Context do
   @doc """
   Check if context has a specific permission.
 
-  The wildcard permission `:*` grants all permissions.
+  The wildcard permission `:*` grants all permissions; no sign-in path
+  mints it — a person holds the explicit `person_permissions/0`.
 
   This is the raw identity-membership predicate and deliberately ignores
   `plane` — in-chain authorization needs it as its identity conjunct
@@ -357,6 +358,10 @@ defmodule Sanctum.Context do
   def has_permission?(%__MODULE__{permissions: perms}, permission) do
     MapSet.member?(perms, :*) or MapSet.member?(perms, permission)
   end
+
+  @doc "The permissions a signed-in person holds; see `Sanctum.Atoms.person_permissions/0`."
+  @spec person_permissions() :: [atom()]
+  defdelegate person_permissions(), to: Sanctum.Atoms
 
   @doc """
   One-way transition onto the guest plane, taken when a context is closed
@@ -388,11 +393,11 @@ defmodule Sanctum.Context do
       iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Context.require_permission(ctx, :execute)
       :ok
-
   """
   @spec require_permission(t(), atom(), :external | :in_chain) ::
           :ok | {:error, Sanctum.Unauthorized.reason()}
   def require_permission(ctx, permission, plane \\ :external)
+
   def require_permission(%__MODULE__{plane: :guest}, permission, :external) do
     {:error, {:guest_plane, permission}}
   end
@@ -574,10 +579,10 @@ defmodule Sanctum.Context do
       iex> record = %{user_id: "u1", athanor_id: "ath_1"}
       iex> Sanctum.Context.authorize(ctx, :storage_read, {:execution, record})
       :ok
-
   """
   @spec authorize(t(), atom(), term()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
   def authorize(%__MODULE__{} = ctx, action), do: authorize(ctx, action, nil)
+
   # Unauthenticated contexts are never authorized. This MUST precede the
   # generic clause so an unauthenticated context is never authorized.
   def authorize(%__MODULE__{authenticated: false}, _action, _resource) do

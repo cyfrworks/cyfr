@@ -4,8 +4,9 @@
 defmodule Aqua.RunApprovedTest do
   # An approved virtual-tool card runs the wrapped catalyst as a CHILD of
   # the card's pinned authority — the hop the formula host makes for the
-  # guest — never as a fresh root and never through the registry, which
-  # refuses a guest-planed `execution.run` by design.
+  # guest, with the assistant as the invoking reference — never as a fresh
+  # root and never through the registry, which refuses a guest-planed
+  # `execution.run` by design.
   use ExUnit.Case, async: false
 
   alias Aqua.Turn
@@ -58,6 +59,7 @@ defmodule Aqua.RunApprovedTest do
 
     assert opts[:parent_execution_id] == "exec_card"
     assert opts[:root_execution_id] == "exec_card"
+    assert opts[:parent_reference] == "formula:local.aqua"
     assert %Sanctum.Context{plane: :guest} = opts[:ctx]
   end
 
@@ -118,7 +120,11 @@ defmodule Aqua.RunApprovedTest do
     assert {:ok, _} = Turn.run_approved(card, ctx, "prof_x")
 
     assert_receive {:child, _, "catalyst:local.files", nil,
-                    %{"action" => "delete", "path" => "data/storage/k.json"}, _}
+                    %{"action" => "delete", "path" => "data/storage/k.json"}, opts}
+
+    # The assistant is the invoking reference, so the child's row keeps a
+    # digest of its reply rather than the reply.
+    assert opts[:parent_reference] == "formula:local.aqua"
 
     self_card = %{
       tool: "execution",

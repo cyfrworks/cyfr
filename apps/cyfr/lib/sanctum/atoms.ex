@@ -31,12 +31,19 @@ defmodule Sanctum.Atoms do
   @spec known_permissions() :: [String.t()]
   def known_permissions, do: @known_permissions
 
-  # The sign-in providers, listed only so their atoms exist before anything
-  # converts one. It had drifted to `okta azure local oidc`: three providers
-  # this server has never had, and `oidc` where the generic-OIDC provider is
-  # spelled `:oidcc` everywhere else — so the one name the list needed to
-  # guarantee was the one it did not carry. `Sanctum.ProviderVocabularyTest`
-  # binds it to the device-flow roster.
+  # Every permission but the wildcard, which no sign-in path mints.
+  @person_permissions Enum.map(@known_permissions -- ["*"], &String.to_atom/1)
+
+  @doc """
+  The permissions a signed-in person holds: every declared permission. A
+  person is gated by membership, consent and policy, not by a permission
+  subset; a narrower credential (an API key, a webhook, an internal
+  context) states its own set.
+  """
+  @spec person_permissions() :: [atom()]
+  def person_permissions, do: @person_permissions
+
+  # Pre-create atoms for the supported sign-in providers.
   @known_providers ~w(github google oidcc)
 
   @doc "The sign-in provider vocabulary as strings."

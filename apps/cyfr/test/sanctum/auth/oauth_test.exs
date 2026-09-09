@@ -48,7 +48,7 @@ defmodule Sanctum.Auth.OAuthTest do
       assert user.user_id == "github|https://github.com|12345"
       assert user.email == "alice@example.com"
       assert user.provider == "github"
-      assert MapSet.member?(user.permissions, :*)
+      assert MapSet.equal?(user.permissions, MapSet.new(Sanctum.Context.person_permissions()))
     end
 
     test "rejects GitHub user with missing email" do

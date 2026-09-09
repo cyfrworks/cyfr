@@ -297,12 +297,7 @@ defmodule Opus.ExecutionSemaphoreTest do
     end
 
     test "the half-cap holds when someone else's freed slot is handed to a schedule" do
-      # Admission stopped background at half the athanor's cap, but the
-      # hand-off picked the next background waiter under the FULL cap. So a
-      # slot released by ANOTHER athanor was handed to a queue of schedules
-      # already sitting at their ceiling, walking them up to `tenant_max` one
-      # release at a time — and the member's next turn met :tenant_limit
-      # anyway, which is the outcome the half-cap exists to prevent.
+      # Queue hand-off must enforce the same background cap as initial admission.
       {:ok, pid} = GenServer.start(ExecutionSemaphore, {64, 4}, name: :test_handoff_sem)
       parent = self()
 
@@ -835,7 +830,7 @@ defmodule Opus.ExecutionSemaphoreTest do
           :ok = ExecutionSemaphore.acquire(5_000, :root, tenant)
           # Acknowledged before the release: the note names the tenant, so
           # the order of the release and its :DOWN cannot lose it.
-          :ok = ExecutionSemaphore.note_unreaped(tenant)
+          :ok = ExecutionSemaphore.note_unreaped(tenant, "exec_probe")
           ExecutionSemaphore.release()
         end)
         |> Task.await()
@@ -872,7 +867,7 @@ defmodule Opus.ExecutionSemaphoreTest do
       tenant = "ath_cancelled_#{System.unique_integer([:positive])}"
       threshold = max(2, div(ExecutionSemaphore.status().tenant_max, 2))
 
-      for _ <- 1..threshold, do: :ok = ExecutionSemaphore.note_unreaped(tenant)
+      for _ <- 1..threshold, do: :ok = ExecutionSemaphore.note_unreaped(tenant, "exec_probe")
 
       assert {:error, :tenant_unreaped_limit} =
                ExecutionSemaphore.acquire(1_000, :root, tenant)
@@ -882,7 +877,7 @@ defmodule Opus.ExecutionSemaphoreTest do
 
     test "a note with no tenant charges nobody" do
       before = ExecutionSemaphore.status().unreaped
-      assert :ok = ExecutionSemaphore.note_unreaped(nil)
+      assert :ok = ExecutionSemaphore.note_unreaped(nil, nil)
       assert ExecutionSemaphore.status().unreaped == before
     end
   end
