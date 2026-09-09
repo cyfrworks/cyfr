@@ -113,7 +113,8 @@ defmodule Aqua.Wire do
   testability.
   """
 
-  @spec validate(term(), map()) :: {:ok, map()} | {:error, String.t()}
+  @spec validate(term(), map()) ::
+          {:ok, map()} | {:error, String.t()} | {:error, {atom(), String.t()}}
 
   def validate(raw, tool_policy \\ %{})
 
@@ -326,8 +327,6 @@ defmodule Aqua.Wire do
   defp policy_value(policy, tool, action) when is_map(policy) do
     Map.get(policy, "#{tool}.#{action}") || Map.get(policy, "#{tool}.*")
   end
-
-  defp policy_value(_, _, _), do: nil
 
   defp ensure_object(value, _label) when is_map(value), do: :ok
 

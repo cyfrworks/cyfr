@@ -103,7 +103,9 @@ defmodule Aqua.Ops do
   """
   @spec render_refusal(term()) :: String.t()
   def render_refusal(reason) do
-    Cyfr.Ops.Error.render(reason) ||
-      inspect(Sanctum.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
+    case Cyfr.Ops.Error.render(reason) do
+      nil -> inspect(Sanctum.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
+      sentence -> sentence
+    end
   end
 end

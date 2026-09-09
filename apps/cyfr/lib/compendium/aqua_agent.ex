@@ -237,7 +237,7 @@ defmodule Compendium.AquaAgent do
       "name" => name,
       "type" => type_of(agent),
       "disabled" => agent.disabled == true,
-      "tool_policy" => agent.tool_policy || %{}
+      "tool_policy" => agent.tool_policy
     }
     |> Cyfr.MapUtil.put_present("catalyst_ref", agent.catalyst_ref)
     |> Cyfr.MapUtil.put_present("model", agent.model)
