@@ -136,7 +136,7 @@ defmodule Sanctum.ProvisioningClosureTest do
       )
 
     # The mint is a bare row now; filling it is the first read of its
-    # bundle. `ensure_provisioned/1` is that hook, and the tools that read
+    # bundle. `start_provisioning/1` is that hook, and the tools that read
     # the bundle call it for real.
     assert {:ok, group} = Athanors.create_group(ctx.user_id, "Closure #{n}")
     refute group.provisioned_at

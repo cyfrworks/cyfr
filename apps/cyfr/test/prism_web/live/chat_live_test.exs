@@ -565,6 +565,21 @@ defmodule PrismWeb.ChatLiveTest do
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Slow #{alice.namespace}")
     conn = log_in_user(conn, alice, athanor_id: group.id)
 
+    # Hold the estate's claim so the mount's attempt returns at once instead
+    # of running a fill this test never awaits — one that would reach the
+    # database without the sandbox connection the test owns.
+    parent = self()
+
+    holder =
+      spawn_link(fn ->
+        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
+        send(parent, :claimed)
+        receive do: (:release -> :ok)
+      end)
+
+    assert_receive :claimed
+    on_exit(fn -> if Process.alive?(holder), do: send(holder, :release) end)
+
     started = System.monotonic_time(:millisecond)
     {_view, html} = mount_chat(conn, group)
     assert System.monotonic_time(:millisecond) - started < 5_000

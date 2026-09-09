@@ -25,12 +25,44 @@ defmodule Cyfr.ConsentDrift do
   """
   @spec missing(Context.t()) :: {:ok, [String.t()]} | :unknown
   def missing(%Context{} = ctx) do
+    case state(ctx) do
+      {:drifted, actions} -> {:ok, actions}
+      :ok -> {:ok, []}
+      _ -> :unknown
+    end
+  end
+
+  @doc """
+  What stands between this estate's AQUA and the authority a turn pins.
+
+  `:ok` — the consented set covers what the shipped manifest declares.
+  `{:drifted, actions}` — the consent predates the manifest and lacks these.
+  `:stale` — the consent no longer answers for the estate's closure at all,
+  which is what installing a dependency does to it: a turn is refused
+  `consent_required` until a member consents again.
+  `:unknown` — the question could not be asked (no profile yet, an
+  unreadable manifest, a store that did not answer).
+  """
+  @spec state(Context.t()) :: :ok | {:drifted, [String.t()]} | :stale | :unknown
+  def state(%Context{} = ctx) do
     ref = Aqua.VirtualTools.aqua_formula()
 
-    with {:ok, _needs, caps} <- Sanctum.Consent.ShapeDerivation.manifest_blocks(ctx, ref),
-         {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, ref) do
-      declared = Sanctum.Consent.ShapeDerivation.expand_tools((caps && caps.tools) || [])
-      {:ok, missing(declared, consented(authority))}
+    with {:ok, _needs, caps} <- Sanctum.Consent.ShapeDerivation.manifest_blocks(ctx, ref) do
+      case Cyfr.Execution.authority_for(ctx, :default, ref) do
+        {:ok, authority} ->
+          declared = Sanctum.Consent.ShapeDerivation.expand_tools((caps && caps.tools) || [])
+
+          case missing(declared, consented(authority)) do
+            [] -> :ok
+            actions -> {:drifted, actions}
+          end
+
+        {:error, {:consent_required, _}} ->
+          :stale
+
+        _ ->
+          :unknown
+      end
     else
       _ -> :unknown
     end

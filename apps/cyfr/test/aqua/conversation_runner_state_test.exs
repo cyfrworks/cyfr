@@ -39,6 +39,7 @@ defmodule Aqua.ConversationRunnerStateTest do
     alice = user_ctx("local|idp|alice")
     bob = user_ctx("local|idp|bob")
     {:ok, group} = Sanctum.Tenancy.Athanors.get("ath_a")
+    _ = Sanctum.TestContext.provisioned!(group.id)
 
     {:ok, _} =
       Sanctum.Tenancy.Members.ensure(alice.user_id, scope: "athanor", athanor_id: group.id)

@@ -24,7 +24,10 @@ defmodule Aqua.TurnComposeTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    ctx = Sanctum.TestContext.local()
+    _ = Sanctum.TestContext.provisioned!(ctx.athanor_id)
+
+    {:ok, ctx: ctx}
   end
 
   # Every tool call the registry dispatches for this estate mints a row,

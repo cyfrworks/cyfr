@@ -45,7 +45,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   @impl true
   def update(%{load: true} = assigns, socket) do
-    {:ok, socket |> assign(Map.delete(assigns, :load)) |> load_agents() |> assign(:loaded, true)}
+    # A load ends any install this section was showing: the parent asks for
+    # one when the fetch answers, whether it landed or not.
+    {:ok,
+     socket
+     |> assign(Map.delete(assigns, :load))
+     |> assign(:installing, false)
+     |> load_agents()
+     |> assign(:loaded, true)}
   end
 
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}

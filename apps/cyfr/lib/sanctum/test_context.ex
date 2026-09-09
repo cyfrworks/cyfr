@@ -59,36 +59,45 @@ if Mix.env() in [:test, :dev] do
       # second app's helper runs in the same BEAM.
       Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fn ->
         for {id, slug} <- @well_known do
-          athanor =
-            case Sanctum.Tenancy.Athanors.get(id) do
-              {:ok, existing} ->
-                existing
+          case Sanctum.Tenancy.Athanors.get(id) do
+            {:ok, _} ->
+              :ok
 
-              {:error, :not_found} ->
-                {:ok, created} =
-                  Sanctum.Tenancy.Athanors.create(%{
-                    id: id,
-                    kind: "group",
-                    name: "Test #{slug}",
-                    slug: slug,
-                    created_by: "system"
-                  })
-
-                created
-            end
-
-          # These stand for estates that exist and are set up: a turn pins
-          # the baseline consent provisioning mints, and every fixture built
-          # on them presupposes a working estate. What provisioning itself
-          # does is covered by its own suite. Marked on every run, since the
-          # rows are committed and outlive the one that created them.
-          if is_nil(athanor.provisioned_at) do
-            {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+            {:error, :not_found} ->
+              {:ok, _} =
+                Sanctum.Tenancy.Athanors.create(%{
+                  id: id,
+                  kind: "group",
+                  name: "Test #{slug}",
+                  slug: slug,
+                  created_by: "system"
+                })
           end
         end
       end)
 
       :ok
+    end
+
+    @doc """
+    Mark `athanor_id` filled — what a test says when it drives a turn.
+
+    A turn pins the baseline consent provisioning mints, so an estate a
+    test chats in is one that has been set up. Left off by default: the
+    seeded rows are bare estates, as a fresh server's are, and a
+    server-wide sweep must not find work on every one of them.
+    """
+    def provisioned!(athanor_id) when is_binary(athanor_id) do
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+
+      case athanor.provisioned_at do
+        nil ->
+          {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+          filled
+
+        _ ->
+          athanor
+      end
     end
 
     @doc """

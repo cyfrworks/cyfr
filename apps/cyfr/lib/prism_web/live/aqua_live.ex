@@ -51,7 +51,7 @@ defmodule PrismWeb.AquaLive do
       |> assign(:active_nav, "aqua")
       |> assign(:loading, true)
       |> assign(:provenance, %{})
-      |> assign(:consent_missing, [])
+      |> assign(:consent_state, :unknown)
       |> assign(:models_by_provider, %{})
       |> assign(:catalyst_refs, %{})
       |> assign(:models_loaded, false)
@@ -199,15 +199,9 @@ defmodule PrismWeb.AquaLive do
           %{}
       end
 
-    missing =
-      case Cyfr.ConsentDrift.missing(socket.assigns.context) do
-        {:ok, missing} -> missing
-        :unknown -> []
-      end
-
     socket
     |> assign(:provenance, provenance)
-    |> assign(:consent_missing, missing)
+    |> assign(:consent_state, Cyfr.ConsentDrift.state(socket.assigns.context))
   end
 
   # Each section reads itself when told, with the provenance as it is now.
@@ -243,7 +237,9 @@ defmodule PrismWeb.AquaLive do
     end
   end
 
-  defp consent_drift_sentence(missing) do
+  # The sentence for a consent that no longer answers, or nil when there is
+  # nothing to say. `:unknown` says nothing: the question could not be asked.
+  defp consent_warning({:drifted, missing}) do
     shown = missing |> Enum.take(4) |> Enum.join(", ")
     rest = if length(missing) > 4, do: ", …", else: ""
 
@@ -256,6 +252,13 @@ defmodule PrismWeb.AquaLive do
     "This estate consented to an older AQUA formula: #{count} not in its consent " <>
       "(#{shown}#{rest}), so a card for one is denied on Approve until a member re-consents."
   end
+
+  defp consent_warning(:stale) do
+    "This estate's components changed since it consented — installing one does that — " <>
+      "so AQUA cannot start a turn until a member consents again."
+  end
+
+  defp consent_warning(_state), do: nil
 
   # ============================================================================
   # Render
@@ -279,12 +282,12 @@ defmodule PrismWeb.AquaLive do
             authority will deny on the click. Re-consenting is the fix,
             and the sheet is one click away. --%>
       <div
-        :if={@consent_missing != []}
+        :if={consent_warning(@consent_state)}
         id="aqua-consent-drift"
         role="status"
         class="rounded border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200 flex items-start justify-between gap-3"
       >
-        <p>{consent_drift_sentence(@consent_missing)}</p>
+        <p>{consent_warning(@consent_state)}</p>
         <button
           type="button"
           phx-click="open_consent"

@@ -125,7 +125,7 @@ defmodule Sanctum.Tenancy.Athanors do
 
   The row only — it is deliberately **not** provisioned here. A pair that
   owns nothing needs no registry pull, no component scan and no consent
-  bootstrap to exist; `Sanctum.Provisioning.ensure_provisioned/1` fills it
+  bootstrap to exist; `Sanctum.Provisioning.start_provisioning/1` fills it
   at first need instead, so clicking a name opens a chat immediately
   instead of waiting on the network.
   """

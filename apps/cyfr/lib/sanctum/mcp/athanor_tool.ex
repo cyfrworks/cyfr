@@ -133,7 +133,7 @@ defmodule Sanctum.MCP.AthanorTool do
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args)
       when is_binary(name) do
     # The row and the creator's seat only — the estate is filled at first
-    # need (`Sanctum.Provisioning.ensure_provisioned/1`), so creating a
+    # need (`Sanctum.Provisioning.start_provisioning/1`), so creating a
     # group never waits on a registry round trip.
     case Athanors.create_group(ctx.user_id, name, slug: Map.get(args, "slug")) do
       {:ok, athanor} ->

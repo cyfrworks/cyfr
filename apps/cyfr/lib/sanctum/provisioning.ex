@@ -15,7 +15,7 @@ defmodule Sanctum.Provisioning do
   A person's own athanor is minted here on their first admitted sign-in
   (`after_sign_in/1`, once their cyfr.run namespace is known — the athanor's
   slug is the namespace). A group is minted as a bare row (`Sanctum.Tenancy.Athanors.create_group/3`) and
-  filled the first time something reads its bundle (`ensure_provisioned/1`).
+  filled the first time something reads its bundle (`start_provisioning/1`).
   Provisioning is idempotent — `provisioned_at` marks completion and every
   step tolerates being repeated — and loud: a failure leaves the row
   unprovisioned with the reason in its settings, and the next sign-in
@@ -116,7 +116,7 @@ defmodule Sanctum.Provisioning do
         :ok
 
       {:ok, athanor} ->
-        in_background(fn -> provision(athanor, ctx) end)
+        in_background(fn -> claim_and_provision(athanor, ctx) end)
         :ok
 
       _ ->
@@ -127,14 +127,16 @@ defmodule Sanctum.Provisioning do
   def start_provisioning(_ctx), do: :ok
 
   @doc """
-  Start the fill if needed, and say whether the bundle can be read yet.
+  Start the fill if needed, and say whether the estate can run a turn yet.
 
-  What every reader of the bundle calls: `:ok` when the athanor is filled,
-  `{:error, :not_provisioned}` while it is not — with the work started, so
-  an estate first touched over the wire fills without a console ever
-  opening it. A reader answers the refusal rather than an empty tree: an
-  empty roster reads as "this estate has no agent", which is a different
-  and wrong answer.
+  `:ok` when the athanor is filled, `{:error, :not_provisioned}` while it
+  is not — with the work started, so an estate first touched over the wire
+  fills without a console ever opening it.
+
+  Reads of the bundle do not use this: the tree reads through the seed
+  overlay from the moment the row exists, so a roster is real straight
+  away. What a fill adds is the baseline consent a turn pins, which is why
+  `Aqua.Turn.begin/5` is what waits.
   """
   @spec ready(Context.t()) :: :ok | {:error, :not_provisioned}
   def ready(%Context{} = ctx) do
@@ -171,6 +173,20 @@ defmodule Sanctum.Provisioning do
         _ -> do_provision(athanor, acting_ctx)
       end
     end)
+  end
+
+  # One attempt per athanor at a time. Several readers ask on one page load,
+  # and without this each would start a task that waits out the lock and
+  # then repeats work the first attempt already did — or already failed.
+  # A caller that finds an attempt running adds nothing and says so.
+  defp claim_and_provision(%{id: athanor_id} = athanor, ctx) do
+    case Registry.register(Sanctum.ProvisioningRegistry, athanor_id, :filling) do
+      {:ok, _} ->
+        provision(athanor, ctx)
+
+      {:error, {:already_registered, _}} ->
+        {:error, :provisioning_busy}
+    end
   end
 
   # The lock every filler shares. `sync_seeds/0` takes it too, but not

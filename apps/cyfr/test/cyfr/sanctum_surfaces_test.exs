@@ -66,7 +66,8 @@ defmodule Cyfr.SanctumSurfacesTest do
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cidr
       Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
       Sanctum.OAuth
-      Sanctum.Provisioning Sanctum.ProvisioningSupervisor Sanctum.PubSub
+      Sanctum.Provisioning Sanctum.ProvisioningRegistry Sanctum.ProvisioningSupervisor
+      Sanctum.PubSub
       Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy Sanctum.ToolServerDigest
       Sanctum.Unauthorized Sanctum.UnauthorizedError
     ),

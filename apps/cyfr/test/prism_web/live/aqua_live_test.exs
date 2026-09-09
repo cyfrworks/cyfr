@@ -470,7 +470,13 @@ defmodule PrismWeb.AquaLiveTest do
       |> element("button[phx-click=install_catalyst]")
       |> render_click()
 
-      assert render(view) =~ "Could not install"
+      html = render(view)
+      assert html =~ "Could not install"
+
+      # The button comes back: a refused fetch must not leave the page
+      # showing "Installing…" with nothing to click.
+      refute html =~ "Installing…"
+      assert has_element?(view, "button[phx-click=install_catalyst]:not([disabled])")
     end
 
     test "a key bound from the page drops the kept catalogue, so the picker is read again",

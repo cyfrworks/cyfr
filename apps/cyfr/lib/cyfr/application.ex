@@ -145,6 +145,9 @@ defmodule Cyfr.Application do
       ]),
       # Provisioning retries that must not ride a sign-in (registry pulls).
       {Task.Supervisor, name: Sanctum.ProvisioningSupervisor},
+      # One in-flight fill per athanor: a page load asks several readers,
+      # and each would otherwise start a task that only queues on the lock.
+      {Registry, keys: :unique, name: Sanctum.ProvisioningRegistry},
       # Single-use consent authorizations. The shipped store is the DB
       # (config.exs pins Proof.DB); the in-memory GenServer starts only
       # when a deployment explicitly configures it, so production does not

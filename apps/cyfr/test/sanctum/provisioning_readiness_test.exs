@@ -54,6 +54,31 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert Cyfr.Ops.Error.render(:not_provisioned) =~ "still being prepared"
   end
 
+  test "a reader adds nothing while a fill is already running", %{ctx: ctx, group: group} do
+    # A page load asks several readers, and each starts the fill. Only one
+    # attempt runs: the rest find the claim taken and return, rather than
+    # queueing a worker that would wait out the lock and then repeat work
+    # the running attempt is already doing — or has already failed at.
+    parent = self()
+
+    holder =
+      spawn_link(fn ->
+        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
+        send(parent, :claimed)
+        receive do: (:release -> :ok)
+      end)
+
+    assert_receive :claimed
+
+    for _ <- 1..12, do: assert(:ok = Sanctum.Provisioning.start_provisioning(ctx))
+
+    # None of them filled anything: the claim is what serializes attempts,
+    # before the lock rather than behind it.
+    assert {:ok, %{provisioned_at: nil}} = Athanors.get(group.id)
+
+    send(holder, :release)
+  end
+
   test "a context with no athanor is never ready" do
     assert Provisioning.provisioned?(%Sanctum.Context{}) == false
     assert :ok = Provisioning.start_provisioning(%Sanctum.Context{})

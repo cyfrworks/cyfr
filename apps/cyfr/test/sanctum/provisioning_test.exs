@@ -337,6 +337,9 @@ defmodule Sanctum.ProvisioningTest do
 
     assert_receive :held
 
+    # The attempt the call starts finds the lock held and gives up without
+    # touching the database, so nothing outlives this test holding a
+    # connection it does not own.
     started = System.monotonic_time(:millisecond)
     assert :ok = Provisioning.start_provisioning(in_group)
 

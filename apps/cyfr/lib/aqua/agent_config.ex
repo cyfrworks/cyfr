@@ -44,7 +44,7 @@ defmodule Aqua.AgentConfig do
   (`Compendium.AquaAgent.list/1`).
 
   The read is also where an estate gets its bundle on first need
-  (`Sanctum.Provisioning.ensure_provisioned/1`): a group estate is minted
+  (`Sanctum.Provisioning.start_provisioning/1`): a group estate is minted
   as a bare row and filled the first time something reads it, and a turn
   roots an authority in that bundle right after this read. The `aqua`
   tool hooks its own reads the same way for callers outside the harness.
