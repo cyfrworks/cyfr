@@ -164,6 +164,59 @@ defmodule Sanctum.ProvisioningClosureTest do
     assert at == group.provisioned_at
   end
 
+  # The shipped bundle must provision where no registry answers: everything
+  # it cannot run without is a local seed component, and the five provider
+  # catalysts are optional. Both endpoints are pinned, because they are
+  # separate settings and a pull dials the OCI one: `:registry_url` decides
+  # whether a registry is configured at all, `:oci_registry_url` is what a
+  # blob fetch resolves against.
+  for {label, rest_host, oci_host} <- [
+        {"no registry is configured", "none", "none"},
+        {"the registry does not answer", "127.0.0.1:19", "127.0.0.1:19"}
+      ] do
+    test "the real bundle provisions offline when #{label}" do
+      Application.put_env(:cyfr, :registry_url, unquote(rest_host))
+      Application.put_env(:cyfr, :oci_registry_url, unquote(oci_host))
+
+      n = System.unique_integer([:positive])
+
+      ctx =
+        Sanctum.Context.build(
+          user_id: "github|https://github.com|offline-#{n}",
+          athanor_id: Sanctum.TestContext.athanor_id(),
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      assert {:ok, group} = Athanors.create_group(ctx.user_id, "Offline #{n}")
+      in_group = %{ctx | athanor_id: group.id}
+      :ok = Provisioning.ensure_provisioned(in_group)
+
+      {:ok, group} = Athanors.get(group.id)
+
+      assert %DateTime{} = group.provisioned_at,
+             "the estate did not provision: #{inspect(Athanors.settings(group))}"
+
+      refute Map.has_key?(Athanors.settings(group), "provisioning_error")
+
+      # AQUA is consented and loads: its required closure is the local seed.
+      assert {:ok, [profile]} = Source.DB.profiles(in_group, "formula:local.aqua")
+      {:ok, aqua} = Compendium.Registry.get_latest(in_group, "aqua", "local", "formula")
+      assert {:ok, live} = Compendium.Activation.resolve_verified(in_group, aqua)
+
+      assert {:ok, %Sanctum.Authority{}, _stamp} =
+               Loader.load_root(in_group, profile, source: Source.DB, live: {:ok, live})
+
+      # The optional providers are simply absent, not a failure.
+      for name <- @providers do
+        assert {:error, :not_found} =
+                 Compendium.Registry.get_latest(in_group, name, "moonmoon69", "catalyst")
+      end
+    end
+  end
+
   test "sync_seeds heals a missing dep even when the scan registers nothing new" do
     n = System.unique_integer([:positive])
     user_id = "github|https://github.com|resync-#{n}"

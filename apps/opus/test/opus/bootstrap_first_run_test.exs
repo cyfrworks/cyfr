@@ -34,7 +34,7 @@ defmodule Opus.BootstrapFirstRunTest do
                 end)
                 |> List.last()
                 |> Path.relative_to(Path.join(@seed_root, "components"))
-  @pull_gated ["formulas/local/list-models/0.6.1", @shipped_aqua]
+  @registry_dep_formulas ["formulas/local/list-models/0.6.1", @shipped_aqua]
 
   setup do
     Arca.Cache.init()
@@ -87,24 +87,24 @@ defmodule Opus.BootstrapFirstRunTest do
 
     # The model catalysts are name-level moonmoon69 refs that arrive only
     # via registry pull (the closure pull at provisioning on a real
-    # install). AQUA declares them OPTIONAL, so with none installed its
-    # activation covers the two shipped catalysts and bootstrap mints it —
-    # a server with no registry boots. list-models requires its, so with
-    # them absent its activation cannot resolve and bootstrap mints
-    # nothing for it: the fail-closed CI truth for a required dependency.
-    for rel <- @pull_gated do
+    # install). Both formulas declare them OPTIONAL, so with none installed
+    # each activation covers what is present and bootstrap mints both — a
+    # server with no registry boots with its whole bundle consented.
+    for rel <- @registry_dep_formulas do
       assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
 
-    {:ok, %{minted: minted} = outcome} = Bootstrap.run(ctx)
+    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert "catalyst:local.files" in minted
     assert "catalyst:local.http" in minted
     assert "formula:local.aqua" in minted
-    refute "formula:local.list-models" in minted
+    assert "formula:local.list-models" in minted
 
-    assert Enum.any?(outcome.skipped, fn {ref, _reason} ->
-             ref == "formula:local.list-models"
-           end)
+    # list-models invokes its providers as children and asks for nothing
+    # else, so with none installed its activation is itself alone.
+    {:ok, [list_models_profile]} = Source.DB.profiles(ctx, "formula:local.list-models")
+    {:ok, list_models_consent} = Source.DB.head_consent(ctx, list_models_profile.id)
+    assert Map.keys(list_models_consent.activation) == ["formula:local.list-models"]
 
     {:ok, [aqua_profile]} = Source.DB.profiles(ctx, "formula:local.aqua")
     {:ok, aqua_consent} = Source.DB.head_consent(ctx, aqua_profile.id)

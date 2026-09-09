@@ -8,28 +8,28 @@
     "static": [
       {
         "ref": "catalyst:moonmoon69.claude",
-        "optional": false,
-        "reason": "Claude API provider for models.list"
+        "optional": true,
+        "reason": "Claude LLM provider (pulled from the registry when configured; the estate lists the models of whichever providers are installed)"
       },
       {
         "ref": "catalyst:moonmoon69.openai",
-        "optional": false,
-        "reason": "OpenAI API provider for models.list"
+        "optional": true,
+        "reason": "OpenAI LLM provider (pulled from the registry when configured; the estate lists the models of whichever providers are installed)"
       },
       {
         "ref": "catalyst:moonmoon69.gemini",
-        "optional": false,
-        "reason": "Gemini API provider for models.list"
+        "optional": true,
+        "reason": "Gemini LLM provider (pulled from the registry when configured; the estate lists the models of whichever providers are installed)"
       },
       {
         "ref": "catalyst:moonmoon69.grok",
-        "optional": false,
-        "reason": "Grok API provider for models.list"
+        "optional": true,
+        "reason": "Grok LLM provider (pulled from the registry when configured; the estate lists the models of whichever providers are installed)"
       },
       {
         "ref": "catalyst:moonmoon69.openrouter",
-        "optional": false,
-        "reason": "OpenRouter API provider for models.list"
+        "optional": true,
+        "reason": "OpenRouter LLM provider (pulled from the registry when configured; the estate lists the models of whichever providers are installed)"
       }
     ]
   },
@@ -39,7 +39,7 @@
       "properties": {
         "providers": {
           "type": "array",
-          "description": "Optional filter — which providers to query. Defaults to all.",
+          "description": "Optional filter \u2014 which providers to query. Defaults to all.",
           "items": {
             "type": "string",
             "enum": [

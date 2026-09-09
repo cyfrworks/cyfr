@@ -4,18 +4,18 @@ Aggregates available models from all AI provider catalysts (Claude, OpenAI, Gemi
 
 ## Prerequisites
 
-This formula invokes five sub-catalysts. Grant each one a profile with
-`cyfr profile grant` (or from the console's consent sheet):
+None. All five provider catalysts are optional dependencies: the formula
+resolves and runs with any subset of them installed, and reports the rest
+under `errors`. An estate with no provider installed lists no models.
+
+A provider answers once its catalyst is installed and holds a key. Grant it a
+profile with `cyfr profile grant` (or from the console's consent sheet):
 
 ```bash
 cyfr profile grant catalyst:moonmoon69.claude
-cyfr profile grant catalyst:moonmoon69.openai
-cyfr profile grant catalyst:moonmoon69.gemini
-cyfr profile grant catalyst:moonmoon69.grok
-cyfr profile grant catalyst:moonmoon69.openrouter
 ```
 
-Each grant walks the catalyst's declared needs, binds the API-key vault entry,
+The grant walks the catalyst's declared needs, binds the API-key vault entry,
 and mints the consent the component runs under.
 
 | Catalyst | Vault entry field | Domain |
