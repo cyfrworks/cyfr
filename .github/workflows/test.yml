@@ -288,15 +288,23 @@ jobs:
               exit 0
             fi
           fi
-          bad="$(git diff --name-only --diff-filter=M "$base"..HEAD -- 'seed/components/**')"
-          # A deletion or rename inside a version directory that still
-          # ships is a mutation too; retiring the WHOLE directory is a
-          # release decision and passes.
+          # The rule is about paths, not file identity: every query runs with
+          # --no-renames. Rename detection reports a rename under its
+          # DESTINATION path, so shipping a new version by copying the last
+          # one read as "files removed from the version that still ships" —
+          # retiring 1.0.6 for 1.0.7 failed the check the comment below says
+          # it should pass. It also hid an in-place edit whenever git paired
+          # the file with a deletion elsewhere: that pair is R, which the
+          # modified-file query does not select.
+          bad="$(git diff --no-renames --name-only --diff-filter=M "$base"..HEAD -- 'seed/components/**')"
+          # A deletion inside a version directory that still ships is a
+          # mutation too; retiring the WHOLE directory is a release decision
+          # and passes.
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
             if [ -d "$vdir" ]; then bad="$bad"$'\n'"$f"; fi
-          done <<< "$(git diff --name-only --diff-filter=DR "$base"..HEAD -- 'seed/components/**')"
+          done <<< "$(git diff --no-renames --name-only --diff-filter=D "$base"..HEAD -- 'seed/components/**')"
           # Reject added files inside version directories that already exist at the base revision.
           while IFS= read -r f; do
             [ -z "$f" ] && continue
@@ -304,7 +312,7 @@ jobs:
             if git rev-parse --verify --quiet "$base:$vdir" >/dev/null 2>&1; then
               bad="$bad"$'\n'"$f"
             fi
-          done <<< "$(git diff --name-only --diff-filter=A "$base"..HEAD -- 'seed/components/**')"
+          done <<< "$(git diff --no-renames --name-only --diff-filter=A "$base"..HEAD -- 'seed/components/**')"
           bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
           if [ -n "$bad" ]; then
             echo "::error::files changed inside existing seed/components version directories — ship a new version instead"

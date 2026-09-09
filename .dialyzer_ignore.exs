@@ -6,9 +6,6 @@
 # last matching warning is fixed; list_unused_filters fails on unused entries.
 # Review the reported warning before adding a filter.
 [
-  {"lib/aqua/actions.ex", :pattern_match},
-  {"lib/aqua/actions.ex", :pattern_match_cov},
-  {"lib/aqua/mcp_helpers.ex", :missing_range},
   {"lib/arca/adapters/s3.ex", :call_without_opaque},
   {"lib/arca/consent_storage.ex", :call_without_opaque},
   {"lib/arca/overlay.ex", :call_without_opaque},
