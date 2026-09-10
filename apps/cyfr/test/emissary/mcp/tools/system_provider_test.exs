@@ -92,6 +92,43 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
   end
 
+  describe "registry health" do
+    # The probe is off in the suite (it is a DNS and TLS round trip); these
+    # turn it on against the closed loopback port the suite configures as
+    # the registry, so the answer is immediate and never leaves this machine.
+    setup do
+      previous = Application.get_env(:cyfr, :registry_health_probe)
+      Arca.Cache.invalidate(:registry_health)
+
+      on_exit(fn ->
+        Application.put_env(:cyfr, :registry_health_probe, previous)
+        Arca.Cache.invalidate(:registry_health)
+      end)
+
+      :ok
+    end
+
+    test "a configured registry that does not answer is unreachable, within the probe's timeout" do
+      Application.put_env(:cyfr, :registry_health_probe, true)
+      started = System.monotonic_time(:millisecond)
+
+      {:ok, result} =
+        SystemProvider.handle("system", Sanctum.TestContext.local(), %{"action" => "status"})
+
+      assert result.services.registry == "unreachable"
+      assert System.monotonic_time(:millisecond) - started < 5_000
+    end
+
+    test "with the probe off the answer is unknown, never a guess" do
+      Application.put_env(:cyfr, :registry_health_probe, false)
+
+      {:ok, result} =
+        SystemProvider.handle("system", Sanctum.TestContext.local(), %{"action" => "status"})
+
+      assert result.services.registry == "unknown"
+    end
+  end
+
   describe "handle/3 - status action with scope 'all'" do
     test "returns ok or degraded status" do
       ctx = Sanctum.TestContext.local()

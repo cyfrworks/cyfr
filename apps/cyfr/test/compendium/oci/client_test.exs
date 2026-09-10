@@ -4,7 +4,7 @@
 defmodule Compendium.OCI.ClientTest do
   use ExUnit.Case, async: false
 
-  alias Compendium.OCI.{Blob, Cache, Client, Reference}
+  alias Compendium.OCI.{Blob, Cache, Client, Errors, Reference}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -68,10 +68,23 @@ defmodule Compendium.OCI.ClientTest do
   end
 
   describe "discover/2 - registry-config enforcement" do
-    test "rejects discover with non-cyfr.run registry" do
-      {:error, msg} = Client.discover("ghcr.io")
+    test "rejects discover with non-cyfr.run registry, typed" do
+      assert {:error, %Errors{reason: :registry_host_mismatch, message: msg}} =
+               Client.discover("ghcr.io")
+
       assert msg =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert msg =~ "ghcr.io"
+    end
+
+    test "a foreign host is refused with the same typed error before any I/O" do
+      canonical = Compendium.RegistryHost.canonical_host()
+
+      assert :ok = Compendium.RegistryHost.validate_host(canonical)
+
+      assert {:error, %Errors{reason: :registry_host_mismatch, registry: "ghcr.io"} = refusal} =
+               Compendium.RegistryHost.validate_host("ghcr.io")
+
+      assert Errors.to_string(refusal) =~ "only supports #{canonical}"
     end
   end
 

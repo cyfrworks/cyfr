@@ -47,10 +47,12 @@ defmodule Compendium.RegistryPortTest do
     assert is_binary(RegistryHost.canonical_rest_host())
   end
 
-  test "the OCI seam refuses every host, the canonical one included" do
-    assert {:error, message} = RegistryHost.validate_host("registry.cyfr.run")
-    assert message =~ "CYFR_REGISTRY_URL=none"
-    assert {:error, _} = RegistryHost.validate_host("none")
+  test "the OCI seam refuses every host, the canonical one included, typed" do
+    assert {:error, %Errors{reason: :registry_unconfigured} = refusal} =
+             RegistryHost.validate_host("registry.cyfr.run")
+
+    assert Errors.to_string(refusal) =~ "CYFR_REGISTRY_URL=none"
+    assert {:error, %Errors{reason: :registry_unconfigured}} = RegistryHost.validate_host("none")
   end
 
   test "the REST seam refuses before any I/O" do
