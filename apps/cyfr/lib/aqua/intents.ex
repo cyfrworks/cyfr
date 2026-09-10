@@ -8,10 +8,11 @@ defmodule Aqua.Intents do
   page; the intent itself names no estate, the athanor in focus is added
   when it is pushed.
 
-  `ui.navigate` paths are validated against the console GET routes the
-  router declares — derived, never mirrored. A detail route (one with a
-  parameter) and a redirect stub are left out by rule, and the list is
-  not configurable. Resource-focus intents compute their target paths.
+  A `ui.navigate` path is checked for shape alone — absolute, no scheme or
+  host, no dot segments — and whether the console serves it is the web
+  adapter's decision (`PrismWeb.Nav.page?/1`): the engine names a page, it
+  does not read the router. Resource-focus intents compute their target
+  paths.
   """
 
   @allowed_overlay_states ~w(half full)
@@ -36,7 +37,7 @@ defmodule Aqua.Intents do
 
   def validate(%{"kind" => "ui.navigate"} = obj) do
     with {:ok, path} <- string_field(obj, "path"),
-         :ok <- check_allowed_path(path) do
+         :ok <- check_page_path(path) do
       {:ok, %{kind: "navigate", to: path}}
     end
   end
@@ -132,76 +133,19 @@ defmodule Aqua.Intents do
     end
   end
 
-  defp check_allowed_path(path) do
-    routes = allowed_routes()
+  # A page path as the console spells one: absolute, without scheme or
+  # host, no dot segments, unreserved characters and percent-escapes in
+  # the segments, and an optional query string. Whether the console serves
+  # it is the web adapter's decision (`PrismWeb.Nav.page?/1`).
+  @page_path ~r{\A/(?:[\w.~%-]+(?:/[\w.~%-]+)*/?)?(?:\?[\w.~%=&+-]*)?\z}
 
-    cond do
-      path in routes -> :ok
-      matches_query_form?(path, routes) -> :ok
-      true -> {:error, "ui.navigate: path #{inspect(path)} not in allowlist"}
-    end
+  defp check_page_path(path) do
+    segments = path |> String.split("?", parts: 2) |> hd() |> String.split("/")
+
+    if Regex.match?(@page_path, path) and not Enum.any?(segments, &(&1 in [".", ".."])),
+      do: :ok,
+      else: {:error, "ui.navigate: path #{inspect(path)} is not a page path"}
   end
-
-  defp matches_query_form?(path, routes) do
-    case String.split(path, "?", parts: 2) do
-      [base, _query] -> base in routes
-      _ -> false
-    end
-  end
-
-  # The Prism page paths — the router's routes under `/a/:athanor/…` with
-
-  # the focus prefix stripped (an intent addresses a page; the athanor in
-
-  # focus is added when it is pushed), plus the global pages, which have no
-
-  # estate in their address and are pushed as they are. A route with a
-
-  # parameter left in it is a record's, not a page's, and a redirect stub
-
-  # is not a page at all. Memoized, since the router's route table is
-
-  # fixed for the VM lifetime.
-
-  @focus_prefix "/a/:athanor"
-
-  @doc false
-
-  @spec allowed_routes() :: [String.t()]
-
-  def allowed_routes do
-    case :persistent_term.get({Aqua.Intents, :allowed_routes}, :miss) do
-      :miss ->
-        routes =
-          EmissaryWeb.Router.__routes__()
-          |> Enum.filter(
-            &(&1.verb == :get and String.starts_with?(&1.path, @focus_prefix <> "/") and
-                not redirect_stub?(&1))
-          )
-          |> Enum.map(&String.replace_prefix(&1.path, @focus_prefix, ""))
-          |> Enum.reject(&String.contains?(&1, ":"))
-          |> Kernel.++(Cyfr.GlobalPages.paths())
-          |> Enum.uniq()
-
-        :persistent_term.put({Aqua.Intents, :allowed_routes}, routes)
-        routes
-
-      routes ->
-        routes
-    end
-  end
-
-  # A LiveView named `…RedirectLive` only forwards to another address: a
-
-  # navigate to it would land the browser somewhere the agent did not
-
-  # name, so the stub is not a target — the page it forwards to is.
-
-  defp redirect_stub?(%{metadata: %{phoenix_live_view: live}}) when is_tuple(live) do
-    live |> elem(0) |> Atom.to_string() |> String.ends_with?("RedirectLive")
-  end
-
-  defp redirect_stub?(_route), do: false
 
   # The clipboard is the one action whose output leaves the browser: whatever
 

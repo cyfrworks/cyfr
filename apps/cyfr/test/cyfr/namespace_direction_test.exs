@@ -38,9 +38,8 @@ defmodule Cyfr.NamespaceDirectionTest do
   # The HTTP surface. Emissary (the MCP contract) is fair game for the
   # engine APPS — but EmissaryWeb (endpoint, router, plugs) is the web
   # layer, and an engine that names it has taken the browser surface as a
-  # dependency. Scoped to apps/opus and apps/locus only: inside cyfr,
-  # Sanctum and Aqua legitimately name it today (the tincture token's
-  # asset sibling, the router introspection Aqua.Intents documents).
+  # dependency. Scoped to apps/opus and apps/locus only; inside cyfr the
+  # domain namespaces are held to the written-down roster below.
   @engine_apps ["apps/opus/lib", "apps/locus/lib"]
   @forbidden_web_from_engine_apps ~r/\bEmissaryWeb\.[A-Z]/
 
@@ -109,11 +108,9 @@ defmodule Cyfr.NamespaceDirectionTest do
   # argued, rather than accruing quietly the way these two did.
   @domain_dirs ["apps/cyfr/lib/sanctum", "apps/cyfr/lib/aqua", "apps/cyfr/lib/compendium"]
 
-  @domain_web_calls [
-    # `Aqua.Intents` validates an agent's navigation intents against the
-    # console's real route table, so a link it emits cannot 404.
-    {"apps/cyfr/lib/aqua/intents.ex", "EmissaryWeb.Router"}
-  ]
+  # Empty: the assistant's navigation intents name a page by shape, and
+  # `PrismWeb.Nav.page?/1` maps them to the route table on the web side.
+  @domain_web_calls []
 
   # `{rel, module}` for every live domain→web reach, with its line.
   defp domain_web_reaches do

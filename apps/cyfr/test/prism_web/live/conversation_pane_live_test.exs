@@ -137,6 +137,31 @@ defmodule PrismWeb.ConversationPaneLiveTest do
     refute_push_event(pane, "aqua:intents", %{intents: _})
   end
 
+  test "a navigate is pushed only for a page the console serves", %{
+    conn: conn,
+    user: user,
+    room: room,
+    conv: conv
+  } do
+    pane = room_pane(conn, room, conv)
+
+    intents = [
+      %{kind: "navigate", to: "/etc/passwd"},
+      # Under a page the nav offers, but no route serves it.
+      %{kind: "navigate", to: "/components/not/a/page"},
+      # `/agents` only forwards elsewhere; the page it forwards to is the target.
+      %{kind: "navigate", to: "/agents"},
+      %{kind: "navigate", to: "/executions?id=exec_a"}
+    ]
+
+    send(pane.pid, {:conversation, conv.id, {:intents, intents, user.user_id}})
+    render(pane)
+
+    assert_push_event(pane, "aqua:intents", %{intents: pushed})
+    assert [%{kind: "navigate", to: to}] = pushed
+    assert to == PrismWeb.Focus.path(route(room), "/executions?id=exec_a")
+  end
+
   test "a kept model catalogue is read on mount without a run", %{
     conn: conn,
     room: room,

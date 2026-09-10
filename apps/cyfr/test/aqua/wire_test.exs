@@ -43,33 +43,6 @@ defmodule Aqua.WireTest do
     end
   end
 
-  describe "allowed_routes/0" do
-    @focus_prefix "/a/:athanor"
-
-    test "no redirect stub is a target, and every page the nav offers is one" do
-      routes = Aqua.Intents.allowed_routes()
-
-      # Derived from the router the same way, so a new stub fails here.
-      stubs =
-        for %{path: path, metadata: %{phoenix_live_view: live}} <-
-              EmissaryWeb.Router.__routes__(),
-            is_tuple(live),
-            live |> elem(0) |> Atom.to_string() |> String.ends_with?("RedirectLive"),
-            String.starts_with?(path, @focus_prefix),
-            do: String.replace_prefix(path, @focus_prefix, "")
-
-      assert "/agents" in stubs
-
-      for stub <- stubs do
-        refute stub in routes, "#{stub} forwards elsewhere and must not be a navigate target"
-      end
-
-      for mode <- ~w(dev lite), item <- PrismWeb.Nav.items(mode) do
-        assert item.path in routes, "#{mode} nav offers #{item.path}, the allowlist does not"
-      end
-    end
-  end
-
   describe "parse/2" do
     test "ui.navigate: allowed path produces navigate intent" do
       input =
@@ -92,23 +65,26 @@ defmodule Aqua.WireTest do
       assert result.drops == []
     end
 
-    test "ui.navigate: disallowed path is dropped, block still stripped" do
+    test "ui.navigate: a path that is not a page path is dropped, block still stripped" do
+      for path <- ["http://evil.example/", "//evil.example/x", "/a/../b", "activities", "/x y"] do
+        entry = Jason.encode!(%{"kind" => "ui.navigate", "path" => path})
+        result = Aqua.Wire.parse("```aqua-actions\n[#{entry}]\n```", @policy)
+
+        assert result.stripped == ""
+        assert result.intents == [], "#{path} became an intent"
+        assert [%{reason: reason}] = result.drops
+        assert reason =~ "not a page path"
+      end
+    end
+
+    test "ui.navigate: whether the console serves a page is the web adapter's decision" do
+      # A well-formed path the console has no page for is an intent here;
+      # `PrismWeb.Nav.page?/1` is what drops it before it is pushed.
       input = "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/etc/passwd\"}]\n```"
       result = Aqua.Wire.parse(input, @policy)
 
-      assert result.stripped == ""
-      assert result.intents == []
-      assert [%{reason: reason}] = result.drops
-      assert reason =~ "not in allowlist"
-    end
-
-    test "ui.navigate: a redirect stub is not a target" do
-      input = "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/agents\"}]\n```"
-      result = Aqua.Wire.parse(input, @policy)
-
-      assert result.intents == []
-      assert [%{reason: reason}] = result.drops
-      assert reason =~ "not in allowlist"
+      assert result.intents == [%{kind: "navigate", to: "/etc/passwd"}]
+      assert result.drops == []
     end
 
     test "ui.navigate: query-string variants of allowed routes pass" do

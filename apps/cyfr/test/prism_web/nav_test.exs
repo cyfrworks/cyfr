@@ -73,14 +73,45 @@ defmodule PrismWeb.NavTest do
     assert Nav.href("/executions?id=exec_1", "home") == "/a/home/executions?id=exec_1"
   end
 
-  test "an item's scope is derived from Cyfr.GlobalPages, the one list the engine reads too" do
+  test "an item's scope is derived from the one list of global pages" do
     for item <- Nav.items("dev") do
-      expected = if Cyfr.GlobalPages.global?(item.path), do: :global, else: :athanor
+      expected = if Nav.global?(item.path), do: :global, else: :athanor
       assert item.scope == expected, "#{item.key} is #{item.scope}, the list says #{expected}"
     end
 
     # Every global page is a nav item — the list names pages, not stray paths.
     paths = Enum.map(Nav.items("dev"), & &1.path)
-    for path <- Cyfr.GlobalPages.paths(), do: assert(path in paths)
+    for path <- Nav.global_pages(), do: assert(path in paths)
+  end
+
+  # The one place a navigate the assistant proposes meets the router: a
+  # page the console serves passes, with its parameters; a redirect stub
+  # and a path no route matches do not.
+  test "a navigate lands on a page the router serves: every nav item, a record's page, no stub" do
+    focus = "/a/:athanor"
+
+    stubs =
+      for %{path: path, metadata: %{phoenix_live_view: live}} <- EmissaryWeb.Router.__routes__(),
+          is_tuple(live),
+          live |> elem(0) |> Atom.to_string() |> String.ends_with?("RedirectLive"),
+          String.starts_with?(path, focus),
+          do: String.replace_prefix(path, focus, "")
+
+    assert "/agents" in stubs
+
+    for stub <- stubs do
+      refute Nav.page?(Nav.href(stub, "home")),
+             "#{stub} forwards elsewhere and must not be a navigate target"
+    end
+
+    for mode <- ~w(dev lite), item <- Nav.items(mode) do
+      assert Nav.page?(Nav.href(item, "home")),
+             "#{mode} nav offers #{item.path}, the router does not"
+    end
+
+    assert Nav.page?(Nav.href("/executions?id=exec_a", "home"))
+    assert Nav.page?(Nav.href("/components/local.weather-app", "home"))
+    refute Nav.page?(Nav.href("/etc/passwd", "home"))
+    refute Nav.page?(Nav.href("/components/not/a/page", "home"))
   end
 end

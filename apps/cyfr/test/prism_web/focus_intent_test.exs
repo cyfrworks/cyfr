@@ -143,7 +143,7 @@ defmodule PrismWeb.FocusIntentTest do
   test "a global page is pushed as it is, with no estate in its address",
        %{estate: estate, conv: conv} = context do
     path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(estate), conv.id)
-    assert Cyfr.GlobalPages.global?(path)
+    assert PrismWeb.Nav.global?(path)
 
     assert {:ok, %{kind: "navigate", to: ^path} = intent} =
              Aqua.Wire.validate(%{"kind" => "ui.navigate", "path" => path})

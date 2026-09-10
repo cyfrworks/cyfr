@@ -904,6 +904,7 @@ defmodule PrismWeb.ConversationPaneLive do
         %{kind: "navigate", to: to} = intent -> %{intent | to: PrismWeb.Nav.href(to, route)}
         intent -> intent
       end)
+      |> Enum.filter(&served?/1)
 
     {socket, intents} =
       if socket.assigns.panel?, do: keep_navigates(socket, intents), else: {socket, intents}
@@ -951,6 +952,21 @@ defmodule PrismWeb.ConversationPaneLive do
   end
 
   defp pane_id(socket), do: socket.assigns.dom <> "-pane"
+
+  # A navigate lands on a page the console serves or nowhere: the link,
+  # focused on this pane's estate, must resolve in the router, and a
+  # redirect stub is not a page. The engine checks a path's shape alone;
+  # this is where it is mapped to a route.
+  defp served?(%{kind: "navigate", to: href}) do
+    if PrismWeb.Nav.page?(href) do
+      true
+    else
+      Logger.warning("[ConversationPane] navigate dropped: #{inspect(href)} is not a page")
+      false
+    end
+  end
+
+  defp served?(_intent), do: true
 
   # A navigate to a page the current mode's nav does not show is dropped —
   # `PrismWeb.Nav` is the one owner of what a mode surfaces, and an
