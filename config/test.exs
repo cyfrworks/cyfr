@@ -34,8 +34,14 @@ config :cyfr, :tincture_rate_limit_max, 1_000_000
 # in a suite. Surfaces render its "unknown" answer.
 config :cyfr, :registry_health_probe, false
 
-# Use an unreachable REST registry for deterministic failure paths; keep the OCI host default for allowlist tests.
+# Both registry endpoints point at a closed loopback port: a registry is
+# configured, so the "registry does not answer" paths run, and no test can
+# reach a registry off this machine. `:registry_url` decides whether a
+# registry is configured at all and where its REST API is; `:oci_registry_url`
+# is what a pull resolves against. A test that needs the public host name
+# sets it locally and asserts through `Compendium.RegistryHost.canonical_host/0`.
 config :cyfr, :registry_url, "127.0.0.1:19"
+config :cyfr, :oci_registry_url, "127.0.0.1:19"
 
 # Configure Arca for tests (use sandboxed pool). The adapter is selected at
 # build time in config.exs from CYFR_DATABASE; the per-adapter opts must

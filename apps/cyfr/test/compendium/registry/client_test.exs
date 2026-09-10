@@ -153,7 +153,7 @@ defmodule Compendium.Registry.ClientTest do
             "registry" => "ghcr.io"
           })
 
-        assert err_msg(msg) =~ "only supports registry.cyfr.run"
+        assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       end
     end
 
@@ -959,7 +959,7 @@ defmodule Compendium.Registry.ClientTest do
         result =
           MCP.handle("component", ctx, %{
             "action" => "pull",
-            "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
+            "reference" => "#{Compendium.RegistryHost.canonical_host()}/cyfr/reagents/test:1.0.0"
           })
 
         # Network error expected — we're just verifying the code path exists

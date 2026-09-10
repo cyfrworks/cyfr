@@ -496,7 +496,7 @@ defmodule Compendium.MCPTest do
           "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
         })
 
-      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert err_msg(msg) =~ "ghcr.io"
     end
 
@@ -505,7 +505,7 @@ defmodule Compendium.MCPTest do
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "pull",
-          "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
+          "reference" => "#{Compendium.RegistryHost.canonical_host()}/cyfr/reagents/test:1.0.0"
         })
 
       assert is_binary(msg)
@@ -526,7 +526,7 @@ defmodule Compendium.MCPTest do
           "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
         })
 
-      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert err_msg(msg) =~ "ghcr.io"
     end
 
@@ -537,7 +537,7 @@ defmodule Compendium.MCPTest do
           "registry" => "ghcr.io"
         })
 
-      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert err_msg(msg) =~ "ghcr.io"
     end
 
@@ -653,7 +653,7 @@ defmodule Compendium.MCPTest do
           "registry" => "ghcr.io"
         })
 
-      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert err_msg(msg) =~ "ghcr.io"
     end
   end

@@ -14,16 +14,20 @@ defmodule Compendium.OCILocalNamespaceTest do
 
   # Both spellings resolve to the `local` namespace. The first skips
   # component_tool's friendly check because it contains a "/"; the second
-  # additionally names a registry host.
-  @refused [
-    "local/reagents/sneaky:1.0.0",
-    "registry.cyfr.run/local/formulas/sneaky:1.0.0",
-    "registry.cyfr.run/local/catalysts/sneaky:0.1.0"
-  ]
+  # additionally names the canonical registry host.
+  defp refused do
+    host = Compendium.RegistryHost.canonical_host()
+
+    [
+      "local/reagents/sneaky:1.0.0",
+      "#{host}/local/formulas/sneaky:1.0.0",
+      "#{host}/local/catalysts/sneaky:0.1.0"
+    ]
+  end
 
   describe "pull refusal" do
     test "every local-namespace ref is refused", %{ctx: ctx} do
-      for ref <- @refused do
+      for ref <- refused() do
         assert {:error, message} = OCI.Client.pull(ctx, ref)
 
         assert message =~ "local namespace",
@@ -37,7 +41,10 @@ defmodule Compendium.OCILocalNamespaceTest do
       # point — a rejected namespace must cost nothing and must not depend
       # on what a remote registry says.
       assert {:error, message} =
-               OCI.Client.pull(ctx, "registry.cyfr.run/local/reagents/sneaky:1.0.0")
+               OCI.Client.pull(
+                 ctx,
+                 "#{Compendium.RegistryHost.canonical_host()}/local/reagents/sneaky:1.0.0"
+               )
 
       assert message =~ "local namespace"
       refute message =~ "Failed"
@@ -46,7 +53,11 @@ defmodule Compendium.OCILocalNamespaceTest do
 
     test "a non-local namespace is not caught by the gate" do
       # Pure check on the same predicate the gate applies — no network.
-      {:ok, ref} = OCI.Reference.parse("registry.cyfr.run/moonmoon69/reagents/thing:1.0.0")
+      {:ok, ref} =
+        OCI.Reference.parse(
+          "#{Compendium.RegistryHost.canonical_host()}/moonmoon69/reagents/thing:1.0.0"
+        )
+
       {:ok, component_ref} = OCI.Reference.to_component_ref(ref)
 
       assert component_ref.namespace == "moonmoon69"
@@ -54,7 +65,7 @@ defmodule Compendium.OCILocalNamespaceTest do
     end
 
     test "both refused spellings really do resolve to the local namespace" do
-      for spelling <- @refused do
+      for spelling <- refused() do
         {:ok, ref} = OCI.Reference.parse(spelling)
         {:ok, component_ref} = OCI.Reference.to_component_ref(ref)
 

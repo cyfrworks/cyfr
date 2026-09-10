@@ -20,7 +20,7 @@ defmodule Compendium.OCI.ClientTest do
   describe "pull_bytes/1 - registry-config enforcement" do
     test "rejects pull_bytes from non-cyfr.run registry" do
       {:error, msg} = Client.pull_bytes("ghcr.io/alice/reagents/data-processor:1.0.0")
-      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert msg =~ "ghcr.io"
     end
   end
@@ -48,7 +48,7 @@ defmodule Compendium.OCI.ClientTest do
           "ghcr.io/alice/reagents/data-processor:1.0.0"
         )
 
-      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert msg =~ "ghcr.io"
     end
   end
@@ -62,7 +62,7 @@ defmodule Compendium.OCI.ClientTest do
           "ghcr.io"
         )
 
-      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert msg =~ "ghcr.io"
     end
   end
@@ -70,7 +70,7 @@ defmodule Compendium.OCI.ClientTest do
   describe "discover/2 - registry-config enforcement" do
     test "rejects discover with non-cyfr.run registry" do
       {:error, msg} = Client.discover("ghcr.io")
-      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert msg =~ "ghcr.io"
     end
   end
