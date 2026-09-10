@@ -345,10 +345,9 @@ defmodule Sanctum.Consent.Commit do
   # config permits. Nothing is taken verbatim.
   #
   # Narrowed at the PATTERN level, not by expanding against the live tool
-  # catalogue: `ExternalProvider.describe_candidate/2` reports
-  # `tool_names: []` for a server it could not reach, so expanding would
-  # silently collapse a legitimate grant to nothing whenever the upstream
-  # is down.
+  # catalogue: the catalog reports `tool_names: []` for a server it could
+  # not reach, so expanding would silently collapse a legitimate grant to
+  # nothing whenever the upstream is down.
   #
   # A requested `"*"` means "whatever this server exposes", so it resolves
   # to the config itself rather than being stored as `"*"` — the operator
@@ -395,7 +394,7 @@ defmodule Sanctum.Consent.Commit do
     |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
       name = Map.get(raw, :server_name)
 
-      case Emissary.MCP.ExternalProvider.consent_candidate(ctx, name || "") do
+      case Sanctum.Catalog.tool_server_candidate(ctx, name || "") do
         {:ok, %{server_digest: digest} = candidate} when is_binary(digest) ->
           # Intersect granted patterns with the server’s configured patterns.
           # Dispatch also rechecks the live configuration.

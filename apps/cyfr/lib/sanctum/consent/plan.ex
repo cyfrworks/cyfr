@@ -76,7 +76,7 @@ defmodule Sanctum.Consent.Plan do
          caps: resources,
          limits: limits,
          candidates: candidates,
-         tool_server_candidates: Emissary.MCP.ExternalProvider.consent_candidates(ctx),
+         tool_server_candidates: Sanctum.Catalog.tool_server_candidates(ctx),
          warnings: need_warnings(needs, candidates),
          defaults: %{scope: :versionless, kind: kind, label: label, invoke_mode: :open_inert}
        }}

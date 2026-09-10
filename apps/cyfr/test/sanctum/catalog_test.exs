@@ -24,4 +24,27 @@ defmodule Sanctum.CatalogTest do
   test "a shape derives its tool roster through the port" do
     assert Sanctum.Consent.ShapeDerivation.all_tool_actions() == Catalog.tool_actions()
   end
+
+  test "a grant's tool servers are answered through the port" do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    ctx = Sanctum.TestContext.local()
+
+    assert is_list(Catalog.tool_server_candidates(ctx))
+    assert {:error, _} = Catalog.tool_server_candidate(ctx, "no-such-server")
+  end
+
+  # Consent reaches the operation catalog through this port and nowhere
+  # else: no module under `sanctum/consent` names the transport.
+  test "consent names no Emissary module" do
+    root = Path.expand("../../../..", __DIR__)
+
+    reaches =
+      for file <- Path.wildcard(Path.join(root, "apps/cyfr/lib/sanctum/consent/**/*.ex")),
+          line <- file |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
+          line =~ ~r/\bEmissary\./,
+          do: "#{Path.relative_to(file, root)}: #{String.trim(line)}"
+
+    assert reaches == []
+  end
 end

@@ -17,14 +17,12 @@ defmodule Cyfr.EmissarySurfaceTest do
   use ExUnit.Case, async: true
 
   @surface ~w(
-    Emissary.MCP.ExternalProvider
     Emissary.PubSub
   )
 
-  # Why each entry is on the roster (the operation catalog itself lives
-  # under `Cyfr.Ops` now, so its modules are not Emissary's surface):
-  #   ExternalProvider — consent candidates come from the live
-  #     external-server plane.
+  # Why each entry is on the roster (the operation catalog lives under
+  # `Cyfr.Ops`, so its modules are not Emissary's surface, and consent
+  # reaches external tool servers through the `Sanctum.Catalog` port):
   #   Emissary.PubSub — the global PubSub server's process name (the
   #     vocabulary moved to Cyfr.Topics; the name did not).
 

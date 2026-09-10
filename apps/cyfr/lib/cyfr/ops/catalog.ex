@@ -1219,6 +1219,17 @@ defmodule Cyfr.Ops.Catalog do
         do: "#{tool.name}.#{action}"
   end
 
+  # The external tool servers a grant may name (`Sanctum.Catalog`). The
+  # proxied `server:tool` entries are the external provider's, so it is
+  # what describes them.
+  @impl Sanctum.Catalog
+  def tool_server_candidates(%Context{} = ctx),
+    do: Emissary.MCP.ExternalProvider.consent_candidates(ctx)
+
+  @impl Sanctum.Catalog
+  def tool_server_candidate(%Context{} = ctx, name) when is_binary(name),
+    do: Emissary.MCP.ExternalProvider.consent_candidate(ctx, name)
+
   defp loadable?(module),
     do: Code.ensure_loaded?(module) and function_exported?(module, :tools, 0)
 end
