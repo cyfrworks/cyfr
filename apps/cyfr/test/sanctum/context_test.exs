@@ -376,7 +376,7 @@ defmodule Sanctum.ContextTest do
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
-    test "a Home context passes the tenant check against a Home record" do
+    test "a context passes the tenant check against a record of its own athanor" do
       ctx =
         Context.build(
           user_id: "u1",

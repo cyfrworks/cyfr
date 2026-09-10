@@ -161,8 +161,8 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     refute Arca.exists?(ctx, ["guest", "notes.txt"])
     assert {:ok, []} = Arca.list_recursive(ctx, [])
 
-    # The tombstone stands: Home succession reads it, and an audit trail
-    # that forgets an athanor existed cannot say what happened to it.
+    # The tombstone stands: an audit trail that forgets an athanor existed
+    # cannot say what happened to it.
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
   end
 

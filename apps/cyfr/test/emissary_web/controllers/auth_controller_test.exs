@@ -315,8 +315,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert {:ok, %{authenticated: true, namespace: ^ns} = loaded} =
                Sanctum.Session.load(session_of(conn), surface: :console)
 
-      # ...and it names their own athanor, not the Home seat a platform
-      # admin picks up a moment earlier. Minted at admission, its address
+      # ...and it names their own athanor, minted at admission. Its address
       # is the namespace only when the namespace was known first.
       assert {:ok, %{id: personal_id, kind: "person"}} =
                Sanctum.Tenancy.Athanors.get_by_owner(person_id(user_id))

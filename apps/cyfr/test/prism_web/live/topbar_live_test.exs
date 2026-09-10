@@ -56,8 +56,8 @@ defmodule PrismWeb.TopbarLiveTest do
     assert has_element?(bar, ~s(a[href="#{PrismWeb.ChatLive.chat_path(route)}"]), "Bells")
     assert has_element?(bar, ~s(a[href="/a/#{route}/aqua"]), "AQUA")
 
-    # something happens in a FOLLOWED thread of the group while Home is in
-    # focus: a badge. The creator follows their own thread.
+    # something happens in a FOLLOWED thread of the group while another
+    # estate is in focus: a badge. The creator follows their own thread.
     group_ctx =
       Sanctum.Context.build(
         user_id: alice.user_id,

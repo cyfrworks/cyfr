@@ -48,8 +48,8 @@ defmodule Locus.MixProject do
       # The cyfr release starts :cyfr explicitly, and its ordering in the
       # root mix.exs is what guarantees :cyfr boots first there — OTP has
       # no edge for it. The one locus module that DOES need the started
-      # app (Locus.MCP: Repo, Arca, ToolRegistry) is reachable only
-      # through Emissary's tool registry, which never runs in the builder.
+      # app (Locus.MCP: Repo, Arca, the operation catalog) is reachable only
+      # through Cyfr.Ops.Catalog dispatch, which never runs in the builder.
       {:cyfr, in_umbrella: true, runtime: false}
     ]
   end

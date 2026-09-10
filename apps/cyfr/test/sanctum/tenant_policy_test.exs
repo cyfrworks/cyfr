@@ -20,7 +20,7 @@ defmodule Sanctum.TenantPolicyTest do
       assert {:error, :missing_tenant} = TenantPolicy.require_athanor(ctx)
     end
 
-    test "accepts any non-empty athanor_id — Home is an ordinary athanor gated by membership" do
+    test "accepts any non-empty athanor_id — every athanor is gated by membership alone" do
       ctx = %Context{user_id: "u1", athanor_id: "ath_home"}
       assert :ok = TenantPolicy.require_athanor(ctx)
     end

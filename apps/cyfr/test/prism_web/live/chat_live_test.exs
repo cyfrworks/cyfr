@@ -356,10 +356,10 @@ defmodule PrismWeb.ChatLiveTest do
     {:ok, _} =
       Conversations.append(ctx, conv.id, %{author: alice.user_id, content: "secret plan"})
 
-    # The shared estate, asked for the group's conversation id, opens nothing of it: the
-    # id is not one of Home's threads, so the page says so and opens Home's
-    # own. (The rail may name the group's topic — Alice is its member — but
-    # the tape stays Home's.)
+    # The focused estate, asked for the group's conversation id, opens
+    # nothing of it: the id is not one of its threads, so the page says so
+    # and opens one of its own. (The rail may name the group's topic — Alice
+    # is its member — but the tape stays the focused estate's.)
     {view, html} = mount_chat(alice_conn, nil, conv.id)
     assert html =~ "That conversation isn"
     refute render(pane(view)) =~ "secret plan"
@@ -640,8 +640,8 @@ defmodule PrismWeb.ChatLiveTest do
     bob = test_user()
     conn = log_in_user(conn, alice, athanor_id: estate().id)
 
-    # Home holds a thread Alice does not follow, so its "Other topics" has
-    # something to fold.
+    # The focused estate holds a thread Alice does not follow, so its
+    # "Other topics" has something to fold.
     home_ctx =
       Sanctum.Context.build(
         user_id: alice.user_id,
@@ -672,7 +672,8 @@ defmodule PrismWeb.ChatLiveTest do
     # …and the rebuild did not undo what she folded.
     assert has_element?(view, fold <> "[aria-expanded=false]")
 
-    # Bob takes the seat back: the row goes, and the page — on Home — stays.
+    # Bob takes the seat back: the row goes, and the page — on the focused
+    # estate — stays.
     :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: alice.user_id)
     refute has_element?(view, "#estate-" <> group.id)
     assert has_element?(view, "#estate-#{estate().id} button[aria-current=true]", "Chat")
@@ -697,7 +698,7 @@ defmodule PrismWeb.ChatLiveTest do
     {:ok, foreign} = Conversations.create(group_ctx)
     :ok = Arca.TopicSubscriptionStorage.unfollow(group_ctx, foreign.id, alice.user_id)
 
-    # Home is open; the id belongs to the group.
+    # The focused estate is open; the id belongs to the group.
     {view, _html} = mount_chat(conn)
     assert render_click(view, "follow_topic", %{"id" => foreign.id}) =~ "That conversation isn"
     refute Arca.TopicSubscriptionStorage.follows?(estate().id, foreign.id, alice.user_id)

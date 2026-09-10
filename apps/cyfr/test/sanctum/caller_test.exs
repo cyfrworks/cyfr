@@ -38,7 +38,8 @@ defmodule Sanctum.CallerTest do
     %{user | user_id: row.id}
   end
 
-  # A signed-in person with no publisher namespace and a seat in Home.
+  # A signed-in person with no publisher namespace: the users row alone,
+  # no membership.
   defp known!(user) do
     {:ok, row} =
       Sanctum.Tenancy.Users.upsert_from_provider(%{
@@ -112,7 +113,7 @@ defmodule Sanctum.CallerTest do
       _ = other_home
       other_session = session_for(Map.put(other, :namespace, other.slug))
 
-      # The other user holds no membership in Home.
+      # The other user holds no membership in the `home` fixture estate.
       assert {:error, reason} = Caller.establish(other_session.token, focus: home.id)
       assert reason in [:not_member, :no_athanor]
 
