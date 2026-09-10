@@ -150,6 +150,16 @@ config :cyfr, :external_server_max_in_flight, 8
 # cyfr.run probe before proceeding without it (`Sanctum.SignIn`), and the
 # retention sweep interval (`Cyfr.RetentionScheduler`).
 config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
+
+# The deadline, in milliseconds, for one provisioning attempt's required
+# dependency pulls: the closure of every component the bundle cannot run
+# without, pulled when an athanor is first filled and at the seed sync
+# after a release. A pull past it stops where it is; what landed stays
+# registered, the estate is left unprovisioned with the timeout recorded,
+# and the next attempt resumes from what is installed. The OCI transport
+# waits up to two minutes per request and retries twice, so one stalled
+# blob can hold an attempt for several minutes within this bound.
+config :cyfr, :provisioning_required_pull_budget_ms, :timer.minutes(10)
 config :cyfr, :returning_probe_ms, 5_000
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 

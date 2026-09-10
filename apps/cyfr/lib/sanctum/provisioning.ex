@@ -12,18 +12,46 @@ defmodule Sanctum.Provisioning do
   and a baseline consent minted for every executable local component —
   so the athanor's AQUA answers from the first prompt.
 
-  A person's own athanor is minted here on their first admitted sign-in
-  (`after_sign_in/1`, once their cyfr.run namespace is known — the athanor's
-  slug is the namespace). A group is minted as a bare row (`Sanctum.Tenancy.Athanors.create_group/3`) and
-  filled the first time something reads its bundle (`start_provisioning/1`).
-  Provisioning is idempotent — `provisioned_at` marks completion and every
-  step tolerates being repeated — and loud: a failure leaves the row
-  unprovisioned with the reason in its settings, and the next sign-in
-  tries again.
+  A person's own athanor is minted at admission (`after_sign_in/1`): a
+  person needs no registry, no namespace and no claim to have one, and its
+  slug is their namespace only when that is already known and free. A
+  group is minted as a bare row (`Sanctum.Tenancy.Athanors.create_group/3`)
+  and filled the first time something reads its bundle
+  (`start_provisioning/1`). Provisioning is idempotent — `provisioned_at`
+  marks completion and every step tolerates being repeated — and loud: a
+  failure leaves the row unprovisioned with the reason in its settings,
+  and the next sign-in tries again.
 
   The registry pull runs as the person whose sign-in caused it, so their
   pull credential is used; a seed context pulls anonymously, which serves
   public components.
+
+  ## Entry points
+
+  Every fill shares one per-athanor lock (`Arca.Overlay.UnitLock`, keyed
+  `{athanor_id, :provisioning}`); background attempts also hold a claim in
+  `Sanctum.ProvisioningRegistry`, so concurrent first needs coalesce on
+  one attempt instead of queueing behind the lock. Both are node-local.
+
+    * `start_provisioning/1`, and `ready/1` on an unfilled estate:
+      asynchronous; claim, then lock; stands off for a minute after a
+      recorded failure.
+    * `after_sign_in/1`'s personal fill and group retries: asynchronous;
+      claim, then lock; no backoff.
+    * `provision/2`, behind the explicit `athanor.provision`: synchronous;
+      no claim of its own. Answers `{:error, :provisioning_busy}` at once
+      while a background attempt holds the claim, and after a bounded
+      wait when the lock is held otherwise.
+    * `sync_seeds/0` at boot: synchronous; lock only, and without the
+      already-filled short-circuit, since its job is to offer new seed
+      media to estates that are filled.
+
+  Required dependency pulls run under one deadline per attempt
+  (`:provisioning_required_pull_budget_ms`); optional pulls under a
+  shorter fixed one. A walk cut short stops where it is: what landed stays
+  registered, the failure is recorded on the row, and the next attempt
+  finds what is still missing by reading every installed component's
+  manifest.
   """
 
   require Logger
@@ -192,15 +220,29 @@ defmodule Sanctum.Provisioning do
   def provision(%{provisioned_at: %DateTime{}} = athanor, _ctx), do: {:ok, athanor}
 
   def provision(%{id: athanor_id} = athanor, acting_ctx) do
-    with_provisioning_lock(athanor_id, fn ->
-      # Re-read inside the lock: the caller that just held it may have been
-      # filling this very athanor.
-      case Athanors.get(athanor_id) do
-        {:ok, %{provisioned_at: %DateTime{}} = filled} -> {:ok, filled}
-        {:ok, fresh} -> do_provision(fresh, acting_ctx)
-        _ -> do_provision(athanor, acting_ctx)
-      end
-    end)
+    if filling_elsewhere?(athanor_id) do
+      {:error, :provisioning_busy}
+    else
+      with_provisioning_lock(athanor_id, fn ->
+        # Re-read inside the lock: the caller that just held it may have been
+        # filling this very athanor.
+        case Athanors.get(athanor_id) do
+          {:ok, %{provisioned_at: %DateTime{}} = filled} -> {:ok, filled}
+          {:ok, fresh} -> do_provision(fresh, acting_ctx)
+          _ -> do_provision(athanor, acting_ctx)
+        end
+      end)
+    end
+  end
+
+  # Whether another process holds this athanor's claim. An attempt that is
+  # already doing the work is answered as in progress, not waited out; the
+  # caller's own claim (`claim_and_provision/2` reaches here holding it) is
+  # not contention.
+  defp filling_elsewhere?(athanor_id) do
+    Sanctum.ProvisioningRegistry
+    |> Registry.lookup(athanor_id)
+    |> Enum.any?(fn {pid, _value} -> pid != self() end)
   end
 
   # One attempt per athanor at a time, and the only way a fill is started.
@@ -248,8 +290,7 @@ defmodule Sanctum.Provisioning do
 
     with {:ok, _scan} <- register_bundle(athanor_id),
          :ok <- aqua_definitions(ctx),
-         %{failed: []} = closure <-
-           Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx, :required)),
+         {:ok, closure} <- pull_required_deps(ctx),
          optional <- pull_optional_deps(ctx),
          {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx),
          :ok <- all_minted(bootstrap) do
@@ -276,8 +317,8 @@ defmodule Sanctum.Provisioning do
           error
       end
     else
-      %{failed: failed} ->
-        record_failure(athanor, :closure, failed)
+      {:error, {:closure, detail}} ->
+        record_failure(athanor, :closure, detail)
 
       {:error, {:aqua_template, _} = reason} ->
         record_failure(athanor, :aqua_template, reason)
@@ -549,13 +590,13 @@ defmodule Sanctum.Provisioning do
     # something — a transient registry outage at the previous sync must
     # not leave the closure missing until the next release. Both are
     # cheap no-ops when nothing is missing.
-    case Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx, :required)) do
-      %{failed: []} ->
+    case pull_required_deps(ctx) do
+      {:ok, _closure} ->
         :ok
 
-      %{failed: failed} ->
+      {:error, {:closure, detail}} ->
         Logger.warning(
-          "[Provisioning] #{athanor.id}: dep pull after sync failed: #{inspect(failed)}"
+          "[Provisioning] #{athanor.id}: dep pull after sync failed: #{inspect(detail)}"
         )
     end
 
@@ -618,13 +659,28 @@ defmodule Sanctum.Provisioning do
     :ok
   end
 
+  # The bundle's required dependencies — everything a local component
+  # declares it cannot run without — pulled under the attempt's deadline.
+  # A pull that fails, times out or exits is a provisioning failure at the
+  # closure step, retried by the next attempt.
+  defp pull_required_deps(ctx) do
+    budget_ms = Application.fetch_env!(:cyfr, :provisioning_required_pull_budget_ms)
+
+    case bounded_pull(ctx, missing_bundle_deps(ctx, :required), budget_ms) do
+      {:ok, %{failed: []} = closure} -> {:ok, closure}
+      {:ok, %{failed: failed}} -> {:error, {:closure, failed}}
+      :timeout -> {:error, {:closure, {:timeout, budget_ms}}}
+      {:exit, reason} -> {:error, {:closure, {:exit, reason}}}
+    end
+  end
+
   # The bundle's optional dependencies — the model catalysts — are pulled
   # when a registry is configured to pull them from, as a courtesy with a
   # budget: a registry that is slow, unreachable or unset-by-default and
   # absent leaves the estate provisioned on what the bundle ships, its
   # activations covering what is there, and the catalysts arrive when a
-  # model is connected. A required dependency that fails to pull is a
-  # provisioning failure, retried; an optional one never is.
+  # model is connected. An optional dependency that fails to pull is never
+  # a provisioning failure.
   @optional_pull_budget_ms 10_000
 
   defp pull_optional_deps(ctx) do
@@ -633,33 +689,56 @@ defmodule Sanctum.Provisioning do
         do: missing_bundle_deps(ctx, :all) -- missing_bundle_deps(ctx, :required),
         else: []
 
-    case optional do
-      [] ->
+    case bounded_pull(ctx, optional, @optional_pull_budget_ms) do
+      {:ok, %{pulled: pulled, failed: []}} ->
+        length(pulled)
+
+      {:ok, %{pulled: pulled, failed: failed}} ->
+        Logger.warning(
+          "[Provisioning] #{length(failed)} optional dependencies not pulled " <>
+            "(#{inspect(Enum.map(failed, &elem(&1, 0)))}); the estate provisions without them"
+        )
+
+        length(pulled)
+
+      :timeout ->
+        Logger.warning(
+          "[Provisioning] optional dependencies not pulled within " <>
+            "#{@optional_pull_budget_ms} ms; the estate provisions without them"
+        )
+
         0
 
-      refs ->
-        task = Task.async(fn -> Pull.ensure_published_deps(ctx, refs) end)
+      {:exit, reason} ->
+        Logger.warning(
+          "[Provisioning] optional dependency pull exited (#{inspect(reason)}); " <>
+            "the estate provisions without them"
+        )
 
-        case Task.yield(task, @optional_pull_budget_ms) || Task.shutdown(task, :brutal_kill) do
-          {:ok, %{pulled: pulled, failed: []}} ->
-            length(pulled)
+        0
+    end
+  end
 
-          {:ok, %{pulled: pulled, failed: failed}} ->
-            Logger.warning(
-              "[Provisioning] #{length(failed)} optional dependencies not pulled " <>
-                "(#{inspect(Enum.map(failed, &elem(&1, 0)))}); the estate provisions without them"
-            )
+  # Pull `refs` and their closure with `budget_ms` as the deadline for the
+  # whole walk, in a task of the provisioning supervisor's. Past the
+  # deadline the task is killed where it is — inside the lock, so the
+  # attempt has stopped before any coordination is released. The
+  # components it registered before the cut stay, and `missing_bundle_deps/2`
+  # lists what is installed, so the next attempt finds what is still
+  # missing below them. A task that exits is reported, never the caller's
+  # crash: a seed sync at boot must not take the server down.
+  defp bounded_pull(_ctx, [], _budget_ms), do: {:ok, %{pulled: [], failed: [], present: []}}
 
-            length(pulled)
+  defp bounded_pull(ctx, refs, budget_ms) do
+    task =
+      Task.Supervisor.async_nolink(Sanctum.ProvisioningSupervisor, fn ->
+        Pull.ensure_published_deps(ctx, refs)
+      end)
 
-          _ ->
-            Logger.warning(
-              "[Provisioning] optional dependencies not pulled within " <>
-                "#{@optional_pull_budget_ms} ms; the estate provisions without them"
-            )
-
-            0
-        end
+    case Task.yield(task, budget_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, outcome} -> {:ok, outcome}
+      {:exit, reason} -> {:exit, reason}
+      nil -> :timeout
     end
   end
 

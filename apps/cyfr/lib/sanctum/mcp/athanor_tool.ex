@@ -329,12 +329,18 @@ defmodule Sanctum.MCP.AthanorTool do
 
   # A seeding that failed (the registry was unreachable, a dependency not
   # public) is retried by any member — idempotent, so a provisioned athanor
-  # answers at once. The outcome is on the row either way.
+  # answers at once. The outcome is on the row either way. An attempt
+  # already running — a background fill, a seed sync, another member's
+  # retry — is reported as in progress, the same typed answer a turn gives
+  # while the estate is unfilled, never as a failure.
   def handle(%Context{} = ctx, %{"action" => "provision"} = args) do
     with {:ok, athanor, focused} <- resolve(ctx, args) do
       case Sanctum.Provisioning.provision(athanor, focused) do
         {:ok, provisioned} ->
           {:ok, render(provisioned)}
+
+        {:error, :provisioning_busy} ->
+          {:error, :not_provisioned}
 
         {:error, {:provisioning_failed, step, _detail}} ->
           {:error, "Provisioning failed at #{step} — the error is recorded on the athanor"}
