@@ -148,11 +148,14 @@ jobs:
           for src in seed/components/formulas/local/aqua/*/src; do
             (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/aqua-guest-target")
           done
-      # The shipped binary is the build of its source: the stamp the build
+      # Every shipped binary is the build of its source: the stamp the build
       # script writes binds the binary's digest to the source tree's, so a
       # guest edit without a rebuild fails here, toolchain or not.
-      - name: The shipped AQUA guest is built from its source
-        run: scripts/build-aqua-guest.sh --check
+      - name: Every stamped seed guest is built from its source
+        run: |
+          for stamp in seed/components/*/local/*/*/src/build.stamp; do
+            scripts/build-seed-guest.sh "$(dirname "$(dirname "$stamp")")" --check
+          done
       - name: Install dependencies
         run: mix deps.get
       - name: Compile with warnings as errors
