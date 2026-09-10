@@ -64,7 +64,7 @@ defmodule Arca.Adapters.S3MinioTest do
     # These names break a signer that double-encodes (or forgets to encode)
     # the canonical URI — exactly what the stub suite cannot verify.
     for name <- ["plain.txt", "with space.txt", "plus+plus.txt", "文件名.json", "📁data.bin"] do
-      path = ["guest", "sig", name]
+      path = ["data", "sig", name]
       content = "content of #{name}"
 
       assert :ok = S3.put(ctx, path, content)
@@ -76,27 +76,27 @@ defmodule Arca.Adapters.S3MinioTest do
   end
 
   test "listing callbacks agree with what was written", %{ctx: ctx} do
-    :ok = S3.put(ctx, ["guest", "walk", "a.txt"], "a")
-    :ok = S3.put(ctx, ["guest", "walk", "b.txt"], "bb")
-    :ok = S3.put(ctx, ["guest", "walk", "sub", "c.txt"], "ccc")
+    :ok = S3.put(ctx, ["data", "walk", "a.txt"], "a")
+    :ok = S3.put(ctx, ["data", "walk", "b.txt"], "bb")
+    :ok = S3.put(ctx, ["data", "walk", "sub", "c.txt"], "ccc")
 
-    assert {:ok, entries} = S3.list_typed(ctx, ["guest", "walk"])
+    assert {:ok, entries} = S3.list_typed(ctx, ["data", "walk"])
     assert Enum.sort(entries) == [{"a.txt", :file}, {"b.txt", :file}, {"sub", :dir}]
 
-    assert {:error, :enotdir} = S3.list_typed(ctx, ["guest", "walk", "a.txt"])
-    assert {:ok, []} = S3.list_typed(ctx, ["guest", "walk", "nothing"])
+    assert {:error, :enotdir} = S3.list_typed(ctx, ["data", "walk", "a.txt"])
+    assert {:ok, []} = S3.list_typed(ctx, ["data", "walk", "nothing"])
 
-    assert {:ok, leaves} = S3.list_recursive(ctx, ["guest", "walk"])
+    assert {:ok, leaves} = S3.list_recursive(ctx, ["data", "walk"])
 
     assert Enum.sort(leaves) == [
-             ["guest", "walk", "a.txt"],
-             ["guest", "walk", "b.txt"],
-             ["guest", "walk", "sub", "c.txt"]
+             ["data", "walk", "a.txt"],
+             ["data", "walk", "b.txt"],
+             ["data", "walk", "sub", "c.txt"]
            ]
 
-    assert {:ok, %{files: 3, bytes: 6}} = S3.usage(ctx, ["guest", "walk"])
+    assert {:ok, %{files: 3, bytes: 6}} = S3.usage(ctx, ["data", "walk"])
 
-    assert {:ok, pairs} = Arca.Storage.read_subtree_via(S3, ctx, ["guest", "walk"])
+    assert {:ok, pairs} = Arca.Storage.read_subtree_via(S3, ctx, ["data", "walk"])
 
     assert Enum.sort(pairs) == [
              {["a.txt"], "a"},
@@ -104,19 +104,19 @@ defmodule Arca.Adapters.S3MinioTest do
              {["sub", "c.txt"], "ccc"}
            ]
 
-    assert :ok = S3.delete_tree(ctx, ["guest", "walk"])
-    assert {:ok, []} = S3.list_recursive(ctx, ["guest", "walk"])
+    assert :ok = S3.delete_tree(ctx, ["data", "walk"])
+    assert {:ok, []} = S3.list_recursive(ctx, ["data", "walk"])
   end
 
   test "append extends in place and delete_tree's batch really deletes", %{ctx: ctx} do
-    path = ["guest", "log", "events.jsonl"]
+    path = ["data", "log", "events.jsonl"]
     assert :ok = S3.append(ctx, path, "one\n")
     assert :ok = S3.append(ctx, path, "two\n")
     assert {:ok, "one\ntwo\n"} = S3.get(ctx, path)
 
     # The DeleteObjects batch is Content-MD5-signed — a real service
     # rejects a bad digest, which no stub can prove.
-    assert :ok = S3.delete_tree(ctx, ["guest", "log"])
+    assert :ok = S3.delete_tree(ctx, ["data", "log"])
     refute S3.exists?(ctx, path)
   end
 
@@ -125,12 +125,12 @@ defmodule Arca.Adapters.S3MinioTest do
     Application.put_env(:cyfr, :s3, Keyword.put(prev, :prefix, "tenants/it"))
     on_exit(fn -> Application.put_env(:cyfr, :s3, prev) end)
 
-    assert :ok = S3.put(ctx, ["guest", "prefixed.txt"], "p")
-    assert {:ok, "p"} = S3.get(ctx, ["guest", "prefixed.txt"])
+    assert :ok = S3.put(ctx, ["data", "prefixed.txt"], "p")
+    assert {:ok, "p"} = S3.get(ctx, ["data", "prefixed.txt"])
 
     # Without the prefix the object is elsewhere in the bucket.
     Application.put_env(:cyfr, :s3, prev)
-    assert {:error, :not_found} = S3.get(ctx, ["guest", "prefixed.txt"])
+    assert {:error, :not_found} = S3.get(ctx, ["data", "prefixed.txt"])
   end
 
   # MinIO answers 409 (BucketAlreadyOwnedByYou) when the bucket exists —

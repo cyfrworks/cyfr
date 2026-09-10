@@ -30,6 +30,7 @@ defmodule Opus.StorageTestDouble do
       defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
       defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
       defdelegate usage(ctx, path), to: Arca.Adapters.Local
+      defdelegate ensure_dir(ctx, path), to: Arca.Adapters.Local
       defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
 
       defoverridable get: 2,

@@ -48,7 +48,7 @@ defmodule PrismWeb.FilesLiveTest do
 
     html = view |> element("#files-upload") |> render_submit()
     assert html =~ "hello.txt"
-    assert {:ok, "hello there"} = Arca.get(ctx, ["guest", "hello.txt"])
+    assert {:ok, "hello there"} = Arca.get(ctx, ["data", "hello.txt"])
 
     # Open shows the text; Edit and Save write it back.
     html = view |> element("#files-entries button", "hello.txt") |> render_click()
@@ -60,7 +60,7 @@ defmodule PrismWeb.FilesLiveTest do
     |> form("#files-editor", %{"content" => "hello again"})
     |> render_submit()
 
-    assert {:ok, "hello again"} = Arca.get(ctx, ["guest", "hello.txt"])
+    assert {:ok, "hello again"} = Arca.get(ctx, ["data", "hello.txt"])
     assert render(view) =~ "hello again"
 
     # The download route streams the bytes as a download.
@@ -76,7 +76,7 @@ defmodule PrismWeb.FilesLiveTest do
     view |> element("#files-entries button", "Delete") |> render_click()
     refute has_element?(view, "#files-entries")
     refute has_element?(view, "#files-open")
-    refute Arca.exists?(ctx, ["guest", "hello.txt"])
+    refute Arca.exists?(ctx, ["data", "hello.txt"])
   end
 
   test "the download route knows no folder the page does not show", %{conn: conn, route: route} do

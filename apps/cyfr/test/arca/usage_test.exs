@@ -31,35 +31,35 @@ defmodule Arca.UsageTest do
   end
 
   test "reads walk once and cache; creates bump; deletes drop", %{ctx: ctx} do
-    :ok = Arca.put(ctx, ["guest", "a.txt"], "aaaa")
+    :ok = Arca.put(ctx, ["data", "a.txt"], "aaaa")
 
     assert {:ok, 4} = Arca.Usage.athanor_bytes(ctx)
-    assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(ctx, "guest")
+    assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(ctx, "data")
 
     # A successful create bumps the cached counters in place — no walk.
-    :ok = Arca.put(ctx, ["guest", "b.txt"], "bb")
+    :ok = Arca.put(ctx, ["data", "b.txt"], "bb")
     assert {:ok, 6} = Arca.Usage.athanor_bytes(ctx)
-    assert {:ok, %{files: 2, bytes: 6}} = Arca.Usage.scope_usage(ctx, "guest")
+    assert {:ok, %{files: 2, bytes: 6}} = Arca.Usage.scope_usage(ctx, "data")
 
     # A delete drops the entries; the next read walks the truth afresh.
-    :ok = Arca.delete(ctx, ["guest", "b.txt"])
+    :ok = Arca.delete(ctx, ["data", "b.txt"])
     assert {:ok, 4} = Arca.Usage.athanor_bytes(ctx)
-    assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(ctx, "guest")
+    assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(ctx, "data")
   end
 
   test "an overwrite over-counts — the safe direction — until invalidated", %{ctx: ctx} do
-    :ok = Arca.put(ctx, ["guest", "a.txt"], "aaaa")
+    :ok = Arca.put(ctx, ["data", "a.txt"], "aaaa")
     assert {:ok, 4} = Arca.Usage.athanor_bytes(ctx)
 
     # Overwriting the same 4 bytes bumps again: 8 cached over 4 stored.
-    :ok = Arca.put(ctx, ["guest", "a.txt"], "aaaa")
+    :ok = Arca.put(ctx, ["data", "a.txt"], "aaaa")
     assert {:ok, 8} = Arca.Usage.athanor_bytes(ctx)
 
     # invalidate/1 clears the whole athanor — total and scope pairs — and
     # the next read walks the truth.
     Arca.Usage.invalidate(ctx.athanor_id)
     assert {:ok, 4} = Arca.Usage.athanor_bytes(ctx)
-    assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(ctx, "guest")
+    assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(ctx, "data")
   end
 
   test "a failed walk answers raw and is never cached", %{ctx: ctx} do

@@ -24,7 +24,7 @@ defmodule Arca.AppendParityTest do
 
   test "Local refuses an append past the shared ceiling, like S3 does", %{ctx: ctx} do
     ceiling = Sanctum.Limits.default_max_response_size()
-    path = ["guest", "parity.log"]
+    path = ["data", "parity.log"]
 
     # A file already at the ceiling: the cheapest way is to write it whole
     # (cap-exempt — this test measures the append bound, not the quota).

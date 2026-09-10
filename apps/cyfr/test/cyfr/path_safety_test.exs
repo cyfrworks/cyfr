@@ -8,12 +8,12 @@ defmodule Cyfr.PathSafetyTest do
 
   describe "validate_segments!/1 (Arca contract)" do
     test "accepts ordinary segments" do
-      assert :ok = PathSafety.validate_segments!(["guest", "notes", "started.json"])
+      assert :ok = PathSafety.validate_segments!(["data", "notes", "started.json"])
     end
 
     test "rejects literal .. segments" do
       assert_raise ArgumentError, ~r/segment ".." is not allowed/, fn ->
-        PathSafety.validate_segments!(["guest", "..", "etc", "passwd"])
+        PathSafety.validate_segments!(["data", "..", "etc", "passwd"])
       end
     end
 
@@ -102,16 +102,16 @@ defmodule Cyfr.PathSafetyTest do
 
   describe "length and depth ceilings (both contracts)" do
     test "a 240-byte segment passes; 241 is refused — measured in bytes, not graphemes" do
-      assert :ok = PathSafety.validate_segments!(["guest", String.duplicate("a", 240)])
+      assert :ok = PathSafety.validate_segments!(["data", String.duplicate("a", 240)])
 
       assert_raise ArgumentError, ~r/segment longer than 240 bytes/, fn ->
-        PathSafety.validate_segments!(["guest", String.duplicate("a", 241)])
+        PathSafety.validate_segments!(["data", String.duplicate("a", 241)])
       end
 
       # 81 three-byte graphemes are 243 bytes: past the ceiling even though
       # the grapheme count is far under it.
       assert_raise ArgumentError, ~r/segment longer than 240 bytes/, fn ->
-        PathSafety.validate_segments!(["guest", String.duplicate("四", 81)])
+        PathSafety.validate_segments!(["data", String.duplicate("四", 81)])
       end
 
       assert {:error, {:segment_too_long, message}} =
@@ -121,10 +121,10 @@ defmodule Cyfr.PathSafetyTest do
     end
 
     test "depth past 32 segments is refused" do
-      deep_ok = ["guest" | for(n <- 1..31, do: "d#{n}")]
+      deep_ok = ["data" | for(n <- 1..31, do: "d#{n}")]
       assert :ok = PathSafety.validate_segments!(deep_ok)
 
-      deep_bad = ["guest" | for(n <- 1..32, do: "d#{n}")]
+      deep_bad = ["data" | for(n <- 1..32, do: "d#{n}")]
 
       assert_raise ArgumentError, ~r/more than 32 segments/, fn ->
         PathSafety.validate_segments!(deep_bad)
@@ -138,7 +138,7 @@ defmodule Cyfr.PathSafetyTest do
 
     test "a joined path past 1024 bytes is refused" do
       # Eight 200-byte segments: each under the segment cap, 1607 joined.
-      long = ["guest" | for(_ <- 1..8, do: String.duplicate("a", 200))]
+      long = ["data" | for(_ <- 1..8, do: String.duplicate("a", 200))]
 
       assert_raise ArgumentError, ~r/longer than 1024 bytes/, fn ->
         PathSafety.validate_segments!(long)
@@ -148,8 +148,8 @@ defmodule Cyfr.PathSafetyTest do
 
   describe "validate_segments/1 (tuple contract)" do
     test "answers instead of raising — the exists? contract" do
-      assert :ok = PathSafety.validate_segments(["guest", "notes.txt"])
-      assert {:error, {:dot_segment, message}} = PathSafety.validate_segments(["guest", ".."])
+      assert :ok = PathSafety.validate_segments(["data", "notes.txt"])
+      assert {:error, {:dot_segment, message}} = PathSafety.validate_segments(["data", ".."])
       assert message =~ "not allowed"
     end
   end

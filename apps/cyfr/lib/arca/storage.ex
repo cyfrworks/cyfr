@@ -5,7 +5,7 @@ defmodule Arca.Storage do
   @moduledoc """
   Behaviour for storage adapters.
 
-  All paths are lists of segments, e.g. `["guest", "notes.txt"]`.
+  All paths are lists of segments, e.g. `["data", "notes.txt"]`.
   The adapter handles joining to the actual storage location.
 
   ## Single seam policy
@@ -51,10 +51,11 @@ defmodule Arca.Storage do
     `components/` → `Compendium.ComponentPath`; `aqua/` →
     `Compendium.AquaPath`; `conversations/` →
     `Arca.ConversationStorage.blob_root/1` (the conversation domain's one
-    module owns both planes' spellings); `guest/` — the WASM guest's
-    `data/` scope — has none by design (the guest names its own paths;
-    `guest_scopes/0` is the map, applied by `Opus.StorageHandler` at the
-    guest boundary, so a `data/` grant can never see a host scope). The
+    module owns both planes' spellings); `data/` — what components
+    store — has none by design (the guest names its own paths inside it;
+    `guest_scopes/0` says which roots a guest may name at all, applied by
+    `Opus.StorageHandler` at the guest boundary, so a `data/` grant can
+    never see a host scope). The
     global roots keep their literal at their single consumer, with a
     roster-membership witness in that consumer's test.
   - **Anything else** → refused (`authorize_path/2`): an unknown first
@@ -85,7 +86,7 @@ defmodule Arca.Storage do
           ├── aqua/                      # the athanor's AQUA agent definitions
           ├── conversations/             # chat attachment blobs
           ├── payloads/                  # retained execution bodies — tenant-reserved, system-written
-          └── guest/                     # guest (WASM) files — the guest's `data/` scope
+          └── data/                      # what components store — the guest's `data/` scope
 
   Per-athanor settings (retention policy included) are rows — the
   `athanors.settings` document — never blobs; the tree holds only content.
@@ -152,7 +153,7 @@ defmodule Arca.Storage do
       ctx = Sanctum.TestContext.local()
 
       # Tenant-scoped (auto-prefixed with {athanor_id}/)
-      Arca.put(ctx, ["guest", "notes.txt"], content)
+      Arca.put(ctx, ["data", "notes.txt"], content)
 
       # Global (no tenant prefix)
       Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
@@ -196,10 +197,10 @@ defmodule Arca.Storage do
   #   machinery may mutate them (`Arca.Overlay`'s internal-write scope or
   #   an `auth_method: :system` context — the `meta/` origin marks);
   #   `:global` roots stay at the storage root.
-  # - guest name: what a WASM guest calls the root (`nil` = host-only,
-  #   invisible at the guest boundary). `guest/` is the one renamed scope —
-  #   the guest says `data/` — so a `data/` grant is a physical SIBLING of
-  #   the host scopes, never their parent.
+  # - guest name: what a WASM guest may call the root (`nil` = host-only,
+  #   invisible at the guest boundary). A guest scope is a physical
+  #   SIBLING of the host scopes, never their parent, so a `data/` grant
+  #   can never see them.
   # - seed: how the root relates to the seed tree (`seed/{root}`) — one
   #   model: `:overlay` names a root whose shipped default lives there
   #   (`Arca.Overlay`): the athanor's tree holds its own copy of every
@@ -240,7 +241,7 @@ defmodule Arca.Storage do
     # (`Arca.ExecutionPayloads`, under the internal-write scope) change
     # bytes a row names by digest.
     {"payloads", :tenant_reserved, nil, nil, :system},
-    {"guest", :tenant, "data", nil, :open},
+    {"data", :tenant, "data", nil, :open},
     {"cache", :global, nil, nil, :system},
     {"system", :global, nil, nil, :system}
   ]
@@ -310,10 +311,10 @@ defmodule Arca.Storage do
   @spec reserved_roots() :: [String.t()]
   def reserved_roots, do: @reserved_roots
 
-  # The guest (WASM) storage vocabulary and the physical tenant scope each
-  # guest scope stores under. The guest contract says `data/`; the host
-  # stores that scope under `guest/`, a physical sibling of the host
-  # scopes (aqua/, conversations/) so a `data/` grant can never see them.
+  # The guest (WASM) storage vocabulary: the roots a guest may name, each
+  # mapped to the tenant scope it stores under — the athanor's root of the
+  # same name, a physical sibling of the host scopes (aqua/,
+  # conversations/) so a `data/` grant can never see them.
   @guest_scopes Map.new(
                   for {root, _class, guest, _seed, _tier} <- @layout,
                       guest != nil,
@@ -322,23 +323,20 @@ defmodule Arca.Storage do
 
   @doc """
   The guest storage scopes: what a WASM guest may name in a path, mapped
-  to the physical tenant scope each one stores under. `Opus.StorageHandler`
-  applies this at the guest boundary (requests come in speaking `data/`,
-  responses keep speaking it); keeping the map here means the layout —
-  including the one vocabulary difference between guest and host — is
-  written down in a single module.
+  to the tenant scope each one stores under. `Opus.StorageHandler`
+  applies this at the guest boundary; keeping the map here means the
+  roots a guest may reach are written down in the one layout table.
   """
   @spec guest_scopes() :: %{String.t() => String.t()}
   def guest_scopes, do: @guest_scopes
 
-  # What a person sees of the tree. A root's console name is its
-  # guest-facing name when it has one (`data/` for `guest/`) and its own
-  # otherwise; the system tier is not a folder at all.
+  # What a person sees of the tree: the roots of the open, shaped and read
+  # tiers, by name; the system tier is not a folder at all.
   @tier_order [:open, :shaped, :read]
   @console_folders for tier <- @tier_order,
-                       {root, class, guest, _seed, ^tier} <- @layout,
+                       {root, class, _guest, _seed, ^tier} <- @layout,
                        class in [:tenant, :tenant_reserved],
-                       do: %{name: guest || root, root: root, tier: tier}
+                       do: %{name: root, root: root, tier: tier}
 
   @console_scopes Map.new(@console_folders, &{&1.name, &1.root})
   @tiers Map.new(@layout, fn {root, _class, _guest, _seed, tier} -> {root, tier} end)
@@ -359,8 +357,8 @@ defmodule Arca.Storage do
   def console_folders, do: @console_folders
 
   @doc """
-  The console's folder vocabulary mapped to the physical tenant root each
-  folder stores under — `%{"data" => "guest", "components" => "components", …}`.
+  The console's folder vocabulary mapped to the tenant root each folder
+  stores under — `%{"data" => "data", "components" => "components", …}`.
   """
   @spec console_scopes() :: %{String.t() => String.t()}
   def console_scopes, do: @console_scopes
@@ -508,8 +506,8 @@ defmodule Arca.Storage do
   Locate `path` against the overlay's unit grammar: the one lookup from a
   logical path to its shadow unit and shape, answered by the root's
   installed `Arca.Storage.UnitLocator` (pure — no I/O, so batch walks
-  can classify every leaf without a probe). A non-overlaid root — `meta/`,
-  `guest/`, the empty path — is `:not_overlaid`. The wiring is asserted
+  can classify every leaf without a probe). A non-overlaid root — `data/`,
+  `notes/`, the empty path — is `:not_overlaid`. The wiring is asserted
   and cached by `install_locators!/0` at boot; the lazy fallback here
   covers `--no-start` scripts.
   """
@@ -708,10 +706,10 @@ defmodule Arca.Storage do
 
   ## Examples
 
-      iex> Arca.Storage.validate_path!(["guest", "notes.txt"])
+      iex> Arca.Storage.validate_path!(["data", "notes.txt"])
       :ok
 
-      iex> Arca.Storage.validate_path!(["guest", "..", "..", "etc", "passwd"])
+      iex> Arca.Storage.validate_path!(["data", "..", "..", "etc", "passwd"])
       ** (ArgumentError) Path traversal rejected: segment \"..\" is not allowed
   """
   defdelegate validate_path!(segments), to: Cyfr.PathSafety, as: :validate_segments!

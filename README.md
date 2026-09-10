@@ -140,7 +140,7 @@ your-project/
             ├── conversations/  # Chat attachment files
             ├── notes/      # What was kept out of a conversation — host-only, no guest scope
             ├── payloads/   # Retained execution inputs and results — host-only, by digest
-            └── guest/      # Files WASM components store (their `data/` scope)
+            └── data/       # Files WASM components store — their `data/` scope, and yours
 ```
 
 > Every folder exists from the moment the athanor is provisioned. The Files

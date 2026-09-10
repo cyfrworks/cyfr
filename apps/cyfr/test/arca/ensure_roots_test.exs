@@ -34,8 +34,8 @@ defmodule Arca.EnsureRootsTest do
   end
 
   test "ensure_dir/2 refuses what the roster refuses", %{ctx: ctx} do
-    assert :ok = Arca.ensure_dir(ctx, ["guest", "reports", "2026"])
-    assert {:ok, [{"2026", :dir}]} = Arca.list_typed(ctx, ["guest", "reports"])
+    assert :ok = Arca.ensure_dir(ctx, ["data", "reports", "2026"])
+    assert {:ok, [{"2026", :dir}]} = Arca.list_typed(ctx, ["data", "reports"])
 
     assert {:error, :forbidden} = Arca.ensure_dir(ctx, ["scratch"])
     assert {:error, :forbidden} = Arca.ensure_dir(ctx, ["seed", "components", "x"])

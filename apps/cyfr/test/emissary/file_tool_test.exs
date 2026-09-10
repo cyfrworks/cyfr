@@ -106,6 +106,6 @@ defmodule Emissary.MCP.FileToolTest do
                "content" => "x"
              })
 
-    refute Arca.exists?(ctx, ["guest", "x.txt"])
+    refute Arca.exists?(ctx, ["data", "x.txt"])
   end
 end

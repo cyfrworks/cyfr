@@ -19,7 +19,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   reads the athanor's whole tree, every scope in
   `Arca.Storage.tenant_roots/0`, attachment blobs included: the athanor is
   its members' own machine. A narrower credential, a key scoped to
-  `:storage_read` alone, reaches `conversations/` and `guest/` — what a
+  `:storage_read` alone, reaches `conversations/` and `data/` — what a
   conversation attached and what an agent could have written — and never
   the estate's components, its assistant tree or its notes. Conversation
   transcripts are rows, never reachable here, and an unknown first
@@ -84,7 +84,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         description:
           "Read a file in the athanor's storage by path. A person reads every root (" <>
             Enum.map_join(Arca.Storage.tenant_roots(), ", ", &(&1 <> "/")) <>
-            "); a key scoped to :storage_read reaches conversations/ and guest/",
+            "); a key scoped to :storage_read reaches conversations/ and data/",
         mimeType: Cyfr.MediaType.binary()
       }
     ]
@@ -137,7 +137,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # person (`:admin` — a session holds every permission), and for a
   # narrower key only the roots an agent or a conversation could have
   # filled.
-  @key_reach ["conversations", "guest"]
+  @key_reach ["conversations", "data"]
 
   defp within_reach(ctx, [root | _]) do
     if Context.has_permission?(ctx, :admin) or root in @key_reach,

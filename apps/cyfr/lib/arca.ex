@@ -81,18 +81,18 @@ defmodule Arca do
       ctx = Sanctum.TestContext.local()
 
       # Tenant-scoped storage (auto-prefixed with {athanor_id}/)
-      :ok = Arca.put(ctx, ["guest", "notes.txt"], content)
-      {:ok, content} = Arca.get(ctx, ["guest", "notes.txt"])
+      :ok = Arca.put(ctx, ["data", "notes.txt"], content)
+      {:ok, content} = Arca.get(ctx, ["data", "notes.txt"])
 
       # Global storage (no tenant prefix)
       :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
 
       # Append-only storage (JSONL-style logs)
-      :ok = Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], log_line <> "\\n")
+      :ok = Arca.append(ctx, ["data", "logs", "2025-01-15.jsonl"], log_line <> "\\n")
 
       # JSON convenience functions
-      :ok = Arca.put_json(ctx, ["guest", "state.json"], %{...})
-      {:ok, map} = Arca.get_json(ctx, ["guest", "state.json"])
+      :ok = Arca.put_json(ctx, ["data", "state.json"], %{...})
+      {:ok, map} = Arca.get_json(ctx, ["data", "state.json"])
 
   ## Retention
 
@@ -119,9 +119,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["guest", "file.txt"], "hello")
+      iex> Arca.put(ctx, ["data", "file.txt"], "hello")
       :ok
-      iex> Arca.get(ctx, ["guest", "file.txt"])
+      iex> Arca.get(ctx, ["data", "file.txt"])
       {:ok, "hello"}
   """
   @spec get(Context.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
@@ -134,9 +134,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["guest", "data.json"], %{"key" => "value"})
+      iex> Arca.put_json(ctx, ["data", "data.json"], %{"key" => "value"})
       :ok
-      iex> Arca.get_json(ctx, ["guest", "data.json"])
+      iex> Arca.get_json(ctx, ["data", "data.json"])
       {:ok, %{"key" => "value"}}
   """
   @spec get_json(Context.t(), Arca.Storage.path()) :: {:ok, term()} | {:error, term()}
@@ -169,7 +169,7 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["guest", "nested", "path", "file.txt"], "content")
+      iex> Arca.put(ctx, ["data", "nested", "path", "file.txt"], "content")
       :ok
   """
   @spec put(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
@@ -185,7 +185,7 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["guest", "data.json"], %{"key" => "value"})
+      iex> Arca.put_json(ctx, ["data", "data.json"], %{"key" => "value"})
       :ok
   """
   @spec put_json(Context.t(), Arca.Storage.path(), term(), keyword()) :: :ok | {:error, term()}
@@ -215,9 +215,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
+      iex> Arca.append(ctx, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
       :ok
-      iex> Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
+      iex> Arca.append(ctx, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
       :ok
   """
   @spec append(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
@@ -233,11 +233,11 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["guest", "file.txt"], "hello")
+      iex> Arca.put(ctx, ["data", "file.txt"], "hello")
       :ok
-      iex> Arca.delete(ctx, ["guest", "file.txt"])
+      iex> Arca.delete(ctx, ["data", "file.txt"])
       :ok
-      iex> Arca.get(ctx, ["guest", "file.txt"])
+      iex> Arca.get(ctx, ["data", "file.txt"])
       {:error, :not_found}
   """
   @spec delete(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
@@ -253,11 +253,11 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["guest", "listdir", "a.txt"], "a")
+      iex> Arca.put(ctx, ["data", "listdir", "a.txt"], "a")
       :ok
-      iex> Arca.put(ctx, ["guest", "listdir", "b.txt"], "b")
+      iex> Arca.put(ctx, ["data", "listdir", "b.txt"], "b")
       :ok
-      iex> {:ok, files} = Arca.list(ctx, ["guest", "listdir"])
+      iex> {:ok, files} = Arca.list(ctx, ["data", "listdir"])
       iex> Enum.sort(files)
       ["a.txt", "b.txt"]
   """
@@ -309,11 +309,11 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.exists?(ctx, ["guest", "nonexistent"])
+      iex> Arca.exists?(ctx, ["data", "nonexistent"])
       false
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.exists?(ctx, ["guest", "..", "aqua"])
+      iex> Arca.exists?(ctx, ["data", "..", "aqua"])
       false
   """
   @spec exists?(Context.t(), Arca.Storage.path()) :: boolean()
@@ -571,7 +571,7 @@ defmodule Arca do
       # permanently ENOTDIR-ing the tenant. `delete_tree` is exempt: the
       # whole tree (`[]` — the purge) and a whole scope are exactly what
       # it is for. Runs on the normalized path, so a multi-level string
-      # segment (`"guest/notes.txt"`) counts as its real depth.
+      # segment (`"data/notes.txt"`) counts as its real depth.
       kind != :delete_tree and length(path) < 2 ->
         {:error, :invalid_path}
 

@@ -74,7 +74,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
         content: "something private"
       })
 
-    :ok = Arca.put(ctx, ["guest", "notes.txt"], "kept until destroy")
+    :ok = Arca.put(ctx, ["data", "notes.txt"], "kept until destroy")
 
     # The rest of the roster, written straight through the row plane. Going
     # via each domain API would need a component, a consent walk and a
@@ -158,7 +158,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
              "#{table} still holds rows for a destroyed athanor"
     end
 
-    refute Arca.exists?(ctx, ["guest", "notes.txt"])
+    refute Arca.exists?(ctx, ["data", "notes.txt"])
     assert {:ok, []} = Arca.list_recursive(ctx, [])
 
     # The tombstone stands: an audit trail that forgets an athanor existed

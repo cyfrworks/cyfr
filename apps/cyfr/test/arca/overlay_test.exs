@@ -141,7 +141,7 @@ defmodule Arca.OverlayTest do
 
       assert Arca.Storage.locate(vd) == {:dir, vd, Compendium.ComponentPath.manifest_name()}
       assert Arca.Storage.locate(Enum.take(vd, 4)) == :above_unit
-      assert Arca.Storage.locate(["guest", "x"]) == :not_overlaid
+      assert Arca.Storage.locate(["data", "x"]) == :not_overlaid
       assert Arca.Storage.locate([]) == :not_overlaid
     end
 
@@ -175,9 +175,9 @@ defmodule Arca.OverlayTest do
     end
 
     test "a path outside the seeded roots is untouched", %{ctx: ctx} do
-      assert {:error, :not_found} = Arca.get(ctx, ["guest", "nope.txt"])
-      refute Arca.exists?(ctx, ["guest", "nope.txt"])
-      assert {:ok, []} = Arca.Overlay.shipped_units("guest")
+      assert {:error, :not_found} = Arca.get(ctx, ["data", "nope.txt"])
+      refute Arca.exists?(ctx, ["data", "nope.txt"])
+      assert {:ok, []} = Arca.Overlay.shipped_units("data")
     end
   end
 
@@ -262,7 +262,7 @@ defmodule Arca.OverlayTest do
       assert {:error, :not_shipped} = Arca.Overlay.pull_shipped(ctx, absent)
       assert {:error, :not_a_unit} = Arca.Overlay.pull_shipped(ctx, @version_dir ++ ["src"])
       assert {:error, :not_overlaid} = Arca.Overlay.pull_shipped(ctx, ["components"])
-      assert {:error, :not_overlaid} = Arca.Overlay.pull_shipped(ctx, ["guest", "x"])
+      assert {:error, :not_overlaid} = Arca.Overlay.pull_shipped(ctx, ["data", "x"])
     end
 
     test "a failed copy rolls back — nothing lingers, and the healed pull lands", %{ctx: ctx} do
@@ -397,7 +397,7 @@ defmodule Arca.OverlayTest do
 
       # Longer paths answer for their unit; non-overlaid roots are :absent.
       assert Arca.Overlay.unit_status(ctx, @version_dir ++ ["notes.txt"]) == {:ok, :shipped}
-      assert Arca.Overlay.unit_status(ctx, ["guest", "x"]) == {:ok, :absent}
+      assert Arca.Overlay.unit_status(ctx, ["data", "x"]) == {:ok, :absent}
     end
 
     test "unit_statuses/2 answers the whole root in two listings, matching unit_status/2",
@@ -832,17 +832,17 @@ defmodule Arca.OverlayTest do
 
   describe "always-on decorator" do
     test "paths outside the overlaid roots pass through verbatim", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["guest", "sub", "file.txt"], "guest bytes")
+      :ok = Arca.put(ctx, ["data", "sub", "file.txt"], "guest bytes")
       :ok = Arca.put(ctx, ["conversations", "conv_1", "blob.bin"], "blob")
 
-      assert {:ok, "guest bytes"} = Arca.get(ctx, ["guest", "sub", "file.txt"])
-      assert {:ok, [{"sub", :dir}]} = Arca.list_typed(ctx, ["guest"])
+      assert {:ok, "guest bytes"} = Arca.get(ctx, ["data", "sub", "file.txt"])
+      assert {:ok, [{"sub", :dir}]} = Arca.list_typed(ctx, ["data"])
 
       # The whole-athanor walk and tree deletes answer as the configured
       # adapter would — no seed merge outside the overlaid roots.
       assert {:ok, %{files: 2}} = Arca.usage(ctx, [])
       assert {:ok, leaves} = Arca.list_recursive(ctx, [])
-      assert ["guest", "sub", "file.txt"] in leaves
+      assert ["data", "sub", "file.txt"] in leaves
 
       assert :ok = Arca.delete_tree(ctx, ["conversations"])
       refute Arca.exists?(ctx, ["conversations", "conv_1", "blob.bin"])
@@ -858,7 +858,7 @@ defmodule Arca.OverlayTest do
           else: Application.delete_env(:cyfr, :storage_adapter)
       end)
 
-      assert_raise ArgumentError, ~r/decorator/, fn -> Arca.get(ctx, ["guest", "x"]) end
+      assert_raise ArgumentError, ~r/decorator/, fn -> Arca.get(ctx, ["data", "x"]) end
     end
   end
 
@@ -1026,7 +1026,7 @@ defmodule Arca.OverlayTest do
       assert {:error, :not_found} = Arca.Overlay.update(ctx, @manifest, fn _ -> {:ok, "x"} end)
       refute Arca.exists?(ctx, @manifest)
 
-      for path <- [["guest", "x.txt"], ["aqua", "roles"], ["aqua", "roles", "notes.txt"]] do
+      for path <- [["data", "x.txt"], ["aqua", "roles"], ["aqua", "roles", "notes.txt"]] do
         assert {:error, :not_overlaid} = Arca.Overlay.update(ctx, path, fn _ -> {:ok, "x"} end)
       end
 
@@ -1153,7 +1153,7 @@ defmodule Arca.OverlayTest do
     end
 
     test "tree source: streams another Arca tree; sentinel: overrides its manifest", %{ctx: ctx} do
-      src = ["guest", "staging"]
+      src = ["data", "staging"]
       :ok = Arca.put(ctx, src ++ ["a.txt"], "A")
       :ok = Arca.put(ctx, src ++ [@sentinel], ~s({"stale":true}))
 

@@ -16,7 +16,7 @@ defmodule Arca.Adapters.S3 do
   `Arca.Storage.physical_segments/2` under one root, so a key generated
   against one decodes identically against the other —
   `<prefix>/athanors/{athanor_id}/<scope>/<rest>` for every tenant scope
-  in `Arca.Storage.tenant_roots/0` (`components/`, `guest/`, `aqua/`, …)
+  in `Arca.Storage.tenant_roots/0` (`components/`, `data/`, `aqua/`, …)
   and the globals `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`.
 
   An S3 deployment is not a whole-box backup: the bucket holds Arca

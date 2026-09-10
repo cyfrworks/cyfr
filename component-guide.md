@@ -32,12 +32,12 @@ your-project/
         ├── conversations/ # Chat attachment files
         ├── notes/         # What was kept out of a conversation — host-only, never a guest scope
         ├── payloads/      # Retained execution inputs and results — host-only, by digest
-        └── guest/         # Files WASM components store — their `data/` scope
+        └── data/          # Files WASM components store — their `data/` scope, and yours
 ```
 
 Every folder is laid when the athanor is provisioned. The Files page in the
-console, and the `file` tool behind it, show this tree by tier: `data/` (the
-`guest/` root) is open, `components/` and `aqua/` are shaped, `notes/` and
+console, and the `file` tool behind it, show this tree by tier: `data/` is
+open, `components/` and `aqua/` are shaped, `notes/` and
 `conversations/` are read-only there, and `payloads/` is the server's own and
 has no name on the page.
 

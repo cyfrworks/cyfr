@@ -254,7 +254,7 @@ defmodule Cyfr.FilesTest do
   end
 
   test "locate/1 names the bytes the download route streams, in any shown folder" do
-    assert {:ok, ["guest", "a", "b.txt"], :open} = Files.locate("data/a/b.txt")
+    assert {:ok, ["data", "a", "b.txt"], :open} = Files.locate("data/a/b.txt")
     assert {:ok, ["notes", "plan.md"], :read} = Files.locate("notes/plan.md")
     assert {:error, {:not_found, "Folder", "payloads"}} = Files.locate("payloads/sha256/abc")
     assert {:error, {:invalid_argument, _}} = Files.locate("data")
