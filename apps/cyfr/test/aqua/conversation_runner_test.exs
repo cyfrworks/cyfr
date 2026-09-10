@@ -938,7 +938,7 @@ defmodule Aqua.ConversationRunnerTest do
     {:ok, _} =
       Conversations.update(alice, conv.id, %{
         execution_id: "exec_stored",
-        orchestrator: "aqua_planner"
+        orchestrator: "planner"
       })
 
     {:ok, _pid} = ConversationRunner.ensure(conv.id, conv.athanor_id)
@@ -946,7 +946,7 @@ defmodule Aqua.ConversationRunnerTest do
 
     live = ConversationRunner.state(conv.id, conv.athanor_id)
     assert live.running
-    assert live.orchestrator["name"] == "aqua_planner"
+    assert live.orchestrator["name"] == "planner"
     refute Map.has_key?(live.orchestrator, "owner")
   end
 

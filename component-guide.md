@@ -32,8 +32,7 @@ your-project/
         ├── conversations/ # Chat attachment files
         ├── notes/         # What was kept out of a conversation — host-only, never a guest scope
         ├── payloads/      # Retained execution inputs and results — host-only, by digest
-        ├── guest/         # Files WASM components store — their `data/` scope
-        └── meta/          # Overlay origin marks — system-plane only, never yours to write
+        └── guest/         # Files WASM components store — their `data/` scope
 ```
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
@@ -1132,24 +1131,24 @@ counted in its storage. The rules:
   and `component pull type:local.name` (or `:version`) copies the shipped
   version in beside what you hold — the same pull as a registry component,
   from the seed instead of a registry. Nothing is pulled behind your back.
-- **Editing marks the copy.** `component status` shows an edited copy as
-  `bundled_modified` with a diff against shipped; an unedited one is
-  `bundled`.
+- **Edit the copy freely.** It is yours to change in place; `component
+  status` compares it with what ships and shows an edited copy as
+  `bundled_modified` with the diff.
 - **Delete never means revert.** Deleting a bundled copy, edited or not, is
-  refused; the `component` tool's `reset` action restores an edited copy to
-  exactly what the release ships.
-- **Your own component at a shipped path stays yours.** A component you
-  created where a release ships one is shown as "hides shipped"; deleting
-  yours makes the shipped version available to pull. Reset never destroys
-  your work.
+  refused; the `component` tool's `reset` action, and the Reset button on
+  the Components page, put back exactly what the release ships.
+- **A shipped path is a shipped component.** Whatever bytes stand at a
+  name and version the server ships, they are the bundled copy, and Reset
+  replaces them with what ships. Scaffold refuses shipped names, so this
+  only ever describes a copy you edited.
 - **Forks report their upstream.** A fork remembers what it was cut from
   (`forked_from`); when a newer version of that upstream line is present
   locally, status flags it `upstream_superseded`.
 
 The AQUA tree — the soul, its roles and its scrolls — follows the same
 model: provisioning copies the shipped tree into the athanor's `aqua/`, an
-edit marks the file, and the `aqua` tool's `reset` action (from the AQUA
-page or over MCP) restores edited copies — one role by name, or every one —
+edited file reads as edited by its bytes, and the `aqua` tool's `reset`
+action (from the AQUA page or over MCP) restores edited copies — one role by name, or every one —
 while keeping the roles and scrolls the estate made; `skill_reset` restores
 one scroll.
 

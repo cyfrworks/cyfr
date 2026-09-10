@@ -977,7 +977,7 @@ defmodule PrismWeb.ComponentsLive do
   # version, and a line whose newest shipped version is already held has
   # nothing to update to.
   defp newer_shipped_ref(ver, versions) do
-    with true <- comp_field(ver, :provenance) in ["bundled", "bundled_modified"],
+    with true <- comp_field(ver, :provenance) == "bundled",
          [newest | _] <- comp_field(ver, :shipped_versions) || [],
          true <- Compendium.Semver.strictly_newer?(newest, comp_field(ver, :version)),
          false <- Enum.any?(versions, &(comp_field(&1, :version) == newest)),
@@ -999,7 +999,6 @@ defmodule PrismWeb.ComponentsLive do
   # default state and carries no badge noise; an absent label (older wire
   # shape) shows nothing.
   defp provenance_badge("bundled"), do: {"bundled", "bg-gray-800 text-gray-400"}
-  defp provenance_badge("bundled_modified"), do: {"modified", "bg-amber-900/50 text-amber-300"}
   defp provenance_badge("remote"), do: {"remote", "bg-sky-900/50 text-sky-300"}
   defp provenance_badge(_user_or_nil), do: nil
 
@@ -1414,13 +1413,6 @@ defmodule PrismWeb.ComponentsLive do
                                         >
                                           upstream updated
                                         </span>
-                                        <span
-                                          :if={comp_field(ver, :shadows_shipped)}
-                                          class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-900/50 text-amber-300"
-                                          title="your component hides a same-named shipped one — removing it reveals the shipped version"
-                                        >
-                                          hides shipped
-                                        </span>
                                       </td>
                                       <td class="px-3 py-2 text-sm text-gray-400">
                                         {format_bytes(comp_field(ver, :size))}
@@ -1472,24 +1464,19 @@ defmodule PrismWeb.ComponentsLive do
                                           </.button>
                                           <.button
                                             :if={
-                                              comp_field(ver, :provenance) == "bundled_modified" &&
-                                                !@pushing
+                                              comp_field(ver, :provenance) == "bundled" && !@pushing
                                             }
                                             variant="ghost"
                                             class="text-xs px-2 py-0.5 text-amber-400 hover:text-amber-300"
                                             phx-click="reset"
                                             phx-value-ref={ver_ref}
-                                            data-confirm={"Reset #{ver_ref} to the shipped version? Your edits will be lost."}
+                                            data-confirm={"Reset #{ver_ref} to the shipped version? Any edits will be lost."}
                                           >
                                             Reset
                                           </.button>
                                           <.button
                                             :if={
-                                              comp_field(ver, :provenance) not in [
-                                                "bundled",
-                                                "bundled_modified"
-                                              ] &&
-                                                !@pushing
+                                              comp_field(ver, :provenance) != "bundled" && !@pushing
                                             }
                                             variant="ghost"
                                             class="text-xs px-2 py-0.5 text-red-400 hover:text-red-300"

@@ -3,9 +3,9 @@
 
 defmodule Compendium.ProvenanceTest do
   @moduledoc """
-  Checks tree-derived provenance and its delete/reset behavior: a shipped
-  copy is restored, never deleted, and the athanor's own work is never
-  replaced by what ships.
+  Checks tree-derived provenance and its delete/reset behavior: a unit at
+  a path the server ships is a shipped copy whatever its bytes, restored
+  by reset and never deleted; an edit shows as drift.
   """
 
   use ExUnit.Case, async: false
@@ -51,12 +51,12 @@ defmodule Compendium.ProvenanceTest do
     {:ok, ctx: ctx, bundled: bundled}
   end
 
-  test "of/2 tells the four classes apart", %{ctx: ctx, bundled: bundled} do
+  test "of/2 tells the three classes apart", %{ctx: ctx, bundled: bundled} do
     assert Provenance.of(ctx, bundled) == {:ok, :bundled}
 
-    # An edit marks the copy — same row, different provenance.
+    # An edit does not change whose unit it is.
     :ok = Arca.put(ctx, @bundled_dir ++ ["notes.txt"], "edited")
-    assert Provenance.of(ctx, bundled) == {:ok, :bundled_modified}
+    assert Provenance.of(ctx, bundled) == {:ok, :bundled}
 
     # The athanor's own component: tenant bytes, no seed counterpart.
     own_dir = ["components", "reagents", "local", "own-tool", "0.1.0"]
@@ -81,7 +81,7 @@ defmodule Compendium.ProvenanceTest do
 
     # The batch map agrees with the one-row classification.
     {:ok, provenance_map} = Provenance.map(ctx)
-    assert provenance_map[{"bundled-tool", "1.0.0", "local"}] == :bundled_modified
+    assert provenance_map[{"bundled-tool", "1.0.0", "local"}] == :bundled
     assert provenance_map[{"own-tool", "0.1.0", "local"}] == :user
     assert provenance_map[{"remote-tool", "1.0.0", "local"}] == :remote
   end
@@ -89,9 +89,7 @@ defmodule Compendium.ProvenanceTest do
   test "of_status/1 covers every overlay state; label/1 is closed" do
     assert Provenance.of_status(:available) == :bundled
     assert Provenance.of_status(:shipped) == :bundled
-    assert Provenance.of_status(:modified) == :bundled_modified
     assert Provenance.of_status(:own) == :user
-    assert Provenance.of_status(:own_shadowing) == :user
     assert Provenance.of_status(:absent) == :user
 
     for provenance <- [:bundled, :bundled_modified, :user, :remote] do
@@ -138,7 +136,7 @@ defmodule Compendium.ProvenanceTest do
     assert {:ok, :pristine} = Provenance.drift(ctx, bundled)
 
     # An edit that leaves the shipped content as it was is still pristine
-    # by bytes — the diff decides, not the mark.
+    # by bytes — the diff decides.
     :ok = Arca.put(ctx, @bundled_dir ++ ["notes.txt"], "x")
     :ok = Arca.delete(ctx, @bundled_dir ++ ["notes.txt"])
     assert {:ok, :pristine} = Provenance.drift(ctx, bundled)
@@ -167,21 +165,22 @@ defmodule Compendium.ProvenanceTest do
   test "deleting an edited bundled copy refuses and points at reset", %{ctx: ctx} do
     :ok = Arca.put(ctx, @bundled_dir ++ ["notes.txt"], "edited")
 
-    assert {:error, :bundled_modified} = Registry.delete(ctx, "bundled-tool", "1.0.0")
+    assert {:error, :bundled} = Registry.delete(ctx, "bundled-tool", "1.0.0")
     assert {:ok, _} = Registry.get(ctx, "bundled-tool", "1.0.0")
   end
 
-  test "reset/4 reverts an edited copy to shipped and refuses everything else", %{
+  test "reset/4 restores a bundled copy to shipped and refuses everything else", %{
     ctx: ctx,
     bundled: bundled
   } do
-    assert {:ok, :already_pristine} = Registry.reset(ctx, "bundled-tool", "1.0.0")
+    # An unedited copy resets to itself.
+    assert {:ok, :reset} = Registry.reset(ctx, "bundled-tool", "1.0.0")
 
     :ok = Arca.put(ctx, @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
-    assert Provenance.of(ctx, bundled) == {:ok, :bundled_modified}
+    assert {:ok, %{provenance: :bundled_modified}} = Provenance.status(ctx, bundled)
 
     assert {:ok, :reset} = Registry.reset(ctx, "bundled-tool", "1.0.0")
-    assert Provenance.of(ctx, bundled) == {:ok, :bundled}
+    assert {:ok, %{provenance: :bundled, drift: :pristine}} = Provenance.status(ctx, bundled)
     assert {:ok, @valid_wasm} = Arca.get(ctx, @bundled_dir ++ ["reagent.wasm"])
 
     # The row survived the revert and matches the pristine bytes again.
@@ -199,7 +198,7 @@ defmodule Compendium.ProvenanceTest do
     assert {:error, :not_bundled} = Registry.reset(ctx, "remote-tool", "1.0.0")
   end
 
-  test "a user component a LATER release also ships stays the user's", %{ctx: ctx} do
+  test "a user component at a path a LATER release ships becomes the bundled copy", %{ctx: ctx} do
     # The athanor scaffolds mine-first 1.0.0 while no release ships it.
     own_dir = ["components", "reagents", "local", "mine-first", "1.0.0"]
     :ok = Arca.put(ctx, own_dir ++ ["reagent.wasm"], @valid_wasm)
@@ -215,41 +214,32 @@ defmodule Compendium.ProvenanceTest do
     assert Provenance.of(ctx, own) == {:ok, :user}
 
     # A later release ships the very same name and version.
-    shipped_wasm = @valid_wasm <> <<1>>
-
     Arca.Test.UnitFixtures.seed_component!("reagent", "local", "mine-first", "1.0.0",
       manifest: %{"type" => "reagent", "version" => "1.0.0", "description" => "shipped"},
-      wasm: shipped_wasm
+      wasm: @valid_wasm
     )
 
-    # Still the user's work: reset refuses to wipe it, delete is allowed —
-    # and only then is the shipped unit available to pull, never served in
-    # the user's place.
-    assert Provenance.of(ctx, own) == {:ok, :user}
-    assert {:error, :not_bundled} = Registry.reset(ctx, "mine-first", "1.0.0")
+    # Bundled now, and edited by its bytes: delete refuses, reset puts the
+    # shipped bytes there.
+    assert Provenance.of(ctx, own) == {:ok, :bundled}
+    assert {:ok, %{provenance: :bundled_modified}} = Provenance.status(ctx, own)
+    assert {:error, :bundled} = Registry.delete(ctx, "mine-first", "1.0.0")
 
-    assert {:ok, :deleted} = Registry.delete(ctx, "mine-first", "1.0.0")
-    assert {:error, :not_found} = Arca.get(ctx, own_dir ++ ["reagent.wasm"])
-    assert Arca.Overlay.unit_status(ctx, own_dir) == {:ok, :available}
-
-    :ok = Arca.Overlay.pull_shipped(ctx, own_dir)
-    assert {:ok, ^shipped_wasm} = Arca.get(ctx, own_dir ++ ["reagent.wasm"])
+    assert {:ok, :reset} = Registry.reset(ctx, "mine-first", "1.0.0")
+    assert {:ok, manifest} = Arca.get(ctx, own_dir ++ ["cyfr-manifest.json"])
+    assert %{"description" => "shipped"} = Jason.decode!(manifest)
+    assert {:ok, %{provenance: :bundled, drift: :pristine}} = Provenance.status(ctx, own)
   end
 
-  test "status/2 answers provenance, drift and shadowing in one probe", %{
-    ctx: ctx,
-    bundled: bundled
-  } do
-    assert {:ok, %{provenance: :bundled, drift: :pristine, shadows_shipped: false}} =
-             Provenance.status(ctx, bundled)
+  test "status/2 answers provenance and drift in one probe", %{ctx: ctx, bundled: bundled} do
+    assert {:ok, %{provenance: :bundled, drift: :pristine}} = Provenance.status(ctx, bundled)
 
     :ok = Arca.put(ctx, @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
 
     assert {:ok,
             %{
               provenance: :bundled_modified,
-              drift: {:modified, %{changed: [["reagent.wasm"]]}},
-              shadows_shipped: false
+              drift: {:modified, %{changed: [["reagent.wasm"]]}}
             }} = Provenance.status(ctx, bundled)
 
     # drift/2 is a thin reading of the same answer.
@@ -262,35 +252,8 @@ defmodule Compendium.ProvenanceTest do
         type: "reagent"
       })
 
-    assert {:ok, %{provenance: :remote, drift: nil, shadows_shipped: false}} =
-             Provenance.status(ctx, remote)
-  end
-
-  test "the athanor's own unit over a shipped counterpart reads shadows_shipped", %{ctx: ctx} do
-    own_dir = ["components", "reagents", "local", "mine-first", "1.0.0"]
-    :ok = Arca.put(ctx, own_dir ++ ["reagent.wasm"], @valid_wasm)
-
-    :ok =
-      Arca.put(
-        ctx,
-        own_dir ++ ["cyfr-manifest.json"],
-        Jason.encode!(%{"type" => "reagent", "version" => "1.0.0"})
-      )
-
-    {:ok, own} = Registry.register_from_arca(ctx, own_dir)
-    assert {:ok, %{provenance: :user, shadows_shipped: false}} = Provenance.status(ctx, own)
-
-    Arca.Test.UnitFixtures.seed_component!("reagent", "local", "mine-first", "1.0.0",
-      manifest: %{"type" => "reagent", "version" => "1.0.0"},
-      wasm: false
-    )
-
-    assert {:ok, %{provenance: :user, drift: nil, shadows_shipped: true}} =
-             Provenance.status(ctx, own)
-
-    {:ok, [entry]} = Provenance.annotate(ctx, [own])
-    assert entry.shadows_shipped
-    assert entry.provenance == :user
+    assert {:ok, %{provenance: :remote, drift: nil}} = Provenance.status(ctx, remote)
+    assert {:error, :not_bundled} = Provenance.drift(ctx, remote)
   end
 
   test "annotate/2 carries fork lineage, and malformed lineage never raises", %{ctx: ctx} do

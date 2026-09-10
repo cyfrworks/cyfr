@@ -3,11 +3,10 @@
 
 defmodule PrismWeb.ComponentsLiveTest do
   @moduledoc """
-  Provenance in the Components page: a bundled copy wears its badge and
-  offers no Remove (it isn't the athanor's to delete); an edited copy
-  reads "modified" and offers Reset; Reset restores the shipped bytes; a
-  newer shipped version is offered as Update and pulled in beside the
-  copy.
+  Provenance in the Components page: a bundled copy wears its badge,
+  offers Reset and no Remove (it isn't the athanor's to delete); Reset
+  restores the shipped bytes over an edit; a newer shipped version is
+  offered as Update and pulled in beside the copy.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -66,41 +65,29 @@ defmodule PrismWeb.ComponentsLiveTest do
     {view, render(view)}
   end
 
-  test "a bundled copy wears its badge and offers no Remove", %{conn: conn} do
+  test "a bundled copy wears its badge, offers Reset and no Remove", %{conn: conn} do
     {_view, html} = expanded_html(conn)
 
     assert html =~ "shelf-tool"
     assert html =~ ~r/>\s*bundled\s*</
-    refute html =~ ~r/>\s*modified\s*</
-    refute html =~ "Reset"
+    assert html =~ "Reset reagent:local.shelf-tool:1.0.0 to the shipped version?"
     refute html =~ "Remove reagent:local.shelf-tool:1.0.0?"
   end
 
-  test "an edited copy reads modified and offers Reset", %{conn: conn, ctx: ctx} do
+  test "Reset restores the shipped bytes over an edit", %{conn: conn, ctx: ctx} do
     :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
+    assert {:ok, true} = Arca.Overlay.edited?(ctx, @version_dir)
 
-    {_view, html} = expanded_html(conn)
-
-    assert html =~ ~r/>\s*modified\s*</
-    assert html =~ "Reset reagent:local.shelf-tool:1.0.0 to the shipped version?"
-  end
-
-  test "Reset reverts the copy to shipped", %{conn: conn, ctx: ctx} do
-    :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
-
-    {view, html} = expanded_html(conn)
-    assert html =~ ~r/>\s*modified\s*</
-
+    {view, _html} = expanded_html(conn)
     render_click(view, "reset", %{"ref" => "reagent:local.shelf-tool:1.0.0"})
 
     # The edit is gone; the copy matches the shipped version again, and a
     # fresh mount agrees.
     refute Arca.exists?(ctx, @version_dir ++ ["notes.txt"])
-    assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
+    assert {:ok, false} = Arca.Overlay.edited?(ctx, @version_dir)
 
     {_view, html} = expanded_html(conn)
     assert html =~ ~r/>\s*bundled\s*</
-    refute html =~ ~r/>\s*modified\s*</
   end
 
   test "a newer shipped version is offered as Update and pulled in beside the copy", %{

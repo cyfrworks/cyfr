@@ -99,24 +99,41 @@ defmodule Compendium.AquaTemplate do
 
   @doc """
   Each aqua unit the athanor holds, in the one provenance vocabulary
-  (`Compendium.Provenance.of_status/1`): `:bundled` (an unedited copy of
-  what shipped), `:bundled_modified` (the athanor edited its copy),
-  `:user` (member-created). A shipped unit the athanor does not hold is
-  not the athanor's and is not listed.
+  (`Compendium.Provenance`): `:bundled` (a copy of what ships, byte for
+  byte), `:bundled_modified` (the athanor wrote into its copy), `:user`
+  (member-created). A shipped unit the athanor does not hold is not the
+  athanor's and is not listed.
   """
   @spec status(Context.t()) ::
           {:ok, [%{path: String.t(), state: Compendium.Provenance.t()}]} | {:error, term()}
   def status(%Context{} = ctx) do
     with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "aqua") do
-      {:ok,
-       statuses
-       |> Enum.reject(fn {_unit, state} -> state == :available end)
-       |> Enum.map(fn {unit, state} ->
-         %{path: Enum.join(unit, "/"), state: Compendium.Provenance.of_status(state)}
-       end)
-       |> Enum.sort_by(& &1.path)}
+      statuses
+      |> Enum.sort_by(fn {unit, _state} -> unit end)
+      |> Enum.reduce_while({:ok, []}, fn {unit, state}, {:ok, acc} ->
+        case unit_provenance(ctx, unit, state) do
+          {:ok, nil} -> {:cont, {:ok, acc}}
+          {:ok, state} -> {:cont, {:ok, [%{path: Enum.join(unit, "/"), state: state} | acc]}}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, files} -> {:ok, Enum.reverse(files)}
+        error -> error
+      end
     end
   end
+
+  # A held copy is bundled or edited by its bytes; the athanor's own is
+  # the athanor's; what it does not hold is not listed.
+  defp unit_provenance(ctx, unit, :shipped) do
+    with {:ok, edited?} <- Arca.Overlay.edited?(ctx, unit) do
+      {:ok, if(edited?, do: :bundled_modified, else: :bundled)}
+    end
+  end
+
+  defp unit_provenance(_ctx, _unit, :own), do: {:ok, :user}
+  defp unit_provenance(_ctx, _unit, _available_or_absent), do: {:ok, nil}
 
   @doc """
   Reset the aqua tree to what ships: every edited copy of a shipped unit
@@ -150,27 +167,46 @@ defmodule Compendium.AquaTemplate do
   end
 
   @doc """
-  Restore one edited copy of a shipped unit — the soul, a role or a
-  scroll — to the shipped bytes. `{:error, :pristine}` when the copy is
-  unedited, `{:error, :not_a_copy}` when the athanor made the unit
-  itself, `{:error, :not_found}` when the athanor does not hold it.
+  Restore one shipped unit — the soul, a role or a scroll — to the
+  shipped bytes, whatever the athanor wrote into its copy; a shipped unit
+  the athanor lacks is copied in. `{:error, :not_a_copy}` when the
+  athanor made the unit itself, `{:error, :not_found}` when neither the
+  athanor nor the seed has it.
   """
   @spec restore(Context.t(), Arca.Storage.path()) ::
-          :ok | {:error, :pristine | :not_a_copy | :not_found | term()}
+          :ok | {:error, :not_a_copy | :not_found | term()}
   def restore(%Context{} = ctx, unit) do
     Context.require_tenant!(ctx)
 
-    with :ok <- seed_check(), do: Arca.Overlay.revert_copy(ctx, unit)
+    with :ok <- seed_check(),
+         {:ok, status} <- Arca.Overlay.unit_status(ctx, unit) do
+      case status do
+        held_or_offered when held_or_offered in [:shipped, :available] ->
+          Arca.Overlay.pull_shipped(ctx, unit)
+
+        :own ->
+          {:error, :not_a_copy}
+
+        :absent ->
+          {:error, :not_found}
+      end
+    end
   end
 
   # One unit's part of a reset: an edited copy is restored, a shipped unit
   # the athanor lacks is copied in, and the athanor's own work is kept —
   # or, with `all: true`, deleted so the shipped set is all that remains.
-  defp reset_unit(ctx, unit, :modified, _all?), do: outcome(Arca.Overlay.revert_copy(ctx, unit))
-  defp reset_unit(ctx, unit, :available, _all?), do: outcome(Arca.Overlay.pull_shipped(ctx, unit))
-  defp reset_unit(_ctx, _unit, :shipped, _all?), do: :unchanged
+  defp reset_unit(ctx, unit, :shipped, _all?) do
+    case Arca.Overlay.edited?(ctx, unit) do
+      {:ok, true} -> outcome(Arca.Overlay.pull_shipped(ctx, unit))
+      {:ok, false} -> :unchanged
+      {:error, _} = error -> error
+    end
+  end
 
-  defp reset_unit(ctx, unit, own, true) when own in [:own, :own_shadowing] do
+  defp reset_unit(ctx, unit, :available, _all?), do: outcome(Arca.Overlay.pull_shipped(ctx, unit))
+
+  defp reset_unit(ctx, unit, :own, true) do
     case Arca.Overlay.drop_unit(ctx, unit) do
       {:ok, :deleted} -> :reverted
       {:error, :not_found} -> :unchanged
@@ -178,7 +214,7 @@ defmodule Compendium.AquaTemplate do
     end
   end
 
-  defp reset_unit(_ctx, _unit, own, false) when own in [:own, :own_shadowing], do: :kept
+  defp reset_unit(_ctx, _unit, :own, false), do: :kept
   defp reset_unit(_ctx, _unit, :absent, _all?), do: :unchanged
 
   defp outcome(:ok), do: :reverted

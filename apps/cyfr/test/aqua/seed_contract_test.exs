@@ -19,7 +19,7 @@ defmodule Aqua.SeedContractTest do
   Virtual tools (`files`, `storage`, `http`, `request_setup`) and the
   `native_search` gate live inside the formula and are not MCP actions —
   they must not appear in caps, and are not checked here. Role globs
-  (`aqua_builder.*`) are delegation targets the formula resolves itself.
+  (`builder.*`) are delegation targets the formula resolves itself.
   """
   use ExUnit.Case, async: true
 

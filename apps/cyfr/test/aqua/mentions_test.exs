@@ -17,8 +17,8 @@ defmodule Aqua.MentionsTest do
     end
 
     test "longest handle wins, so a suffixed name is not read as a prefix" do
-      roster = [entry("aqua"), entry("aqua_planner")]
-      assert {"go", %{"name" => "aqua_planner"}} = Turn.parse_mention("@aqua_planner go", roster)
+      roster = [entry("aqua"), entry("planner")]
+      assert {"go", %{"name" => "planner"}} = Turn.parse_mention("@planner go", roster)
     end
 
     test "a mention is a whole word" do

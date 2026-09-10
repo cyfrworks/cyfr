@@ -46,7 +46,7 @@ defmodule Compendium.AquaPath do
 
   ## Examples
 
-      iex> Compendium.AquaPath.valid_name?("aqua_web")
+      iex> Compendium.AquaPath.valid_name?("web")
       true
 
       iex> Compendium.AquaPath.valid_name?("../escape")
@@ -80,7 +80,7 @@ defmodule Compendium.AquaPath do
       iex> Compendium.AquaPath.soul?("aqua")
       true
 
-      iex> Compendium.AquaPath.soul?("aqua_web")
+      iex> Compendium.AquaPath.soul?("web")
       false
 
   """
@@ -144,8 +144,8 @@ defmodule Compendium.AquaPath do
 
   ## Examples
 
-      iex> Compendium.AquaPath.role_file("aqua_web")
-      ["aqua", "roles", "aqua_web.md"]
+      iex> Compendium.AquaPath.role_file("web")
+      ["aqua", "roles", "web.md"]
 
   """
   @spec role_file(String.t()) :: [String.t()]
@@ -161,8 +161,8 @@ defmodule Compendium.AquaPath do
       iex> Compendium.AquaPath.agent_file("aqua")
       ["aqua", "aqua.md"]
 
-      iex> Compendium.AquaPath.agent_file("aqua_web")
-      ["aqua", "roles", "aqua_web.md"]
+      iex> Compendium.AquaPath.agent_file("web")
+      ["aqua", "roles", "web.md"]
 
   """
   @spec agent_file(String.t()) :: [String.t()]
@@ -213,8 +213,8 @@ defmodule Compendium.AquaPath do
   The overlay's unit grammar for `aqua/` (`Arca.Storage.UnitLocator`):
   the soul and each role are file-shaped units (a valid-named `.md`
   file), a skill a valid-named directory unit sentinel'd by `SKILL.md`. A
-  unit is a claim the storage layer acts on — the shipped copy, origin
-  and edit marks, status — so only the grammar mints one: a
+  unit is a claim the storage layer acts on — the shipped copy, the
+  lock, status — so only the grammar mints one: a
   stray `roles/notes.txt` or a junk-named skill dir stays plain storage,
   outside the roster and the reset bookkeeping.
 
@@ -223,8 +223,8 @@ defmodule Compendium.AquaPath do
       iex> Compendium.AquaPath.locate(["aqua", "aqua.md"])
       {:file, ["aqua", "aqua.md"]}
 
-      iex> Compendium.AquaPath.locate(["aqua", "roles", "aqua_web.md"])
-      {:file, ["aqua", "roles", "aqua_web.md"]}
+      iex> Compendium.AquaPath.locate(["aqua", "roles", "web.md"])
+      {:file, ["aqua", "roles", "web.md"]}
 
       iex> Compendium.AquaPath.locate(["aqua", "skills", "pdf-forms", "helpers", "fill.md"])
       {:dir, ["aqua", "skills", "pdf-forms"], "SKILL.md"}

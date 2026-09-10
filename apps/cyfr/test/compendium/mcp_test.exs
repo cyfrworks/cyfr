@@ -56,7 +56,7 @@ defmodule Compendium.MCPTest do
     )
 
     write.(
-      "aqua_builder",
+      "builder",
       %{
         title: "Builder",
         description: "WASM component builder sub-agent prompt",
@@ -66,7 +66,7 @@ defmodule Compendium.MCPTest do
     )
 
     write.(
-      "aqua_artisan",
+      "artisan",
       %{
         title: "Artisan",
         description: "Tincture app/dashboard sub-agent prompt",
@@ -76,7 +76,7 @@ defmodule Compendium.MCPTest do
     )
 
     write.(
-      "aqua_explorer",
+      "explorer",
       %{
         title: "Explorer",
         description: "Research and web search sub-agent prompt",
@@ -86,13 +86,13 @@ defmodule Compendium.MCPTest do
     )
 
     write.(
-      "aqua_planner",
+      "planner",
       %{title: "Planner", description: "Planning and analysis sub-agent prompt"},
       "# Planner Agent\n\nYou are the Planner."
     )
 
     write.(
-      "aqua_web",
+      "web",
       %{
         title: "Web",
         description: "HTTP interaction sub-agent prompt",
@@ -1098,9 +1098,8 @@ defmodule Compendium.MCPTest do
       # Every listed row carries its provenance and update facts — the
       # one data path the Components page consumes.
       for comp <- result.components do
-        assert comp[:provenance] in ["bundled", "bundled_modified", "user", "remote"]
+        assert comp[:provenance] in ["bundled", "user", "remote"]
         assert is_boolean(comp[:superseded])
-        assert is_boolean(comp[:shadows_shipped])
         assert is_boolean(comp[:upstream_superseded])
       end
     end
@@ -1276,11 +1275,11 @@ defmodule Compendium.MCPTest do
       assert "tincture-guide" in names
       assert "integration-guide" in names
       assert "aqua" in names
-      assert "aqua_builder" in names
-      assert "aqua_artisan" in names
-      assert "aqua_explorer" in names
-      assert "aqua_planner" in names
-      assert "aqua_web" in names
+      assert "builder" in names
+      assert "artisan" in names
+      assert "explorer" in names
+      assert "planner" in names
+      assert "web" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do
@@ -1352,11 +1351,11 @@ defmodule Compendium.MCPTest do
       assert result.model == "claude-opus-4-6"
     end
 
-    test "get aqua_builder returns a role with metadata", %{ctx: ctx} do
+    test "get builder returns a role with metadata", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
 
-      assert result.name == "aqua_builder"
+      assert result.name == "builder"
       assert result.type == "role"
       refute Map.has_key?(result, :parent)
       assert result.format == "markdown"
@@ -1367,7 +1366,7 @@ defmodule Compendium.MCPTest do
     test "get returns the athanor's declared policy — one allowlist for every member", %{
       ctx: ctx
     } do
-      {:ok, before} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+      {:ok, before} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
       assert before.tool_policy["build.compile"] == "auto"
 
       # Editing declared policy goes through the tool — the agents page's
@@ -1381,11 +1380,11 @@ defmodule Compendium.MCPTest do
       {:ok, _} =
         MCP.handle("aqua", ctx, %{
           "action" => "update",
-          "name" => "aqua_builder",
+          "name" => "builder",
           "tool_policy" => edited
         })
 
-      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
 
       refute Map.has_key?(result.tool_policy, "build.compile")
       assert result.tool_policy["files.write"] == "auto"
@@ -1397,7 +1396,7 @@ defmodule Compendium.MCPTest do
       assert {:error, msg} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"files.delete" => "block"}
                })
 
@@ -1408,7 +1407,7 @@ defmodule Compendium.MCPTest do
       assert {:error, msg} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"no-dot-here" => "auto"}
                })
 
@@ -1448,7 +1447,7 @@ defmodule Compendium.MCPTest do
       assert {:error, {:invalid_argument, msg}} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"files.*" => "auto"}
                })
 
@@ -1458,7 +1457,7 @@ defmodule Compendium.MCPTest do
       assert {:error, {:invalid_argument, msg}} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"files.write" => "ask"}
                })
 
@@ -1487,34 +1486,34 @@ defmodule Compendium.MCPTest do
       assert {:ok, _} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"files.write" => "auto", "files.read" => "auto"}
                })
     end
 
-    test "get aqua_artisan returns a role prompt", %{ctx: ctx} do
+    test "get artisan returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_artisan"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "artisan"})
 
-      assert result.name == "aqua_artisan"
+      assert result.name == "artisan"
       assert result.type == "role"
       assert result.content =~ "Artisan Agent"
     end
 
-    test "get aqua_web returns a role prompt", %{ctx: ctx} do
+    test "get web returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_web"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "web"})
 
-      assert result.name == "aqua_web"
+      assert result.name == "web"
       assert result.type == "role"
       assert result.content =~ "Web Agent"
     end
 
-    test "get aqua_planner returns a role prompt", %{ctx: ctx} do
+    test "get planner returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_planner"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "planner"})
 
-      assert result.name == "aqua_planner"
+      assert result.name == "planner"
       assert result.type == "role"
       assert result.content =~ "Planner Agent"
     end
@@ -1662,7 +1661,7 @@ defmodule Compendium.MCPTest do
 
       assert "aqua/roles/keeper.md" in kept
       assert "aqua/skills/pdf" in kept
-      assert "aqua/roles/aqua_web.md" in reverted
+      assert "aqua/roles/web.md" in reverted
       assert Arca.exists?(ctx, ["aqua", "roles", "keeper.md"])
 
       {:ok, %{reset: true, kept: []}} =
@@ -1807,14 +1806,10 @@ defmodule Compendium.MCPTest do
 
       assert back.content =~ "component(action: \"search\""
 
-      # Restored, it is already what ships; the estate's own has nothing to restore to.
-      assert {:error, {:invalid_argument, msg}} =
-               MCP.handle("aqua", ctx, %{
-                 "action" => "skill_reset",
-                 "name" => "capability-acquisition"
-               })
-
-      assert msg =~ "already what ships"
+      # Restoring again changes nothing and answers the same; the estate's
+      # own has nothing to restore to.
+      {:ok, %{restored: "capability-acquisition"}} =
+        MCP.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "capability-acquisition"})
 
       {:ok, _} =
         MCP.handle("aqua", ctx, %{
@@ -1840,34 +1835,32 @@ defmodule Compendium.MCPTest do
     end
 
     test "a shipped role refuses delete, edited or not, and points at disable", %{ctx: ctx} do
-      # The fixture edited the athanor's copy of aqua_web: still shipped,
+      # The fixture edited the athanor's copy of web: still shipped,
       # still not deletable — disable is the verb, and reset the way back.
-      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
+      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "web"})
       assert err_msg(msg) =~ "cannot be deleted"
       assert err_msg(msg) =~ "disabled=true"
 
-      {:ok, %{restored: "aqua_web"}} =
-        MCP.handle("aqua", ctx, %{"action" => "reset", "name" => "aqua_web"})
+      {:ok, %{restored: "web"}} =
+        MCP.handle("aqua", ctx, %{"action" => "reset", "name" => "web"})
 
       {:ok, %{files: files}} = MCP.handle("aqua", ctx, %{"action" => "status"})
-      assert %{state: "bundled"} = Enum.find(files, &(&1.path == "aqua/roles/aqua_web.md"))
+      assert %{state: "bundled"} = Enum.find(files, &(&1.path == "aqua/roles/web.md"))
 
-      assert {:error, {:invalid_argument, msg}} =
-               MCP.handle("aqua", ctx, %{"action" => "reset", "name" => "aqua_web"})
+      {:ok, %{restored: "web"}} =
+        MCP.handle("aqua", ctx, %{"action" => "reset", "name" => "web"})
 
-      assert msg =~ "already what ships"
-
-      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
+      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "web"})
       assert err_msg(msg) =~ "cannot be deleted"
 
       {:ok, _} =
-        MCP.handle("aqua", ctx, %{"action" => "update", "name" => "aqua_web", "disabled" => true})
+        MCP.handle("aqua", ctx, %{"action" => "update", "name" => "web", "disabled" => true})
 
       {:ok, listing} = MCP.handle("aqua", ctx, %{"action" => "list"})
-      refute Enum.any?(listing.guides, &(&1.name == "aqua_web"))
+      refute Enum.any?(listing.guides, &(&1.name == "web"))
 
       # get still answers (so it can be re-enabled), flagged.
-      {:ok, got} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_web"})
+      {:ok, got} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "web"})
       assert got.disabled == true
     end
 

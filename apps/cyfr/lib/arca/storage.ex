@@ -84,8 +84,8 @@ defmodule Arca.Storage do
           ├── components/{type}s/{publisher}/{name}/{version}/
           ├── aqua/                      # the athanor's AQUA agent definitions
           ├── conversations/             # chat attachment blobs
-          ├── guest/                     # guest (WASM) files — the guest's `data/` scope
-          └── meta/                      # tenant-reserved: origin and edit marks of shipped copies, system-written
+          ├── payloads/                  # retained execution bodies — tenant-reserved, system-written
+          └── guest/                     # guest (WASM) files — the guest's `data/` scope
 
   Per-athanor settings (retention policy included) are rows — the
   `athanors.settings` document — never blobs; the tree holds only content.
@@ -234,7 +234,6 @@ defmodule Arca.Storage do
     # bytes a row names by digest.
     {"payloads", :tenant_reserved, nil, nil},
     {"guest", :tenant, "data", nil},
-    {"meta", :tenant_reserved, nil, nil},
     {"cache", :global, nil, nil},
     {"system", :global, nil, nil}
   ]
@@ -288,11 +287,10 @@ defmodule Arca.Storage do
   @spec tenant_roots() :: [String.t()]
   def tenant_roots, do: @tenant_roots
 
-  # Tenant roots only the server's own machinery may mutate. `meta/`
-  # holds the overlay's origin marks — the facts `unit_status/2` trusts
-  # to tell a copy of shipped media from the athanor's own work — so a
-  # member-level write there could forge a mark and turn "reset" into
-  # deleting member work. Reads stay ordinary tenant reads.
+  # Tenant roots only the server's own machinery may mutate: `payloads/`
+  # holds bytes an `execution_payloads` row names by digest, so a
+  # member-level write there could put other bytes behind a recorded
+  # digest. Reads stay ordinary tenant reads.
   @reserved_roots for {root, :tenant_reserved, _guest, _seed} <- @layout, do: root
 
   @doc """

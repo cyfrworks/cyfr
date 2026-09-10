@@ -495,7 +495,6 @@ defmodule Compendium.MCP.ComponentTool do
           |> Map.put(:provenance, Compendium.Provenance.label(entry.provenance))
           |> Map.put(:shipped_versions, entry.shipped_versions)
           |> Map.put(:superseded, entry.superseded)
-          |> Map.put(:shadows_shipped, entry.shadows_shipped)
           |> Map.put(:forked_from, entry.forked_from)
           |> Map.put(:upstream_superseded, entry.upstream_superseded)
         end)
@@ -536,11 +535,6 @@ defmodule Compendium.MCP.ComponentTool do
              "#{reference} ships with the server and cannot be deleted — " <>
                "edit it, or use action=reset to restore it"}
 
-          {:error, :bundled_modified} ->
-            {:error,
-             "#{reference} is bundled with local edits — use action=reset to " <>
-               "restore the shipped version"}
-
           {:error, reason} ->
             Logger.error("[Compendium.MCP] component.delete failed: #{inspect(reason)}")
             {:error, "Failed to delete #{reference}"}
@@ -555,8 +549,8 @@ defmodule Compendium.MCP.ComponentTool do
     {:error, {:invalid_argument, "Missing required argument: reference"}}
   end
 
-  # Reset action — revert a bundled component's local edits to exactly what
-  # the release shipped ("delete" never means "revert").
+  # Reset action — restore a bundled component to exactly what the release
+  # ships ("delete" never means "revert").
   def handle(%Context{} = ctx, %{"action" => "reset", "reference" => reference}) do
     with {:ok, %{version: version} = cref} when is_binary(version) <-
            Sanctum.ComponentRef.parse(reference) do
@@ -564,9 +558,6 @@ defmodule Compendium.MCP.ComponentTool do
         {:ok, :reset} ->
           broadcast_components_changed(ctx)
           {:ok, %{status: "reset", reference: reference}}
-
-        {:ok, :already_pristine} ->
-          {:ok, %{status: "already_pristine", reference: reference}}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Component", reference}}
@@ -625,8 +616,7 @@ defmodule Compendium.MCP.ComponentTool do
        %{
          reference: reference,
          provenance: Compendium.Provenance.label(overlay.provenance),
-         shipped_versions: shipped,
-         shadows_shipped: overlay.shadows_shipped
+         shipped_versions: shipped
        }
        |> Map.merge(drift)
        |> Map.merge(lineage)}
@@ -674,7 +664,6 @@ defmodule Compendium.MCP.ComponentTool do
               provenance: Compendium.Provenance.label(entry.provenance),
               shipped_versions: entry.shipped_versions,
               superseded: entry.superseded,
-              shadows_shipped: entry.shadows_shipped,
               forked_from: entry.forked_from,
               upstream_superseded: entry.upstream_superseded
             }
@@ -683,7 +672,7 @@ defmodule Compendium.MCP.ComponentTool do
         counts =
           Enum.reduce(
             overview,
-            %{bundled: 0, bundled_modified: 0, user: 0, remote: 0},
+            %{bundled: 0, user: 0, remote: 0},
             fn entry, acc -> Map.update!(acc, entry.provenance, &(&1 + 1)) end
           )
 
@@ -1258,9 +1247,6 @@ defmodule Compendium.MCP.ComponentTool do
     do:
       "#{reference} is not a version the server ships — a local component is " <>
         "registered from your tree (`cyfr register`); only shipped versions are pulled from the seed"
-
-  defp shipped_pull_error(reference, :own_work),
-    do: "#{reference} is your own component — the shipped version is not copied over it"
 
   defp shipped_pull_error(reference, reason) do
     Logger.error("[Compendium.MCP] shipped pull of #{reference} failed: #{inspect(reason)}")

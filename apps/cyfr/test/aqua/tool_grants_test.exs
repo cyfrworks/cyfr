@@ -113,8 +113,8 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "a role's delegation glob and the search gate pass through composition untouched" do
-      composed = ToolGrants.resolve(%{"aqua_builder.*" => "auto", "native_search" => "auto"}, [])
-      assert composed == %{"aqua_builder.*" => "auto", "native_search" => "auto"}
+      composed = ToolGrants.resolve(%{"builder.*" => "auto", "native_search" => "auto"}, [])
+      assert composed == %{"builder.*" => "auto", "native_search" => "auto"}
     end
 
     test "the kind ceiling demotes an automatic destructive action, wherever it came from" do
@@ -293,7 +293,7 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "another agent's grants are not this agent's", %{ctx: ctx} do
-      {:ok, _} = grant(ctx, %{agent_name: "aqua_planner"})
+      {:ok, _} = grant(ctx, %{agent_name: "planner"})
 
       assert [] = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
     end

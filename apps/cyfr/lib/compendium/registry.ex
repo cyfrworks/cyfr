@@ -29,12 +29,11 @@ defmodule Compendium.Registry do
   ## Delete vs reset — provenance decides
 
   `delete/4` asks `Compendium.Provenance` first: a `:bundled` component
-  is the release's, not the athanor's (refused); a `:bundled_modified`
-  copy refuses too — "delete" never means "revert"; the revert is
-  `reset/4`, which asks the overlay's `revert_copy/2` (only a
-  materialized copy reverts; member work never does). A `:user`/`:remote`
-  component deletes bytes FIRST, then rows, so the DB can never claim a
-  deletion the tree didn't make.
+  is the release's, not the athanor's (refused, edited or not — "delete"
+  never means "revert"); the revert is `reset/4`, which copies what ships
+  over the athanor's copy (`Arca.Overlay.pull_shipped/2`). A
+  `:user`/`:remote` component deletes bytes FIRST, then rows, so the DB
+  can never claim a deletion the tree didn't make.
 
   Hostname normalization uses `Compendium.RegistryHost`, archive handling
   uses `Compendium.Archive`, and name-level removal uses `Compendium.Cascade`.
@@ -665,9 +664,8 @@ defmodule Compendium.Registry do
   @doc """
   Delete a component from the registry — and "deleted" means GONE.
 
-  Returns `{:error, :bundled}` for bundled components and
-  `{:error, :bundled_modified}` for modified bundled copies; use `reset/4`
-  to restore a modified copy. User and remote components are deleted from
+  Returns `{:error, :bundled}` for a bundled component, edited or not;
+  `reset/4` restores one. User and remote components are deleted from
   storage before their rows and associations; storage failure retains the
   row. Returns `{:ok, :deleted}`.
 
@@ -675,7 +673,7 @@ defmodule Compendium.Registry do
   name/version.
   """
   @spec delete(Context.t(), String.t(), String.t(), String.t() | nil) ::
-          {:ok, :deleted} | {:error, :not_found | :bundled | :bundled_modified | term()}
+          {:ok, :deleted} | {:error, :not_found | :bundled | term()}
   def delete(%Context{} = ctx, name, version, publisher_filter \\ nil)
       when is_binary(name) and is_binary(version) do
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher_filter, nil) do
@@ -721,49 +719,40 @@ defmodule Compendium.Registry do
     end
   end
 
-  # Provenance decides the refusals: a shipped copy, edited or not, is
-  # restored rather than deleted; the athanor's own work and a pulled
-  # component delete outright.
+  # Provenance decides the refusals: a shipped copy is restored rather
+  # than deleted; the athanor's own work and a pulled component delete
+  # outright.
   defp delete_disposition(ctx, component) do
     case Compendium.Provenance.of(ctx, component) do
       {:ok, :bundled} -> {:error, :bundled}
-      {:ok, :bundled_modified} -> {:error, :bundled_modified}
       {:ok, own_or_remote} when own_or_remote in [:user, :remote] -> {:ok, :deleted}
       {:error, _} = error -> error
     end
   end
 
   @doc """
-  Restore a `:bundled_modified` component to exactly what the release
-  ships: copy the shipped unit over the athanor's edited copy and
-  re-register so the row matches the pristine bytes. Refused for anything
-  else — `{:ok, :already_pristine}` for an unedited bundled component,
-  `{:error, :not_bundled}` for the athanor's own or a pulled one.
+  Restore a bundled component to exactly what the release ships: copy the
+  shipped unit over the athanor's copy, whatever was written into it, and
+  re-register so the row matches the shipped bytes.
+  `{:error, :not_bundled}` for the athanor's own or a pulled one — nothing
+  shipped to restore.
   """
   @spec reset(Context.t(), String.t(), String.t(), String.t() | nil) ::
-          {:ok, :reset | :already_pristine} | {:error, term()}
+          {:ok, :reset} | {:error, term()}
   def reset(%Context{} = ctx, name, version, publisher_filter \\ nil)
       when is_binary(name) and is_binary(version) do
     with {:ok, component} <-
            Arca.ComponentStorage.get_component(ctx, name, version, publisher_filter, nil) do
-      # The overlay's revert verb IS the policy: only an edited copy
-      # restores. The athanor's own work (a fork, a pull, its own name a
-      # release later shipped) refuses as :not_a_copy; an unedited copy
-      # as :pristine — both mapped to this surface's words.
-      case Arca.Overlay.revert_copy(ctx, Compendium.Provenance.version_dir(component)) do
+      unit = Compendium.Provenance.version_dir(component)
+
+      case Arca.Overlay.pull_shipped(ctx, unit) do
         :ok ->
           # The re-registration invalidates the executor caches when the
-          # pristine bytes differ from the row; an `:unchanged` answer
+          # shipped bytes differ from the row; an `:unchanged` answer
           # means nothing moved and nothing needs sweeping.
-          with {:ok, _} <-
-                 register_from_arca(ctx, Compendium.Provenance.version_dir(component)) do
-            {:ok, :reset}
-          end
+          with {:ok, _} <- register_from_arca(ctx, unit), do: {:ok, :reset}
 
-        {:error, :pristine} ->
-          {:ok, :already_pristine}
-
-        {:error, refused} when refused in [:not_a_copy, :not_found, :not_overlaid] ->
+        {:error, refused} when refused in [:not_shipped, :not_a_unit, :not_overlaid] ->
           {:error, :not_bundled}
 
         {:error, _} = error ->

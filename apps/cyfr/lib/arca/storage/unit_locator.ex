@@ -21,7 +21,7 @@ defmodule Arca.Storage.UnitLocator do
       version directory, an aqua skill).
 
   Pure — no I/O, no context. The shape must be answerable before any file
-  exists (the edit mark consults it on the first write), and the batch
+  exists (the write gate consults it on the first write), and the batch
   walks stay two listings with no per-unit probes because classifying a
   leaf is a function call, not a round-trip.
   """

@@ -526,8 +526,8 @@ defmodule Arca do
       Arca.Storage.classify(path) == :seed ->
         {:error, :seed_read_only}
 
-      # Reserved tenant roots mutate only within `with_internal_writes/1`.
-      # Origin marks control reset behavior and must not be forgeable by callers.
+      # Reserved tenant roots mutate only within `with_internal_writes/1`:
+      # the bytes a payload row names by digest are the store's to write.
       # Reads use ordinary tenant access checks.
       List.first(path) in Arca.Storage.reserved_roots() and
           not Arca.Overlay.internal_writes?() ->
@@ -547,9 +547,9 @@ defmodule Arca do
         {:error, :reserved_name}
 
       true ->
-        # The edit marks of the seeded roots are set inside the
-        # `Arca.Overlay` decorator's own put/append/delete callbacks —
-        # this seam only gates, checks, dispatches and accounts.
+        # The unit lock and the `:bundled` refusal of the seeded roots
+        # live inside the `Arca.Overlay` decorator's own callbacks — this
+        # seam only gates, checks, dispatches and accounts.
         # Accounting is universal — every tenant write lands here, so a
         # new writer cannot forget — and the cap check rides the same
         # chokepoint (`check_cap/4` below): checked by default, exempt
@@ -593,8 +593,8 @@ defmodule Arca do
   # (the one seed tree, `:seed_path` — `Arca.Storage.seed_roots/0`), whatever
   # storage adapter is configured: an object-store deployment provisions
   # athanors from the shipped media without the bucket ever holding a copy.
-  # Every other path goes through the `Arca.Overlay` decorator (edit
-  # marks, the `:bundled` refusal — wrapping the configured adapter),
+  # Every other path goes through the `Arca.Overlay` decorator (the unit
+  # lock, the `:bundled` refusal — wrapping the configured adapter),
   # which delegates verbatim for paths outside the overlaid
   # roots — one routing decision instead of a per-root classification.
   defp adapter(["seed" | _]), do: Arca.Adapters.Local

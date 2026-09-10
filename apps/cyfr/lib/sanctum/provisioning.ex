@@ -117,8 +117,7 @@ defmodule Sanctum.Provisioning do
   mint its baseline consent, as the first fill did for what shipped then.
   A `local` ref names what the server ships; a versionless ref takes the
   newest shipped version. Answers what `Compendium.Pull.pull_shipped/2`
-  does: `{:error, :not_shipped}` for a version the seed does not carry,
-  `{:error, :own_work}` when the athanor's own component stands there.
+  does: `{:error, :not_shipped}` for a version the seed does not carry.
   """
   @spec install_shipped(Context.t(), String.t()) ::
           {:ok, %{status: String.t(), component_ref: String.t()}} | {:error, term()}

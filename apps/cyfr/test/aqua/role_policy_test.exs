@@ -11,9 +11,9 @@ defmodule Aqua.RolePolicyTest do
   alias Aqua.AgentConfig
 
   @roster [
-    %{"name" => "aqua", "type" => "soul", "tool_policy" => %{"aqua_builder.*" => "auto"}},
+    %{"name" => "aqua", "type" => "soul", "tool_policy" => %{"builder.*" => "auto"}},
     %{
-      "name" => "aqua_builder",
+      "name" => "builder",
       "type" => "role",
       "content" => "build",
       "tool_policy" => %{
@@ -23,7 +23,7 @@ defmodule Aqua.RolePolicyTest do
       }
     },
     %{
-      "name" => "aqua_web",
+      "name" => "web",
       "type" => "role",
       "content" => "fetch",
       "tool_policy" => %{"http.get" => "auto"}
@@ -31,11 +31,11 @@ defmodule Aqua.RolePolicyTest do
   ]
 
   test "a standing deny for a role holds in its clone definition, and the ceiling applies" do
-    grants = %{"aqua_builder" => [%{effect: "deny", tool: "files", action: "write"}]}
+    grants = %{"builder" => [%{effect: "deny", tool: "files", action: "write"}]}
 
     [builder, web] = AgentConfig.role_definitions(@roster, [], "cat", "m", grants)
 
-    assert builder["name"] == "aqua_builder"
+    assert builder["name"] == "builder"
     assert builder["tool_policy"]["files.write"] == "deny"
     # A hand-written destructive auto reaches the guest as ask.
     assert builder["tool_policy"]["files.delete"] == "ask"

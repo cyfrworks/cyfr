@@ -95,7 +95,7 @@ defmodule Aqua.TurnComposeTest do
 
     names = Enum.map(input["sub_agents"], & &1["name"])
     assert Enum.all?(1..4, &("role_#{&1}" in names))
-    assert "aqua_builder" in names
+    assert "builder" in names
     refute "aqua" in names
 
     # The authored prompt came off the roster, the scrolls off the tree:

@@ -154,31 +154,31 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-card-aqua button[phx-click=editor_set_disabled]")
 
       # Shipped and unedited: no Delete, a Disable.
-      assert has_element?(view, "#aqua-card-aqua_planner", "shipped")
-      refute has_element?(view, "#aqua-card-aqua_planner button[phx-click=editor_delete]")
+      assert has_element?(view, "#aqua-card-planner", "shipped")
+      refute has_element?(view, "#aqua-card-planner button[phx-click=editor_delete]")
 
       view
-      |> element("#aqua-card-aqua_planner button[phx-click=editor_set_disabled]", "Disable")
+      |> element("#aqua-card-planner button[phx-click=editor_set_disabled]", "Disable")
       |> render_click()
 
-      assert {:ok, %{"disabled" => true}} = get_agent(ctx, "aqua_planner")
+      assert {:ok, %{"disabled" => true}} = get_agent(ctx, "planner")
 
       # Still on the page — `list` drops it, the page does not — as
       # disabled, edited, and with the way back.
-      assert has_element?(view, "#aqua-card-aqua_planner", "disabled")
-      assert has_element?(view, "#aqua-card-aqua_planner", "edited")
+      assert has_element?(view, "#aqua-card-planner", "disabled")
+      assert has_element?(view, "#aqua-card-planner", "edited")
 
       assert has_element?(
                view,
-               "#aqua-card-aqua_planner button[phx-click=editor_revert]",
+               "#aqua-card-planner button[phx-click=editor_revert]",
                "Revert to shipped"
              )
 
       view
-      |> element("#aqua-card-aqua_planner button[phx-click=editor_set_disabled]", "Enable")
+      |> element("#aqua-card-planner button[phx-click=editor_set_disabled]", "Enable")
       |> render_click()
 
-      assert {:ok, %{"disabled" => false}} = get_agent(ctx, "aqua_planner")
+      assert {:ok, %{"disabled" => false}} = get_agent(ctx, "planner")
     end
 
     test "restoring the shipped files reverts an edited soul and keeps what the estate made",
@@ -222,18 +222,18 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "a new role starts with a role's hands, and the soul is given leave to clone into it",
          %{conn: conn, ctx: ctx} do
-      {:ok, %{"tool_policy" => planner_policy}} = get_agent(ctx, "aqua_planner")
+      {:ok, %{"tool_policy" => planner_policy}} = get_agent(ctx, "planner")
       assert map_size(planner_policy) > 0
 
       {view, html} = mount_athanor(conn, "/aqua")
 
       # The most restrictive role is the default start.
-      assert html =~ ~s(<option value="aqua_planner" selected)
+      assert html =~ ~s(<option value="planner" selected)
 
       view
       |> form("form[phx-submit=editor_create_role]", %{
         "name" => "scout",
-        "start_from" => "aqua_planner"
+        "start_from" => "planner"
       })
       |> render_submit()
 
@@ -650,11 +650,11 @@ defmodule PrismWeb.AquaLiveTest do
       view
       |> with_target("#aqua-agents")
       |> render_click("editor_toggle_capability", %{
-        "name" => "aqua_web",
+        "name" => "web",
         "key" => "files.write"
       })
 
-      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "aqua_web")
+      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "web")
 
       view
       |> with_target("#aqua-agents")
@@ -670,12 +670,12 @@ defmodule PrismWeb.AquaLiveTest do
         view
         |> with_target("#aqua-agents")
         |> render_click("editor_toggle_capability", %{
-          "name" => "aqua_web",
+          "name" => "web",
           "key" => "files.delete"
         })
 
       assert html =~ "no card to raise"
-      assert {:ok, %{"tool_policy" => policy}} = get_agent(ctx, "aqua_web")
+      assert {:ok, %{"tool_policy" => policy}} = get_agent(ctx, "web")
       refute Map.has_key?(policy, "files.delete")
 
       html =
@@ -695,13 +695,13 @@ defmodule PrismWeb.AquaLiveTest do
         view
         |> with_target("#aqua-agents")
         |> render_click("editor_set_capability_mode", %{
-          "name" => "aqua_web",
+          "name" => "web",
           "key" => "files.write",
           "mode" => "ask"
         })
 
       assert html =~ "no card to raise"
-      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "aqua_web")
+      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "web")
     end
 
     test "a shipped role's policy round-trips through untick and tick unchanged", %{
@@ -709,27 +709,27 @@ defmodule PrismWeb.AquaLiveTest do
       ctx: ctx
     } do
       {view, _html} = mount_athanor(conn, "/aqua")
-      {:ok, %{"tool_policy" => shipped}} = get_agent(ctx, "aqua_builder")
+      {:ok, %{"tool_policy" => shipped}} = get_agent(ctx, "builder")
       assert shipped["files.write"] == "auto"
 
       view
       |> with_target("#aqua-agents")
       |> render_click("editor_toggle_capability", %{
-        "name" => "aqua_builder",
+        "name" => "builder",
         "key" => "files.write"
       })
 
-      assert {:ok, %{"tool_policy" => without}} = get_agent(ctx, "aqua_builder")
+      assert {:ok, %{"tool_policy" => without}} = get_agent(ctx, "builder")
       refute Map.has_key?(without, "files.write")
 
       view
       |> with_target("#aqua-agents")
       |> render_click("editor_toggle_capability", %{
-        "name" => "aqua_builder",
+        "name" => "builder",
         "key" => "files.write"
       })
 
-      assert {:ok, %{"tool_policy" => ^shipped}} = get_agent(ctx, "aqua_builder")
+      assert {:ok, %{"tool_policy" => ^shipped}} = get_agent(ctx, "builder")
     end
 
     test "the matrix tells the truth: a role's hands run in the role, and it is offered no destructive row",

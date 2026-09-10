@@ -61,8 +61,7 @@ defmodule Compendium.Pull do
   to mint, as the first fill did for what shipped then.
 
   `{:error, :not_shipped}` when the seed carries no such version;
-  `{:error, :own_work}` when the athanor's own component stands at that
-  path; `{:error, :not_local}` for a ref outside the `local` namespace.
+  `{:error, :not_local}` for a ref outside the `local` namespace.
   """
   @spec pull_shipped(Context.t(), String.t()) ::
           {:ok, %{status: String.t(), component_ref: String.t()}} | {:error, term()}

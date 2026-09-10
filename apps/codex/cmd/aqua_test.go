@@ -74,7 +74,7 @@ func TestRenderAquaList(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
 			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The estate's assistant"},
-			map[string]any{"name": "aqua_builder", "title": "Builder", "type": "role", "description": "Builds components"},
+			map[string]any{"name": "builder", "title": "Builder", "type": "role", "description": "Builds components"},
 			map[string]any{"name": "component-guide", "title": "Component Guide", "type": "doc", "description": "Building WASM components"},
 		},
 		"skills": []any{
@@ -87,7 +87,7 @@ func TestRenderAquaList(t *testing.T) {
 	// Sections in the server's order, each entry under its own heading.
 	ordered := []string{
 		"Soul", "aqua ", "AQUA — The estate's assistant",
-		"Roles", "aqua_builder", "Builder — Builds components",
+		"Roles", "builder", "Builder — Builds components",
 		"Guides", "component-guide", "Component Guide — Building WASM components",
 		"Scrolls", "release-notes", "How to write release notes",
 	}
@@ -132,14 +132,14 @@ func TestRenderAquaList_ScrollsUnavailable(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
 			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The estate's assistant"},
-			map[string]any{"name": "aqua_builder", "title": "Builder", "type": "role", "description": "Builds components"},
+			map[string]any{"name": "builder", "title": "Builder", "type": "role", "description": "Builds components"},
 		},
 		"skills_error": "connection reset",
 	}
 
 	out := captureStdout(t, func() { renderAquaList(result) })
 
-	for _, want := range []string{"Soul", "aqua ", "Roles", "aqua_builder", "Guides\n  none", "Scrolls: unavailable (connection reset)"} {
+	for _, want := range []string{"Soul", "aqua ", "Roles", "builder", "Guides\n  none", "Scrolls: unavailable (connection reset)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in output, got:\n%s", want, out)
 		}
@@ -208,7 +208,7 @@ func TestRenderAquaStatus(t *testing.T) {
 	result := map[string]any{
 		"files": []any{
 			map[string]any{"path": "aqua/aqua.md", "state": "bundled_modified"},
-			map[string]any{"path": "aqua/roles/aqua_builder.md", "state": "bundled"},
+			map[string]any{"path": "aqua/roles/builder.md", "state": "bundled"},
 			map[string]any{"path": "aqua/skills/release-notes", "state": "user"},
 		},
 		"count": float64(3),
@@ -216,7 +216,7 @@ func TestRenderAquaStatus(t *testing.T) {
 
 	out := captureStdout(t, func() { renderAquaStatus(result) })
 
-	for _, want := range []string{"PATH", "STATE", "aqua/aqua.md", "edited", "aqua/roles/aqua_builder.md", "bundled", "aqua/skills/release-notes", "yours"} {
+	for _, want := range []string{"PATH", "STATE", "aqua/aqua.md", "edited", "aqua/roles/builder.md", "bundled", "aqua/skills/release-notes", "yours"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in output, got:\n%s", want, out)
 		}

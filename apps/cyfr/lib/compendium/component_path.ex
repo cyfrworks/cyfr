@@ -121,9 +121,9 @@ defmodule Compendium.ComponentPath do
   (`Arca.Storage.UnitLocator`): every path at or below a version
   directory that `parse/1` accepts belongs to that directory-shaped
   unit, sentinel'd by the manifest; anything else is above the units.
-  A unit is a claim the storage layer acts on — the shipped copy, origin
-  and edit marks, status — so only the grammar mints one: a junk
-  five-segment shape stays plain storage, never a phantom unit.
+  A unit is a claim the storage layer acts on — the shipped copy, the
+  lock, status — so only the grammar mints one: a junk five-segment
+  shape stays plain storage, never a phantom unit.
 
   ## Examples
 

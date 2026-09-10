@@ -140,8 +140,7 @@ your-project/
             ├── conversations/  # Chat attachment files
             ├── notes/      # What was kept out of a conversation — host-only, no guest scope
             ├── payloads/   # Retained execution inputs and results — host-only, by digest
-            ├── guest/      # Files WASM components store (their `data/` scope)
-            └── meta/       # Tenant-reserved: origin and edit marks of shipped copies, system-written
+            └── guest/      # Files WASM components store (their `data/` scope)
 ```
 
 > The seed bundle every athanor starts from rides inside the container image

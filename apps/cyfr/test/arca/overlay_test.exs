@@ -63,10 +63,9 @@ defmodule Arca.OverlayTest do
   reader sees the athanor's own tree and nothing else; the seed tree is
   the shipped default a unit is copied FROM — at provisioning, on a pull
   of a shipped version, on a restore — whole, droppings excluded, the
-  sentinel copied last so a crash can never half-land it, and marked as a
-  copy of what shipped. An edit inside a copy marks it modified; a
-  shipped copy is restored, never deleted; the athanor's own work is never
-  replaced.
+  sentinel copied last so a crash can never half-land it. A unit the seed
+  ships is a shipped copy whatever its bytes; an edit shows in its diff;
+  a shipped copy is restored, never deleted.
   """
 
   use ExUnit.Case, async: false
@@ -113,16 +112,6 @@ defmodule Arca.OverlayTest do
     {:ok, ctx: Sanctum.TestContext.local(), seed_dir: seed}
   end
 
-  # Lay raw tenant bytes under the overlay's internal-write scope —
-  # simulating partial copies and crash windows without the edit marks
-  # firing. The context is ordinary; the exemption is the lexical scope.
-  defp lay_raw(ctx, path, content) do
-    internal =
-      Sanctum.internal_context(user_id: "_test_lay", athanor_id: ctx.athanor_id, scope: :athanor)
-
-    Arca.Overlay.with_internal_writes(fn -> Arca.put(internal, path, content) end)
-  end
-
   # Lay a shipped role file in the seed tree.
   defp ship_role!(seed, name, body) do
     roles = Path.join(seed, "aqua/roles")
@@ -157,8 +146,8 @@ defmodule Arca.OverlayTest do
     end
 
     test "a junk shape under components/ is plain storage — never a unit", %{ctx: ctx} do
-      # Only the grammar mints a unit: no copy-on-write, no origin mark,
-      # no status entry for a shape the domain would never name.
+      # Only the grammar mints a unit: no lock, no status entry for a
+      # shape the domain would never name.
       junk = ["components", "junk", "a", "b", "not-semver"]
       assert Arca.Storage.locate(junk ++ ["file.txt"]) == :above_unit
 
@@ -193,7 +182,7 @@ defmodule Arca.OverlayTest do
   end
 
   describe "pulling what ships" do
-    test "pull_shipped/2 copies the unit whole — droppings excluded, sentinel last, marked shipped, uncapped",
+    test "pull_shipped/2 copies the unit whole — droppings excluded, sentinel last, uncapped",
          %{ctx: ctx} do
       prev = Application.get_env(:cyfr, :caps)
       Application.put_env(:cyfr, :caps, athanor_storage_bytes: 5)
@@ -249,24 +238,23 @@ defmodule Arca.OverlayTest do
       assert {:ok, "edited"} = Arca.get(ctx, @version_dir ++ ["notes.txt"])
     end
 
-    test "a pull replaces a partial copy and never the athanor's own work", %{
-      ctx: ctx,
-      seed_dir: seed
-    } do
+    test "a pull replaces whatever stands at a shipped path", %{ctx: ctx, seed_dir: seed} do
       # A crashed copy: some files, no sentinel. It reads as available, and
       # the next pull replaces it whole.
-      :ok = lay_raw(ctx, @version_dir ++ ["src", "lib.rs"], "fn pwned() {}")
+      :ok = Arca.put(ctx, @version_dir ++ ["src", "lib.rs"], "fn pwned() {}")
       assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :available}
       assert :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
       assert {:ok, "fn main() {}"} = Arca.get(ctx, @version_dir ++ ["src", "lib.rs"])
 
-      # The athanor's own complete unit at a shipped path is never replaced.
+      # A complete unit the athanor wrote at a path a release ships is the
+      # shipped copy from then on: a pull puts the shipped bytes there.
       mine = ["components", "catalysts", "local", "mine", "1.0.0"]
       :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"mine":true}))
       _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED")
-      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own_shadowing}
-      assert {:error, :own_work} = Arca.Overlay.pull_shipped(ctx, mine)
-      assert {:ok, ~s({"mine":true})} = Arca.get(ctx, mine ++ [@sentinel])
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :shipped}
+      assert :ok = Arca.Overlay.pull_shipped(ctx, mine)
+      assert {:ok, ~s({"type":"catalyst"})} = Arca.get(ctx, mine ++ [@sentinel])
+      assert {:ok, "SHIPPED"} = Arca.get(ctx, mine ++ ["catalyst.wasm"])
 
       # What the seed does not ship cannot be pulled; a non-unit path is a
       # programmer error the verb refuses typed.
@@ -317,29 +305,19 @@ defmodule Arca.OverlayTest do
   end
 
   describe "edits" do
-    test "a write inside a shipped copy marks it modified; the athanor's own unit writes plainly",
+    test "a write inside a shipped copy lands and shows in its diff; the athanor's own unit writes plainly",
          %{ctx: ctx} do
       :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
       :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "hi")
 
       assert {:ok, "hi"} = Arca.get(ctx, @version_dir ++ ["notes.txt"])
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
+      assert {:ok, true} = Arca.Overlay.edited?(ctx, @version_dir)
 
       fresh = ["components", "catalysts", "local", "brand-new", "0.1.0"]
       :ok = Arca.put(ctx, fresh ++ ["catalyst.wasm"], "NEW")
       assert {:ok, [{"catalyst.wasm", :file}]} = Arca.list_typed(ctx, fresh)
       assert Arca.Overlay.unit_status(ctx, fresh) == {:ok, :own}
-    end
-
-    test "a generic system writer edits like any caller — only the lexical scope is exempt",
-         %{ctx: ctx} do
-      :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
-
-      generic =
-        Sanctum.internal_context(user_id: "_test", athanor_id: ctx.athanor_id, scope: :athanor)
-
-      :ok = Arca.put(generic, @version_dir ++ ["own.txt"], "mine")
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
     end
 
     test "a forged magic-string context carries no exemption", %{ctx: ctx} do
@@ -349,8 +327,7 @@ defmodule Arca.OverlayTest do
         Sanctum.internal_context(user_id: "_overlay", athanor_id: ctx.athanor_id, scope: :athanor)
 
       assert {:error, :bundled} = Arca.delete_tree(shaped, @version_dir)
-      :ok = Arca.put(shaped, @version_dir ++ ["own.txt"], "mine")
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
+      assert Arca.exists?(ctx, @version_dir ++ ["catalyst.wasm"])
     end
   end
 
@@ -366,7 +343,8 @@ defmodule Arca.OverlayTest do
 
       assert :ok = Arca.delete(ctx, @version_dir ++ ["catalyst.wasm"])
       refute Arca.exists?(ctx, @version_dir ++ ["catalyst.wasm"])
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
+      assert {:ok, %{removed: [["catalyst.wasm"]]}} = Arca.Overlay.diff_unit(ctx, @version_dir)
 
       role = ship_role!(seed, "a.md", "shipped")
       :ok = Arca.Overlay.pull_shipped(ctx, role)
@@ -374,7 +352,7 @@ defmodule Arca.OverlayTest do
       assert {:ok, "shipped"} = Arca.get(ctx, role)
     end
 
-    test "the athanor's own unit deletes plainly, and its marks with it", %{ctx: ctx} do
+    test "the athanor's own unit deletes plainly", %{ctx: ctx} do
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
       :ok = Arca.put(ctx, own ++ [@sentinel], ~s({"type":"catalyst"}))
       assert Arca.Overlay.unit_status(ctx, own) == {:ok, :own}
@@ -392,34 +370,37 @@ defmodule Arca.OverlayTest do
   end
 
   describe "unit status and drift" do
-    test "unit_status/2 tells the six states apart", %{ctx: ctx, seed_dir: seed} do
+    test "unit_status/2 tells the four states apart", %{ctx: ctx, seed_dir: seed} do
       assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :available}
 
       :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
       assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
 
+      # An edit does not change whose unit it is.
       :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
 
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
       :ok = Arca.put(ctx, own ++ ["catalyst.wasm"], "NEW")
       assert Arca.Overlay.unit_status(ctx, own) == {:ok, :own}
 
-      # The athanor's own complete unit over a later-shipped counterpart.
-      shadowing = ["components", "catalysts", "local", "mine", "1.0.0"]
-      :ok = Arca.put(ctx, shadowing ++ [@sentinel], ~s({"type":"catalyst"}))
+      # The athanor's own complete unit at a path a later release ships
+      # is a shipped copy from then on.
+      mine = ["components", "catalysts", "local", "mine", "1.0.0"]
+      :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"type":"catalyst"}))
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own}
       _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED")
-      assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :own_shadowing}
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :shipped}
 
       absent = ["components", "catalysts", "local", "nope", "9.9.9"]
       assert Arca.Overlay.unit_status(ctx, absent) == {:ok, :absent}
 
       # Longer paths answer for their unit; non-overlaid roots are :absent.
-      assert Arca.Overlay.unit_status(ctx, @version_dir ++ ["notes.txt"]) == {:ok, :modified}
+      assert Arca.Overlay.unit_status(ctx, @version_dir ++ ["notes.txt"]) == {:ok, :shipped}
       assert Arca.Overlay.unit_status(ctx, ["guest", "x"]) == {:ok, :absent}
     end
 
-    test "unit_statuses/2 answers the whole root in four listings, matching unit_status/2",
+    test "unit_statuses/2 answers the whole root in two listings, matching unit_status/2",
          %{ctx: ctx, seed_dir: seed} do
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
       :ok = Arca.put(ctx, own ++ ["catalyst.wasm"], "NEW")
@@ -431,21 +412,12 @@ defmodule Arca.OverlayTest do
       v2 = ship_version!(seed, "bundled", "2.0.0", "V2")
       :ok = Arca.Overlay.pull_shipped(ctx, v2)
       :ok = Arca.put(ctx, v2 ++ ["notes.txt"], "edited")
-
-      shadowing = ["components", "catalysts", "local", "mine", "1.0.0"]
-      :ok = Arca.put(ctx, shadowing ++ [@sentinel], ~s({"type":"catalyst"}))
-      _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED")
       v3 = ship_version!(seed, "bundled", "3.0.0", "V3")
 
       {:ok, statuses} = Arca.Overlay.unit_statuses(ctx, "components")
 
-      assert %{
-               @version_dir => :shipped,
-               ^v2 => :modified,
-               ^v3 => :available,
-               ^own => :own,
-               ^shadowing => :own_shadowing
-             } = statuses
+      assert %{@version_dir => :shipped, ^v2 => :shipped, ^v3 => :available, ^own => :own} =
+               statuses
 
       # The batch and per-unit forms can never classify the same facts
       # differently.
@@ -479,53 +451,45 @@ defmodule Arca.OverlayTest do
 
       :ok = Arca.put(ctx, file, "edited body")
       assert {:ok, %{added: [], removed: [], changed: [[]]}} = Arca.Overlay.diff_unit(ctx, file)
-      assert Arca.Overlay.unit_status(ctx, file) == {:ok, :modified}
-
-      # A restore brings the shipped bytes back and the copy reads shipped.
-      assert :ok = Arca.Overlay.revert_copy(ctx, file)
-      assert {:ok, "shipped body"} = Arca.get(ctx, file)
+      assert {:ok, true} = Arca.Overlay.edited?(ctx, file)
       assert Arca.Overlay.unit_status(ctx, file) == {:ok, :shipped}
+
+      # A restore brings the shipped bytes back.
+      assert :ok = Arca.Overlay.pull_shipped(ctx, file)
+      assert {:ok, "shipped body"} = Arca.get(ctx, file)
+      assert {:ok, false} = Arca.Overlay.edited?(ctx, file)
     end
   end
 
   describe "the revert verbs" do
-    test "revert_copy/2 restores only an edited copy — member work refuses", %{
+    test "pull_shipped/2 restores a held copy whatever was written into it", %{
       ctx: ctx,
       seed_dir: seed
     } do
       :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
       :ok = Arca.put(ctx, @version_dir ++ ["catalyst.wasm"], "EDITED")
       :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "note")
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
+      assert {:ok, true} = Arca.Overlay.edited?(ctx, @version_dir)
 
-      assert :ok = Arca.Overlay.revert_copy(ctx, @version_dir)
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
+      assert :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
+      assert {:ok, false} = Arca.Overlay.edited?(ctx, @version_dir)
       assert {:ok, "WASM-BYTES"} = Arca.get(ctx, @version_dir ++ ["catalyst.wasm"])
       refute Arca.exists?(ctx, @version_dir ++ ["notes.txt"])
 
-      # An unedited copy has nothing to restore.
-      assert {:error, :pristine} = Arca.Overlay.revert_copy(ctx, @version_dir)
+      # Restoring an unedited copy changes nothing and answers the same.
+      assert :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
 
-      # The athanor's own work never reverts — with or without a shipped
-      # counterpart underneath.
+      # The athanor's own work has nothing shipped to restore to.
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
       :ok = Arca.put(ctx, own ++ ["catalyst.wasm"], "NEW")
-      assert {:error, :not_a_copy} = Arca.Overlay.revert_copy(ctx, own)
+      assert {:error, :not_shipped} = Arca.Overlay.pull_shipped(ctx, own)
       assert {:ok, "NEW"} = Arca.get(ctx, own ++ ["catalyst.wasm"])
 
-      shadowing = ["components", "catalysts", "local", "mine", "1.0.0"]
-      :ok = Arca.put(ctx, shadowing ++ [@sentinel], ~s({"type":"catalyst"}))
-      _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED")
-      assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :own_shadowing}
-      assert {:error, :not_a_copy} = Arca.Overlay.revert_copy(ctx, shadowing)
-
-      # Not held → :not_found; outside the units → :not_overlaid.
+      # A shipped unit the athanor does not hold is copied in — the same
+      # verb is the pull.
       v2 = ship_version!(seed, "bundled", "2.0.0", "V2")
-      assert {:error, :not_found} = Arca.Overlay.revert_copy(ctx, v2)
-      absent = ["components", "catalysts", "local", "nope", "9.9.9"]
-      assert {:error, :not_found} = Arca.Overlay.revert_copy(ctx, absent)
-      assert {:error, :not_overlaid} = Arca.Overlay.revert_copy(ctx, ["guest", "x"])
-      assert {:error, :not_overlaid} = Arca.Overlay.revert_copy(ctx, ["components"])
+      assert :ok = Arca.Overlay.pull_shipped(ctx, v2)
+      assert {:ok, "V2"} = Arca.get(ctx, v2 ++ ["catalyst.wasm"])
     end
 
     test "drop_unit/2 deletes the athanor's own work and refuses a shipped copy", %{
@@ -538,21 +502,17 @@ defmodule Arca.OverlayTest do
       assert {:ok, :deleted} = Arca.Overlay.drop_unit(ctx, own)
       assert Arca.Overlay.unit_status(ctx, own) == {:ok, :absent}
 
-      # Own work shadowing a shipped counterpart goes too; what shipped is
-      # then available to pull, never served in its place.
-      shadowing = ["components", "catalysts", "local", "mine", "1.0.0"]
-      :ok = Arca.put(ctx, shadowing ++ [@sentinel], ~s({"mine":true}))
-      _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED")
-      assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :own_shadowing}
-      assert {:ok, :deleted} = Arca.Overlay.drop_unit(ctx, shadowing)
-      assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :available}
-      assert {:error, :not_found} = Arca.get(ctx, shadowing ++ ["catalyst.wasm"])
-
-      # A shipped copy — edited or not — is restored, never deleted.
+      # A shipped copy — edited or not, and whoever wrote it — is restored,
+      # never deleted.
       :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
       assert {:error, :bundled} = Arca.Overlay.drop_unit(ctx, @version_dir)
       :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
       assert {:error, :bundled} = Arca.Overlay.drop_unit(ctx, @version_dir)
+
+      mine = ["components", "catalysts", "local", "mine", "1.0.0"]
+      :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"mine":true}))
+      _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED")
+      assert {:error, :bundled} = Arca.Overlay.drop_unit(ctx, mine)
 
       # What the athanor does not hold is not found; outside the units is
       # not a unit.
@@ -563,8 +523,8 @@ defmodule Arca.OverlayTest do
     end
   end
 
-  describe "marks — a copy of what shipped vs the athanor's own work" do
-    test "a unit the athanor created BEFORE a release shipped it is its own — shadowing", %{
+  describe "a shipped path is a shipped unit, whoever wrote it" do
+    test "a unit the athanor created BEFORE a release shipped it becomes the shipped copy", %{
       ctx: ctx,
       seed_dir: seed
     } do
@@ -572,59 +532,51 @@ defmodule Arca.OverlayTest do
       :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"type":"catalyst"}))
       :ok = Arca.put(ctx, mine ++ ["catalyst.wasm"], "MY-WASM")
       assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own}
+      assert :ok = Arca.delete_tree(ctx, mine)
 
-      # A later release ships the same name and version. The athanor's
-      # bytes stay its own work — now visibly shadowing the shipped unit:
-      # a restore and a pull refuse, a delete works.
+      :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"type":"catalyst"}))
+      :ok = Arca.put(ctx, mine ++ ["catalyst.wasm"], "MY-WASM")
+
+      # A later release ships the same name and version. The bytes stay
+      # until a restore replaces them; the unit reads shipped and edited,
+      # and no longer deletes.
       _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED-WASM")
 
       assert {:ok, "MY-WASM"} = Arca.get(ctx, mine ++ ["catalyst.wasm"])
-      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own_shadowing}
-      assert {:ok, %{^mine => :own_shadowing}} = Arca.Overlay.unit_statuses(ctx, "components")
-      assert {:error, :not_a_copy} = Arca.Overlay.revert_copy(ctx, mine)
-      assert {:error, :own_work} = Arca.Overlay.pull_shipped(ctx, mine)
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :shipped}
+      assert {:ok, %{^mine => :shipped}} = Arca.Overlay.unit_statuses(ctx, "components")
+      assert {:ok, true} = Arca.Overlay.edited?(ctx, mine)
+      assert {:error, :bundled} = Arca.delete_tree(ctx, mine)
 
-      assert :ok = Arca.delete_tree(ctx, mine)
-      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :available}
-      assert {:error, :not_found} = Arca.get(ctx, mine ++ ["catalyst.wasm"])
+      assert :ok = Arca.Overlay.pull_shipped(ctx, mine)
+      assert {:ok, "SHIPPED-WASM"} = Arca.get(ctx, mine ++ ["catalyst.wasm"])
     end
 
-    test "a complete copy without its mark (crash window) reads as the athanor's own", %{
-      ctx: ctx
-    } do
-      # A crash between the sentinel landing and the origin mark: the copy
-      # is complete but unmarked — it classifies as the athanor's own
-      # (shadowing), the direction that never wipes bytes.
-      :ok = lay_raw(ctx, @version_dir ++ [@sentinel], ~s({"type":"catalyst"}))
-      :ok = lay_raw(ctx, @version_dir ++ ["catalyst.wasm"], "WASM-BYTES")
-
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :own_shadowing}
-      assert {:error, :not_a_copy} = Arca.Overlay.revert_copy(ctx, @version_dir)
-    end
-
-    test "file-shaped units: editing a pulled agent is :modified, own-then-shipped shadows",
-         %{ctx: ctx, seed_dir: seed} do
+    test "file-shaped units follow the same rule", %{ctx: ctx, seed_dir: seed} do
       shipped = ship_role!(seed, "shipped.md", "shipped body")
       :ok = Arca.Overlay.pull_shipped(ctx, shipped)
       assert Arca.Overlay.unit_status(ctx, shipped) == {:ok, :shipped}
 
       :ok = Arca.put(ctx, shipped, "edited body")
-      assert Arca.Overlay.unit_status(ctx, shipped) == {:ok, :modified}
+      assert Arca.Overlay.unit_status(ctx, shipped) == {:ok, :shipped}
+      assert {:ok, true} = Arca.Overlay.edited?(ctx, shipped)
 
-      # An agent the athanor wrote first stays its own when a release
-      # later ships the same name — and deleting it leaves the seed's
-      # available, not served.
+      # An agent the athanor wrote first is a shipped copy once a release
+      # ships the same name: it no longer deletes, and a restore replaces it.
       mine = ["aqua", "roles", "mine.md"]
       :ok = Arca.put(ctx, mine, "my body")
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own}
       _ = ship_role!(seed, "mine.md", "shipped later")
 
-      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own_shadowing}
-      assert :ok = Arca.delete(ctx, mine)
-      assert {:error, :not_found} = Arca.get(ctx, mine)
-      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :available}
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :shipped}
+      assert {:error, :bundled} = Arca.delete(ctx, mine)
+      assert :ok = Arca.Overlay.pull_shipped(ctx, mine)
+      assert {:ok, "shipped later"} = Arca.get(ctx, mine)
     end
+  end
 
-    test "concurrent pulls keep both marks — no lost update", %{ctx: ctx, seed_dir: seed} do
+  describe "copies, commits and writes serialise on the unit" do
+    test "concurrent pulls of two units both land", %{ctx: ctx, seed_dir: seed} do
       v2 = ship_version!(seed, "bundled", "2.0.0", "V2")
 
       [a, b] =
@@ -677,7 +629,7 @@ defmodule Arca.OverlayTest do
              "from_a.txt was acknowledged and then cleared by a concurrent copy"
 
       assert {:ok, "WASM-BYTES"} = Arca.get(ctx, @version_dir ++ ["catalyst.wasm"])
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
+      assert {:ok, true} = Arca.Overlay.edited?(ctx, @version_dir)
     end
 
     test "concurrent edits of one copy keep every acknowledged write", %{ctx: ctx} do
@@ -702,7 +654,7 @@ defmodule Arca.OverlayTest do
       end
 
       assert {:ok, "WASM-BYTES"} = Arca.get(ctx, @version_dir ++ ["catalyst.wasm"])
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
     end
 
     test "a commit cannot clear a held unit under a live write", %{ctx: ctx} do
@@ -847,29 +799,6 @@ defmodule Arca.OverlayTest do
       assert {:ok, "A"} = Arca.get(ctx, unit ++ ["a.txt"])
     end
 
-    test "no context outside the overlay's own scope can forge a mark — meta/ is reserved",
-         %{ctx: ctx} do
-      for root <- ["origin", "edited"] do
-        mark = ["meta", root | @version_dir]
-        assert {:error, :forbidden} = Arca.put(ctx, mark, ~s({"origin":"seed"}))
-        assert {:error, :forbidden} = Arca.delete_tree(ctx, ["meta", root])
-
-        # Reads stay ordinary tenant reads.
-        assert {:error, :not_found} = Arca.get(ctx, mark)
-      end
-
-      # Reserved writes require the lexical internal-write scope, including for system contexts.
-      system =
-        Sanctum.internal_context(user_id: "_test", athanor_id: ctx.athanor_id, scope: :athanor)
-
-      assert {:error, :forbidden} = Arca.put(system, ["meta", "note.txt"], "server-side")
-
-      assert :ok =
-               Arca.Overlay.with_internal_writes(fn ->
-                 Arca.put(system, ["meta", "note.txt"], "server-side")
-               end)
-    end
-
     test "a tree delete above units is refused while a unit stands beneath it", %{
       ctx: ctx,
       seed_dir: seed
@@ -877,7 +806,6 @@ defmodule Arca.OverlayTest do
       role = ship_role!(seed, "a.md", "shipped")
       :ok = Arca.Overlay.pull_shipped(ctx, role)
       :ok = Arca.put(ctx, role, "edited")
-      assert Arca.Overlay.unit_status(ctx, role) == {:ok, :modified}
 
       # The wholesale form rides no unit lock, so it could land inside a
       # concurrent commit; a populated tree refuses at every level above
@@ -886,14 +814,10 @@ defmodule Arca.OverlayTest do
       assert {:error, :above_unit} = Arca.delete_tree(ctx, ["aqua"])
       assert {:error, :above_unit} = Arca.delete_tree(ctx, ["aqua", "roles"])
       assert {:ok, "edited"} = Arca.get(ctx, role)
-      assert Arca.Overlay.unit_status(ctx, role) == {:ok, :modified}
 
-      # The internal-write scope keeps the wholesale form, and it clears
-      # the marks with the bytes: re-completing the same unit without the
-      # overlay's own copy machinery must NOT read as a copy.
+      # The internal-write scope keeps the wholesale form.
       assert :ok = Arca.Overlay.with_internal_writes(fn -> Arca.delete_tree(ctx, ["aqua"]) end)
-      :ok = lay_raw(ctx, role, "recreated by hand")
-      assert Arca.Overlay.unit_status(ctx, role) == {:ok, :own_shadowing}
+      assert Arca.Overlay.unit_status(ctx, role) == {:ok, :available}
     end
 
     test "a tree above units holding no unit deletes plainly", %{ctx: ctx} do
@@ -986,9 +910,9 @@ defmodule Arca.OverlayTest do
       assert {:ok, "shipped scroll"} = Arca.get(ctx, scroll ++ [@skill_manifest])
 
       # The seed-backed component version the athanor never pulled is not
-      # present: the athanor's own lands there and shadows what shipped.
+      # present: a commit lands there, and reads as the shipped copy.
       assert {:ok, _} = create(ctx, @version_dir, ~s({"mine":true}), if_absent: true)
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :own_shadowing}
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
     end
 
     test "the athanor's own unit refuses and keeps its bytes; an absent one lands", %{ctx: ctx} do
@@ -1093,7 +1017,7 @@ defmodule Arca.OverlayTest do
 
       assert {:ok, "edited"} = Arca.get(ctx, @manifest)
       assert {:ok, "field tables"} = Arca.get(ctx, @scroll ++ ["reference.md"])
-      assert Arca.Overlay.unit_status(ctx, @scroll) == {:ok, :modified}
+      assert {:ok, %{changed: [["SKILL.md"]]}} = Arca.Overlay.diff_unit(ctx, @scroll)
     end
 
     test "nothing at the path, a path no unit covers, and a declining fun write nothing", %{
@@ -1174,7 +1098,7 @@ defmodule Arca.OverlayTest do
       assert {:ok, "B"} = Arca.get(ctx, @own_dir ++ ["sub", "b.txt"])
     end
 
-    test "a mid-list failure rolls the whole unit back — no partial, no mark", %{ctx: ctx} do
+    test "a mid-list failure rolls the whole unit back — no partial", %{ctx: ctx} do
       files = [
         {[@sentinel], ~s({"type":"catalyst"})},
         {["a.txt"], "A"},
@@ -1244,52 +1168,22 @@ defmodule Arca.OverlayTest do
       assert {:ok, "A"} = Arca.get(ctx, @own_dir ++ ["a.txt"])
     end
 
-    test "default origin is none — a committed unit over a seed counterpart shadows",
+    test "a committed unit at a shipped path is the shipped copy — a restore replaces it",
          %{ctx: ctx} do
       files = [{[@sentinel], ~s({"mine":true})}, {["own.txt"], "MINE"}]
 
       assert {:ok, _} =
                Arca.Overlay.commit_unit(ctx, @version_dir, {:files, files}, cap: :exempt)
-
-      # No origin mark: the athanor's own work, which reset refuses.
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :own_shadowing}
-      assert {:error, :not_a_copy} = Arca.Overlay.revert_copy(ctx, @version_dir)
-    end
-
-    test "origin: :seed marks the commit as a shipped copy", %{ctx: ctx} do
-      seed_src = ["seed" | @version_dir]
-
-      system =
-        Sanctum.internal_context(user_id: "_test", athanor_id: ctx.athanor_id, scope: :athanor)
-
-      assert {:ok, _} =
-               Arca.Overlay.commit_unit(
-                 system,
-                 @version_dir,
-                 {:tree, seed_src, exclude: &Arca.Storage.build_dropping?/1},
-                 cap: :exempt,
-                 origin: :seed
-               )
 
       assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
+      assert {:ok, true} = Arca.Overlay.edited?(ctx, @version_dir)
+
+      assert :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
+      assert {:ok, false} = Arca.Overlay.edited?(ctx, @version_dir)
+      refute Arca.exists?(ctx, @version_dir ++ ["own.txt"])
     end
 
-    test "a commit over a shipped copy makes it the athanor's own", %{ctx: ctx} do
-      :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
-      :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
-
-      files = [{[@sentinel], ~s({"mine":true})}, {["own.txt"], "MINE"}]
-
-      assert {:ok, _} =
-               Arca.Overlay.commit_unit(ctx, @version_dir, {:files, files}, cap: :exempt)
-
-      # Both marks went with the replaced bytes.
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :own_shadowing}
-    end
-
-    test "a file unit is one plain put — sentinel/origin refused",
-         %{ctx: ctx} do
+    test "a file unit is one plain put — sentinel refused", %{ctx: ctx} do
       agent = ["aqua", "roles", "mine.md"]
 
       assert {:ok, [[]]} =
@@ -1301,7 +1195,7 @@ defmodule Arca.OverlayTest do
       assert_raise ArgumentError, ~r/the put is the commit/, fn ->
         Arca.Overlay.commit_unit(ctx, agent, {:files, [{[], "x"}]},
           cap: :exempt,
-          origin: :seed
+          sentinel: "x"
         )
       end
     end
@@ -1319,7 +1213,7 @@ defmodule Arca.OverlayTest do
     setup %{ctx: ctx} do
       :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
       :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :modified}
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
 
       original = Application.get_env(:cyfr, :storage_adapter)
       Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.DownAdapter)
@@ -1341,7 +1235,7 @@ defmodule Arca.OverlayTest do
     test "status surfaces answer the outage, never :available for a copy", %{ctx: ctx} do
       assert {:error, :adapter_down} = Arca.Overlay.unit_status(ctx, @version_dir)
       assert {:error, :adapter_down} = Arca.Overlay.unit_statuses(ctx, "components")
-      assert {:error, :adapter_down} = Arca.Overlay.revert_copy(ctx, @version_dir)
+      assert {:error, :adapter_down} = Arca.Overlay.pull_shipped(ctx, @version_dir)
       assert {:error, :adapter_down} = Arca.Overlay.materialize_shipped(ctx, "components")
     end
   end
@@ -1400,7 +1294,7 @@ defmodule Arca.OverlayTest do
 
       # The unit is not complete, and says so rather than passing for one.
       assert {:ok, status} = Arca.Overlay.unit_status(ctx, dir)
-      refute status in [:shipped, :modified]
+      refute status == :shipped
 
       # And the instructions are unreachable: SKILL.md IS the sentinel.
       assert {:error, :not_found} =

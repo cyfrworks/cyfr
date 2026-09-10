@@ -190,7 +190,7 @@ defmodule Sanctum.ProvisioningTest do
     # A member edited their copy of foo.
     version_dir = ["components", "catalysts", "local", "foo", "1.0.0"]
     :ok = Arca.put(in_group, version_dir ++ ["scratch.txt"], "x")
-    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :modified}
+    assert {:ok, true} = Arca.Overlay.edited?(in_group, version_dir)
 
     # The next release ships a second bundled catalyst.
     src = Path.join([bundle_dir, "catalysts", "local", "fresh", "1.0.0"])
@@ -210,7 +210,7 @@ defmodule Sanctum.ProvisioningTest do
     assert :ok = Provisioning.sync_seeds()
 
     # The edit survives the release, and the new catalyst is only offered.
-    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :modified}
+    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :shipped}
     assert {:ok, "x"} = Arca.get(in_group, version_dir ++ ["scratch.txt"])
 
     fresh_dir = ["components", "catalysts", "local", "fresh", "1.0.0"]

@@ -115,11 +115,13 @@ defmodule Compendium.AquaTemplateTest do
     assert {:ok, %{prompt: "soul prompt v1"}} = AquaAgent.get(ctx, "aqua")
     assert {:ok, %{prompt: "ours"}} = AquaAgent.get(ctx, "scribe")
 
-    # A reset restores the edited copy to what NOW ships and leaves the
-    # unedited copy as it is — the seed is the default, not a live feed.
-    assert {:ok, %{reverted: ["aqua/roles/scribe.md"], kept: []}} = AquaTemplate.reset(ctx)
+    # A reset restores every copy that differs from what NOW ships — the
+    # edited role and the soul the release changed alike.
+    assert {:ok, %{reverted: ["aqua/aqua.md", "aqua/roles/scribe.md"], kept: []}} =
+             AquaTemplate.reset(ctx)
+
     assert {:ok, %{prompt: "scribe prompt v2"}} = AquaAgent.get(ctx, "scribe")
-    assert {:ok, %{prompt: "soul prompt v1"}} = AquaAgent.get(ctx, "aqua")
+    assert {:ok, %{prompt: "soul prompt v2"}} = AquaAgent.get(ctx, "aqua")
   end
 
   test "a shipped skill is copied whole and refuses deletion; a write inside it is an edit", %{
@@ -136,7 +138,9 @@ defmodule Compendium.AquaTemplateTest do
     assert {:error, :bundled} = Arca.delete_tree(ctx, AquaPath.skill_dir("pdf"))
 
     :ok = Arca.put(ctx, AquaPath.skill_dir("pdf") ++ ["notes.md"], "mine")
-    assert Arca.Overlay.unit_status(ctx, AquaPath.skill_dir("pdf")) == {:ok, :modified}
+    assert Arca.Overlay.unit_status(ctx, AquaPath.skill_dir("pdf")) == {:ok, :shipped}
+    {:ok, files} = AquaTemplate.status(ctx)
+    assert %{state: :bundled_modified} = Enum.find(files, &(&1.path == "aqua/skills/pdf"))
   end
 
   test "status/1 tells shipped, modified, and own apart", %{ctx: ctx, template: template} do
@@ -144,7 +148,13 @@ defmodule Compendium.AquaTemplateTest do
     fill!(ctx)
 
     {:ok, scribe} = AquaAgent.get(ctx, "scribe")
-    :ok = Arca.put(ctx, AquaPath.agent_file("scribe"), AquaAgent.serialize(scribe))
+
+    :ok =
+      Arca.put(
+        ctx,
+        AquaPath.agent_file("scribe"),
+        AquaAgent.serialize(%{scribe | prompt: "ours"})
+      )
 
     :ok =
       Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))

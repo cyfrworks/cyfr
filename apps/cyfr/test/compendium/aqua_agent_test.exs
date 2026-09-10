@@ -21,7 +21,7 @@ defmodule Compendium.AquaAgentTest do
         disabled: false,
         catalyst_ref: "catalyst:moonmoon69.claude",
         model: "claude-sonnet-4-6",
-        tool_policy: %{"files.read" => "auto", "aqua_web.*" => "auto", "native_search" => "ask"},
+        tool_policy: %{"files.read" => "auto", "web.*" => "auto", "native_search" => "ask"},
         prompt: "You are the scribe.\n\n## Style\n\n- terse"
       },
       overrides
@@ -76,10 +76,10 @@ defmodule Compendium.AquaAgentTest do
   defp with_policy(yaml), do: "---\ntool_policy:\n#{yaml}---\n\nprompt\n"
 
   test "the policy grammar parses: ask/auto over tool.action, tool.* and native_search" do
-    file = with_policy("  files.read: auto\n  aqua_web.*: ask\n  native_search: auto\n")
+    file = with_policy("  files.read: auto\n  web.*: ask\n  native_search: auto\n")
 
     assert {:ok, %{tool_policy: policy}} = AquaAgent.parse("x", file)
-    assert policy == %{"files.read" => "auto", "aqua_web.*" => "ask", "native_search" => "auto"}
+    assert policy == %{"files.read" => "auto", "web.*" => "ask", "native_search" => "auto"}
 
     # An absent policy is the empty allowlist; an empty one parses too.
     assert {:ok, %{tool_policy: %{}}} = AquaAgent.parse("x", "---\ntitle: X\n---\n\nprompt\n")

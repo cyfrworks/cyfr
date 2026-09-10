@@ -24,8 +24,8 @@ func TestIsManaged(t *testing.T) {
 		"wit",
 		"wit/cyfr/oauth/token.wit",
 		"aqua/aqua.md",
-		"aqua/roles/aqua_builder.md",
-		"aqua/roles/aqua_web.md",
+		"aqua/roles/builder.md",
+		"aqua/roles/web.md",
 		"aqua/skills/capability-acquisition/SKILL.md",
 		"aqua/skills/capability-acquisition/references/notes.md",
 	}
@@ -46,8 +46,8 @@ func TestIsManaged(t *testing.T) {
 		"aqua",
 		"aqua/README.md",                     // only the soul, roles and scrolls ship
 		"aqua/roles/custom.md",               // a member's own role
-		"aqua/roles/aqua_builder.txt",        // a role is a .md file
-		"aqua/roles/nested/aqua_builder.md",  // roles are flat
+		"aqua/roles/builder.txt",             // a role is a .md file
+		"aqua/roles/nested/builder.md",       // roles are flat
 		"aqua/skills/custom/SKILL.md",        // a member's own scroll
 		"aqua/skills/capability-acquisition", // a scroll is the files inside its directory
 	}

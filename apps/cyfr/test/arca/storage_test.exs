@@ -249,7 +249,7 @@ defmodule Arca.StorageTest do
   describe "classify/1 and tenant_roots/0" do
     test "the tenant roster is closed, and every scope classifies" do
       assert Storage.tenant_roots() ==
-               ~w(aqua components conversations notes payloads guest meta)
+               ~w(aqua components conversations notes payloads guest)
 
       for root <- Storage.tenant_roots() do
         assert Storage.classify([root, "x"]) == :tenant
@@ -283,12 +283,12 @@ defmodule Arca.StorageTest do
       # Every roster is derived from @layout; these pin the derived values
       # so an edited row cannot silently reshape a roster.
       assert Enum.sort(Storage.tenant_roots()) ==
-               ~w(aqua components conversations guest meta notes payloads)
+               ~w(aqua components conversations guest notes payloads)
 
       assert Enum.sort(Storage.global_prefixes()) == ~w(cache system)
       assert Enum.sort(Storage.seed_roots()) == ~w(aqua components)
       assert Enum.sort(Storage.overlay_roots()) == ~w(aqua components)
-      assert Storage.reserved_roots() == ~w(payloads meta)
+      assert Storage.reserved_roots() == ~w(payloads)
       assert Storage.guest_scopes() == %{"data" => "guest", "components" => "components"}
 
       # The classes partition: no root is both tenant and global; every
@@ -310,7 +310,7 @@ defmodule Arca.StorageTest do
 
     test "locate/1 routes through the configured locator, and only there" do
       assert Storage.locate(["guest", "x"]) == :not_overlaid
-      assert Storage.locate(["meta", "origin", "x"]) == :not_overlaid
+      assert Storage.locate(["payloads", "sha256", "x"]) == :not_overlaid
       assert Storage.locate([]) == :not_overlaid
       assert Storage.locate(["components"]) == :above_unit
       assert Storage.locate(["aqua"]) == :above_unit

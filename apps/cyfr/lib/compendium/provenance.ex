@@ -5,18 +5,18 @@ defmodule Compendium.Provenance do
   @moduledoc """
   Where a component's bytes come from, as one derived classification:
 
-  - `:bundled` — the athanor's copy of a shipped unit, unedited since it
-    was copied from the seed.
-  - `:bundled_modified` — shipped, and the athanor has edited its copy;
-    a reset restores what the release ships.
+  - `:bundled` — the athanor's copy of a unit the server ships.
+  - `:bundled_modified` — a shipped copy whose bytes differ from what
+    ships. Only the surfaces that compare bytes answer it (`status/2`,
+    `drift/2`, `Compendium.AquaTemplate.status/1`); a reset restores what
+    the release ships.
   - `:user` — the athanor's own: scaffolded, built, or forked here.
   - `:remote` — pulled from a registry (`source` `"oci"`/`"published"`).
 
   Provenance is DERIVED, never stored: the registry row's `source` column
-  answers only the ingress channel, and the overlay's unit state changes
-  inside `Arca` the moment a write edits a copy — a stored flag would be
-  stale by then. The tree probe (`Arca.Overlay.unit_status/2`) is the
-  SSOT; a row can cache the answer for display, but the tree wins.
+  answers only the ingress channel, and whether the seed ships a unit is
+  the tree's answer (`Arca.Overlay.unit_status/2`). A row can cache the
+  answer for display, but the tree wins.
 
   `shipped_versions/2` lists bundled versions for a name; `drift/2` compares
   the tenant copy with its shipped counterpart.
@@ -50,8 +50,7 @@ defmodule Compendium.Provenance do
   """
   @spec of_status(Arca.Overlay.unit_status()) :: t()
   def of_status(status) when status in [:available, :shipped], do: :bundled
-  def of_status(:modified), do: :bundled_modified
-  def of_status(status) when status in [:own, :own_shadowing, :absent], do: :user
+  def of_status(status) when status in [:own, :absent], do: :user
 
   @doc """
   The wire spelling of a provenance — the MCP boundary stringifies
@@ -95,63 +94,56 @@ defmodule Compendium.Provenance do
   defp superseded?([newest | _], version), do: Compendium.Semver.strictly_newer?(newest, version)
 
   @doc """
-  One component's whole overlay answer in ONE unit probe (`diff_unit/2`
-  only when the copy was edited): its provenance, its drift from the
-  shipped bytes (`:pristine` for `:bundled`, `nil` where nothing shipped
-  backs it), and whether the athanor's own work is shadowing a shipped
-  counterpart.
+  One component's whole answer: its provenance, and its drift from the
+  shipped bytes — `:pristine` for an unedited copy, `{:modified, diff}`
+  for an edited one (whose provenance then reads `:bundled_modified`),
+  `nil` where nothing shipped backs it.
   """
   @spec status(Context.t(), map()) ::
-          {:ok,
-           %{
-             provenance: t(),
-             drift: :pristine | {:modified, map()} | nil,
-             shadows_shipped: boolean()
-           }}
+          {:ok, %{provenance: t(), drift: :pristine | {:modified, map()} | nil}}
           | {:error, term()}
   def status(%Context{} = ctx, component) do
     if Compendium.Source.remote?(Map.get(component, :source)) do
-      {:ok, %{provenance: :remote, drift: nil, shadows_shipped: false}}
+      {:ok, %{provenance: :remote, drift: nil}}
     else
       unit_dir = version_dir(component)
 
-      with {:ok, unit_status} <- Arca.Overlay.unit_status(ctx, unit_dir) do
-        base = %{
-          provenance: of_status(unit_status),
-          drift: nil,
-          shadows_shipped: unit_status == :own_shadowing
-        }
+      case Arca.Overlay.unit_status(ctx, unit_dir) do
+        {:ok, :shipped} ->
+          with {:ok, diff} <- Arca.Overlay.diff_unit(ctx, unit_dir) do
+            case diff do
+              %{added: [], removed: [], changed: []} ->
+                {:ok, %{provenance: :bundled, drift: :pristine}}
 
-        case unit_status do
-          :modified ->
-            case Arca.Overlay.diff_unit(ctx, unit_dir) do
-              {:ok, %{added: [], removed: [], changed: []}} -> {:ok, %{base | drift: :pristine}}
-              {:ok, diff} -> {:ok, %{base | drift: {:modified, diff}}}
-              {:error, _} = error -> error
+              diff ->
+                {:ok, %{provenance: :bundled_modified, drift: {:modified, diff}}}
             end
+          end
 
-          shipped when shipped in [:shipped, :available] ->
-            {:ok, %{base | drift: :pristine}}
+        {:ok, :available} ->
+          {:ok, %{provenance: :bundled, drift: :pristine}}
 
-          _own_or_absent ->
-            {:ok, base}
-        end
+        {:ok, _own_or_absent} ->
+          {:ok, %{provenance: :user, drift: nil}}
+
+        {:error, _} = error ->
+          error
       end
     end
   end
 
   @doc """
-  How a `:bundled_modified` copy differs from what the release shipped —
+  How a bundled copy differs from what the release shipped —
   `{:ok, :pristine}` for a byte-identical copy, `{:ok, {:modified, diff}}`
   with the added/removed/changed relative paths otherwise. Any other
-  provenance answers `{:error, :not_bundled_modified}`. A thin reading of
+  provenance answers `{:error, :not_bundled}`. A thin reading of
   `status/2`.
   """
   @spec drift(Context.t(), map()) ::
           {:ok, :pristine | {:modified, map()}} | {:error, term()}
   def drift(%Context{} = ctx, component) do
     case status(ctx, component) do
-      {:ok, %{drift: nil}} -> {:error, :not_bundled_modified}
+      {:ok, %{drift: nil}} -> {:error, :not_bundled}
       {:ok, %{drift: drift}} -> {:ok, drift}
       {:error, _} = error -> error
     end
@@ -160,9 +152,8 @@ defmodule Compendium.Provenance do
   @doc """
   Annotate registry rows with everything the update surfaces speak, in
   one pass: `provenance`, the `shipped_versions` this release carries for
-  the name, `superseded` (a strictly newer shipped version exists),
-  `shadows_shipped` (the athanor's own unit hides a shipped counterpart),
-  and fork lineage — `forked_from` (read from the row's manifest, where
+  the name, `superseded` (a strictly newer shipped version exists), and
+  fork lineage — `forked_from` (read from the row's manifest, where
   the fork stamped it) with `upstream_superseded` (a newer version of the
   fork's upstream line is known locally — the fork-side symmetry of
   `superseded`). One overlay walk, one seed listing per distinct
@@ -177,7 +168,6 @@ defmodule Compendium.Provenance do
                provenance: t(),
                shipped_versions: [String.t()],
                superseded: boolean(),
-               shadows_shipped: boolean(),
                forked_from: String.t() | nil,
                upstream_superseded: boolean()
              }
@@ -190,12 +180,7 @@ defmodule Compendium.Provenance do
         Enum.map(rows, fn row ->
           base =
             if remote_row?(row) do
-              %{
-                provenance: :remote,
-                shipped_versions: [],
-                superseded: false,
-                shadows_shipped: false
-              }
+              %{provenance: :remote, shipped_versions: [], superseded: false}
             else
               unit_status = Map.get(statuses, version_dir(row), :absent)
               shipped = Map.fetch!(catalog, {type_of(row), row.name})
@@ -203,8 +188,7 @@ defmodule Compendium.Provenance do
               %{
                 provenance: of_status(unit_status),
                 shipped_versions: shipped,
-                superseded: superseded?(shipped, row.version),
-                shadows_shipped: unit_status == :own_shadowing
+                superseded: superseded?(shipped, row.version)
               }
             end
 

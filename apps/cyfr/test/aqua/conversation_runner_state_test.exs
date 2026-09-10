@@ -264,7 +264,7 @@ defmodule Aqua.ConversationRunnerStateTest do
     grants = MapSet.new([{"aqua", "component", "create"}])
     intent = %{proposal: %{tool: "component", action: "create", args: %{}}}
     assert Aqua.Turn.granted?("aqua", intent, grants)
-    refute Aqua.Turn.granted?("aqua_planner", intent, grants)
+    refute Aqua.Turn.granted?("planner", intent, grants)
     refute Aqua.Turn.granted?(nil, intent, grants)
   end
 
@@ -292,7 +292,7 @@ defmodule Aqua.ConversationRunnerStateTest do
 
     {:ok, me} = Context.focus(alice, mine.id)
 
-    for name <- ["aqua", "aqua_planner"] do
+    for name <- ["aqua", "planner"] do
       {:ok, _} =
         Aqua.AgentConfig.call_aqua(me, %{
           "action" => "update",
@@ -305,14 +305,14 @@ defmodule Aqua.ConversationRunnerStateTest do
     ConversationRunner.subscribe(conv.id, conv.athanor_id)
 
     # A solo estate: the previous turn's agent answers a bare line.
-    {_eid, runner, _} = start_turn(me, conv, "@aqua_planner look around")
+    {_eid, runner, _} = start_turn(me, conv, "@planner look around")
     finish_with(runner, "Looked.")
     assert_receive {:conversation, _, {:turn_finished}}, 5_000
 
     {:ok, _} =
       Aqua.AgentConfig.call_aqua(me, %{
         "action" => "update",
-        "name" => "aqua_planner",
+        "name" => "planner",
         "disabled" => true
       })
 

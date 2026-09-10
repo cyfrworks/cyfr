@@ -1295,10 +1295,11 @@ defmodule Opus.StorageHandlerTest do
       assert decoded["written"] == true
 
       # The copy is the athanor's, edited: the shipped sibling stays and
-      # the unit reads modified.
+      # the unit still reads shipped, with the edit in its diff.
       assert {:ok, ~s({"seeded":false})} = Arca.get(ctx, unit ++ ["config.json"])
       assert Arca.Adapters.Local.exists?(ctx, unit ++ ["cyfr-manifest.json"])
-      assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :modified}
+      assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :shipped}
+      assert {:ok, true} = Arca.Overlay.edited?(ctx, unit)
     end
 
     test "a guest mutation above the unit grammar is refused; data/ is untouched", %{

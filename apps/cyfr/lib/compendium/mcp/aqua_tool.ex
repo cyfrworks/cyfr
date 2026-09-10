@@ -737,16 +737,12 @@ defmodule Compendium.MCP.AquaTool do
 
   # The tree changed; the derived index follows it. Never the write's
   # failure: an index that lags is re-synced by the next write or sync.
-  # One unit back to what ships: only an edited copy restores; an unedited
-  # one and the estate's own work refuse in words.
+  # One unit back to what ships; the estate's own work refuses in words.
   defp restore_unit(ctx, unit, noun, name) do
     case Compendium.AquaTemplate.restore(ctx, unit) do
       :ok ->
         resync_index(ctx)
         {:ok, %{restored: name}}
-
-      {:error, :pristine} ->
-        {:error, {:invalid_argument, "#{noun} '#{name}' is already what ships with the server"}}
 
       {:error, :not_a_copy} ->
         {:error,

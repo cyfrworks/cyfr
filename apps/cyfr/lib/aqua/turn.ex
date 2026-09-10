@@ -61,7 +61,7 @@ defmodule Aqua.Turn do
   @doc """
   Who can be addressed on this tape: the estate's soul first, then its
   roles — the tree in focus and no other. A room's tape is the room's:
-  `@aqua` reaches the room's soul, and a role mention (`@aqua_builder`)
+  `@aqua` reaches the room's soul, and a role mention (`@builder`)
   runs that role directly for one turn; a person's own assistant lives in
   their own athanor and rides along in its own panel, never on a shared
   tape.
@@ -89,8 +89,8 @@ defmodule Aqua.Turn do
   An explicit `@name` in the message names the orchestrator for this turn
   — the roster entry called `name`. Returns `{message_without_mention,
   entry | nil}`: the whole entry, since the caller carries it into the
-  turn. Matching longest-first so `@aqua_planner` is not read as `@aqua`
-  with a suffix.
+  turn. Matching longest-first, so a name that extends another's is
+  never read as the shorter one with a suffix.
   """
   @spec parse_mention(String.t(), [map()]) :: {String.t(), map() | nil}
   def parse_mention(message, orchestrators) do
