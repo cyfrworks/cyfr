@@ -10,9 +10,8 @@ defmodule Compendium.AutoIndexer do
   with `source: "filesystem"`.
 
   A scan is triggered when an athanor is provisioned and at every boot sync
-  (`Sanctum.Provisioning` — the walk sees the seed bundle through
-  `Arca.Overlay`, so bundled versions get rows without any copy), by
-  `component.register`, and from the Components page.
+  (`Sanctum.Provisioning`, once the shipped bundle is copied into the
+  athanor), by `component.register`, and from the Components page.
 
   ## Security
 
@@ -23,10 +22,8 @@ defmodule Compendium.AutoIndexer do
   ## Stale Entry Pruning
 
   After scanning, removes registry rows with `source: "filesystem"` the
-  walk no longer discovered. "Present" means present in the UNION: a
-  bundled version directory is always discoverable through the seed, so
-  bundled rows survive every prune without the athanor holding a byte —
-  only a genuinely deleted local component loses its row.
+  walk no longer discovered: a version directory gone from the athanor's
+  tree, a shipped copy or its own, loses its row.
   """
 
   require Logger
@@ -242,10 +239,9 @@ defmodule Compendium.AutoIndexer do
 
   Each athanor indexes its own subtree — the listing is rooted in `ctx`'s
   athanor, and `register_from_arca`/`prune_stale_entries` stay keyed on
-  `ctx`, so no scan writes another athanor's rows. The walk is the seed
-  UNION (`Arca.Overlay`): bundled version directories the athanor has not
-  materialized are discovered — and stay discovered — so their rows
-  survive every prune without a byte copied.
+  `ctx`, so no scan writes another athanor's rows. The walk is the
+  athanor's own tree: the shipped copies provisioning laid, beside what
+  the athanor registered itself.
 
   A listing outage answers `{:error, term}`, never an empty roster — an
   unreadable tree read as empty would prune every filesystem row and show

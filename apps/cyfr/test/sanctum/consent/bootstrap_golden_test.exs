@@ -53,7 +53,8 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     # The server's own mint: `granted_by` is the constant "system:bootstrap".
     ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor.id, scope: :athanor)
 
-    # The scan mints the bundle rows through the seed overlay — no copies.
+    # The bundle is copied in and the scan mints its rows, as a fill does.
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "components")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
 
     {:ok, ctx: ctx}

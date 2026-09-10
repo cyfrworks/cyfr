@@ -20,11 +20,11 @@ defmodule Compendium.ComponentPath do
   layout, and the segment can never diverge from the id minted by
   `Compendium.ComponentId`.
 
-  The seed bundle every athanor reads through lives under the reserved
-  `seed/components/{type}s/local/...` prefix
-  (`Arca.Storage.seed_prefix("components")`) and is read in place from the
-  seed tree (`:seed_path`), outside the storage root; it is bytes only and
-  never a tenant.
+  The seed bundle every athanor is provisioned from lives under the
+  reserved `seed/components/{type}s/local/...` prefix
+  (`Arca.Storage.seed_prefix("components")`) in the seed tree
+  (`:seed_path`), outside the storage root; it is bytes only and never a
+  tenant.
 
   Vocabulary note: paths and the components table say `publisher`;
   references and identity (`Sanctum.ComponentRef`) say `namespace` — the
@@ -121,9 +121,9 @@ defmodule Compendium.ComponentPath do
   (`Arca.Storage.UnitLocator`): every path at or below a version
   directory that `parse/1` accepts belongs to that directory-shaped
   unit, sentinel'd by the manifest; anything else is above the units.
-  A unit is a claim the storage layer acts on — copy-on-write, origin
-  marks, status — so only the grammar mints one: a junk five-segment
-  shape stays plain storage, never a CoW'd, quota-charged phantom unit.
+  A unit is a claim the storage layer acts on — the shipped copy, origin
+  and edit marks, status — so only the grammar mints one: a junk
+  five-segment shape stays plain storage, never a phantom unit.
 
   ## Examples
 

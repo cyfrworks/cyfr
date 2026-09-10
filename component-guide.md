@@ -1120,33 +1120,38 @@ A component that takes everything it needs from call arguments declares no `need
 
 ## Bundled Components and Upgrades
 
-Every athanor sees the components the server ships (`seed/components/`) through
-a copy-on-write overlay — a bundled component costs your athanor **nothing**
-until you edit it. The rules:
+The components the server ships (`seed/components/`) are the default every
+athanor starts from: provisioning copies each shipped version into the
+athanor's own `components/` tree, registers it and mints its baseline
+consent. From then on the copy is the athanor's — served from its tree,
+counted in its storage. The rules:
 
-- **Unedited bundled components track the release live.** A new server version
-  updates them everywhere automatically; new shipped versions appear beside
-  whatever you already have.
-- **Editing makes a copy.** Your first write copies the whole version directory
-  into your athanor (counted against your storage) and freezes it — later
-  releases no longer touch it. `component status` shows it as `bundled_modified`
-  with a diff against shipped.
-- **Delete never means revert.** Deleting a bundled component is refused (it
-  isn't yours to delete — and it costs nothing); the `component` tool's `reset`
-  action reverts an edited copy to exactly what the release ships.
-- **Your own component at a shipped path stays yours.** If a release later
-  ships a component where you already created one, your bytes keep answering
-  (shown as "hides shipped"); deleting yours reveals the shipped one. Reset
-  never destroys your work.
+- **A release never changes an athanor's copy.** A newer shipped version
+  reads as available: the Components page offers **Update to x.y.z** beside
+  the bundled version you hold, `component list` carries `shipped_versions`,
+  and `component pull type:local.name` (or `:version`) copies the shipped
+  version in beside what you hold — the same pull as a registry component,
+  from the seed instead of a registry. Nothing is pulled behind your back.
+- **Editing marks the copy.** `component status` shows an edited copy as
+  `bundled_modified` with a diff against shipped; an unedited one is
+  `bundled`.
+- **Delete never means revert.** Deleting a bundled copy, edited or not, is
+  refused; the `component` tool's `reset` action restores an edited copy to
+  exactly what the release ships.
+- **Your own component at a shipped path stays yours.** A component you
+  created where a release ships one is shown as "hides shipped"; deleting
+  yours makes the shipped version available to pull. Reset never destroys
+  your work.
 - **Forks report their upstream.** A fork remembers what it was cut from
   (`forked_from`); when a newer version of that upstream line is present
   locally, status flags it `upstream_superseded`.
 
-The AQUA tree — the soul, its roles and its scrolls — follows the same overlay
-with per-unit shadows: an unedited file tracks the release automatically, an
-edited one shadows only itself, and the `aqua` tool's `reset` action (from the
-AQUA page or over MCP) reverts edited copies while keeping the roles and
-scrolls the estate made.
+The AQUA tree — the soul, its roles and its scrolls — follows the same
+model: provisioning copies the shipped tree into the athanor's `aqua/`, an
+edit marks the file, and the `aqua` tool's `reset` action (from the AQUA
+page or over MCP) restores edited copies — one role by name, or every one —
+while keeping the roles and scrolls the estate made; `skill_reset` restores
+one scroll.
 
 ---
 

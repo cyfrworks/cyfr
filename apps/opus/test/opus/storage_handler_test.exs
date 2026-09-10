@@ -1246,7 +1246,10 @@ defmodule Opus.StorageHandlerTest do
       :ok
     end
 
-    test "a guest reads an unmaterialized bundle file", %{ctx: ctx, component_ref: ref} do
+    test "a guest reads a shipped bundle file the athanor holds", %{ctx: ctx, component_ref: ref} do
+      :ok =
+        Arca.Overlay.pull_shipped(ctx, ["components", "catalysts", "local", "bundled", "1.0.0"])
+
       edge = EdgeFixtures.edge(paths: ["components/"], actions: ["read", "list", "exists"])
 
       request =
@@ -1273,10 +1276,12 @@ defmodule Opus.StorageHandlerTest do
       assert list["files"] == ["1.0.0/"]
     end
 
-    test "a guest write materializes the version dir, then lands", %{
+    test "a guest write into a shipped copy lands as an edit", %{
       ctx: ctx,
       component_ref: ref
     } do
+      unit = ["components", "catalysts", "local", "bundled", "1.0.0"]
+      :ok = Arca.Overlay.pull_shipped(ctx, unit)
       edge = EdgeFixtures.edge(paths: ["components/"], actions: ["read", "write"])
 
       request =
@@ -1289,22 +1294,11 @@ defmodule Opus.StorageHandlerTest do
       decoded = Jason.decode!(StorageHandler.execute(request, edge, nil, ctx, ref))
       assert decoded["written"] == true
 
-      # The edit shadows the bundle, and the sibling file came along — the
-      # copy is the athanor's own now.
-      assert {:ok, ~s({"seeded":false})} =
-               Arca.get(ctx, [
-                 "components",
-                 "catalysts",
-                 "local",
-                 "bundled",
-                 "1.0.0",
-                 "config.json"
-               ])
-
-      assert Arca.Adapters.Local.exists?(
-               ctx,
-               ["components", "catalysts", "local", "bundled", "1.0.0", "cyfr-manifest.json"]
-             )
+      # The copy is the athanor's, edited: the shipped sibling stays and
+      # the unit reads modified.
+      assert {:ok, ~s({"seeded":false})} = Arca.get(ctx, unit ++ ["config.json"])
+      assert Arca.Adapters.Local.exists?(ctx, unit ++ ["cyfr-manifest.json"])
+      assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :modified}
     end
 
     test "a guest mutation above the unit grammar is refused; data/ is untouched", %{

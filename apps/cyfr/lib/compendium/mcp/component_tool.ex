@@ -318,13 +318,29 @@ defmodule Compendium.MCP.ComponentTool do
       reference ->
         with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
           oci_reference =
-            if Compendium.OCI.Reference.oci_ref?(reference) do
-              {:ok, reference}
-            else
-              convert_to_oci_ref(reference)
+            cond do
+              Compendium.OCI.Reference.oci_ref?(reference) -> {:ok, reference}
+              shipped_ref?(reference) -> :shipped
+              true -> convert_to_oci_ref(reference)
             end
 
           case oci_reference do
+            # A `local` ref names what the server ships: the pull copies the
+            # shipped version from the seed rather than dialling a registry.
+            :shipped ->
+              broadcast_progress(ctx, progress_id, :pulling, "Copying shipped #{reference}...")
+
+              case Sanctum.Provisioning.install_shipped(ctx, reference) do
+                {:ok, res} ->
+                  broadcast_progress(ctx, progress_id, :complete, "Pulled #{res.component_ref}")
+                  broadcast_components_changed(ctx)
+                  {:ok, res}
+
+                {:error, reason} ->
+                  broadcast_progress(ctx, progress_id, :error, "Pull failed")
+                  {:error, shipped_pull_error(reference, reason)}
+              end
+
             {:ok, ref} ->
               broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
               result = do_oci_pull(ctx, ref)
@@ -477,6 +493,7 @@ defmodule Compendium.MCP.ComponentTool do
         Enum.map(annotated, fn entry ->
           entry.component
           |> Map.put(:provenance, Compendium.Provenance.label(entry.provenance))
+          |> Map.put(:shipped_versions, entry.shipped_versions)
           |> Map.put(:superseded, entry.superseded)
           |> Map.put(:shadows_shipped, entry.shadows_shipped)
           |> Map.put(:forked_from, entry.forked_from)
@@ -511,24 +528,18 @@ defmodule Compendium.MCP.ComponentTool do
             broadcast_components_changed(ctx)
             {:ok, %{status: "deleted", reference: reference}}
 
-          {:ok, :revealed_shipped} ->
-            broadcast_components_changed(ctx)
-            # The athanor's copy is gone; the shipped version shows
-            # through again — same wording as aqua's delete.
-            {:ok, %{status: "deleted", reference: reference, restored: "shipped"}}
-
           {:error, :not_found} ->
             {:error, {:not_found, "Component", reference}}
 
           {:error, :bundled} ->
             {:error,
              "#{reference} ships with the server and cannot be deleted — " <>
-               "it costs your athanor nothing until edited"}
+               "edit it, or use action=reset to restore it"}
 
           {:error, :bundled_modified} ->
             {:error,
              "#{reference} is bundled with local edits — use action=reset to " <>
-               "revert it to the shipped version"}
+               "restore the shipped version"}
 
           {:error, reason} ->
             Logger.error("[Compendium.MCP] component.delete failed: #{inspect(reason)}")
@@ -1239,10 +1250,31 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   # Convert a component-ref style reference to an OCI reference for pulling.
-  # Local components are registered via `cyfr register`, not pulled. This is
-  # an early, friendlier message only — a ref carrying a registry host skips
-  # this branch entirely, so the binding refusal lives in `OCI.Client.pull/2`.
+  # A ref carrying a registry host skips this branch entirely, so the
+  # binding refusal lives in `OCI.Client.pull/2`.
   defp convert_to_oci_ref(reference), do: Compendium.Pull.oci_reference_for(reference)
+
+  defp shipped_pull_error(reference, :not_shipped),
+    do:
+      "#{reference} is not a version the server ships — a local component is " <>
+        "registered from your tree (`cyfr register`); only shipped versions are pulled from the seed"
+
+  defp shipped_pull_error(reference, :own_work),
+    do: "#{reference} is your own component — the shipped version is not copied over it"
+
+  defp shipped_pull_error(reference, reason) do
+    Logger.error("[Compendium.MCP] shipped pull of #{reference} failed: #{inspect(reason)}")
+    "Failed to pull #{reference}"
+  end
+
+  # A component ref in the `local` namespace: the server's own shipped
+  # media, never a registry's.
+  defp shipped_ref?(reference) do
+    case Sanctum.ComponentRef.parse(reference) do
+      {:ok, %{namespace: namespace}} -> Compendium.ComponentPath.local_publisher?(namespace)
+      _ -> false
+    end
+  end
 
   # Shared OCI pull logic used by both explicit OCI refs and converted component refs.
   defp do_oci_pull(ctx, reference) do

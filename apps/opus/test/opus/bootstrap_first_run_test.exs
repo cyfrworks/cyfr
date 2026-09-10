@@ -46,9 +46,7 @@ defmodule Opus.BootstrapFirstRunTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
-    # The REAL tracked bundle, served in place through the seed overlay —
-    # the production-true path: a real install copies nothing, the union
-    # answers and the scan mints rows.
+    # The REAL tracked bundle as the seed tree — what a fill copies from.
     original_seed_path = Application.get_env(:cyfr, :seed_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
 
@@ -74,11 +72,13 @@ defmodule Opus.BootstrapFirstRunTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # Register a tracked bundle version the way the auto-indexer does: the
-  # overlay union serves the seed bytes in place — nothing is copied.
+  # Copy a tracked bundle version in and register it, the way a fill does.
   defp stage_and_register(ctx, rel) do
     segments = ["components" | String.split(rel, "/")]
-    Compendium.Registry.register_from_arca(ctx, segments)
+
+    with :ok <- Arca.Overlay.pull_shipped(ctx, segments) do
+      Compendium.Registry.register_from_arca(ctx, segments)
+    end
   end
 
   test "the tracked bundle registers, bootstraps and loads from its caps blocks", %{ctx: ctx} do

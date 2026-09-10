@@ -31,6 +31,7 @@ defmodule Aqua.AquaToolEditsTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = Sanctum.TestContext.local()
+    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{"cloneable" => true}} = call(ctx, %{"action" => "create", "name" => "scout"})
     %{ctx: ctx}
   end

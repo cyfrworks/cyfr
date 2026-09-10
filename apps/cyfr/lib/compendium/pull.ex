@@ -11,8 +11,8 @@ defmodule Compendium.Pull do
   through `Compendium.OCI.Client.pull/2`, which registers the component in
   the caller's athanor. `ensure_published_deps/2` walks a set of refs and
   every static dependency of what it pulled, so a seeded athanor holds the
-  whole closure its bundle needs. Local-publisher refs are never pulled:
-  they are registered, not fetched.
+  whole closure its bundle needs. A `local` ref names the server's own
+  shipped media: `pull_shipped/2` copies it from the seed tree instead.
 
   The pull credential is the caller's (`Compendium.OCI.Auth` selects it by
   `ctx.user_id`); a server-internal context pulls anonymously, which is
@@ -51,6 +51,48 @@ defmodule Compendium.Pull do
       failed: Enum.reverse(outcome.failed),
       present: Enum.reverse(outcome.present)
     }
+  end
+
+  @doc """
+  Copy a shipped component into the caller's athanor and register it: a
+  `local` ref names what the server ships, so the pull is from the seed
+  tree, never a registry. A versionless ref takes the newest shipped
+  version. Its baseline consent is `Sanctum.Provisioning.install_shipped/2`'s
+  to mint, as the first fill did for what shipped then.
+
+  `{:error, :not_shipped}` when the seed carries no such version;
+  `{:error, :own_work}` when the athanor's own component stands at that
+  path; `{:error, :not_local}` for a ref outside the `local` namespace.
+  """
+  @spec pull_shipped(Context.t(), String.t()) ::
+          {:ok, %{status: String.t(), component_ref: String.t()}} | {:error, term()}
+  def pull_shipped(%Context{} = ctx, reference) when is_binary(reference) do
+    with {:ok, %Sanctum.ComponentRef{} = cref} <- Sanctum.ComponentRef.parse(reference),
+         :ok <- local_ref(cref),
+         {:ok, version} <- shipped_version(cref),
+         unit =
+           Compendium.ComponentPath.version_dir(cref.type, cref.namespace, cref.name, version),
+         :ok <- Arca.Overlay.pull_shipped(ctx, unit),
+         {:ok, _} <- Compendium.Registry.register_from_arca(ctx, unit) do
+      pulled = %Sanctum.ComponentRef{cref | version: version}
+      {:ok, %{status: "pulled", component_ref: Sanctum.ComponentRef.to_string(pulled)}}
+    end
+  end
+
+  defp local_ref(%Sanctum.ComponentRef{namespace: namespace}) do
+    if Compendium.ComponentPath.local_publisher?(namespace), do: :ok, else: {:error, :not_local}
+  end
+
+  # The version the seed ships for the ref: the named one when it does,
+  # else the newest.
+  defp shipped_version(%Sanctum.ComponentRef{} = cref) do
+    with {:ok, versions} <- Compendium.Provenance.shipped_versions(cref.type, cref.name) do
+      cond do
+        is_nil(cref.version) and versions != [] -> {:ok, hd(versions)}
+        cref.version in versions -> {:ok, cref.version}
+        true -> {:error, :not_shipped}
+      end
+    end
   end
 
   @doc """

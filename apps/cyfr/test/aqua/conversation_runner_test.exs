@@ -327,6 +327,7 @@ defmodule Aqua.ConversationRunnerTest do
     # A turn pins the baseline consent, so the estate this one runs in is
     # set up like any estate a person actually chats in.
     {:ok, personal} = Sanctum.Tenancy.Athanors.mark_provisioned(personal)
+    :ok = Sanctum.TestContext.shipped!(personal.id)
 
     {:ok, _} = Sanctum.Tenancy.Members.ensure(owner, scope: "athanor", athanor_id: personal.id)
     ctx = %{user_ctx(owner) | athanor_id: personal.id}

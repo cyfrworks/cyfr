@@ -83,7 +83,7 @@ defmodule Compendium.OCILocalNamespaceTest do
                  "reference" => "reagent:local.thing:1.0.0"
                })
 
-      assert message =~ "Cannot pull local components"
+      assert message =~ "not a version the server ships"
       assert message =~ "cyfr register"
     end
   end

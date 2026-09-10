@@ -2,11 +2,10 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.AgentConfigTest do
-  # The agent's tool_policy is DECLARED policy, and the athanor's
-  # definitions come from the shipped template on first read. A chat
-  # decision that outlives the turn ("always" / "never") is not an edit to
-  # it — those are `Aqua.ToolGrants` rows, composed over the declaration at
-  # use time.
+  # The agent's tool_policy is DECLARED policy, read from the athanor's
+  # own copy of the shipped template. A chat decision that outlives the
+  # turn ("always" / "never") is not an edit to it — those are
+  # `Aqua.ToolGrants` rows, composed over the declaration at use time.
   use ExUnit.Case, async: false
 
   alias Aqua.AgentConfig
@@ -27,6 +26,7 @@ defmodule Aqua.AgentConfigTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
+    :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
@@ -37,9 +37,16 @@ defmodule Aqua.AgentConfigTest do
     Aqua.AgentConfig.stringify_deep(guide)["tool_policy"]
   end
 
-  test "the shipped roster reads through the overlay — no copy is ever made", %{ctx: ctx} do
+  # Every AQUA unit the athanor holds is an unedited copy of what ships.
+  defp pristine?(ctx) do
+    {:ok, statuses} = Arca.Overlay.unit_statuses(ctx, "aqua")
+    statuses != %{} and Enum.all?(statuses, fn {_unit, status} -> status == :shipped end)
+  end
+
+  test "the shipped roster is read from the athanor's own copy", %{ctx: ctx} do
     assert is_map(policy(ctx, "aqua"))
-    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
+    assert Arca.exists?(ctx, Compendium.AquaPath.agent_file("aqua"))
+    assert pristine?(ctx)
   end
 
   test "a standing decision never rewrites the declared policy", %{ctx: ctx} do
@@ -58,8 +65,8 @@ defmodule Aqua.AgentConfigTest do
     # not an edit to what the author declared.
     assert policy(ctx, "aqua")["component.pull"] == "ask"
 
-    # And nothing was materialized into the athanor's tree to say so.
-    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
+    # And no file in the athanor's tree was edited to say so.
+    assert pristine?(ctx)
   end
 
   # Minimal valid WASM with a `run` export — enough to publish a row.

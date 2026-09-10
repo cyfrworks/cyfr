@@ -294,8 +294,9 @@ defmodule Cyfr.RuntimeConfig do
   Resolve the filesystem roots from the environment (release runtime):
 
     * `CYFR_DATA_PATH` — the one runtime storage root (default `"data"`)
-    * `CYFR_SEED_PATH` — the seed tree, read in place: the component bundle
-      under `components/` and the AQUA template under `aqua/`
+    * `CYFR_SEED_PATH` — the seed tree every athanor is provisioned from:
+      the component bundle under `components/` and the AQUA template under
+      `aqua/`
       (default `"seed"`)
     * `CYFR_DATABASE_PATH` — the SQLite file (default `cyfr.db` under the
       data root; ignored on Postgres)

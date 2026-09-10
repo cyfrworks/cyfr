@@ -51,6 +51,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     {:ok, _} = Athanors.mark_provisioned(room)
 
     conn = log_in_user(conn, user, athanor_id: room.id)
+    :ok = Sanctum.TestContext.shipped!(mine.id)
 
     {:ok, u} = Sanctum.Tenancy.Users.get(user.user_id)
     {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)

@@ -59,8 +59,8 @@ defmodule Arca do
   Typed tuples, whoever the caller: `:not_found`; `:forbidden` (unknown or
   reserved root, from `authorize_path/2`); `:seed_read_only`;
   `:reserved_name` (the `.tmp.<n>` shape); `:invalid_path` (a mutation
-  above depth 2); `:bundled` (deleting an unmaterialized seed unit);
-  `{:materialize_failed, reason}` (copy-on-write materialization);
+  above depth 2); `:bundled` (deleting a shipped copy);
+  `{:materialize_failed, reason}` (copying a shipped unit into the athanor);
   `{:limit_reached, :athanor_storage_bytes, cap}` and
   `:storage_unverifiable` (any capped tenant create — the write gate
   checks by default, see `put/4`'s `cap:` option); plus the adapter
@@ -510,11 +510,10 @@ defmodule Arca do
     end
   end
 
-  # Seed media is read-only at this seam, whatever the context: the overlay
-  # materializer only ever reads seed and writes the athanor, so a
-  # write here is always a bug — and letting one through would mutate the
-  # tracked repo tree or the operator's mount. "Read in place" is an
-  # invariant, not a convention.
+  # Seed media is read-only at this seam, whatever the context: a shipped
+  # copy is read from the seed and written into the athanor, so a write
+  # here is always a bug — and letting one through would mutate the
+  # tracked repo tree or the operator's mount.
   #
   # For everything else: a write anywhere in the athanor's tree changes
   # what the storage cap measures, and that total is cached because walking
@@ -548,7 +547,7 @@ defmodule Arca do
         {:error, :reserved_name}
 
       true ->
-        # Copy-on-write for the seed-overlaid roots happens inside the
+        # The edit marks of the seeded roots are set inside the
         # `Arca.Overlay` decorator's own put/append/delete callbacks —
         # this seam only gates, checks, dispatches and accounts.
         # Accounting is universal — every tenant write lands here, so a
@@ -594,9 +593,9 @@ defmodule Arca do
   # (the one seed tree, `:seed_path` — `Arca.Storage.seed_roots/0`), whatever
   # storage adapter is configured: an object-store deployment provisions
   # athanors from the shipped media without the bucket ever holding a copy.
-  # Every other path goes through the `Arca.Overlay` decorator (union
-  # reads, copy-on-write, the `:bundled` refusal — wrapping the configured
-  # adapter), which delegates verbatim for paths outside the overlaid
+  # Every other path goes through the `Arca.Overlay` decorator (edit
+  # marks, the `:bundled` refusal — wrapping the configured adapter),
+  # which delegates verbatim for paths outside the overlaid
   # roots — one routing decision instead of a per-root classification.
   defp adapter(["seed" | _]), do: Arca.Adapters.Local
   defp adapter(_path), do: Arca.Overlay

@@ -15,13 +15,13 @@ defmodule Arca.Storage.UnitLocator do
     * `:above_unit` — the path sits above any shadow unit (listings union
       here; writes and deletes pass untouched);
     * `{:file, unit}` — the path is at or below a file-shaped unit (the
-      unit IS one file — an aqua agent; a single put materializes it);
+      unit IS one file — an aqua agent);
     * `{:dir, unit, sentinel}` — the path is at or below a directory
       unit whose named sentinel file marks a completed copy (a component
       version directory, an aqua skill).
 
   Pure — no I/O, no context. The shape must be answerable before any file
-  exists (copy-on-write consults it on the first write), and the batch
+  exists (the edit mark consults it on the first write), and the batch
   walks stay two listings with no per-unit probes because classifying a
   leaf is a function call, not a round-trip.
   """

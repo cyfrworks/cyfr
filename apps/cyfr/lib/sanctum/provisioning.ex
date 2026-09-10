@@ -4,13 +4,13 @@
 defmodule Sanctum.Provisioning do
   @moduledoc """
   What turns an athanor row into a working athanor: the seed bundle
-  registered as rows (its bytes stay in the seed tree — `Arca.Overlay`
-  reads them through the athanor's `components/` until a write
-  materializes a copy), the AQUA agent definitions checked well-formed
-  (never copied — the overlay serves the shipped template in place), the
+  copied into the athanor's `components/` and registered as rows, the
+  shipped AQUA tree checked well-formed and copied into its `aqua/`, the
   published components the bundle depends on pulled from the registry,
   and a baseline consent minted for every executable local component —
-  so the athanor's AQUA answers from the first prompt.
+  so the athanor's AQUA answers from the first prompt. The seed tree is
+  the shipped default: what a release ships later is offered, never
+  pushed, and a reset copies it in again.
 
   A person's own athanor is minted at admission (`after_sign_in/1`): a
   person needs no registry, no namespace and no claim to have one, and its
@@ -110,6 +110,24 @@ defmodule Sanctum.Provisioning do
   # Nothing waits on a request path now, so this bounds contention between
   # a background fill and an explicit retry rather than a page's mount.
   @lock_wait_ms 30_000
+
+  @doc """
+  Copy a shipped component version into the context's athanor — a newer
+  version a release brought, or one the athanor lacks — register it and
+  mint its baseline consent, as the first fill did for what shipped then.
+  A `local` ref names what the server ships; a versionless ref takes the
+  newest shipped version. Answers what `Compendium.Pull.pull_shipped/2`
+  does: `{:error, :not_shipped}` for a version the seed does not carry,
+  `{:error, :own_work}` when the athanor's own component stands there.
+  """
+  @spec install_shipped(Context.t(), String.t()) ::
+          {:ok, %{status: String.t(), component_ref: String.t()}} | {:error, term()}
+  def install_shipped(%Context{} = ctx, reference) when is_binary(reference) do
+    with {:ok, pulled} <- Pull.pull_shipped(ctx, reference),
+         {:ok, _bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx) do
+      {:ok, pulled}
+    end
+  end
 
   @doc """
   Whether the context's athanor has been filled.
@@ -289,7 +307,7 @@ defmodule Sanctum.Provisioning do
     ctx = acting_ctx || seed_ctx(athanor_id)
 
     with {:ok, _scan} <- register_bundle(athanor_id),
-         :ok <- aqua_definitions(ctx),
+         :ok <- aqua_definitions(athanor_id),
          {:ok, closure} <- pull_required_deps(ctx),
          optional <- pull_optional_deps(ctx),
          {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx),
@@ -495,15 +513,17 @@ defmodule Sanctum.Provisioning do
     Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
   end
 
-  # The bundle registered as rows: the scan walks the athanor's
-  # `components/` union (its own tree over the seed bundle — `Arca.Overlay`)
-  # and mints a row per version directory. No bytes move. An install
-  # without its bundle cannot provision anyone; say so rather than minting
-  # an empty athanor.
+  # The bundle copied in and registered as rows: every shipped version
+  # directory the athanor does not hold is copied from the seed
+  # (`Arca.Overlay.materialize_shipped/2`), then the scan walks the
+  # athanor's `components/` and mints a row per version directory. An
+  # install without its bundle cannot provision anyone; say so rather than
+  # minting an empty athanor.
   defp register_bundle(athanor_id) do
     ctx = seed_ctx(athanor_id)
 
-    with :ok <- bundle_present(ctx) do
+    with :ok <- bundle_present(ctx),
+         {:ok, _copied} <- Arca.Overlay.materialize_shipped(ctx, "components") do
       # A component that fails registration is logged by the scan and
       # skipped; the consent bootstrap's `all_minted` is the gate that
       # decides whether what registered is enough to provision. A
@@ -521,37 +541,28 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  # The AQUA template is served in place through the seed overlay — no
-  # copy is made. What provisioning checks is that the install SHIPS a
-  # well-formed template (a v2-shaped or empty mount fails loud here, at
-  # the one moment an operator is watching, instead of as an empty roster
-  # later). `ctx` is unused — the check is the seed's, not the athanor's.
-  defp aqua_definitions(_ctx) do
-    case Compendium.AquaTemplate.seed_check() do
-      :ok -> :ok
+  # The shipped AQUA tree, checked well-formed first (a v2-shaped or empty
+  # mount fails loud here, at the one moment an operator is watching,
+  # instead of as an empty roster later), then copied into the athanor's
+  # `aqua/` — every shipped unit it does not yet hold.
+  defp aqua_definitions(athanor_id) do
+    with :ok <- Compendium.AquaTemplate.seed_check(),
+         {:ok, _copied} <- Arca.Overlay.materialize_shipped(seed_ctx(athanor_id), "aqua") do
+      :ok
+    else
       {:error, reason} -> {:error, {:aqua_template, reason}}
     end
   end
 
   @doc """
-  Sync every provisioned athanor with the seed media a release shipped:
-  the scan re-walks the `components/` union so bundle versions the release
-  added get rows, their published deps pulled, AND their baseline consents
-  minted — a row without a profile is uninvocable, and nothing after boot
-  would ever mint one. No bytes move, the overlay serves them in place.
-  AQUA needs no sync step at all: the same overlay serves its tree, so a
-  new release's agents and skills are simply visible, per-file, everywhere
-  they were not edited.
-
-  The sync also collapses pristine copies: a materialized unit that is
-  byte-identical to what the release now ships serves nothing — deleting
-  it reclaims the athanor's quota and lets the unit track upgrades again.
-  Edited copies are kept.
-
-  Why per-file for aqua and per-version for components: the upgrade rule
-  lives with the layout table (`Arca.Storage`) — a release only ever
-  changes what an UNmaterialized unit reads through to, and the unit
-  granularity IS the upgrade granularity.
+  Make every provisioned athanor whole against the seed media a release
+  shipped — without changing what the athanor chose. A shipped version a
+  row names but the tree no longer holds is copied back; an athanor
+  without its shipped soul gets the shipped AQUA tree; the bundle's
+  published dependencies are re-pulled and baseline consents minted for
+  any row still without one. Newer shipped versions are NOT copied in:
+  they read as available until a person pulls them, so an upgrade never
+  changes an estate under its members.
 
   Runs at boot (`Cyfr.Bootstrap`); a failure logs and moves on — a sync
   must never take the server down or block another athanor's.
@@ -559,7 +570,7 @@ defmodule Sanctum.Provisioning do
   @spec sync_seeds() :: :ok
   def sync_seeds do
     for athanor <- Athanors.list_active(), not is_nil(athanor.provisioned_at) do
-      # The same lock every fill takes, so a boot offering new media and a
+      # The same lock every fill takes, so a boot healing an estate and a
       # first-need fill cannot walk one estate at once. Not `provision/2`:
       # this runs on athanors that are already filled, which is exactly what
       # that function short-circuits.
@@ -571,6 +582,8 @@ defmodule Sanctum.Provisioning do
 
   defp sync_seed(athanor) do
     ctx = seed_ctx(athanor.id)
+
+    heal_shipped(ctx, athanor.id)
 
     case AutoIndexer.scan(ctx: ctx) do
       {:ok, %{registered: registered}} when registered > 0 ->
@@ -603,8 +616,65 @@ defmodule Sanctum.Provisioning do
     _ = pull_optional_deps(ctx)
 
     bootstrap_synced(ctx, athanor.id)
-    collapse_pristine(ctx, athanor.id)
     index_agents(ctx)
+    :ok
+  end
+
+  # What the athanor already chose, restored: a shipped version its rows
+  # name but its tree lacks, and the shipped AQUA tree when it holds no
+  # AQUA unit at all. A newer shipped version with no row is left available.
+  defp heal_shipped(ctx, athanor_id) do
+    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "components"),
+         {:ok, rows} <- Arca.ComponentStorage.list_components(ctx, limit: :none) do
+      registered =
+        MapSet.new(rows, fn row ->
+          Compendium.ComponentPath.version_dir(
+            row.component_type,
+            Compendium.ComponentPath.normalize_publisher(row.publisher),
+            row.name,
+            row.version
+          )
+        end)
+
+      for {unit, :available} <- statuses, MapSet.member?(registered, unit) do
+        case Arca.Overlay.pull_shipped(ctx, unit) do
+          :ok ->
+            Logger.info("[Provisioning] #{athanor_id}: restored shipped #{Enum.join(unit, "/")}")
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Provisioning] #{athanor_id}: shipped #{Enum.join(unit, "/")} not restored: " <>
+                inspect(reason)
+            )
+        end
+      end
+    else
+      {:error, reason} ->
+        Logger.warning("[Provisioning] #{athanor_id}: heal skipped — #{inspect(reason)}")
+    end
+
+    case Arca.Overlay.unit_statuses(ctx, "aqua") do
+      {:ok, statuses} ->
+        held? = Enum.any?(statuses, fn {_unit, status} -> status != :available end)
+
+        if not held? and statuses != %{} do
+          case Arca.Overlay.materialize_shipped(ctx, "aqua") do
+            {:ok, copied} ->
+              Logger.info(
+                "[Provisioning] #{athanor_id}: copied #{length(copied)} shipped AQUA unit(s)"
+              )
+
+            {:error, reason} ->
+              Logger.warning(
+                "[Provisioning] #{athanor_id}: AQUA not restored — #{inspect(reason)}"
+              )
+          end
+        end
+
+      {:error, reason} ->
+        Logger.warning("[Provisioning] #{athanor_id}: AQUA heal skipped — #{inspect(reason)}")
+    end
+
     :ok
   end
 
@@ -620,43 +690,6 @@ defmodule Sanctum.Provisioning do
       {:ok, _nothing_new} ->
         :ok
     end
-  end
-
-  defp collapse_pristine(ctx, athanor_id) do
-    # Collapse is overlay semantics, so the roster is the overlay's —
-    # `unit_statuses/2` filters by the same one, and a status walk that
-    # cannot answer skips this athanor's collapse rather than running
-    # over a lying map.
-    for root <- Arca.Storage.overlay_roots() do
-      case Arca.Overlay.unit_statuses(ctx, root) do
-        {:ok, statuses} ->
-          for {unit, :materialized} <- statuses do
-            case Arca.Overlay.collapse_unit(ctx, unit) do
-              :collapsed ->
-                Logger.info(
-                  "[Provisioning] #{athanor_id}: collapsed pristine copy #{Enum.join(unit, "/")}"
-                )
-
-              {:error, reason} ->
-                Logger.warning(
-                  "[Provisioning] #{athanor_id}: collapse of #{Enum.join(unit, "/")} failed: " <>
-                    inspect(reason)
-                )
-
-              _kept_or_absent ->
-                :ok
-            end
-          end
-
-        {:error, reason} ->
-          Logger.warning(
-            "[Provisioning] #{athanor_id}: #{root} status walk failed, " <>
-              "skipping collapse this cycle: #{inspect(reason)}"
-          )
-      end
-    end
-
-    :ok
   end
 
   # The bundle's required dependencies — everything a local component

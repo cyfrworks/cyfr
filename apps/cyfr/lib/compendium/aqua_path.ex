@@ -211,10 +211,10 @@ defmodule Compendium.AquaPath do
 
   @doc """
   The overlay's unit grammar for `aqua/` (`Arca.Storage.UnitLocator`):
-  the soul and each role are file-shaped units (a valid-named `.md` file —
-  a single put materializes it), a skill a valid-named directory unit
-  sentinel'd by `SKILL.md`. A unit is a claim the storage layer acts on —
-  copy-on-write, origin marks, status — so only the grammar mints one: a
+  the soul and each role are file-shaped units (a valid-named `.md`
+  file), a skill a valid-named directory unit sentinel'd by `SKILL.md`. A
+  unit is a claim the storage layer acts on — the shipped copy, origin
+  and edit marks, status — so only the grammar mints one: a
   stray `roles/notes.txt` or a junk-named skill dir stays plain storage,
   outside the roster and the reset bookkeeping.
 

@@ -65,7 +65,7 @@ defmodule Compendium.MCP.AquaTool do
       name: "aqua",
       title: "AQUA Agent System",
       description:
-        "The estate's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it clones into, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the estate made, or 'reset' to revert edited copies of shipped files (member-created roles and scrolls are kept unless all=true).",
+        "The estate's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it clones into, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the estate made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one role with name, else every one; member-created roles and scrolls are kept unless all=true).",
       annotations: %{
         readOnlyHint: false,
         destructiveHint: true,
@@ -119,6 +119,12 @@ defmodule Compendium.MCP.AquaTool do
             permission: :component_manage,
             consent: :interactive
           },
+          "skill_reset" => %{
+            kind: :destructive,
+            planes: [:external],
+            permission: :component_manage,
+            consent: :interactive
+          },
           "create" => %{
             kind: :write,
             planes: [:external],
@@ -137,8 +143,9 @@ defmodule Compendium.MCP.AquaTool do
             permission: :component_manage,
             consent: :interactive
           },
-          # Reset restores shipped units. With all=true it also deletes
-          # member-created agents and skills; the operation requires interactive consent.
+          # Reset restores shipped units — one role by name, else every
+          # edited copy. With all=true it also deletes member-created
+          # roles and scrolls.
           "reset" => %{
             kind: :destructive,
             planes: [:external],
@@ -164,15 +171,16 @@ defmodule Compendium.MCP.AquaTool do
               "skill_get",
               "skill_create",
               "skill_update",
-              "skill_delete"
+              "skill_delete",
+              "skill_reset"
             ],
             "description" =>
-              "Action: list/get the soul ('aqua'), roles and guides; create/update/delete to manage roles (the soul is edited with update and never created or deleted; docs are read-only); status for per-file provenance (bundled/bundled_modified/user); skill_list/skill_get to read scrolls, skill_create/skill_update to write one (name, description, content), skill_delete to remove one the estate made; or reset to revert edited copies of shipped files (member-created roles and scrolls are kept unless all=true)."
+              "Action: list/get the soul ('aqua'), roles and guides; create/update/delete to manage roles (the soul is edited with update and never created or deleted; docs are read-only); status for per-file provenance (bundled/bundled_modified/user); skill_list/skill_get to read scrolls, skill_create/skill_update to write one (name, description, content), skill_delete to remove one the estate made, skill_reset to restore an edited scroll to what ships; or reset to restore edited copies of shipped files (one role with name, else every one; member-created roles and scrolls are kept unless all=true)."
           },
           "name" => %{
             "type" => "string",
             "description" =>
-              "Soul ('aqua'), role, guide, or scroll name (for get/update/delete and the skill_* actions)"
+              "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
           },
           "detail" => %{
             "type" => "boolean",
@@ -427,23 +435,17 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   # --- delete ---
-  # A shipped, unedited role cannot be deleted (the athanor does not own
-  # it) — disabling is the closet-removal verb. Deleting an EDITED copy of
-  # a shipped role reverts it to shipped; deleting a member-created role
-  # deletes it outright. The soul takes the same verb: an edited soul
-  # reverts, and the shipped one refuses with its own sentence.
+  # A shipped role, edited or not, cannot be deleted (a reset restores
+  # it) — disabling is the closet-removal verb. A member-created role
+  # deletes outright. The soul takes the same verb and refuses with its
+  # own sentence.
 
   def handle(%Context{} = ctx, %{"action" => "delete", "name" => name}) do
-    # One call: the overlay's drop verb owns the whole disposition — the
-    # bundled refusal, the not-found, and what the delete reveals — so
-    # this adapter only puts words on its answers (and the old
-    # status-then-drop pair's race window is gone with the second probe).
+    # The overlay's drop verb owns the whole disposition — the bundled
+    # refusal, the not-found, the delete — so this adapter only puts
+    # words on its answers.
     with :ok <- validate_name(name) do
       case Arca.Overlay.drop_unit(ctx, AquaPath.agent_file(name)) do
-        {:ok, :revealed_shipped} ->
-          resync_index(ctx)
-          {:ok, %{deleted: name, restored: "shipped"}}
-
         {:ok, :deleted} ->
           resync_index(ctx)
           {:ok, %{deleted: name}}
@@ -466,6 +468,14 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   # --- reset ---
+  # With a name, one role's (or the soul's) edited copy is restored;
+  # without, every edited copy of a shipped unit.
+
+  def handle(%Context{} = ctx, %{"action" => "reset", "name" => name}) when is_binary(name) do
+    with :ok <- validate_name(name) do
+      restore_unit(ctx, AquaPath.agent_file(name), "Soul or role", name)
+    end
+  end
 
   def handle(%Context{} = ctx, %{"action" => "reset"} = args) do
     case Compendium.AquaTemplate.reset(ctx, all: args["all"] == true) do
@@ -609,10 +619,8 @@ defmodule Compendium.MCP.AquaTool do
   # Updating rewrites the manifest alone, as one locked read-modify-write:
   # the fields the call leaves out are read from the manifest as it is at
   # the moment of the write, so two concurrent updates cannot lose one.
-  # The write inside is a plain put — inside a shipped scroll it
-  # materializes the whole unit first (the overlay's copy-on-write), so
-  # the scroll's other files come along; a unit commit here would have
-  # replaced the unit whole and dropped them.
+  # The write inside is a plain put, so the scroll's other files stay; a
+  # unit commit here would replace the unit whole and drop them.
   def handle(%Context{} = ctx, %{"action" => "skill_update", "name" => name} = args) do
     rewrite = fn current ->
       with {:ok, meta, body} <- AquaAgent.parse_frontmatter(current) do
@@ -649,14 +657,11 @@ defmodule Compendium.MCP.AquaTool do
     {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
-  # Same disposition as an agent: a shipped, unedited scroll cannot be
-  # deleted; an edited copy reverts to shipped; the estate's own goes.
+  # Same disposition as an agent: a shipped scroll is restored by a reset,
+  # never deleted; the estate's own goes.
   def handle(%Context{} = ctx, %{"action" => "skill_delete", "name" => name}) do
     with :ok <- validate_name(name) do
       case Arca.Overlay.drop_unit(ctx, AquaPath.skill_dir(name)) do
-        {:ok, :revealed_shipped} ->
-          {:ok, %{deleted: name, restored: "shipped"}}
-
         {:ok, :deleted} ->
           {:ok, %{deleted: name}}
 
@@ -676,6 +681,18 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   def handle(_ctx, %{"action" => "skill_delete"}) do
+    {:error, {:invalid_argument, "Missing required argument: name"}}
+  end
+
+  # --- skill_reset ---
+
+  def handle(%Context{} = ctx, %{"action" => "skill_reset", "name" => name}) do
+    with :ok <- validate_name(name) do
+      restore_unit(ctx, AquaPath.skill_dir(name), "Scroll", name)
+    end
+  end
+
+  def handle(_ctx, %{"action" => "skill_reset"}) do
     {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
@@ -720,6 +737,31 @@ defmodule Compendium.MCP.AquaTool do
 
   # The tree changed; the derived index follows it. Never the write's
   # failure: an index that lags is re-synced by the next write or sync.
+  # One unit back to what ships: only an edited copy restores; an unedited
+  # one and the estate's own work refuse in words.
+  defp restore_unit(ctx, unit, noun, name) do
+    case Compendium.AquaTemplate.restore(ctx, unit) do
+      :ok ->
+        resync_index(ctx)
+        {:ok, %{restored: name}}
+
+      {:error, :pristine} ->
+        {:error, {:invalid_argument, "#{noun} '#{name}' is already what ships with the server"}}
+
+      {:error, :not_a_copy} ->
+        {:error,
+         {:invalid_argument,
+          "#{noun} '#{name}' is this estate's own and has no shipped version to restore"}}
+
+      {:error, :not_found} ->
+        {:error, {:not_found, noun, name}}
+
+      {:error, reason} ->
+        Logger.error("[AquaTool] aqua restore #{name} failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Storage"}}
+    end
+  end
+
   defp resync_index(ctx) do
     case Compendium.AgentIndex.sync(ctx) do
       {:ok, _} -> :ok

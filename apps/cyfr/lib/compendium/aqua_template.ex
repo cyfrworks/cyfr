@@ -8,16 +8,17 @@ defmodule Compendium.AquaTemplate do
   repo's `seed/aqua/` on a checkout, the operator-editable `/app/seed/aqua`
   mount in Docker.
 
-  The athanor's `aqua/` uses the seed overlay (`Arca.Overlay`). Unedited
-  files track the mounted seed; edits shadow their units, and deleting a
-  shadow restores the shipped content. Provisioning does not copy files.
+  Provisioning copies the shipped tree into the athanor's `aqua/`
+  (`Arca.Overlay`); from then on the athanor's files are its own, and the
+  seed is the default a reset copies in again. A release that ships new
+  roles or scrolls changes nothing until a reset asks for them.
 
   What remains here is the seed-side surface: `seed_check/0` (is the
   install's template well-formed — provisioning fails loud on a mount
   with no soul), `files/0` (what the seed ships), `status/1` (each unit's
-  drift, from the overlay), and `reset/2` (revert edited copies of
-  shipped units; member-created roles and scrolls are kept unless
-  `all: true` deletes the whole upper layer).
+  provenance, from the overlay), and `reset/2` (restore edited copies of
+  shipped units and pull shipped units the athanor lacks; member-created
+  roles and scrolls are kept unless `all: true` deletes them too).
   """
 
   require Logger
@@ -97,10 +98,11 @@ defmodule Compendium.AquaTemplate do
   end
 
   @doc """
-  Each aqua shadow unit's state, in the one provenance vocabulary
-  (`Compendium.Provenance.of_status/1`): `:bundled` (reads come from the
-  seed), `:bundled_modified` (the athanor's copy shadows a shipped
-  counterpart), `:user` (member-created, no shipped counterpart).
+  Each aqua unit the athanor holds, in the one provenance vocabulary
+  (`Compendium.Provenance.of_status/1`): `:bundled` (an unedited copy of
+  what shipped), `:bundled_modified` (the athanor edited its copy),
+  `:user` (member-created). A shipped unit the athanor does not hold is
+  not the athanor's and is not listed.
   """
   @spec status(Context.t()) ::
           {:ok, [%{path: String.t(), state: Compendium.Provenance.t()}]} | {:error, term()}
@@ -108,6 +110,7 @@ defmodule Compendium.AquaTemplate do
     with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "aqua") do
       {:ok,
        statuses
+       |> Enum.reject(fn {_unit, state} -> state == :available end)
        |> Enum.map(fn {unit, state} ->
          %{path: Enum.join(unit, "/"), state: Compendium.Provenance.of_status(state)}
        end)
@@ -116,62 +119,70 @@ defmodule Compendium.AquaTemplate do
   end
 
   @doc """
-  Revert the aqua tree to shipped. By default only edited copies of
-  shipped units revert — member-created agents and skills are KEPT and
-  reported. `all: true` deletes the whole `aqua/` upper layer, the
-  member's own units included, so the seed shows through whole. Either
-  way the template's presence is checked before anything is deleted: a
-  broken install refuses rather than destroys.
+  Reset the aqua tree to what ships: every edited copy of a shipped unit
+  is restored to the shipped bytes, and every shipped unit the athanor
+  does not hold is copied in. By default member-created agents and skills
+  are KEPT and reported; `all: true` deletes them too, so the tree is
+  exactly the shipped set. Either way the template's presence is checked
+  before anything changes: a broken install refuses rather than destroys.
   """
   @spec reset(Context.t(), keyword()) ::
           {:ok, %{reverted: [String.t()], kept: [String.t()]}} | {:error, term()}
   def reset(%Context{} = ctx, opts \\ []) do
     Context.require_tenant!(ctx)
+    all? = Keyword.get(opts, :all, false)
 
     with :ok <- seed_check(),
          {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "aqua") do
-      if Keyword.get(opts, :all, false) do
-        # Drop each unit under its own lock. The aqua root is above the units
-        # and cannot be deleted while units remain beneath it.
-        statuses
-        |> Enum.sort_by(fn {unit, _state} -> unit end)
-        |> Enum.reduce_while({:ok, []}, fn
-          {_unit, :seed}, acc ->
-            {:cont, acc}
+      statuses
+      |> Enum.sort_by(fn {unit, _state} -> unit end)
+      |> Enum.reduce_while({:ok, %{reverted: [], kept: []}}, fn {unit, state}, {:ok, acc} ->
+        name = Enum.join(unit, "/")
 
-          {unit, _state}, {:ok, gone} ->
-            case Arca.Overlay.drop_unit(ctx, unit) do
-              {:ok, _} -> {:cont, {:ok, gone ++ [Enum.join(unit, "/")]}}
-              {:error, :not_found} -> {:cont, {:ok, gone}}
-              {:error, reason} -> {:halt, {:error, reason}}
-            end
-        end)
-        |> case do
-          {:ok, gone} -> {:ok, %{reverted: Enum.sort(gone), kept: []}}
-          error -> error
+        case reset_unit(ctx, unit, state, all?) do
+          :reverted -> {:cont, {:ok, %{acc | reverted: acc.reverted ++ [name]}}}
+          :kept -> {:cont, {:ok, %{acc | kept: acc.kept ++ [name]}}}
+          :unchanged -> {:cont, {:ok, acc}}
+          {:error, reason} -> {:halt, {:error, reason}}
         end
-      else
-        statuses
-        |> Enum.sort_by(fn {unit, _state} -> unit end)
-        |> Enum.reduce_while({:ok, %{reverted: [], kept: []}}, fn
-          {unit, :materialized}, {:ok, acc} ->
-            case Arca.Overlay.revert_copy(ctx, unit) do
-              :ok ->
-                {:cont, {:ok, %{acc | reverted: acc.reverted ++ [Enum.join(unit, "/")]}}}
-
-              {:error, reason} ->
-                {:halt, {:error, reason}}
-            end
-
-          {unit, own}, {:ok, acc} when own in [:own, :own_shadowing] ->
-            {:cont, {:ok, %{acc | kept: acc.kept ++ [Enum.join(unit, "/")]}}}
-
-          {_unit, :seed}, {:ok, acc} ->
-            {:cont, {:ok, acc}}
-        end)
-      end
+      end)
     end
   end
+
+  @doc """
+  Restore one edited copy of a shipped unit — the soul, a role or a
+  scroll — to the shipped bytes. `{:error, :pristine}` when the copy is
+  unedited, `{:error, :not_a_copy}` when the athanor made the unit
+  itself, `{:error, :not_found}` when the athanor does not hold it.
+  """
+  @spec restore(Context.t(), Arca.Storage.path()) ::
+          :ok | {:error, :pristine | :not_a_copy | :not_found | term()}
+  def restore(%Context{} = ctx, unit) do
+    Context.require_tenant!(ctx)
+
+    with :ok <- seed_check(), do: Arca.Overlay.revert_copy(ctx, unit)
+  end
+
+  # One unit's part of a reset: an edited copy is restored, a shipped unit
+  # the athanor lacks is copied in, and the athanor's own work is kept —
+  # or, with `all: true`, deleted so the shipped set is all that remains.
+  defp reset_unit(ctx, unit, :modified, _all?), do: outcome(Arca.Overlay.revert_copy(ctx, unit))
+  defp reset_unit(ctx, unit, :available, _all?), do: outcome(Arca.Overlay.pull_shipped(ctx, unit))
+  defp reset_unit(_ctx, _unit, :shipped, _all?), do: :unchanged
+
+  defp reset_unit(ctx, unit, own, true) when own in [:own, :own_shadowing] do
+    case Arca.Overlay.drop_unit(ctx, unit) do
+      {:ok, :deleted} -> :reverted
+      {:error, :not_found} -> :unchanged
+      {:error, _} = error -> error
+    end
+  end
+
+  defp reset_unit(_ctx, _unit, own, false) when own in [:own, :own_shadowing], do: :kept
+  defp reset_unit(_ctx, _unit, :absent, _all?), do: :unchanged
+
+  defp outcome(:ok), do: :reverted
+  defp outcome({:error, _} = error), do: error
 
   # The seed's soul and roles, parsed with the same format module the
   # athanor's union reads them with. No roster rule beyond "each file

@@ -12,7 +12,7 @@ defmodule Compendium.MCP.AquaToolConsentTest do
   alias Cyfr.Ops.Catalog
   alias Cyfr.Ops.Visibility
 
-  @writes ~w(create update delete reset skill_create skill_update skill_delete)
+  @writes ~w(create update delete reset skill_create skill_update skill_delete skill_reset)
   @reads ~w(list get status skill_list skill_get)
 
   setup do
@@ -54,7 +54,9 @@ defmodule Compendium.MCP.AquaToolConsentTest do
       {"update", %{"name" => "aqua", "content" => "x"}},
       {"create", %{"name" => "sneak", "content" => "x"}},
       {"delete", %{"name" => "aqua"}},
-      {"skill_delete", %{"name" => "capability-acquisition"}}
+      {"reset", %{"name" => "aqua"}},
+      {"skill_delete", %{"name" => "capability-acquisition"}},
+      {"skill_reset", %{"name" => "capability-acquisition"}}
     ]
 
     for {action, args} <- calls do

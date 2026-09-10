@@ -177,9 +177,8 @@ defmodule Sanctum.ProvisioningTest do
     assert other.slug == "prov-#{n + 1}"
   end
 
-  test "sync_seeds registers, consents, and collapses pristine copies", %{
-    bundle_dir: bundle_dir
-  } do
+  test "sync_seeds leaves the athanor's copies alone; what a release adds is pulled, not pushed",
+       %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|sync-#{n}"}
@@ -188,12 +187,10 @@ defmodule Sanctum.ProvisioningTest do
     in_group = %{ctx | athanor_id: group.id}
     :ok = Provisioning.start_provisioning(in_group)
 
-    # A member edited foo and reverted the edit by hand — a materialized,
-    # byte-identical copy that costs quota and no longer tracks releases.
+    # A member edited their copy of foo.
     version_dir = ["components", "catalysts", "local", "foo", "1.0.0"]
     :ok = Arca.put(in_group, version_dir ++ ["scratch.txt"], "x")
-    :ok = Arca.delete(in_group, version_dir ++ ["scratch.txt"])
-    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :materialized}
+    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :modified}
 
     # The next release ships a second bundled catalyst.
     src = Path.join([bundle_dir, "catalysts", "local", "fresh", "1.0.0"])
@@ -212,8 +209,25 @@ defmodule Sanctum.ProvisioningTest do
 
     assert :ok = Provisioning.sync_seeds()
 
-    # The new component has a row AND a baseline profile — invocable
-    # without a human walking every athanor's consent sheet.
+    # The edit survives the release, and the new catalyst is only offered.
+    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :modified}
+    assert {:ok, "x"} = Arca.get(in_group, version_dir ++ ["scratch.txt"])
+
+    fresh_dir = ["components", "catalysts", "local", "fresh", "1.0.0"]
+    assert Arca.Overlay.unit_status(in_group, fresh_dir) == {:ok, :available}
+
+    {:ok, rows} =
+      Arca.ComponentStorage.list_components(in_group, publisher: "local", limit: :none)
+
+    refute Enum.any?(rows, &(&1.name == "fresh"))
+
+    # Pulling it gives the athanor a row AND a baseline profile — invocable
+    # without a human walking the consent sheet.
+    assert {:ok, %{component_ref: "catalyst:local.fresh:1.0.0"}} =
+             Provisioning.install_shipped(in_group, "catalyst:local.fresh")
+
+    assert Arca.Overlay.unit_status(in_group, fresh_dir) == {:ok, :shipped}
+
     {:ok, rows} =
       Arca.ComponentStorage.list_components(in_group, publisher: "local", limit: :none)
 
@@ -221,9 +235,6 @@ defmodule Sanctum.ProvisioningTest do
 
     {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.fresh")
     assert profile.kind == "owner"
-
-    # The pristine copy collapsed — the seed serves the unit again.
-    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :seed}
   end
 
   test "with no registry, a bundle whose OPTIONAL dependency is not installed still provisions",

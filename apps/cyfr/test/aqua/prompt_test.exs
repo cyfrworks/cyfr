@@ -11,6 +11,7 @@ defmodule Aqua.PromptTest do
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
@@ -121,6 +122,8 @@ defmodule Aqua.PromptTest do
       {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
       {:ok, _} = Sanctum.Tenancy.Members.create(%{user_id: user, athanor_id: mine.id})
       {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
+      :ok = Sanctum.TestContext.shipped!(estate.id)
+      :ok = Sanctum.TestContext.shipped!(mine.id)
 
       room = %{Sanctum.TestContext.local() | user_id: user, athanor_id: estate.id}
       {:ok, home} = Sanctum.Context.focus(room, mine.id)

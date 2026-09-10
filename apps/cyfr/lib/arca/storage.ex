@@ -65,9 +65,8 @@ defmodule Arca.Storage do
   `physical_segments/2` is the single translation from this logical
   vocabulary to the stored layout; every adapter joins its output under one
   storage root, so publishing in one athanor never overwrites another's
-  blobs and members of an athanor share its storage. A new athanor sees
-  the bundled baseline through the seed overlay (`Arca.Overlay`) — no
-  copy is made until it writes.
+  blobs and members of an athanor share its storage. A new athanor is
+  provisioned with its own copy of the shipped baseline (`Arca.Overlay`).
 
   ## Storage Structure
 
@@ -86,16 +85,17 @@ defmodule Arca.Storage do
           ├── aqua/                      # the athanor's AQUA agent definitions
           ├── conversations/             # chat attachment blobs
           ├── guest/                     # guest (WASM) files — the guest's `data/` scope
-          └── meta/                      # tenant-reserved: overlay origin marks, system-written
+          └── meta/                      # tenant-reserved: origin and edit marks of shipped copies, system-written
 
   Per-athanor settings (retention policy included) are rows — the
   `athanors.settings` document — never blobs; the tree holds only content.
 
   The seed media every athanor is provisioned from is not stored state —
-  every root is read in place as a same-named subdirectory of the one seed
-  tree (`:seed_path`, the repo's `seed/` on a checkout, `/app/seed` in
-  Docker): the component bundle at `seed/components` (baked into the image)
-  and the AQUA template at `seed/aqua` (the operator-editable mount).
+  each root is a same-named subdirectory of the one seed tree
+  (`:seed_path`, the repo's `seed/` on a checkout, `/app/seed` in Docker),
+  copied into the athanor at provisioning and on a pull: the component
+  bundle at `seed/components` (baked into the image) and the AQUA template
+  at `seed/aqua` (the operator-editable mount).
 
   ## The volume vs. the seed tree
 
@@ -104,10 +104,11 @@ defmodule Arca.Storage do
   - everything under `:base_path` is **mutable state**: volume-mounted,
     backed up, gitignored (CI asserts it), owned by athanors or the server.
   - everything under `:seed_path` is **install media**: git-tracked or
-    image-baked, read in place, read-only at this facade and at every
-    adapter. A new image ships a new bundle precisely because the volume
-    does not hold it; the operator's AQUA overlay (`./aqua` →
-    `/app/seed/aqua` in compose) is operator input, not athanor state.
+    image-baked, read-only at this facade and at every adapter. A new
+    image ships a new default; what an athanor holds is its own copy,
+    offered the newer version and never changed under it. The operator's
+    AQUA mount (`./aqua` → `/app/seed/aqua` in compose) is operator input,
+    not athanor state.
 
   At-rest encryption of the volume or bucket is the operator's concern
   (disk/volume encryption, S3 default SSE) — the blob plane holds content
@@ -199,13 +200,13 @@ defmodule Arca.Storage do
   #   the guest says `data/` — so a `data/` grant is a physical SIBLING of
   #   the host scopes, never their parent.
   # - seed: how the root relates to the seed tree (`seed/{root}`) — one
-  #   model: `:overlay` is a read-through union with copy-on-write
-  #   (`Arca.Overlay`): the athanor's tree shadows the seed tree per
-  #   shadow unit, a write materializes the shadowed unit first, and a
-  #   release only ever changes what an UNmaterialized unit reads through
-  #   to, adding new units beside materialized ones — the unit granularity
-  #   IS the upgrade granularity (aqua's file units upgrade per file,
-  #   automatically; component version directories arrive additively).
+  #   model: `:overlay` names a root whose shipped default lives there
+  #   (`Arca.Overlay`): the athanor's tree holds its own copy of every
+  #   shipped unit, taken at provisioning or by a pull, marked by origin
+  #   and marked again on edit; a release changes nothing the athanor
+  #   holds — a newer shipped unit reads as available until pulled. The
+  #   unit granularity IS the copy and upgrade granularity (an aqua file,
+  #   a component version directory).
   #   The unit shapes themselves are the domain's: each overlaid root
   #   names an `Arca.Storage.UnitLocator` in the `:overlay_locators`
   #   config (`Compendium.ComponentPath`, `Compendium.AquaPath`), and
@@ -350,8 +351,8 @@ defmodule Arca.Storage do
   def classify([]), do: :tenant
   def classify(_), do: :invalid
 
-  # Seed roots are local subdirectories of :seed_path, read in place.
-  # They use the same :overlay layout filter as overlay_roots/0.
+  # Seed roots are local subdirectories of :seed_path. They use the same
+  # :overlay layout filter as overlay_roots/0.
   @seed_roots for {root, _class, _guest, :overlay} <- @layout, do: root
 
   @doc """
@@ -397,9 +398,9 @@ defmodule Arca.Storage do
   @overlay_roots for {root, _class, _guest, :overlay} <- @layout, do: root
 
   @doc """
-  The seed-overlaid roots: `Arca.Overlay` resolves reads through the seed
-  tree below these roots and materializes a shadowed unit on first write.
-  How each root's units are shaped is its locator's answer — `locate/1`.
+  The seeded roots: the ones whose shipped default lives in the seed tree
+  and is copied into the athanor unit by unit (`Arca.Overlay`). How each
+  root's units are shaped is its locator's answer — `locate/1`.
   """
   @spec overlay_roots() :: [String.t()]
   def overlay_roots, do: @overlay_roots
@@ -620,7 +621,7 @@ defmodule Arca.Storage do
   nothing cross-tenant to refuse here: a context physically cannot name
   another athanor's tree. What this gate refuses is (a) the server's own
   reserved vocabularies for non-system contexts — the seed media `seed/…`
-  (read in place from the seed tree) and the global roots `cache/` (OCI
+  (the shipped defaults) and the global roots `cache/` (OCI
   blobs) and `system/` (health probes) — and (b) any first segment outside
   the closed rosters, for everyone: an unknown root is a typo or an
   invented subtree, never storage. `Arca` runs this before dispatching to

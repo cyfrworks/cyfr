@@ -130,6 +130,9 @@ defmodule PrismWeb.ConnCase do
     {:ok, _membership} =
       Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: athanor_id)
 
+    # The estate holds what the server ships, as a fill leaves it.
+    :ok = Sanctum.TestContext.shipped!(athanor_id)
+
     ctx =
       Sanctum.Context.build(
         user_id: user.user_id,

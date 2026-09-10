@@ -141,13 +141,14 @@ your-project/
             ├── notes/      # What was kept out of a conversation — host-only, no guest scope
             ├── payloads/   # Retained execution inputs and results — host-only, by digest
             ├── guest/      # Files WASM components store (their `data/` scope)
-            └── meta/       # Tenant-reserved: overlay origin marks, system-written
+            └── meta/       # Tenant-reserved: origin and edit marks of shipped copies, system-written
 ```
 
 > The seed bundle every athanor starts from rides inside the container image
-> (under `CYFR_SEED_PATH`, mounted so `./aqua` overlays its `aqua/` root) and
-> is read in place — a scaffolded project carries no `components/` directory.
-> Your own components live inside your athanor's tree under `components/`.
+> (under `CYFR_SEED_PATH`, mounted so `./aqua` replaces its `aqua/` root) and
+> is copied into each athanor when it is provisioned — a scaffolded project
+> carries no `components/` directory. Your athanor's copies of the bundle and
+> your own components live together in its tree under `components/`.
 
 ## Using Components
 
@@ -171,8 +172,9 @@ cyfr pull c:moonmoon69.claude
 ```
 
 Generic catalysts, formulas, and example tinctures ship bundled under the
-`local` publisher and register from the packaged tree when you run
-`cyfr register`. The `moonmoon69` API catalysts are **not** bundled: they
+`local` publisher: each athanor gets its own copy when it is provisioned,
+and a newer shipped version is offered on the Components page and pulled
+with `cyfr pull c:local.<name>`. The `moonmoon69` API catalysts are **not** bundled: they
 arrive from the registry, normally pulled automatically as dependencies at
 register time, or explicitly with `cyfr pull`. Use `cyfr list` / `cyfr search`
 to see what's available, then grant one:
@@ -481,12 +483,11 @@ the others.
 | `CYFR_MAX_PAIRS_PER_PERSON` | DMs one person may hold open (default 200). A DM is minted for two, so either person at the ceiling refuses it; an ended DM frees its place |
 | `CYFR_MAX_MEMBERS_PER_GROUP` | seats in one group, invitations included |
 | `CYFR_MAX_CONVERSATIONS_PER_ATHANOR` | threads one estate may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |
-| `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — its data and the components it has materialized or created; pristine seeded components read through the overlay and cost it nothing |
+| `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — everything in its tree, its copies of the shipped bundle included; copying a shipped version in is never refused by the cap, but its bytes count from then on |
 
-A new athanor reads the shipped bundle in place through the seed overlay —
-no copy exists until it edits a component — so `CYFR_MAX_ATHANORS` bounds
-tenancy and `CYFR_ATHANOR_STORAGE_BYTES` bounds only what each athanor
-actually writes.
+A new athanor is provisioned with its own copy of the shipped bundle and
+AQUA tree, so `CYFR_MAX_ATHANORS` bounds tenancy and
+`CYFR_ATHANOR_STORAGE_BYTES` bounds each athanor's whole tree.
 A specific `cyfr admin deny` always beats `*`.
 
 Closing the door again — `cyfr admin remove` on the `*` entry — ejects

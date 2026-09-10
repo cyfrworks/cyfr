@@ -70,11 +70,11 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  test "the image carries the seed tree and reads it in place" do
+  test "the image carries the seed tree and the release reads it there" do
     # A bare image boot (no host bind mount) must still be able to provision
     # an athanor from its seed: the bundle rides in the image inside the seed
-    # tree and the release reads it there directly (CYFR_SEED_PATH) — no
-    # first-boot copy.
+    # tree (CYFR_SEED_PATH), each athanor's copy is taken from it at
+    # provisioning, and the entrypoint copies nothing into the volume.
     dockerfile = read!("Dockerfile")
     entrypoint = read!("docker-entrypoint.sh")
     dockerignore = read!(".dockerignore")

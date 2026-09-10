@@ -56,14 +56,12 @@ defmodule Opus.SeedModelCatalystsTest do
       field = unquote(field)
       ref = "catalyst:local.#{name}"
 
-      # The shipped version, found rather than pinned.
+      # The shipped version, found rather than pinned, copied in as a fill
+      # copies it, then registered.
       [version_dir] = Path.wildcard(Path.join(@seed_root, "components/catalysts/local/#{name}/*"))
-
-      {:ok, _} =
-        Compendium.Registry.register_from_arca(
-          ctx,
-          ["components", "catalysts", "local", name, Path.basename(version_dir)]
-        )
+      unit = ["components", "catalysts", "local", name, Path.basename(version_dir)]
+      :ok = Arca.Overlay.pull_shipped(ctx, unit)
+      {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
 
       {:ok, %{minted: minted}} = Bootstrap.run(ctx)
       assert ref in minted

@@ -51,6 +51,8 @@ defmodule PrismWeb.ChatLiveTest do
   # A named catalyst that does not resolve in the estate refuses the turn;
   # these sandboxes hold none, so the fixture agent pins none.
   defp unpin_catalyst(athanor_id) do
+    :ok = Sanctum.TestContext.shipped!(athanor_id)
+
     {:ok, _} =
       Aqua.AgentConfig.call_aqua(
         %{Sanctum.TestContext.local() | athanor_id: athanor_id},

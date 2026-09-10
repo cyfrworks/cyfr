@@ -5,16 +5,16 @@ defmodule Compendium.Provenance do
   @moduledoc """
   Where a component's bytes come from, as one derived classification:
 
-  - `:bundled` — shipped in the seed bundle, unedited; reads come from the
-    seed through the overlay, the athanor owns no bytes.
-  - `:bundled_modified` — shipped, but the athanor materialized (edited)
-    its copy; the copy shadows the seed until reverted.
+  - `:bundled` — the athanor's copy of a shipped unit, unedited since it
+    was copied from the seed.
+  - `:bundled_modified` — shipped, and the athanor has edited its copy;
+    a reset restores what the release ships.
   - `:user` — the athanor's own: scaffolded, built, or forked here.
   - `:remote` — pulled from a registry (`source` `"oci"`/`"published"`).
 
   Provenance is DERIVED, never stored: the registry row's `source` column
   answers only the ingress channel, and the overlay's unit state changes
-  inside `Arca` the moment a write copy-on-writes — a stored flag would be
+  inside `Arca` the moment a write edits a copy — a stored flag would be
   stale by then. The tree probe (`Arca.Overlay.unit_status/2`) is the
   SSOT; a row can cache the answer for display, but the tree wins.
 
@@ -49,8 +49,8 @@ defmodule Compendium.Provenance do
   words here, so the two cannot drift.
   """
   @spec of_status(Arca.Overlay.unit_status()) :: t()
-  def of_status(:seed), do: :bundled
-  def of_status(:materialized), do: :bundled_modified
+  def of_status(status) when status in [:available, :shipped], do: :bundled
+  def of_status(:modified), do: :bundled_modified
   def of_status(status) when status in [:own, :own_shadowing, :absent], do: :user
 
   @doc """
@@ -96,7 +96,7 @@ defmodule Compendium.Provenance do
 
   @doc """
   One component's whole overlay answer in ONE unit probe (`diff_unit/2`
-  only when the copy is materialized): its provenance, its drift from the
+  only when the copy was edited): its provenance, its drift from the
   shipped bytes (`:pristine` for `:bundled`, `nil` where nothing shipped
   backs it), and whether the athanor's own work is shadowing a shipped
   counterpart.
@@ -123,14 +123,14 @@ defmodule Compendium.Provenance do
         }
 
         case unit_status do
-          :materialized ->
+          :modified ->
             case Arca.Overlay.diff_unit(ctx, unit_dir) do
               {:ok, %{added: [], removed: [], changed: []}} -> {:ok, %{base | drift: :pristine}}
               {:ok, diff} -> {:ok, %{base | drift: {:modified, diff}}}
               {:error, _} = error -> error
             end
 
-          :seed ->
+          shipped when shipped in [:shipped, :available] ->
             {:ok, %{base | drift: :pristine}}
 
           _own_or_absent ->

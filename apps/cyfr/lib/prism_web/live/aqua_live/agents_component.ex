@@ -162,20 +162,27 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   def handle_event("editor_update_field", _params, socket), do: {:noreply, socket}
 
   # The tool owns the disposition: a role this estate made is deleted, an
-  # edited copy of a shipped one reverts to shipped. The card offers the
-  # verb only where one of those applies (`card_actions/2`).
+  # edited copy of a shipped one is restored. The card offers the verb
+  # only where one of those applies (`removal/1`).
   def handle_event("editor_delete", %{"name" => name}, socket) do
     case call_aqua(socket.assigns.context, %{"action" => "delete", "name" => name}) do
-      {:ok, %{"restored" => _}} ->
-        send(self(), {:refresh, :agents})
-        {:noreply, put_flash(socket, :info, "Reverted '#{name}' to what ships with the server.")}
-
       {:ok, _} ->
         send(self(), {:refresh, :agents})
         {:noreply, put_flash(socket, :info, "Deleted the role '#{name}'.")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Delete failed: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("editor_revert", %{"name" => name}, socket) do
+    case call_aqua(socket.assigns.context, %{"action" => "reset", "name" => name}) do
+      {:ok, _} ->
+        send(self(), {:refresh, :agents})
+        {:noreply, put_flash(socket, :info, "Reverted '#{name}' to what ships with the server.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Revert failed: #{error_message(reason)}")}
     end
   end
 
@@ -558,16 +565,24 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # The one removal verb a card may offer, read from its provenance: the
-  # estate's own role is deleted, an edited copy of a shipped one reverts,
-  # an unedited shipped role and the soul offer nothing. A provenance the
-  # page could not read offers nothing either.
+  # The one removal verb a card may offer — label, confirm prefix, event —
+  # read from its provenance: the estate's own role is deleted, an edited
+  # copy of a shipped one is restored, an unedited shipped role and the
+  # soul offer nothing. A provenance the page could not read offers
+  # nothing either.
   defp removal(agent) do
     cond do
-      agent["type"] == AquaAgent.soul_type() -> nil
-      agent["provenance"] == "user" -> {"Delete", "Delete the role '"}
-      agent["provenance"] == "bundled_modified" -> {"Revert to shipped", "Revert the role '"}
-      true -> nil
+      agent["type"] == AquaAgent.soul_type() ->
+        nil
+
+      agent["provenance"] == "user" ->
+        {"Delete", "Delete the role '", "editor_delete"}
+
+      agent["provenance"] == "bundled_modified" ->
+        {"Revert to shipped", "Revert the role '", "editor_revert"}
+
+      true ->
+        nil
     end
   end
 
@@ -863,7 +878,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           <button
             :if={@removal}
             type="button"
-            phx-click="editor_delete"
+            phx-click={elem(@removal, 2)}
             phx-target={@myself}
             phx-value-name={@agent["name"]}
             data-confirm={elem(@removal, 1) <> @agent["name"] <> "'?"}

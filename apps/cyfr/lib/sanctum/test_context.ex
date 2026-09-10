@@ -80,7 +80,9 @@ if Mix.env() in [:test, :dev] do
     end
 
     @doc """
-    Mark `athanor_id` filled — what a test says when it drives a turn.
+    Mark `athanor_id` filled — what a test says when it drives a turn —
+    with the shipped AQUA tree and bundle copied in, as a fill copies
+    them, so the estate has a soul to answer with.
 
     A turn pins the baseline consent provisioning mints, so an estate a
     test chats in is one that has been set up. Left off by default: the
@@ -89,6 +91,7 @@ if Mix.env() in [:test, :dev] do
     """
     def provisioned!(athanor_id) when is_binary(athanor_id) do
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+      shipped!(athanor_id)
 
       case athanor.provisioned_at do
         nil ->
@@ -98,6 +101,20 @@ if Mix.env() in [:test, :dev] do
         _ ->
           athanor
       end
+    end
+
+    @doc """
+    Copy every shipped unit the estate lacks into `athanor_id` — the
+    shipped AQUA tree and the bundle — without marking it provisioned.
+    """
+    def shipped!(athanor_id) when is_binary(athanor_id) do
+      ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
+
+      for root <- Arca.Storage.overlay_roots() do
+        {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, root)
+      end
+
+      :ok
     end
 
     @doc """

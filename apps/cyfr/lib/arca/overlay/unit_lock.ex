@@ -11,8 +11,8 @@ defmodule Arca.Overlay.UnitLock do
   `Arca.Overlay.commit_unit/4` clears a unit, writes its contents, then
   writes its sentinel. Commits to the same unit must be serialized.
 
-  The lock also serializes copy-on-write materialization with the write
-  that triggered it, preserving successful writes by concurrent callers.
+  The lock also serializes a shipped copy's commit with writes into the
+  same unit.
 
   Callers perform storage work in their own processes while holding
   the mutex. The coordinator only grants and releases locks.

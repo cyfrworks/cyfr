@@ -3,8 +3,9 @@
 
 defmodule Compendium.ProvenanceTest do
   @moduledoc """
-  Checks tree-derived provenance and its delete/reset behavior. Bundled
-  component deletion must be refused without changing rows or bytes.
+  Checks tree-derived provenance and its delete/reset behavior: a shipped
+  copy is restored, never deleted, and the athanor's own work is never
+  replaced by what ships.
   """
 
   use ExUnit.Case, async: false
@@ -44,6 +45,7 @@ defmodule Compendium.ProvenanceTest do
     end)
 
     ctx = Sanctum.TestContext.local()
+    :ok = Arca.Overlay.pull_shipped(ctx, @bundled_dir)
     {:ok, bundled} = Registry.register_from_arca(ctx, @bundled_dir)
 
     {:ok, ctx: ctx, bundled: bundled}
@@ -52,7 +54,7 @@ defmodule Compendium.ProvenanceTest do
   test "of/2 tells the four classes apart", %{ctx: ctx, bundled: bundled} do
     assert Provenance.of(ctx, bundled) == {:ok, :bundled}
 
-    # An edit copy-on-writes the unit — same row, different provenance.
+    # An edit marks the copy — same row, different provenance.
     :ok = Arca.put(ctx, @bundled_dir ++ ["notes.txt"], "edited")
     assert Provenance.of(ctx, bundled) == {:ok, :bundled_modified}
 
@@ -85,9 +87,11 @@ defmodule Compendium.ProvenanceTest do
   end
 
   test "of_status/1 covers every overlay state; label/1 is closed" do
-    assert Provenance.of_status(:seed) == :bundled
-    assert Provenance.of_status(:materialized) == :bundled_modified
+    assert Provenance.of_status(:available) == :bundled
+    assert Provenance.of_status(:shipped) == :bundled
+    assert Provenance.of_status(:modified) == :bundled_modified
     assert Provenance.of_status(:own) == :user
+    assert Provenance.of_status(:own_shadowing) == :user
     assert Provenance.of_status(:absent) == :user
 
     for provenance <- [:bundled, :bundled_modified, :user, :remote] do
@@ -133,7 +137,8 @@ defmodule Compendium.ProvenanceTest do
   test "drift/2 answers pristine and modified honestly", %{ctx: ctx, bundled: bundled} do
     assert {:ok, :pristine} = Provenance.drift(ctx, bundled)
 
-    # Materialize without editing shipped content — still pristine.
+    # An edit that leaves the shipped content as it was is still pristine
+    # by bytes — the diff decides, not the mark.
     :ok = Arca.put(ctx, @bundled_dir ++ ["notes.txt"], "x")
     :ok = Arca.delete(ctx, @bundled_dir ++ ["notes.txt"])
     assert {:ok, :pristine} = Provenance.drift(ctx, bundled)
@@ -218,11 +223,16 @@ defmodule Compendium.ProvenanceTest do
     )
 
     # Still the user's work: reset refuses to wipe it, delete is allowed —
-    # and only then does the shipped unit show through.
+    # and only then is the shipped unit available to pull, never served in
+    # the user's place.
     assert Provenance.of(ctx, own) == {:ok, :user}
     assert {:error, :not_bundled} = Registry.reset(ctx, "mine-first", "1.0.0")
 
-    assert {:ok, _} = Registry.delete(ctx, "mine-first", "1.0.0")
+    assert {:ok, :deleted} = Registry.delete(ctx, "mine-first", "1.0.0")
+    assert {:error, :not_found} = Arca.get(ctx, own_dir ++ ["reagent.wasm"])
+    assert Arca.Overlay.unit_status(ctx, own_dir) == {:ok, :available}
+
+    :ok = Arca.Overlay.pull_shipped(ctx, own_dir)
     assert {:ok, ^shipped_wasm} = Arca.get(ctx, own_dir ++ ["reagent.wasm"])
   end
 

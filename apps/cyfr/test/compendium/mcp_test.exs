@@ -111,7 +111,9 @@ defmodule Compendium.MCPTest do
     original_base_path = Application.fetch_env!(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_dir)
 
-    # Set up the athanor's aqua/ directory with agent manifest and test prompts
+    # The estate holds the shipped tree, as a fill leaves it; the fixture
+    # then edits every shipped agent.
+    :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     setup_aqua_dir()
 
     # Point API URL at a non-routable address so cyfr.run fallback tests
@@ -473,14 +475,14 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "component tool - pull action" do
-    test "rejects pull of local components", %{ctx: ctx} do
+    test "rejects pull of a local component the server does not ship", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "pull",
           "reference" => "c:local.example-tool:1.0.0"
         })
 
-      assert err_msg(msg) =~ "Cannot pull local components"
+      assert err_msg(msg) =~ "not a version the server ships"
       assert err_msg(msg) =~ "cyfr register"
     end
 
@@ -1767,9 +1769,8 @@ defmodule Compendium.MCPTest do
                })
     end
 
-    test "the shipped scroll cannot be deleted; an edited copy reverts; the estate's own goes", %{
-      ctx: ctx
-    } do
+    test "the shipped scroll is never deleted, edited or not; a reset restores it; the estate's own goes",
+         %{ctx: ctx} do
       assert {:error, {:invalid_argument, msg}} =
                MCP.handle("aqua", ctx, %{
                  "action" => "skill_delete",
@@ -1790,13 +1791,30 @@ defmodule Compendium.MCPTest do
       assert %{state: "bundled_modified"} =
                Enum.find(files, &(&1.path == "aqua/skills/capability-acquisition"))
 
-      {:ok, %{deleted: "capability-acquisition", restored: "shipped"}} =
-        MCP.handle("aqua", ctx, %{"action" => "skill_delete", "name" => "capability-acquisition"})
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "skill_delete",
+                 "name" => "capability-acquisition"
+               })
+
+      assert msg =~ "ships with the server"
+
+      {:ok, %{restored: "capability-acquisition"}} =
+        MCP.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "capability-acquisition"})
 
       {:ok, back} =
         MCP.handle("aqua", ctx, %{"action" => "skill_get", "name" => "capability-acquisition"})
 
       assert back.content =~ "component(action: \"search\""
+
+      # Restored, it is already what ships; the estate's own has nothing to restore to.
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "skill_reset",
+                 "name" => "capability-acquisition"
+               })
+
+      assert msg =~ "already what ships"
 
       {:ok, _} =
         MCP.handle("aqua", ctx, %{
@@ -1806,25 +1824,41 @@ defmodule Compendium.MCPTest do
           "content" => "c"
         })
 
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "pdf"})
+
+      assert msg =~ "estate's own"
+
       {:ok, %{deleted: "pdf"}} =
         MCP.handle("aqua", ctx, %{"action" => "skill_delete", "name" => "pdf"})
 
       assert {:error, {:not_found, "Scroll", "pdf"}} =
                MCP.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
+
+      assert {:error, {:not_found, "Scroll", "pdf"}} =
+               MCP.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "pdf"})
     end
 
-    test "a shipped agent refuses delete and points at disable; an edited one reverts", %{
-      ctx: ctx
-    } do
-      # The throwaway seed ships aqua_web (test_helper copies the real
-      # template); the fixture's tenant copy shadows it — a delete reverts.
-      {:ok, %{deleted: "aqua_web", restored: "shipped"}} =
-        MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
-
-      # Now unmaterialized and shipped: delete refuses, disable is the verb.
+    test "a shipped role refuses delete, edited or not, and points at disable", %{ctx: ctx} do
+      # The fixture edited the athanor's copy of aqua_web: still shipped,
+      # still not deletable — disable is the verb, and reset the way back.
       {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
       assert err_msg(msg) =~ "cannot be deleted"
       assert err_msg(msg) =~ "disabled=true"
+
+      {:ok, %{restored: "aqua_web"}} =
+        MCP.handle("aqua", ctx, %{"action" => "reset", "name" => "aqua_web"})
+
+      {:ok, %{files: files}} = MCP.handle("aqua", ctx, %{"action" => "status"})
+      assert %{state: "bundled"} = Enum.find(files, &(&1.path == "aqua/roles/aqua_web.md"))
+
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{"action" => "reset", "name" => "aqua_web"})
+
+      assert msg =~ "already what ships"
+
+      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
+      assert err_msg(msg) =~ "cannot be deleted"
 
       {:ok, _} =
         MCP.handle("aqua", ctx, %{"action" => "update", "name" => "aqua_web", "disabled" => true})
@@ -1842,12 +1876,6 @@ defmodule Compendium.MCPTest do
                MCP.handle("aqua", ctx, %{"action" => "create", "name" => "aqua", "content" => "x"})
 
       assert msg =~ "soul"
-
-      # The fixture materialized the soul; deleting that copy reveals the
-      # shipped one, and deleting the shipped one is refused with its own
-      # sentence.
-      {:ok, %{deleted: "aqua", restored: "shipped"}} =
-        MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua"})
 
       assert {:error, {:invalid_argument, msg}} =
                MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua"})
@@ -1961,7 +1989,10 @@ defmodule Compendium.MCPTest do
       segments
     end
 
-    test "rejects pull of local formula", %{ctx: ctx, test_dir: test_dir} do
+    test "rejects pull of a local formula the server does not ship", %{
+      ctx: ctx,
+      test_dir: test_dir
+    } do
       formula_dir =
         setup_component_dir(test_dir, "formula", "test-formula", "0.1.0", %{
           "type" => "formula",
@@ -1977,7 +2008,7 @@ defmodule Compendium.MCPTest do
           "reference" => "formula:local.test-formula:0.1.0"
         })
 
-      assert err_msg(msg) =~ "Cannot pull local components"
+      assert err_msg(msg) =~ "not a version the server ships"
     end
   end
 

@@ -971,6 +971,30 @@ defmodule PrismWeb.ComponentsLive do
   defp comp_field(c, key) when is_map(c), do: c[key]
   defp comp_field(_, _), do: nil
 
+  # The ref of the newest shipped version of a bundled row's line that
+  # the athanor does not hold yet — what Update pulls — or nil: the
+  # athanor's own work and remote rows are never offered a shipped
+  # version, and a line whose newest shipped version is already held has
+  # nothing to update to.
+  defp newer_shipped_ref(ver, versions) do
+    with true <- comp_field(ver, :provenance) in ["bundled", "bundled_modified"],
+         [newest | _] <- comp_field(ver, :shipped_versions) || [],
+         true <- Compendium.Semver.strictly_newer?(newest, comp_field(ver, :version)),
+         false <- Enum.any?(versions, &(comp_field(&1, :version) == newest)),
+         {:ok, cref} <- Sanctum.ComponentRef.parse(comp_ref(ver)) do
+      Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{cref | version: newest})
+    else
+      _ -> nil
+    end
+  end
+
+  defp shipped_version(ref) do
+    case Sanctum.ComponentRef.parse(ref) do
+      {:ok, %Sanctum.ComponentRef{version: version}} -> version
+      _ -> ref
+    end
+  end
+
   # The version-row badge for a provenance label. "Yours" (user) is the
   # default state and carries no badge noise; an absent label (older wire
   # shape) shows nothing.
@@ -1384,13 +1408,6 @@ defmodule PrismWeb.ComponentsLive do
                                           {elem(badge, 0)}
                                         </span>
                                         <span
-                                          :if={comp_field(ver, :superseded)}
-                                          class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-900/50 text-emerald-300"
-                                          title="a newer shipped version exists"
-                                        >
-                                          update shipped
-                                        </span>
-                                        <span
                                           :if={comp_field(ver, :upstream_superseded)}
                                           class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-900/50 text-emerald-300"
                                           title={"forked from #{comp_field(ver, :forked_from)} — a newer upstream version is available locally"}
@@ -1417,6 +1434,23 @@ defmodule PrismWeb.ComponentsLive do
                                       </td>
                                       <td class="px-3 py-2 text-right">
                                         <div class="flex items-center justify-end gap-1">
+                                          <% newer_ref = newer_shipped_ref(ver, @expanded_versions) %>
+                                          <span
+                                            :if={newer_ref && MapSet.member?(@pulling, newer_ref)}
+                                            class="text-xs text-emerald-400 animate-pulse"
+                                          >
+                                            Updating...
+                                          </span>
+                                          <.button
+                                            :if={newer_ref && !MapSet.member?(@pulling, newer_ref)}
+                                            variant="ghost"
+                                            class="text-xs px-2 py-0.5 text-emerald-400 hover:text-emerald-300"
+                                            phx-click="pull"
+                                            phx-value-ref={newer_ref}
+                                            title="copy the newer shipped version in beside this one"
+                                          >
+                                            Update to {shipped_version(newer_ref)}
+                                          </.button>
                                           <span
                                             :if={@pushing == ver_ref}
                                             class="text-xs text-blue-400 animate-pulse"

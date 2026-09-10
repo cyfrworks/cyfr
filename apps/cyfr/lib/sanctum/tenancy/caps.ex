@@ -32,10 +32,9 @@ defmodule Sanctum.Tenancy.Caps do
 
   The byte cap counts the athanor's whole tree — every scope — on every
   write, which is what `CYFR_ATHANOR_STORAGE_BYTES` claims to bound.
-  Seeded components and templates the athanor has not materialized live
-  in the seed tree and cost it nothing; a copy-on-write materialization
-  is charged at materialization time (`Arca.Overlay` consults this cap
-  for the copied bytes). The check is check-then-write, deliberately
+  A shipped copy is never refused by the cap — provisioning and a pull
+  commit it exempt — but its bytes count in the total every later write
+  is checked against. The check is check-then-write, deliberately
   unlocked: concurrent writers can overshoot by at most writers × the
   per-call size ceiling, because every successful write bumps the cached
   total before the next check reads it — a per-athanor reservation lock
@@ -133,15 +132,16 @@ defmodule Sanctum.Tenancy.Caps do
   default (`Arca.put/4`'s `cap:` option), and `Arca.Overlay.commit_unit/4`
   checks whole units up front with the policy as a required argument.
   The uncapped-by-design set is whatever states `cap: :exempt` — grep it:
-  today the build-artifact saves (`Locus.MCP`), plus scaffold and fork's
-  `commit_unit` calls, which move operator-shipped or build-derived
-  bytes where failing half-way is worse than any over-cap state. Exempt
+  today the build-artifact saves (`Locus.MCP`), the shipped copy
+  (`Arca.Overlay.pull_shipped/2`), plus scaffold and fork's `commit_unit`
+  calls, which move shipped or build-derived bytes where failing half-way
+  is worse than any over-cap state. Exempt
   bytes still count — usage accounting in `Arca` sees every tenant write.
 
   The count is one walk of the athanor's whole tree — components, guest
   files, attachments, because a cap that bounds one subtree is not a cap
-  on the athanor; unmaterialized seed units are not in it — read from a
-  cache that `Arca` keeps current per write (bytes bumped on writes,
+  on the athanor — read from a cache that `Arca` keeps current per write
+  (bytes bumped on writes,
   dropped on deletes), so the hot path pays no walk at all.
   """
   @spec check_storage(Sanctum.Context.t(), non_neg_integer()) ::

@@ -63,7 +63,7 @@ defmodule PrismWeb.AquaLiveTest do
         "content" => "# Tom"
       })
 
-    assert {:ok, %{files: 0}} = Arca.usage(group_ctx, ["aqua"])
+    refute Arca.exists?(group_ctx, Compendium.AquaPath.agent_file("tom"))
 
     # The group's page: no closet picker, no personal role.
     {_view, html} = mount_athanor(conn, "/aqua", group)
@@ -84,7 +84,7 @@ defmodule PrismWeb.AquaLiveTest do
     })
 
     assert {:ok, %{"title" => "My Tom"}} = get_agent(mine_ctx, "tom")
-    assert {:ok, %{files: 0}} = Arca.usage(group_ctx, ["aqua"])
+    refute Arca.exists?(group_ctx, Compendium.AquaPath.agent_file("tom"))
   end
 
   # Point the soul at `ref`, and put it back afterwards: the agent files live
@@ -167,7 +167,12 @@ defmodule PrismWeb.AquaLiveTest do
       # disabled, edited, and with the way back.
       assert has_element?(view, "#aqua-card-aqua_planner", "disabled")
       assert has_element?(view, "#aqua-card-aqua_planner", "edited")
-      assert has_element?(view, "#aqua-card-aqua_planner button", "Revert to shipped")
+
+      assert has_element?(
+               view,
+               "#aqua-card-aqua_planner button[phx-click=editor_revert]",
+               "Revert to shipped"
+             )
 
       view
       |> element("#aqua-card-aqua_planner button[phx-click=editor_set_disabled]", "Enable")
@@ -355,8 +360,8 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-scrolls[open]")
       assert html =~ shipped["name"]
 
-      # A shipped, unedited scroll offers no Delete; edited, it offers the
-      # way back — and takes it.
+      # A shipped, unedited scroll offers no removal verb; edited, it
+      # offers the way back — and takes it.
       view
       |> with_target("#aqua-scrolls-section")
       |> render_click("skill_open", %{
@@ -365,6 +370,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       assert has_element?(view, "#aqua-scroll-open", "shipped")
       refute has_element?(view, "#aqua-scroll-open button[phx-click=skill_delete]")
+      refute has_element?(view, "#aqua-scroll-open button[phx-click=skill_revert]")
 
       view
       |> with_target("#aqua-scrolls-section")
@@ -386,13 +392,13 @@ defmodule PrismWeb.AquaLiveTest do
 
       assert has_element?(
                view,
-               "#aqua-scroll-open button[phx-click=skill_delete]",
+               "#aqua-scroll-open button[phx-click=skill_revert]",
                "Revert to shipped"
              )
 
       view
       |> with_target("#aqua-scrolls-section")
-      |> render_click("skill_delete", %{
+      |> render_click("skill_revert", %{
         "name" => shipped["name"]
       })
 
