@@ -1,0 +1,211 @@
+{
+  "name": "grok",
+  "type": "catalyst",
+  "version": "1.1.0",
+  "publisher": "local",
+  "description": "xAI Grok API \u2014 chat, vision, image generation, embeddings, responses, and files",
+  "needs": {
+    "api_key": {
+      "type": "api_key:x.ai",
+      "reason": "to call the xAI API with your key (console.x.ai)",
+      "required": true,
+      "fields": [
+        "GROK_API_KEY"
+      ]
+    }
+  },
+  "caps": {
+    "egress": {
+      "domains": [
+        "api.x.ai"
+      ],
+      "methods": [
+        "GET",
+        "POST",
+        "DELETE"
+      ]
+    },
+    "limits": {
+      "timeout": "3m",
+      "max_memory_bytes": 67108864,
+      "max_request_size": 1048576,
+      "max_response_size": 5242880,
+      "rate_limit": {
+        "requests": 100,
+        "window": "1m"
+      }
+    }
+  },
+  "defaults": {
+    "base_url": "https://api.x.ai/v1"
+  },
+  "schema": {
+    "input": {
+      "properties": {
+        "operation": {
+          "enum": [
+            "chat.completions.create",
+            "models.list",
+            "embeddings.create",
+            "images.generate",
+            "images.edit",
+            "responses.create",
+            "files.list",
+            "files.get",
+            "files.delete"
+          ]
+        },
+        "params": {
+          "description": "Operation-specific parameters",
+          "type": "object"
+        },
+        "stream": {
+          "description": "Enable streaming for chat completions",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "type": "object"
+    },
+    "output": {
+      "type": "object"
+    }
+  },
+  "examples": [
+    {
+      "input": {
+        "operation": "chat.completions.create",
+        "params": {
+          "messages": [
+            {
+              "content": "Hello",
+              "role": "user"
+            }
+          ],
+          "model": "grok-4-1-fast-reasoning"
+        }
+      },
+      "name": "Chat completion",
+      "output": {
+        "data": {
+          "choices": [
+            {
+              "message": {
+                "content": "Hi!",
+                "role": "assistant"
+              }
+            }
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "input": {
+        "operation": "chat.completions.create",
+        "params": {
+          "messages": [
+            {
+              "content": "Count to 5",
+              "role": "user"
+            }
+          ],
+          "model": "grok-4-1-fast-reasoning"
+        },
+        "stream": true
+      },
+      "name": "Streaming chat",
+      "output": {
+        "data": {
+          "chunks": [
+            "..."
+          ],
+          "combined_text": "1, 2, 3, 4, 5"
+        },
+        "status": 200
+      }
+    },
+    {
+      "input": {
+        "operation": "images.generate",
+        "params": {
+          "model": "grok-imagine-image",
+          "prompt": "A sunset over mountains"
+        }
+      },
+      "name": "Generate image",
+      "output": {
+        "data": {
+          "data": [
+            {
+              "url": "..."
+            }
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "input": {
+        "operation": "models.list",
+        "params": {}
+      },
+      "name": "List models",
+      "output": {
+        "data": {
+          "data": [
+            "..."
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "input": {
+        "operation": "responses.create",
+        "params": {
+          "input": [
+            {
+              "file_id": "file-abc123",
+              "type": "input_file"
+            },
+            {
+              "text": "Summarize this document",
+              "type": "input_text"
+            }
+          ],
+          "model": "grok-4-fast-reasoning"
+        }
+      },
+      "name": "Chat with files (Responses API)",
+      "output": {
+        "data": {
+          "output": [
+            {
+              "content": [
+                "..."
+              ],
+              "type": "message"
+            }
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "input": {
+        "operation": "files.list",
+        "params": {}
+      },
+      "name": "List files",
+      "output": {
+        "data": {
+          "data": []
+        },
+        "status": 200
+      }
+    }
+  ]
+}

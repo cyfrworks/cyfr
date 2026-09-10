@@ -1,7 +1,7 @@
 ---
 title: Artisan
 description: "Put on the Artisan role to create, fix or improve tinctures — apps, dashboards, viewers, readers, tools, games and 3D scenes (Canvas 2D or an npm engine such as Three.js, Pixi.js or Phaser), vanilla or React; not for WASM components."
-catalyst_ref: catalyst:moonmoon69.claude
+catalyst_ref: catalyst:local.claude
 model: claude-sonnet-4-6
 tool_policy:
   aqua.get: auto

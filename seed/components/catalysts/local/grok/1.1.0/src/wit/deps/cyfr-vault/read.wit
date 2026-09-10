@@ -1,0 +1,8 @@
+package cyfr:vault@0.1.0;
+
+interface read {
+    /// Retrieve a bound credential field by name.
+    /// Returns ok(value) on success, or err("access-denied: {name}") if
+    /// the field is not granted to this component.
+    get: func(name: string) -> result<string, string>;
+}

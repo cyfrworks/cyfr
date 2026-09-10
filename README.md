@@ -132,7 +132,7 @@ your-project/
     └── athanors/           # One tree per athanor — each person's and each group's
         └── <athanor id>/
             ├── components/ # {type}s/{publisher}/{name}/{version}/
-            │   ├── catalysts/   # local: files, http · moonmoon69: claude, openai, gemini, …
+            │   ├── catalysts/   # Bundled: files, http, claude, openai, gemini, grok, openrouter
             │   ├── reagents/    # Your local reagents
             │   ├── formulas/    # Bundled formulas: list-models, aqua
             │   └── tinctures/   # Bundled example tinctures + your own

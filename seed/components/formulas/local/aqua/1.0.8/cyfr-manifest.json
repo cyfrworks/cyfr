@@ -1,0 +1,224 @@
+{
+  "name": "aqua",
+  "type": "formula",
+  "version": "1.0.8",
+  "publisher": "local",
+  "description": "AQUA, the estate's assistant: one loop for the soul and for every role it clones into. Per-file tool allowlist (tool_policy: tool.action -> ask|auto, supports tool.* globs); auto actions are directly callable, everything else is proposed for a person's approval.",
+  "dependencies": {
+    "static": [
+      {
+        "ref": "catalyst:local.files",
+        "optional": false,
+        "reason": "File operations"
+      },
+      {
+        "ref": "catalyst:local.http",
+        "optional": false,
+        "reason": "HTTP operations"
+      },
+      {
+        "ref": "catalyst:local.claude",
+        "optional": true,
+        "reason": "Claude LLM provider (ships with the server; the estate consents to it at first fill)"
+      },
+      {
+        "ref": "catalyst:local.openai",
+        "optional": true,
+        "reason": "OpenAI LLM provider (ships with the server; the estate consents to it at first fill)"
+      },
+      {
+        "ref": "catalyst:local.gemini",
+        "optional": true,
+        "reason": "Gemini LLM provider (ships with the server; the estate consents to it at first fill)"
+      },
+      {
+        "ref": "catalyst:local.grok",
+        "optional": true,
+        "reason": "Grok LLM provider (ships with the server; the estate consents to it at first fill)"
+      },
+      {
+        "ref": "catalyst:local.openrouter",
+        "optional": true,
+        "reason": "OpenRouter LLM provider (ships with the server; the estate consents to it at first fill)"
+      }
+    ]
+  },
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": [
+        "catalyst_ref",
+        "model",
+        "task",
+        "system"
+      ],
+      "properties": {
+        "catalyst_ref": {
+          "type": "string",
+          "description": "LLM catalyst reference, e.g. catalyst:local.claude"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier (e.g. claude-sonnet-4-5-20250514)"
+        },
+        "task": {
+          "type": "string",
+          "description": "Task or follow-up message"
+        },
+        "system": {
+          "type": "string",
+          "description": "Full system prompt (caller-composed)"
+        },
+        "messages": {
+          "type": "array",
+          "description": "Conversation history for continuation"
+        },
+        "attachments": {
+          "type": "array",
+          "description": "Files attached to the task: objects with filename, media_type and base64 data (canonical content blocks are built per provider)"
+        },
+        "tool_policy": {
+          "type": "object",
+          "description": "Per-tool approval policy overlay (\"ask\" | \"auto\") the harness resolved for this turn"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "description": "Completion token cap for the provider call"
+        },
+        "sub_agents": {
+          "type": "array",
+          "description": "The roles the soul may clone into, provided by the harness. Each becomes a virtual tool named after the role.",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "description",
+              "prompt"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Role name (used as the virtual tool name)"
+              },
+              "title": {
+                "type": "string",
+                "description": "Human-readable title"
+              },
+              "description": {
+                "type": "string",
+                "description": "Tool description shown to the LLM"
+              },
+              "prompt": {
+                "type": "string",
+                "description": "Full system prompt for the role"
+              },
+              "tool_policy": {
+                "type": "object",
+                "description": "The role's own tool allowlist (\"ask\" | \"auto\"); absent means no tools"
+              },
+              "catalyst_ref": {
+                "type": "string",
+                "description": "Catalyst reference for this role (resolved by harness)"
+              },
+              "model": {
+                "type": "string",
+                "description": "Model for this role"
+              }
+            }
+          }
+        },
+        "role": {
+          "type": "string",
+          "description": "Set by the host when the assistant clones into one of its roles: the role's name, which every event of the run then carries."
+        },
+        "emit_tag": {
+          "type": "string",
+          "description": "Set by the host on a clone: the tag its events carry back to the parent's stream (role:tool_call_id)."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "turns": {
+          "type": "integer"
+        },
+        "messages": {
+          "type": "array",
+          "description": "Full conversation history including tool_use/tool_result pairs"
+        },
+        "component_ref": {
+          "type": "string"
+        },
+        "usage": {
+          "type": "object",
+          "description": "Accumulated token usage across all turns",
+          "properties": {
+            "input_tokens": {
+              "type": "integer"
+            },
+            "output_tokens": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "name": "General task with Claude",
+      "input": {
+        "catalyst_ref": "catalyst:local.claude",
+        "model": "claude-sonnet-4-5-20250514",
+        "task": "List all Rust files in components/ and describe what each does",
+        "system": "You are an agent running inside CYFR, a governed computation platform."
+      }
+    }
+  ],
+  "caps": {
+    "tools": [
+      "tools.list",
+      "execution.run",
+      "execution.logs",
+      "component.search",
+      "component.inspect",
+      "component.list",
+      "component.pull",
+      "component.create",
+      "component.setup_plan",
+      "build.compile",
+      "build.toolchains",
+      "aqua.list",
+      "aqua.get",
+      "aqua.skill_list",
+      "aqua.skill_get",
+      "aqua.skill_create",
+      "aqua.skill_update",
+      "notes.keep",
+      "notes.pin",
+      "notes.forget",
+      "notes.list",
+      "notes.read",
+      "notes.search",
+      "system.status",
+      "schedule.list"
+    ],
+    "limits": {
+      "timeout": "15m",
+      "max_concurrent_tasks": 30,
+      "max_request_size": 5242880,
+      "max_response_size": 5242880,
+      "batch_timeout": "5m"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 ---
 title: AQUA
-catalyst_ref: catalyst:moonmoon69.claude
+catalyst_ref: catalyst:local.claude
 model: claude-sonnet-4-6
 tool_policy:
   aqua.get: auto

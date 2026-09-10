@@ -22,7 +22,7 @@ defmodule Compendium.AquaAgent do
       ---
       title: Artisan
       description: Put on the Artisan role to …
-      catalyst_ref: catalyst:moonmoon69.claude
+      catalyst_ref: catalyst:local.claude
       model: claude-sonnet-4-6
       tool_policy:
         files.read: auto

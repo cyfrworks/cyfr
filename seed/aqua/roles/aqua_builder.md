@@ -1,7 +1,7 @@
 ---
 title: Builder
 description: "Put on the Builder role to create, fix or improve WASM components — catalysts, reagents and formulas in Rust with WIT interfaces, compilation and manifest work; not for tinctures."
-catalyst_ref: catalyst:moonmoon69.claude
+catalyst_ref: catalyst:local.claude
 model: claude-sonnet-4-6
 tool_policy:
   aqua.get: auto

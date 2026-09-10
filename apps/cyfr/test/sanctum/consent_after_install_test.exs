@@ -5,17 +5,19 @@ defmodule Sanctum.ConsentAfterInstallTest do
   @moduledoc """
   What installing a component does to what the estate consented to.
 
-  A baseline consent is minted against the closure that existed when the
-  estate was filled. Installing a component widens that closure, so the
-  consent no longer answers for it and a turn is refused until a member
-  consents again. The estate reports that state rather than leaving it
-  unexplained.
+  A baseline consent is minted against the closure that exists when the
+  estate is filled. Installing a component a formula names as an optional
+  dependency widens that closure, so the consent no longer answers for it
+  and a turn is refused until a member consents again. The estate reports
+  that state rather than leaving it unexplained — and only for the
+  formula the install touched: the bundled assistant's closure ships in
+  the seed and stands.
   """
   use ExUnit.Case, async: false
 
-  # The registry: five fixture catalysts under `moonmoon69/catalysts/<name>`,
-  # each an OCI manifest naming a cyfr-manifest config blob and a wasm blob.
-  defmodule Registry do
+  # The registry: one fixture catalyst under `moonmoon69/catalysts/claude`,
+  # an OCI manifest naming a cyfr-manifest config blob and a wasm blob.
+  defmodule OCIRegistry do
     @behaviour Plug
 
     @impl true
@@ -54,61 +56,43 @@ defmodule Sanctum.ConsentAfterInstallTest do
     end
   end
 
-  alias Sanctum.Consent.{Loader, Source}
+  alias Sanctum.Consent.Source
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
   @repo_root Path.expand("../../../..", __DIR__)
   @bundle Path.join(@repo_root, "seed/components")
-  @wasm Path.join(@repo_root, "apps/cyfr/test/support/test_wasm/math.wasm")
-  @providers ~w(claude openai gemini grok openrouter)
-
-  # `claude` depends on a component NO local manifest mentions: the bundle
-  # names the five providers and nothing below them. Rediscovering it is
-  # only possible by reading an installed remote component's own manifest.
-  @below_remote "helper"
+  @wasm File.read!(Path.join(@repo_root, "apps/cyfr/test/support/test_wasm/math.wasm"))
+  @formula "formula:local.uses-remote"
+  @remote "catalyst:moonmoon69.claude"
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    test_dir = Path.join(System.tmp_dir!(), "cyfr_closure_#{:rand.uniform(1_000_000)}")
+    test_dir = Path.join(System.tmp_dir!(), "cyfr_install_#{System.unique_integer([:positive])}")
     seed_dir = Path.join(test_dir, "seed")
     bundle_dir = Path.join(seed_dir, "components")
     copy_bundle!(bundle_dir)
-    # Provisioning also copies the AQUA template out of the seed tree.
+    write_formula!(bundle_dir)
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    {:ok, server} = Bandit.start_link(plug: {Registry, fixtures()}, ip: {127, 0, 0, 1}, port: 0)
+    {:ok, server} =
+      Bandit.start_link(plug: {OCIRegistry, fixtures()}, ip: {127, 0, 0, 1}, port: 0)
+
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
-    prev = %{
-      base_path: Application.get_env(:cyfr, :base_path),
-      seed_path: Application.get_env(:cyfr, :seed_path),
-      oci: Application.get_env(:cyfr, :oci_registry_url),
-      registry: Application.get_env(:cyfr, :registry_url),
-      egress: Application.get_env(:cyfr, :private_egress_targets),
-      sigstore: Application.get_env(:cyfr, :sigstore)
-    }
+    keys = [:base_path, :seed_path, :oci_registry_url, :registry_url, :sigstore, :consent_source]
+    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
 
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :seed_path, seed_dir)
-    # `localhost:` is the one host the OCI reference layer maps to http.
-    Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
-    Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
-    Application.put_env(:cyfr, :private_egress_targets, ["127.0.0.1"])
     # A cosign on PATH would try to verify; point it at nothing so it fails fast.
     Application.put_env(:cyfr, :sigstore, verification: :keyed, key_path: "/nonexistent")
+    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     on_exit(fn ->
-      for {key, value} <- [
-            base_path: prev.base_path,
-            seed_path: prev.seed_path,
-            oci_registry_url: prev.oci,
-            registry_url: prev.registry,
-            private_egress_targets: prev.egress,
-            sigstore: prev.sigstore
-          ] do
+      for {key, value} <- prev do
         if value,
           do: Application.put_env(:cyfr, key, value),
           else: Application.delete_env(:cyfr, key)
@@ -118,15 +102,13 @@ defmodule Sanctum.ConsentAfterInstallTest do
       Process.exit(server, :normal)
     end)
 
-    :ok
+    {:ok, port: port}
   end
 
-  test "installing a component changes what the estate consented to, and it says so" do
+  test "installing a component changes what the estate consented to, and it says so", %{
+    port: port
+  } do
     n = System.unique_integer([:positive])
-
-    prev_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
-    on_exit(fn -> Application.put_env(:cyfr, :consent_source, prev_source) end)
 
     ctx =
       Sanctum.Context.build(
@@ -138,89 +120,101 @@ defmodule Sanctum.ConsentAfterInstallTest do
         authenticated: true
       )
 
-    prev_rest = Application.get_env(:cyfr, :registry_url)
-    prev_oci = Application.get_env(:cyfr, :oci_registry_url)
+    # Filled offline: each consent covers the closure that exists, and a
+    # turn can pin it.
     Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
     Application.put_env(:cyfr, :oci_registry_url, Compendium.RegistryHost.none())
 
     {:ok, group} = Athanors.create_group(ctx.user_id, "Installed #{n}")
     in_group = %{ctx | athanor_id: group.id}
     :ok = Provisioning.start_provisioning(in_group)
+    {:ok, group} = Athanors.get(group.id)
+    assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
 
-    # Filled offline: AQUA's consent covers the closure that exists, and a
-    # turn can pin it.
     assert {:ok, %Sanctum.Authority{}} =
-             Cyfr.Execution.authority_for(in_group, :default, "formula:local.aqua")
+             Cyfr.Execution.authority_for(in_group, :default, @formula)
 
-    assert Cyfr.ConsentDrift.state(in_group) == :ok
+    assert Cyfr.ConsentDrift.state(in_group, @formula) == :ok
 
-    # A provider is installed, as the AQUA page's Install does. That widens
-    # the closure AQUA's consent was minted against, so the consent no
-    # longer answers for it and a turn is refused until a member consents
-    # again. The estate must SAY that rather than look unexplained.
-    Application.put_env(:cyfr, :registry_url, prev_rest)
-    Application.put_env(:cyfr, :oci_registry_url, prev_oci)
+    # The optional provider is installed, as the console's Install does.
+    # That widens the closure the formula's consent was minted against, so
+    # the consent no longer answers for it and a turn is refused until a
+    # member consents again. The estate must SAY that rather than look
+    # unexplained.
+    Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
+    # `localhost:` is the one host the OCI reference layer maps to http.
+    Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
 
     assert {:ok, _} =
              Cyfr.Ops.Catalog.call_external("component", in_group, %{
                "action" => "pull",
-               "reference" => "catalyst:moonmoon69.claude"
+               "reference" => @remote
              })
 
     assert {:error, {:consent_required, _}} =
+             Cyfr.Execution.authority_for(in_group, :default, @formula)
+
+    assert Cyfr.ConsentDrift.state(in_group, @formula) == :stale
+    assert Cyfr.ConsentDrift.stale_refs(in_group) == [{@formula, :stale}]
+
+    # The bundled assistant names nothing the install touched: its closure
+    # ships in the seed, so its consent stands and a turn still pins it.
+    assert Cyfr.ConsentDrift.state(in_group) == :ok
+
+    assert {:ok, %Sanctum.Authority{}} =
              Cyfr.Execution.authority_for(in_group, :default, "formula:local.aqua")
+  end
 
-    assert Cyfr.ConsentDrift.state(in_group) == :stale
+  # A local formula that may use the published provider once it is installed.
+  defp write_formula!(bundle_dir) do
+    dir = Path.join([bundle_dir, "formulas", "local", "uses-remote", "1.0.0"])
+    File.mkdir_p!(dir)
+    File.write!(Path.join(dir, "formula.wasm"), @wasm)
 
-    # And it is not AQUA's alone: the model listing names the same provider,
-    # so its own consent went stale too. Recovery is offered per formula
-    # rather than for the assistant alone, or the picker stays empty after
-    # a person installs the very catalyst it lists.
-    stale = Cyfr.ConsentDrift.stale_refs(in_group)
-    refs = Enum.map(stale, &elem(&1, 0))
+    manifest = %{
+      "name" => "uses-remote",
+      "type" => "formula",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "description" => "Uses a published provider when one is installed",
+      "caps" => %{"tools" => ["execution.run"], "limits" => %{"timeout" => "1m"}},
+      "dependencies" => %{
+        "static" => [
+          %{"ref" => "catalyst:local.http", "optional" => false, "reason" => "HTTP"},
+          %{"ref" => @remote, "optional" => true, "reason" => "a provider installed later"}
+        ]
+      },
+      "schema" => %{"input" => %{"type" => "object"}, "output" => %{"type" => "object"}}
+    }
 
-    assert "formula:local.aqua" in refs
-    assert "formula:local.list-models" in refs
-    assert Enum.all?(stale, fn {_ref, state} -> state == :stale end)
+    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
   end
 
   defp fixtures do
-    wasm = File.read!(@wasm)
+    config =
+      Jason.encode!(%{
+        "name" => "claude",
+        "version" => "1.0.0",
+        "type" => "catalyst",
+        "publisher" => "moonmoon69",
+        "description" => "claude (fixture)",
+        "dependencies" => %{"static" => []},
+        "caps" => %{
+          "egress" => %{"domains" => ["api.claude.example"], "methods" => ["GET", "POST"]},
+          "limits" => %{"timeout" => "1m"}
+        }
+      })
 
-    Map.new([@below_remote | @providers], fn name ->
-      deps =
-        if name == "claude",
-          do: %{
-            "static" => [
-              %{"ref" => "catalyst:moonmoon69.#{@below_remote}", "optional" => false}
-            ]
-          },
-          else: %{"static" => []}
+    {:ok, manifest_json, config_digest, wasm_digest} =
+      Compendium.OCI.Manifest.build(config, @wasm, "catalyst")
 
-      config =
-        Jason.encode!(%{
-          "name" => name,
-          "version" => "1.0.0",
-          "type" => "catalyst",
-          "publisher" => "moonmoon69",
-          "description" => "#{name} (fixture)",
-          "dependencies" => deps,
-          "caps" => %{
-            "egress" => %{"domains" => ["api.#{name}.example"], "methods" => ["GET", "POST"]},
-            "limits" => %{"timeout" => "1m"}
-          }
-        })
-
-      {:ok, manifest_json, config_digest, wasm_digest} =
-        Compendium.OCI.Manifest.build(config, wasm, "catalyst")
-
-      {"moonmoon69/catalysts/#{name}",
-       %{
-         manifest: manifest_json,
-         manifest_digest: Compendium.OCI.Blob.compute_digest(manifest_json),
-         blobs: %{config_digest => config, wasm_digest => wasm}
-       }}
-    end)
+    %{
+      "moonmoon69/catalysts/claude" => %{
+        manifest: manifest_json,
+        manifest_digest: Compendium.OCI.Blob.compute_digest(manifest_json),
+        blobs: %{config_digest => config, wasm_digest => @wasm}
+      }
+    }
   end
 
   # The tracked bundle, minus Rust build output that may sit beside a source tree.
@@ -230,8 +224,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     |> Path.wildcard(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
-      rel = Path.relative_to(src, @bundle)
-      target = Path.join(dest, rel)
+      target = Path.join(dest, Path.relative_to(src, @bundle))
       File.mkdir_p!(Path.dirname(target))
       File.cp!(src, target)
     end)

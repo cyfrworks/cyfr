@@ -1,7 +1,7 @@
 ---
 title: Explorer
 description: "Put on the Explorer role for deep web research — fact-finding across several searches, documentation lookup and synthesized findings; not for touching the estate's files or components."
-catalyst_ref: catalyst:moonmoon69.gemini
+catalyst_ref: catalyst:local.gemini
 model: gemini-pro-latest
 tool_policy:
   native_search: auto

@@ -1,7 +1,7 @@
 ---
 title: Planner
 description: "Put on the Planner role to investigate, analyze and recommend without changing anything — read-only; not for building, editing or running work."
-catalyst_ref: catalyst:moonmoon69.claude
+catalyst_ref: catalyst:local.claude
 model: claude-sonnet-4-6
 tool_policy:
   aqua.get: auto

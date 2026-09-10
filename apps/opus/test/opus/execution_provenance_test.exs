@@ -57,7 +57,7 @@ defmodule Opus.ExecutionProvenanceTest do
     {row, output} =
       run(ctx,
         parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
-        parent_reference: "formula:local.aqua:1.0.7"
+        parent_reference: "formula:local.aqua:1.0.8"
       )
 
     assert output["envelope"] == "v1"

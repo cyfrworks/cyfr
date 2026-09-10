@@ -1,7 +1,7 @@
 ---
 title: Web
 description: "Put on the Web role for direct HTTP work on a known URL — read a page as Markdown, call an API, send a webhook, check a link, on any host including localhost; not for research that needs a search engine."
-catalyst_ref: catalyst:moonmoon69.claude
+catalyst_ref: catalyst:local.claude
 model: claude-sonnet-4-6
 tool_policy:
   http.get: auto

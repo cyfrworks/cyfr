@@ -8,11 +8,10 @@ defmodule Opus.BootstrapFirstRunTest do
   their consents from the caps blocks, and a needs-declaring component
   reads not-ready until a vault entry is bound through the walk.
 
-  The moonmoon69 catalysts arrive only via registry pull, so on a tree
-  without them AQUA and list-models register (a manifest's dependency
-  refs only have to parse) but their bootstrap legitimately skips as
-  unresolvable — asserted as the CI truth rather than worked around. The
-  full pulled-bundle first run is `Sanctum.Provisioning`'s closure pull.
+  The five model catalysts ship in the seed, so AQUA and list-models
+  bootstrap with their whole closure present, and a catalyst's need reads
+  not-ready until a key is bound through the walk. The full first run over
+  the bundle is `Sanctum.Provisioning`'s closure test.
   """
 
   use ExUnit.Case, async: false
@@ -22,7 +21,9 @@ defmodule Opus.BootstrapFirstRunTest do
   alias Sanctum.Consent.Source
 
   @seed_root Path.expand("../../../../seed", __DIR__)
-  @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.1"]
+  @models ~w(claude openai gemini grok openrouter)
+  @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.1"] ++
+             Enum.map(@models, &"catalysts/local/#{&1}/1.1.0")
   # The AQUA formula at its newest shipped version, found rather than
   # pinned: a release bump must not leave this naming a directory that no
   # longer ships.
@@ -34,7 +35,7 @@ defmodule Opus.BootstrapFirstRunTest do
                 end)
                 |> List.last()
                 |> Path.relative_to(Path.join(@seed_root, "components"))
-  @registry_dep_formulas ["formulas/local/list-models/0.6.1", @shipped_aqua]
+  @formulas ["formulas/local/list-models/0.6.2", @shipped_aqua]
 
   setup do
     Arca.Cache.init()
@@ -85,32 +86,39 @@ defmodule Opus.BootstrapFirstRunTest do
       assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
 
-    # The model catalysts are name-level moonmoon69 refs that arrive only
-    # via registry pull (the closure pull at provisioning on a real
-    # install). Both formulas declare them OPTIONAL, so with none installed
-    # each activation covers what is present and bootstrap mints both — a
-    # server with no registry boots with its whole bundle consented.
-    for rel <- @registry_dep_formulas do
+    # Both formulas name the model catalysts as optional dependencies, and
+    # every one ships: each activation covers the whole bundle, and a
+    # server with no registry boots with all of it consented.
+    for rel <- @formulas do
       assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
+
+    model_refs = Enum.map(@models, &"catalyst:local.#{&1}")
 
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert "catalyst:local.files" in minted
     assert "catalyst:local.http" in minted
     assert "formula:local.aqua" in minted
     assert "formula:local.list-models" in minted
+    for ref <- model_refs, do: assert(ref in minted, "#{ref} not minted")
 
     # list-models invokes its providers as children and asks for nothing
-    # else, so with none installed its activation is itself alone.
+    # else, so its activation is itself and the five providers.
     {:ok, [list_models_profile]} = Source.DB.profiles(ctx, "formula:local.list-models")
     {:ok, list_models_consent} = Source.DB.head_consent(ctx, list_models_profile.id)
-    assert Map.keys(list_models_consent.activation) == ["formula:local.list-models"]
+
+    assert Map.keys(list_models_consent.activation) |> Enum.sort() ==
+             Enum.sort(["formula:local.list-models" | model_refs])
 
     {:ok, [aqua_profile]} = Source.DB.profiles(ctx, "formula:local.aqua")
     {:ok, aqua_consent} = Source.DB.head_consent(ctx, aqua_profile.id)
 
     assert Map.keys(aqua_consent.activation) |> Enum.sort() ==
-             ["catalyst:local.files", "catalyst:local.http", "formula:local.aqua"]
+             Enum.sort([
+               "catalyst:local.files",
+               "catalyst:local.http",
+               "formula:local.aqua" | model_refs
+             ])
 
     # Each minted consent loads through the production source, and the
     # blob's ingress edge carries the manifest's declared ask.

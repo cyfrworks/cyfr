@@ -1,15 +1,17 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.ProvisioningDeadlineTest do
+defmodule Sanctum.ProvisioningRemoteDepsTest do
   @moduledoc """
-  Required dependency work is bounded per attempt. A registry that accepts
-  a connection and never answers cannot hold an estate's fill open: the
-  attempt stops within its budget, the claim and the lock are released
-  after it has stopped, the timeout is recorded on the row, and the next
-  attempt resumes from what landed — a dependency below a partially
-  installed remote component included. An explicit retry that meets an
-  attempt in progress is told so, typed, without waiting.
+  A bundle whose required closure reaches a registry. Required dependency
+  work is bounded per attempt: a registry that accepts a connection and
+  never answers cannot hold an estate's fill open — the attempt stops
+  within its budget, the claim and the lock are released after it has
+  stopped, the timeout is recorded on the row, and the next attempt
+  resumes from what landed, a dependency below a partially installed
+  remote component included. The seed sync heals a dependency an earlier
+  attempt lost. An explicit retry that meets an attempt in progress is
+  told so, typed, without waiting.
   """
   use ExUnit.Case, async: false
 
@@ -167,6 +169,24 @@ defmodule Sanctum.ProvisioningDeadlineTest do
     # finishes the closure.
     Agent.update(stall, fn _ -> nil end)
     assert {:ok, %{provisioned_at: %DateTime{}}} = Provisioning.provision(group, ctx)
+    assert {:ok, _} = Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
+  end
+
+  test "the seed sync heals a dependency an earlier attempt lost", %{ctx: ctx, group: group} do
+    :ok = Provisioning.start_provisioning(ctx)
+    {:ok, group} = Athanors.get(group.id)
+    assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
+
+    # A transient outage at an earlier sync leaves one dependency of the
+    # closure unpulled; dropping its row is exactly that state. The next
+    # boot registers no new bundle versions, and the closure still heals.
+    {:ok, below} = Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
+    :ok = Arca.ComponentStorage.delete_component(ctx, "below", below.version, "someone", nil)
+
+    assert {:error, :not_found} =
+             Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
+
+    assert :ok = Provisioning.sync_seeds()
     assert {:ok, _} = Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
   end
 
