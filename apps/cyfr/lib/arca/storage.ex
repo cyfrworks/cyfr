@@ -183,12 +183,13 @@ defmodule Arca.Storage do
            | term()}
 
   # The one layout table: every root this layer knows, one row each —
-  # `{root, class, guest-facing name, seed relationship}`. The rosters
-  # below (`tenant_roots/0`, `global_prefixes/0`, `guest_scopes/0`,
-  # `seed_roots/0`, `overlay_roots/0`, `reserved_roots/0`) are derived
-  # views of this table, so a new kind of state is a new row — never a
-  # fourth list to keep in step, and a typo cannot desynchronize one
-  # roster from the others.
+  # `{root, class, guest-facing name, seed relationship, console tier}`.
+  # The rosters below (`tenant_roots/0`, `global_prefixes/0`,
+  # `guest_scopes/0`, `seed_roots/0`, `overlay_roots/0`,
+  # `reserved_roots/0`, `console_folders/0`) are derived views of this
+  # table, so a new kind of state is a new row — never another list to
+  # keep in step, and a typo cannot desynchronize one roster from the
+  # others.
   #
   # - class: `:tenant` roots live under `athanors/{athanor_id}/`;
   #   `:tenant_reserved` roots live there too but only the server's own
@@ -213,6 +214,12 @@ defmodule Arca.Storage do
   #   `locate/1` below is the one lookup. `nil` — no seed counterpart.
   #   A future overlaid root is one row here plus one locator module
   #   (and, if its media has validity rules, a provisioning seed-check).
+  # - console tier: how the Files page and the `file` tool show the root
+  #   to a person (`Cyfr.Files`). `:open` is theirs to fill and clear;
+  #   `:shaped` holds units a grammar shapes — files are edited in
+  #   place, units are made and removed by the domain's own verbs;
+  #   `:read` is shown and downloaded here, managed on its own page;
+  #   `:system` is the server's own and is not shown at all.
   #
   # The volume holds more than Arca paths: `cyfr.db` (+ WAL/SHM) and the
   # `mcp-bridge/` sidecar state live inside `:base_path`, and Caddy keeps
@@ -220,22 +227,22 @@ defmodule Arca.Storage do
   # Arca addresses tenant and global blobs; everything else on the volume
   # is another program's file.
   @layout [
-    {"aqua", :tenant, nil, :overlay},
-    {"components", :tenant, "components", :overlay},
-    {"conversations", :tenant, nil, nil},
+    {"aqua", :tenant, nil, :overlay, :shaped},
+    {"components", :tenant, "components", :overlay, :shaped},
+    {"conversations", :tenant, nil, nil, :read},
     # Host-only notes belong to the athanor in focus and survive conversation
     # deletion. Guests have no direct storage scope for this root.
-    {"notes", :tenant, nil, nil},
+    {"notes", :tenant, nil, nil, :read},
     # An execution's retained input and result bytes, referenced by an
     # `execution_payloads` row. Host-only: what a component was given and
     # what it answered is the estate's record, never a path a guest
     # writes — and reserved, so only the payload store's own writes
     # (`Arca.ExecutionPayloads`, under the internal-write scope) change
     # bytes a row names by digest.
-    {"payloads", :tenant_reserved, nil, nil},
-    {"guest", :tenant, "data", nil},
-    {"cache", :global, nil, nil},
-    {"system", :global, nil, nil}
+    {"payloads", :tenant_reserved, nil, nil, :system},
+    {"guest", :tenant, "data", nil, :open},
+    {"cache", :global, nil, nil, :system},
+    {"system", :global, nil, nil, :system}
   ]
 
   @doc """
@@ -265,7 +272,7 @@ defmodule Arca.Storage do
   path, served through the seed overlay like `components/`: the shipped
   template shows through until a file is edited.
   """
-  @global_prefixes for {root, :global, _guest, _seed} <- @layout, do: root
+  @global_prefixes for {root, :global, _guest, _seed, _tier} <- @layout, do: root
 
   def global_prefixes, do: @global_prefixes
 
@@ -273,7 +280,7 @@ defmodule Arca.Storage do
   # these subtrees; an unknown first segment is refused, never silently
   # minted as a new subtree. A new kind of tenant state is a new row in
   # `@layout`.
-  @tenant_roots for {root, class, _guest, _seed} <- @layout,
+  @tenant_roots for {root, class, _guest, _seed, _tier} <- @layout,
                     class in [:tenant, :tenant_reserved],
                     do: root
 
@@ -291,7 +298,7 @@ defmodule Arca.Storage do
   # holds bytes an `execution_payloads` row names by digest, so a
   # member-level write there could put other bytes behind a recorded
   # digest. Reads stay ordinary tenant reads.
-  @reserved_roots for {root, :tenant_reserved, _guest, _seed} <- @layout, do: root
+  @reserved_roots for {root, :tenant_reserved, _guest, _seed, _tier} <- @layout, do: root
 
   @doc """
   The reserved tenant roots: subtrees of the athanor's tree that only the
@@ -308,7 +315,9 @@ defmodule Arca.Storage do
   # stores that scope under `guest/`, a physical sibling of the host
   # scopes (aqua/, conversations/) so a `data/` grant can never see them.
   @guest_scopes Map.new(
-                  for {root, _class, guest, _seed} <- @layout, guest != nil, do: {guest, root}
+                  for {root, _class, guest, _seed, _tier} <- @layout,
+                      guest != nil,
+                      do: {guest, root}
                 )
 
   @doc """
@@ -321,6 +330,44 @@ defmodule Arca.Storage do
   """
   @spec guest_scopes() :: %{String.t() => String.t()}
   def guest_scopes, do: @guest_scopes
+
+  # What a person sees of the tree. A root's console name is its
+  # guest-facing name when it has one (`data/` for `guest/`) and its own
+  # otherwise; the system tier is not a folder at all.
+  @tier_order [:open, :shaped, :read]
+  @console_folders for tier <- @tier_order,
+                       {root, class, guest, _seed, ^tier} <- @layout,
+                       class in [:tenant, :tenant_reserved],
+                       do: %{name: guest || root, root: root, tier: tier}
+
+  @console_scopes Map.new(@console_folders, &{&1.name, &1.root})
+  @tiers Map.new(@layout, fn {root, _class, _guest, _seed, tier} -> {root, tier} end)
+
+  @typedoc """
+  How a root is shown to a person: `:open` (theirs to fill and clear),
+  `:shaped` (units a grammar shapes, edited in place), `:read` (shown and
+  downloaded, managed on its own page), `:system` (not shown).
+  """
+  @type tier :: :open | :shaped | :read | :system
+
+  @doc """
+  The folders the Files page and the `file` tool show, in tier order:
+  each with its console `name`, its physical `root` and its `tier`. The
+  system tier is absent by construction.
+  """
+  @spec console_folders() :: [%{name: String.t(), root: String.t(), tier: tier()}]
+  def console_folders, do: @console_folders
+
+  @doc """
+  The console's folder vocabulary mapped to the physical tenant root each
+  folder stores under — `%{"data" => "guest", "components" => "components", …}`.
+  """
+  @spec console_scopes() :: %{String.t() => String.t()}
+  def console_scopes, do: @console_scopes
+
+  @doc "The console tier of a root; `nil` for a name the layout does not know."
+  @spec tier(String.t()) :: tier() | nil
+  def tier(root) when is_binary(root), do: Map.get(@tiers, root)
 
   @doc """
   Whether `name` is spelled like an in-flight atomic write (`<file>.tmp.<n>`,
@@ -351,7 +398,7 @@ defmodule Arca.Storage do
 
   # Seed roots are local subdirectories of :seed_path. They use the same
   # :overlay layout filter as overlay_roots/0.
-  @seed_roots for {root, _class, _guest, :overlay} <- @layout, do: root
+  @seed_roots for {root, _class, _guest, :overlay, _tier} <- @layout, do: root
 
   @doc """
   The seed-media roots: the logical `["seed", root | rest]` prefixes, each a
@@ -393,7 +440,7 @@ defmodule Arca.Storage do
 
   # The overlay roots, from the layout table. Their unit shapes live with
   # the domain locators (`locate/1`).
-  @overlay_roots for {root, _class, _guest, :overlay} <- @layout, do: root
+  @overlay_roots for {root, _class, _guest, :overlay, _tier} <- @layout, do: root
 
   @doc """
   The seeded roots: the ones whose shipped default lives in the seed tree
@@ -724,7 +771,8 @@ defmodule Arca.Storage do
   @callback list_recursive(Context.t(), path()) :: {:ok, [path()]} | error()
 
   @doc """
-  Recursive file count and byte total under a prefix.
+  Recursive file count and byte total at and under a path: a directory's
+  whole subtree, or one file's own size.
 
   Quota enforcement reads this — it must reflect every leaf in the subtree,
   not just the top level, or a nested write evades the ceiling.
@@ -732,6 +780,15 @@ defmodule Arca.Storage do
   """
   @callback usage(Context.t(), path()) ::
               {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | error()
+
+  @doc """
+  Make a directory exist at `path`, holding nothing. A filesystem creates
+  it (parents included) so the tree a person browses shows every folder
+  from the first day; an object store has no directories and answers
+  `:ok` without a request — a folder there exists when a key sits under
+  it. Idempotent.
+  """
+  @callback ensure_dir(Context.t(), path()) :: :ok | error()
 
   @doc """
   Read a whole subtree through any adapter, as `{relative_path, binary}`

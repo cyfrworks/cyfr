@@ -35,6 +35,12 @@ your-project/
         └── guest/         # Files WASM components store — their `data/` scope
 ```
 
+Every folder is laid when the athanor is provisioned. The Files page in the
+console, and the `file` tool behind it, show this tree by tier: `data/` (the
+`guest/` root) is open, `components/` and `aqua/` are shaped, `notes/` and
+`conversations/` are read-only there, and `payloads/` is the server's own and
+has no name on the page.
+
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
 ```
 data/athanors/{athanor_id}/components/catalysts/local/my-api/0.1.0/
@@ -1151,6 +1157,27 @@ edited file reads as edited by its bytes, and the `aqua` tool's `reset`
 action (from the AQUA page or over MCP) restores edited copies — one role by name, or every one —
 while keeping the roles and scrolls the estate made; `skill_reset` restores
 one scroll.
+
+### The Files page
+
+The console's Files page is the tree above, browsed like a phone's files
+rather than a desktop's disk: you see the athanor's folders and nothing of
+the server's, and each folder is one of three tiers.
+
+- **Open** — `data/`. Upload, download, edit and delete anything. Every
+  component with a `data/` grant reads and writes the same space.
+- **Shaped** — `components/` and `aqua/`. Files are edited in place, but only
+  inside a unit the folder's grammar knows: a `local` component's version
+  directory, the soul, a role, a scroll. A write outside one is refused with
+  the shape spelled out; a unit is created and removed by its own verb
+  (scaffold, pull, fork, the AQUA page), and one the server ships is reset,
+  never deleted. An edit inside a component re-registers its row; an edit
+  under `aqua/` rewrites the agent index.
+- **Read-only** — `notes/` and `conversations/`. Shown and downloaded here,
+  written by their own surfaces.
+
+The `file` tool (`list`, `read`, `write`, `delete`) is the same surface on
+the wire; reads take `storage_read`, changes `storage_write`.
 
 ---
 

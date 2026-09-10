@@ -178,6 +178,9 @@ defmodule Arca.Overlay do
   def usage(%Context{} = ctx, path), do: tenant().usage(ctx, path)
 
   @impl true
+  def ensure_dir(%Context{} = ctx, path), do: tenant().ensure_dir(ctx, path)
+
+  @impl true
   def serve_to_conn(conn, %Context{} = ctx, path, opts),
     do: tenant().serve_to_conn(conn, ctx, path, opts)
 

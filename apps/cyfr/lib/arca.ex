@@ -444,6 +444,38 @@ defmodule Arca do
   end
 
   @doc """
+  Make a directory exist at a tenant path, holding nothing — every folder
+  of a fresh estate from the first day (`ensure_roots/1`). Not a write of
+  bytes: nothing is capped or counted, and the reserved roots are not
+  refused — a directory carries no bytes a row could name. Refused like
+  any path outside the tenant roster; seed media stays read-only.
+  """
+  @spec ensure_dir(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
+  def ensure_dir(%Context{} = ctx, path) do
+    path = normalize(path)
+
+    cond do
+      Arca.Storage.classify(path) != :tenant -> {:error, :forbidden}
+      path == [] -> {:error, :invalid_path}
+      true -> guarded(ctx, path, fn p -> adapter(p).ensure_dir(ctx, p) end)
+    end
+  end
+
+  @doc """
+  Make every tenant root of the context's athanor exist — the folder
+  structure a person browses, laid at provisioning and healed at boot.
+  """
+  @spec ensure_roots(Context.t()) :: :ok | {:error, term()}
+  def ensure_roots(%Context{} = ctx) do
+    Enum.reduce_while(Arca.Storage.tenant_roots(), :ok, fn root, :ok ->
+      case ensure_dir(ctx, [root]) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {root, reason}}}
+      end
+    end)
+  end
+
+  @doc """
   Stream a stored object to a `Plug.Conn`.
 
   Caller owns Content-Type, CSP, and caching headers; the adapter handles

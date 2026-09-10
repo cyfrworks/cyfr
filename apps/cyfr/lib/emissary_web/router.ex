@@ -364,6 +364,7 @@ defmodule EmissaryWeb.Router do
     pipe_through [:attachment, :attachment_throttle]
 
     get "/attachments/:message_id/:filename", AttachmentController, :show
+    get "/files/download/*path", FileController, :show
   end
 
   # Opening an estate is a link. `PrismWeb.Focus` resolves the segment and narrows
@@ -389,6 +390,7 @@ defmodule EmissaryWeb.Router do
         live "/", ChatRedirectLive, :index
         # AQUA page and agents-path redirect.
         live "/aqua", AquaLive, :index
+        live "/files", FilesLive, :index
         live "/agents", AquaRedirectLive, :index
         # /activities: unified activities feed (mcp_log + execution fan-out).
         live "/activities", ActivitiesLive, :index

@@ -67,6 +67,7 @@ defmodule Cyfr.RouteAuthInventoryTest do
     # Prism — a chat attachment's bytes: session cookie + the URL's athanor
     # focused in the controller exactly as a LiveView mount focuses it
     {:get, "/a/:athanor/attachments/:message_id/:filename"} => :browser_focus_handler,
+    {:get, "/a/:athanor/files/download/*path"} => :browser_focus_handler,
 
     # Prism — live_session :athanor (LiveAuth + Focus on_mount): every page
     # is `/a/<athanor>/…`, the athanor in focus is the URL's.
@@ -76,6 +77,7 @@ defmodule Cyfr.RouteAuthInventoryTest do
     {:get, "/a/:athanor"} => :browser_authenticated,
     {:get, "/a/:athanor/agents"} => :browser_authenticated,
     {:get, "/a/:athanor/aqua"} => :browser_authenticated,
+    {:get, "/a/:athanor/files"} => :browser_authenticated,
     {:get, "/a/:athanor/activities"} => :browser_authenticated,
     {:get, "/a/:athanor/enforcements"} => :browser_authenticated,
     {:get, "/a/:athanor/executions"} => :browser_authenticated,

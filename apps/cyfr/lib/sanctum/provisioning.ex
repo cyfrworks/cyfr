@@ -305,7 +305,8 @@ defmodule Sanctum.Provisioning do
   defp do_provision(%{id: athanor_id} = athanor, acting_ctx) do
     ctx = acting_ctx || seed_ctx(athanor_id)
 
-    with {:ok, _scan} <- register_bundle(athanor_id),
+    with :ok <- Arca.ensure_roots(seed_ctx(athanor_id)),
+         {:ok, _scan} <- register_bundle(athanor_id),
          :ok <- aqua_definitions(athanor_id),
          {:ok, closure} <- pull_required_deps(ctx),
          optional <- pull_optional_deps(ctx),
@@ -581,6 +582,14 @@ defmodule Sanctum.Provisioning do
 
   defp sync_seed(athanor) do
     ctx = seed_ctx(athanor.id)
+
+    case Arca.ensure_roots(ctx) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Provisioning] #{athanor.id}: roots — #{inspect(reason)}")
+    end
 
     heal_shipped(ctx, athanor.id)
 

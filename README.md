@@ -143,6 +143,13 @@ your-project/
             └── guest/      # Files WASM components store (their `data/` scope)
 ```
 
+> Every folder exists from the moment the athanor is provisioned. The Files
+> page (and the `file` tool) shows the tree the way a phone shows its files:
+> `data/` is yours to fill and clear, `components/` and `aqua/` hold shaped
+> units whose files you edit in place, `notes/` and `conversations/` are read
+> there and managed on their own pages, and the server's own storage
+> (`payloads/`, the seed, the cache) is not a folder at all.
+
 > The seed bundle every athanor starts from rides inside the container image
 > (under `CYFR_SEED_PATH`, mounted so `./aqua` replaces its `aqua/` root) and
 > is copied into each athanor when it is provisioned — a scaffolded project
@@ -680,6 +687,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
 | `cyfr aqua list/get/status/reset/skills` | Read the AQUA soul, roles, guides and scrolls, see which files are shipped, edited or yours, and reset to shipped `[i]` |
+| `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `conversations/` read-only |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
 | `cyfr registry probe` | Force a re-probe against cyfr.run (re-mints push tokens) |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |

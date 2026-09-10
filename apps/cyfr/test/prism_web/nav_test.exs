@@ -10,7 +10,7 @@ defmodule PrismWeb.NavTest do
     keys = Enum.map(Nav.items("lite"), & &1.key)
 
     assert keys ==
-             ~w(chat aqua tinctures members vault schedules webhooks mcp_servers settings legal)
+             ~w(chat aqua files tinctures members vault schedules webhooks mcp_servers settings legal)
 
     refute "executions" in keys
     refute "api_keys" in keys
@@ -23,7 +23,7 @@ defmodule PrismWeb.NavTest do
     keys = Enum.map(Nav.items("dev"), & &1.key)
 
     for key <-
-          ~w(chat executions enforcements components builds registry api_keys webhooks reports) do
+          ~w(chat files executions enforcements components builds registry api_keys webhooks reports) do
       assert key in keys, "dev lacks #{key}"
     end
 

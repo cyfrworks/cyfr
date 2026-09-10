@@ -28,6 +28,8 @@ config :cyfr,
     # What was kept out of a conversation — a separate object from the tape,
     # which is what lets a thread be erased honestly.
     Emissary.MCP.NotesTool,
+    # The athanor's files as the Files page shows them, one tier per folder.
+    Emissary.MCP.FileTool,
     # Domain services
     Opus.MCP,
     Opus.CronMCP,

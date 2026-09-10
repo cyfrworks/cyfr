@@ -177,6 +177,28 @@ defmodule Sanctum.ProvisioningTest do
     assert other.slug == "prov-#{n + 1}"
   end
 
+  test "a fill lays every folder of the tree, and a boot sync lays a missing one again", %{
+    bundle_dir: bundle_dir
+  } do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|roots-#{n}"}
+
+    {:ok, group} = Athanors.create_group(ctx.user_id, "Roots #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.start_provisioning(in_group)
+
+    {:ok, entries} = Arca.list_typed(in_group, [])
+
+    assert Enum.sort(entries) ==
+             Enum.sort(for root <- Arca.Storage.tenant_roots(), do: {root, :dir})
+
+    :ok = Arca.delete_tree(in_group, ["notes"])
+    assert :ok = Provisioning.sync_seeds()
+    assert {:ok, [_ | _] = healed} = Arca.list_typed(in_group, [])
+    assert {"notes", :dir} in healed
+  end
+
   test "sync_seeds leaves the athanor's copies alone; what a release adds is pulled, not pushed",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)

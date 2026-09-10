@@ -152,6 +152,15 @@ defmodule Arca.Adapters.S3 do
     end
   end
 
+  # An object store has no directories: a prefix exists when a key sits
+  # under it, and nothing needs creating for that.
+  @impl true
+  def ensure_dir(%Context{} = _ctx, segments) do
+    Arca.Storage.refuse_seed_write!(segments)
+    Arca.Storage.validate_path!(segments)
+    :ok
+  end
+
   @impl true
   def list_typed(%Context{} = ctx, segments) do
     prefix = build_key(ctx, segments)
@@ -278,10 +287,11 @@ defmodule Arca.Adapters.S3 do
     case list_entries(prefix_key) do
       {:ok, entries} ->
         # Directory markers (keys ending "/") are not files — the Local
-        # adapter's walk never counts a directory either.
+        # adapter's walk never counts a directory either. An object AT the
+        # key is the file itself, counted like Local's stat of one.
         sizes =
           for {key, size} <- entries,
-              String.starts_with?(key, prefix_with_slash),
+              key == prefix_key or String.starts_with?(key, prefix_with_slash),
               not String.ends_with?(key, "/"),
               do: size
 

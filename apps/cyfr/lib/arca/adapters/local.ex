@@ -161,6 +161,12 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
+  def ensure_dir(%Context{} = ctx, path) do
+    refuse_seed_write!(path)
+    File.mkdir_p(build_path(ctx, path))
+  end
+
+  @impl true
   def list_typed(%Context{} = ctx, path) do
     full_path = build_path(ctx, path)
 
@@ -256,12 +262,15 @@ defmodule Arca.Adapters.Local do
       end
     else
       case File.lstat(full_path) do
+        {:ok, %File.Stat{type: :regular, size: size}} ->
+          {:ok, %{files: 1, bytes: size}}
+
         {:error, reason} when reason != :enoent ->
           # A root that exists but cannot even be stat'd must not read as
           # empty — the cap would silently under-count.
           {:error, {:usage_walk, full_path, reason}}
 
-        _missing_or_not_a_dir ->
+        _missing_or_not_a_file ->
           {:ok, %{files: 0, bytes: 0}}
       end
     end

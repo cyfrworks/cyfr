@@ -291,6 +291,29 @@ defmodule Arca.StorageTest do
       assert Storage.reserved_roots() == ~w(payloads)
       assert Storage.guest_scopes() == %{"data" => "guest", "components" => "components"}
 
+      # The console tier: what a person sees of the tree, system absent.
+      assert Storage.console_folders() == [
+               %{name: "data", root: "guest", tier: :open},
+               %{name: "aqua", root: "aqua", tier: :shaped},
+               %{name: "components", root: "components", tier: :shaped},
+               %{name: "conversations", root: "conversations", tier: :read},
+               %{name: "notes", root: "notes", tier: :read}
+             ]
+
+      assert Storage.console_scopes() == %{
+               "data" => "guest",
+               "aqua" => "aqua",
+               "components" => "components",
+               "conversations" => "conversations",
+               "notes" => "notes"
+             }
+
+      assert Storage.tier("payloads") == :system
+      assert Storage.tier("cache") == :system
+      assert Storage.tier("guest") == :open
+      assert Storage.tier("nope") == nil
+      assert Enum.all?(Storage.console_folders(), &(&1.root in Storage.tenant_roots()))
+
       # The classes partition: no root is both tenant and global; every
       # seed root, overlay root and guest-scope target is a tenant root;
       # every overlay root has a configured locator (the unit shapes are
