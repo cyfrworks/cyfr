@@ -71,6 +71,19 @@ defmodule Aqua.AquaToolEditsTest do
     refute Enum.any?(rows, &(&1.name == "scout"))
   end
 
+  # A reset reverts the tree to what ships, and the index follows: a role a
+  # member created does not outlive its file as a row.
+  test "the agent index follows a reset", %{ctx: ctx} do
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    assert Enum.any?(rows, &(&1.name == "scout"))
+
+    assert {:ok, %{"reset" => true}} = call(ctx, %{"action" => "reset", "all" => true})
+
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    refute Enum.any?(rows, &(&1.name == "scout"))
+    assert Enum.any?(rows, &(&1.name == AquaPath.soul_name()))
+  end
+
   test "two members toggling different keys keep both", %{ctx: ctx} do
     assert {:ok, _} =
              call(ctx, %{

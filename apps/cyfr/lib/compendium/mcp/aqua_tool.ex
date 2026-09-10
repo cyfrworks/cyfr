@@ -470,6 +470,7 @@ defmodule Compendium.MCP.AquaTool do
   def handle(%Context{} = ctx, %{"action" => "reset"} = args) do
     case Compendium.AquaTemplate.reset(ctx, all: args["all"] == true) do
       {:ok, %{reverted: reverted, kept: kept}} ->
+        resync_index(ctx)
         files = Enum.map(Compendium.AquaTemplate.files(), &Enum.join(&1, "/"))
         {:ok, %{reset: true, reverted: reverted, kept: kept, files: files}}
 
