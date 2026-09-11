@@ -88,8 +88,16 @@ defmodule Aqua.Loop.Binding do
 
         true ->
           case String.split(name, ".", parts: 2) do
-            [tool, action] -> resolve_action(tool, action, args)
-            _ -> {:error, "unknown tool: #{name}"}
+            [tool, action] ->
+              resolve_action(tool, action, args)
+
+            [tool] ->
+              # The model names the tool and carries the action in its
+              # arguments, as every catalog tool's schema declares.
+              case Map.pop(args, "action") do
+                {action, rest} when is_binary(action) -> resolve_action(tool, action, rest)
+                _ -> {:error, "unknown tool: #{name}"}
+              end
           end
       end
 

@@ -231,6 +231,57 @@ defmodule Sanctum.Tenancy do
 
   def revalidate(%Context{} = ctx), do: {:ok, ctx}
 
+  @doc """
+  The context a recovered turn continues under: the person-shaped
+  context the sender's sign-in would carry (`auth_method: :oidc`, the
+  person's full permission vocabulary), rebuilt from the turn's rows when
+  the sender's own context is gone. Unlike `revalidate/1`, it refuses
+  instead of degrading: `:denied` when the `users` row is denied or
+  missing (read first — a denial marks the user before memberships are
+  swept, so a surviving membership proves nothing), `:not_member` when
+  the person is not seated in the turn's own athanor, `:archived` when
+  the estate is not active, `:unavailable` when the store cannot answer.
+  """
+  @spec continuation(String.t(), String.t()) ::
+          {:ok, Context.t()} | {:error, :denied | :not_member | :archived | :unavailable}
+  def continuation(user_id, athanor_id)
+      when is_binary(user_id) and user_id != "" and is_binary(athanor_id) and athanor_id != "" do
+    case Users.get(user_id) do
+      {:ok, %{status: "denied"}} ->
+        {:error, :denied}
+
+      {:ok, _user} ->
+        cond do
+          not Members.member?(user_id, athanor_id) -> {:error, :not_member}
+          not Athanors.active?(athanor_id) -> {:error, :archived}
+          true -> {:ok, continuation_context(user_id, athanor_id)}
+        end
+
+      {:error, :not_found} ->
+        {:error, :denied}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Sanctum.Tenancy] user read failed while continuing a turn for user=#{user_id}: " <>
+            "#{inspect(reason)} — refusing"
+        )
+
+        {:error, :unavailable}
+    end
+  end
+
+  # The one site that builds a person's continuation context.
+  defp continuation_context(user_id, athanor_id) do
+    Context.build(
+      user_id: user_id,
+      athanor_id: athanor_id,
+      permissions: Sanctum.Atoms.person_permissions(),
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
+  end
+
   defp unavailable(what, user_id, reason) do
     Logger.warning(
       "[Sanctum.Tenancy] #{what} read failed during revalidation for user=#{user_id}: " <>

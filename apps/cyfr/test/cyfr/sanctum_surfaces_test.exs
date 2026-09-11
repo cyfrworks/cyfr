@@ -37,9 +37,12 @@ defmodule Cyfr.SanctumSurfacesTest do
     # with on first read has to be there before the turn roots an
     # authority in it. The tool keeps the same hook for readers outside
     # the harness.
+    # `Sanctum.JCS` is the canonical form a card's proposal is digested in
+    # (`Aqua.Loop.Policy.proposal_digest/1`) — the same canon the consent
+    # digests use, so a decision consumes exactly what was shown.
     "aqua" => ~w(
-      Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.Notify
-      Sanctum.Provisioning Sanctum.Sanitizer Sanctum.Tenancy
+      Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.JCS
+      Sanctum.Notify Sanctum.Provisioning Sanctum.Sanitizer Sanctum.Tenancy
     ),
     # `Sanctum.Provisioning` is `Compendium.MCP.AquaTool` and
     # `ComponentTool`'s list action alone — the first-need hook. A group

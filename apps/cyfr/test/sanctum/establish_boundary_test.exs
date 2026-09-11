@@ -35,6 +35,10 @@ defmodule Sanctum.EstablishBoundaryTest do
     # `Provisioning`'s person context: the server filling an admitted
     # person's estate with their pull credential; no credential of its own.
     "apps/cyfr/lib/sanctum/provisioning.ex" => 1,
+    # `Tenancy.continuation/2`: the person-shaped context a recovered
+    # turn continues under, rebuilt from the turn's rows and refused when
+    # the person is denied, unseated or the estate archived.
+    "apps/cyfr/lib/sanctum/tenancy.ex" => 1,
     # The test fixture.
     "apps/cyfr/lib/sanctum/test_context.ex" => 1
   }

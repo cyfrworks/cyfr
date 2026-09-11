@@ -66,6 +66,16 @@ defmodule Aqua.Loop.BindingTest do
              })
   end
 
+  test "a tool named without a dot carries its action in the arguments" do
+    assert {:ok, %Call{kind: :hand, tool: "files", action: "read", args: %{"path" => "a"}}} =
+             Binding.resolve("files", %{"action" => "read", "path" => "a"})
+
+    assert {:ok, %Call{kind: :catalog, tool: "notes", action: "read"}} =
+             Binding.resolve("notes", %{"action" => "read"})
+
+    assert {:error, "unknown tool: notes"} = Binding.resolve("notes", %{})
+  end
+
   test "roles, the ui event, external servers and catalog actions resolve to their kinds" do
     assert {:ok, %Call{kind: :clone, target: "builder"}} =
              Binding.resolve("builder", %{"task" => "x"}, roles: ["builder"])
