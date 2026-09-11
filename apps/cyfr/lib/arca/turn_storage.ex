@@ -34,7 +34,7 @@ defmodule Arca.TurnStorage do
   @statuses ["accepted", "running", "paused", "completed", "failed", "cancelled", "uncertain"]
   @open ["accepted", "running", "paused"]
   @terminal ["completed", "failed", "cancelled", "uncertain"]
-  @step_kinds ["model", "tool", "approval", "clone", "launch"]
+  @step_kinds ["model", "tool", "ui", "approval", "clone", "launch"]
   @outcomes ["ok", "error", "denied", "skipped", "cancelled", "uncertain"]
   @decisions ["approved", "declined", "expired", "error"]
   @recovery_cap 3
@@ -1264,6 +1264,39 @@ defmodule Arca.TurnStorage do
   # ---------------------------------------------------------------------------
   # Reads
   # ---------------------------------------------------------------------------
+
+  @doc """
+  The `tool_call` payloads of the steps a turn and its clone turns closed
+  with an `ok` outcome, oldest first: what the turn wrote to, read from
+  the rows.
+  """
+  @spec closed_calls(Context.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def closed_calls(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.closed_calls", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      turns =
+        from(t in Turn,
+          where:
+            t.athanor_id == ^athanor_id and (t.id == ^turn_id or t.parent_turn_id == ^turn_id),
+          select: t.id
+        )
+
+      payloads =
+        Arca.Repo.all(
+          from(s in TurnStep,
+            join: m in Message,
+            on: m.athanor_id == s.athanor_id and m.id == s.message_id,
+            where: s.athanor_id == ^athanor_id and s.turn_id in subquery(turns),
+            where: s.dispatch_state == "closed" and s.outcome == "ok" and s.kind != "model",
+            order_by: [asc: s.seq],
+            select: m
+          )
+        )
+
+      {:ok, Enum.map(payloads, &Arca.ConversationStorage.payload/1)}
+    end)
+  end
 
   @doc "One turn of the athanor."
   @spec get(Context.t(), String.t()) :: {:ok, Turn.t()} | {:error, term()}

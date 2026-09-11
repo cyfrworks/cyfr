@@ -379,6 +379,19 @@ defmodule Aqua.Tape do
 
   def agent_revision(_ctx, _turn), do: {:error, :no_revision}
 
+  @doc """
+  Announce an ephemeral console event on the conversation's topic — a
+  delta, the tool activity, the usage, the sender's intents — without a
+  row.
+  """
+  @spec announce(Context.t(), String.t(), term()) :: :ok
+  def announce(%Context{} = ctx, conversation_id, event),
+    do: broadcast(ctx, conversation_id, event)
+
+  @doc "The `tool_call` payloads of the calls a turn and its clones closed."
+  @spec closed_calls(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
+  def closed_calls(%Context{} = ctx, turn), do: TurnStorage.closed_calls(ctx, turn.id)
+
   @doc "One message row of the tenant."
   @spec message(Context.t(), String.t()) :: {:ok, row()} | {:error, term()}
   def message(%Context{} = ctx, message_id), do: Conversations.get_message(ctx, message_id)

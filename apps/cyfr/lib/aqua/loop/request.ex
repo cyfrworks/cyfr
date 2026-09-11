@@ -207,11 +207,7 @@ defmodule Aqua.Loop.Request do
   @spec build(keyword()) :: map()
   def build(opts) do
     caps = Keyword.get(opts, :capabilities, %{})
-
-    max_tokens =
-      [Keyword.get(opts, :max_tokens), Map.get(caps, :default_max_tokens), @default_max_tokens]
-      |> Enum.find(&(is_integer(&1) and &1 > 0))
-      |> min(Map.get(caps, :max_output_tokens) || @default_max_tokens)
+    max_tokens = max_tokens(caps, Keyword.get(opts, :max_tokens))
 
     provider_tools =
       if Keyword.get(opts, :native_search?, false) and
@@ -227,6 +223,18 @@ defmodule Aqua.Loop.Request do
       "provider_tools" => provider_tools,
       "max_tokens" => max_tokens
     }
+  end
+
+  @doc """
+  The output ceiling a request asks for under `caps`: the caller's, else
+  the catalyst's default, else the contract's, never past the model's
+  own ceiling.
+  """
+  @spec max_tokens(map(), pos_integer() | nil) :: pos_integer()
+  def max_tokens(caps, requested \\ nil) do
+    [requested, Map.get(caps, :default_max_tokens), @default_max_tokens]
+    |> Enum.find(&(is_integer(&1) and &1 > 0))
+    |> min(Map.get(caps, :max_output_tokens) || @default_max_tokens)
   end
 
   @doc """
@@ -378,7 +386,11 @@ defmodule Aqua.Loop.Request do
   defp shape({:shaped, message}, acc, _opts), do: [message | acc]
 
   defp shape(%Message{kind: "text"} = row, acc, opts) do
-    if row.author in [Message.agent_author(), Message.system_author()] do
+    # A clone's task is the soul speaking to the role: the role reads it
+    # as the person's words.
+    task? = Conversations.payload(row)["as"] == "task"
+
+    if row.author in [Message.agent_author(), Message.system_author()] and not task? do
       step = step_of(row)
       block = %{"type" => "text", "text" => row.content || ""}
 

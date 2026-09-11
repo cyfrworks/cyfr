@@ -180,7 +180,8 @@ defmodule Sanctum.Authority do
          resources: ingress_edge,
          chain: [profile.source_ref],
          depth: 0,
-         budget: Budget.new(source_node.limits.max_concurrent_tasks)
+         budget:
+           Budget.new(source_node.limits.max_concurrent_tasks, Keyword.get(opts, :budget_id))
        }}
     end
   end

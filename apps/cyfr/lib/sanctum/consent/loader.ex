@@ -71,6 +71,8 @@ defmodule Sanctum.Consent.Loader do
     result), required for the integrity evaluation
   - `:live_shape_digest` — the installed source's shape digest, nil = unknown
   - `:ceiling` — override the platform ceiling (tests only)
+  - `:budget_id` — the reservation the authority's budget names (a turn
+    resumed or taken over charges the one it was admitted with)
   - `:source` — override the configured `Sanctum.Consent.Source` (tests only)
   """
   @spec load_root(Context.t(), map(), keyword()) ::
@@ -441,6 +443,6 @@ defmodule Sanctum.Consent.Loader do
       activation: running.graph
     }
 
-    Authority.root(profile_map, blob, Keyword.take(opts, [:ceiling]))
+    Authority.root(profile_map, blob, Keyword.take(opts, [:ceiling, :budget_id]))
   end
 end

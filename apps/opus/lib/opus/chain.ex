@@ -394,7 +394,7 @@ defmodule Opus.Chain do
       ctx,
       profile,
       [live: live, source: source, shape_diff: shape_diff_fn(ctx, profile, source)] ++
-        Keyword.take(opts, [:ceiling, :live_shape_digest])
+        Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id])
     )
   end
 

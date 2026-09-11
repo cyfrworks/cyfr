@@ -37,10 +37,14 @@ defmodule Sanctum.Authority.Budget do
     :ok
   end
 
-  @doc "A fresh budget of `cap` slots, nothing in flight."
-  @spec new(non_neg_integer()) :: t()
-  def new(cap) when is_integer(cap) and cap >= 0 do
-    %__MODULE__{id: unique_id(), cap: cap}
+  @doc """
+  A budget of `cap` slots. A fresh id counts from nothing in flight; a
+  given `id` names an existing reservation, so a rebuilt authority
+  charges the one its turn was admitted with.
+  """
+  @spec new(non_neg_integer(), String.t() | nil) :: t()
+  def new(cap, id \\ nil) when is_integer(cap) and cap >= 0 do
+    %__MODULE__{id: id || unique_id(), cap: cap}
   end
 
   @doc "Take one slot; `{:error, :invoke_budget_exhausted}` when none is free."

@@ -16,6 +16,8 @@ defmodule Cyfr.Test.ScriptedExecution do
   - `%{...}` — the `model/chat@1` data the child answers, wrapped in the
     envelope `%{"status" => 200, "data" => data}`; the call completes.
   - `{:error, message}` — the child fails with `message`.
+  - `{:refuse, %{"type", "message"}}` — the child completes with the
+    contract's typed refusal in its envelope.
   - `{:sleep, ms}` — wait before the next item.
   - `{:probe, pid}` — send `{:scripted_probe, self(), execution_id}` to
     `pid` and wait for `:continue` (5 s), so a test can inspect what the
@@ -42,11 +44,19 @@ defmodule Cyfr.Test.ScriptedExecution do
     %{id: @agent, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
   end
 
-  @doc "Start the script agent: `ref:` the scripted reference, `script:` its items."
+  @doc "Start the script agent: `ref:` the scripted reference (or a list), `script:` its items."
   def start_link(opts) do
-    {:ok, key} = Compendium.Activation.key_for_ref(Keyword.fetch!(opts, :ref))
+    keys =
+      opts
+      |> Keyword.fetch!(:ref)
+      |> List.wrap()
+      |> Enum.map(fn ref ->
+        {:ok, key} = Compendium.Activation.key_for_ref(ref)
+        key
+      end)
+
     script = Keyword.get(opts, :script, [])
-    Agent.start_link(fn -> %{ref: key, script: script, calls: []} end, name: @agent)
+    Agent.start_link(fn -> %{refs: keys, script: script, calls: []} end, name: @agent)
   end
 
   @doc "Replace the remaining script."
@@ -113,7 +123,7 @@ defmodule Cyfr.Test.ScriptedExecution do
   defp scripted?(reference) do
     with pid when is_pid(pid) <- Process.whereis(@agent),
          {:ok, key} <- Compendium.Activation.key_for_ref(reference) do
-      Agent.get(pid, & &1.ref) == key
+      key in Agent.get(pid, & &1.refs)
     else
       _ -> false
     end
@@ -170,7 +180,7 @@ defmodule Cyfr.Test.ScriptedExecution do
           Agent.update(@agent, &%{&1 | calls: [%{execution_id: id, input: input} | &1.calls]})
 
           try do
-            answer(ctx, id, attempt, started_at, false)
+            answer(ctx, id, attempt, started_at, false, input)
           after
             slot().release(token)
           end
@@ -199,6 +209,26 @@ defmodule Cyfr.Test.ScriptedExecution do
         []
     end
   end
+
+  # The catalyst's own answers about itself are not the script's: a
+  # capability probe is answered the same way every time.
+  defp answer(ctx, id, attempt, started_at, _crash_after?, %{"operation" => "describe"}) do
+    complete(ctx, id, attempt, started_at, %{
+      "contracts" => ["model/chat@1"],
+      "provider" => "scripted",
+      "tools" => true,
+      "provider_tools" => [],
+      "media_types" => ["image/png"],
+      "streaming" => false,
+      "defaults" => %{}
+    })
+  end
+
+  defp answer(ctx, id, attempt, started_at, _crash_after?, %{"operation" => "models"}),
+    do: complete(ctx, id, attempt, started_at, %{"models" => []})
+
+  defp answer(ctx, id, attempt, started_at, crash_after?, _input),
+    do: answer(ctx, id, attempt, started_at, crash_after?)
 
   defp answer(ctx, id, attempt, started_at, crash_after?) do
     case take_item() do
@@ -234,31 +264,49 @@ defmodule Cyfr.Test.ScriptedExecution do
         fail(ctx, id, attempt, started_at, message)
         {:error, message}
 
+      {:refuse, %{"type" => _} = error} ->
+        refuse(ctx, id, attempt, started_at, error)
+
       %{} = data ->
-        envelope = %{"status" => 200, "data" => data}
-        now = DateTime.utc_now()
-
-        {:ok, _} =
-          Arca.Execution.record_end(
-            ctx,
-            id,
-            "completed",
-            %{
-              completed_at: now,
-              duration_ms: DateTime.diff(now, started_at, :millisecond),
-              output: Jason.encode!(envelope)
-            },
-            attempt
-          )
-
+        result = complete(ctx, id, attempt, started_at, data)
         if crash_after?, do: Process.exit(self(), :kill)
+        result
+    end
+  end
 
+  # The catalyst's typed refusal: the run completes, the envelope refuses.
+  defp refuse(ctx, id, attempt, started_at, error) do
+    envelope = %{"status" => 429, "error" => error}
+    written(ctx, id, attempt, started_at, envelope)
+  end
+
+  defp complete(ctx, id, attempt, started_at, data) do
+    envelope = %{"status" => 200, "data" => data}
+    written(ctx, id, attempt, started_at, envelope)
+  end
+
+  # The terminal write; a row that is no longer running (a cancel, a
+  # sweep, a test that ended) answers a refusal instead of a crash.
+  defp written(ctx, id, attempt, started_at, envelope) do
+    now = DateTime.utc_now()
+
+    case Arca.Execution.record_end(
+           ctx,
+           id,
+           "completed",
+           %{
+             completed_at: now,
+             duration_ms: DateTime.diff(now, started_at, :millisecond),
+             output: Jason.encode!(envelope)
+           },
+           attempt
+         ) do
+      {:ok, _} ->
         {:ok,
-         %{
-           status: :completed,
-           output: envelope,
-           metadata: %{execution_id: id, attempt: attempt}
-         }}
+         %{status: :completed, output: envelope, metadata: %{execution_id: id, attempt: attempt}}}
+
+      {:error, reason} ->
+        {:error, {:not_recorded, reason}}
     end
   end
 

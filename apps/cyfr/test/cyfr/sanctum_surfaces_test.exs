@@ -40,9 +40,11 @@ defmodule Cyfr.SanctumSurfacesTest do
     # `Sanctum.JCS` is the canonical form a card's proposal is digested in
     # (`Aqua.Loop.Policy.proposal_digest/1`) — the same canon the consent
     # digests use, so a decision consumes exactly what was shown.
+    # `Sanctum.Limits` is the loop's deadline: the timeout the authority's
+    # consented node limits carry, parsed once per turn.
     "aqua" => ~w(
       Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.JCS
-      Sanctum.Notify Sanctum.Provisioning Sanctum.Sanitizer Sanctum.Tenancy
+      Sanctum.Limits Sanctum.Notify Sanctum.Provisioning Sanctum.Sanitizer Sanctum.Tenancy
     ),
     # `Sanctum.Provisioning` is `Compendium.MCP.AquaTool` and
     # `ComponentTool`'s list action alone — the first-need hook. A group

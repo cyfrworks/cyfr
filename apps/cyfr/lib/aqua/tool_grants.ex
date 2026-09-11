@@ -263,6 +263,10 @@ defmodule Aqua.ToolGrants do
     |> MapSet.difference(denied)
   end
 
+  @doc "The grant scopes, as the rows spell them."
+  @spec scopes() :: [String.t()]
+  def scopes, do: @scopes
+
   @doc """
   Record a decision. `scope` is `"conversation"` or `"agent"`, `effect`
   `"allow"` or `"deny"`. A standing allow for a destructive or external
