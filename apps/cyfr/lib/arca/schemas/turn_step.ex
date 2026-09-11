@@ -29,5 +29,15 @@ defmodule Arca.Schemas.TurnStep do
     field :outcome, :string
     field :started_at, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec
+    field :result_message_id, :string
+    field :proposal_digest, :string
+    field :request_digest, :string
+    field :usage, :string
+    field :excluded, :string
+    field :recovery, :string
+    field :generation, :integer, default: 0
+    field :cancel_requested_at, :utc_datetime_usec
+    field :child_execution_id, :string
+    field :error, :string
   end
 end

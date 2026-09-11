@@ -35,6 +35,9 @@ defmodule Arca.TenantTables do
   # fails the boot rather than surviving erasure silently.
   @roster [
     "execution_events",
+    "budget_charges",
+    "budget_reservations",
+    "execution_attempts",
     "approvals",
     "turn_steps",
     "turns",

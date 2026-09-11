@@ -3,20 +3,57 @@
 
 defmodule Arca.TurnStorage do
   @moduledoc """
-  The `turns` rows: accepted work in a conversation and how it ended.
+  The durable turn: `turns`, `turn_steps`, `approvals`, the message rows
+  a turn writes and the events it records, each transition one
+  transaction.
 
-  Keyed by the execution running the turn once accepted, which is what
-  every runner path holds when the turn ends. A write that fails is
-  reported, never raised: the turn's bookkeeping must not take the turn
-  down with it.
+  A turn is accepted with its message (`accept/3`), started once its root
+  execution and pins exist (`start/3`), and from then on every write is
+  fenced: the caller names the turn's `fence`, and a runner whose fence
+  moved (`supersede/2`, `takeover/3`) is refused `{:error, :superseded}`.
+  A step is proposed before its effect (`record_response/4`), flipped to
+  `dispatched` in its own commit (`dispatch_step/3`), and closed with its
+  result row, outcome and event together (`close_step/4`). Pause and
+  resume flip the turn, its root attempt and its root execution in one
+  transaction; `finish/4` is the one terminal write.
+
+  Multi-row writes that append a message run under `with_seq_retry/1`:
+  the `(conversation_id, seq)` race surfaces as a changeset raise inside
+  the transaction and the whole transaction is retried, since a retry
+  inside an aborted Postgres transaction cannot land.
+
+  The old `accept/2`, `close/4` and `list/3` serve the runner that keys
+  turns by execution until the loop replaces it.
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [from: 2, where: 3]
 
-  alias Arca.Schemas.Turn
+  alias Arca.Schemas.{Approval, Conversation, Message, Turn, TurnStep}
   alias Sanctum.Context
 
-  @statuses ["accepted", "completed", "failed", "cancelled"]
+  @statuses ["accepted", "running", "paused", "completed", "failed", "cancelled", "uncertain"]
+  @open ["accepted", "running", "paused"]
+  @terminal ["completed", "failed", "cancelled", "uncertain"]
+  @step_kinds ["model", "tool", "approval", "clone", "launch"]
+  @outcomes ["ok", "error", "denied", "skipped", "cancelled", "uncertain"]
+  @decisions ["approved", "declined", "expired", "error"]
+  @recovery_cap 3
+
+  @doc "Every status a turn can carry."
+  def statuses, do: @statuses
+
+  @doc "The statuses of a turn that still owns work."
+  def open_statuses, do: @open
+
+  @doc "The statuses of a turn that is over."
+  def terminal_statuses, do: @terminal
+
+  @doc "How many automatic recoveries a turn gets before it is `uncertain`."
+  def recovery_cap, do: @recovery_cap
+
+  # ---------------------------------------------------------------------------
+  # The old runner's bookkeeping, keyed by execution
+  # ---------------------------------------------------------------------------
 
   @doc """
   Record a turn the runner accepted, for the execution now running it. The
@@ -31,7 +68,7 @@ defmodule Arca.TurnStorage do
       conversation_id = Map.fetch!(attrs, :conversation_id)
 
       conversation =
-        Arca.Repo.get_by(Arca.Schemas.Conversation, id: conversation_id, athanor_id: athanor_id)
+        Arca.Repo.get_by(Conversation, id: conversation_id, athanor_id: athanor_id)
 
       if is_nil(conversation), do: throw(:conversation_not_found)
 
@@ -60,7 +97,7 @@ defmodule Arca.TurnStorage do
   @spec close(Context.t(), String.t(), String.t(), String.t() | nil) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def close(%Context{} = ctx, execution_id, status, error \\ nil)
-      when is_binary(execution_id) and status in @statuses do
+      when is_binary(execution_id) and status in ["completed", "failed", "cancelled"] do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.close", fn ->
       athanor_id = Context.athanor!(ctx)
 
@@ -94,5 +131,1578 @@ defmodule Arca.TurnStorage do
          )
        )}
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Acceptance
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Accept a message, atomically with the work it opens. `attrs`:
+
+  - `:message` — the row: `:author`, `:content`, `:payload`, optional
+    `:id` (a caller-minted id, so attachments stored under it are found)
+    and `:client_id` (the sender's retry identity).
+  - `:turn` — `%{orchestrator, requested_by, model, options}` to open an
+    `accepted` turn keyed by the message; `nil` for room content.
+  - `:steer_turn_id` — attach the message to a live turn instead.
+
+  Answers `{:ok, %{message: row, turn: row | nil}}`. A `client_id` this
+  conversation already accepted answers `{:error, :duplicate_client_id}`
+  (the caller reads the existing acceptance with `accepted/3`); a
+  message that already opened a turn answers `{:error, :turn_exists}`.
+  """
+  @spec accept_message(Context.t(), String.t(), map()) ::
+          {:ok, %{message: Message.t(), turn: Turn.t() | nil}} | {:error, term()}
+  def accept_message(%Context{} = ctx, conversation_id, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.accept_message", fn ->
+      athanor_id = Context.athanor!(ctx)
+      message = Map.fetch!(attrs, :message)
+
+      with_seq_retry(fn ->
+        Arca.Repo.transaction(fn ->
+          conv = conversation!(athanor_id, conversation_id)
+
+          row =
+            Arca.ConversationStorage.insert_message!(
+              ctx,
+              conv,
+              Map.put(message, :turn_id, Map.get(attrs, :steer_turn_id))
+            )
+
+          turn =
+            case Map.get(attrs, :turn) do
+              nil ->
+                case Map.get(attrs, :steer_turn_id) do
+                  nil -> nil
+                  steer_id -> turn!(athanor_id, steer_id)
+                end
+
+              %{} = t ->
+                open_turn!(athanor_id, conv, row, t)
+            end
+
+          %{message: %{row | turn_id: turn && turn.id}, turn: turn}
+        end)
+      end)
+      |> case do
+        {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+          cond do
+            unique?(errors, :conversation_id, "client_id") -> {:error, :duplicate_client_id}
+            unique?(errors, :conversation_id, "message_id") -> {:error, :turn_exists}
+            true -> {:error, changeset}
+          end
+
+        other ->
+          other
+      end
+    end)
+  end
+
+  @doc "The acceptance a sender's `client_id` already produced: its message and turn."
+  @spec accepted(Context.t(), String.t(), String.t()) ::
+          {:ok, %{message: Message.t(), turn: Turn.t() | nil}} | {:error, term()}
+  def accepted(%Context{} = ctx, conversation_id, client_id) do
+    with {:ok, message} <-
+           Arca.ConversationStorage.get_by_client_id(ctx, conversation_id, client_id) do
+      Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.accepted", fn ->
+        athanor_id = Context.athanor!(ctx)
+
+        turn =
+          Arca.Repo.one(
+            from(t in Turn,
+              where: t.athanor_id == ^athanor_id and t.message_id == ^message.id
+            )
+          ) ||
+            (message.turn_id &&
+               Arca.Repo.one(
+                 from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^message.turn_id)
+               ))
+
+        {:ok, %{message: message, turn: turn}}
+      end)
+    end
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp open_turn!(athanor_id, %Conversation{} = conv, %Message{} = row, attrs) do
+    now = DateTime.utc_now()
+
+    turn =
+      Arca.Repo.insert!(
+        %Turn{}
+        |> Ecto.Changeset.change(%{
+          id: Cyfr.UUID7.generate_id("trn"),
+          athanor_id: athanor_id,
+          conversation_id: conv.id,
+          message_id: row.id,
+          orchestrator: Map.get(attrs, :orchestrator),
+          requested_by: Map.get(attrs, :requested_by),
+          model: Map.get(attrs, :model),
+          options: encode(Map.get(attrs, :options)),
+          fence: new_fence(),
+          runner_id: Cyfr.Boot.id(),
+          status: "accepted",
+          accepted_at: now
+        })
+        |> Ecto.Changeset.unique_constraint([:conversation_id, :message_id])
+      )
+
+    # The initiating message belongs to its turn: attached, it is read by
+    # this turn alone and by no other turn's projection.
+    {1, _} =
+      from(m in Message, where: m.athanor_id == ^athanor_id and m.id == ^row.id)
+      |> Arca.Repo.update_all(set: [turn_id: turn.id])
+
+    conv
+    |> Conversation.changeset(%{
+      turn_seq: (conv.turn_seq || 0) + 1,
+      orchestrator: Map.get(attrs, :orchestrator)
+    })
+    |> Arca.Repo.update!()
+
+    turn
+  end
+
+  # ---------------------------------------------------------------------------
+  # Lifecycle
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Start an accepted turn: `accepted → running` with its root execution,
+  attempt, budget and pins (`:root_execution_id`, `:attempt`,
+  `:budget_id`, `:profile_id`, `:consent_id`, `:agent_revision_digest`,
+  `:agent_capability_digest`), and the consumption boundary set to the
+  highest seq the turn may read now. Event `turn.started`.
+  """
+  @spec start(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def start(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.start", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        turn = turn!(athanor_id, turn_id)
+        window = boundary(athanor_id, turn)
+
+        sets = [
+          status: "running",
+          root_execution_id: Map.get(attrs, :root_execution_id),
+          attempt: Map.get(attrs, :attempt),
+          budget_id: Map.get(attrs, :budget_id),
+          profile_id: Map.get(attrs, :profile_id),
+          consent_id: Map.get(attrs, :consent_id),
+          agent_revision_digest: Map.get(attrs, :agent_revision_digest),
+          agent_capability_digest: Map.get(attrs, :agent_capability_digest),
+          runner_id: Cyfr.Boot.id(),
+          window_upto_seq: window
+        ]
+
+        moved =
+          from(t in Turn,
+            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.status == "accepted"
+          )
+          |> fenced(attrs)
+          |> Arca.Repo.update_all(set: sets)
+          |> elem(0)
+
+        if moved != 1, do: Arca.Repo.rollback(:not_accepted)
+        turn = turn!(athanor_id, turn_id)
+        event!(athanor_id, turn, "turn.started", nil, %{})
+        turn
+      end)
+    end)
+  end
+
+  @doc """
+  Pause a running turn: the turn, its root attempt and its root execution
+  leave `running` together. `attrs`: `:fence`, `:reason`
+  (`"approval" | "launch"`), `:launch_step_id`. The running interval is
+  added to `active_ms`. Event `turn.paused`.
+  """
+  @spec pause(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def pause(%Context{} = ctx, turn_id, attrs \\ %{}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pause", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        turn = turn!(athanor_id, turn_id)
+        check_fence!(turn, attrs)
+        if turn.status != "running", do: Arca.Repo.rollback(:not_running)
+
+        ran = Arca.ExecutionAttempts.pause!(athanor_id, turn.attempt) || 0
+        execution_status!(athanor_id, turn.root_execution_id, "running", "paused")
+        now = DateTime.utc_now()
+
+        {1, _} =
+          from(t in Turn,
+            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.status == "running"
+          )
+          |> Arca.Repo.update_all(
+            set: [
+              status: "paused",
+              paused_at: now,
+              paused_reason: Map.get(attrs, :reason, "approval"),
+              launch_step_id: Map.get(attrs, :launch_step_id),
+              active_ms: turn.active_ms + ran
+            ]
+          )
+
+        turn = turn!(athanor_id, turn_id)
+        event!(athanor_id, turn, "turn.paused", nil, %{"reason" => turn.paused_reason})
+        turn
+      end)
+    end)
+  end
+
+  @doc """
+  Resume a paused turn with a fresh lease: the turn, its root attempt and
+  its root execution return to `running` together. Event `turn.resumed`.
+  """
+  @spec resume(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def resume(%Context{} = ctx, turn_id, attrs \\ %{}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.resume", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        turn = turn!(athanor_id, turn_id)
+        check_fence!(turn, attrs)
+        if turn.status != "paused", do: Arca.Repo.rollback(:not_paused)
+
+        until = Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
+
+        if Arca.ExecutionAttempts.resume!(athanor_id, turn.attempt, until) != 1,
+          do: Arca.Repo.rollback(:attempt_not_paused)
+
+        execution_status!(athanor_id, turn.root_execution_id, "paused", "running")
+
+        {1, _} =
+          from(t in Turn,
+            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.status == "paused"
+          )
+          |> Arca.Repo.update_all(
+            set: [status: "running", paused_at: nil, paused_reason: nil, launch_step_id: nil]
+          )
+
+        turn = turn!(athanor_id, turn_id)
+        event!(athanor_id, turn, "turn.resumed", nil, %{})
+        turn
+      end)
+    end)
+  end
+
+  @doc """
+  End a turn: the one terminal transaction. `status` is
+  `completed | failed | cancelled | uncertain`; `attrs`: `:fence`,
+  `:error`. The root attempt is closed with the matching outcome, the
+  root execution leaves `running`/`paused`, the reservation is released
+  and the open running interval is added to `active_ms`. A turn already
+  over is answered `{:error, :already_finished}`; a turn with no root yet
+  (still `accepted`) closes on its own. Event `turn.<status>`.
+  """
+  @spec finish(Context.t(), String.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def finish(%Context{} = ctx, turn_id, status, attrs \\ %{}) when status in @terminal do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.finish", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        turn = turn!(athanor_id, turn_id)
+        check_fence!(turn, attrs)
+        if turn.status in @terminal, do: Arca.Repo.rollback(:already_finished)
+
+        ran =
+          if turn.attempt do
+            {attempt_state, outcome} = attempt_end(status)
+            Arca.ExecutionAttempts.close!(athanor_id, turn.attempt, attempt_state, outcome) || 0
+          else
+            0
+          end
+
+        if turn.root_execution_id do
+          execution_status!(
+            athanor_id,
+            turn.root_execution_id,
+            ["running", "paused"],
+            status_of(status),
+            error: Map.get(attrs, :error)
+          )
+
+          Arca.BudgetReservations.close!(athanor_id, turn.root_execution_id)
+        end
+
+        {1, _} =
+          from(t in Turn,
+            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.status in ^@open
+          )
+          |> Arca.Repo.update_all(
+            set: [
+              status: status,
+              error: Map.get(attrs, :error),
+              ended_at: DateTime.utc_now(),
+              active_ms: turn.active_ms + ran,
+              paused_at: nil,
+              paused_reason: nil,
+              launch_step_id: nil
+            ]
+          )
+
+        turn = turn!(athanor_id, turn_id)
+        event!(athanor_id, turn, "turn." <> status, nil, %{"error" => Map.get(attrs, :error)})
+        turn
+      end)
+    end)
+  end
+
+  @doc """
+  Take over a running turn another runner lost: the one place a
+  successor attempt is opened. The predecessor is retired, the successor
+  opened with the next fence and the pointer moved, the turn's `fence`
+  renewed, `recovery_attempts` counted and the predecessor's unaccounted
+  running interval added. Refused `{:error, :recovery_exhausted}` past
+  the cap and `{:error, :not_open}` for a turn that is over.
+  """
+  @spec takeover(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def takeover(%Context{} = ctx, turn_id, attrs \\ %{}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.takeover", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        turn = turn!(athanor_id, turn_id)
+        if turn.status not in ["running", "paused"], do: Arca.Repo.rollback(:not_open)
+        if turn.recovery_attempts >= @recovery_cap, do: Arca.Repo.rollback(:recovery_exhausted)
+        if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
+
+        %{attempt: successor, ran_ms: ran} =
+          Arca.ExecutionAttempts.takeover!(athanor_id, turn.root_execution_id,
+            runner_id: Cyfr.Boot.id(),
+            lease_until: Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
+          )
+
+        execution_status!(
+          athanor_id,
+          turn.root_execution_id,
+          ["running", "paused", "failed"],
+          "running"
+        )
+
+        {1, _} =
+          from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+          |> Arca.Repo.update_all(
+            set: [
+              status: "running",
+              attempt: successor.attempt,
+              fence: new_fence(),
+              runner_id: Cyfr.Boot.id(),
+              recovery_attempts: turn.recovery_attempts + 1,
+              active_ms: turn.active_ms + ran,
+              paused_at: nil,
+              paused_reason: nil,
+              launch_step_id: nil
+            ]
+          )
+
+        turn = turn!(athanor_id, turn_id)
+        event!(athanor_id, turn, "turn.recovered", nil, %{"attempt" => successor.attempt})
+        turn
+      end)
+    end)
+  end
+
+  @doc """
+  Renew the turn's fence and mark every dispatched step cancel-requested,
+  before its loop is stopped: a later write from the old fence and a
+  later admission of those steps are refused. Answers the turn with its
+  new fence.
+  """
+  @spec supersede(Context.t(), String.t()) :: {:ok, Turn.t()} | {:error, term()}
+  def supersede(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.supersede", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        now = DateTime.utc_now()
+
+        {1, _} =
+          from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+          |> Arca.Repo.update_all(set: [fence: new_fence()])
+
+        from(s in TurnStep,
+          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
+          where: s.dispatch_state == "dispatched" and is_nil(s.cancel_requested_at)
+        )
+        |> Arca.Repo.update_all(set: [cancel_requested_at: now])
+
+        turn!(athanor_id, turn_id)
+      end)
+    end)
+  end
+
+  @doc "Rewrite the pins of a turn (a clone records its own)."
+  @spec update_pins(Context.t(), String.t(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def update_pins(%Context{} = ctx, turn_id, pins) when is_map(pins) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.update_pins", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      sets =
+        pins
+        |> Map.take([:profile_id, :consent_id, :agent_revision_digest, :agent_capability_digest])
+        |> Map.to_list()
+
+      {count, _} =
+        from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+        |> Arca.Repo.update_all(set: sets)
+
+      {:ok, count}
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Steps
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Record one step of a turn at the next `seq`. `attrs`: `:kind`,
+  `:tool`, `:action`, `:idempotency_key`, `:authority_digest`,
+  `:request_digest`, `:proposal_digest`, `:recovery`, `:excluded` (a
+  list), `:message_id`, `:child_execution_id`, `:dispatch_state`
+  (default `proposed`), `:fence`.
+  """
+  @spec put_step(Context.t(), String.t(), map()) :: {:ok, TurnStep.t()} | {:error, term()}
+  def put_step(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.put_step", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        turn = turn!(athanor_id, turn_id)
+        check_fence!(turn, attrs)
+        insert_step!(athanor_id, turn, attrs)
+      end)
+    end)
+  end
+
+  @doc """
+  Persist a model response before any of its calls run: the model step
+  closes with its usage, the reply and every tool call become message
+  rows, every call becomes a `proposed` step, and one event records it.
+  `response`: `:text`, `:usage`, `:stop_reason`, `:tool_calls` — each
+  `%{tool_call_id, name, tool, action, arguments, provider_data, kind,
+  recovery, child_execution_id}`; `:fence`. Answers
+  `{:ok, %{text: row | nil, calls: [%{message: row, step: step}]}}`.
+  """
+  @spec record_response(Context.t(), String.t(), String.t(), map()) ::
+          {:ok, %{text: Message.t() | nil, calls: [map()]}} | {:error, term()}
+  def record_response(%Context{} = ctx, turn_id, model_step_id, response)
+      when is_map(response) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.record_response", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      with_seq_retry(fn ->
+        Arca.Repo.transaction(fn ->
+          turn = turn!(athanor_id, turn_id)
+          check_fence!(turn, response)
+          conv = conversation!(athanor_id, turn.conversation_id)
+          now = DateTime.utc_now()
+
+          text =
+            case Map.get(response, :text) do
+              nil ->
+                nil
+
+              "" ->
+                nil
+
+              content ->
+                Arca.ConversationStorage.insert_message!(ctx, conv, %{
+                  author: Message.agent_author(),
+                  kind: "text",
+                  content: content,
+                  payload: %{"step_id" => model_step_id},
+                  turn_id: turn_id,
+                  execution_id: turn.root_execution_id
+                })
+            end
+
+          {1, _} =
+            from(s in TurnStep,
+              where: s.athanor_id == ^athanor_id and s.id == ^model_step_id,
+              where: s.turn_id == ^turn_id and s.dispatch_state in ["proposed", "dispatched"]
+            )
+            |> Arca.Repo.update_all(
+              set: [
+                dispatch_state: "closed",
+                outcome: "ok",
+                usage: encode(Map.get(response, :usage)),
+                result_message_id: text && text.id,
+                ended_at: now
+              ]
+            )
+
+          calls =
+            response
+            |> Map.get(:tool_calls, [])
+            |> Enum.map(fn call ->
+              row =
+                Arca.ConversationStorage.insert_message!(ctx, conv, %{
+                  author: Message.agent_author(),
+                  kind: "tool_call",
+                  content: Map.get(call, :name, ""),
+                  payload:
+                    %{
+                      "tool_call_id" => Map.get(call, :tool_call_id),
+                      "name" => Map.get(call, :name),
+                      "tool" => Map.get(call, :tool),
+                      "action" => Map.get(call, :action),
+                      "arguments" => Map.get(call, :arguments),
+                      "provider_data" => Map.get(call, :provider_data),
+                      "kind" => Map.get(call, :kind),
+                      "step_id" => model_step_id
+                    }
+                    |> reject_nil(),
+                  turn_id: turn_id,
+                  execution_id: turn.root_execution_id
+                })
+
+              step =
+                insert_step!(athanor_id, turn, %{
+                  kind: Map.get(call, :step_kind, "tool"),
+                  tool: Map.get(call, :tool),
+                  action: Map.get(call, :action),
+                  idempotency_key: Map.get(call, :idempotency_key),
+                  proposal_digest: Map.get(call, :proposal_digest),
+                  recovery: Map.get(call, :recovery),
+                  message_id: row.id,
+                  child_execution_id: Map.get(call, :child_execution_id),
+                  authority_digest: Map.get(call, :authority_digest)
+                })
+
+              %{message: row, step: step}
+            end)
+
+          event!(athanor_id, turn, "model.completed", model_step_id, %{
+            "usage" => Map.get(response, :usage),
+            "stop_reason" => Map.get(response, :stop_reason),
+            "calls" => length(calls)
+          })
+
+          %{text: text, calls: calls}
+        end)
+      end)
+    end)
+  end
+
+  @doc """
+  Flip a proposed step to `dispatched` in its own commit. Answers the
+  step, or `{:error, :not_proposed}` when it was not proposed (dispatched
+  already, closed, or cancel-requested).
+  """
+  @spec dispatch_step(Context.t(), String.t(), map()) :: {:ok, TurnStep.t()} | {:error, term()}
+  def dispatch_step(%Context{} = ctx, step_id, attrs \\ %{}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.dispatch_step", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        step = step!(athanor_id, step_id)
+        turn = turn!(athanor_id, step.turn_id)
+        check_fence!(turn, attrs)
+
+        {count, _} =
+          from(s in TurnStep,
+            where: s.athanor_id == ^athanor_id and s.id == ^step_id,
+            where: s.dispatch_state == "proposed" and is_nil(s.cancel_requested_at)
+          )
+          |> Arca.Repo.update_all(
+            set: [dispatch_state: "dispatched", started_at: DateTime.utc_now()]
+          )
+
+        if count != 1, do: Arca.Repo.rollback(:not_proposed)
+        step!(athanor_id, step_id)
+      end)
+    end)
+  end
+
+  @doc """
+  Close a step with its result: the `tool_result` row, the step's
+  `outcome`, `execution_id` and error, and the `step.closed` event, in
+  one transaction. `attrs`: `:result` (`%{content, payload}` for the
+  row; omitted for a step that produced none), `:execution_id`, `:error`,
+  `:fence`. A step closes from `dispatched`, or from `proposed` for
+  `denied` and `skipped`.
+  """
+  @spec close_step(Context.t(), String.t(), String.t(), map()) ::
+          {:ok, %{step: TurnStep.t(), result: Message.t() | nil}} | {:error, term()}
+  def close_step(%Context{} = ctx, step_id, outcome, attrs \\ %{}) when outcome in @outcomes do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.close_step", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      with_seq_retry(fn ->
+        Arca.Repo.transaction(fn ->
+          step = step!(athanor_id, step_id)
+          turn = turn!(athanor_id, step.turn_id)
+          check_fence!(turn, attrs)
+          close_step!(ctx, athanor_id, turn, step, outcome, attrs)
+        end)
+      end)
+    end)
+  end
+
+  @doc "Mark a dispatched step whose effect cannot be known `uncertain`."
+  @spec mark_step_uncertain(Context.t(), String.t(), String.t() | nil) ::
+          {:ok, TurnStep.t()} | {:error, term()}
+  def mark_step_uncertain(%Context{} = ctx, step_id, reason \\ nil) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.mark_step_uncertain", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        step = step!(athanor_id, step_id)
+        turn = turn!(athanor_id, step.turn_id)
+
+        {count, _} =
+          from(s in TurnStep,
+            where: s.athanor_id == ^athanor_id and s.id == ^step_id,
+            where: s.dispatch_state == "dispatched"
+          )
+          |> Arca.Repo.update_all(
+            set: [
+              dispatch_state: "uncertain",
+              outcome: "uncertain",
+              error: reason,
+              ended_at: DateTime.utc_now()
+            ]
+          )
+
+        if count != 1, do: Arca.Repo.rollback(:not_dispatched)
+        event!(athanor_id, turn, "step.uncertain", step_id, %{"reason" => reason})
+        step!(athanor_id, step_id)
+      end)
+    end)
+  end
+
+  @doc """
+  Close every unstarted step of a turn as `skipped` with a synthetic
+  result, and invalidate their pending approvals. Answers the steps
+  skipped.
+  """
+  @spec skip_steps(Context.t(), String.t(), String.t(), map()) ::
+          {:ok, [TurnStep.t()]} | {:error, term()}
+  def skip_steps(%Context{} = ctx, turn_id, reason, attrs \\ %{}) when is_binary(reason) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.skip_steps", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      with_seq_retry(fn ->
+        Arca.Repo.transaction(fn ->
+          turn = turn!(athanor_id, turn_id)
+          check_fence!(turn, attrs)
+
+          steps =
+            Arca.Repo.all(
+              from(s in TurnStep,
+                where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
+                where: s.dispatch_state == "proposed",
+                order_by: [asc: s.seq]
+              )
+            )
+
+          Enum.map(steps, fn step ->
+            if step.approval_id do
+              from(a in Approval,
+                where: a.athanor_id == ^athanor_id and a.id == ^step.approval_id,
+                where: a.status == "pending"
+              )
+              |> Arca.Repo.update_all(
+                set: [status: "invalidated", decided_at: DateTime.utc_now()]
+              )
+
+              from(m in Message,
+                where: m.athanor_id == ^athanor_id and m.approval_id == ^step.approval_id,
+                where: m.status == "pending"
+              )
+              |> Arca.Repo.update_all(set: [status: "invalidated"])
+            end
+
+            %{step: closed} =
+              close_step!(ctx, athanor_id, turn, step, "skipped", %{
+                result: %{content: reason, payload: %{"skipped" => true}}
+              })
+
+            closed
+          end)
+        end)
+      end)
+    end)
+  end
+
+  @doc "Rewrite a step's `excluded` list and other bookkeeping (`:excluded`, `:request_digest`, `:error`)."
+  @spec update_step(Context.t(), String.t(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def update_step(%Context{} = ctx, step_id, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.update_step", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      sets =
+        attrs
+        |> Map.take([:excluded, :request_digest, :error, :authority_digest])
+        |> Enum.map(fn
+          {:excluded, list} -> {:excluded, encode(list)}
+          other -> other
+        end)
+
+      {count, _} =
+        from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step_id)
+        |> Arca.Repo.update_all(set: sets)
+
+      {:ok, count}
+    end)
+  end
+
+  @doc """
+  The step barrier, run inside admission's transaction: bind the child
+  execution to its step while the step is dispatched, on this generation,
+  not cancel-requested, and the child id is the one the step pre-minted.
+  Answers the rows bound — 0 when admission must abort.
+  """
+  @spec bind_child!(String.t(), String.t(), non_neg_integer(), String.t()) :: non_neg_integer()
+  # arca:db-raise-ok inside the caller's transaction
+  def bind_child!(athanor_id, step_id, generation, execution_id) when is_binary(athanor_id) do
+    {count, _} =
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.id == ^step_id,
+        where: s.generation == ^generation and s.dispatch_state == "dispatched",
+        where: is_nil(s.cancel_requested_at) and s.child_execution_id == ^execution_id
+      )
+      |> Arca.Repo.update_all(set: [execution_id: execution_id])
+
+    count
+  end
+
+  @doc """
+  Open the next generation of a step for a replay-safe re-dispatch: the
+  old generation is cancel-marked so its late admission is refused, and
+  the step returns to `proposed` with `generation + 1` and a fresh child
+  execution id. Answers the step.
+  """
+  @spec next_generation(Context.t(), String.t(), map()) :: {:ok, TurnStep.t()} | {:error, term()}
+  def next_generation(%Context{} = ctx, step_id, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.next_generation", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        step = step!(athanor_id, step_id)
+
+        {1, _} =
+          from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step_id)
+          |> Arca.Repo.update_all(
+            set: [
+              generation: step.generation + 1,
+              dispatch_state: "proposed",
+              cancel_requested_at: nil,
+              child_execution_id: Map.fetch!(attrs, :child_execution_id),
+              execution_id: nil,
+              started_at: nil
+            ]
+          )
+
+        step!(athanor_id, step_id)
+      end)
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Approvals
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Open an approval for a proposed step: the `approvals` row, the card
+  message row that references it, and the step's `approval_id`, in one
+  transaction. `attrs`: `:proposal_digest`, `:expires_at`, `:scope`,
+  `:card` (`%{content, payload}` — the payload the console card reads),
+  `:fence`. Answers `{:ok, %{approval: row, card: row}}`.
+  """
+  @spec open_approval(Context.t(), String.t(), map()) ::
+          {:ok, %{approval: Approval.t(), card: Message.t()}} | {:error, term()}
+  def open_approval(%Context{} = ctx, step_id, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_approval", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      with_seq_retry(fn ->
+        Arca.Repo.transaction(fn ->
+          step = step!(athanor_id, step_id)
+          turn = turn!(athanor_id, step.turn_id)
+          check_fence!(turn, attrs)
+          conv = conversation!(athanor_id, turn.conversation_id)
+          card = Map.get(attrs, :card, %{})
+          approval_id = Map.get(attrs, :id) || Cyfr.UUID7.generate_id("apr")
+          now = DateTime.utc_now()
+
+          card_row =
+            Arca.ConversationStorage.insert_message!(ctx, conv, %{
+              id: Map.get(card, :id),
+              author: Message.agent_author(),
+              kind: "approval",
+              content: Map.get(card, :content, ""),
+              payload: Map.get(card, :payload),
+              status: "pending",
+              turn_id: turn.id,
+              approval_id: approval_id,
+              execution_id: turn.root_execution_id
+            })
+
+          approval =
+            Arca.Repo.insert!(%Approval{
+              id: approval_id,
+              athanor_id: athanor_id,
+              turn_id: turn.id,
+              step_id: step.id,
+              message_id: card_row.id,
+              conversation_id: turn.conversation_id,
+              status: "pending",
+              scope: Map.get(attrs, :scope),
+              proposal_digest: Map.get(attrs, :proposal_digest, ""),
+              expires_at: Map.get(attrs, :expires_at),
+              inserted_at: now
+            })
+
+          {1, _} =
+            from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step_id)
+            |> Arca.Repo.update_all(set: [approval_id: approval_id])
+
+          event!(athanor_id, turn, "approval.opened", step_id, %{"approval_id" => approval_id})
+          %{approval: approval, card: card_row}
+        end)
+      end)
+    end)
+  end
+
+  @doc """
+  Resolve a pending approval in one transaction. `decision` is
+  `approved | declined | expired | error`; `attrs`: `:decided_by`,
+  `:scope`, `:resolution_kind` (`continue | launch | denied | expired`),
+  `:resolution` (a map, stored as JSON), `:denied_result`
+  (`%{content, payload}` — the `tool_result` row a declined, expired or
+  errored step leaves), `:grants` (rows for `Arca.ToolGrantStorage.put/1`,
+  written here so the standing answer lands with the decision), `:fence`.
+  An approved step returns to `proposed` (its kind becomes `launch` for a
+  launch); any other decision closes it `denied`. Answers
+  `{:ok, %{approval, step, card}}`; a decision already made answers
+  `{:error, {:already_resolved, approval}}`.
+  """
+  @spec resolve_approval(Context.t(), String.t(), String.t(), map()) ::
+          {:ok, %{approval: Approval.t(), step: TurnStep.t(), card: Message.t()}}
+          | {:error, term()}
+  def resolve_approval(%Context{} = ctx, approval_id, decision, attrs)
+      when decision in @decisions and is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.resolve_approval", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      with_seq_retry(fn ->
+        Arca.Repo.transaction(fn ->
+          approval = approval!(athanor_id, approval_id)
+          if approval.status != "pending", do: Arca.Repo.rollback({:already_resolved, approval})
+          turn = turn!(athanor_id, approval.turn_id)
+          check_fence!(turn, attrs)
+          step = step!(athanor_id, approval.step_id)
+          now = DateTime.utc_now()
+          resolution_kind = Map.get(attrs, :resolution_kind)
+
+          {1, _} =
+            from(a in Approval,
+              where: a.athanor_id == ^athanor_id and a.id == ^approval_id,
+              where: a.status == "pending"
+            )
+            |> Arca.Repo.update_all(
+              set: [
+                status: decision,
+                scope: Map.get(attrs, :scope, approval.scope),
+                decided_by: Map.get(attrs, :decided_by),
+                decided_at: now,
+                resolution_kind: resolution_kind,
+                resolution: encode(Map.get(attrs, :resolution))
+              ]
+            )
+
+          from(m in Message,
+            where: m.athanor_id == ^athanor_id and m.id == ^approval.message_id
+          )
+          |> Arca.Repo.update_all(
+            set: [
+              status: decision,
+              resolved_by: Map.get(attrs, :decided_by),
+              resolved_at: now,
+              resolution: encode(Map.get(attrs, :resolution))
+            ]
+          )
+
+          if decision == "approved" do
+            kind = if resolution_kind == "launch", do: "launch", else: step.kind
+
+            {1, _} =
+              from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step.id)
+              |> Arca.Repo.update_all(set: [dispatch_state: "proposed", kind: kind])
+          else
+            close_step!(ctx, athanor_id, turn, step, "denied", %{
+              result: Map.get(attrs, :denied_result),
+              error: Map.get(attrs, :reason)
+            })
+          end
+
+          Enum.each(Map.get(attrs, :grants, []), fn grant ->
+            case Arca.ToolGrantStorage.put(grant) do
+              {:ok, _} -> :ok
+              {:error, reason} -> Arca.Repo.rollback({:grant_failed, reason})
+            end
+          end)
+
+          event!(athanor_id, turn, "approval.resolved", step.id, %{
+            "approval_id" => approval_id,
+            "decision" => decision,
+            "resolution_kind" => resolution_kind
+          })
+
+          %{
+            approval: approval!(athanor_id, approval_id),
+            step: step!(athanor_id, step.id),
+            card: Arca.Repo.get_by!(Message, id: approval.message_id, athanor_id: athanor_id)
+          }
+        end)
+      end)
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Clones
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Open a clone turn under `parent_turn_id`: its own `turns` row sharing
+  the parent's root execution and attempt, the `clone` step in the
+  parent (dispatched), and the task as the clone's first row. `attrs`:
+  `:role` (the orchestrator), `:task`, `:model`, `:step_id` (an existing
+  clone step to bind, else one is recorded), `:fence`. Answers
+  `{:ok, %{turn, step, task: row}}`.
+  """
+  @spec open_clone_turn(Context.t(), String.t(), map()) ::
+          {:ok, %{turn: Turn.t(), step: TurnStep.t(), task: Message.t()}} | {:error, term()}
+  def open_clone_turn(%Context{} = ctx, parent_turn_id, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_clone_turn", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      with_seq_retry(fn ->
+        Arca.Repo.transaction(fn ->
+          parent = turn!(athanor_id, parent_turn_id)
+          check_fence!(parent, attrs)
+          if parent.status != "running", do: Arca.Repo.rollback(:parent_not_running)
+          if parent.parent_turn_id, do: Arca.Repo.rollback(:clone_depth)
+          conv = conversation!(athanor_id, parent.conversation_id)
+          now = DateTime.utc_now()
+          role = Map.fetch!(attrs, :role)
+
+          step =
+            case Map.get(attrs, :step_id) do
+              nil ->
+                insert_step!(athanor_id, parent, %{
+                  kind: "clone",
+                  tool: role,
+                  action: "clone",
+                  dispatch_state: "dispatched",
+                  idempotency_key: Map.get(attrs, :idempotency_key)
+                })
+
+              step_id ->
+                step!(athanor_id, step_id)
+            end
+
+          child =
+            Arca.Repo.insert!(
+              %Turn{}
+              |> Ecto.Changeset.change(%{
+                id: Cyfr.UUID7.generate_id("trn"),
+                athanor_id: athanor_id,
+                conversation_id: parent.conversation_id,
+                parent_turn_id: parent.id,
+                root_execution_id: parent.root_execution_id,
+                attempt: parent.attempt,
+                budget_id: parent.budget_id,
+                orchestrator: role,
+                requested_by: parent.requested_by,
+                model: Map.get(attrs, :model),
+                fence: new_fence(),
+                runner_id: Cyfr.Boot.id(),
+                status: "running",
+                accepted_at: now,
+                window_upto_seq: 0
+              })
+            )
+
+          task =
+            Arca.ConversationStorage.insert_message!(ctx, conv, %{
+              author: Message.agent_author(),
+              kind: "text",
+              content: Map.get(attrs, :task, ""),
+              payload: %{"as" => "task", "role" => role, "step_id" => step.id},
+              turn_id: child.id,
+              execution_id: parent.root_execution_id
+            })
+
+          event!(athanor_id, parent, "clone.opened", step.id, %{"turn_id" => child.id})
+          %{turn: child, step: step, task: task}
+        end)
+      end)
+    end)
+  end
+
+  @doc "End a clone turn as `status` (`completed | failed | cancelled | uncertain`)."
+  @spec close_clone_turn(Context.t(), String.t(), String.t(), map()) ::
+          {:ok, Turn.t()} | {:error, term()}
+  def close_clone_turn(%Context{} = ctx, turn_id, status, attrs \\ %{})
+      when status in @terminal do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.close_clone_turn", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        turn = turn!(athanor_id, turn_id)
+        if is_nil(turn.parent_turn_id), do: Arca.Repo.rollback(:not_a_clone)
+        check_fence!(turn, attrs)
+
+        {count, _} =
+          from(t in Turn,
+            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.status in ^@open
+          )
+          |> Arca.Repo.update_all(
+            set: [status: status, error: Map.get(attrs, :error), ended_at: DateTime.utc_now()]
+          )
+
+        if count != 1, do: Arca.Repo.rollback(:already_finished)
+        turn!(athanor_id, turn_id)
+      end)
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # The consumption boundary
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Move the turn's boundary past every human row attached to it that
+  arrived while it worked, and answer those rows in `seq` order: the
+  steer the loop drains before its next model request.
+  """
+  @spec drain_steer(Context.t(), String.t(), map()) :: {:ok, [Message.t()]} | {:error, term()}
+  def drain_steer(%Context{} = ctx, turn_id, attrs \\ %{}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.drain_steer", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        turn = turn!(athanor_id, turn_id)
+        check_fence!(turn, attrs)
+        rows = steer_rows(athanor_id, turn)
+
+        case rows do
+          [] ->
+            []
+
+          rows ->
+            newest = rows |> Enum.map(& &1.seq) |> Enum.max()
+
+            {1, _} =
+              from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+              |> Arca.Repo.update_all(set: [window_upto_seq: newest])
+
+            rows
+        end
+      end)
+    end)
+  end
+
+  @doc "Whether a human row attached to the turn waits past its boundary."
+  @spec steer_pending?(Context.t(), String.t()) :: boolean() | {:error, term()}
+  def steer_pending?(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.steer_pending?", fn ->
+      athanor_id = Context.athanor!(ctx)
+      turn = turn!(athanor_id, turn_id)
+      steer_rows(athanor_id, turn) != []
+    end)
+  end
+
+  @doc """
+  The rows a turn may read, in `seq` order: its own rows except undrained
+  human steer, plus — behind its boundary — unattached rows and the rows
+  of terminal, non-clone turns of the conversation. A clone reads its
+  own rows only. Rows attached to other open turns are never read.
+  """
+  @spec projection(Context.t(), String.t()) :: {:ok, [Message.t()]} | {:error, term()}
+  def projection(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.projection", fn ->
+      athanor_id = Context.athanor!(ctx)
+      turn = turn!(athanor_id, turn_id)
+      window = turn.window_upto_seq || 0
+      humans = [Message.agent_author(), Message.system_author()]
+
+      rows =
+        if turn.parent_turn_id do
+          Arca.Repo.all(
+            from(m in Message,
+              where: m.athanor_id == ^athanor_id and m.conversation_id == ^turn.conversation_id,
+              where: m.turn_id == ^turn_id,
+              order_by: [asc: m.seq]
+            )
+          )
+        else
+          settled = settled_turns(athanor_id, turn.conversation_id)
+
+          Arca.Repo.all(
+            from(m in Message,
+              where: m.athanor_id == ^athanor_id and m.conversation_id == ^turn.conversation_id,
+              where:
+                (m.turn_id == ^turn_id and (m.author in ^humans or m.seq <= ^window)) or
+                  (m.seq <= ^window and (is_nil(m.turn_id) or m.turn_id in subquery(settled))),
+              order_by: [asc: m.seq]
+            )
+          )
+        end
+
+      {:ok, rows}
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Reads
+  # ---------------------------------------------------------------------------
+
+  @doc "One turn of the athanor."
+  @spec get(Context.t(), String.t()) :: {:ok, Turn.t()} | {:error, term()}
+  def get(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.get", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      case Arca.Repo.one(from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)) do
+        nil -> {:error, :not_found}
+        turn -> {:ok, turn}
+      end
+    end)
+  end
+
+  @doc "The turn a message opened, if any."
+  @spec turn_of_message(Context.t(), String.t()) :: {:ok, Turn.t()} | {:error, term()}
+  def turn_of_message(%Context{} = ctx, message_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.turn_of_message", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      case Arca.Repo.one(
+             from(t in Turn, where: t.athanor_id == ^athanor_id and t.message_id == ^message_id)
+           ) do
+        nil -> {:error, :not_found}
+        turn -> {:ok, turn}
+      end
+    end)
+  end
+
+  @doc "The steps of a turn in `seq` order."
+  @spec steps(Context.t(), String.t()) :: {:ok, [TurnStep.t()]} | {:error, term()}
+  def steps(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.steps", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      {:ok,
+       Arca.Repo.all(
+         from(s in TurnStep,
+           where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
+           order_by: [asc: s.seq]
+         )
+       )}
+    end)
+  end
+
+  @doc "One step of the athanor."
+  @spec step(Context.t(), String.t()) :: {:ok, TurnStep.t()} | {:error, term()}
+  def step(%Context{} = ctx, step_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.step", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      case Arca.Repo.one(
+             from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step_id)
+           ) do
+        nil -> {:error, :not_found}
+        step -> {:ok, step}
+      end
+    end)
+  end
+
+  @doc "The open turns of a conversation (accepted, running or paused), oldest first."
+  @spec open_turns(Context.t(), String.t()) :: {:ok, [Turn.t()]} | {:error, term()}
+  def open_turns(%Context{} = ctx, conversation_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_turns", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      {:ok,
+       Arca.Repo.all(
+         from(t in Turn,
+           where: t.athanor_id == ^athanor_id and t.conversation_id == ^conversation_id,
+           where: t.status in ^@open,
+           order_by: [asc: t.accepted_at]
+         )
+       )}
+    end)
+  end
+
+  @doc """
+  Every conversation holding an open root turn, across all tenants, as
+  `{athanor_id, conversation_id}` pairs — the boot's recovery scan.
+  System-internal only.
+  """
+  @spec with_open_turns() :: [{String.t(), String.t()}]
+  def with_open_turns do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.with_open_turns", [], fn ->
+      # arca:unscoped-ok the boot recovers open turns of every tenant when
+      # no tenant context exists yet; system-internal only.
+      Arca.Repo.all(
+        from(t in Turn,
+          where: t.status in ^@open and is_nil(t.parent_turn_id),
+          distinct: true,
+          select: {t.athanor_id, t.conversation_id}
+        )
+      )
+    end)
+  end
+
+  @doc "One approval of the athanor."
+  @spec approval(Context.t(), String.t()) :: {:ok, Approval.t()} | {:error, term()}
+  def approval(%Context{} = ctx, approval_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.approval", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      case Arca.Repo.one(
+             from(a in Approval, where: a.athanor_id == ^athanor_id and a.id == ^approval_id)
+           ) do
+        nil -> {:error, :not_found}
+        approval -> {:ok, approval}
+      end
+    end)
+  end
+
+  @doc "The approval a card message references."
+  @spec approval_by_message(Context.t(), String.t()) :: {:ok, Approval.t()} | {:error, term()}
+  def approval_by_message(%Context{} = ctx, message_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.approval_by_message", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      case Arca.Repo.one(
+             from(a in Approval,
+               where: a.athanor_id == ^athanor_id and a.message_id == ^message_id
+             )
+           ) do
+        nil -> {:error, :not_found}
+        approval -> {:ok, approval}
+      end
+    end)
+  end
+
+  @doc "The pending approvals of a turn, oldest first."
+  @spec pending_approvals(Context.t(), String.t()) :: {:ok, [Approval.t()]} | {:error, term()}
+  def pending_approvals(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pending_approvals", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      {:ok,
+       Arca.Repo.all(
+         from(a in Approval,
+           where: a.athanor_id == ^athanor_id and a.turn_id == ^turn_id,
+           where: a.status == "pending",
+           order_by: [asc: a.inserted_at]
+         )
+       )}
+    end)
+  end
+
+  @doc "The athanor's pending approvals whose `expires_at` passed."
+  @spec expired_approvals(Context.t(), DateTime.t()) :: {:ok, [Approval.t()]} | {:error, term()}
+  def expired_approvals(%Context{} = ctx, %DateTime{} = now) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.expired_approvals", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      {:ok,
+       Arca.Repo.all(
+         from(a in Approval,
+           where: a.athanor_id == ^athanor_id and a.status == "pending",
+           where: not is_nil(a.expires_at) and a.expires_at < ^now,
+           order_by: [asc: a.expires_at]
+         )
+       )}
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internal
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Run `fun` (a transaction that appends a message) again, up to three
+  times, when it fails on the `(conversation_id, seq)` unique race.
+  """
+  @spec with_seq_retry((-> {:ok, term()} | {:error, term()})) :: {:ok, term()} | {:error, term()}
+  def with_seq_retry(fun) when is_function(fun, 0), do: with_seq_retry(fun, 3)
+
+  defp with_seq_retry(_fun, 0), do: {:error, :seq_conflict}
+
+  defp with_seq_retry(fun, retries) do
+    try do
+      fun.()
+    rescue
+      e in Ecto.InvalidChangesetError ->
+        if unique?(e.changeset.errors, :conversation_id, "seq"),
+          do: with_seq_retry(fun, retries - 1),
+          else: {:error, e.changeset}
+    end
+  end
+
+  # A unique violation on a composite index reports on its first field;
+  # the index name tells the races apart.
+  defp unique?(errors, field, index_word) do
+    errors
+    |> Keyword.get_values(field)
+    |> Enum.any?(fn
+      {_msg, meta} when is_list(meta) ->
+        Keyword.get(meta, :constraint) == :unique and
+          String.contains?(to_string(Keyword.get(meta, :constraint_name, "")), index_word)
+
+      _ ->
+        false
+    end)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp close_step!(ctx, athanor_id, turn, step, outcome, attrs) do
+    from_states =
+      if outcome in ["denied", "skipped"], do: ["dispatched", "proposed"], else: ["dispatched"]
+
+    now = DateTime.utc_now()
+
+    result =
+      case Map.get(attrs, :result) do
+        nil ->
+          nil
+
+        %{} = result ->
+          conv = conversation!(athanor_id, turn.conversation_id)
+
+          Arca.ConversationStorage.insert_message!(ctx, conv, %{
+            author: Message.system_author(),
+            kind: "tool_result",
+            content: Map.get(result, :content, ""),
+            payload: Map.merge(Map.get(result, :payload) || %{}, %{"step_id" => step.id}),
+            turn_id: turn.id,
+            execution_id: Map.get(attrs, :execution_id)
+          })
+      end
+
+    {count, _} =
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.id == ^step.id,
+        where: s.dispatch_state in ^from_states
+      )
+      |> Arca.Repo.update_all(
+        set: [
+          dispatch_state: "closed",
+          outcome: outcome,
+          result_message_id: result && result.id,
+          execution_id: Map.get(attrs, :execution_id) || step.execution_id,
+          error: Map.get(attrs, :error),
+          ended_at: now
+        ]
+      )
+
+    if count != 1, do: Arca.Repo.rollback(:not_open)
+
+    event!(athanor_id, turn, "step.closed", step.id, %{
+      "outcome" => outcome,
+      "execution_id" => Map.get(attrs, :execution_id),
+      "result_message_id" => result && result.id
+    })
+
+    %{step: step!(athanor_id, step.id), result: result}
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp insert_step!(athanor_id, %Turn{} = turn, attrs) do
+    seq =
+      Arca.Repo.one(
+        from(s in TurnStep,
+          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+          select: coalesce(max(s.seq), 0)
+        )
+      ) + 1
+
+    kind = Map.get(attrs, :kind, "tool")
+    if kind not in @step_kinds, do: Arca.Repo.rollback({:invalid_step_kind, kind})
+
+    Arca.Repo.insert!(%TurnStep{
+      id: Map.get(attrs, :id) || Cyfr.UUID7.generate_id("stp"),
+      athanor_id: athanor_id,
+      turn_id: turn.id,
+      seq: seq,
+      kind: kind,
+      idempotency_key: Map.get(attrs, :idempotency_key),
+      tool: Map.get(attrs, :tool),
+      action: Map.get(attrs, :action),
+      dispatch_state: Map.get(attrs, :dispatch_state, "proposed"),
+      message_id: Map.get(attrs, :message_id),
+      authority_digest: Map.get(attrs, :authority_digest),
+      request_digest: Map.get(attrs, :request_digest),
+      proposal_digest: Map.get(attrs, :proposal_digest),
+      recovery: Map.get(attrs, :recovery),
+      excluded: encode(Map.get(attrs, :excluded)),
+      child_execution_id: Map.get(attrs, :child_execution_id),
+      started_at: if(Map.get(attrs, :dispatch_state) == "dispatched", do: DateTime.utc_now())
+    })
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp event!(_athanor_id, %Turn{root_execution_id: nil}, _type, _step_id, _data), do: :ok
+
+  defp event!(athanor_id, %Turn{} = turn, type, step_id, data) do
+    Arca.ExecutionEvents.append!(athanor_id, turn.root_execution_id, type,
+      turn_id: turn.id,
+      step_id: step_id,
+      data: reject_nil(data)
+    )
+
+    :ok
+  end
+
+  # Move the root execution between statuses, fenced on the turn's own
+  # attempt being the pointer. `error:` sets the message on a terminal move.
+  # arca:db-raise-ok inside the caller's transaction
+  defp execution_status!(athanor_id, execution_id, from, to, opts \\ [])
+
+  defp execution_status!(_athanor_id, nil, _from, _to, _opts), do: :ok
+
+  defp execution_status!(athanor_id, execution_id, from, to, opts) do
+    from = List.wrap(from)
+
+    sets =
+      if to in Arca.Execution.terminal_statuses(),
+        do: [
+          status: to,
+          completed_at: DateTime.utc_now(),
+          error_message: Keyword.get(opts, :error)
+        ],
+        else: [status: to]
+
+    {count, _} =
+      from(e in Arca.Execution,
+        where: e.id == ^execution_id and e.athanor_id == ^athanor_id,
+        where: e.status in ^from
+      )
+      |> Arca.Repo.update_all(set: sets)
+
+    if count != 1, do: Arca.Repo.rollback({:execution_not_in, from})
+    :ok
+  end
+
+  defp attempt_end("completed"), do: {"completed", "ok"}
+  defp attempt_end("failed"), do: {"failed", "error"}
+  defp attempt_end("cancelled"), do: {"cancelled", "cancelled"}
+  defp attempt_end("uncertain"), do: {"failed", "uncertain"}
+
+  defp status_of("uncertain"), do: "failed"
+  defp status_of(status), do: status
+
+  # The highest seq a turn may read when it starts: its own initiating
+  # message, and every unattached row or row of a settled turn.
+  # arca:db-raise-ok inside the caller's transaction
+  defp boundary(athanor_id, %Turn{} = turn) do
+    settled = settled_turns(athanor_id, turn.conversation_id)
+
+    history =
+      Arca.Repo.one(
+        from(m in Message,
+          where: m.athanor_id == ^athanor_id and m.conversation_id == ^turn.conversation_id,
+          where: is_nil(m.turn_id) or m.turn_id in subquery(settled),
+          select: coalesce(max(m.seq), 0)
+        )
+      )
+
+    own =
+      if turn.message_id do
+        Arca.Repo.one(
+          from(m in Message,
+            where: m.athanor_id == ^athanor_id and m.id == ^turn.message_id,
+            select: m.seq
+          )
+        ) || 0
+      else
+        0
+      end
+
+    max(history, own)
+  end
+
+  defp settled_turns(athanor_id, conversation_id) do
+    from(t in Turn,
+      where: t.athanor_id == ^athanor_id and t.conversation_id == ^conversation_id,
+      where: t.status in ^@terminal and is_nil(t.parent_turn_id),
+      select: t.id
+    )
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp steer_rows(athanor_id, %Turn{} = turn) do
+    window = turn.window_upto_seq || 0
+    reserved = [Message.agent_author(), Message.system_author()]
+
+    Arca.Repo.all(
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
+        where: m.author not in ^reserved and m.seq > ^window,
+        order_by: [asc: m.seq]
+      )
+    )
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp turn!(athanor_id, turn_id) do
+    Arca.Repo.one(from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)) ||
+      Arca.Repo.rollback(:turn_not_found)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp step!(athanor_id, step_id) do
+    Arca.Repo.one(from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step_id)) ||
+      Arca.Repo.rollback(:step_not_found)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp approval!(athanor_id, approval_id) do
+    Arca.Repo.one(
+      from(a in Approval, where: a.athanor_id == ^athanor_id and a.id == ^approval_id)
+    ) ||
+      Arca.Repo.rollback(:approval_not_found)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp conversation!(athanor_id, conversation_id) do
+    Arca.Repo.get_by(Conversation, id: conversation_id, athanor_id: athanor_id) ||
+      Arca.Repo.rollback(:conversation_not_found)
+  end
+
+  defp check_fence!(%Turn{fence: fence}, attrs) do
+    case Map.get(attrs, :fence) do
+      nil -> :ok
+      ^fence -> :ok
+      _ -> Arca.Repo.rollback(:superseded)
+    end
+  end
+
+  defp fenced(query, attrs) do
+    case Map.get(attrs, :fence) do
+      nil -> query
+      fence -> where(query, [t], t.fence == ^fence)
+    end
+  end
+
+  defp new_fence, do: Cyfr.UUID7.generate_id("fnc")
+
+  defp encode(nil), do: nil
+  defp encode(value) when is_binary(value), do: value
+  defp encode(value), do: Jason.encode!(value)
+
+  defp reject_nil(map) when is_map(map) do
+    map |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
   end
 end

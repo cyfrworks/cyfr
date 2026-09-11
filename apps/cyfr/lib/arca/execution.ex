@@ -34,7 +34,10 @@ defmodule Arca.Execution do
   # The execution lifecycle vocabulary, in one place like its sibling
   # stores. A row starts "running" and ends in exactly one of the
   # terminal three.
-  @statuses ~w(running completed failed cancelled)
+  @statuses ~w(running paused completed failed cancelled)
+  # What a row is: a component run, a host loop's logical turn root, or an
+  # outbound tool call.
+  @kinds ~w(component turn tool_call)
   @terminal_statuses ~w(completed failed cancelled)
 
   @doc "Every status an execution row can carry."
@@ -42,6 +45,9 @@ defmodule Arca.Execution do
 
   @doc "The statuses a finished execution can carry."
   def terminal_statuses, do: @terminal_statuses
+
+  @doc "Every kind an execution row can carry."
+  def kinds, do: @kinds
 
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
@@ -83,6 +89,20 @@ defmodule Arca.Execution do
     # authority again — an approval, an audit — reads it here instead of
     # re-deriving a selection that may since have become ambiguous.
     field :profile_id, :string
+    # What the row is: a `component` run, the logical `turn` root a host
+    # loop holds without a guest, or an outbound `tool_call`. A turn root's
+    # `component_type` is `agent`.
+    field :kind, :string, default: "component"
+    # The turn or schedule this execution belongs to.
+    field :turn_id, :string
+    field :schedule_id, :string
+    # The attempt that owns the row (`Arca.ExecutionAttempts`): every
+    # attempt-scoped write names it, and a successor moves it in the same
+    # transaction that retires the predecessor.
+    field :current_attempt, :string
+    # The durable event counter: `Arca.ExecutionEvents` allocates a seq by
+    # incrementing it inside the writer's transaction.
+    field :event_seq, :integer, default: 0
   end
 
   # Every column a start writes — the write path's half of the row shape,
@@ -108,7 +128,12 @@ defmodule Arca.Execution do
     :runner_id,
     :lease_until,
     :attempt,
-    :profile_id
+    :profile_id,
+    :kind,
+    :turn_id,
+    :schedule_id,
+    :current_attempt,
+    :event_seq
   ]
 
   @doc "The columns `start_changeset/1` casts, for the write path to pin against."
@@ -130,10 +155,21 @@ defmodule Arca.Execution do
       :component_type
     ])
     |> validate_inclusion(:status, @statuses)
-    # Which component types exist is product vocabulary — sourced from the
-    # canonical list rather than re-declared in the persistence layer.
-    # Tinctures never execute server-side, hence executable_types.
-    |> validate_inclusion(:component_type, Sanctum.ComponentRef.executable_types())
+    |> validate_inclusion(:kind, @kinds)
+    |> validate_component_type()
+  end
+
+  # Which component types exist is product vocabulary — sourced from the
+  # canonical list rather than re-declared in the persistence layer.
+  # Tinctures never execute server-side, hence executable_types. A turn
+  # root is an `agent` (a consent source, never a component) and an
+  # outbound tool call a `tool_server`; both are row-level types.
+  defp validate_component_type(changeset) do
+    case get_field(changeset, :kind) do
+      "turn" -> validate_inclusion(changeset, :component_type, ["agent"])
+      "tool_call" -> validate_inclusion(changeset, :component_type, ["tool_server"])
+      _ -> validate_inclusion(changeset, :component_type, Sanctum.ComponentRef.executable_types())
+    end
   end
 
   @doc """
@@ -154,6 +190,118 @@ defmodule Arca.Execution do
       attrs
       |> start_changeset()
       |> Arca.Repo.insert()
+    end)
+  end
+
+  @doc """
+  Admit an execution: the row, its first attempt and, for a root, its
+  budget reservation, in one transaction. `attrs` are the start
+  changeset's; `opts`:
+
+  - `:attempt` — the attempt id (minted when absent); `:runner_id`,
+    `:lease_until` (defaults from `Arca.ExecutionAttempts`).
+  - `:reservation` — `%{budget_id, cap}` to mint the root's reservation.
+  - `:charge` — `%{reservation_id, id}` of the hold this child was
+    charged under; the hold barrier stamps it admitted while it stands,
+    and admission is refused `{:error, :hold_expired}` otherwise.
+  - `:step` — `%{id, generation, athanor_id}` of the loop step this child
+    belongs to; the step barrier binds the child to it while the step is
+    dispatched, on its generation and not cancelled, and admission is
+    refused `{:error, :step_superseded}` otherwise.
+
+  Answers `{:ok, %{execution: t(), attempt: ExecutionAttempt.t()}}`.
+  """
+  @spec admit(map(), keyword()) ::
+          {:ok, %{execution: struct(), attempt: struct()}} | {:error, term()}
+  def admit(attrs, opts \\ []) when is_map(attrs) and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Execution.admit", fn ->
+      athanor_id = Map.fetch!(attrs, :athanor_id)
+      attempt_id = Keyword.get(opts, :attempt) || Arca.ExecutionAttempts.generate_id()
+      runner_id = Keyword.get(opts, :runner_id) || Cyfr.Boot.id()
+      lease_until = Keyword.get(opts, :lease_until) || Arca.ExecutionAttempts.lease_until()
+      started_at = Map.get(attrs, :started_at) || DateTime.utc_now()
+
+      attrs =
+        attrs
+        |> Map.put(:started_at, started_at)
+        |> Map.put(:status, "running")
+        |> Map.put(:attempt, attempt_id)
+        |> Map.put(:runner_id, runner_id)
+        |> Map.put(:lease_until, lease_until)
+        |> Map.put(:current_attempt, attempt_id)
+
+      Arca.Repo.transaction(fn ->
+        execution =
+          case Arca.Repo.insert(start_changeset(attrs)) do
+            {:ok, row} -> row
+            {:error, changeset} -> Arca.Repo.rollback(changeset)
+          end
+
+        attempt =
+          Arca.ExecutionAttempts.open!(athanor_id, execution.id,
+            attempt: attempt_id,
+            runner_id: runner_id,
+            lease_until: lease_until,
+            started_at: started_at
+          )
+
+        case Keyword.get(opts, :reservation) do
+          %{budget_id: budget_id, cap: cap} ->
+            Arca.BudgetReservations.mint!(athanor_id, execution.id, budget_id, cap)
+
+          nil ->
+            :ok
+        end
+
+        case Keyword.get(opts, :charge) do
+          %{reservation_id: reservation_id, id: id} ->
+            if Arca.BudgetReservations.admit_hold!(athanor_id, reservation_id, id) != 1,
+              do: Arca.Repo.rollback(:hold_expired)
+
+          nil ->
+            :ok
+        end
+
+        case Keyword.get(opts, :step) do
+          %{id: step_id, generation: generation} ->
+            if Arca.TurnStorage.bind_child!(athanor_id, step_id, generation, execution.id) != 1,
+              do: Arca.Repo.rollback(:step_superseded)
+
+          nil ->
+            :ok
+        end
+
+        %{execution: %{execution | current_attempt: attempt_id}, attempt: attempt}
+      end)
+    end)
+  end
+
+  @doc """
+  Close an execution that is still open — `running` or `paused` — as
+  `status`, fenced on `current_attempt` when `attempt` is given. A row
+  already closed matches nothing. Answers the rows moved.
+  """
+  @spec mark_terminal_if_open(String.t(), String.t(), map(), String.t() | nil) ::
+          non_neg_integer() | {:error, :database_error}
+  def mark_terminal_if_open(id, status, attrs, attempt \\ nil)
+      when status in @terminal_statuses do
+    Arca.Repo.Errors.with_db_rescue("Execution.mark_terminal_if_open", fn ->
+      # arca:unscoped-ok the id comes from trusted runtime state (the turn
+      # root the runner holds), never from caller input.
+      query = from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
+      query = if attempt, do: where(query, [e], e.current_attempt == ^attempt), else: query
+
+      {count, _} =
+        Arca.Repo.update_all(query,
+          set: [
+            status: status,
+            completed_at: attrs[:completed_at] || DateTime.utc_now(),
+            duration_ms: attrs[:duration_ms],
+            error_message: attrs[:error_message]
+          ]
+        )
+
+      count
     end)
   end
 
@@ -419,7 +567,7 @@ defmodule Arca.Execution do
 
     from(e in __MODULE__,
       where: e.started_at < ^cutoff,
-      where: e.status != "running"
+      where: e.status not in ["running", "paused"]
     )
     |> Arca.QueryHelpers.where_athanor(athanor_id)
   end
@@ -452,7 +600,7 @@ defmodule Arca.Execution do
 
     from(e in __MODULE__,
       where: e.id not in subquery(keep_ids_query),
-      where: e.status != "running"
+      where: e.status not in ["running", "paused"]
     )
     |> Arca.QueryHelpers.where_athanor(athanor_id)
   end

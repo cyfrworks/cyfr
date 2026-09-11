@@ -382,6 +382,73 @@ defmodule Arca.ConversationStorage do
     end)
   end
 
+  @doc """
+  Insert one message inside the caller's transaction, at the next `seq`,
+  raising on a store error so the caller's transaction rolls back. The
+  `(conversation_id, seq)` race surfaces as `Ecto.InvalidChangesetError`
+  carrying a `:unique` constraint on `:conversation_id`; a caller that
+  owns the transaction retries the whole transaction on it
+  (`Arca.TurnStorage.with_seq_retry/1`). Titles the conversation from its
+  first user text and bumps `last_message_at` as `append/3` does.
+  """
+  @spec insert_message!(Context.t(), Conversation.t(), map()) :: Message.t()
+  # arca:db-raise-ok inside the caller's transaction
+  def insert_message!(%Context{} = ctx, %Conversation{} = conv, attrs) when is_map(attrs) do
+    now = DateTime.utc_now()
+
+    seq =
+      Repo.one(
+        from(m in Message,
+          where: m.conversation_id == ^conv.id and m.athanor_id == ^ctx.athanor_id,
+          select: coalesce(max(m.seq), 0)
+        )
+      ) + 1
+
+    msg =
+      Repo.insert!(
+        Message.changeset(%Message{}, %{
+          id: attrs[:id] || Cyfr.UUID7.generate_id("msg"),
+          conversation_id: conv.id,
+          athanor_id: ctx.athanor_id,
+          seq: seq,
+          author: attrs[:author],
+          kind: attrs[:kind] || "text",
+          content: attrs[:content] || "",
+          payload: encode_json(attrs[:payload]),
+          status: attrs[:status],
+          execution_id: attrs[:execution_id],
+          turn_id: attrs[:turn_id],
+          approval_id: attrs[:approval_id],
+          client_id: attrs[:client_id],
+          inserted_at: now
+        })
+      )
+
+    conv
+    |> Conversation.changeset(%{last_message_at: now, title: title_after(conv, msg)})
+    |> Repo.update!()
+
+    msg
+  end
+
+  @doc "The message a sender accepted under `client_id` in this conversation, if any."
+  @spec get_by_client_id(Context.t(), String.t(), String.t()) ::
+          {:ok, Message.t()} | {:error, :not_found | :database_error}
+  def get_by_client_id(%Context{} = ctx, conversation_id, client_id)
+      when is_binary(conversation_id) and is_binary(client_id) do
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.get_by_client_id", fn ->
+      case Repo.one(
+             from(m in Message,
+               where: m.conversation_id == ^conversation_id and m.athanor_id == ^ctx.athanor_id,
+               where: m.client_id == ^client_id
+             )
+           ) do
+        nil -> {:error, :not_found}
+        msg -> {:ok, msg}
+      end
+    end)
+  end
+
   defp do_append(_ctx, _conv, _attrs, 0), do: {:error, :seq_conflict}
 
   defp do_append(ctx, conv, attrs, retries) do
@@ -409,6 +476,9 @@ defmodule Arca.ConversationStorage do
             payload: encode_json(attrs[:payload]),
             status: attrs[:status],
             execution_id: attrs[:execution_id],
+            turn_id: attrs[:turn_id],
+            approval_id: attrs[:approval_id],
+            client_id: attrs[:client_id],
             inserted_at: now
           })
 

@@ -23,5 +23,24 @@ defmodule Arca.Schemas.Turn do
     field :error, :string
     field :accepted_at, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec
+    field :parent_turn_id, :string
+    field :message_id, :string
+    field :root_execution_id, :string
+    field :attempt, :string
+    field :runner_id, :string
+    field :fence, :string, default: ""
+    field :recovery_attempts, :integer, default: 0
+    field :profile_id, :string
+    field :consent_id, :string
+    field :agent_revision_digest, :string
+    field :agent_capability_digest, :string
+    field :budget_id, :string
+    field :model, :string
+    field :options, :string
+    field :window_upto_seq, :integer
+    field :active_ms, :integer, default: 0
+    field :paused_at, :utc_datetime_usec
+    field :paused_reason, :string
+    field :launch_step_id, :string
   end
 end
