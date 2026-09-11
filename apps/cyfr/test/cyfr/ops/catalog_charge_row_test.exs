@@ -129,4 +129,47 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
 
     assert {:ok, [%{id: "other"}]} = Arca.BudgetReservations.charges(@athanor, auth.budget.id)
   end
+
+  test "a call under the chain's attempt with no identity of its own holds a row of its own", %{
+    auth: auth,
+    ctx: ctx,
+    charge: charge
+  } do
+    lineage = %{parent_execution_id: "exec_parent", attempt: charge.attempt}
+
+    result =
+      Catalog.call_in_chain(
+        "tincture_visibility",
+        ctx,
+        %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"},
+        auth,
+        guest_fn: :spawn,
+        lineage: lineage
+      )
+
+    case result do
+      {:ok, _} -> :ok
+      {:error, msg} when is_binary(msg) -> refute msg =~ "Denied by chain authority"
+    end
+
+    # Charged for the call, released after it.
+    assert %{charged: 0} = Arca.BudgetReservations.lookup(@athanor, auth.budget.id)
+    assert {:ok, []} = Arca.BudgetReservations.charges(@athanor, auth.budget.id)
+
+    # The row is the authority: a full reservation refuses the call.
+    :ok = Arca.BudgetReservations.charge(@athanor, auth.budget.id, %{charge | id: "other"}, 1)
+
+    assert {:error, msg} =
+             Catalog.call_in_chain(
+               "tincture_visibility",
+               ctx,
+               %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"},
+               auth,
+               guest_fn: :spawn,
+               lineage: lineage
+             )
+
+    assert msg =~ "Denied by chain authority"
+    assert Authority.budget(auth).in_flight == 0
+  end
 end

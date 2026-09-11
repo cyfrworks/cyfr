@@ -259,7 +259,7 @@ defmodule Cyfr.Ops.Catalog do
   def call_in_chain(name, %Context{} = ctx, args, %Sanctum.Authority{} = authority, opts)
       when is_map(args) do
     guest_fn = Keyword.get(opts, :guest_fn, :call)
-    opts = Keyword.put_new(opts, :runner, :supervised)
+    opts = opts |> Keyword.put_new(:runner, :supervised) |> with_charge_identity(guest_fn)
 
     args =
       args
@@ -324,10 +324,34 @@ defmodule Cyfr.Ops.Catalog do
     end
   end
 
-  # A spawn-shaped call with a charge identity holds a row beside the
-  # slot: `opts[:charge]` is `%{id, attempt, generation, holder_execution_id}`
-  # and the row's deadline is the dispatcher's own timeout. Without an
-  # identity (a guest's own call) the slot alone is the hold, as before.
+  # A spawn-shaped call charges the reservation row beside the slot. The
+  # loop names the charge per dispatch; a call under a chain's attempt
+  # without one — a guest's own call, its attempt on the host-stamped
+  # lineage — is given a charge of its own, with no holder, so the row's
+  # deadline is the dispatcher's timeout. Under no attempt at all the
+  # slot alone is the hold.
+  defp with_charge_identity(opts, :spawn) do
+    case {Keyword.get(opts, :charge), get_in(opts, [:lineage, :attempt])} do
+      {%{id: _}, _} ->
+        opts
+
+      {nil, attempt} when is_binary(attempt) ->
+        Keyword.put(opts, :charge, %{
+          id: Cyfr.UUID7.generate_id("chg"),
+          attempt: attempt,
+          generation: 0,
+          holder_execution_id: nil
+        })
+
+      _ ->
+        opts
+    end
+  end
+
+  defp with_charge_identity(opts, _guest_fn), do: opts
+
+  # `opts[:charge]` is `%{id, attempt, generation, holder_execution_id}`;
+  # the row's deadline is the dispatcher's own timeout.
   defp charge_row(:spawn, %Context{athanor_id: athanor_id}, authority, opts)
        when is_binary(athanor_id) do
     case Keyword.get(opts, :charge) do

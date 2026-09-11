@@ -96,11 +96,13 @@ defmodule Opus.Chain do
   @spec run_child(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_child(%Authority{} = authority, reference, need, input, opts) do
+    opts = Opus.Chain.Charge.identify(opts)
+
     with {:ok, decision} <- step_invoke(authority, reference, need, opts) do
       if Keyword.get(opts, :guest_fn) == :spawn do
         # A spawn-shaped step charged the invoke budget; this process holds
         # the slot for the call and the guard's :DOWN releases it if the
-        # process dies inside. With a charge identity the hold is a row too
+        # process dies inside. The hold is a row too
         # (`Arca.BudgetReservations`), released with the slot.
         with :ok <- Opus.Chain.Charge.take(decision.authority, opts) do
           Authority.guard_invoke(decision.authority)

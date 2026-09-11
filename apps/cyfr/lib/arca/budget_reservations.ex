@@ -193,6 +193,22 @@ defmodule Arca.BudgetReservations do
     count
   end
 
+  @doc """
+  A reservation by its id alone — the identity an Authority carries over
+  the wire, whose row names the athanor it belongs to.
+  """
+  @spec fetch(String.t()) :: {:ok, BudgetReservation.t()} | {:error, :not_found | term()}
+  # arca:unscoped-ok the id is the wire's identity of one root's
+  # reservation; the row answers with its own athanor.
+  def fetch(id) when is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.fetch", fn ->
+      case Arca.Repo.get(BudgetReservation, id) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
+  end
+
   @doc "A reservation by its id, within the athanor."
   @spec lookup(String.t(), String.t()) :: BudgetReservation.t() | nil | {:error, term()}
   def lookup(athanor_id, id) when is_binary(athanor_id) do

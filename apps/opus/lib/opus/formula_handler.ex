@@ -485,6 +485,8 @@ defmodule Opus.FormulaHandler do
       ctx: ctx,
       parent_execution_id: Keyword.fetch!(opts, :parent_execution_id),
       root_execution_id: opts[:root_execution_id],
+      # This formula's own attempt authorizes its children's charges.
+      attempt: opts[:attempt],
       declared_needs: opts[:declared_needs] || [],
       activation_digest: opts[:activation_digest],
       # Who invoked the child — this formula — for what its row keeps of
@@ -610,77 +612,87 @@ defmodule Opus.FormulaHandler do
 
     case Map.get(args, "reference") do
       reference when is_binary(reference) and reference != "" ->
-        child_opts = Keyword.put(child_opts(ctx, opts), :guest_fn, :spawn)
+        child_opts =
+          ctx
+          |> child_opts(opts)
+          |> Keyword.put(:guest_fn, :spawn)
+          |> Opus.Chain.Charge.identify()
+
         need = Map.get(args, "need")
         input = Map.get(args, "input") || %{}
 
-        case Opus.Chain.step_invoke(authority, reference, need, child_opts) do
-          {:ok, decision} ->
-            fun = fn ->
-              # The task holds the charged slot from here on: the guard's
-              # :DOWN compensation releases it if the task is brutally
-              # killed (cancel / await timeout), where the `after` below
-              # cannot run.
-              Sanctum.Authority.guard_invoke(decision.authority)
-              start_time = System.monotonic_time(:millisecond)
+        with {:ok, decision} <- Opus.Chain.step_invoke(authority, reference, need, child_opts),
+             :ok <- Opus.Chain.Charge.take(decision.authority, child_opts) do
+          fun = fn ->
+            # The task holds the charged slot from here on: the guard's
+            # :DOWN compensation releases it if the task is brutally
+            # killed (cancel / await timeout), where the `after` below
+            # cannot run; the charge row is reclaimed by the sweep once
+            # its holder ends.
+            Sanctum.Authority.guard_invoke(decision.authority)
+            start_time = System.monotonic_time(:millisecond)
 
-              try do
-                case Opus.Chain.execute_child(decision, input, child_opts) do
-                  {:ok, output} ->
-                    emit_telemetry(parent_execution_id, "execution.run", :ok, start_time)
+            try do
+              case Opus.Chain.execute_child(decision, input, child_opts) do
+                {:ok, output} ->
+                  emit_telemetry(parent_execution_id, "execution.run", :ok, start_time)
 
-                    {encode_success(normalize_keys(output)), %{tool: "execution", action: "run"}}
+                  {encode_success(normalize_keys(output)), %{tool: "execution", action: "run"}}
 
-                  {:error, reason} ->
-                    emit_telemetry(parent_execution_id, "execution.run", :error, start_time)
-                    {encode_child_error(reason), %{tool: "execution", action: "run"}}
+                {:error, reason} ->
+                  emit_telemetry(parent_execution_id, "execution.run", :error, start_time)
+                  {encode_child_error(reason), %{tool: "execution", action: "run"}}
+              end
+            after
+              Sanctum.Authority.release_invoke(decision.authority)
+              Opus.Chain.Charge.give_back(decision.authority, child_opts)
+            end
+          end
+
+          # The budget is already charged; an exit from the tracker call
+          # (dead tracker, call timeout) would bypass the release arms
+          # below and leak the slot for the root's remaining life. A
+          # timed-out call has still landed in the tracker's mailbox —
+          # the task will run and its own `after` releases the charge, so
+          # releasing here too would free a concurrent sibling's slot
+          # (mirrors Sanctum.Authority.BudgetGuard.release_after_exit/2);
+          # any other exit means the spawn never landed.
+          spawn_result =
+            try do
+              Opus.AsyncTracker.spawn_task(tracker, fun, "execution.run")
+            catch
+              :exit, reason ->
+                unless match?({:timeout, _}, reason) do
+                  Sanctum.Authority.release_invoke(decision.authority)
+                  Opus.Chain.Charge.give_back(decision.authority, child_opts)
                 end
-              after
-                Sanctum.Authority.release_invoke(decision.authority)
-              end
+
+                Logger.warning(
+                  "[Opus.FormulaHandler] spawn tracker unreachable: #{inspect(reason)}"
+                )
+
+                :tracker_unreachable
             end
 
-            # The budget is already charged; an exit from the tracker call
-            # (dead tracker, call timeout) would bypass the release arms
-            # below and leak the slot for the root's remaining life. A
-            # timed-out call has still landed in the tracker's mailbox —
-            # the task will run and its own `after` releases the charge, so
-            # releasing here too would free a concurrent sibling's slot
-            # (mirrors Sanctum.Authority.BudgetGuard.release_after_exit/2);
-            # any other exit means the spawn never landed.
-            spawn_result =
-              try do
-                Opus.AsyncTracker.spawn_task(tracker, fun, "execution.run")
-              catch
-                :exit, reason ->
-                  unless match?({:timeout, _}, reason) do
-                    Sanctum.Authority.release_invoke(decision.authority)
-                  end
+          case spawn_result do
+            {:ok, task_id} ->
+              Opus.Telemetry.formula_spawn(parent_execution_id, task_id, "execution.run")
+              safe_encode(%{"task_id" => task_id})
 
-                  Logger.warning(
-                    "[Opus.FormulaHandler] spawn tracker unreachable: #{inspect(reason)}"
-                  )
+            {:error, :max_tasks_exceeded} ->
+              Sanctum.Authority.release_invoke(decision.authority)
+              Opus.Chain.Charge.give_back(decision.authority, child_opts)
+              encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
 
-                  :tracker_unreachable
-              end
+            {:error, reason} ->
+              Sanctum.Authority.release_invoke(decision.authority)
+              Opus.Chain.Charge.give_back(decision.authority, child_opts)
+              encode_error(:spawn_failed, guest_reason(reason))
 
-            case spawn_result do
-              {:ok, task_id} ->
-                Opus.Telemetry.formula_spawn(parent_execution_id, task_id, "execution.run")
-                safe_encode(%{"task_id" => task_id})
-
-              {:error, :max_tasks_exceeded} ->
-                Sanctum.Authority.release_invoke(decision.authority)
-                encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
-
-              {:error, reason} ->
-                Sanctum.Authority.release_invoke(decision.authority)
-                encode_error(:spawn_failed, guest_reason(reason))
-
-              :tracker_unreachable ->
-                encode_error(:spawn_failed, "task tracker unavailable")
-            end
-
+            :tracker_unreachable ->
+              encode_error(:spawn_failed, "task tracker unavailable")
+          end
+        else
           {:error, reason} ->
             encode_child_error(reason)
         end

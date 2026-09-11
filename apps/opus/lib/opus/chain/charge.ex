@@ -3,16 +3,49 @@
 
 defmodule Opus.Chain.Charge do
   @moduledoc """
-  The durable side of a spawn-shaped child's invoke charge: with a charge
-  identity in the call's options (`%{id, attempt, generation,
-  holder_execution_id}`, minted by the loop per dispatch), the hold the
-  transition charged in the root's budget is a `budget_charges` row too,
-  taken before the child runs and given back with the slot. Without an
-  identity — a guest formula's own spawn — the slot alone is the hold.
-  A row the reservation refuses gives the slot back and refuses the run.
+  The durable side of a spawn-shaped child's invoke charge: the hold the
+  transition charged in the root's budget is a `budget_charges` row too
+  (`Arca.BudgetReservations`), taken before the child runs and given back
+  with the slot, and the reservation row is the authority — a row it
+  refuses gives the slot back and refuses the run.
+
+  The charge identity (`%{id, attempt, generation, holder_execution_id}`)
+  is the loop's per dispatch; a spawn without one but under a known
+  attempt — a guest formula's own child — is given one by `identify/1`:
+  a fresh charge id, the caller's attempt, and the child's execution id,
+  minted here so admission's hold barrier can name it. A spawn under no
+  attempt at all holds the slot alone.
   """
 
   alias Sanctum.Authority
+
+  @doc """
+  The call's options with a charge identity: the given one, or one
+  derived from `:attempt` (with `:execution_id` minted for the child when
+  absent), or the options unchanged when no attempt is known.
+  """
+  @spec identify(keyword()) :: keyword()
+  def identify(opts) do
+    case {Keyword.get(opts, :charge), Keyword.get(opts, :attempt)} do
+      {%{id: _}, _} ->
+        opts
+
+      {nil, attempt} when is_binary(attempt) ->
+        execution_id = Keyword.get(opts, :execution_id) || Opus.ExecutionRecord.generate_id()
+
+        opts
+        |> Keyword.put(:execution_id, execution_id)
+        |> Keyword.put(:charge, %{
+          id: Cyfr.UUID7.generate_id("chg"),
+          attempt: attempt,
+          generation: 0,
+          holder_execution_id: execution_id
+        })
+
+      _ ->
+        opts
+    end
+  end
 
   @doc "Take the charge row for `opts[:charge]`, or `:ok` when there is none."
   @spec take(Authority.t(), keyword()) :: :ok | {:error, term()}

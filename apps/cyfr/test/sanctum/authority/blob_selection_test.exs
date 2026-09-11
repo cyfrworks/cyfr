@@ -8,11 +8,17 @@ defmodule Sanctum.Authority.BlobSelectionTest do
   and nothing in between is a vault.
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Sanctum.Authority
   alias Sanctum.Authority.Blob
   alias Sanctum.Test.AuthorityFixtures, as: Fixtures
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    :ok
+  end
 
   @formula "formula:local.assistant"
   @catalyst "catalyst:local.claude"
@@ -114,7 +120,7 @@ defmodule Sanctum.Authority.BlobSelectionTest do
 
     {:ok, root} = Authority.root(profile, blob)
     {:ok, edge} = Blob.lookup_edge(root.policy, @formula, @catalyst, "")
-    child = Authority.bound_child(root, @catalyst, edge)
+    child = Fixtures.reserve!(Authority.bound_child(root, @catalyst, edge))
 
     assert {:ok, back} = Authority.from_wire(Authority.to_wire(child))
 
@@ -157,7 +163,7 @@ defmodule Sanctum.Authority.BlobSelectionTest do
 
     {:ok, root} = Authority.root(profile, blob)
     {:ok, edge} = Blob.lookup_edge(root.policy, @formula, @catalyst, "")
-    child = Authority.bound_child(root, @catalyst, edge)
+    child = Fixtures.reserve!(Authority.bound_child(root, @catalyst, edge))
     assert {:ok, back} = Authority.from_wire(Authority.to_wire(child))
 
     assert back.resources.vault.lender == %{

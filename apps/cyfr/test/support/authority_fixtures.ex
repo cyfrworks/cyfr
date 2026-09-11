@@ -122,6 +122,26 @@ defmodule Sanctum.Test.AuthorityFixtures do
     )
   end
 
+  @doc """
+  Mint the reservation row an authority's budget names — the root's, as
+  admission would — so the authority crosses the wire.
+  """
+  def reserve!(%Authority{} = auth, athanor_id \\ "ath_test") do
+    {:ok, _} =
+      Arca.Execution.admit(
+        %{
+          id: Cyfr.UUID7.execution_id(),
+          reference: "#{@formula}:1.0.0",
+          user_id: "usr_wire",
+          athanor_id: athanor_id,
+          component_type: "formula"
+        },
+        reservation: %{budget_id: auth.budget.id, cap: auth.budget.cap}
+      )
+
+    auth
+  end
+
   @doc "Root authority over the fixture graph. Opts pass through to root/3."
   def root!(profile_overrides \\ %{}, opts \\ []) do
     {:ok, auth} = Authority.root(profile(profile_overrides), blob!(), opts)
