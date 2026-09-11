@@ -61,10 +61,12 @@ defmodule Cyfr.SanctumSurfacesTest do
     ),
     # Cyfr.Release uses Sanctum.Cipher for key rotation. Cyfr.Ops uses
     # consent classes, chain authority, authorization rendering, and
-    # the Sanctum.Catalog port.
+    # the Sanctum.Catalog port. Cyfr.Models.Windows parses a catalyst
+    # reference to read its exact name (Sanctum.ComponentRef).
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cidr
-      Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
+      Sanctum.Cipher Sanctum.ComponentRef Sanctum.Consent Sanctum.Context
+      Sanctum.Door Sanctum.Notify
       Sanctum.OAuth
       Sanctum.Provisioning Sanctum.ProvisioningRegistry Sanctum.ProvisioningSupervisor
       Sanctum.PubSub

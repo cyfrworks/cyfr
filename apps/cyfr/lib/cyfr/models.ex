@@ -41,6 +41,110 @@ defmodule Cyfr.Models do
   # root execution and one provider round trip.
   @listing_concurrency 5
   @listing_timeout_ms 30_000
+  @capabilities_ttl_ms :timer.hours(24)
+
+  @typedoc """
+  What a planner needs to size a request: the model's context window and
+  output ceiling, the provider tools and media types the catalyst
+  offers, whether it streams, and its default `max_tokens`. `source`
+  says where the window came from: the catalyst's own listing, the host
+  table, or the configured default.
+  """
+  @type capabilities :: %{
+          context_window: pos_integer(),
+          max_output_tokens: pos_integer() | nil,
+          provider_tools: [String.t()],
+          media_types: [String.t()],
+          streaming: boolean(),
+          default_max_tokens: pos_integer() | nil,
+          source: :models | :table | :default
+        }
+
+  @doc """
+  The capabilities of `model` on `resolved_ref`, read through `run` — a
+  function the caller supplies that runs one contract operation on the
+  catalyst under the caller's own authority (`%{"operation" => op,
+  "params" => %{}}` → `{:ok, result} | {:error, _}`), so a guest-planed
+  loop reads through its pinned authority and a console through the
+  catalog. `describe` supplies the tools, media types, streaming and the
+  default `max_tokens`; `models` the window and output ceiling where the
+  provider reports them; `Cyfr.Models.Windows` the window otherwise.
+  Cached for a day under the resolved reference, the model and
+  `binding_digest` (the key the reading ran with).
+  """
+  @spec capabilities(Context.t(), String.t(), String.t() | nil, String.t() | nil, keyword()) ::
+          capabilities()
+  def capabilities(%Context{} = ctx, resolved_ref, model, binding_digest, opts) do
+    run = Keyword.fetch!(opts, :run)
+    key = {:model_caps, Context.athanor!(ctx), resolved_ref, model, binding_digest}
+
+    case Arca.Cache.get(key) do
+      {:ok, caps} ->
+        caps
+
+      :miss ->
+        caps = read_capabilities(resolved_ref, model, run)
+        if caps.source != :default, do: Arca.Cache.put(key, caps, @capabilities_ttl_ms)
+        caps
+    end
+  end
+
+  defp read_capabilities(resolved_ref, model, run) do
+    described =
+      case run.(%{"operation" => "describe", "params" => %{}}) do
+        {:ok, result} ->
+          case decode_envelope(result) do
+            {:ok, data} when is_map(data) -> data
+            _ -> %{}
+          end
+
+        _ ->
+          %{}
+      end
+
+    listed =
+      case run.(%{"operation" => "models", "params" => %{}}) do
+        {:ok, result} ->
+          case decode_envelope(result) do
+            {:ok, %{"models" => models}} when is_list(models) ->
+              Enum.find(models, %{}, &(is_map(&1) and &1["id"] == model))
+
+            _ ->
+              %{}
+          end
+
+        _ ->
+          %{}
+      end
+
+    {window, source} =
+      cond do
+        is_integer(listed["context_window"]) and listed["context_window"] > 0 ->
+          {listed["context_window"], :models}
+
+        window = Cyfr.Models.Windows.by_catalyst(resolved_ref) ->
+          {window, :table}
+
+        true ->
+          {Cyfr.Models.Windows.default(), :default}
+      end
+
+    %{
+      context_window: window,
+      max_output_tokens: positive(listed["max_output_tokens"]),
+      provider_tools: list_of_strings(described["provider_tools"]),
+      media_types: list_of_strings(described["media_types"]),
+      streaming: described["streaming"] == true,
+      default_max_tokens: positive(get_in(described, ["defaults", "max_tokens"])),
+      source: source
+    }
+  end
+
+  defp positive(n) when is_integer(n) and n > 0, do: n
+  defp positive(_), do: nil
+
+  defp list_of_strings(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
+  defp list_of_strings(_), do: []
 
   @doc "The chat contract's name, as a manifest declares it."
   @spec chat_contract() :: String.t()
