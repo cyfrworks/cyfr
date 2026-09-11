@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Prism.AquaRustConsistencyTest do
-  # Keep Rust virtual-tool dispatch aligned with Aqua.VirtualTools
+  # Keep Rust virtual-tool dispatch aligned with Aqua.Hands
   # classification and display metadata.
   use ExUnit.Case, async: true
 
-  alias Aqua.VirtualTools, as: AquaVirtualTools
+  alias Aqua.Hands
 
   @aqua_glob Path.join([
                __DIR__,
@@ -51,7 +51,7 @@ defmodule Prism.AquaRustConsistencyTest do
 
     rust = rust_actions(File.read!(path))
 
-    for {tool, %{actions: actions}} <- AquaVirtualTools.catalog(),
+    for {tool, %{actions: actions}} <- Hands.catalog(),
         tool not in @host_side_tools do
       rust_verbs = Map.get(rust, tool)
 
@@ -67,7 +67,7 @@ defmodule Prism.AquaRustConsistencyTest do
   test "the http read verb the drift hid is present" do
     # Pinned specifically: this is the verb that was missing, and losing it
     # again would silently un-classify the agent's most-used read path.
-    assert AquaVirtualTools.kind_for("http", "read") == :read
-    assert "http.read" in AquaVirtualTools.action_pairs()
+    assert Hands.kind_for("http", "read") == :read
+    assert "http.read" in Hands.action_pairs()
   end
 end

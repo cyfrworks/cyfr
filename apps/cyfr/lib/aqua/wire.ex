@@ -143,7 +143,7 @@ defmodule Aqua.Wire do
          summary: summary,
          # Risk derived from the action's `kind`, not from the policy mode
          # or the agent's hinted risk. Kind comes from the tool definition's
-         # annotations (or AquaVirtualTools for `files`/`storage`/`http`).
+         # annotations (or `Aqua.Hands` for `files`/`storage`/`http`).
          # Approval cards color themselves from this kind.
          action_kind: action_kind,
          # How far a standing answer may reach, from the same declaration:
@@ -194,7 +194,7 @@ defmodule Aqua.Wire do
 
   # run; an `execution.run` of a wrapped catalyst is the virtual action its
 
-  # input denotes (`Aqua.VirtualTools.canonical/2`); a `files` call whose
+  # input denotes (`Aqua.Hands.canonical/2`); a `files` call whose
 
   # path lands in the storage boundary is the storage operation. A request
 
@@ -205,13 +205,13 @@ defmodule Aqua.Wire do
   defp canonical_proposal("execution", action, %{"reference" => reference} = args, policy)
        when action in ["run", "run_stream"] and is_binary(reference) do
     cond do
-      Aqua.VirtualTools.self_reference?(reference) ->
+      Aqua.Hands.self_reference?(reference) ->
         {:error,
          {:not_in_allowlist,
           "ui.request_approval: the assistant itself is not a tool to run — clone a role instead"}}
 
       true ->
-        case Aqua.VirtualTools.canonical(reference, Map.get(args, "input") || %{}) do
+        case Aqua.Hands.canonical(reference, Map.get(args, "input") || %{}) do
           {:ok, candidates} ->
             pick_canonical(candidates, policy, reference)
 
@@ -228,7 +228,7 @@ defmodule Aqua.Wire do
   end
 
   defp canonical_proposal("files", action, args, _policy) do
-    case Aqua.VirtualTools.canonical_files(action, args) do
+    case Aqua.Hands.canonical_files(action, args) do
       {:ok, canonical} ->
         {:ok, canonical}
 
@@ -282,7 +282,7 @@ defmodule Aqua.Wire do
         # click. Say so here instead, where the agent can act on it. A UI
         # event the guest answers in place is never a card either.
         cond do
-          Aqua.VirtualTools.auto_only?(tool, action) ->
+          Aqua.Hands.auto_only?(tool, action) ->
             {:error,
              {:auto_allowlisted,
               "ui.request_approval: '#{key}' runs on its own — call it directly, do not request approval"}}

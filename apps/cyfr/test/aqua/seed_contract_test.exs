@@ -23,7 +23,7 @@ defmodule Aqua.SeedContractTest do
   """
   use ExUnit.Case, async: true
 
-  alias Aqua.VirtualTools, as: AquaVirtualTools
+  alias Aqua.Hands
   alias Cyfr.Ops.Catalog
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
@@ -125,7 +125,7 @@ defmodule Aqua.SeedContractTest do
     asking =
       for {name, key, mode} <- seed_policy(),
           {tool, action} <- exact(key),
-          AquaVirtualTools.auto_only?(tool, action),
+          Hands.auto_only?(tool, action),
           mode != "auto",
           do: "#{name}: #{key}"
 
@@ -266,7 +266,7 @@ defmodule Aqua.SeedContractTest do
   defp mcp_action?(key) do
     case String.split(key, ".", parts: 2) do
       [_tool, "*"] -> false
-      [tool, _action] -> not AquaVirtualTools.virtual_tool?(tool)
+      [tool, _action] -> not Hands.hand?(tool)
       _ -> false
     end
   end

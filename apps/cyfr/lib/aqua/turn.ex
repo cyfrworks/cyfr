@@ -585,11 +585,11 @@ defmodule Aqua.Turn do
     # authority, never as a root. `Aqua.Wire` canonicalises a proposal
     # before the card exists; this is the same rule at the last door.
     cond do
-      is_binary(reference) and Aqua.VirtualTools.self_reference?(reference) ->
+      is_binary(reference) and Aqua.Hands.self_reference?(reference) ->
         {:error, {:invalid_argument, "the assistant itself is not a tool to run"}}
 
-      is_binary(reference) and match?({:ok, _}, Aqua.VirtualTools.canonical(reference, input)) ->
-        {:ok, [canonical | _]} = Aqua.VirtualTools.canonical(reference, input)
+      is_binary(reference) and match?({:ok, _}, Aqua.Hands.canonical(reference, input)) ->
+        {:ok, [canonical | _]} = Aqua.Hands.canonical(reference, input)
         run_approved(Map.merge(proposal, canonical), ctx, profile_id)
 
       true ->
@@ -610,7 +610,7 @@ defmodule Aqua.Turn do
       when is_binary(tool) and is_binary(action) and is_binary(profile_id) do
     with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, {:id, profile_id}, @agent_ref) do
       cond do
-        Aqua.VirtualTools.virtual_tool?(tool) ->
+        Aqua.Hands.hand?(tool) ->
           run_virtual(proposal, ctx, authority)
 
         Aqua.Ops.child_execution?(tool, action) ->
@@ -684,7 +684,7 @@ defmodule Aqua.Turn do
   # event (`request_setup`) is not a catalyst and has no card to run.
   defp run_virtual(%{tool: tool, action: action, args: args} = proposal, ctx, authority) do
     with {:ok, %{catalyst: catalyst, input: input}} <-
-           Aqua.VirtualTools.child_call(tool, action, args || %{}) do
+           Aqua.Hands.child_call(tool, action, args || %{}) do
       lineage = Map.get(proposal, :lineage) || %{}
       execution_id = lineage[:execution_id] || lineage["execution_id"]
 

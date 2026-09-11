@@ -1,28 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Aqua.VirtualTools do
+defmodule Aqua.Hands do
   @moduledoc """
-  The one table for AQUA's virtual tools — `files`, `storage`, `http`,
-  `request_setup`.
+  The one table of AQUA's hands — `files`, `storage`, `http`,
+  `request_setup`: the model-visible operations that run a local catalyst
+  under the pinned authority, and the UI event that is none.
 
-  Virtual tools are defined and dispatched inside the AQUA formula
-  (`components/formulas/local/aqua/<version>/src/src/tools.rs`); they never
-  reach `Cyfr.Ops.Catalog`. The guest wraps each call as an
-  `execution.run` of a local catalyst with a rewritten input. This module
-  is the host's copy of that contract, and it answers four questions from
-  the same rows:
+  Every question about a hand is answered from these rows:
 
     * **kind** — what `Aqua.Kinds.kind_for/2` and the AQUA page classify
-      a `tool.action` as;
-    * **child call** — the catalyst and the input the guest would build
-      for it (`child_call/3`), so an approved card can be run by the host
-      exactly as the guest would have run it;
+      a `tool.action` as, and which reads are reviewed as safe to
+      re-dispatch after an uncertain recovery (`recovery: :replay_safe`);
+    * **child call** — the catalyst and the input a `tool.action` becomes
+      (`child_call/3`), which `Aqua.Loop.Binding` dispatches;
     * **canonical operation** — what an `execution.run` of one of those
       catalysts, or a `files` call whose path lands in the storage
       boundary, IS (`canonical/2`, `canonical_files/2`): wrappers are
-      aliases of canonical operations, and every policy decision — the
-      guest's guard, a card, an approval — is made on the canonical one;
+      aliases of canonical operations, and every policy decision — a
+      card, an approval — is made on the canonical one;
     * **`auto_only`** — `request_setup.open` is a UI event, not a catalyst;
       an `ask` on it would be a card nothing can execute.
 
@@ -32,9 +28,9 @@ defmodule Aqua.VirtualTools do
   reverse mapping answers both and the caller decides what an ambiguous
   request may do.
 
-  The guest's `tools.rs` carries the same rows; `virtual_tools.json`
-  beside it is the fixture both sides run, and
-  `Prism.AquaRustConsistencyTest` holds the schema enums to this catalog.
+  Until the host loop replaces the AQUA formula, the guest's `tools.rs`
+  carries the same rows and `Prism.AquaRustConsistencyTest` holds its
+  enums to this table.
   """
 
   @files_catalyst "catalyst:local.files"
@@ -49,11 +45,11 @@ defmodule Aqua.VirtualTools do
       description: "Athanor file ops. Wraps catalyst:local.files.",
       catalyst: @files_catalyst,
       actions: %{
-        "read" => %{kind: :read, planes: [:in_chain]},
-        "list" => %{kind: :read, planes: [:in_chain]},
-        "search" => %{kind: :read, planes: [:in_chain]},
-        "grep" => %{kind: :read, planes: [:in_chain]},
-        "tree" => %{kind: :read, planes: [:in_chain]},
+        "read" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
+        "list" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
+        "search" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
+        "grep" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
+        "tree" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
         "write" => %{kind: :write, planes: [:in_chain]},
         "edit" => %{kind: :write, planes: [:in_chain]},
         "delete" => %{kind: :destructive, planes: [:in_chain]}
@@ -64,8 +60,8 @@ defmodule Aqua.VirtualTools do
       description: "Persistent k/v under data/storage/. Wraps catalyst:local.files.",
       catalyst: @files_catalyst,
       actions: %{
-        "read" => %{kind: :read, planes: [:in_chain]},
-        "list" => %{kind: :read, planes: [:in_chain]},
+        "read" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
+        "list" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
         "write" => %{kind: :write, planes: [:in_chain]},
         "delete" => %{kind: :destructive, planes: [:in_chain]}
       }
@@ -183,9 +179,9 @@ defmodule Aqua.VirtualTools do
   end
 
   @doc "Whether `tool` is a virtual tool managed by AQUA."
-  @spec virtual_tool?(String.t()) :: boolean()
-  def virtual_tool?(tool) when is_binary(tool), do: Map.has_key?(@catalog, tool)
-  def virtual_tool?(_), do: false
+  @spec hand?(String.t()) :: boolean()
+  def hand?(tool) when is_binary(tool), do: Map.has_key?(@catalog, tool)
+  def hand?(_), do: false
 
   @doc """
   The second arm of the plane taxonomy audit.

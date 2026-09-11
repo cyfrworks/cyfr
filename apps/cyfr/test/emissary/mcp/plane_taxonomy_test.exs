@@ -62,7 +62,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
   alias Cyfr.Ops.Catalog
-  alias Aqua.VirtualTools, as: AquaVirtualTools
+  alias Aqua.Hands
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
   # The root suite loads all eight; assert the count so a standalone run
@@ -193,11 +193,11 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   describe "agent virtual tools" do
     test "the second audit arm passes" do
-      assert AquaVirtualTools.audit_planes() == :ok
+      assert Hands.audit_planes() == :ok
     end
 
     test "every virtual action is in-chain only" do
-      for {tool, %{actions: actions}} <- AquaVirtualTools.catalog(),
+      for {tool, %{actions: actions}} <- Hands.catalog(),
           {action, %{planes: planes}} <- actions do
         assert planes == [:in_chain], "#{tool}.#{action} claims #{inspect(planes)}"
       end
@@ -206,7 +206,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
     test "virtual tools are not registered tools" do
       registered = annotated_actions() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
 
-      for tool <- Map.keys(AquaVirtualTools.catalog()) do
+      for tool <- Map.keys(Hands.catalog()) do
         refute MapSet.member?(registered, tool),
                "#{tool} is both a virtual tool and a registered tool — one taxonomy would hide the other"
       end

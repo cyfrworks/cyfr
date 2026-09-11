@@ -71,7 +71,7 @@ defmodule PrismWeb.AquaLive.Catalog do
       end)
       |> Enum.reject(fn {_name, actions} -> actions == [] end)
 
-    virtual = Aqua.VirtualTools.list_for_panel()
+    virtual = Aqua.Hands.list_for_panel()
 
     # `native_search` is a bare-tool exclusivity gate — has no actions but
     # appears in the policy as a single boolean key.

@@ -14,7 +14,7 @@ defmodule Prism.AquaTemplatePolicyTest do
   use ExUnit.Case, async: true
 
   alias Cyfr.Ops.Catalog
-  alias Aqua.VirtualTools, as: AquaVirtualTools
+  alias Aqua.Hands
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
 
@@ -77,11 +77,11 @@ defmodule Prism.AquaTemplatePolicyTest do
         false
 
       [tool, action] ->
-        if AquaVirtualTools.virtual_tool?(tool) do
+        if Hands.hand?(tool) do
           # A virtual tool's ACTION has to exist too. Accepting the whole
           # namespace on the strength of its name let `storage.frobnicate`
           # through — granted in the template, dispatched by nothing.
-          is_nil(AquaVirtualTools.kind_for(tool, action))
+          is_nil(Hands.kind_for(tool, action))
         else
           refused_action?(tool, action)
         end

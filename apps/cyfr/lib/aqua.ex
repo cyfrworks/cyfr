@@ -19,7 +19,7 @@ defmodule Aqua do
     agent's declared `tool_policy`.
   - `Aqua.Wire` — validates the `aqua-actions` blocks a model emits
     into typed client intents, against the agent's tool policy.
-  - `Aqua.VirtualTools` — the UI-plane pseudo-tools those intents name.
+  - `Aqua.Hands` — the UI-plane pseudo-tools those intents name.
   - `Aqua.AgentConfig` — the soul's and the roles' definitions and prompts.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into an
     estate you belong to.

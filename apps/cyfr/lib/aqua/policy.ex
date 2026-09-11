@@ -17,8 +17,8 @@ defmodule Aqua.Policy do
   file written past this door reaches the guest already demoted.
   """
 
+  alias Aqua.Hands
   alias Aqua.Kinds
-  alias Aqua.VirtualTools
   alias Compendium.AquaAgent
 
   @type agent_type :: String.t()
@@ -63,7 +63,7 @@ defmodule Aqua.Policy do
 
       [tool, action] ->
         cond do
-          VirtualTools.auto_only?(tool, action) -> nil
+          Hands.auto_only?(tool, action) -> nil
           Kinds.kind_for(tool, action) == nil -> nil
           Kinds.auto_permitted?(tool, action) -> nil
           true -> {:error, "#{key} always asks — it cannot be set to auto"}
@@ -84,7 +84,7 @@ defmodule Aqua.Policy do
     Enum.find_value(policy, :ok, fn {key, value} ->
       case String.split(key, ".", parts: 2) do
         [tool, action] ->
-          if VirtualTools.auto_only?(tool, action) and value != "auto",
+          if Hands.auto_only?(tool, action) and value != "auto",
             do: {:error, "#{key} runs on its own — it is auto or absent, never ask"}
 
         _ ->
