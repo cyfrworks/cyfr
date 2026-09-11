@@ -165,7 +165,7 @@ defmodule PrismWeb.AquaLive do
     {:noreply, assign(socket, :consent_sheet_ref, nil)}
   end
 
-  # list-models async result. Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
+  # The catalogue, async. Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
   def handle_info({:list_models_result, {:ok, result}}, socket) do
     %{models: models, refs: refs} = PrismWeb.ModelCatalog.parse(result)
 

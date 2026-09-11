@@ -135,22 +135,4 @@ defmodule PrismWeb.AquaLive.Catalog do
   end
 
   def decode_model_choice(_), do: :noop
-
-  @doc """
-  Catalysts return their list-models response verbatim — typically a list
-  of `%{"id" => ...}` objects, sometimes wrapped in a `{"data": [...]}`
-  envelope. Reduce to a plain list of model ids.
-  """
-  def normalize_provider_models(value) do
-    cond do
-      is_list(value) -> Enum.map(value, &model_id/1) |> Enum.reject(&is_nil/1)
-      is_map(value) and is_list(value["data"]) -> normalize_provider_models(value["data"])
-      true -> []
-    end
-  end
-
-  defp model_id(m) when is_binary(m), do: m
-  defp model_id(%{"id" => id}) when is_binary(id), do: id
-  defp model_id(%{id: id}) when is_binary(id), do: id
-  defp model_id(_), do: nil
 end

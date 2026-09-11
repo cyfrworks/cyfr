@@ -23,7 +23,7 @@ defmodule Opus.BootstrapFirstRunTest do
   @seed_root Path.expand("../../../../seed", __DIR__)
   @models ~w(claude openai gemini grok openrouter)
   @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.1"] ++
-             Enum.map(@models, &"catalysts/local/#{&1}/1.1.0")
+             Enum.map(@models, &"catalysts/local/#{&1}/1.2.0")
   # The AQUA formula at its newest shipped version, found rather than
   # pinned: a release bump must not leave this naming a directory that no
   # longer ships.

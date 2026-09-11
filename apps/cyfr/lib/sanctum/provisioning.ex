@@ -687,13 +687,14 @@ defmodule Sanctum.Provisioning do
   end
 
   # Idempotent by construction: every already-consented ref lands in
-  # `skipped`, so only what the release just added mints anything.
+  # `skipped`, so only what the release just added mints anything, and
+  # only a bootstrap-only head the release moved is re-minted.
   defp bootstrap_synced(ctx, athanor_id) do
     case Sanctum.Consent.Bootstrap.run(ctx) do
       {:ok, %{minted: minted, revised: revised}} when minted != [] or revised != [] ->
         Logger.info(
           "[Provisioning] #{athanor_id}: baseline consents minted for " <>
-            "[#{Enum.join(minted, ", ")}], selections revised for [#{Enum.join(revised, ", ")}]"
+            "[#{Enum.join(minted, ", ")}], re-minted for [#{Enum.join(revised, ", ")}]"
         )
 
       {:ok, _nothing_new} ->

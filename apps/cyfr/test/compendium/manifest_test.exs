@@ -63,4 +63,27 @@ defmodule Compendium.ManifestTest do
       assert Manifest.decode_strict(:atom) == {:error, :malformed_manifest}
     end
   end
+
+  describe "contracts" do
+    test "a manifest declares contracts as family/name@major names" do
+      assert :ok = Manifest.validate(%{"contracts" => ["model/chat@1", "search/query@12"]})
+      assert Manifest.contracts(%{"contracts" => ["model/chat@1"]}) == ["model/chat@1"]
+      assert Manifest.contracts(%{}) == []
+      assert "contracts" in Manifest.known_keys()
+    end
+
+    test "a contract off the grammar, or a block that is not a list, is refused" do
+      for bad <- ["model/chat", "model/chat@0", "Model/chat@1", "chat@1", "model/chat@1.0", 7] do
+        assert {:error, {:invalid_contracts, _}} = Manifest.validate(%{"contracts" => [bad]}),
+               inspect(bad)
+      end
+
+      assert {:error, {:invalid_contracts, _}} =
+               Manifest.validate(%{"contracts" => "model/chat@1"})
+
+      # A read of a malformed block declares nothing rather than raising.
+      assert Manifest.contracts(%{"contracts" => ["model/chat@1", 7, "nope"]}) == ["model/chat@1"]
+      assert Manifest.contracts(%{"contracts" => "model/chat@1"}) == []
+    end
+  end
 end

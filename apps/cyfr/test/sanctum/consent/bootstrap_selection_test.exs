@@ -7,8 +7,9 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   shipped catalyst that needs a credential, that catalyst's default
   profile — so the key a person binds on the catalyst is what the
   assistant runs it with. A person's own formula selects nothing at
-  bootstrap, and a boot revises a bootstrap-only consent that lacks the
-  selections its dependencies offer, and nothing else.
+  bootstrap. A boot re-mints a bootstrap-only consent that lacks the
+  selections its dependencies offer, or whose closure the seed moved,
+  and leaves a person's consent and a person's closure alone.
   """
 
   use ExUnit.Case, async: false
@@ -188,6 +189,99 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     assert person.granted_via == "interactive"
     assert edge!(person.resolved_policy, @aqua, @claude).vault == nil
     assert aqua.id == person.profile_id
+  end
+
+  test "a seed update re-mints a bootstrap-only consent; a person's consent or closure stays", %{
+    ctx: ctx
+  } do
+    {:ok, _} = Bootstrap.run(ctx)
+    {_aqua, first, _} = head!(ctx, @aqua)
+    {_, list_first, _} = head!(ctx, "formula:local.list-models")
+    old_digest = first.activation |> Jason.decode!() |> Map.fetch!(@claude)
+
+    # A release retires the claude version this estate holds and ships a
+    # new one. Until the estate takes the new version, its copy of the old
+    # one is no longer a shipped path — but it is unchanged and the head
+    # names it, so the selection stays and nothing is re-minted.
+    seed_dir = Application.get_env(:cyfr, :seed_path)
+    current = shipped_version("catalysts", "claude")
+    ship_version!(seed_dir, "claude", current, "9.0.0")
+    File.rm_rf!(Path.join([seed_dir, "components", "catalysts", "local", "claude", current]))
+
+    assert {:ok, :own} =
+             Arca.Overlay.unit_status(ctx, ["components", "catalysts", "local", "claude", current])
+
+    assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
+    {_, kept, _} = head!(ctx, @aqua)
+    assert kept.revision == first.revision
+    assert %{via: %{label: "default"}} = edge!(kept.resolved_policy, @aqua, @claude).vault
+
+    # The estate takes the new release: the assistant's closure moves, and
+    # every node of it is the seed's own or unchanged since the head.
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "components")
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+
+    # The catalyst's own head re-mints too: its new release widened its
+    # caps, and that closure is the seed's alone.
+    {:ok, %{minted: [], revised: revised}} = Bootstrap.run(ctx)
+    assert Enum.sort(revised) == [@claude, @aqua, "formula:local.list-models"]
+
+    {_, healed, _} = head!(ctx, @aqua)
+    assert healed.revision == first.revision + 1
+    assert healed.granted_via == "bootstrap"
+    assert healed.shape_digest != first.shape_digest
+    new_digest = healed.activation |> Jason.decode!() |> Map.fetch!(@claude)
+    assert new_digest != old_digest
+    # The selection rides into the re-mint.
+    assert %{via: %{label: "default"}} = edge!(healed.resolved_policy, @aqua, @claude).vault
+    {_, list_healed, _} = head!(ctx, "formula:local.list-models")
+    assert list_healed.revision == list_first.revision + 1
+
+    # Idempotent once re-minted.
+    assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
+
+    # A person's own claude release moves the closure again; that closure
+    # is not the seed's, so the boot leaves the head where it is.
+    own = ["components", "catalysts", "local", "claude", "9.1.0"]
+    shipped = ["components", "catalysts", "local", "claude", "9.0.0"]
+    {:ok, manifest} = Arca.get_json(ctx, shipped ++ ["cyfr-manifest.json"])
+    {:ok, wasm} = Arca.get(ctx, shipped ++ ["catalyst.wasm"])
+    :ok = Arca.put(ctx, own ++ ["catalyst.wasm"], wasm)
+
+    :ok =
+      Arca.put_json(
+        ctx,
+        own ++ ["cyfr-manifest.json"],
+        manifest
+        |> Map.put("version", "9.1.0")
+        |> put_in(["caps", "egress", "methods"], ["GET", "POST", "DELETE", "PUT"])
+      )
+
+    {:ok, _} = Compendium.Registry.register_from_arca(ctx, own)
+    assert {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
+    assert {@aqua, :shape_moved} in skipped
+    {_, still, _} = head!(ctx, @aqua)
+    assert still.revision == healed.revision
+  end
+
+  # A new shipped release of a catalyst in the test seed: the current
+  # version's files under a new version directory, the manifest bumped and
+  # its egress widened so the release digest moves as a real release does.
+  defp ship_version!(seed_dir, name, from, to) do
+    src = Path.join([seed_dir, "components", "catalysts", "local", name, from])
+    dest = Path.join([seed_dir, "components", "catalysts", "local", name, to])
+    File.mkdir_p!(dest)
+    File.cp!(Path.join(src, "catalyst.wasm"), Path.join(dest, "catalyst.wasm"))
+
+    manifest =
+      src
+      |> Path.join("cyfr-manifest.json")
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.put("version", to)
+      |> put_in(["caps", "egress", "methods"], ["GET", "POST", "DELETE"])
+
+    File.write!(Path.join(dest, "cyfr-manifest.json"), Jason.encode!(manifest))
   end
 
   defp shipped_version(plural, name) do

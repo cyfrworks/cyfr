@@ -504,6 +504,7 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `tags` | array | Optional | Free-form discovery tags shown in search |
 | `category` | string | Optional | Registry category for browsing |
 | `forked_from` | string | Optional | The ref this component was forked from (`component.fork` stamps it) |
+| `contracts` | string[] | Catalysts (if they answer one) | Named operation sets the component answers on its `run` export, as `family/name@major` — `model/chat@1` is the one the host reads (see [Model catalysts](#model-catalysts-the-modelchat1-contract)) |
 
 ### Fields by Type
 
@@ -517,6 +518,7 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `schema` (tables/queries) | — | — | — | Yes (if has data) |
 | `examples` | Recommended | Recommended | Recommended | — |
 | `dependencies.static` | — | — | Yes (if invokes sub-components) | Optional |
+| `contracts` | — | Model catalysts | — | — |
 
 ### `needs` Section
 
@@ -910,6 +912,102 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 - Use `component.setup_plan` to check whether a sub-component has every need bound before invoking it.
 
 ---
+
+## Model catalysts: the `model/chat@1` contract
+
+A model catalyst fronts an LLM provider. Beyond whatever provider operations it offers, it declares one contract in its manifest and answers it on its one `run` export, so the assistant, the console's model picker and any formula drive every model the same way:
+
+```json
+"contracts": ["model/chat@1"]
+```
+
+The contract is three operations of the ordinary catalyst envelope (`{"operation", "params"}` in, `{"status", "data"}` or `{"status", "error"}` out). The five bundled catalysts (`catalyst:local.{claude,openai,gemini,grok,openrouter}`) implement it in their `src/src/chat.rs`; the provider's request and response shapes are built and read there and never leave the binary. The HTTP call and the key stay in the catalyst.
+
+**`describe`** — what the catalyst can do, answered without a key:
+
+```json
+{"operation": "describe", "params": {}}
+```
+```json
+{"status": 200, "data": {
+  "contracts": ["model/chat@1"], "provider": "anthropic",
+  "tools": true, "provider_tools": ["web_search"],
+  "media_types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"],
+  "streaming": false, "defaults": {"max_tokens": 16384}
+}}
+```
+
+**`models`** — the models the bound key can reach, in one shape:
+
+```json
+{"operation": "models", "params": {}}
+```
+```json
+{"status": 200, "data": {"models": [
+  {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6"},
+  {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "context_window": 1048576, "max_output_tokens": 65536}
+]}}
+```
+
+`context_window` and `max_output_tokens` appear where the provider reports them. The console's model picker is this operation over every installed catalyst that declares the contract, each run with the key its own profile binds.
+
+**`chat`** — one model turn:
+
+```json
+{"operation": "chat", "params": {
+  "model": "claude-sonnet-4-6",
+  "system": "You are the estate's assistant.",
+  "messages": [
+    {"role": "user", "content": "Read a.txt"},
+    {"role": "assistant", "content": [
+      {"type": "text", "text": "Reading it."},
+      {"type": "tool_call", "id": "call_1", "name": "files.read", "arguments": {"path": "a.txt"}}
+    ]},
+    {"role": "tool", "content": [
+      {"type": "tool_result", "tool_call_id": "call_1", "name": "files.read", "content": "hello", "is_error": false}
+    ]},
+    {"role": "user", "content": [
+      {"type": "text", "text": "And this?"},
+      {"type": "image", "media_type": "image/png", "data": "<base64>"}
+    ]}
+  ],
+  "tools": [{"name": "files.read", "description": "Read a file",
+             "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}],
+  "provider_tools": ["web_search"],
+  "max_tokens": 4096,
+  "temperature": 0.2
+}}
+```
+
+Request fields: `model` (required); `system`; `messages` (required, non-empty — `content` is a string or a list of blocks: `text` in any turn; `image` and `document` (`media_type`, base64 `data`, optional `filename`) in a user turn; `tool_call` (`id`, `name`, `arguments`, and `provider_data` when a response carried it — send it back unchanged) in an assistant turn; `tool_result` (`tool_call_id`, `name`, `content` as a string or text blocks, `is_error`) in a tool turn); `tools` (`name`, `description`, `parameters` as JSON Schema); `provider_tools` (names from `describe`, run inside the provider with no approval round trip); `max_tokens`; `temperature`.
+
+Response:
+
+```json
+{"status": 200, "data": {
+  "model": "claude-sonnet-4-6-20260301",
+  "content": [
+    {"type": "text", "text": "Here is b.txt as well."},
+    {"type": "tool_call", "id": "call_2", "name": "files.read", "arguments": {"path": "b.txt"}}
+  ],
+  "stop_reason": "tool_call",
+  "usage": {"input_tokens": 1200, "output_tokens": 40, "cache_read_tokens": 1000, "cache_write_tokens": 0}
+}}
+```
+
+`stop_reason` is one of `end_turn`, `tool_call`, `max_tokens`, `content_filter`, `other`. `input_tokens` counts the whole prompt; the cache counts are the part of it the provider served from its cache or wrote to it.
+
+A refusal is typed, with the provider's own body beside it when the refusal is the provider's:
+
+```json
+{"status": 429, "error": {"type": "rate_limited", "message": "…", "provider": {"…": "the provider's body"}}}
+```
+
+`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `unknown_operation`.
+
+The catalyst world's `run` returns once, so `describe` reports `streaming: false` and a whole response is answered.
+
+To ship a model catalyst of your own: declare the contract, answer the three operations, and cover the mapping with host-target unit tests (`cargo test` in `src/`, as the bundled ones do). A request that does not parse is refused as `invalid_request` before any key is read; `describe` answers without a key; `chat` and `models` never answer provider-shaped data.
 
 ## Needs & the Vault
 

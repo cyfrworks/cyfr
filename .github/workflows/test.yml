@@ -141,12 +141,17 @@ jobs:
           fi
           cargo-component --version
       # The AQUA formula guest's own suite — its one dispatch table, the
-      # role gate, the attachment strip — runs on the host target; the
-      # shipped binary is not rebuilt here.
-      - name: Test the AQUA formula guest
+      # role gate, the attachment strip — and each model catalyst's
+      # `model/chat@1` mapping run on the host target; the shipped
+      # binaries are not rebuilt here.
+      - name: Test the AQUA formula guest and the model catalysts
         run: |
           for src in seed/components/formulas/local/aqua/*/src; do
             (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/aqua-guest-target")
+          done
+          for chat in seed/components/catalysts/local/*/*/src/src/chat.rs; do
+            src="$(dirname "$(dirname "$chat")")"
+            (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/catalyst-guest-target")
           done
       # Every shipped binary is the build of its source: the stamp the build
       # script writes binds the binary's digest to the source tree's, so a

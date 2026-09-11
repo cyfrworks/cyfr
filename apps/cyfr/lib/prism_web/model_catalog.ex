@@ -3,33 +3,28 @@
 
 defmodule PrismWeb.ModelCatalog do
   @moduledoc """
-  One loader for the model catalogue (`formula:local.list-models`).
+  One loader for the model catalogue the pickers show.
 
-  Callers use `load/1` to request models and `parse/1` to decode
-  the resulting message.
+  Callers use `load/1` to request models and `parse/1` to decode the
+  resulting message.
 
-  The catalogue is a formula run against every provider the athanor holds
-  a key for, and a pane asked for it on every mount — every thread switch.
-  So a run's answer is kept per athanor in `Arca.Cache` for a short while
-  (`ttl_ms/0`): a hit is delivered to the caller's mailbox at once, with no
-  run and no deadline armed, and a key bound or dropped in the meantime is
-  seen when the entry lapses or `forget/1` is called.
+  The catalogue is `Cyfr.Models.catalogue/1`: every installed catalyst
+  that speaks `model/chat@1`, asked for its models with the key the
+  estate bound on it. A pane asks for it on every mount — every thread
+  switch — so a run's answer is kept per athanor in `Arca.Cache` for a
+  short while (`ttl_ms/0`): a hit is delivered to the caller's mailbox at
+  once, with no run and no deadline armed, and a key bound or dropped in
+  the meantime is seen when the entry lapses or `forget/1` is called.
   """
 
-  @list_models_ref "formula:local.list-models"
-
-  # If list-models hangs, the picker settles on the stored model instead
-  # of staying empty. One deadline (the longer of the two the pages had —
-  # a formula run against several providers legitimately takes a while).
+  # If a provider hangs, the picker settles on the stored model instead
+  # of staying empty. One deadline for the whole listing.
   @timeout_ms 60_000
 
-  # Short: long enough that switching threads does not run the formula
+  # Short: long enough that switching threads does not run the listing
   # again, short enough that a key bound on the AQUA page shows in the
   # picker within the minute even where nothing calls `forget/1`.
   @ttl_ms :timer.minutes(1)
-
-  @doc "The formula ref, for anything that names it."
-  def ref, do: @list_models_ref
 
   @doc "How long one athanor's catalogue is kept, in milliseconds."
   @spec ttl_ms() :: pos_integer()
@@ -65,13 +60,7 @@ defmodule PrismWeb.ModelCatalog do
 
     Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
       Cyfr.LoggerContext.restore(logger_metadata)
-
-      result =
-        PrismWeb.Ops.call_tool(ctx, "execution/run", %{
-          "reference" => @list_models_ref,
-          "input" => %{}
-        })
-
+      result = Cyfr.Models.catalogue(ctx)
       with {:ok, catalogue} <- result, do: remember(athanor_id, catalogue)
       send(lv, {:list_models_result, result})
     end)
@@ -96,36 +85,20 @@ defmodule PrismWeb.ModelCatalog do
 
   @doc """
   Decode a `{:list_models_result, {:ok, result}}` payload into
-  `%{models: %{provider => [model]}, refs: %{}}` — both halves, so a page
-  cannot silently drop one again.
+  `%{models: %{provider => [model_id]}, refs: %{provider => ref}}` — both
+  halves, so a page cannot silently drop one again.
   """
   @spec parse(term()) :: %{models: map(), refs: map()}
-  def parse(result) do
-    raw = result[:result] || result
-
-    decoded =
-      cond do
-        is_binary(raw) ->
-          case Jason.decode(raw) do
-            {:ok, m} -> m
-            _ -> %{}
-          end
-
-        is_map(raw) ->
-          raw
-
-        true ->
-          %{}
-      end
-
+  def parse(result) when is_map(result) do
     models =
-      (decoded["models"] || %{})
-      |> Map.new(fn {provider, value} ->
-        {provider, PrismWeb.AquaLive.Catalog.normalize_provider_models(value)}
-      end)
+      (result["models"] || %{})
+      |> Enum.filter(fn {_provider, ids} -> is_list(ids) end)
+      |> Map.new(fn {provider, ids} -> {provider, Enum.filter(ids, &is_binary/1)} end)
 
-    %{models: models, refs: decoded["refs"] || %{}}
+    %{models: models, refs: result["refs"] || %{}}
   end
+
+  def parse(_), do: %{models: %{}, refs: %{}}
 
   # Spelled here rather than in `Arca.Cache.Keys`: the entry is the
   # console's own read-through, nothing else reads or sweeps it by shape.

@@ -614,9 +614,10 @@ defmodule PrismWeb.AquaLiveTest do
       send(view.pid, {:consent_granted, "catalyst:local.http:1.1.0", %{}})
       assert render(view) =~ "Model connected."
 
-      # The kept entry is gone: a load from here finds no hit to hand back.
+      # The kept entry is gone: a load from here finds no hit to hand back,
+      # whatever a fresh run answers.
       PrismWeb.ModelCatalog.load(ctx)
-      refute_received {:list_models_result, {:ok, _}}
+      refute_received {:list_models_result, {:ok, %{"models" => %{"kept" => _}}}}
     end
 
     test "the prompt editor is a dialog with a sibling backdrop and an Escape of its own",

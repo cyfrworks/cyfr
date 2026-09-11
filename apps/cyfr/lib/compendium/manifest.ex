@@ -70,13 +70,29 @@ defmodule Compendium.Manifest do
     description license tags category
     needs caps dependencies tincture
     schema examples defaults forked_from
+    contracts
   )
+
+  # A contract is `<family>/<name>@<major>`: the operations a component
+  # answers on its one export, named so a host can ask for them by name
+  # (`Cyfr.Models` reads `model/chat@1`).
+  @contract_pattern ~r/\A[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*@[1-9][0-9]*\z/
 
   @legacy_blocks ~w(setup oauth wasi)
 
   @doc "The closed top-level manifest key roster (docs derive from this)."
   @spec known_keys() :: [String.t()]
   def known_keys, do: @known_keys
+
+  @doc """
+  The contracts a manifest declares (`"contracts": ["model/chat@1"]`), as
+  written; an absent or malformed block declares none.
+  """
+  @spec contracts(map()) :: [String.t()]
+  def contracts(%{"contracts" => list}) when is_list(list),
+    do: Enum.filter(list, &(is_binary(&1) and Regex.match?(@contract_pattern, &1)))
+
+  def contracts(_), do: []
 
   @doc """
   Validate a decoded manifest at a write boundary — the ONE manifest
@@ -89,7 +105,8 @@ defmodule Compendium.Manifest do
       * unknown top-level keys;
       * malformed `needs` or `caps` blocks;
       * malformed `tincture` or `dependencies` blocks, which feed CSP,
-        activation-graph and release-digest validation.
+        activation-graph and release-digest validation;
+      * a `contracts` block that is not a list of `family/name@major` names.
   """
   @spec validate(map()) :: :ok | {:error, term()}
   def validate(manifest) when is_map(manifest) do
@@ -97,10 +114,30 @@ defmodule Compendium.Manifest do
          :ok <- reject_unknown_keys(manifest),
          :ok <- Compendium.Manifest.Needs.validate(manifest),
          :ok <- Compendium.Manifest.Caps.validate(manifest),
-         :ok <- validate_tincture_block(manifest) do
+         :ok <- validate_tincture_block(manifest),
+         :ok <- validate_contracts_block(manifest) do
       validate_dependencies_block(manifest)
     end
   end
+
+  defp validate_contracts_block(%{"contracts" => list}) when is_list(list) do
+    case Enum.reject(list, &(is_binary(&1) and Regex.match?(@contract_pattern, &1))) do
+      [] ->
+        :ok
+
+      bad ->
+        {:error,
+         {:invalid_contracts,
+          "Manifest declares contract(s) that are not family/name@major: " <>
+            Enum.map_join(bad, ", ", &inspect/1)}}
+    end
+  end
+
+  defp validate_contracts_block(%{"contracts" => other}) do
+    {:error, {:invalid_contracts, "Manifest `contracts` must be a list, got: #{inspect(other)}"}}
+  end
+
+  defp validate_contracts_block(_), do: :ok
 
   def validate(_), do: :ok
 

@@ -4,10 +4,12 @@
 defmodule Opus.SeedModelCatalystsTest do
   @moduledoc """
   The five model catalysts the seed ships run under this host: each
-  instantiates against the host's catalyst world, reads the key its need
-  binds through `cyfr:vault/read`, and answers the catalyst envelope. The
-  operation asked for is one no catalyst has, so the key is read and
-  nothing is dialled.
+  instantiates against the host's catalyst world, declares and answers
+  `model/chat@1` (`describe` without a key, a chat request off the
+  contract refused before the key is read), reads the key its need binds
+  through `cyfr:vault/read`, and answers the catalyst envelope. The
+  operation asked for after the key is one no catalyst has, so the key is
+  read and nothing is dialled.
   """
 
   use ExUnit.Case, async: false
@@ -65,6 +67,31 @@ defmodule Opus.SeedModelCatalystsTest do
 
       {:ok, %{minted: minted}} = Bootstrap.run(ctx)
       assert ref in minted
+
+      # The manifest declares the contract, and the binary answers it
+      # before any key exists: `describe` needs none, and a chat request
+      # off the contract is refused as such rather than as a key failure.
+      {:ok, component} = Compendium.Registry.get_latest(ctx, name, "local", "catalyst")
+      assert Cyfr.Models.speaks_chat?(component.manifest)
+
+      assert {:ok, %{result: described}} =
+               MCP.handle("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => ref,
+                 "input" => %{"operation" => "describe", "params" => %{}}
+               })
+
+      assert {:ok, capabilities} = Cyfr.Models.decode_envelope(described)
+      assert capabilities["contracts"] == [Cyfr.Models.chat_contract()]
+      assert capabilities["tools"] == true and capabilities["streaming"] == false
+      assert is_list(capabilities["provider_tools"]) and is_list(capabilities["media_types"])
+
+      assert {:error, "'model' is required"} =
+               MCP.handle("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => ref,
+                 "input" => %{"operation" => "chat", "params" => %{"messages" => []}}
+               })
 
       # The operator binds a vault entry to the catalyst's one need.
       {:ok, entry} =
