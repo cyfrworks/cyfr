@@ -70,6 +70,27 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
+    test "an agent is never rooted from the wire: a turn starts through conversation.send alone",
+         %{ctx: ctx} do
+      for action <- ["run", "run_stream"] do
+        assert {:error, {:invalid_argument, message}} =
+                 MCP.handle("execution", ctx, %{
+                   "action" => action,
+                   "reference" => "agent:local.aqua",
+                   "input" => %{}
+                 })
+
+        assert message =~ "conversation.send"
+      end
+
+      assert {:error, {:invalid_argument, _}} =
+               Cyfr.Ops.Catalog.call_external("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => "agent:local.aqua",
+                 "input" => %{}
+               })
+    end
+
     test "returns 1 action-based tool" do
       tools = MCP.tools()
       assert length(tools) == 1

@@ -181,18 +181,40 @@ defmodule Opus.TurnRoot do
   @doc """
   Local cleanup once the turn's terminal write landed
   (`Arca.TurnStorage.finish/4`): the keeper stops and the slot is
-  released. `opts`: `:claim`.
+  released. `opts`: `:claim`; `:failed` — a sentence — closes a root
+  still open as failed first, for a turn that ended before it carried
+  its root (a row the turn's own terminal write could not reach).
   """
   @spec release(Context.t(), String.t(), keyword()) :: :ok
-  def release(%Context{}, _execution_id, opts) do
+  def release(%Context{} = ctx, execution_id, opts) do
     case Keyword.get(opts, :claim) do
-      %{keeper: keeper, token: token} ->
+      %{keeper: keeper, token: token} = claim ->
         Lease.stop(keeper)
+
+        case Keyword.get(opts, :failed) do
+          error when is_binary(error) -> fail_open_root(ctx, execution_id, claim.attempt, error)
+          _ -> :ok
+        end
+
         Opus.Slot.release(token)
 
       _ ->
         :ok
     end
+
+    :ok
+  end
+
+  # A row the turn's terminal write already closed matches nothing here.
+  defp fail_open_root(ctx, execution_id, attempt, error) do
+    _ =
+      Arca.Execution.record_end(
+        ctx,
+        execution_id,
+        "failed",
+        %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: error},
+        attempt
+      )
 
     :ok
   end

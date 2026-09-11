@@ -96,6 +96,31 @@ defmodule Aqua.TapeTest do
     assert {:error, :client_id_reused} = Tape.accept(ctx, conv.id, other_actor)
   end
 
+  test "a message id already taken is the same send by its client id, and another's otherwise",
+       %{ctx: ctx, conv: conv} do
+    id = Cyfr.UUID7.generate_id("msg")
+
+    attrs = %{
+      message: %{author: ctx.user_id, content: "@aqua go", id: id, client_id: "c-id"},
+      turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+    }
+
+    assert {:ok, %{message: %{id: ^id}, turn: turn, replayed: false}} =
+             Tape.accept(ctx, conv.id, attrs)
+
+    assert {:ok, %{message: %{id: ^id}, turn: ^turn, replayed: true}} =
+             Tape.accept(ctx, conv.id, attrs)
+
+    # The same id under another client id, or under none, is another send.
+    other = put_in(attrs, [:message, :client_id], "c-other")
+    assert {:error, :message_id_reused} = Tape.accept(ctx, conv.id, other)
+
+    bare = update_in(attrs, [:message], &Map.delete(&1, :client_id))
+    assert {:error, :message_id_reused} = Tape.accept(ctx, conv.id, bare)
+
+    assert [_] = Conversations.messages(ctx, conv.id)
+  end
+
   test "rows are broadcast only after they committed, and a moved fence refuses", %{
     ctx: ctx,
     conv: conv

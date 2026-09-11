@@ -114,6 +114,7 @@ defmodule PrismWeb.ConversationPaneLive do
       |> assign(:solo_human, Sanctum.Tenancy.Members.solo?(ctx.athanor_id))
       |> assign(:own?, Users.own_athanor?(ctx.user_id, ctx.athanor_id))
       |> assign(:links, [])
+      |> assign(:held_send, nil)
       |> assign(:model_override, nil)
       |> assign(:models_by_provider, %{})
       |> assign(:models_loaded, false)
@@ -297,6 +298,29 @@ defmodule PrismWeb.ConversationPaneLive do
 
   def handle_event("dismiss_restart", _params, socket),
     do: {:noreply, assign(socket, :restart_prompt, nil)}
+
+  def handle_event("retry_send", _params, %{assigns: %{held_send: %{} = held}} = socket),
+    do: deliver(socket, held, nil)
+
+  def handle_event("retry_send", _params, socket), do: {:noreply, socket}
+
+  def handle_event("discard_send", _params, %{assigns: %{held_send: %{} = held}} = socket) do
+    ctx = socket.assigns.context
+    Aqua.Attachments.discard(ctx, held.conversation_id, held.message_id, held.attachments)
+    {:noreply, socket |> assign(:held_send, nil) |> mirror(nil)}
+  end
+
+  def handle_event("discard_send", _params, socket), do: {:noreply, socket}
+
+  # The held send the browser kept across a reload, offered back by the
+  # pane's hook. It is trusted no further than a send over the wire: the
+  # shape is checked and the conversation must be this member's to read.
+  def handle_event("restore_draft", params, socket) do
+    case restored(socket, params) do
+      {:ok, envelope} -> deliver(socket, envelope, nil)
+      :error -> {:noreply, mirror(socket, nil)}
+    end
+  end
 
   def handle_event("stop", _params, socket) do
     case socket.assigns.conversation do
@@ -508,12 +532,19 @@ defmodule PrismWeb.ConversationPaneLive do
         if socket.assigns.preparing? and not preparing?(athanor) do
           roster = Aqua.Roster.roster(ctx)
 
-          {:noreply,
-           socket
-           |> assign(:preparing?, false)
-           |> assign(:roster, roster)
-           |> assign(:model_ready, model_ready(ctx, roster))
-           |> load_models()}
+          socket =
+            socket
+            |> assign(:preparing?, false)
+            |> assign(:roster, roster)
+            |> assign(:model_ready, model_ready(ctx, roster))
+            |> load_models()
+
+          # The send held for the fill goes now, once; a refusal holds it
+          # again for the person's own retry.
+          case socket.assigns.held_send do
+            %{} = held -> deliver(socket, held, nil)
+            nil -> {:noreply, socket}
+          end
         else
           {:noreply, socket}
         end
@@ -680,87 +711,171 @@ defmodule PrismWeb.ConversationPaneLive do
 
     with {:ok, conv, created?} <- current_or_new(socket),
          {room, socket} = room_context(socket, conv),
-         {:ok, refs} <- Aqua.Attachments.store(ctx, conv.id, message_id, files),
-         :ok <- send_or_discard(ctx, conv, message, message_id, refs, room, socket) do
-      # A conversation this send created is this pane's now, and the host's
-      # to address — the URL is the host's, the pane only asked for a row.
-      if created?, do: tell_host(socket, {:opened, conv})
-      socket = if created?, do: open_thread(socket, conv), else: socket
-      {:noreply, assign(socket, :input, "")}
+         {:ok, refs} <- Aqua.Attachments.store(ctx, conv.id, message_id, files) do
+      envelope = %{
+        conversation_id: conv.id,
+        client_id: Cyfr.UUID7.generate_id("snd"),
+        message_id: message_id,
+        text: message,
+        attachments: refs,
+        agent: socket.assigns.assistant && socket.assigns.assistant["name"],
+        model: socket.assigns.model_override,
+        room: Keyword.get(room, :room)
+      }
+
+      deliver(socket, envelope, if(created?, do: conv))
     else
-      {:error, :busy} ->
-        {:noreply,
-         put_flash(socket, :error, "Too many turns are already waiting — let one finish first.")}
-
-      {:error, :not_member} ->
-        {:noreply, put_flash(socket, :error, "You are no longer a member here.")}
-
-      {:error, :archived} ->
-        {:noreply, put_flash(socket, :error, "This estate has been archived.")}
-
-      {:error, :no_orchestrator} ->
-        {:noreply, put_flash(socket, :error, "This estate has no assistant — see AQUA.")}
-
-      {:error, :storage_full} ->
-        {:noreply, put_flash(socket, :error, "This estate's storage is full.")}
-
-      {:error, :storage_unverifiable} ->
-        {:noreply,
-         put_flash(socket, :error, "Storage usage can't be verified right now — try again.")}
-
-      {:error, :message_too_long} ->
-        {:noreply,
-         put_flash(socket, :error, "That message is too long — up to 32 KiB of text per line.")}
-
-      {:error, :context_too_long} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "What the room shows is too long to read into one message — untick reading it and send again."
-         )}
-
-      {:error, :too_many_attachments} ->
-        {:noreply, put_flash(socket, :error, "Too many attachments for one message.")}
-
-      {:error, :attachment_too_large} ->
-        {:noreply, put_flash(socket, :error, "An attachment is too large.")}
-
-      {:error, :storage_error} ->
-        {:noreply,
-         put_flash(socket, :error, "Storing the attachments failed — nothing was sent.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not send: #{error_message(reason)}")}
+      {:error, reason} -> {:noreply, refuse(socket, reason)}
     end
   end
 
-  # The attachment bytes are written before the runner sees the message, so
-  # that this member writes them in this process. A refused send therefore
-  # leaves blobs behind that belong to no row — nothing lists them, nothing
-  # reads them, and they count against the athanor's quota. The runner is
-  # where the refusal is decided (membership, archive, a full queue), so
-  # the cleanup belongs on its answer.
-  defp send_or_discard(ctx, conv, message, message_id, refs, room, socket) do
-    args =
-      %{
-        "conversation" => conv.id,
-        "message" => message,
-        "id" => message_id,
-        "attachments" => refs,
-        "model" => socket.assigns.model_override,
-        "agent" => socket.assigns.assistant && socket.assigns.assistant["name"]
-      }
-      |> Map.merge(Map.new(room, fn {k, v} -> {Atom.to_string(k), v} end))
-      |> Map.reject(fn {_k, v} -> is_nil(v) end)
+  # One send, identified once: the envelope carries the message id, the
+  # `client_id` and every argument, so a retry — the person's, the pane's
+  # own when the fill completes, or one after a reload — offers the same
+  # send and is accepted once. The estate being prepared holds the send
+  # with its attachments in place; any other refusal is final, and the
+  # bytes written under the message id are discarded, since a refused
+  # send would otherwise leave blobs that belong to no row.
+  defp deliver(socket, envelope, created) do
+    ctx = socket.assigns.context
 
-    case PrismWeb.Ops.call_tool(ctx, "conversation/send", args) do
+    case PrismWeb.Ops.call_tool(ctx, "conversation/send", send_args(envelope)) do
       {:ok, _} ->
-        :ok
+        {:noreply,
+         socket
+         |> assign(:held_send, nil)
+         |> assign(:input, "")
+         |> mirror(nil)
+         |> opened(created)}
 
-      {:error, _reason} = error ->
-        Aqua.Attachments.discard(ctx, conv.id, message_id, refs)
-        error
+      {:error, :not_provisioned} ->
+        {:noreply,
+         socket
+         |> assign(:held_send, envelope)
+         |> assign(:input, "")
+         |> mirror(envelope)
+         |> opened(created)}
+
+      {:error, reason} ->
+        Aqua.Attachments.discard(
+          ctx,
+          envelope.conversation_id,
+          envelope.message_id,
+          envelope.attachments
+        )
+
+        {:noreply, socket |> assign(:held_send, nil) |> mirror(nil) |> refuse(reason)}
+    end
+  end
+
+  defp send_args(envelope) do
+    %{
+      "conversation" => envelope.conversation_id,
+      "message" => envelope.text,
+      "id" => envelope.message_id,
+      "client_id" => envelope.client_id,
+      "attachments" => envelope.attachments,
+      "model" => envelope.model,
+      "agent" => envelope.agent,
+      "room" => envelope.room
+    }
+    |> Map.reject(fn {_k, v} -> is_nil(v) end)
+  end
+
+  # A conversation this send created is this pane's now, and the host's
+  # to address — the URL is the host's, the pane only asked for a row.
+  defp opened(socket, nil), do: socket
+
+  defp opened(socket, conv) do
+    tell_host(socket, {:opened, conv})
+    open_thread(socket, conv)
+  end
+
+  # What the browser keeps of a held send, so a reload offers it back
+  # (`restore_draft`) under the same identity; nil clears it.
+  defp mirror(socket, envelope) do
+    push_event(socket, "aqua:held_send", %{
+      pane: pane_id(socket),
+      envelope: envelope && Map.new(envelope, fn {k, v} -> {Atom.to_string(k), v} end)
+    })
+  end
+
+  defp restored(
+         socket,
+         %{
+           "conversation_id" => conversation_id,
+           "client_id" => client_id,
+           "message_id" => message_id,
+           "text" => text
+         } = params
+       )
+       when is_binary(conversation_id) and is_binary(client_id) and is_binary(message_id) and
+              is_binary(text) do
+    attachments = params["attachments"] || []
+    room = params["room"]
+
+    with true <- is_list(attachments) and Enum.all?(attachments, &is_map/1),
+         true <- is_nil(room) or is_map(room),
+         {:ok, _conv} <- Conversations.get(socket.assigns.context, conversation_id) do
+      {:ok,
+       %{
+         conversation_id: conversation_id,
+         client_id: client_id,
+         message_id: message_id,
+         text: text,
+         attachments: attachments,
+         agent: if(is_binary(params["agent"]), do: params["agent"]),
+         model: if(is_binary(params["model"]), do: params["model"]),
+         room: room
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  defp restored(_socket, _params), do: :error
+
+  defp refuse(socket, reason) do
+    case reason do
+      :busy ->
+        put_flash(socket, :error, "Too many turns are already waiting — let one finish first.")
+
+      :not_member ->
+        put_flash(socket, :error, "You are no longer a member here.")
+
+      :archived ->
+        put_flash(socket, :error, "This estate has been archived.")
+
+      :no_orchestrator ->
+        put_flash(socket, :error, "This estate has no assistant — see AQUA.")
+
+      :storage_full ->
+        put_flash(socket, :error, "This estate's storage is full.")
+
+      :storage_unverifiable ->
+        put_flash(socket, :error, "Storage usage can't be verified right now — try again.")
+
+      :message_too_long ->
+        put_flash(socket, :error, "That message is too long — up to 32 KiB of text per line.")
+
+      :context_too_long ->
+        put_flash(
+          socket,
+          :error,
+          "What the room shows is too long to read into one message — untick reading it and send again."
+        )
+
+      :too_many_attachments ->
+        put_flash(socket, :error, "Too many attachments for one message.")
+
+      :attachment_too_large ->
+        put_flash(socket, :error, "An attachment is too large.")
+
+      :storage_error ->
+        put_flash(socket, :error, "Storing the attachments failed — nothing was sent.")
+
+      other ->
+        put_flash(socket, :error, "Could not send: #{error_message(other)}")
     end
   end
 
@@ -1339,6 +1454,29 @@ defmodule PrismWeb.ConversationPaneLive do
       </div>
 
       <div
+        :if={@held_send}
+        class="flex items-center gap-2 border-t border-amber-900/60 bg-amber-900/10 px-3 py-2 text-xs text-amber-200"
+      >
+        <span class="truncate">
+          Still being prepared — your message is held and goes when the estate is ready.
+        </span>
+        <button
+          type="button"
+          phx-click="retry_send"
+          class="ml-auto rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          phx-click="discard_send"
+          class="rounded px-2 py-0.5 text-gray-400 hover:text-gray-200"
+        >
+          Discard
+        </button>
+      </div>
+
+      <div
         :if={@links != []}
         id={@dom <> "-links"}
         class="flex flex-col gap-1 border-t border-gray-800 px-3 py-1.5 text-[11px] text-gray-500"
@@ -1419,14 +1557,11 @@ defmodule PrismWeb.ConversationPaneLive do
               )
             }
             class="flex-1 resize-none rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none max-h-40 overflow-y-auto"
-            disabled={@roster == [] or @preparing?}
+            disabled={@roster == []}
           >{@input}</textarea>
           <button
             type="submit"
-            disabled={
-              @roster == [] or @preparing? or
-                (@input == "" and @uploads.attachments.entries == [])
-            }
+            disabled={@roster == [] or (@input == "" and @uploads.attachments.entries == [])}
             class="self-end rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Send

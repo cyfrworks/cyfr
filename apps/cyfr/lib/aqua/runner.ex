@@ -344,6 +344,9 @@ defmodule Aqua.Runner do
 
   defp admit_turn(state, ctx, name, text, opts) do
     cond do
+      opened_before?(state, ctx, opts) ->
+        accept_turn(state, ctx, name, text, opts)
+
       steer?(state, ctx) ->
         steer(state, ctx, text, opts)
 
@@ -358,6 +361,22 @@ defmodule Aqua.Runner do
 
       true ->
         accept_turn(state, ctx, name, text, opts)
+    end
+  end
+
+  # A `client_id` that already opened a turn is offered as that turn's
+  # opener again, never as a steer of it or a turn behind it: the tape
+  # answers the identity it accepted, while the turn runs or after.
+  defp opened_before?(state, ctx, opts) do
+    case Keyword.get(opts, :client_id) do
+      client_id when is_binary(client_id) ->
+        match?(
+          {:ok, %{message: %{id: id}, turn: %{message_id: id}}},
+          Tape.accepted(ctx, state.id, client_id)
+        )
+
+      _ ->
+        false
     end
   end
 

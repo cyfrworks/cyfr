@@ -185,6 +185,49 @@ defmodule Aqua.RunnerTest do
     assert %{turn_id: ^first} = Enum.find(rows, &(&1.content == "@aqua also this"))
   end
 
+  test "the opener offered again while its turn runs is the same send, not a steer", %{
+    ctx: ctx,
+    conv: conv
+  } do
+    script!([{:probe, self()}, reply("done")])
+
+    {:ok, %{message_id: mid, turn_id: turn_id, admitted: :turn}} =
+      Runner.send_message(ctx, conv.id, "@aqua go", client_id: "c-open")
+
+    assert_receive {:scripted_probe, worker, _}, 30_000
+
+    # The sender's own line would steer — but this is the line that opened
+    # the turn, retried: the identity it was given, nothing attached.
+    assert {:ok, %{message_id: ^mid, turn_id: ^turn_id, admitted: :turn, replayed: true}} =
+             Runner.send_message(ctx, conv.id, "@aqua go", client_id: "c-open")
+
+    # A different line under that client id is a reuse, never a steer.
+    assert {:error, :client_id_reused} =
+             Runner.send_message(ctx, conv.id, "@aqua something else", client_id: "c-open")
+
+    send(worker, :continue)
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+    assert [_] = Enum.filter(Conversations.messages(ctx, conv.id), &(&1.author == ctx.user_id))
+  end
+
+  test "a turn that cannot start once its root is claimed ends failed, root and all", %{
+    ctx: ctx,
+    conv: conv
+  } do
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "@ghost go"},
+        turn: %{orchestrator: "ghost", requested_by: ctx.user_id}
+      })
+
+    assert {:failed, _reason} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+    assert {:ok, %{status: "failed", root_execution_id: nil}} = Tape.turn(ctx, turn.id)
+
+    # The root the claim admitted is closed, not left running under a
+    # released slot.
+    assert %{status: "failed", kind: "turn"} = Arca.Repo.get_by(Arca.Execution, turn_id: turn.id)
+  end
+
   test "stop cuts the running turn and drops what waited", %{ctx: ctx, conv: conv} do
     other = second_member(ctx)
     script!([{:probe, self()}])

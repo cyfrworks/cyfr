@@ -555,6 +555,101 @@ defmodule PrismWeb.ChatLiveTest do
     refute render(pane(view)) =~ "Still being prepared"
   end
 
+  test "a message sent while the estate is prepared is held, offered back after a reload, and accepted once",
+       %{conn: conn} do
+    Application.put_env(:cyfr, :provisioning_inline, false)
+    on_exit(fn -> Application.put_env(:cyfr, :provisioning_inline, true) end)
+
+    alice = test_user()
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Held #{alice.namespace}")
+    conn = log_in_user(conn, alice, athanor_id: group.id)
+    ctx = member_ctx(alice, group)
+
+    # The fill's claim is held: the estate stays unfilled while the pane sends.
+    parent = self()
+
+    holder =
+      spawn_link(fn ->
+        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
+        send(parent, :claimed)
+        receive do: (:release -> :ok)
+      end)
+
+    assert_receive :claimed
+    on_exit(fn -> if Process.alive?(holder), do: send(holder, :release) end)
+
+    {view, _html} = mount_chat(conn, group)
+
+    pane(view)
+    |> form("form[phx-submit=submit]", %{"message" => "@aqua hold this"})
+    |> render_submit()
+
+    # Held, not refused: the pane says so, the browser is given the whole
+    # send to keep, and nothing was written.
+    assert_push_event(pane(view), "aqua:held_send", %{
+      envelope:
+        %{"client_id" => client_id, "message_id" => message_id, "conversation_id" => conv_id} =
+          envelope
+    })
+
+    assert render(pane(view)) =~ "Retry"
+    assert [] == Conversations.latest_messages(ctx, conv_id, 10)
+
+    # A reload: the hook offers the held send back, and it is held again
+    # under the same identity.
+    {reloaded, _} = mount_chat(conn, group, conv_id)
+    render_hook(pane(reloaded), "restore_draft", envelope)
+    assert render(pane(reloaded)) =~ "Retry"
+
+    assert_push_event(pane(reloaded), "aqua:held_send", %{
+      envelope: %{"message_id" => ^message_id}
+    })
+
+    assert [] == Conversations.latest_messages(ctx, conv_id, 10)
+
+    # The fill completes: every pane holding the send retries on its own,
+    # the estate accepts the message once, and the turn runs.
+    Cyfr.Test.ScriptedExecution.script([model_reply("Held, then heard")])
+    ready_estate!(group.id, alice.user_id)
+    {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
+    {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(row)
+    Sanctum.Notify.broadcast(group.id, :athanor_changed, %{name: filled.name})
+
+    # Both panes offer the send; the turn it opens ends with the reply.
+    wait_until(
+      fn ->
+        Enum.any?(Conversations.latest_messages(ctx, conv_id, 10), &(&1.id == message_id)) and
+          match?({:ok, []}, Aqua.Tape.open_turns(ctx, conv_id))
+      end,
+      60_000
+    )
+
+    assert_push_event(pane(reloaded), "aqua:held_send", %{envelope: nil}, 5_000)
+    assert_push_event(view, "aqua:held_send", %{envelope: nil}, 5_000)
+    refute render(pane(reloaded)) =~ "Retry"
+
+    rows = Conversations.latest_messages(ctx, conv_id, 50)
+    assert [%{id: ^message_id}] = Enum.filter(rows, &(&1.author == alice.user_id))
+    assert Enum.any?(rows, &(&1.content == "Held, then heard"))
+    wait_until(fn -> render(pane(reloaded)) =~ "Held, then heard" end)
+
+    # The harness offering the same send names the same identity: the
+    # console and the wire agree on what was accepted.
+    assert {:ok, %{replayed: true, message_id: ^message_id}} =
+             Emissary.MCP.ConversationTool.handle("conversation", ctx, %{
+               "action" => "send",
+               "conversation" => conv_id,
+               "message" => "@aqua hold this",
+               "client_id" => client_id
+             })
+
+    assert [%{id: ^message_id}] =
+             Enum.filter(
+               Conversations.latest_messages(ctx, conv_id, 50),
+               &(&1.author == alice.user_id)
+             )
+  end
+
   test "a mount on an estate still being filled does not wait for the fill", %{conn: conn} do
     # The real path: the fill is a task nothing awaits, so a mount cannot be
     # held open by it. The suite otherwise fills inline so its assertions can

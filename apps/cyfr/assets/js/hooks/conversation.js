@@ -15,6 +15,11 @@
 //   (navigate, copy) as `{pane, intents}`. LiveView dispatches a pushed
 //   event to every hook on the page, so each pane acts only on a payload
 //   whose `pane` names its own DOM id and ignores the rest.
+// - `aqua:held_send` is the send the server holds while the estate is being
+//   prepared, as `{pane, envelope}` — `envelope` null once it went or was
+//   dropped. It is kept in sessionStorage under this pane's id, and offered
+//   back as `restore_draft` when the pane mounts, so a reload mid-wait
+//   retries the same send under the same identity.
 
 import {isMac} from "../platform"
 
@@ -23,8 +28,40 @@ function isHaltShortcut(event) {
   return modifier && !event.shiftKey && !event.altKey && event.key === "."
 }
 
+function heldSendKey(pane) {
+  return `aqua:held-send:${pane}`
+}
+
+function readHeldSend(pane) {
+  try {
+    const raw = sessionStorage.getItem(heldSendKey(pane))
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && typeof parsed === "object" ? parsed : null
+  } catch (_err) {
+    return null
+  }
+}
+
+function writeHeldSend(pane, envelope) {
+  try {
+    if (envelope) sessionStorage.setItem(heldSendKey(pane), JSON.stringify(envelope))
+    else sessionStorage.removeItem(heldSendKey(pane))
+  } catch (_err) {
+    // No storage (a private window, a full quota): the hold lives in the
+    // socket alone and a reload asks the person to send again.
+  }
+}
+
 const Conversation = {
   mounted() {
+    this.handleEvent("aqua:held_send", ({pane, envelope}) => {
+      if (pane !== this.el.id) return
+      writeHeldSend(this.el.id, envelope)
+    })
+
+    const held = readHeldSend(this.el.id)
+    if (held) this.pushEventTo(this.el, "restore_draft", held)
+
     this._onKeyDown = (event) => {
       if (isHaltShortcut(event)) {
         event.preventDefault()

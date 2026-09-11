@@ -44,7 +44,9 @@ defmodule Aqua.Tape do
   A `client_id` this conversation already accepted answers the existing
   acceptance as `replayed: true` when it is the same send — same actor,
   text, attachments, agent, model and room — and
-  `{:error, :client_id_reused}` when it is not.
+  `{:error, :client_id_reused}` when it is not. A message `id` already
+  taken is answered the same way through its `client_id`, and refused
+  `{:error, :message_id_reused}` without one or under another's.
   """
   @spec accept(Context.t(), String.t(), map()) ::
           {:ok, %{message: row(), turn: turn() | nil, replayed: boolean()}} | {:error, term()}
@@ -54,20 +56,51 @@ defmodule Aqua.Tape do
         broadcast(ctx, conversation_id, {:message, message})
         {:ok, %{message: message, turn: turn, replayed: false}}
 
-      {:error, :duplicate_client_id} ->
-        client_id = get_in(attrs, [:message, :client_id])
-
-        with {:ok, %{message: message, turn: turn}} <-
-               TurnStorage.accepted(ctx, conversation_id, client_id) do
-          if same_send?(message, turn, attrs),
-            do: {:ok, %{message: message, turn: turn, replayed: true}},
-            else: {:error, :client_id_reused}
-        end
+      {:error, reason} when reason in [:duplicate_client_id, :message_id_reused] ->
+        replay(ctx, conversation_id, attrs, reason)
 
       other ->
         other
     end
   end
+
+  # The identity offered again — by client id, or by a message id already
+  # taken — answers what was accepted when it is the same send; the
+  # client id is what names the accepted row, so an id offered without one
+  # is another send's.
+  defp replay(ctx, conversation_id, attrs, reason) do
+    case get_in(attrs, [:message, :client_id]) do
+      client_id when is_binary(client_id) ->
+        case TurnStorage.accepted(ctx, conversation_id, client_id) do
+          {:ok, %{message: message, turn: turn}} ->
+            if same_send?(message, turn, attrs),
+              do: {:ok, %{message: message, turn: turn, replayed: true}},
+              else: {:error, reused(reason)}
+
+          {:error, :not_found} ->
+            {:error, reused(reason)}
+
+          {:error, _} = error ->
+            error
+        end
+
+      _ ->
+        {:error, reused(reason)}
+    end
+  end
+
+  defp reused(:duplicate_client_id), do: :client_id_reused
+  defp reused(:message_id_reused), do: :message_id_reused
+
+  @doc """
+  The acceptance a `client_id` already produced in this conversation:
+  its message and, when the row opened or steered a turn, that turn.
+  `{:error, :not_found}` for a `client_id` never accepted.
+  """
+  @spec accepted(Context.t(), String.t(), String.t()) ::
+          {:ok, %{message: row(), turn: turn() | nil}} | {:error, term()}
+  def accepted(%Context{} = ctx, conversation_id, client_id) when is_binary(client_id),
+    do: TurnStorage.accepted(ctx, conversation_id, client_id)
 
   @doc "Append one row outside a turn's step machinery (a system note, a compaction, an aborted mark)."
   @spec append(Context.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}

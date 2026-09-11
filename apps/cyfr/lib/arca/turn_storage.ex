@@ -66,7 +66,8 @@ defmodule Arca.TurnStorage do
   - `:steer_turn_id` — attach the message to a live turn instead.
 
   Answers `{:ok, %{message: row, turn: row | nil}}`. A `client_id` this
-  conversation already accepted answers `{:error, :duplicate_client_id}`
+  conversation already accepted answers `{:error, :duplicate_client_id}`,
+  a message `id` already taken `{:error, :message_id_reused}`
   (the caller reads the existing acceptance with `accepted/3`); a
   message that already opened a turn answers `{:error, :turn_exists}`.
   """
@@ -107,6 +108,7 @@ defmodule Arca.TurnStorage do
         {:error, %Ecto.Changeset{errors: errors} = changeset} ->
           cond do
             unique?(errors, :conversation_id, "client_id") -> {:error, :duplicate_client_id}
+            unique?(errors, :id, "messages") -> {:error, :message_id_reused}
             unique?(errors, :conversation_id, "message_id") -> {:error, :turn_exists}
             true -> {:error, changeset}
           end

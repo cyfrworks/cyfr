@@ -82,9 +82,14 @@ defmodule Aqua.Loop do
         {:ok, state} ->
           conclude(state, loop(state))
 
+        # The root is held but the turn never ran: ended with the actor's
+        # own context, since no spec was built to carry it, and the root
+        # closed by the release when the turn never came to carry it.
         {:error, {:after_claim, claim, turn, reason}} ->
-          state = %State{spec: nil, claim: claim, turn: turn}
-          conclude(state, {{:failed, reason}, state})
+          error = describe(reason)
+          _ = Tape.finish(ctx, turn, "failed", %{error: error})
+          Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
+          {:failed, reason}
 
         {:error, reason} ->
           _ = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})

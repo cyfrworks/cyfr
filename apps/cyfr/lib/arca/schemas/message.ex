@@ -93,5 +93,8 @@ defmodule Arca.Schemas.Message do
     |> validate_inclusion(:status, @statuses)
     |> unique_constraint([:conversation_id, :seq])
     |> unique_constraint([:conversation_id, :client_id])
+    # The primary key, under the name each adapter reports it by.
+    |> unique_constraint(:id, name: :messages_pkey)
+    |> unique_constraint(:id, name: :messages_id_index)
   end
 end

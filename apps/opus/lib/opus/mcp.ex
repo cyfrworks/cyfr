@@ -368,85 +368,20 @@ defmodule Opus.MCP do
      "execution.#{action} cannot be invoked in-chain; a component runs children through the formula host, not by re-rooting"}
   end
 
-  # Run stream action - start execution in background and return execution_id + stream URL
-  # The caller can connect to the SSE endpoint to receive intermediate events.
-  def handle("execution", %Context{} = ctx, %{"action" => "run_stream"} = args) do
+  # An agent is addressed in a conversation (`conversation.send`) and runs
+  # under the turn that claims its root; it is never rooted from here,
+  # whatever the caller's grants, so the harness and the console start a
+  # turn one way.
+  def handle("execution", %Context{} = ctx, %{"action" => action} = args)
+      when action in ["run", "run_stream"] do
     reference = args["reference"] || ""
-    input = args["input"] || %{}
 
-    execution_id = Opus.ExecutionRecord.generate_id()
-
-    opts = build_run_opts(args)
-    opts = [{:execution_id, execution_id} | opts]
-    # This execution IS the root — its emit target is itself
-    opts = [{:root_execution_id, execution_id} | opts]
-
-    opts =
-      case args["parent_execution_id"] do
-        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-        _ -> opts
-      end
-
-    # Spawn execution in background, registering PID for cancellation
-    logger_metadata = Cyfr.LoggerContext.capture()
-
-    case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
-
-           case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
-             {:ok, _} ->
-               run_root_formatted(ctx, reference, input, opts, args)
-
-             {:error, reason} ->
-               Logger.error(
-                 "[Opus.MCP] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
-               )
-           end
-         end) do
-      {:ok, _pid} ->
-        {:ok,
-         %{
-           execution_id: execution_id,
-           stream_url: "/api/executions/#{execution_id}/events"
-         }}
-
-      {:error, reason} ->
-        Logger.error("[Opus.MCP] Failed to spawn execution #{execution_id}: #{inspect(reason)}")
-        {:error, "execution_spawn_failed"}
-    end
-  end
-
-  # Run action - execute a WASM component
-  # Delegates to Opus.run/4 (via Opus.Executor) to avoid duplication
-  # Accepts optional parent_execution_id for formula lineage tracking
-  def handle("execution", %Context{} = ctx, %{"action" => "run"} = args) do
-    reference = args["reference"] || ""
-    input = args["input"] || %{}
-
-    # Build options for Opus.run/4
-    opts = build_run_opts(args)
-
-    # Thread parent_execution_id for formula→component lineage
-    opts =
-      case args["parent_execution_id"] do
-        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-        _ -> opts
-      end
-
-    # Thread root_execution_id so nested emits route to the root stream
-    opts =
-      case args["root_execution_id"] do
-        rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
-        _ -> opts
-      end
-
-    case run_root_formatted(ctx, reference, input, opts, args) do
-      {:ok, result} ->
-        # Format response for MCP (convert atoms to strings for JSON)
-        {:ok, format_run_result(result, reference)}
-
-      {:error, reason} ->
-        {:error, reason}
+    if Compendium.AgentSource.agent_ref?(reference) do
+      {:error,
+       {:invalid_argument,
+        "#{reference} is an agent: it is addressed in a conversation (conversation.send), never run"}}
+    else
+      start_root(action, ctx, args)
     end
   end
 
@@ -601,6 +536,87 @@ defmodule Opus.MCP do
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
+  end
+
+  # Start the execution in the background and answer its id and stream URL;
+  # the caller follows the SSE endpoint for intermediate events.
+  defp start_root("run_stream", ctx, args) do
+    reference = args["reference"] || ""
+    input = args["input"] || %{}
+
+    execution_id = Opus.ExecutionRecord.generate_id()
+
+    opts = build_run_opts(args)
+    opts = [{:execution_id, execution_id} | opts]
+    # This execution IS the root — its emit target is itself
+    opts = [{:root_execution_id, execution_id} | opts]
+
+    opts =
+      case args["parent_execution_id"] do
+        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+        _ -> opts
+      end
+
+    # Spawn execution in background, registering PID for cancellation
+    logger_metadata = Cyfr.LoggerContext.capture()
+
+    case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
+
+           case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
+             {:ok, _} ->
+               run_root_formatted(ctx, reference, input, opts, args)
+
+             {:error, reason} ->
+               Logger.error(
+                 "[Opus.MCP] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
+               )
+           end
+         end) do
+      {:ok, _pid} ->
+        {:ok,
+         %{
+           execution_id: execution_id,
+           stream_url: "/api/executions/#{execution_id}/events"
+         }}
+
+      {:error, reason} ->
+        Logger.error("[Opus.MCP] Failed to spawn execution #{execution_id}: #{inspect(reason)}")
+        {:error, "execution_spawn_failed"}
+    end
+  end
+
+  # Run the component to completion through `Opus.run/4`; an optional
+  # `parent_execution_id` records the formula lineage.
+  defp start_root("run", ctx, args) do
+    reference = args["reference"] || ""
+    input = args["input"] || %{}
+
+    # Build options for Opus.run/4
+    opts = build_run_opts(args)
+
+    # Thread parent_execution_id for formula→component lineage
+    opts =
+      case args["parent_execution_id"] do
+        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+        _ -> opts
+      end
+
+    # Thread root_execution_id so nested emits route to the root stream
+    opts =
+      case args["root_execution_id"] do
+        rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
+        _ -> opts
+      end
+
+    case run_root_formatted(ctx, reference, input, opts, args) do
+      {:ok, result} ->
+        # Format response for MCP (convert atoms to strings for JSON)
+        {:ok, format_run_result(result, reference)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   # ============================================================================
