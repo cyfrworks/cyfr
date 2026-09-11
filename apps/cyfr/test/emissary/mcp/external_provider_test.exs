@@ -189,6 +189,55 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
   end
 
+  describe "an outbound call's own row" do
+    test "an in-chain call is admitted as a tool_call under the caller's lineage and closed after",
+         %{ctx: ctx} do
+      Arca.McpServerStorage.put(ctx, %{name: "rowed", url: "https://localhost:99999/mcp"})
+      parent = "exec_parent_#{System.unique_integer([:positive])}"
+
+      assert {:error, _unreachable} =
+               ExternalProvider.try_handle(
+                 "rowed:probe",
+                 ctx,
+                 %{"x" => 1, "parent_execution_id" => parent, "attempt" => "att_p"},
+                 :in_chain
+               )
+
+      assert [row] = Arca.Repo.all(Arca.Execution)
+      assert row.kind == "tool_call"
+      assert row.component_type == "tool_server"
+      assert row.reference == "rowed:probe"
+      assert row.parent_execution_id == parent
+      assert row.root_execution_id == parent
+      assert row.status == "failed"
+      assert is_binary(row.error_message)
+      assert is_binary(row.component_digest)
+
+      # The row keeps an envelope of the input, not the input.
+      assert %{"envelope" => "v1", "server" => "rowed", "tool" => "probe", "keys" => ["x"]} =
+               Jason.decode!(row.input)
+
+      assert %{state: "failed", outcome: "error"} =
+               Arca.ExecutionAttempts.current(ctx.athanor_id, row.id)
+
+      Emissary.MCP.ExternalServerSupervisor.stop("rowed", ctx.athanor_id)
+    end
+
+    test "a console call writes no row", %{ctx: ctx} do
+      Arca.McpServerStorage.put(ctx, %{
+        name: "console-rowless",
+        url: "https://localhost:99999/mcp",
+        config_json: Jason.encode!(%{"console" => true})
+      })
+
+      assert {:error, _unreachable} =
+               ExternalProvider.try_handle("console-rowless:probe", ctx, %{}, :external)
+
+      assert [] = Arca.Repo.all(Arca.Execution)
+      Emissary.MCP.ExternalServerSupervisor.stop("console-rowless", ctx.athanor_id)
+    end
+  end
+
   describe "list_external_tools/1" do
     test "returns empty list when no servers configured", %{ctx: ctx} do
       assert [] = ExternalProvider.list_external_tools(ctx)

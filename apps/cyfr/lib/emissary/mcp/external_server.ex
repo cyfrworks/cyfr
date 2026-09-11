@@ -269,8 +269,13 @@ defmodule Emissary.MCP.ExternalServer do
           {:ok, task_pid} ->
             ref = Process.monitor(task_pid)
             # `from` rides along so an abnormal exit can still answer — see
-            # the :DOWN clause.
-            {:noreply, %{state | in_flight: Map.put(state.in_flight, task_pid, {ref, from})}}
+            # the :DOWN clause; the caller is watched too, so a caller that
+            # goes away mid-call takes its upstream round-trip with it.
+            {caller, _tag} = from
+            caller_ref = Process.monitor(caller)
+
+            {:noreply,
+             %{state | in_flight: Map.put(state.in_flight, task_pid, {ref, from, caller_ref})}}
 
           {:error, reason} ->
             {:reply, {:error, "External call failed to start: #{inspect(reason)}"}, state}
@@ -310,23 +315,33 @@ defmodule Emissary.MCP.ExternalServer do
   end
 
   @impl true
-  def handle_info({:DOWN, _ref, :process, task_pid, reason}, state) do
-    # The task replies on its own way out, and its `rescue` covers a raise
-    # — but not an exit: a supervisor shutdown or a kill leaves `from`
-    # unanswered, and the caller then blocks for the whole two-minute call
-    # timeout on a task that is already gone. Answer for it.
-    case {reason, Map.get(state.in_flight, task_pid)} do
-      {:normal, _} ->
-        :ok
+  def handle_info({:DOWN, ref, :process, pid, reason}, state) do
+    case Map.get(state.in_flight, pid) do
+      {_ref, from, caller_ref} ->
+        # The task replies on its own way out, and its `rescue` covers a
+        # raise — but not an exit: a supervisor shutdown or a kill leaves
+        # `from` unanswered, and the caller then blocks for the whole
+        # two-minute call timeout on a task that is already gone. Answer
+        # for it.
+        Process.demonitor(caller_ref, [:flush])
 
-      {_reason, {_ref, from}} ->
-        GenServer.reply(from, {:error, "External call did not complete"})
+        if reason != :normal,
+          do: GenServer.reply(from, {:error, "External call did not complete"})
 
-      _ ->
-        :ok
+        {:noreply, %{state | in_flight: Map.delete(state.in_flight, pid)}}
+
+      nil ->
+        # A caller gone mid-call: its upstream round-trip is nobody's now.
+        case Enum.find(state.in_flight, fn {_task, {_r, _f, caller_ref}} -> caller_ref == ref end) do
+          {task_pid, {task_ref, _from, _caller_ref}} ->
+            Process.demonitor(task_ref, [:flush])
+            Process.exit(task_pid, :kill)
+            {:noreply, %{state | in_flight: Map.delete(state.in_flight, task_pid)}}
+
+          nil ->
+            {:noreply, state}
+        end
     end
-
-    {:noreply, %{state | in_flight: Map.delete(state.in_flight, task_pid)}}
   end
 
   def handle_info(msg, state) do

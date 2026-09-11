@@ -292,6 +292,11 @@ defmodule Emissary.MCP.ExternalProvider do
                    "only from inside a chain — set \"console\": true in the " <>
                    "server's config to call it from the console"}
 
+              plane == :in_chain ->
+                attempted(ctx, server, server_name, remote_tool, args, fn ->
+                  dispatch_external(server, server_name, remote_tool, ctx, args)
+                end)
+
               true ->
                 dispatch_external(server, server_name, remote_tool, ctx, args)
             end
@@ -316,6 +321,106 @@ defmodule Emissary.MCP.ExternalProvider do
   # says otherwise.
   defp console_reachable?(server) do
     Arca.McpServerStorage.config(server)["console"] == true
+  end
+
+  # An outbound call from a chain is an execution of its own: a row of
+  # kind `tool_call` with an attempt, admitted under the caller's lineage
+  # before the call, its lease kept while the call is in flight, closed
+  # with an envelope of what came back. A cancel asked of the attempt, or
+  # a lease lost, exits the caller mid-call (`Cyfr.Execution.LeaseWatch`)
+  # — the step that made the call closes uncertain, never with a result
+  # that arrived after. A console call writes no row.
+  defp attempted(ctx, server, server_name, remote_tool, args, call) do
+    id = Cyfr.UUID7.execution_id()
+    started_at = DateTime.utc_now()
+    input = Map.drop(args, ["action", "parent_execution_id", "root_execution_id", "attempt"])
+
+    attrs = %{
+      id: id,
+      request_id: ctx.request_id,
+      reference: "#{server_name}:#{remote_tool}",
+      input_hash: Arca.Execution.hash_input(input),
+      user_id: ctx.user_id,
+      athanor_id: ctx.athanor_id,
+      component_type: "tool_server",
+      component_digest: server_digest(server),
+      started_at: started_at,
+      status: "running",
+      input: Jason.encode!(input_envelope(server_name, remote_tool, input)),
+      parent_execution_id: args["parent_execution_id"],
+      root_execution_id: args["root_execution_id"] || args["parent_execution_id"],
+      kind: "tool_call"
+    }
+
+    case Arca.Execution.admit(attrs, runner_id: Cyfr.Boot.id()) do
+      {:ok, %{attempt: %{attempt: attempt}}} ->
+        {:ok, watch} = Cyfr.Execution.LeaseWatch.start(self(), id, attempt)
+        result = call.()
+        Cyfr.Execution.LeaseWatch.stop(watch)
+        close(ctx, id, attempt, started_at, result)
+        result
+
+      {:error, reason} ->
+        {:error,
+         "Call to #{remote_tool} on server '#{server_name}' not admitted: #{inspect(reason)}"}
+    end
+  end
+
+  defp input_envelope(server_name, remote_tool, input) do
+    encoded = Jason.encode!(input)
+
+    %{
+      "envelope" => "v1",
+      "server" => server_name,
+      "tool" => remote_tool,
+      "input_hash" => Arca.Execution.hash_input(input),
+      "bytes" => byte_size(encoded),
+      "keys" => input |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
+    }
+  end
+
+  defp server_digest(server) do
+    case Sanctum.ToolServerDigest.from_server(server) do
+      {:ok, digest} -> digest
+      _ -> nil
+    end
+  end
+
+  # The row keeps an envelope of the answer, never the answer: what came
+  # back is the caller's, and the tape's when a turn made the call.
+  defp close(ctx, id, attempt, started_at, result) do
+    now = DateTime.utc_now()
+    duration_ms = DateTime.diff(now, started_at, :millisecond)
+
+    {status, attrs} =
+      case result do
+        {:ok, answer} ->
+          encoded = Jason.encode!(answer)
+
+          {"completed",
+           %{
+             output:
+               Jason.encode!(%{
+                 "envelope" => "v1",
+                 "output_hash" => Cyfr.Digest.sha256(encoded),
+                 "bytes" => byte_size(encoded)
+               })
+           }}
+
+        {:error, reason} ->
+          {"failed", %{error_message: if(is_binary(reason), do: reason, else: inspect(reason))}}
+      end
+
+    _ =
+      Arca.Execution.record_end(
+        ctx,
+        id,
+        status,
+        Map.merge(attrs, %{completed_at: now, duration_ms: duration_ms}),
+        attempt
+      )
+
+    :ok
   end
 
   defp dispatch_external(server, server_name, remote_tool, ctx, args) do

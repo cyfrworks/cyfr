@@ -100,11 +100,14 @@ defmodule Emissary.MCP.ExternalServerTest do
 
       fake = spawn(fn -> Process.sleep(:infinity) end)
 
+      caller = self()
+
       :sys.replace_state(pid, fn state ->
         # This closure runs in the server process, so the monitor's :DOWN
         # lands in the server's mailbox — same as a real dispatched task.
         ref = Process.monitor(fake)
-        %{state | in_flight: Map.put(state.in_flight, fake, ref)}
+        entry = {ref, {caller, make_ref()}, Process.monitor(caller)}
+        %{state | in_flight: Map.put(state.in_flight, fake, entry)}
       end)
 
       Process.exit(fake, :kill)
