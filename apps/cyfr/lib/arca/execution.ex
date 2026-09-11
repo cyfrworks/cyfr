@@ -73,15 +73,6 @@ defmodule Arca.Execution do
     field :resolver_digest, :string
     field :activation_digest, :string
     field :activation_graph, :string
-    field :runner_id, :string
-    field :lease_until, :utc_datetime_usec
-    # The fence. Minted with the row and carried by the one runner attempt
-    # that opened it; every later write — renewal, completion, the sweep —
-    # names it, so a runner that lost the row (its lease lapsed and the
-    # sweeper failed it, or another attempt took it) cannot write over the
-    # current owner. Two rows can share an id across restarts of this
-    # process; they never share an attempt.
-    field :attempt, :string
     # Which consent this execution rooted under: stamped by every root —
     # `run_root/5` and a `run_root_edge/5` tincture ingress alike — and nil
     # for a child row, which walks its parent's authority rather than
@@ -125,9 +116,6 @@ defmodule Arca.Execution do
     :resolver_digest,
     :activation_digest,
     :activation_graph,
-    :runner_id,
-    :lease_until,
-    :attempt,
     :profile_id,
     :kind,
     :turn_id,
@@ -225,9 +213,6 @@ defmodule Arca.Execution do
         attrs
         |> Map.put(:started_at, started_at)
         |> Map.put(:status, "running")
-        |> Map.put(:attempt, attempt_id)
-        |> Map.put(:runner_id, runner_id)
-        |> Map.put(:lease_until, lease_until)
         |> Map.put(:current_attempt, attempt_id)
 
       Arca.Repo.transaction(fn ->
@@ -318,9 +303,10 @@ defmodule Arca.Execution do
   discarded. A row that already left `running` answers
   `{:error, :not_running}` and the caller keeps its hands off the wire.
 
-  `fence` narrows the write to the attempt that owns the row (see
-  `fenced/2`): a finisher whose attempt is no longer the row's is refused
-  the same way.
+  `fence` narrows the write to the attempt that owns the row
+  (`attempt:` against `current_attempt`): a finisher whose attempt is no
+  longer the row's is refused the same way. The attempt row itself is
+  closed by `record_end/5`, which every engine completion uses.
   """
   def record_complete(%Sanctum.Context{} = ctx, id, attrs, fence \\ []) do
     Arca.Repo.Errors.with_db_rescue("Execution.record_complete", fn ->
@@ -631,12 +617,16 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Marks an execution as failed only if it's still 'running'. Returns {count, nil}.
+  Fail an execution that is still open, closing its attempt with it.
 
   System-internal: the `id` originates from trusted runtime state — the
-  cancellation cascade (`list_running_children/1`, already tenant-scoped) or the
-  `Opus.ExecutionSweeper` GC's own scan — never from caller-supplied input. Do
-  not call it with an id taken straight from a request.
+  cancellation cascade (`list_running_children/1`, already tenant-scoped)
+  or the `Opus.ExecutionSweeper`'s own scan — never from caller-supplied
+  input. `fence`: `attempt:` names the attempt being retired (the row's
+  current one when absent); `lease_until:` is the lease the sweeper
+  observed, and the attempt lapses only if that exact lease still stands,
+  so a renewal that landed after the scan matches nothing. Answers
+  `{count, nil}` with the rows failed.
   """
   def mark_failed_if_running(id, attrs, fence \\ []) do
     # Fail-open default: a row the store could not fail stays running; the sweep retries next tick.
@@ -644,61 +634,124 @@ defmodule Arca.Execution do
       # arca:unscoped-ok the id comes from trusted runtime state (the
       # tenant-scoped cancellation cascade or the sweeper's own scan), never
       # from caller input — see the doc above.
-      from(e in __MODULE__,
-        where: e.id == ^id,
-        where: e.status == "running"
-      )
-      |> fenced(fence)
-      |> Arca.Repo.update_all(
-        set: [
-          status: "failed",
-          completed_at: attrs[:completed_at],
-          duration_ms: attrs[:duration_ms],
-          error_message: attrs[:error_message]
-        ]
-      )
+      Arca.Repo.transaction(fn ->
+        row =
+          Arca.Repo.one(
+            from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
+          )
+
+        case row do
+          nil ->
+            {0, nil}
+
+          %__MODULE__{} = execution ->
+            attempt = Keyword.get(fence, :attempt) || execution.current_attempt
+
+            retired? =
+              cond do
+                attempt != execution.current_attempt -> false
+                is_nil(attempt) -> true
+                true -> retire_attempt(execution, attempt, Keyword.get(fence, :lease_until))
+              end
+
+            if retired? do
+              from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
+              |> Arca.Repo.update_all(
+                set: [
+                  status: "failed",
+                  completed_at: attrs[:completed_at],
+                  duration_ms: attrs[:duration_ms],
+                  error_message: attrs[:error_message]
+                ]
+              )
+            else
+              {0, nil}
+            end
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        {:error, _} -> {0, nil}
+      end
     end)
   end
 
   @doc """
-  Renew a running execution's lease: the runner is alive and the row is
-  still its. Returns the number of rows touched — 0 once the execution has
-  finished, been failed by the sweeper, or (with a fence) left this
-  attempt's hands — or `{:error, :database_error}` when the store cannot
-  answer, so the runner can tell a refused renewal from an unanswered one.
+  End an execution from the attempt that owns it: the attempt closes with
+  `outcome` and the row leaves `running`/`paused` as `status`, in one
+  transaction. `attempt` nil means the row's current attempt (a cancel
+  from a read-back record). `{:error, :not_running}` when the row is not
+  open or the attempt does not own it.
   """
-  @spec renew_lease(String.t(), DateTime.t(), keyword()) ::
-          non_neg_integer() | {:error, :database_error}
-  # arca:unscoped-ok the runner renews the lease on the row it is running;
-  # the id comes from trusted runtime state, never from a request.
-  def renew_lease(id, %DateTime{} = until, fence \\ []) do
-    Arca.Repo.Errors.with_db_rescue("Execution.renew_lease", fn ->
-      {count, _} =
-        from(e in __MODULE__, where: e.id == ^id and e.status == "running")
-        |> fenced(fence)
-        |> Arca.Repo.update_all(set: [lease_until: until])
+  @spec record_end(Sanctum.Context.t(), String.t(), String.t(), map(), String.t() | nil) ::
+          {:ok, %__MODULE__{}}
+          | {:error, :not_running | :not_found | :database_error | Ecto.Changeset.t()}
+  def record_end(%Sanctum.Context{} = ctx, id, status, attrs, attempt)
+      when status in @terminal_statuses do
+    Arca.Repo.Errors.with_db_rescue("Execution.record_end", fn ->
+      Arca.Repo.transaction(fn ->
+        execution =
+          from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
+          |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+          |> Arca.Repo.one()
 
-      count
+        if is_nil(execution), do: Arca.Repo.rollback(:not_running)
+        owner = attempt || execution.current_attempt
+        if owner != execution.current_attempt, do: Arca.Repo.rollback(:not_running)
+
+        changeset = complete_changeset(execution, Map.put(attrs, :status, status))
+        if not changeset.valid?, do: Arca.Repo.rollback(changeset)
+
+        {attempt_state, outcome} = attempt_end(status, Map.get(attrs, :outcome))
+
+        if owner &&
+             is_nil(
+               Arca.ExecutionAttempts.close!(execution.athanor_id, owner, attempt_state, outcome)
+             ),
+           do: Arca.Repo.rollback(:not_running)
+
+        {1, _} =
+          from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
+          |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+          |> Arca.Repo.update_all(set: Map.to_list(changeset.changes))
+
+        Ecto.Changeset.apply_changes(changeset)
+      end)
     end)
   end
 
-  # Fence writes by attempt id, runner boot id, and observed lease value.
-  # A lease renewal invalidates a sweep using the old value. Nil keys add
-  # no fence; without an attempt id, cancellation checks status alone.
+  defp attempt_end("completed", outcome), do: {"completed", outcome || "ok"}
+  defp attempt_end("failed", outcome), do: {"failed", outcome || "error"}
+  defp attempt_end("cancelled", outcome), do: {"cancelled", outcome || "cancelled"}
+
+  # Retire the owning attempt: on the lease the sweeper observed when one
+  # is given (a renewal since matches nothing), else as failed.
+  # arca:db-raise-ok inside the caller's transaction
+  defp retire_attempt(_execution, attempt, %DateTime{} = seen) do
+    match?({:ok, ran} when is_integer(ran), Arca.ExecutionAttempts.lapse(attempt, seen))
+  end
+
+  defp retire_attempt(execution, attempt, nil) do
+    not is_nil(Arca.ExecutionAttempts.close!(execution.athanor_id, attempt, "failed", "error"))
+  end
+
+  # Fence a write on the attempt that owns the row. A nil attempt adds no
+  # fence: cancellation then checks status alone.
   defp fenced(query, fence) do
     Enum.reduce(fence, query, fn
       {_key, nil}, q -> q
-      {:attempt, attempt}, q -> where(q, [e], e.attempt == ^attempt)
-      {:runner_id, runner}, q -> where(q, [e], e.runner_id == ^runner)
-      {:lease_until, %DateTime{} = seen}, q -> where(q, [e], e.lease_until == ^seen)
+      {:attempt, attempt}, q -> where(q, [e], e.current_attempt == ^attempt)
+      {_other, _}, q -> q
     end)
   end
 
   @doc """
-  Lists 'running' executions whose lease lapsed before `now` (the sweep).
+  Executions whose current attempt is running with a lease lapsed before
+  `now` (the sweep), each as the row's map with the attempt's `attempt`,
+  `runner_id` and `lease_until` beside it.
 
   Intentionally spans all tenants: the `Opus.ExecutionSweeper` GC must reap
-  orphaned 'running' rows left by a crashed runner — this node's or another
+  orphaned rows left by a crashed runner — this node's or another
   node's — when no tenant context can be reconstructed. System-internal
   only — not reachable from a tenant request.
   """
@@ -707,13 +760,22 @@ defmodule Arca.Execution do
     Arca.Repo.Errors.with_db_rescue("Execution.list_stale_running", [], fn ->
       # arca:unscoped-ok the sweeper reaps orphaned rows across all tenants
       # when no tenant context can be reconstructed — system-internal only.
-      from(e in __MODULE__,
+      from(a in Arca.Schemas.ExecutionAttempt,
+        join: e in __MODULE__,
+        on: e.id == a.execution_id and e.current_attempt == a.attempt,
+        where: a.state == "running" and a.lease_until < ^now,
         where: e.status == "running",
-        where: e.lease_until < ^now,
-        order_by: [asc: e.lease_until],
-        limit: ^limit
+        order_by: [asc: a.lease_until],
+        limit: ^limit,
+        select: {e, a}
       )
       |> Arca.Repo.all()
+      |> Enum.map(fn {e, a} ->
+        e
+        |> Map.from_struct()
+        |> Map.delete(:__meta__)
+        |> Map.merge(%{attempt: a.attempt, runner_id: a.runner_id, lease_until: a.lease_until})
+      end)
     end)
   end
 

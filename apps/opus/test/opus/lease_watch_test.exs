@@ -21,18 +21,17 @@ defmodule Opus.LeaseWatchTest do
     id = "exec_watch_#{System.unique_integer([:positive])}"
 
     {:ok, _} =
-      Execution.record_start(%{
-        id: id,
-        reference: "catalyst:local.test:1.0.0",
-        user_id: "user_test",
-        athanor_id: Sanctum.TestContext.athanor_id(),
-        started_at: DateTime.utc_now(),
-        status: "running",
-        component_type: "catalyst",
-        runner_id: ExecutionRecord.runner_id(),
-        lease_until: ExecutionRecord.lease_until(),
-        attempt: attempt
-      })
+      Execution.admit(
+        %{
+          id: id,
+          reference: "catalyst:local.test:1.0.0",
+          user_id: "user_test",
+          athanor_id: Sanctum.TestContext.athanor_id(),
+          component_type: "catalyst"
+        },
+        attempt: attempt,
+        runner_id: ExecutionRecord.runner_id()
+      )
 
     id
   end
@@ -50,15 +49,23 @@ defmodule Opus.LeaseWatchTest do
     assert DateTime.compare(renewed, DateTime.utc_now()) == :gt
 
     {:ok, _} =
-      Execution.record_complete(
+      Execution.record_end(
         Sanctum.TestContext.local(),
         id,
-        %{completed_at: DateTime.utc_now(), duration_ms: 1, status: "completed"},
-        attempt: "att_1"
+        "completed",
+        %{completed_at: DateTime.utc_now(), duration_ms: 1},
+        "att_1"
       )
 
     assert :lost = ExecutionRecord.renew_lease(id, "att_1")
     assert :lapsed = Executor.renew_watch(watch(id, "att_1", far()))
+  end
+
+  test "a cancel asked of the attempt reaches the watch at its next tick" do
+    id = running!("att_c")
+    {:ok, 1} = Arca.ExecutionAttempts.request_cancel(Sanctum.TestContext.athanor_id(), id)
+    assert {:cancel_requested, _} = ExecutionRecord.renew_lease(id, "att_c")
+    assert :cancelled = Executor.renew_watch(watch(id, "att_c", far()))
   end
 
   test "another attempt's renewal is refused, not tolerated" do

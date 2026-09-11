@@ -153,6 +153,17 @@ defmodule Opus do
   @impl Cyfr.Execution
   defdelegate cancel(ctx, execution_id), to: Opus.Executor
 
+  @impl Cyfr.Execution
+  defdelegate claim_turn_root(ctx, agent_ref, opts \\ []), to: Opus.TurnRoot, as: :claim
+  @impl Cyfr.Execution
+  defdelegate pause_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :pause
+  @impl Cyfr.Execution
+  defdelegate resume_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :resume
+  @impl Cyfr.Execution
+  defdelegate adopt_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :adopt
+  @impl Cyfr.Execution
+  defdelegate release_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :release
+
   @doc """
   Terminate a running execution because its consent changed underneath it.
 

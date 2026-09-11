@@ -19,6 +19,14 @@ defmodule Cyfr.ExecutionTest do
     def unsubscribe_events(_id, _ctx), do: :ok
     def events_since(_id, _seq, _athanor), do: [%{seq: 1}]
     def run_child(_authority, ref, _need, input, _opts), do: {:ok, %{child: ref, input: input}}
+
+    def claim_turn_root(_ctx, ref, opts),
+      do: {:ok, %{execution_id: "exec_turn", attempt: "att_turn", ref: ref, opts: opts}}
+
+    def pause_turn_root(_ctx, id, _opts), do: {:ok, %{execution_id: id}}
+    def resume_turn_root(_ctx, id, _opts), do: {:ok, %{execution_id: id}}
+    def adopt_turn_root(_ctx, id, _opts), do: {:ok, %{execution_id: id}}
+    def release_turn_root(_ctx, _id, _opts), do: :ok
     def cancel(_ctx, id), do: {:ok, id}
     def cancel_for_restart(_ctx, _id, _payload), do: :ok
     def get(_ctx, id), do: {:ok, %{id: id}}

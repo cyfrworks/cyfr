@@ -33,11 +33,20 @@ defmodule Opus.HostSurfaceTest do
     "Arca.Cache",
     "Arca.CronSchedule",
     "Arca.Execution",
+    # The attempt that owns an execution: renewed, cancelled and closed by
+    # the runner that holds it, and the turn root a host loop pauses and
+    # resumes — a worker on another node would renew and close its
+    # attempt through a client.
+    "Arca.ExecutionAttempts",
     # A non-chat execution's result is kept as a payload once it completes.
     "Arca.ExecutionPayloads",
     "Arca.QueryHelpers",
     "Arca.Repo",
     "Arca.Storage",
+    # The turn a root belongs to: paused and resumed with the root's
+    # attempt in one transaction — a worker holding a turn root would
+    # move the rows through a client.
+    "Arca.TurnStorage",
     "Arca.Usage",
     "Emissary.PubSub",
 

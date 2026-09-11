@@ -389,14 +389,30 @@ defmodule Opus.Chain do
   @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Authority.t()} | {:error, term()}
   def authority_for(%Context{} = ctx, profile_selector, reference, opts \\ []) do
+    with {:ok, %{authority: authority}} <-
+           authority_and_stamp_for(ctx, profile_selector, reference, opts) do
+      {:ok, authority}
+    end
+  end
+
+  @doc """
+  `authority_for/4` with what a root row records beside the authority:
+  the activation stamp the loader verified and the profile selected.
+  A turn root (`Opus.TurnRoot`) is admitted from this, so its row carries
+  the same activation a WASM root would.
+  """
+  @spec authority_and_stamp_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
+          {:ok, %{authority: Authority.t(), stamp: map() | nil, profile: map()}}
+          | {:error, term()}
+  def authority_and_stamp_for(%Context{} = ctx, profile_selector, reference, opts \\ []) do
     source = Keyword.get(opts, :consent_source, Source.impl())
 
     with {:ok, name_ref} <- name_level(reference),
          {:ok, candidates} <- source.profiles(ctx, name_ref),
          {:ok, profile} <- select_profile(ctx, candidates, profile_selector, opts),
          {:ok, _ref, _type, component} <- Opus.Executor.inspect_component(ctx, reference),
-         {:ok, authority, _stamp} <- load_authority(ctx, profile, component, source, opts) do
-      {:ok, authority}
+         {:ok, authority, stamp} <- load_authority(ctx, profile, component, source, opts) do
+      {:ok, %{authority: authority, stamp: stamp, profile: profile}}
     end
   end
 end

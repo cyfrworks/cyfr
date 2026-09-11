@@ -168,6 +168,17 @@ defmodule Opus.Executor do
         do: [{:execution_id, opts[:execution_id]} | record_opts],
         else: record_opts
 
+    # A root mints its invocation reservation at admission, from the
+    # budget its authority was minted with; a child charges its root's.
+    record_opts =
+      case {opts[:root_execution_id], opts[:authority]} do
+        {nil, %Sanctum.Authority{budget: %Sanctum.Authority.Budget{id: id, cap: cap}}} ->
+          [{:reservation, %{budget_id: id, cap: cap}} | record_opts]
+
+        _ ->
+          record_opts
+      end
+
     record = ExecutionRecord.new(ctx, reference, input, record_opts)
 
     record =
@@ -1041,10 +1052,8 @@ defmodule Opus.Executor do
         _ -> nil
       end
 
-    case Opus.ExecutionSemaphore.acquire(semaphore_timeout, class, tenant) do
-      :ok ->
-        registered? = register_execution(exec_opts)
-
+    case Opus.Slot.acquire(class, tenant, semaphore_timeout, execution_id(exec_opts)) do
+      {:ok, token} ->
         try do
           runtime_opts = runtime_opts(exec_opts, opts)
 
@@ -1062,20 +1071,11 @@ defmodule Opus.Executor do
 
           execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
         after
-          Opus.ExecutionSemaphore.release()
-          if registered?, do: Registry.unregister(Opus.ExecutionRegistry, execution_id(exec_opts))
+          Opus.Slot.release(token)
         end
 
-      {:error, :queue_full} ->
-        {:error, "Server at maximum concurrent executions. Retry later."}
-
-      {:error, :tenant_limit} ->
-        {:error, "Athanor at maximum concurrent executions. Retry later."}
-
-      {:error, :tenant_unreaped_limit} ->
-        {:error,
-         "Athanor has too many recently timed-out executions whose CPU could not be " <>
-           "reclaimed. Wait a few minutes, and check for components that never yield."}
+      {:error, sentence} ->
+        {:error, sentence}
     end
   end
 
@@ -1136,19 +1136,6 @@ defmodule Opus.Executor do
         end)
 
         :ok
-    end
-  end
-
-  defp register_execution(exec_opts) do
-    case execution_id(exec_opts) do
-      nil ->
-        false
-
-      execution_id ->
-        case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
-          {:ok, _} -> true
-          {:error, {:already_registered, _}} -> false
-        end
     end
   end
 
@@ -1344,17 +1331,24 @@ defmodule Opus.Executor do
               :lapsed ->
                 kill_unreaped(pid, cleanup_refs, watch)
                 {:error, "Execution lease lost: the row is no longer this attempt's to finish"}
+
+              :cancelled ->
+                kill_unreaped(pid, cleanup_refs, watch)
+                {:error, "Execution cancelled"}
             end
         end
     end
   end
 
   @doc false
-  @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed
+  @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed | :cancelled
   def renew_watch(watch, now \\ DateTime.utc_now()) do
     case Opus.ExecutionRecord.renew_lease(watch.execution_id, watch.attempt) do
       {:ok, until} ->
         {:ok, %{watch | until: until}}
+
+      {:cancel_requested, _until} ->
+        :cancelled
 
       :lost ->
         :lapsed
@@ -1705,7 +1699,7 @@ defmodule Opus.Executor do
         Arca.Execution.mark_failed_if_running(
           child.id,
           %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
-          attempt: child.attempt
+          attempt: child.current_attempt
         )
 
       if count > 0 do

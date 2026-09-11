@@ -44,6 +44,18 @@ defmodule Cyfr.Execution do
   # as the formula host builds them for a guest's child call. Never a root.
   @callback run_child(Sanctum.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
               {:ok, map()} | {:error, term()}
+  # The logical root a host loop holds for a turn: an `executions` row of
+  # kind `turn` with its attempt, reservation and a `:root` slot, taken
+  # WITHOUT entering the WASM path. Every callback runs in the process
+  # that owns the slot (the loop task); the lease keeper it starts is
+  # linked to that process and exits it when the lease is lost.
+  @callback claim_turn_root(Context.t(), String.t(), keyword()) ::
+              {:ok, map()} | {:error, term()}
+  @callback pause_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  @callback resume_turn_root(Context.t(), String.t(), keyword()) ::
+              {:ok, map()} | {:error, term()}
+  @callback adopt_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  @callback release_turn_root(Context.t(), String.t(), keyword()) :: :ok
   @callback cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   @callback cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   @callback get(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
@@ -115,6 +127,44 @@ defmodule Cyfr.Execution do
           {:ok, map()} | {:error, term()}
   def run_child(authority, reference, need, input, opts) when is_list(opts),
     do: call(:run_child, [authority, reference, need, input, opts])
+
+  @doc """
+  Claim a turn's logical root: the `kind: "turn"` execution, its attempt,
+  its reservation and a `:root` slot on the calling process, with the
+  agent's authority loaded and no guest started. `opts`: `:profile`
+  (a `RootSelect` selector, `:default` when absent), `:turn_id`,
+  `:conversation_id`, `:envelope` (the input keys the row records).
+  Answers the claim the loop keeps (`execution_id`, `attempt`,
+  `authority`, `activation_digest`, `lease_until`, `budget_id`, `token`,
+  `keeper`).
+  """
+  @spec claim_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def claim_turn_root(ctx, agent_ref, opts \\ []),
+    do: call(:claim_turn_root, [ctx, agent_ref, opts])
+
+  @doc "Pause the turn root: keeper stopped, rows flipped, slot released (`:turn_id`, `:fence`, `:reason`, `:launch_step_id`, `:claim`)."
+  @spec pause_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def pause_turn_root(ctx, execution_id, opts),
+    do: call(:pause_turn_root, [ctx, execution_id, opts])
+
+  @doc "Resume a paused turn root from the calling process: slot first, then the rows, then a keeper (`:turn_id`, `:fence`)."
+  @spec resume_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def resume_turn_root(ctx, execution_id, opts),
+    do: call(:resume_turn_root, [ctx, execution_id, opts])
+
+  @doc "Adopt a turn root whose attempt a takeover already opened: slot and keeper only (`:attempt`)."
+  @spec adopt_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def adopt_turn_root(ctx, execution_id, opts),
+    do: call(:adopt_turn_root, [ctx, execution_id, opts])
+
+  @doc "Local cleanup after the turn's terminal write: keeper stopped, slot released (`:claim`)."
+  @spec release_turn_root(Context.t(), String.t(), keyword()) :: :ok
+  def release_turn_root(ctx, execution_id, opts) do
+    case impl() do
+      nil -> :ok
+      mod -> mod.release_turn_root(ctx, execution_id, opts)
+    end
+  end
 
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def cancel(ctx, execution_id), do: call(:cancel, [ctx, execution_id])

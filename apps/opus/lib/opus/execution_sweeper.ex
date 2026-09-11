@@ -7,7 +7,7 @@ defmodule Opus.ExecutionSweeper do
 
   Runs every 60 seconds, checking for execution records still "running"
   whose lease has lapsed. A running row is leased by the node executing it
-  (`executions.runner_id`, `lease_until`) and the executor renews the lease
+  (`execution_attempts.runner_id`, `lease_until`) and the executor renews the lease
   while the work runs; a lapsed lease means the runner stopped renewing —
   crashed, or a whole node gone. This handles:
 
@@ -156,8 +156,9 @@ defmodule Opus.ExecutionSweeper do
         record
       )
 
-      # Cascade to children for formula-type executions
-      if record.component_type in ["formula"] do
+      # Cascade to children for executions that run children: formulas
+      # and turn roots.
+      if record.component_type in ["formula", "agent"] do
         Opus.Executor.cascade_children_failure_by_id(record.id)
       end
     end
