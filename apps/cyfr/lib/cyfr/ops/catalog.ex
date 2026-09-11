@@ -274,25 +274,41 @@ defmodule Cyfr.Ops.Catalog do
 
           # A spawn-shaped transition charged the invoke budget; this
           # process holds the slot, and the executor's wall-clock kill
-          # would skip the `after` — the guard releases on :DOWN.
-          if guest_fn == :spawn, do: Sanctum.Authority.guard_invoke(authority)
+          # would skip the `after` — the guard releases on :DOWN. With a
+          # charge identity the hold is a row too, reclaimable past the
+          # dispatcher's own timeout.
+          case charge_row(guest_fn, ctx, authority, opts) do
+            :ok ->
+              if guest_fn == :spawn, do: Sanctum.Authority.guard_invoke(authority)
 
-          try do
-            do_call(
-              name,
-              ctx,
-              args,
-              opts
-              |> Keyword.delete(:guest_fn)
-              |> Keyword.put(:in_chain, true)
-              # The server row the transition was judged on is the one
-              # dispatch speaks to — one revision per call, never a
-              # second read that a change in between could answer.
-              |> Keyword.put(:server, server)
-            )
-            |> prune_in_chain_discovery(name, args, ctx, authority)
-          after
-            if guest_fn == :spawn, do: Sanctum.Authority.release_invoke(authority)
+              try do
+                do_call(
+                  name,
+                  ctx,
+                  args,
+                  opts
+                  |> Keyword.drop([:guest_fn, :charge])
+                  |> Keyword.put(:in_chain, true)
+                  # The server row the transition was judged on is the one
+                  # dispatch speaks to — one revision per call, never a
+                  # second read that a change in between could answer.
+                  |> Keyword.put(:server, server)
+                )
+                |> prune_in_chain_discovery(name, args, ctx, authority)
+              after
+                if guest_fn == :spawn do
+                  Sanctum.Authority.release_invoke(authority)
+                  release_row(ctx, authority, opts)
+                end
+              end
+
+            {:error, reason} ->
+              # The slot the transition charged goes back: the row refused it.
+              Sanctum.Authority.Budget.release(authority.budget)
+
+              {:error,
+               "Denied by chain authority: " <>
+                 "#{Sanctum.Authority.Transition.deny_message(reason)} for '#{name}'"}
           end
 
         {:deny, reason} ->
@@ -307,6 +323,43 @@ defmodule Cyfr.Ops.Catalog do
       end
     end
   end
+
+  # A spawn-shaped call with a charge identity holds a row beside the
+  # slot: `opts[:charge]` is `%{id, attempt, generation, holder_execution_id}`
+  # and the row's deadline is the dispatcher's own timeout. Without an
+  # identity (a guest's own call) the slot alone is the hold, as before.
+  defp charge_row(:spawn, %Context{athanor_id: athanor_id}, authority, opts)
+       when is_binary(athanor_id) do
+    case Keyword.get(opts, :charge) do
+      %{id: _} = charge ->
+        deadline = DateTime.add(DateTime.utc_now(), @tool_timeout_ms, :millisecond)
+
+        case Arca.BudgetReservations.charge(athanor_id, authority.budget.id, charge, 1,
+               holder_deadline: deadline
+             ) do
+          :ok -> :ok
+          :exhausted -> {:error, :invoke_budget_exhausted}
+          :stale_attempt -> {:error, :invoke_budget_exhausted}
+          :released -> {:error, :invoke_budget_exhausted}
+          {:error, _} -> {:error, :invoke_budget_exhausted}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp charge_row(_guest_fn, _ctx, _authority, _opts), do: :ok
+
+  defp release_row(%Context{athanor_id: athanor_id}, authority, opts)
+       when is_binary(athanor_id) do
+    case Keyword.get(opts, :charge) do
+      %{id: id} -> Arca.BudgetReservations.release(athanor_id, authority.budget.id, id)
+      _ -> :ok
+    end
+  end
+
+  defp release_row(_ctx, _authority, _opts), do: :ok
 
   # Host-supplied lineage, re-injected after the guest's own keys were
   # dropped. This is the only channel a provider can trust for "which

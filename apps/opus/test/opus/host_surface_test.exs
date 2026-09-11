@@ -33,6 +33,10 @@ defmodule Opus.HostSurfaceTest do
     "Arca.Cache",
     "Arca.CronSchedule",
     "Arca.Execution",
+    # The invoke budget's durable half: a spawn-shaped child's charge row,
+    # taken before it runs and given back after — a worker on another
+    # node would charge and release through a client.
+    "Arca.BudgetReservations",
     # The attempt that owns an execution: renewed, cancelled and closed by
     # the runner that holds it, and the turn root a host loop pauses and
     # resumes — a worker on another node would renew and close its

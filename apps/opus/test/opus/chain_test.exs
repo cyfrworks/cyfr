@@ -840,4 +840,69 @@ defmodule Opus.ChainTest do
       assert Authority.budget(auth).in_flight == 0
     end
   end
+
+  describe "run_child/5 as a spawn" do
+    test "a spawn-shaped child holds the slot for the call and releases it on return", %{ctx: ctx} do
+      auth = authority_with_edges(%{@target_node => %{}})
+      assert Authority.budget(auth).in_flight == 0
+
+      _result =
+        Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx, guest_fn: :spawn))
+
+      assert Authority.budget(auth).in_flight == 0
+    end
+
+    test "with a charge identity the hold is a row, taken before the run and given back after", %{
+      ctx: ctx
+    } do
+      auth = authority_with_edges(%{@target_node => %{}})
+
+      {:ok, %{attempt: root_attempt}} =
+        Arca.Execution.admit(
+          %{
+            id: "exec_charge_root_#{System.unique_integer([:positive])}",
+            reference: "formula:local.root:1.0.0",
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "formula"
+          },
+          reservation: %{budget_id: auth.budget.id, cap: 1}
+        )
+
+      charge = %{
+        id: "call:t:1:c1:g0",
+        attempt: root_attempt.attempt,
+        generation: 0,
+        holder_execution_id: nil
+      }
+
+      _result =
+        Opus.run_child(
+          auth,
+          "#{@target_node}:0.1.0",
+          nil,
+          %{},
+          child_opts(ctx, guest_fn: :spawn, charge: charge)
+        )
+
+      assert Authority.budget(auth).in_flight == 0
+      assert %{charged: 0} = Arca.BudgetReservations.lookup(ctx.athanor_id, auth.budget.id)
+      assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, auth.budget.id)
+
+      # A full reservation refuses the run and gives the slot back.
+      :ok =
+        Arca.BudgetReservations.charge(ctx.athanor_id, auth.budget.id, %{charge | id: "other"}, 1)
+
+      assert {:error, {:invoke_denied, :invoke_budget_exhausted}} =
+               Opus.run_child(
+                 auth,
+                 "#{@target_node}:0.1.0",
+                 nil,
+                 %{},
+                 child_opts(ctx, guest_fn: :spawn, charge: charge)
+               )
+
+      assert Authority.budget(auth).in_flight == 0
+    end
+  end
 end
