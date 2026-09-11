@@ -76,6 +76,10 @@ config :phoenix, :json_library, Jason
 # Configure the execution implementation before endpoint startup; unavailable code reports no engine.
 config :cyfr, :execution_impl, Opus
 
+# The byte store behind retained execution payloads
+# (`Arca.ExecutionPayloads.Store`): the athanor's own tree by default.
+config :cyfr, :execution_payload_store, Arca.ExecutionPayloads.Store.Overlay
+
 # Inbound request-param redaction (:filter_parameters) is set at boot by
 # Cyfr.Application from Sanctum.Sanitizer.filter_parameters/0 — the one
 # redaction vocabulary. It is not spelled here so it cannot drift from it.
@@ -178,7 +182,13 @@ config :cyfr, Cyfr.Retention,
   executions: 10_000,
   # Days an execution record is kept, whatever the count.
   execution_days: 90,
+  # Days a retained execution payload is kept, per retention class: the
+  # default class and chat steps, webhook-driven runs, scheduled runs and
+  # the server's own runs.
   payload_days: 30,
+  webhook_payload_days: 14,
+  schedule_payload_days: 30,
+  system_payload_days: 7,
   # Newest N build records kept per athanor.
   builds: 100,
   # Days of policy-enforcement log kept.

@@ -245,6 +245,7 @@ defmodule Aqua.Loop.Binding do
       lineage: %{
         parent_execution_id: Map.fetch!(dispatch, :root_execution_id),
         root_execution_id: Map.fetch!(dispatch, :root_execution_id),
+        attempt: Map.get(dispatch, :attempt),
         conversation_id: Map.get(dispatch, :conversation_id)
       },
       charge: Map.get(dispatch, :charge),

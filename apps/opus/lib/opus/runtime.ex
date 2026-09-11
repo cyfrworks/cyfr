@@ -118,7 +118,10 @@ defmodule Opus.Runtime do
     authority_info = %{
       authority: authority,
       declared_needs: declared_needs,
-      activation_digest: activation_digest
+      activation_digest: activation_digest,
+      # The attempt that owns this execution's row, for the lineage of
+      # every call a formula makes.
+      attempt: Keyword.get(opts, :execution_attempt)
     }
 
     # Build imports and collect cleanup refs
@@ -284,6 +287,7 @@ defmodule Opus.Runtime do
       if component_type == :formula && ctx && execution_id do
         Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
           root_execution_id: root_execution_id,
+          attempt: authority_info.attempt,
           limits: limits,
           authority: authority_info.authority,
           declared_needs: authority_info.declared_needs,

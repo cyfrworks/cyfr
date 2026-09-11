@@ -159,8 +159,9 @@ defmodule Opus.Executor do
       # Set by `Opus.Chain.run_root/5` only: a child walks its parent's
       # authority and roots no profile of its own, so it records none.
       profile_id: opts[:profile_id],
-      # Who invoked this child, for what the row keeps of its output.
-      parent_reference: opts[:parent_reference]
+      # The class the execution's payloads are kept under; a turn's own
+      # dispatches name `chat_step`, everything else derives its own.
+      retention_class: opts[:retention_class]
     ]
 
     record_opts =
@@ -595,6 +596,11 @@ defmodule Opus.Executor do
             # handled below.
             nil
 
+          {:error, {:result_lost, reason}} ->
+            # The row reads failed (result_lost): the run happened and its
+            # result was answered, but nothing retained it.
+            inspect(reason)
+
           {:error, reason} ->
             Logger.error(
               "[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
@@ -627,6 +633,15 @@ defmodule Opus.Executor do
           Logger.info(
             "[Opus.Executor] execution #{completed_record.id} finished after cancel; " <>
               "the cancelled row stands"
+          )
+
+        {:error, {:result_lost, _}} ->
+          Opus.ExecutionEventBuffer.push_terminal(
+            completed_record.id,
+            "error",
+            %{error: "result not retained"},
+            999_999_999,
+            completed_record
           )
 
         _ ->

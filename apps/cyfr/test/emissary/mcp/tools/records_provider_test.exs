@@ -174,6 +174,56 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
                })
     end
 
+    test "in-chain, record.payload answers the calling execution its own payload for its attempt",
+         %{ctx: ctx} do
+      exec = "exec_payload_#{System.unique_integer([:positive])}"
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Execution, [
+          %{
+            id: exec,
+            athanor_id: ctx.athanor_id,
+            user_id: ctx.user_id,
+            reference: "formula:local.pay:0.1.0",
+            status: "running",
+            started_at: DateTime.utc_now(),
+            current_attempt: "att_1"
+          }
+        ])
+
+      {:ok, _} = Arca.ExecutionPayloads.put(ctx, exec, "input", ~s({"given":1}), "api")
+      guest = Context.enter_guest(ctx)
+
+      # The lineage the host stamps names the caller and its attempt.
+      stamped = %{
+        "action" => "payload",
+        "id" => exec,
+        "kind" => "input",
+        "parent_execution_id" => exec,
+        "attempt" => "att_1"
+      }
+
+      assert {:ok, %{content: content}} = MCP.handle("record", guest, stamped)
+      assert Base.decode64!(content) == ~s({"given":1})
+
+      # Another execution's payload, a stale attempt, or no attempt at all.
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("record", guest, %{stamped | "parent_execution_id" => "exec_other"})
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("record", guest, %{stamped | "attempt" => "att_0"})
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("record", guest, Map.delete(stamped, "attempt"))
+
+      # A member names an attempt outright, and reads that attempt's.
+      member = %{"action" => "payload", "id" => exec, "kind" => "input", "attempt" => "att_1"}
+      assert {:ok, _} = MCP.handle("record", ctx, member)
+
+      assert {:error, {:not_found, "Payload", _}} =
+               MCP.handle("record", ctx, %{member | "attempt" => "att_0"})
+    end
+
     test "a key scoped to storage reads reaches data/ and conversations/, a person everything",
          %{ctx: ctx} do
       :ok = Arca.put(ctx, ["data", "reach.txt"], "g")

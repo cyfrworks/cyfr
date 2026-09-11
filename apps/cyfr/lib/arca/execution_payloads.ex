@@ -5,62 +5,144 @@ defmodule Arca.ExecutionPayloads do
   @moduledoc """
   An execution's retained input and result: the bytes under the athanor's
   `payloads/` root, and the `execution_payloads` row that references
-  them by digest, size and retention class.
+  them by digest, size, retention class and the attempt that produced
+  them.
 
-  Written once per execution and kind; read by a member of the athanor
-  through the record tool; pruned by age per retention class
-  (`Cyfr.Retention.Payloads`), and released before the execution rows
-  that name them go (`release/2`). The row is the reference and the bytes
-  are the payload — an `executions` row carries digests and sizes, never
-  the bytes.
+  A payload is kept in two steps so its row can join the transaction
+  that admits or ends the execution: `stage/5` writes the bytes and
+  answers a `Staged`; `commit!/2` inserts the row inside the caller's
+  transaction, for the attempt that owns the execution; `discard/1`
+  removes staged bytes no row names. `put/6` does both in a transaction
+  of its own. A row exists only once its transaction committed, so a
+  reader never meets bytes the execution did not keep.
+
+  One row per `(execution, kind, attempt)`: a successor attempt keeps
+  payloads of its own, and `get/4` serves the current attempt's unless
+  another is named. Pruned by age per retention class
+  (`Cyfr.Retention.Payloads` and its siblings), and released before the
+  execution rows that name them go (`release/2`). The row is the
+  reference and the bytes are the payload — an `executions` row carries
+  digests and sizes, never the bytes.
 
   The bytes are immutable: an object is named by the digest of its
-  content, so two writers for one `(execution, kind)` never overwrite
-  each other — the row decides which object is the payload, and a loser's
-  object is removed. A read verifies the bytes against the row's digest
-  and refuses a mismatch as corruption rather than serving foreign bytes
-  under a trusted digest. The root is reserved
-  (`Arca.Storage.reserved_roots/0`): only this module's own writes, under
-  the overlay's internal-write scope, change it.
+  content, so two writers for one `(execution, kind, attempt)` never
+  overwrite each other — the row decides which object is the payload,
+  and a loser's object is removed. A read verifies the bytes against the
+  row's digest and refuses a mismatch as corruption rather than serving
+  foreign bytes under a trusted digest. The bytes go through the
+  configured store (`Arca.ExecutionPayloads.Store`); the root is reserved
+  (`Arca.Storage.reserved_roots/0`) and only the store's own writes
+  change it.
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [from: 2, where: 3]
 
   require Logger
 
+  alias Arca.ExecutionPayloads.Store
   alias Arca.Schemas.ExecutionPayload
   alias Sanctum.Context
+
+  defmodule Staged do
+    @moduledoc """
+    Bytes kept for a payload row not yet inserted: what `commit!/2`
+    needs to write the row and `discard/1` to remove the object.
+    """
+
+    @type t :: %__MODULE__{}
+
+    defstruct [
+      :ctx,
+      :athanor_id,
+      :execution_id,
+      :kind,
+      :digest,
+      :bytes,
+      :blob_ref,
+      :segments,
+      :retention_class
+    ]
+  end
 
   @kinds ["input", "result"]
   @root "payloads"
 
-  @doc "Keep `bytes` as the execution's `kind` payload under `retention_class`."
-  @spec put(Context.t(), String.t(), String.t(), binary(), String.t()) ::
-          {:ok, ExecutionPayload.t()} | {:error, :exists | :no_execution | term()}
-  def put(%Context{} = ctx, execution_id, kind, bytes, retention_class)
+  @doc """
+  Write `bytes` as the execution's `kind` payload under `retention_class`
+  without a row: the object is named by its digest and answers a
+  `Staged` for `commit!/2` or `discard/1`. The execution need not exist
+  yet — admission commits the input it was given.
+  """
+  @spec stage(Context.t(), String.t(), String.t(), binary(), String.t()) ::
+          {:ok, Staged.t()} | {:error, term()}
+  def stage(%Context{} = ctx, execution_id, kind, bytes, retention_class)
       when is_binary(execution_id) and kind in @kinds and is_binary(bytes) and
              is_binary(retention_class) do
     athanor_id = Context.athanor!(ctx)
     digest = Cyfr.Digest.sha256(bytes)
     segments = object_segments(execution_id, kind, digest)
-    blob_ref = Enum.join(segments, "/")
 
-    with :ok <- execution_known(athanor_id, execution_id),
-         :none <- existing(athanor_id, execution_id, kind),
-         :ok <- internal(fn -> Arca.put(ctx, segments, bytes) end) do
-      attrs = %{
-        id: Cyfr.UUID7.generate_id("pay"),
-        athanor_id: athanor_id,
-        execution_id: execution_id,
-        kind: kind,
-        digest: digest,
-        bytes: byte_size(bytes),
-        blob_ref: blob_ref,
-        retention_class: retention_class,
-        inserted_at: DateTime.utc_now()
-      }
+    with :ok <- Store.impl().put(ctx, segments, bytes) do
+      {:ok,
+       %Staged{
+         ctx: ctx,
+         athanor_id: athanor_id,
+         execution_id: execution_id,
+         kind: kind,
+         digest: digest,
+         bytes: byte_size(bytes),
+         blob_ref: Enum.join(segments, "/"),
+         segments: segments,
+         retention_class: retention_class
+       }}
+    end
+  end
 
-      case insert_row(attrs) do
+  @doc """
+  Insert the row for staged bytes as `attempt`'s payload, inside the
+  caller's transaction; a row that already exists for the execution,
+  kind and attempt raises, and the transaction rolls back.
+  """
+  @spec commit!(Staged.t(), String.t() | nil) :: ExecutionPayload.t()
+  # arca:db-raise-ok inside the caller's transaction
+  # arca:unscoped-ok the row inserted carries the staged athanor_id
+  def commit!(%Staged{} = staged, attempt) when is_binary(attempt) or is_nil(attempt) do
+    %ExecutionPayload{}
+    |> Ecto.Changeset.change(row_attrs(staged, attempt))
+    |> Ecto.Changeset.unique_constraint([:execution_id, :kind, :attempt])
+    |> Arca.Repo.insert!()
+  end
+
+  @doc """
+  Remove staged bytes no row names. An object a row already references
+  — the same bytes committed by another writer — is left as it is.
+  """
+  @spec discard(Staged.t()) :: :ok | {:error, term()}
+  def discard(%Staged{} = staged) do
+    case referenced?(staged) do
+      {:ok, true} -> :ok
+      {:ok, false} -> delete_object(staged.ctx, staged.segments)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Keep `bytes` as the execution's `kind` payload under `retention_class`,
+  for `opts[:attempt]` — the execution's current attempt by default — in
+  one transaction: the bytes, then the row.
+  """
+  @spec put(Context.t(), String.t(), String.t(), binary(), String.t(), keyword()) ::
+          {:ok, ExecutionPayload.t()} | {:error, :exists | :no_execution | term()}
+  def put(%Context{} = ctx, execution_id, kind, bytes, retention_class, opts \\ [])
+      when is_binary(execution_id) and kind in @kinds and is_binary(bytes) and
+             is_binary(retention_class) and is_list(opts) do
+    athanor_id = Context.athanor!(ctx)
+
+    with {:ok, current} <- current_attempt(athanor_id, execution_id),
+         attempt = Keyword.get(opts, :attempt, current),
+         :none <- existing(athanor_id, execution_id, kind, attempt),
+         {:ok, staged} <- stage(ctx, execution_id, kind, bytes, retention_class) do
+      case insert_row(staged, attempt) do
         {:ok, row} ->
           {:ok, row}
 
@@ -68,11 +150,7 @@ defmodule Arca.ExecutionPayloads do
           # Another writer's row won the unique key. The object written
           # here is removed unless it is that row's own — same bytes, same
           # name — so the winner's payload is never touched.
-          case existing(athanor_id, execution_id, kind) do
-            {:exists, %{blob_ref: ^blob_ref}} -> :ok
-            _ -> internal(fn -> Arca.delete(ctx, segments) end)
-          end
-
+          _ = discard(staged)
           {:error, reason}
       end
     else
@@ -82,16 +160,20 @@ defmodule Arca.ExecutionPayloads do
   end
 
   @doc """
-  The execution's `kind` payload: its row and its bytes, verified against
-  the row's digest.
+  The execution's `kind` payload — its row and its bytes, verified
+  against the row's digest — for `opts[:attempt]`, the execution's
+  current attempt by default.
   """
-  @spec get(Context.t(), String.t(), String.t()) ::
+  @spec get(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, ExecutionPayload.t(), binary()} | {:error, :not_found | :payload_corrupt | term()}
-  def get(%Context{} = ctx, execution_id, kind) when is_binary(execution_id) and kind in @kinds do
+  def get(ctx, execution_id, kind, opts \\ [])
+
+  def get(%Context{} = ctx, execution_id, kind, opts)
+      when is_binary(execution_id) and kind in @kinds and is_list(opts) do
     athanor_id = Context.athanor!(ctx)
 
-    with {:ok, row} <- fetch_row(athanor_id, execution_id, kind),
-         {:ok, bytes} <- Arca.get(ctx, String.split(row.blob_ref, "/")) do
+    with {:ok, row} <- fetch_row(athanor_id, execution_id, kind, Keyword.get(opts, :attempt)),
+         {:ok, bytes} <- Store.impl().get(ctx, String.split(row.blob_ref, "/")) do
       if Cyfr.Digest.sha256(bytes) == row.digest do
         {:ok, row, bytes}
       else
@@ -105,31 +187,34 @@ defmodule Arca.ExecutionPayloads do
     end
   end
 
-  def get(_ctx, _execution_id, _kind), do: {:error, :not_found}
+  def get(_ctx, _execution_id, _kind, _opts), do: {:error, :not_found}
 
-  @doc "How many of the context's athanor's payloads are older than `days`."
-  @spec count_older_than_days(Context.t(), pos_integer()) ::
+  @doc "How many of the context's athanor's payloads in `classes` are older than `days`."
+  @spec count_older_than_days(Context.t(), pos_integer(), [String.t()]) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def count_older_than_days(%Context{} = ctx, days) when is_integer(days) and days > 0 do
+  def count_older_than_days(%Context{} = ctx, days, classes)
+      when is_integer(days) and days > 0 and is_list(classes) do
     athanor_id = Context.athanor!(ctx)
 
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.count_older_than_days", fn ->
-      {:ok, Arca.Repo.aggregate(aged(athanor_id, days), :count)}
+      {:ok, Arca.Repo.aggregate(aged(athanor_id, days, classes), :count)}
     end)
   end
 
   @doc """
-  Delete the context's athanor's payloads older than `days`: the bytes,
-  then the rows. A row whose bytes could not be deleted stays, so the
-  next sweep finds them again; bytes already gone are not a failure.
+  Delete the context's athanor's payloads in `classes` older than `days`:
+  the bytes, then the rows. A row whose bytes could not be deleted stays,
+  so the next sweep finds them again; bytes already gone are not a
+  failure.
   """
-  @spec delete_older_than_days(Context.t(), pos_integer()) ::
+  @spec delete_older_than_days(Context.t(), pos_integer(), [String.t()]) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def delete_older_than_days(%Context{} = ctx, days) when is_integer(days) and days > 0 do
+  def delete_older_than_days(%Context{} = ctx, days, classes)
+      when is_integer(days) and days > 0 and is_list(classes) do
     athanor_id = Context.athanor!(ctx)
 
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.delete_older_than_days", fn ->
-      {:ok, delete_rows(ctx, Arca.Repo.all(aged(athanor_id, days)))}
+      {:ok, delete_rows(ctx, Arca.Repo.all(aged(athanor_id, days, classes)))}
     end)
   end
 
@@ -166,11 +251,8 @@ defmodule Arca.ExecutionPayloads do
 
   defp delete_bytes(ctx, rows) do
     Enum.split_with(rows, fn row ->
-      case internal(fn -> Arca.delete(ctx, String.split(row.blob_ref, "/")) end) do
+      case delete_object(ctx, String.split(row.blob_ref, "/")) do
         :ok ->
-          true
-
-        {:error, :not_found} ->
           true
 
         {:error, reason} ->
@@ -184,6 +266,14 @@ defmodule Arca.ExecutionPayloads do
     end)
   end
 
+  defp delete_object(ctx, segments) do
+    case Store.impl().delete(ctx, segments) do
+      :ok -> :ok
+      {:error, :not_found} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp delete_row_ids(_athanor_id, []), do: 0
 
   defp delete_row_ids(athanor_id, ids) do
@@ -195,11 +285,13 @@ defmodule Arca.ExecutionPayloads do
     count
   end
 
-  defp aged(athanor_id, days) do
+  defp aged(athanor_id, days, classes) do
     cutoff = DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
 
     from(p in ExecutionPayload,
-      where: p.athanor_id == ^athanor_id and p.inserted_at < ^cutoff
+      where:
+        p.athanor_id == ^athanor_id and p.retention_class in ^classes and
+          p.inserted_at < ^cutoff
     )
   end
 
@@ -209,22 +301,52 @@ defmodule Arca.ExecutionPayloads do
   defp object_segments(execution_id, kind, "sha256:" <> hex),
     do: [@root, execution_id, "#{kind}.#{hex}"]
 
-  # A payload references an execution the athanor holds; the database
-  # constrains the pair too, but names no constraint an adapter could map
-  # to a typed refusal, so the store asks first.
-  defp execution_known(athanor_id, execution_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.put", fn ->
-      known? =
-        Arca.Repo.exists?(
-          from(e in Arca.Execution, where: e.id == ^execution_id and e.athanor_id == ^athanor_id)
-        )
+  defp row_attrs(%Staged{} = staged, attempt) do
+    %{
+      id: Cyfr.UUID7.generate_id("pay"),
+      athanor_id: staged.athanor_id,
+      execution_id: staged.execution_id,
+      kind: staged.kind,
+      attempt: attempt,
+      digest: staged.digest,
+      bytes: staged.bytes,
+      blob_ref: staged.blob_ref,
+      retention_class: staged.retention_class,
+      inserted_at: DateTime.utc_now()
+    }
+  end
 
-      if known?, do: :ok, else: {:error, :no_execution}
+  # A payload references an execution the athanor holds, and by default
+  # its current attempt; the database constrains the pair too, but names
+  # no constraint an adapter could map to a typed refusal, so the store
+  # asks first.
+  defp current_attempt(athanor_id, execution_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.put", fn ->
+      case Arca.Repo.one(
+             from(e in Arca.Execution,
+               where: e.id == ^execution_id and e.athanor_id == ^athanor_id,
+               select: {e.id, e.current_attempt}
+             )
+           ) do
+        nil -> {:error, :no_execution}
+        {_id, attempt} -> {:ok, attempt}
+      end
     end)
   end
 
-  defp existing(athanor_id, execution_id, kind) do
-    case fetch_row(athanor_id, execution_id, kind) do
+  defp referenced?(%Staged{} = staged) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.discard", fn ->
+      {:ok,
+       Arca.Repo.exists?(
+         from(p in ExecutionPayload,
+           where: p.athanor_id == ^staged.athanor_id and p.blob_ref == ^staged.blob_ref
+         )
+       )}
+    end)
+  end
+
+  defp existing(athanor_id, execution_id, kind, attempt) do
+    case fetch_row(athanor_id, execution_id, kind, attempt) do
       {:ok, row} -> {:exists, row}
       {:error, :not_found} -> :none
       {:error, reason} -> {:error, reason}
@@ -232,26 +354,47 @@ defmodule Arca.ExecutionPayloads do
   end
 
   # arca:unscoped-ok the row inserted carries the context's athanor_id in `attrs`
-  defp insert_row(attrs) do
+  defp insert_row(%Staged{} = staged, attempt) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.put", fn ->
       %ExecutionPayload{}
-      |> Ecto.Changeset.change(attrs)
-      |> Ecto.Changeset.unique_constraint([:execution_id, :kind])
+      |> Ecto.Changeset.change(row_attrs(staged, attempt))
+      |> Ecto.Changeset.unique_constraint([:execution_id, :kind, :attempt])
       |> Arca.Repo.insert()
+      |> case do
+        {:ok, row} -> {:ok, row}
+        {:error, %Ecto.Changeset{errors: [execution_id: _]}} -> {:error, :exists}
+        {:error, changeset} -> {:error, changeset}
+      end
     end)
   end
 
-  # The root is reserved: its bytes change only under the overlay's
-  # internal-write scope, which is what makes a member's write refused.
-  defp internal(fun), do: Arca.Overlay.with_internal_writes(fun)
-
-  defp fetch_row(athanor_id, execution_id, kind) do
+  # The row of the named attempt, or of the execution's current attempt
+  # when none is named: a successor's read never answers a predecessor's
+  # payload.
+  defp fetch_row(athanor_id, execution_id, kind, attempt) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.get", fn ->
-      case Arca.Repo.get_by(ExecutionPayload,
-             athanor_id: athanor_id,
-             execution_id: execution_id,
-             kind: kind
-           ) do
+      base =
+        from(p in ExecutionPayload,
+          where:
+            p.athanor_id == ^athanor_id and p.execution_id == ^execution_id and p.kind == ^kind
+        )
+
+      query =
+        case attempt do
+          nil ->
+            from(p in base,
+              join: e in Arca.Execution,
+              on: e.id == p.execution_id and e.athanor_id == p.athanor_id,
+              where:
+                p.attempt == e.current_attempt or
+                  (is_nil(p.attempt) and is_nil(e.current_attempt))
+            )
+
+          attempt ->
+            where(base, [p], p.attempt == ^attempt)
+        end
+
+      case Arca.Repo.one(query) do
         nil -> {:error, :not_found}
         row -> {:ok, row}
       end

@@ -102,6 +102,8 @@ defmodule Opus.FormulaHandler do
     for this node's onward invocations
   - `:secrets` - credential values dispensed to this execution; emitted
     events are masked with them before leaving the runtime
+  - `:attempt` - the attempt that owns this formula's row, stamped on the
+    lineage of every call it makes
   """
   @spec build_formula_imports(Context.t(), String.t(), keyword()) :: {map(), pid()}
   def build_formula_imports(%Context{} = ctx, parent_execution_id, opts \\ []) do
@@ -144,6 +146,7 @@ defmodule Opus.FormulaHandler do
       [
         parent_execution_id: parent_execution_id,
         root_execution_id: root_execution_id,
+        attempt: opts[:attempt],
         limits: limits,
         parent_reference: opts[:parent_reference],
         parent_roster: opts[:parent_roster] || []
@@ -153,6 +156,7 @@ defmodule Opus.FormulaHandler do
       [
         parent_execution_id: parent_execution_id,
         root_execution_id: root_execution_id,
+        attempt: opts[:attempt],
         limits: limits
       ] ++ authority_opts
 
@@ -697,7 +701,8 @@ defmodule Opus.FormulaHandler do
     # re-injects these, so a guest cannot claim another chain's root.
     lineage = %{
       parent_execution_id: opts[:parent_execution_id],
-      root_execution_id: opts[:root_execution_id] || opts[:parent_execution_id]
+      root_execution_id: opts[:root_execution_id] || opts[:parent_execution_id],
+      attempt: opts[:attempt]
     }
 
     Opus.Host.tool_call(tool, ctx, args, authority, guest_fn: guest_fn, lineage: lineage)

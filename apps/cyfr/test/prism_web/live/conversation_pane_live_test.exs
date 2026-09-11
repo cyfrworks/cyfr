@@ -17,7 +17,9 @@ defmodule PrismWeb.ConversationPaneLiveTest do
     Application.put_env(:cyfr, :base_path, test_path)
 
     on_exit(fn ->
-      File.rm_rf!(test_path)
+      # A turn the test left finishing may still write under the path; the
+      # runners are stopped after this callback, so the removal tolerates it.
+      File.rm_rf(test_path)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),

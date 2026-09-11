@@ -260,17 +260,19 @@ defmodule Opus.ExecutionRecordTest do
       refute String.contains?(Jason.encode!(input), "look at this")
     end
 
-    test "a model call an agent's turn made keeps a digest, its size and the usage", %{ctx: ctx} do
+    test "every output is an envelope on the row and bytes in the payload store, read back joined",
+         %{ctx: ctx} do
       root =
         ExecutionRecord.new(ctx, "agent:local.aqua", %{"turn" => "trn_1"},
           kind: "turn",
-          component_type: :agent
+          component_type: :agent,
+          retention_class: "chat_step"
         )
 
       child =
         ExecutionRecord.new(ctx, "catalyst:moonmoon69.claude:1.0.0", %{"messages" => []},
           parent_execution_id: root.id,
-          parent_reference: "agent:local.aqua"
+          retention_class: "chat_step"
         )
 
       :ok = ExecutionRecord.write_started(child)
@@ -287,13 +289,63 @@ defmodule Opus.ExecutionRecordTest do
       assert output["usage"] == %{"input_tokens" => 9}
       assert output["output_hash"] == Cyfr.Digest.sha256(Jason.encode!(reply))
       refute String.contains?(Jason.encode!(output), "the reply")
+
+      # The bytes are the attempt's payload, under the record's class; the
+      # input was kept with admission.
+      assert {:ok, %{retention_class: "chat_step", attempt: attempt}, bytes} =
+               Arca.ExecutionPayloads.get(ctx, child.id, "result")
+
+      assert attempt == child.attempt
+      assert Jason.decode!(bytes) == reply
+      assert {:ok, _, input} = Arca.ExecutionPayloads.get(ctx, child.id, "input")
+      assert Jason.decode!(input) == %{"messages" => []}
+
+      # A read joins them back; swept, the envelope alone answers.
+      assert {:ok, %{output: ^reply}} = ExecutionRecord.get(ctx, child.id)
+      old = DateTime.add(DateTime.utc_now(), -2 * 86_400, :second)
+      {2, _} = Arca.Repo.update_all(Arca.Schemas.ExecutionPayload, set: [inserted_at: old])
+      {:ok, 2} = Arca.ExecutionPayloads.delete_older_than_days(ctx, 1, ["chat_step"])
+      assert {:ok, %{output: %{"envelope" => "v1"}}} = ExecutionRecord.get(ctx, child.id)
     end
 
-    test "any other component's output is the caller's result and stays", %{ctx: ctx} do
+    test "any other component's output is the same shape, under its own class", %{ctx: ctx} do
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      assert record.retention_class == "api"
       :ok = ExecutionRecord.write_started(record)
       :ok = ExecutionRecord.write_completed(ExecutionRecord.complete(record, %{"sum" => 2}))
-      assert {:ok, %{"sum" => 2}} = Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
+
+      assert {:ok, %{"envelope" => "v1"}} =
+               Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
+
+      assert {:ok, %{retention_class: "api"}, bytes} =
+               Arca.ExecutionPayloads.get(ctx, record.id, "result")
+
+      assert Jason.decode!(bytes) == %{"sum" => 2}
+      assert {:ok, %{output: %{"sum" => 2}}} = ExecutionRecord.get(ctx, record.id)
+    end
+
+    test "a result that cannot be kept closes the attempt result_lost, never as completed",
+         %{ctx: ctx} do
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      :ok = ExecutionRecord.write_started(record)
+
+      Application.put_env(:cyfr, :execution_payload_store, __MODULE__.RefusingStore)
+      on_exit(fn -> Application.delete_env(:cyfr, :execution_payload_store) end)
+
+      assert {:error, {:result_lost, :disk_full}} =
+               ExecutionRecord.write_completed(ExecutionRecord.complete(record, %{"sum" => 2}))
+
+      row = Arca.Repo.get(Arca.Execution, record.id)
+      assert row.status == "failed"
+      assert row.error_message == "result not retained"
+
+      assert %{state: "failed", outcome: "result_lost"} =
+               Arca.ExecutionAttempts.current(ctx.athanor_id, record.id)
+
+      # An input that cannot be kept admits nothing.
+      other = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"b" => 2})
+      assert {:error, {:payload_not_retained, :disk_full}} = ExecutionRecord.write_started(other)
+      assert Arca.Repo.get(Arca.Execution, other.id) == nil
     end
 
     test "includes component_type in record", %{ctx: ctx} do
@@ -382,7 +434,7 @@ defmodule Opus.ExecutionRecordTest do
       assert is_integer(db_record.duration_ms)
 
       {:ok, output} = Jason.decode(db_record.output)
-      assert output == %{"result" => 42}
+      assert output["envelope"] == "v1"
     end
 
     test "rejects non-completed records", %{ctx: ctx} do
@@ -673,5 +725,17 @@ defmodule Opus.ExecutionRecordTest do
 
       assert record1.id != record2.id
     end
+  end
+
+  defmodule RefusingStore do
+    @moduledoc false
+    @behaviour Arca.ExecutionPayloads.Store
+
+    @impl true
+    def put(_ctx, _segments, _bytes), do: {:error, :disk_full}
+    @impl true
+    def get(_ctx, _segments), do: {:error, :not_found}
+    @impl true
+    def delete(_ctx, _segments), do: :ok
   end
 end

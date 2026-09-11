@@ -17,7 +17,9 @@ defmodule PrismWeb.AquaLiveTest do
     Application.put_env(:cyfr, :base_path, test_path)
 
     on_exit(fn ->
-      File.rm_rf!(test_path)
+      # A turn the test left finishing may still write under the path; the
+      # runners are stopped after this callback, so the removal tolerates it.
+      File.rm_rf(test_path)
 
       if original,
         do: Application.put_env(:cyfr, :base_path, original),

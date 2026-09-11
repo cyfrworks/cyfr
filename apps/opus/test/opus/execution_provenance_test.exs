@@ -2,10 +2,10 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.ExecutionProvenanceTest do
-  # Who invoked a child decides what its row keeps of its output. The
-  # record shapes it from `parent_reference`; these tests reach the record
-  # through the executor, the way production does, so a hop that drops
-  # the reference is caught here and not only in a record built by hand.
+  # What a row keeps of an output and where the bytes go. These tests
+  # reach the record through the executor, the way production does, so a
+  # hop that drops the retention class is caught here and not only in a
+  # record built by hand.
   use ExUnit.Case, async: false
 
   alias Opus.Test.NestedExecution, as: Probe
@@ -53,31 +53,39 @@ defmodule Opus.ExecutionProvenanceTest do
     {row, Jason.decode!(row.output)}
   end
 
-  test "a child an agent's turn invoked keeps a digest of its reply, never the reply", %{ctx: ctx} do
+  test "a child a turn dispatched keeps its result under chat_step, an envelope on the row", %{
+    ctx: ctx
+  } do
     {row, output} =
       run(ctx,
         parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
-        parent_reference: "agent:local.aqua"
+        retention_class: "chat_step"
       )
 
     assert output["envelope"] == "v1"
     assert is_binary(output["output_hash"])
     refute Map.has_key?(output, "op")
 
-    # ...and it is the transcript's, not the payload store's.
-    assert Arca.Repo.get_by(Arca.Schemas.ExecutionPayload, execution_id: row.id) == nil
+    assert %{kind: "result", retention_class: "chat_step", attempt: attempt} =
+             Arca.Repo.get_by(Arca.Schemas.ExecutionPayload, execution_id: row.id, kind: "result")
+
+    assert attempt == row.current_attempt
   end
 
-  test "any other execution's result stays on its row and is retained as a payload", %{ctx: ctx} do
+  test "any other execution's result is an envelope on its row and bytes in the store", %{
+    ctx: ctx
+  } do
     {row, output} = run(ctx, [])
 
-    refute Map.has_key?(output, "envelope")
+    assert output["envelope"] == "v1"
 
-    assert %{kind: "result", digest: digest} =
-             Arca.Repo.get_by(Arca.Schemas.ExecutionPayload, execution_id: row.id)
+    assert %{kind: "result", retention_class: "api", digest: digest} =
+             Arca.Repo.get_by(Arca.Schemas.ExecutionPayload, execution_id: row.id, kind: "result")
 
+    assert digest == output["output_hash"]
     assert {:ok, _payload, bytes} = Arca.ExecutionPayloads.get(ctx, row.id, "result")
     assert Cyfr.Digest.sha256(bytes) == digest
-    assert Jason.decode!(bytes) == output
+    assert {:ok, %{output: %{"op" => "echo"} = joined}} = Cyfr.Execution.get(ctx, row.id)
+    assert Jason.decode!(bytes) == joined
   end
 end

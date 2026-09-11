@@ -149,6 +149,43 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   # `tenant_gate/1` exempts platform scope; blob reads are tenant-relative,
   # so a platform context must still carry the athanor whose files it reads.
+  defp payload_attempt(%Context{plane: :guest} = ctx, id, args) do
+    attempt = args["attempt"]
+
+    cond do
+      args["parent_execution_id"] != id ->
+        {:error,
+         {:invalid_argument,
+          "in-chain, record.payload answers the calling execution's own payload"}}
+
+      not is_binary(attempt) ->
+        {:error, {:invalid_argument, "in-chain, record.payload needs the caller's attempt"}}
+
+      true ->
+        case Arca.Execution.get_tenant(ctx, id) do
+          %{current_attempt: ^attempt} ->
+            {:ok, attempt}
+
+          %{} ->
+            {:error, {:invalid_argument, "the attempt is no longer the execution's current one"}}
+
+          nil ->
+            {:error, {:not_found, "Execution", id}}
+
+          {:error, _} ->
+            {:error, {:unavailable, "Storage"}}
+        end
+    end
+  end
+
+  defp payload_attempt(_ctx, _id, args) do
+    case args["attempt"] do
+      attempt when is_binary(attempt) and attempt != "" -> {:ok, attempt}
+      nil -> {:ok, nil}
+      _ -> {:error, {:invalid_argument, "attempt must be a string"}}
+    end
+  end
+
   defp storage_ctx_gate(ctx) do
     if Arca.Storage.athanor_ready?(ctx),
       do: :ok,
@@ -174,7 +211,13 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           actions: %{
             "get" => %{kind: :read, planes: [:external], permission: :storage_read},
             "list" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "payload" => %{kind: :read, planes: [:external], permission: :storage_read}
+            # In-chain, an execution reads its own payload alone, for the
+            # attempt the host stamped on its lineage.
+            "payload" => %{
+              kind: :read,
+              planes: [:external, :in_chain],
+              permission: :storage_read
+            }
           }
         },
         input_schema: %{
@@ -193,6 +236,11 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
               "type" => "string",
               "enum" => ["input", "result"],
               "description" => "payload only: which retained payload (default result)"
+            },
+            "attempt" => %{
+              "type" => "string",
+              "description" =>
+                "payload only: the attempt whose payload to answer (default: the execution's current attempt)"
             },
             "user_id" => %{
               "type" => "string",
@@ -379,7 +427,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   # A retained payload: the bytes an execution was given or answered,
-  # for a member of the athanor that ran it.
+  # for a member of the athanor that ran it — or, in-chain, for the
+  # execution itself: the host-stamped lineage must name it as the
+  # caller and the stamped attempt must be its current one.
   def handle("record", ctx, %{"action" => "payload", "id" => id} = args) do
     kind = Map.get(args, "kind", "result")
 
@@ -387,8 +437,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
          :ok <- storage_ctx_gate(ctx),
          true <-
            kind in ["input", "result"] ||
-             {:error, {:invalid_argument, "kind must be input or result"}} do
-      case Arca.ExecutionPayloads.get(ctx, id, kind) do
+             {:error, {:invalid_argument, "kind must be input or result"}},
+         {:ok, attempt} <- payload_attempt(ctx, id, args) do
+      case Arca.ExecutionPayloads.get(ctx, id, kind, attempt: attempt) do
         {:ok, row, bytes} ->
           {:ok,
            %{

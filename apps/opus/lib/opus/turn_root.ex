@@ -226,7 +226,8 @@ defmodule Opus.TurnRoot do
         kind: "turn",
         turn_id: Keyword.get(opts, :turn_id),
         profile_id: authority.profile_id,
-        reservation: %{budget_id: authority.budget.id, cap: authority.budget.cap}
+        reservation: %{budget_id: authority.budget.id, cap: authority.budget.cap},
+        retention_class: "chat_step"
       )
 
     case stamp do

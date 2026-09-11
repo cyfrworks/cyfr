@@ -809,6 +809,7 @@ defmodule Aqua.Loop do
       ctx: guest(state),
       authority: spec.authority,
       root_execution_id: state.turn.root_execution_id,
+      attempt: state.turn.attempt,
       conversation_id: state.turn.conversation_id,
       agent_ref: Compendium.AgentSource.ref(state.turn.orchestrator),
       charge: Binding.charge(step, state.turn),

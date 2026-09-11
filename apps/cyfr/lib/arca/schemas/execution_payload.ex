@@ -5,7 +5,8 @@ defmodule Arca.Schemas.ExecutionPayload do
   @moduledoc """
   A reference to an execution's retained input or result: the digest and
   size of the bytes, their place under the athanor's `payloads/` root,
-  and the retention class that bounds their life. Owned by the athanor.
+  the attempt that produced them, and the retention class that bounds
+  their life. Owned by the athanor.
   """
 
   use Ecto.Schema
@@ -18,6 +19,7 @@ defmodule Arca.Schemas.ExecutionPayload do
     field :athanor_id, :string
     field :execution_id, :string
     field :kind, :string
+    field :attempt, :string
     field :digest, :string
     field :bytes, :integer
     field :blob_ref, :string

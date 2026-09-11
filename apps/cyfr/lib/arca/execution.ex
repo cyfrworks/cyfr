@@ -196,6 +196,9 @@ defmodule Arca.Execution do
     belongs to; the step barrier binds the child to it while the step is
     dispatched, on its generation and not cancelled, and admission is
     refused `{:error, :step_superseded}` otherwise.
+  - `:payloads` — staged payloads (`Arca.ExecutionPayloads.Staged`)
+    committed for the attempt in the same transaction; one that cannot
+    be kept refuses admission `{:error, {:payload_not_retained, why}}`.
 
   Answers `{:ok, %{execution: t(), attempt: ExecutionAttempt.t()}}`.
   """
@@ -255,6 +258,8 @@ defmodule Arca.Execution do
           nil ->
             :ok
         end
+
+        commit_payloads!(Keyword.get(opts, :payloads, []), attempt_id)
 
         %{execution: %{execution | current_attempt: attempt_id}, attempt: attempt}
       end)
@@ -688,6 +693,9 @@ defmodule Arca.Execution do
           | {:error, :not_running | :not_found | :database_error | Ecto.Changeset.t()}
   def record_end(%Sanctum.Context{} = ctx, id, status, attrs, attempt)
       when status in @terminal_statuses do
+    # `attrs[:payloads]` are staged payloads committed for the owning
+    # attempt in this transaction; `attrs[:outcome]` names the attempt's
+    # outcome when it is not the status's own.
     Arca.Repo.Errors.with_db_rescue("Execution.record_end", fn ->
       Arca.Repo.transaction(fn ->
         execution =
@@ -710,6 +718,8 @@ defmodule Arca.Execution do
              ),
            do: Arca.Repo.rollback(:not_running)
 
+        commit_payloads!(Map.get(attrs, :payloads, []), owner)
+
         {1, _} =
           from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
           |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
@@ -718,6 +728,21 @@ defmodule Arca.Execution do
         Ecto.Changeset.apply_changes(changeset)
       end)
     end)
+  end
+
+  # Staged payloads join the transaction as the attempt's rows; one the
+  # store refuses rolls the whole write back.
+  # arca:db-raise-ok inside the caller's transaction
+  defp commit_payloads!(staged, attempt) do
+    for payload <- staged, not is_nil(payload) do
+      try do
+        Arca.ExecutionPayloads.commit!(payload, attempt)
+      rescue
+        e -> Arca.Repo.rollback({:payload_not_retained, Exception.message(e)})
+      end
+    end
+
+    :ok
   end
 
   defp attempt_end("completed", outcome), do: {"completed", outcome || "ok"}

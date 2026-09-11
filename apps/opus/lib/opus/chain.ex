@@ -315,8 +315,9 @@ defmodule Opus.Chain do
         # Record the edge authorizing this hop for audit attribution.
         |> Arca.QueryHelpers.maybe_put(:dep_ref, decision.reference)
         |> Arca.QueryHelpers.maybe_put(:need, decision.need)
-        # Who invoked this child, for what the row keeps of its output.
+        # Who invoked this child, for a formula's own roster and lineage.
         |> Arca.QueryHelpers.maybe_put(:parent_reference, Keyword.get(opts, :parent_reference))
+        |> Arca.QueryHelpers.maybe_put(:retention_class, Keyword.get(opts, :retention_class))
         # The barriers admission performs for a loop-dispatched child: the
         # hold row its charge names, and the step on its generation.
         |> Arca.QueryHelpers.maybe_put(:charge, hold_of(decision.authority, opts))

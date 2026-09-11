@@ -67,7 +67,8 @@ defmodule Opus.ExecutionRecord do
           resolver_digest: String.t() | nil,
           activation_digest: String.t() | nil,
           activation_graph: String.t() | nil,
-          profile_id: String.t() | nil
+          profile_id: String.t() | nil,
+          retention_class: String.t()
         }
 
   defstruct [
@@ -103,9 +104,11 @@ defmodule Opus.ExecutionRecord do
     # A root's invocation reservation, `%{budget_id, cap}`, minted at
     # admission; nil for a child.
     :reservation,
-    # The invoking component's reference for a child (`Opus.Chain`); nil for
-    # a root. Not a column — it decides what of the output is persisted.
-    :parent_reference
+    # The class the execution's retained payloads are swept under
+    # (`Cyfr.Retention.Payloads` and its siblings): `api`, `webhook`,
+    # `schedule`, `system`, or `chat_step` for a turn's own dispatches.
+    # Not a column — the payload rows carry it.
+    :retention_class
   ]
 
   @doc """
@@ -118,6 +121,9 @@ defmodule Opus.ExecutionRecord do
   - `:parent_execution_id` - Parent formula execution ID for sub-invocations.
   - `:root_execution_id` - The chain's root execution ID. A root stamps
     itself, so every row in a chain carries the same value.
+  - `:retention_class` - The class the execution's payloads are kept
+    under; derived from the caller when absent (`webhook` for a webhook
+    identity, `system` for the server's own context, else `api`).
   """
   @spec new(Context.t(), String.t(), map(), keyword()) :: t()
   def new(%Context{} = ctx, reference, input, opts \\ []) do
@@ -156,9 +162,13 @@ defmodule Opus.ExecutionRecord do
       kind: Keyword.get(opts, :kind, "component"),
       turn_id: Keyword.get(opts, :turn_id),
       reservation: Keyword.get(opts, :reservation),
-      parent_reference: Keyword.get(opts, :parent_reference)
+      retention_class: Keyword.get(opts, :retention_class) || default_retention_class(ctx)
     }
   end
+
+  defp default_retention_class(%Context{user_id: "webhook:" <> _}), do: "webhook"
+  defp default_retention_class(%Context{auth_method: :system}), do: "system"
+  defp default_retention_class(_ctx), do: "api"
 
   @doc "Mark execution as completed with output."
   @spec complete(t(), map()) :: t()
@@ -256,12 +266,34 @@ defmodule Opus.ExecutionRecord do
   loop-dispatched child passes through (`:charge`, `:step`) and a
   scheduled run's `:occurrence_id`.
 
-  Records an input envelope containing the reference, digest, sizes,
-  top-level keys and attachment digests. Raw prompts, conversation history,
-  attachment bytes and transient room excerpts are excluded from this row.
+  The row keeps an input envelope — the reference, digest, sizes,
+  top-level keys and attachment digests — and the input itself is the
+  payload store's, staged first and committed by the admission
+  transaction under the record's retention class: an input that cannot
+  be kept is `{:error, {:payload_not_retained, reason}}` and nothing is
+  admitted.
   """
   @spec write_started(t(), keyword()) :: :ok | {:error, term()}
   def write_started(%__MODULE__{} = record, opts \\ []) do
+    ctx = record_to_ctx(record)
+
+    case stage(ctx, record, "input", encode_json(record.input || %{})) do
+      {:ok, staged} ->
+        case admit(record, opts, [staged]) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            _ = Arca.ExecutionPayloads.discard(staged)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, {:payload_not_retained, reason}}
+    end
+  end
+
+  defp admit(%__MODULE__{} = record, opts, payloads) do
     case Arca.Execution.admit(
            %{
              id: record.id,
@@ -286,7 +318,12 @@ defmodule Opus.ExecutionRecord do
              turn_id: record.turn_id
            },
            Keyword.merge(
-             [attempt: record.attempt, runner_id: runner_id(), reservation: record.reservation],
+             [
+               attempt: record.attempt,
+               runner_id: runner_id(),
+               reservation: record.reservation,
+               payloads: payloads
+             ],
              Keyword.take(opts, [:charge, :step, :occurrence_id])
            )
          ) do
@@ -294,6 +331,9 @@ defmodule Opus.ExecutionRecord do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp stage(ctx, %__MODULE__{} = record, kind, bytes),
+    do: Arca.ExecutionPayloads.stage(ctx, record.id, kind, bytes, record.retention_class)
 
   @doc "How long one lease renewal is good for."
   def lease_seconds, do: Arca.ExecutionAttempts.lease_seconds()
@@ -340,29 +380,46 @@ defmodule Opus.ExecutionRecord do
   end
 
   @doc """
-  Write execution completion record AFTER successful execution.
+  Close the row as completed. The row keeps an envelope of the output
+  (`persisted_output/1`); the output itself is staged as the result
+  payload and committed by the same transaction that closes the attempt.
+  A result that cannot be kept closes the attempt `result_lost` and the
+  row failed — durably, so nothing retries an effect that already
+  happened — and answers `{:error, {:result_lost, reason}}`.
   """
   @spec write_completed(t()) :: :ok | {:error, term()}
   def write_completed(%__MODULE__{status: :completed} = record) do
     ctx = record_to_ctx(record)
 
-    case Arca.Execution.record_end(
-           ctx,
-           record.id,
-           "completed",
-           %{
-             completed_at: record.completed_at,
-             duration_ms: record.duration_ms,
-             output: encode_json(persisted_output(record))
-           },
-           record.attempt
-         ) do
-      {:ok, _} ->
-        retain_result(ctx, record)
-        :ok
+    close = %{
+      completed_at: record.completed_at,
+      duration_ms: record.duration_ms,
+      output: encode_json(persisted_output(record))
+    }
+
+    case stage_result(ctx, record) do
+      {:ok, staged} ->
+        case Arca.Execution.record_end(
+               ctx,
+               record.id,
+               "completed",
+               Map.put(close, :payloads, List.wrap(staged)),
+               record.attempt
+             ) do
+          {:ok, _} ->
+            :ok
+
+          {:error, {:payload_not_retained, reason}} ->
+            if staged, do: Arca.ExecutionPayloads.discard(staged)
+            result_lost(ctx, record, reason)
+
+          {:error, reason} ->
+            if staged, do: Arca.ExecutionPayloads.discard(staged)
+            {:error, reason}
+        end
 
       {:error, reason} ->
-        {:error, reason}
+        result_lost(ctx, record, reason)
     end
   end
 
@@ -370,41 +427,33 @@ defmodule Opus.ExecutionRecord do
     {:error, "Cannot write completed record for status: #{status}"}
   end
 
-  # A non-chat execution's result is kept as a payload in its own store,
-  # by digest and retention class; the row keeps answering as it does. A
-  # store that cannot keep it is logged, never the execution's failure.
-  # Chat executions are the transcript's, not the payload store's.
-  defp retain_result(ctx, %__MODULE__{} = record) do
-    chat? =
-      record.kind == "turn" or Compendium.AgentSource.agent_ref?(record.parent_reference)
+  defp stage_result(_ctx, %__MODULE__{output: nil}), do: {:ok, nil}
 
-    if not chat? and not is_nil(record.output) do
-      case Arca.ExecutionPayloads.put(
-             ctx,
-             record.id,
-             "result",
-             encode_json(record.output),
-             retention_class(record)
-           ) do
-        {:ok, _} ->
-          :ok
+  defp stage_result(ctx, %__MODULE__{} = record),
+    do: stage(ctx, record, "result", encode_json(record.output))
 
-        # A completion driven twice keeps the payload it already has.
-        {:error, :exists} ->
-          :ok
+  defp result_lost(ctx, %__MODULE__{} = record, reason) do
+    Logger.error(
+      "[Opus.ExecutionRecord] result of #{record.id} not retained: #{inspect(reason)}; " <>
+        "the attempt closes result_lost"
+    )
 
-        {:error, reason} ->
-          Logger.warning(
-            "[Opus.ExecutionRecord] result payload of #{record.id} not retained: #{inspect(reason)}"
-          )
-      end
-    end
+    _ =
+      Arca.Execution.record_end(
+        ctx,
+        record.id,
+        "failed",
+        %{
+          completed_at: record.completed_at,
+          duration_ms: record.duration_ms,
+          error_message: "result not retained",
+          outcome: "result_lost"
+        },
+        record.attempt
+      )
 
-    :ok
+    {:error, {:result_lost, reason}}
   end
-
-  defp retention_class(%__MODULE__{user_id: "webhook:" <> _}), do: "webhook"
-  defp retention_class(_record), do: "api"
 
   @doc """
   Write execution failure record AFTER failed or cancelled execution.
@@ -453,7 +502,7 @@ defmodule Opus.ExecutionRecord do
         result = execution_to_map(record)
 
         case Context.authorize(ctx, :storage_read, {:execution, result}) do
-          :ok -> {:ok, from_mcp_result(result)}
+          :ok -> {:ok, hydrate_output(ctx, from_mcp_result(result))}
           {:error, _} -> {:error, :not_found}
         end
     end
@@ -628,27 +677,38 @@ defmodule Opus.ExecutionRecord do
 
   defp put_attachment_digests(envelope, _input), do: envelope
 
-  # A child an agent's turn dispatched carries conversation content in its
-  # OUTPUT: a model call returns the provider's reply, a hand the file it
-  # read. The row keeps a digest, its size and the usage the planner
-  # needs; the tape holds what the model reads. Every other component's
-  # output is the caller's result and stays.
-  defp persisted_output(%__MODULE__{} = record) do
-    cond do
-      Compendium.AgentSource.agent_ref?(record.parent_reference) and not is_nil(record.output) ->
-        encoded = Jason.encode!(record.output)
+  # The row keeps an envelope of every output — its digest, its size and
+  # the usage a planner reads — and the payload store keeps the bytes,
+  # under the execution's retention class, for as long as retention does.
+  defp persisted_output(%__MODULE__{output: nil}), do: nil
 
-        %{
-          "envelope" => "v1",
-          "output_hash" => Cyfr.Digest.sha256(encoded),
-          "bytes" => byte_size(encoded),
-          "usage" => usage_of(record.output)
-        }
+  defp persisted_output(%__MODULE__{output: output}) do
+    encoded = encode_json(output)
 
-      true ->
-        record.output
+    %{
+      "envelope" => "v1",
+      "output_hash" => Cyfr.Digest.sha256(encoded),
+      "bytes" => byte_size(encoded),
+      "usage" => usage_of(output)
+    }
+  end
+
+  # A read joins the retained bytes back onto the envelope the row keeps;
+  # once retention has swept them, the envelope alone answers.
+  defp hydrate_output(
+         ctx,
+         %__MODULE__{output: %{"envelope" => "v1", "output_hash" => _}} = record
+       ) do
+    with {:ok, _row, bytes} <-
+           Arca.ExecutionPayloads.get(ctx, record.id, "result", attempt: record.attempt),
+         {:ok, output} <- Jason.decode(bytes) do
+      %{record | output: output}
+    else
+      _ -> record
     end
   end
+
+  defp hydrate_output(_ctx, record), do: record
 
   defp usage_of(%{"usage" => usage}), do: usage
   defp usage_of(%{usage: usage}), do: usage

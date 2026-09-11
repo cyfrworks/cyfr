@@ -263,7 +263,7 @@ defmodule Cyfr.Ops.Catalog do
 
     args =
       args
-      |> Map.drop(["parent_execution_id", "root_execution_id", "conversation_id"])
+      |> Map.drop(["parent_execution_id", "root_execution_id", "conversation_id", "attempt"])
       |> put_lineage(Keyword.get(opts, :lineage))
 
     with :ok <- check_in_chain_reachable(name, args),
@@ -371,6 +371,9 @@ defmodule Cyfr.Ops.Catalog do
     args
     |> Cyfr.MapUtil.put_present("parent_execution_id", Map.get(lineage, :parent_execution_id))
     |> Cyfr.MapUtil.put_present("root_execution_id", Map.get(lineage, :root_execution_id))
+    # The attempt of the calling execution, so a provider answering the
+    # caller its own payload knows which attempt's it is.
+    |> Cyfr.MapUtil.put_present("attempt", Map.get(lineage, :attempt))
     # The conversation an approved card came from — host-stamped like the
     # execution ids, so a tool that records provenance reads it from here
     # and never from what the model wrote.
