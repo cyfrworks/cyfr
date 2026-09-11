@@ -21,7 +21,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   alias Sanctum.JCS
   alias Sanctum.Test.AuthorityFixtures, as: Fixtures
 
-  @formula "formula:local.aqua"
+  @formula "formula:local.assistant"
   @catalyst "catalyst:local.claude"
   @activation %{@formula => "sha256:act-f", @catalyst => "sha256:act-c"}
   @key_vault %{

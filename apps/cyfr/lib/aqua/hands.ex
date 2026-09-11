@@ -27,15 +27,10 @@ defmodule Aqua.Hands do
   `files.list` and `files.tree` are one catalyst request (`tree`), so the
   reverse mapping answers both and the caller decides what an ambiguous
   request may do.
-
-  Until the host loop replaces the AQUA formula, the guest's `tools.rs`
-  carries the same rows and `Prism.AquaRustConsistencyTest` holds its
-  enums to this table.
   """
 
   @files_catalyst "catalyst:local.files"
   @http_catalyst "catalyst:local.http"
-  @aqua_formula "formula:local.aqua"
   @storage_prefix "data/storage/"
   @storage_root "data/storage"
 
@@ -251,17 +246,6 @@ defmodule Aqua.Hands do
   end
 
   def hand_catalyst?(_), do: false
-
-  @doc "Whether a reference names the AQUA formula itself, at any version."
-  @spec self_reference?(String.t()) :: boolean()
-  def self_reference?(reference) when is_binary(reference),
-    do: name_level(reference) == @aqua_formula
-
-  def self_reference?(_), do: false
-
-  @doc "The AQUA formula's own reference, name level."
-  @spec aqua_formula() :: String.t()
-  def aqua_formula, do: @aqua_formula
 
   # ---------------------------------------------------------------------------
   # Child call — the catalyst request the guest builds for one virtual call

@@ -129,21 +129,28 @@ defmodule Opus.SeedModelCatalystsTest do
   test "the shipped assistant runs claude with the key bound on claude's own profile", %{
     ctx: ctx
   } do
+    # The soul's closure is every shipped agent's catalyst and the hands.
     for {plural, name} <- [
           {"catalysts", "claude"},
+          {"catalysts", "openai"},
+          {"catalysts", "gemini"},
+          {"catalysts", "grok"},
+          {"catalysts", "openrouter"},
           {"catalysts", "files"},
-          {"catalysts", "http"},
-          {"formulas", "aqua"}
+          {"catalysts", "http"}
         ] do
       unit = ["components", plural, "local", name, newest_shipped(plural, name)]
       :ok = Arca.Overlay.pull_shipped(ctx, unit)
       {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
     end
 
-    # The baseline consents: the formula's edge to claude selects claude's
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "aqua")
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+    # The baseline consents: the soul's edge to claude selects claude's
     # default profile, which binds nothing yet.
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert "formula:local.aqua" in minted and "catalyst:local.claude" in minted
+    assert "agent:local.aqua" in minted and "catalyst:local.claude" in minted
 
     child_opts = [
       ctx: Sanctum.Context.enter_guest(ctx),
@@ -153,7 +160,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
     input = %{"operation" => "nothing.here", "params" => %{}}
 
-    {:ok, before} = Opus.Chain.authority_for(ctx, :default, "formula:local.aqua")
+    {:ok, before} = Opus.Chain.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{node_ref: "catalyst:local.claude:" <> _, reason: reason}}} =
              Opus.run_child(before, "catalyst:local.claude", nil, input, child_opts)
@@ -188,7 +195,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
     # The assistant's authority, loaded again, lends the key on its edge;
     # the child reads it and runs to its own refusal.
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, "formula:local.aqua")
+    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, "Unknown operation: nothing.here"} =
              Opus.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
@@ -196,7 +203,7 @@ defmodule Opus.SeedModelCatalystsTest do
     # Revoking the catalyst's profile cuts the assistant off at the next load.
     {:ok, [claude_profile]} = Source.DB.profiles(ctx, "catalyst:local.claude")
     :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, claude_profile.id, "revoked")
-    {:ok, revoked} = Opus.Chain.authority_for(ctx, :default, "formula:local.aqua")
+    {:ok, revoked} = Opus.Chain.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
              Opus.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)

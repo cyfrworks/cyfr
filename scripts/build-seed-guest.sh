@@ -5,7 +5,7 @@
 #
 # Usage: scripts/build-seed-guest.sh <version-dir> [--check | --rebuild-check]
 #   <version-dir>: a seed component version directory, e.g.
-#                  seed/components/formulas/local/aqua/1.0.8 or
+#                  seed/components/formulas/local/list-models/0.6.2 or
 #                  seed/components/catalysts/local/claude/1.2.0
 #   --check: verify digests against the stamp without a toolchain.
 #   --rebuild-check: rebuild and compare bytes using the recorded toolchain.

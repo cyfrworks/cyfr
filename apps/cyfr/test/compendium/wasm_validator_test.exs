@@ -14,10 +14,10 @@ defmodule Compendium.WasmValidatorTest do
   @valid_component <<0x00, 0x61, 0x73, 0x6D, 0x0D, 0x00, 0x01, 0x00>>
 
   # Tracked cargo-component output — the realest component fixtures there
-  # are. The AQUA formula is found at its newest shipped version rather
-  # than pinned, so a release bump cannot leave this pointing at a
+  # are. The list-models formula is found at its newest shipped version
+  # rather than pinned, so a release bump cannot leave this pointing at a
   # directory that no longer ships.
-  @seed_formula [__DIR__, "../../../../seed/components/formulas/local/aqua/*/formula.wasm"]
+  @seed_formula [__DIR__, "../../../../seed/components/formulas/local/list-models/*/formula.wasm"]
                 |> Path.join()
                 |> Path.wildcard()
                 |> Enum.sort_by(fn path ->

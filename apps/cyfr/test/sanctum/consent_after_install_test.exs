@@ -162,7 +162,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     assert Cyfr.ConsentDrift.state(in_group) == :ok
 
     assert {:ok, %Sanctum.Authority{}} =
-             Cyfr.Execution.authority_for(in_group, :default, "formula:local.aqua")
+             Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")
   end
 
   # A local formula that may use the published provider once it is installed.

@@ -87,15 +87,15 @@ defmodule Sanctum.ProvisioningClosureTest do
                "catalyst:local.#{name} is not registered"
       end
 
-      # AQUA is consented and loads: its whole closure is the local seed.
-      assert {:ok, [profile]} = Source.DB.profiles(in_group, "formula:local.aqua")
-      {:ok, aqua} = Compendium.Registry.get_latest(in_group, "aqua", "local", "formula")
-      assert {:ok, live} = Compendium.Activation.resolve_verified(in_group, aqua)
+      # The soul is consented and loads: its whole closure is the local seed.
+      assert {:ok, [_profile]} = Source.DB.profiles(in_group, "agent:local.aqua")
 
-      assert {:ok, %Sanctum.Authority{} = auth, _stamp} =
-               Loader.load_root(in_group, profile, source: Source.DB, live: {:ok, live})
+      assert {:ok, %Sanctum.Authority{} = auth} =
+               Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua",
+                 consent_source: Source.DB
+               )
 
-      assert auth.cursor == {:bound, "formula:local.aqua"}
+      assert auth.cursor == {:bound, "agent:local.aqua"}
 
       # A second provisioning is a no-op.
       assert {:ok, %{provisioned_at: at}} = Provisioning.provision(group, in_group)

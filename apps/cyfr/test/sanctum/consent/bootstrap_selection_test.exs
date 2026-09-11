@@ -3,10 +3,10 @@
 
 defmodule Sanctum.Consent.BootstrapSelectionTest do
   @moduledoc """
-  A shipped formula's baseline consent selects, on its edge to each
-  shipped catalyst that needs a credential, that catalyst's default
-  profile — so the key a person binds on the catalyst is what the
-  assistant runs it with. A person's own formula is not machine-minted.
+  The shipped soul's baseline consent selects, on its edge to the shipped
+  catalyst it runs on, that catalyst's default profile — so the key a
+  person binds on the catalyst is what the assistant runs it with. A
+  person's own formula is not machine-minted.
   A boot re-mints a bootstrap-only consent that lacks the
   selections its dependencies offer, or whose closure the seed moved,
   and leaves a person's consent and a person's closure alone.
@@ -19,7 +19,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
 
   @repo_root Path.expand("../../../../..", __DIR__)
   @bundle Path.join(@repo_root, "seed/components")
-  @aqua "formula:local.aqua"
+  @aqua "agent:local.aqua"
   @claude "catalyst:local.claude"
 
   setup do
@@ -32,6 +32,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
 
     seed_dir = Path.join(test_dir, "seed")
     copy_bundle!(Path.join(seed_dir, "components"))
+    File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
     prev_base = Application.get_env(:cyfr, :base_path)
     prev_seed = Application.get_env(:cyfr, :seed_path)
@@ -54,7 +55,9 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
 
     ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor.id, scope: :athanor)
     {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "components")
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "aqua")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
 
     {:ok, ctx: ctx}
   end
@@ -71,7 +74,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     edge
   end
 
-  test "the shipped assistant selects each shipped model's default profile", %{ctx: ctx} do
+  test "the shipped soul selects its model's default profile", %{ctx: ctx} do
     {:ok, %{minted: minted, revised: []}} = Bootstrap.run(ctx)
     assert @aqua in minted and @claude in minted
 
@@ -83,12 +86,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     {_aqua, aqua_head, aqua_refs} = head!(ctx, @aqua)
     assert aqua_refs == []
 
-    for model <- ~w(claude openai gemini grok openrouter) do
-      {profile, _, _} = head!(ctx, "catalyst:local.#{model}")
-      assert profile.label == "default"
-      edge = edge!(aqua_head.resolved_policy, @aqua, "catalyst:local.#{model}")
-      assert edge.vault == %{via: %{label: "default", binding_digest: nil}, projection: nil}
-    end
+    edge = edge!(aqua_head.resolved_policy, @aqua, @claude)
+    assert edge.vault == %{via: %{label: "default", binding_digest: nil}, projection: nil}
 
     # A dependency without a credential need is not selected.
     assert edge!(aqua_head.resolved_policy, @aqua, "catalyst:local.files").vault == nil
@@ -98,7 +97,14 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   end
 
   test "a person's own formula is not machine-minted", %{ctx: ctx} do
-    shipped = ["components", "formulas", "local", "aqua", shipped_version("formulas", "aqua")]
+    shipped = [
+      "components",
+      "formulas",
+      "local",
+      "list-models",
+      shipped_version("formulas", "list-models")
+    ]
+
     mine = ["components", "formulas", "local", "mine", "0.1.0"]
     {:ok, manifest} = Arca.get_json(ctx, shipped ++ ["cyfr-manifest.json"])
     {:ok, wasm} = Arca.get(ctx, shipped ++ ["formula.wasm"])
@@ -242,8 +248,15 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
 
     # The catalyst's own head re-mints too: its new release widened its
     # caps, and that closure is the seed's alone.
+    # Every shipped agent whose closure holds claude moves with it; nothing
+    # else does.
     {:ok, %{minted: [], revised: revised}} = Bootstrap.run(ctx)
-    assert Enum.sort(revised) == [@claude, @aqua, "formula:local.list-models"]
+    assert @claude in revised and @aqua in revised and "formula:local.list-models" in revised
+
+    assert Enum.all?(
+             revised -- [@claude, "formula:local.list-models"],
+             &String.starts_with?(&1, "agent:")
+           )
 
     {_, healed, _} = head!(ctx, @aqua)
     assert healed.revision == first.revision + 1

@@ -140,15 +140,10 @@ jobs:
             cargo install cargo-component --version 0.21.1 --locked
           fi
           cargo-component --version
-      # The AQUA formula guest's own suite — its one dispatch table, the
-      # role gate, the attachment strip — and each model catalyst's
-      # `model/chat@1` mapping run on the host target; the shipped
-      # binaries are not rebuilt here.
-      - name: Test the AQUA formula guest and the model catalysts
+      # Each model catalyst's `model/chat@1` mapping runs on the host
+      # target; the shipped binaries are not rebuilt here.
+      - name: Test the model catalysts
         run: |
-          for src in seed/components/formulas/local/aqua/*/src; do
-            (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/aqua-guest-target")
-          done
           for chat in seed/components/catalysts/local/*/*/src/src/chat.rs; do
             src="$(dirname "$(dirname "$chat")")"
             (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/catalyst-guest-target")

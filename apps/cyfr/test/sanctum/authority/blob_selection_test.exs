@@ -14,7 +14,7 @@ defmodule Sanctum.Authority.BlobSelectionTest do
   alias Sanctum.Authority.Blob
   alias Sanctum.Test.AuthorityFixtures, as: Fixtures
 
-  @formula "formula:local.aqua"
+  @formula "formula:local.assistant"
   @catalyst "catalyst:local.claude"
 
   defp graph(vault) do

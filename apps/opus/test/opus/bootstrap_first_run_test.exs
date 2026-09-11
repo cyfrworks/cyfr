@@ -24,18 +24,7 @@ defmodule Opus.BootstrapFirstRunTest do
   @models ~w(claude openai gemini grok openrouter)
   @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.1"] ++
              Enum.map(@models, &"catalysts/local/#{&1}/1.2.0")
-  # The AQUA formula at its newest shipped version, found rather than
-  # pinned: a release bump must not leave this naming a directory that no
-  # longer ships.
-  @shipped_aqua [@seed_root, "components/formulas/local/aqua/*"]
-                |> Path.join()
-                |> Path.wildcard()
-                |> Enum.sort_by(fn path ->
-                  path |> Path.basename() |> String.split(".") |> Enum.map(&String.to_integer/1)
-                end)
-                |> List.last()
-                |> Path.relative_to(Path.join(@seed_root, "components"))
-  @formulas ["formulas/local/list-models/0.6.2", @shipped_aqua]
+  @formulas ["formulas/local/list-models/0.6.2"]
 
   setup do
     Arca.Cache.init()
@@ -86,8 +75,8 @@ defmodule Opus.BootstrapFirstRunTest do
       assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
 
-    # Both formulas name the model catalysts as optional dependencies, and
-    # every one ships: each activation covers the whole bundle, and a
+    # The formula names the model catalysts as optional dependencies, and
+    # every one ships: its activation covers the whole bundle, and a
     # server with no registry boots with all of it consented.
     for rel <- @formulas do
       assert {:ok, _} = stage_and_register(ctx, rel), rel
@@ -98,7 +87,6 @@ defmodule Opus.BootstrapFirstRunTest do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert "catalyst:local.files" in minted
     assert "catalyst:local.http" in minted
-    assert "formula:local.aqua" in minted
     assert "formula:local.list-models" in minted
     for ref <- model_refs, do: assert(ref in minted, "#{ref} not minted")
 
@@ -109,16 +97,6 @@ defmodule Opus.BootstrapFirstRunTest do
 
     assert Map.keys(list_models_consent.activation) |> Enum.sort() ==
              Enum.sort(["formula:local.list-models" | model_refs])
-
-    {:ok, [aqua_profile]} = Source.DB.profiles(ctx, "formula:local.aqua")
-    {:ok, aqua_consent} = Source.DB.head_consent(ctx, aqua_profile.id)
-
-    assert Map.keys(aqua_consent.activation) |> Enum.sort() ==
-             Enum.sort([
-               "catalyst:local.files",
-               "catalyst:local.http",
-               "formula:local.aqua" | model_refs
-             ])
 
     # Each minted consent loads through the production source, and the
     # blob's ingress edge carries the manifest's declared ask.

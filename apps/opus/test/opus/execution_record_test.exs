@@ -243,7 +243,7 @@ defmodule Opus.ExecutionRecordTest do
       data = Base.encode64("secret bytes")
 
       record =
-        ExecutionRecord.new(ctx, "formula:local.aqua:1.0.6", %{
+        ExecutionRecord.new(ctx, "formula:local.demo:1.0.0", %{
           "task" => "look at this",
           "attachments" => [
             %{"filename" => "a.txt", "media_type" => "text/plain", "data" => data}

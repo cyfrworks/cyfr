@@ -62,7 +62,7 @@ defmodule Emissary.MCP.NotesToolTest do
   # A chain authority granting exactly `pairs`, the shape the consent blob
   # mints from a manifest's `caps.tools`.
   defp granting(pairs) do
-    node = "formula:local.aqua"
+    node = "formula:local.assistant"
     tools = pairs |> Enum.map(fn {tool, action} -> "#{tool}.#{action}" end) |> Enum.sort()
 
     {:ok, blob} =
@@ -491,7 +491,7 @@ defmodule Emissary.MCP.NotesToolTest do
     # blob, minted from the manifest's caps against the loaded providers —
     # a name no provider serves drops silently, so this pins that every
     # notes action the soul may propose survives the expansion.
-    manifest = shipped_aqua_manifest() |> File.read!() |> Jason.decode!()
+    manifest = shipped_soul_manifest()
 
     caps = Compendium.Manifest.Caps.from_manifest(manifest)
     granted = Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
@@ -507,20 +507,20 @@ defmodule Emissary.MCP.NotesToolTest do
     refute "aqua.skill_delete" in granted
   end
 
-  # The newest shipped AQUA formula, found rather than pinned: a release
-  # bump must not leave this test reading a version that no longer ships.
-  defp shipped_aqua_manifest do
-    path =
-      [__DIR__, "../../../../seed/components/formulas/local/aqua/*/cyfr-manifest.json"]
-      |> Path.join()
-      |> Path.wildcard()
-      |> Enum.sort_by(fn path ->
-        path |> Path.split() |> Enum.at(-2) |> String.split(".") |> Enum.map(&String.to_integer/1)
-      end)
-      |> List.last()
+  # The shipped soul's manifest, derived from its own file over the roster
+  # it ships with.
+  defp shipped_soul_manifest do
+    seed = Path.expand("../../../../seed/aqua", __DIR__)
+    roles = Path.join(seed, Compendium.AquaPath.roles_dirname())
 
-    assert path, "no shipped AQUA formula under seed/components/formulas/local/aqua"
-    path
+    names =
+      roles
+      |> File.ls!()
+      |> Enum.filter(&String.ends_with?(&1, ".md"))
+      |> Enum.map(&Path.basename(&1, ".md"))
+
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(seed, "aqua.md")))
+    Compendium.AgentSource.manifest(soul, MapSet.new(["aqua" | names]))
   end
 
   test "the annotations say what a person may pre-answer" do

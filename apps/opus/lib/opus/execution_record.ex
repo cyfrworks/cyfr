@@ -669,6 +669,8 @@ defmodule Opus.ExecutionRecord do
   end
 
   defp parse_component_type(nil), do: :reagent
+  # A turn root: the agent is a consent source, not an executable type.
+  defp parse_component_type("agent"), do: :agent
 
   defp parse_component_type(type_str) when is_binary(type_str) do
     case Opus.ComponentType.parse(type_str) do

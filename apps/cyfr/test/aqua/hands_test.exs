@@ -11,15 +11,9 @@ defmodule Aqua.HandsTest do
 
   alias Aqua.Hands
 
-  @fixture Path.join([
-             __DIR__,
-             "../../../../seed/components/formulas/local/aqua/*/src/src/virtual_tools.json"
-           ])
+  @fixture Path.expand("../support/fixtures/hands_cases.json", __DIR__)
 
-  defp fixture do
-    [path] = Path.wildcard(@fixture)
-    path |> File.read!() |> Jason.decode!()
-  end
+  defp fixture, do: @fixture |> File.read!() |> Jason.decode!()
 
   test "the shared fixture holds on both directions" do
     cases = fixture()
@@ -70,12 +64,11 @@ defmodule Aqua.HandsTest do
              Hands.child_call("storage", "delete", %{"key" => "k"})
   end
 
-  test "references are judged at name level, and the assistant itself is never a tool" do
+  test "references are judged at name level, and only a hand's catalyst is a hand" do
     assert Hands.name_level("catalyst:local.files:0.5.1") == "catalyst:local.files"
     assert Hands.name_level("catalyst:local.files") == "catalyst:local.files"
-    assert Hands.self_reference?("formula:local.aqua")
-    assert Hands.self_reference?("formula:local.aqua:1.0.6")
-    refute Hands.self_reference?("formula:local.other")
+    assert Hands.hand_catalyst?("catalyst:local.files:0.5.1")
+    refute Hands.hand_catalyst?("formula:local.other")
     assert {:error, :not_virtual} = Hands.canonical("formula:local.other", %{})
   end
 
