@@ -1090,7 +1090,6 @@ defmodule PrismWeb.ChatLive do
         </p>
         <p class="text-[10px] text-gray-600 mt-0.5">
           {Calendar.strftime(@conv.last_message_at || @conv.inserted_at, "%b %d %H:%M")}
-          <span :if={@conv.execution_id} class="ml-1 text-blue-400">● running</span>
         </p>
       </button>
       <button
