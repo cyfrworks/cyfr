@@ -32,9 +32,6 @@ defmodule Aqua.RunnerTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    start_supervised!({Registry, keys: :unique, name: Aqua.RunnerRegistry})
-    start_supervised!({DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one})
-
     test_path = Path.join(System.tmp_dir!(), "runner_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path, :consent_source, :execution_impl]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})

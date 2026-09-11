@@ -37,7 +37,7 @@ defmodule PrismWeb.ChatLive do
   alias Phoenix.LiveView.JS
 
   alias Arca.ConversationStorage, as: Conversations
-  alias Aqua.ConversationRunner
+  alias Aqua.Runner
   alias Sanctum.Tenancy.Athanors
 
   @impl true
@@ -245,7 +245,7 @@ defmodule PrismWeb.ChatLive do
   # to the person's own AQUA beside the page, by name and id only.
   defp select(socket, target) do
     socket = unsubscribe_current(socket)
-    if target, do: ConversationRunner.subscribe(target.id, target.athanor_id)
+    if target, do: Runner.subscribe(target.id, target.athanor_id)
 
     socket
     |> assign(:conversation, target)
@@ -276,7 +276,7 @@ defmodule PrismWeb.ChatLive do
   defp unsubscribe_current(
          %{assigns: %{conversation: %{id: id, athanor_id: athanor_id}}} = socket
        ) do
-    ConversationRunner.unsubscribe(id, athanor_id)
+    Runner.unsubscribe(id, athanor_id)
     socket
   end
 

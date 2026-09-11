@@ -209,7 +209,7 @@ defmodule Sanctum.Provisioning do
   Reads of the bundle do not use this: the tree reads through the seed
   overlay from the moment the row exists, so a roster is real straight
   away. What a fill adds is the baseline consent a turn pins, which is why
-  `Aqua.Turn.begin/5` is what waits.
+  `Aqua.Runner` is what waits.
   """
   @spec ready(Context.t()) :: :ok | {:error, :not_provisioned}
   def ready(%Context{} = ctx) do

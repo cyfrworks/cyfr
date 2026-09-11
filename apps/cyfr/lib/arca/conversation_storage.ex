@@ -4,7 +4,7 @@
 defmodule Arca.ConversationStorage do
   @moduledoc """
   Persistence for the athanor's conversations and their messages — the
-  durable record every member reads (`Aqua.ConversationRunner` writes it,
+  durable record every member reads (`Aqua.Tape` writes it,
   `PrismWeb.ConversationPaneLive` shows it).
 
   A conversation belongs to the athanor of the context that opened it;

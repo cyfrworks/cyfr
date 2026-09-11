@@ -28,8 +28,9 @@ defmodule Cyfr.Test.ScriptedExecution do
     answer is written, before it is returned.
   - `:hang` — never return.
 
-  `run_root/5` and `run_root_edge/5` raise: a turn never roots through
-  the guest path. Select the engine with `config :cyfr, :execution_impl`
+  A scripted reference is never rooted (a turn claims its root without a
+  guest); every other root reaches the engine. Select the engine with
+  `config :cyfr, :execution_impl`
   inside the test; users are `async: false` since the script is one
   named agent.
   """
@@ -69,13 +70,19 @@ defmodule Cyfr.Test.ScriptedExecution do
   # The port
   # ---------------------------------------------------------------------------
 
+  # A scripted reference is never rooted — a turn claims its root without
+  # a guest, and a listing that probes the catalyst is refused; every
+  # other root reaches the engine.
   @impl true
-  def run_root(_ctx, _selector, reference, _input, _opts),
-    do: raise(ArgumentError, "the scripted engine roots nothing (asked for #{reference})")
+  def run_root(ctx, selector, reference, input, opts) do
+    if scripted?(reference),
+      do: {:error, "the scripted engine roots nothing"},
+      else: engine().run_root(ctx, selector, reference, input, opts)
+  end
 
   @impl true
-  def run_root_edge(_ctx, source_ref, _reference, _input, _opts),
-    do: raise(ArgumentError, "the scripted engine roots nothing (asked for #{source_ref})")
+  def run_root_edge(ctx, source_ref, reference, input, opts),
+    do: engine().run_root_edge(ctx, source_ref, reference, input, opts)
 
   @impl true
   def authority_for(ctx, selector, reference, opts),

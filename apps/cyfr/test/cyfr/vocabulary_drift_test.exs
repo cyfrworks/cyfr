@@ -21,13 +21,8 @@ defmodule Cyfr.VocabularyDriftTest do
   @root Path.expand("../../../..", __DIR__)
   @literals ["\"sub-agent\"", "\"orchestrator\""]
 
-  # Files that keep the literal, by exact count.
-  @orchestrator_literal_allowed %{
-    # The approval row's payload key, written where the card is minted and
-    # read where it is decided.
-    "apps/cyfr/lib/aqua/runner/stream.ex" => 1,
-    "apps/cyfr/lib/aqua/runner/approvals.ex" => 1
-  }
+  # Files that keep the literal, by exact count: none.
+  @orchestrator_literal_allowed %{}
 
   @type_value ~r/"(?:soul|role)"/
   @type_key ~r/\["(?:soul|role)"\]|"(?:soul|role)"\s*=>/

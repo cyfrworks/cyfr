@@ -56,6 +56,9 @@ defmodule Opus.HostSurfaceTest do
 
     # The component catalogue: what to run, and whether it is what it says.
     "Compendium.Activation",
+    # The agent that dispatched a child, named on the row as its parent:
+    # what of the child's output is kept follows from it.
+    "Compendium.AgentSource",
     "Compendium.Component",
     "Compendium.Manifest",
     # The local-namespace trust policy: the storage boundary asks it before

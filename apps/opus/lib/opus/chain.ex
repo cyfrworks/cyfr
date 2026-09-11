@@ -417,7 +417,7 @@ defmodule Opus.Chain do
   runs under the same consented authority the conversation's executions
   do.
 
-  It is also the *first* step of a turn: `Aqua.Turn` resolves and pins the
+  It is also the *first* step of a turn: `Aqua.Loop` resolves and pins the
   profile here, composes the system prompt from what the authority
   actually grants, and only then calls `run_root/5` with `{:id, pinned}`.
   A prompt composed before the authority is known is a prompt that can

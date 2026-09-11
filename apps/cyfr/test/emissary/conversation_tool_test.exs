@@ -22,6 +22,69 @@ defmodule Emissary.MCP.ConversationToolTest do
 
   defp call(ctx, args), do: Tool.handle("conversation", ctx, args)
 
+  # A card as the loop opens it: a turn with its root, the model step, the
+  # call, and the approval on the tape; the intent is the card's.
+  defp card!(ctx, conv, intent) do
+    alias Aqua.Tape
+    proposal = intent["proposal"]
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "@aqua do a thing"},
+        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+      })
+
+    {:ok, %{execution: execution, attempt: attempt}} =
+      Arca.Execution.admit(
+        %{
+          id: "exec_tool_#{System.unique_integer([:positive])}",
+          reference: "agent:local.aqua",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "agent",
+          kind: "turn",
+          turn_id: turn.id
+        },
+        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4}
+      )
+
+    {:ok, turn} =
+      Tape.start_turn(ctx, turn, %{
+        root_execution_id: execution.id,
+        attempt: attempt.attempt,
+        profile_id: "prof_x",
+        consent_id: "consent_x"
+      })
+
+    {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
+
+    {:ok, %{calls: [%{step: step}]}} =
+      Tape.record_response(ctx, turn, model_step, %{
+        text: nil,
+        tool_calls: [
+          %{
+            tool_call_id: "c1",
+            name: "#{proposal["tool"]}.#{proposal["action"]}",
+            tool: proposal["tool"],
+            action: proposal["action"],
+            arguments: proposal["args"] || %{},
+            kind: intent["action_kind"]
+          }
+        ]
+      })
+
+    {:ok, %{card: card}} =
+      Tape.open_approval(ctx, turn, step, %{
+        proposal_digest: Aqua.Loop.Policy.proposal_digest(proposal),
+        card: %{
+          content: intent["title"],
+          payload: %{"intent" => Map.put(intent, "tool_call_id", "c1")}
+        }
+      })
+
+    card
+  end
+
   describe "gates" do
     # The surface gate is the `consent: :interactive` declaration on every
     # action, so it is asserted through the REGISTRY — the handler no
@@ -202,18 +265,7 @@ defmodule Emissary.MCP.ConversationToolTest do
           athanor_id: ctx.athanor_id
         )
 
-      card = fn intent ->
-        {:ok, apr} =
-          Conversations.append(ctx, conv.id, %{
-            author: Arca.Schemas.Message.agent_author(),
-            kind: "approval",
-            status: "pending",
-            content: "Do a thing",
-            payload: %{"orchestrator" => "aqua", "intent" => intent}
-          })
-
-        apr
-      end
+      card = fn intent -> card!(ctx, conv, intent) end
 
       destructive =
         card.(%{

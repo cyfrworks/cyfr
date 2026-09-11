@@ -79,11 +79,12 @@ defmodule Aqua.PromptTest do
     end
   end
 
-  test "the approval prelude is part of the one composition", %{ctx: ctx} do
+  test "the console prelude is part of the one composition, and lists no approvals", %{ctx: ctx} do
     prompt = Prompt.compose(ctx, agent: agent(%{"component.pull" => "ask"}), authority: nil)
 
-    assert prompt =~ "component.pull"
-    assert prompt =~ "need approval"
+    assert prompt =~ "## AQUA Shell Control"
+    assert prompt =~ "call the `ui` tool"
+    refute prompt =~ "Actions that need approval"
   end
 
   describe "the estate's notes" do
@@ -141,7 +142,7 @@ defmodule Aqua.PromptTest do
 
       {before, notes} = split_last(prompt, "## Notes")
       assert before =~ "## Runtime Context"
-      assert before =~ "need approval"
+      assert before =~ "## AQUA Shell Control"
 
       assert notes =~ "### Pinned: about-us\n\nWe are planning a trip."
       # Sorted by name, first line only, no timestamps.
@@ -168,7 +169,7 @@ defmodule Aqua.PromptTest do
       prompt = Prompt.compose(room, agent: agent(%{"component.pull" => "ask"}), authority: nil)
 
       {before, rest} = split_last(prompt, "## Scrolls")
-      assert before =~ "need approval"
+      assert before =~ "## AQUA Shell Control"
       [scrolls, _notes] = String.split(rest, "## Notes", parts: 2)
       assert scrolls =~ "- capability-acquisition — "
       assert scrolls =~ "`aqua.skill_get`"

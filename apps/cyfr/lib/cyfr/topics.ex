@@ -189,7 +189,7 @@ defmodule Cyfr.Topics do
     do: PubSub.topic("execution:events:#{execution_id}", athanor)
 
   @doc """
-  One conversation's live events, fanned out by `Aqua.ConversationRunner`.
+  One conversation's live events, fanned out by `Aqua.Tape` and `Aqua.Runner`.
 
   Messages: `{:conversation, conversation_id, event}` — the event shapes
   are documented on the runner, which owns a turn's vocabulary.

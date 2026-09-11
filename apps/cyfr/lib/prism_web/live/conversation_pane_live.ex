@@ -4,7 +4,7 @@
 defmodule PrismWeb.ConversationPaneLive do
   @moduledoc """
   One conversation on screen: the tape, the composer, the approval cards,
-  the consent sheet and the uploads — a window onto `Aqua.ConversationRunner`
+  the consent sheet and the uploads — a window onto `Aqua.Runner`
   for one thread, under one focused context.
 
   Each nested LiveView has its own mailbox, authenticated session context,
@@ -32,7 +32,7 @@ defmodule PrismWeb.ConversationPaneLive do
   require Logger
 
   alias Arca.ConversationStorage, as: Conversations
-  alias Aqua.ConversationRunner
+  alias Aqua.Runner
   alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Users
 
@@ -99,7 +99,7 @@ defmodule PrismWeb.ConversationPaneLive do
     # roster is real before anything is filled. What is not ready is the
     # consent a turn pins, which is why sending is held rather than reading.
     preparing? = preparing?(athanor)
-    roster = if connected?(socket), do: Aqua.Turn.roster(ctx), else: []
+    roster = if connected?(socket), do: Aqua.Roster.roster(ctx), else: []
 
     socket =
       socket
@@ -174,8 +174,8 @@ defmodule PrismWeb.ConversationPaneLive do
 
     case {connected?(socket), conversation} do
       {true, %{} = conv} ->
-        ConversationRunner.subscribe(conv.id, conv.athanor_id)
-        live = ConversationRunner.state(conv.id, conv.athanor_id)
+        Runner.subscribe(conv.id, conv.athanor_id)
+        live = Runner.state(conv.id, conv.athanor_id)
 
         # Newest window only: unbounded, this read loaded every row of a
         # long-lived conversation into every viewer's socket. The runner's
@@ -198,7 +198,7 @@ defmodule PrismWeb.ConversationPaneLive do
   end
 
   defp unsubscribe_thread(%{assigns: %{conversation: %{id: id, athanor_id: athanor_id}}} = socket) do
-    ConversationRunner.unsubscribe(id, athanor_id)
+    Runner.unsubscribe(id, athanor_id)
     socket
   end
 
@@ -506,7 +506,7 @@ defmodule PrismWeb.ConversationPaneLive do
         socket = assign(socket, :athanor, athanor)
 
         if socket.assigns.preparing? and not preparing?(athanor) do
-          roster = Aqua.Turn.roster(ctx)
+          roster = Aqua.Roster.roster(ctx)
 
           {:noreply,
            socket
@@ -1463,9 +1463,8 @@ defmodule PrismWeb.ConversationPaneLive do
   attr :attachment_href, :any, default: nil
 
   defp message_bubble(assigns) do
-    # Strip aqua-actions blocks for display, then trim — a stray block or the
-    # model's surrounding whitespace would inflate the bubble.
-    display = assigns.content |> Aqua.Wire.strip_blocks() |> String.trim()
+    # The model's surrounding whitespace would inflate the bubble.
+    display = String.trim(assigns.content || "")
     assigns = assign(assigns, :display_content, display)
 
     ~H"""

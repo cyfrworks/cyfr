@@ -6,21 +6,26 @@ defmodule Aqua do
   The agent-orchestration domain: conversations, turns, and the action
   plane an agent speaks through.
 
-  - `Aqua.ConversationRunner` — one process per conversation with a live
-    turn; every send, approval and decline is a call into it.
-  - `Aqua.Turn` — begins a turn (resolve, pin, compose, start), builds its
-    input for the AQUA formula and parses its completion.
-  - `Aqua.Orchestrator` — the agent a turn is addressed to, as the runner
-    carries it: a name between turns, the authored definition and the
-    effective policy once a turn resolves it.
+  - `Aqua.Runner` — one process per conversation; every send is admitted
+    and accepted through it, and it owns the turns' lifecycle.
+  - `Aqua.Loop` — one turn, run by the process that holds its root: the
+    model rounds, the dispatch, the cards, the clones (`Aqua.Loop.Turn`,
+    `Aqua.Loop.Binding`, `Aqua.Loop.Request`, `Aqua.Loop.Planner`,
+    `Aqua.Loop.Policy`, `Aqua.Loop.Clone`).
+  - `Aqua.Tape` — the one persistence port of the runner and the loop.
+  - `Aqua.Approvals` — a card decided once, from its own rows;
+    `Aqua.Standing` — what may stand for later calls; `Aqua.Launch` — an
+    approved launch run as its approver.
+  - `Aqua.Orchestrator` — the agent a turn is addressed to, as the
+    approvals re-authorise a card against it.
   - `Aqua.Prompt` — the one composer of the system prompt, from the
     resolved agent and the turn's pinned authority.
   - `Aqua.ToolGrants` — standing approvals as rows, composed over the
     agent's declared `tool_policy`.
-  - `Aqua.Wire` — validates the `aqua-actions` blocks a model emits
-    into typed client intents, against the agent's tool policy.
-  - `Aqua.Hands` — the UI-plane pseudo-tools those intents name.
-  - `Aqua.AgentConfig` — the soul's and the roles' definitions and prompts.
+  - `Aqua.Hands` — the pseudo-tools that run on the bundled catalysts, and
+    the console intents (`Aqua.Intents`).
+  - `Aqua.AgentConfig` — the soul's and the roles' definitions and prompts;
+    `Aqua.Roster` — who may be addressed.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into an
     estate you belong to.
   - `Aqua.Notes` — what somebody chose to keep out of a conversation: the
@@ -28,7 +33,6 @@ defmodule Aqua do
   - `Aqua.RoomExcerpt` — what the person has open beside the thread, read
     for the turn as quoted material.
   - `Aqua.Attachments` — chat attachment refs and blobs.
-  - `Aqua.ConversationCompactor` — bounds a history to the model window.
   - `Aqua.Ops` — the single seam to `Emissary.MCP.*`
     (`Aqua.ToolSeamTest` keeps it the only one).
 

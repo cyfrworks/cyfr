@@ -260,32 +260,17 @@ defmodule Opus.ExecutionRecordTest do
       refute String.contains?(Jason.encode!(input), "look at this")
     end
 
-    test "the assistant's root turn keeps its output minus the message array", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "formula:local.aqua:1.0.6", %{"task" => "hi"})
-      :ok = ExecutionRecord.write_started(record)
-
-      completed =
-        ExecutionRecord.complete(record, %{
-          "content" => "hello",
-          "messages" => [%{"role" => "user", "content" => "hi"}],
-          "usage" => %{"input_tokens" => 3, "output_tokens" => 1}
-        })
-
-      :ok = ExecutionRecord.write_completed(completed)
-      {:ok, output} = Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
-
-      assert output["content"] == "hello"
-      assert output["usage"]["input_tokens"] == 3
-      refute Map.has_key?(output, "messages")
-    end
-
-    test "a model call the assistant made keeps a digest, its size and the usage", %{ctx: ctx} do
-      root = ExecutionRecord.new(ctx, "formula:local.aqua:1.0.6", %{"task" => "hi"})
+    test "a model call an agent's turn made keeps a digest, its size and the usage", %{ctx: ctx} do
+      root =
+        ExecutionRecord.new(ctx, "agent:local.aqua", %{"turn" => "trn_1"},
+          kind: "turn",
+          component_type: :agent
+        )
 
       child =
         ExecutionRecord.new(ctx, "catalyst:moonmoon69.claude:1.0.0", %{"messages" => []},
           parent_execution_id: root.id,
-          parent_reference: "formula:local.aqua:1.0.6"
+          parent_reference: "agent:local.aqua"
         )
 
       :ok = ExecutionRecord.write_started(child)

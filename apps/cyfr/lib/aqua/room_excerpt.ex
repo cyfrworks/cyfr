@@ -9,7 +9,7 @@ defmodule Aqua.RoomExcerpt do
   assistant about it. That assistant is not in the room — a group's tape
   is the group's — so the excerpt is read here, under the person's own
   membership of the room (`Sanctum.Context.focus/2`), and handed to the
-  turn as context (`Aqua.ConversationRunner.send_message/4`'s `:context`):
+  turn as context (`Aqua.Runner.send_message/4`'s `:room`):
   it rides the prompt of that one turn and is never a row of the private
   thread, never its history, never a note. Shared to private is the only
   direction; nothing here writes.

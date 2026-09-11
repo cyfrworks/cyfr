@@ -62,13 +62,100 @@ defmodule PrismWeb.ConnCase do
 
       # Conversation runners the chat page started idle out on their own,
       # which is far too late for the next test's sandbox.
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(Aqua.ConversationSupervisor),
+      for {_, pid, _, _} <- DynamicSupervisor.which_children(Aqua.RunnerSupervisor),
           is_pid(pid) do
-        DynamicSupervisor.terminate_child(Aqua.ConversationSupervisor, pid)
+        DynamicSupervisor.terminate_child(Aqua.RunnerSupervisor, pid)
       end
     end)
 
     {:ok, conn: Phoenix.ConnTest.build_conn()}
+  end
+
+  @doc """
+  Make `athanor_id` an estate a turn can run in: the shipped tree and
+  bundle copied in, indexed, and the baseline consent the soul pins
+  minted — as a fill leaves it. `user_id` is a member whose seat the
+  bootstrap runs under.
+  """
+  def ready_estate!(athanor_id, user_id) do
+    turn_env!()
+    ctx = %{Sanctum.TestContext.local() | user_id: user_id, athanor_id: athanor_id}
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: athanor_id)
+    :ok = Sanctum.TestContext.shipped!(athanor_id)
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+    # The soul roots: the consent a turn pins exists, whoever minted it.
+    {:ok, _} = Cyfr.Execution.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
+    ctx
+  end
+
+  # A turn pins the consent the fill minted into the durable source, from
+  # the repository's own seed; restored on exit.
+  defp turn_env! do
+    keys = [:seed_path, :consent_source]
+    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
+    Application.put_env(:cyfr, :seed_path, Path.expand("../../../../seed", __DIR__))
+    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      for {key, value} <- prev do
+        if value,
+          do: Application.put_env(:cyfr, key, value),
+          else: Application.delete_env(:cyfr, key)
+      end
+    end)
+  end
+
+  @doc """
+  Route the execution port through the scripted engine for this test,
+  scripting the bundled Claude catalyst; restored on exit. Answers the
+  script agent's pid.
+  """
+  def script_model!(items \\ []) do
+    previous = Application.get_env(:cyfr, :execution_impl)
+    Application.put_env(:cyfr, :execution_impl, Cyfr.Test.ScriptedExecution)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      Application.put_env(:cyfr, :execution_impl, previous)
+    end)
+
+    ExUnit.Callbacks.start_supervised!(
+      {Cyfr.Test.ScriptedExecution, ref: "catalyst:local.claude", script: items}
+    )
+  end
+
+  @doc "A `model/chat@1` reply with `text` alone."
+  def model_reply(text) do
+    %{
+      "content" => [%{"type" => "text", "text" => text}],
+      "stop_reason" => "end_turn",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+    }
+  end
+
+  @doc "A `model/chat@1` reply with one tool call."
+  def model_call(id, name, args) do
+    %{
+      "content" => [%{"type" => "tool_call", "id" => id, "name" => name, "arguments" => args}],
+      "stop_reason" => "tool_call",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+    }
+  end
+
+  @doc "The chat requests the scripted model answered, oldest first."
+  def model_requests do
+    Cyfr.Test.ScriptedExecution.calls()
+    |> Enum.filter(&(&1.input["operation"] == "chat"))
+    |> Enum.map(& &1.input["params"])
+  end
+
+  @doc "The text of every block of every message of a chat request."
+  def request_text(request) do
+    request["messages"]
+    |> Enum.flat_map(& &1["content"])
+    |> Enum.map(&(&1["text"] || &1["content"] || ""))
+    |> Enum.join("\n")
   end
 
   @doc "The Plug session key the harness writes the Sanctum session token under."

@@ -32,7 +32,12 @@ defmodule Cyfr.IngressInventoryTest do
     # itself any more).
     "apps/cyfr/lib/emissary/tincture/invoke.ex" => :tincture,
     # Formula children run under the parent's authority, never their own.
-    "apps/opus/lib/opus/formula_handler.ex" => :in_chain
+    "apps/opus/lib/opus/formula_handler.ex" => :in_chain,
+    # The agent loop: the turn's root is claimed without a guest, and every
+    # call it dispatches is a child of that root.
+    "apps/cyfr/lib/aqua/loop.ex" => :in_chain,
+    "apps/cyfr/lib/aqua/loop/binding.ex" => :in_chain,
+    "apps/cyfr/lib/aqua/loop/turn.ex" => :in_chain
   }
 
   @patterns [
@@ -40,6 +45,8 @@ defmodule Cyfr.IngressInventoryTest do
     "Opus.run_root_edge(",
     "Cyfr.Execution.run_root(",
     "Cyfr.Execution.run_root_edge(",
+    "Cyfr.Execution.claim_turn_root(",
+    "Cyfr.Execution.run_child(",
     "Opus.run_child(",
     "Opus.Chain.run_root(",
     "Opus.Chain.run_root_edge(",

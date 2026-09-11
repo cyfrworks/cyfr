@@ -53,11 +53,11 @@ defmodule Opus.ExecutionProvenanceTest do
     {row, Jason.decode!(row.output)}
   end
 
-  test "a child the assistant invoked keeps a digest of its reply, never the reply", %{ctx: ctx} do
+  test "a child an agent's turn invoked keeps a digest of its reply, never the reply", %{ctx: ctx} do
     {row, output} =
       run(ctx,
         parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
-        parent_reference: "formula:local.aqua:1.0.8"
+        parent_reference: "agent:local.aqua"
       )
 
     assert output["envelope"] == "v1"

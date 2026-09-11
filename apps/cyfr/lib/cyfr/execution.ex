@@ -119,7 +119,7 @@ defmodule Cyfr.Execution do
   @doc """
   Run a component as a CHILD of a running chain's authority — the hop the
   formula host makes for a guest's `execution.run`, offered to the host
-  itself so an approved virtual-tool card (`Aqua.Turn.run_approved/3`)
+  itself so an approved hand call (`Aqua.Loop`)
   runs the wrapped catalyst under the card's pinned authority with the
   card's execution as its lineage, never as a fresh root.
   """

@@ -46,11 +46,17 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert :ok = Provisioning.ready(ctx)
   end
 
-  test "a turn on an estate still being filled says so", %{ctx: ctx} do
-    pick = %Aqua.Orchestrator{name: "aqua"}
+  test "a turn on an estate still being filled says so", %{ctx: ctx, group: group} do
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: group.id)
+    {:ok, conv} = Arca.ConversationStorage.create(ctx)
 
+    # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =
-             Aqua.Turn.begin(ctx, "conv_never", pick, "hello")
+             Aqua.Runner.send_message(ctx, conv.id, "@aqua hello",
+               orchestrators: [%{"name" => "aqua", "title" => "AQUA"}]
+             )
+
+    assert [] = Arca.ConversationStorage.messages(ctx, conv.id)
 
     # And the refusal has a sentence every surface renders the same way.
     assert Cyfr.Ops.Error.render(:not_provisioned) =~ "still being prepared"

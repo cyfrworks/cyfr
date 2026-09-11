@@ -62,10 +62,9 @@ defmodule Aqua.Prompt do
   for THIS call only — or `nil` when there is none.
 
   It is other people's words, so it is never part of the system prompt:
-  the turn places it as a transient part of the task's user turn
-  (`Aqua.Turn.build_input/4`), and the guest takes it back out before the
-  history is returned, so no row, no later turn and no compaction ever
-  carries it.
+  the loop places it as a transient block on one request's last user
+  message and records it as excluded (`Aqua.Loop.Turn`), so no row, no
+  later turn and no compaction ever carries it.
   """
   @spec transient(String.t() | nil) :: String.t() | nil
   def transient(text) when is_binary(text) and text != "" do

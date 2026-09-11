@@ -106,7 +106,7 @@ defmodule PrismWeb.FocusIntentTest do
   for %{kind: kind, args: args} <- @intents do
     test "#{kind} lands on a page that reads what it carries", %{estate: estate} = context do
       assert {:ok, %{kind: "navigate", to: path} = intent} =
-               Aqua.Wire.validate(Map.put(unquote(Macro.escape(args)), "kind", unquote(kind)))
+               Aqua.Intents.validate(Map.put(unquote(Macro.escape(args)), "kind", unquote(kind)))
 
       # `Aqua.Intents` mints the page-relative path; the pane prefixes the
       # athanor in focus before handing it to the client, the same split
@@ -146,7 +146,7 @@ defmodule PrismWeb.FocusIntentTest do
     assert PrismWeb.Nav.global?(path)
 
     assert {:ok, %{kind: "navigate", to: ^path} = intent} =
-             Aqua.Wire.validate(%{"kind" => "ui.navigate", "path" => path})
+             Aqua.Intents.validate(%{"kind" => "ui.navigate", "path" => path})
 
     assert pushed(context, intent) == path
     assert served_by(URI.parse(path).path) == PrismWeb.ChatLive

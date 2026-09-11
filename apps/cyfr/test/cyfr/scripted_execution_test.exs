@@ -179,12 +179,11 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
     assert ScriptedExecution.calls() == []
   end
 
-  test "hands still reach the engine, and a root is refused", fx do
+  test "hands still reach the engine, and a scripted root is refused", fx do
     start_supervised!({ScriptedExecution, ref: @scripted, script: []})
 
-    assert_raise ArgumentError, fn ->
-      Cyfr.Execution.run_root(fx.ctx, :default, "formula:local.x:1.0.0", %{})
-    end
+    assert {:error, "the scripted engine roots nothing"} =
+             Cyfr.Execution.run_root(fx.ctx, :default, "#{@scripted}:1.0.0", %{})
 
     # An unscripted reference goes to the engine, which answers for itself.
     result =

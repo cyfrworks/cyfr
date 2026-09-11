@@ -8,7 +8,7 @@ defmodule Emissary.MCP.ConversationTool do
   Exposes AQUA conversation addressing, queuing, history and approvals to
   MCP clients through the conversation runner.
 
-  Every turn-shaped action here **wraps `Aqua.ConversationRunner`** — there
+  Every turn-shaped action here **wraps `Aqua.Runner`** — there
   is no second implementation of a turn, and no path that starts one
   without the runner's gates. The rest wrap the domain verbs the console
   itself uses: `create`/`list` are `Arca.ConversationStorage` (how a
@@ -60,7 +60,7 @@ defmodule Emissary.MCP.ConversationTool do
   # target estate, so a call moves a slice, never a thread.
   @aloud_max 50
 
-  alias Aqua.ConversationRunner
+  alias Aqua.{Approvals, Runner, Tape}
   alias Sanctum.Context
 
   @impl true
@@ -315,20 +315,14 @@ defmodule Emissary.MCP.ConversationTool do
 
         opts =
           [id: message_id, attachments: attachments]
+          |> put_opt(:client_id, args["client_id"])
           |> put_opt(:model, args["model"])
           |> put_opt(:orchestrator, args["agent"])
-          |> put_opt(:context, room_excerpt(ctx, args["room"]))
+          |> put_opt(:room, args["room"])
 
-        case ConversationRunner.send_message(ctx, id, text, opts) do
-          :ok ->
-            {:ok,
-             Map.merge(
-               %{accepted: true, message_id: message_id, replayed: false},
-               waiting(ctx, id)
-             )}
-
-          {:error, reason} ->
-            {:error, refusal(reason, id)}
+        case Runner.send_message(ctx, id, text, opts) do
+          {:ok, accepted} -> {:ok, Map.merge(accepted, waiting(ctx, id))}
+          {:error, reason} -> {:error, refusal(reason, id)}
         end
     end
   end
@@ -367,7 +361,7 @@ defmodule Emissary.MCP.ConversationTool do
          "tool_action" => action
        })
        when is_binary(agent) and is_binary(tool) and is_binary(action) do
-    case ConversationRunner.revoke_grant(ctx, id, agent, tool, action) do
+    case Runner.revoke_grant(ctx, id, agent, tool, action) do
       :ok -> {:ok, %{revoked: true, agent: agent, tool: tool, action: action}}
       {:error, reason} -> {:error, refusal(reason, id)}
     end
@@ -381,7 +375,7 @@ defmodule Emissary.MCP.ConversationTool do
   defp act("restart_for_consent", ctx, id, args) do
     result = %{profile_id: args["profile_id"], revision: args["revision"]}
 
-    case ConversationRunner.restart_for_consent(ctx, id, result) do
+    case Runner.restart_for_consent(ctx, id, result) do
       :ok -> {:ok, %{restart_prompted: true}}
       {:error, reason} -> {:error, refusal(reason, id)}
     end
@@ -391,7 +385,7 @@ defmodule Emissary.MCP.ConversationTool do
   # and never under a running turn.
   defp act("delete", ctx, id, _args) do
     cond do
-      ConversationRunner.turn_running?(ctx, id) ->
+      Runner.turn_running?(ctx, id) ->
         {:error, {:conflict, "a turn is running in this conversation — stop it first"}}
 
       true ->
@@ -404,16 +398,21 @@ defmodule Emissary.MCP.ConversationTool do
   end
 
   defp act("stop", ctx, id, _args) do
-    case ConversationRunner.stop_turn(ctx, id) do
+    case Runner.stop_turn(ctx, id) do
       :ok -> {:ok, %{stopped: true}}
       {:error, reason} -> {:error, refusal(reason, id)}
     end
   end
 
+  # A card is decided by the message it was shown as; the decision is
+  # `Aqua.Approvals`' — the same door the `approval` tool opens.
   defp act("approve", ctx, id, %{"message_id" => message_id} = args) when is_binary(message_id) do
     with {:ok, scope} <- approve_scope(args["scope"]),
-         :ok <- ConversationRunner.approve(ctx, id, message_id, scope) do
-      {:ok, %{decided: "approved", message_id: message_id, scope: scope}}
+         {:ok, approval} <- card_approval(ctx, id, message_id),
+         {:ok, outcome} <-
+           Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: scope}) do
+      {:ok,
+       Map.merge(outcome, %{decided: outcome.decision, message_id: message_id, scope: scope})}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
     end
@@ -424,8 +423,15 @@ defmodule Emissary.MCP.ConversationTool do
 
   defp act("decline", ctx, id, %{"message_id" => message_id} = args) when is_binary(message_id) do
     with {:ok, scope} <- decline_scope(args["scope"]),
-         :ok <- ConversationRunner.decline(ctx, id, message_id, args["reason"] || "", scope) do
-      {:ok, %{decided: "declined", message_id: message_id, scope: scope}}
+         {:ok, approval} <- card_approval(ctx, id, message_id),
+         {:ok, outcome} <-
+           Approvals.resolve(ctx, approval.id, %{
+             decision: :declined,
+             scope: scope,
+             reason: String.slice(args["reason"] || "", 0, 80)
+           }) do
+      {:ok,
+       Map.merge(outcome, %{decided: outcome.decision, message_id: message_id, scope: scope})}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
     end
@@ -548,29 +554,20 @@ defmodule Emissary.MCP.ConversationTool do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp put_opt(opts, _key, nil), do: opts
-  defp put_opt(opts, _key, ""), do: opts
-  defp put_opt(opts, key, value), do: Keyword.put(opts, key, value)
-
-  # The room read as the sender, focused onto that estate with their own
-  # seat checked there; a room they cannot read is left out.
-  defp room_excerpt(
-         ctx,
-         %{"athanor_id" => athanor_id, "conversation_id" => conversation_id} = room
-       )
-       when is_binary(athanor_id) and is_binary(conversation_id) do
-    case Aqua.RoomExcerpt.read(ctx, %{
-           athanor_id: athanor_id,
-           conversation_id: conversation_id,
-           title: room["title"],
-           estate: room["estate"]
-         }) do
-      {:ok, text} -> text
-      {:error, _} -> nil
+  # The card's approval, pinned to this conversation: a member cannot
+  # drive one thread's door to settle another thread's card.
+  defp card_approval(ctx, conversation_id, message_id) do
+    case Tape.approval_by_message(ctx, message_id) do
+      {:ok, %{conversation_id: ^conversation_id} = approval} -> {:ok, approval}
+      {:ok, _elsewhere} -> {:error, {:not_found, "approval", message_id}}
+      {:error, :not_found} -> {:error, {:not_found, "approval", message_id}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp room_excerpt(_ctx, _room), do: nil
+  defp put_opt(opts, _key, nil), do: opts
+  defp put_opt(opts, _key, ""), do: opts
+  defp put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp decode_files(files) do
     Enum.reduce_while(files, {:ok, []}, fn
@@ -599,7 +596,7 @@ defmodule Emissary.MCP.ConversationTool do
   # reads can return error tuples, and either would crash the handler.
   defp waiting(ctx, id) do
     live =
-      case ConversationRunner.state(id, ctx.athanor_id) do
+      case Runner.state(id, ctx.athanor_id) do
         %{} = state -> state
         _ -> %{}
       end
@@ -665,7 +662,6 @@ defmodule Emissary.MCP.ConversationTool do
       id: conv.id,
       title: conv.title,
       created_by: conv.created_by,
-      running: is_binary(conv.execution_id),
       last_message_at: conv.last_message_at,
       at: conv.inserted_at
     }

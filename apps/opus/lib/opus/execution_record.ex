@@ -375,7 +375,8 @@ defmodule Opus.ExecutionRecord do
   # store that cannot keep it is logged, never the execution's failure.
   # Chat executions are the transcript's, not the payload store's.
   defp retain_result(ctx, %__MODULE__{} = record) do
-    chat? = assistant_ref?(record.reference) or assistant_ref?(record.parent_reference)
+    chat? =
+      record.kind == "turn" or Compendium.AgentSource.agent_ref?(record.parent_reference)
 
     if not chat? and not is_nil(record.output) do
       case Arca.ExecutionPayloads.put(
@@ -627,21 +628,14 @@ defmodule Opus.ExecutionRecord do
 
   defp put_attachment_digests(envelope, _input), do: envelope
 
-  # The assistant's own executions carry conversation content in their
-  # OUTPUT too: the root turn returns the whole message array (the runner
-  # reads it from the completion event, never from the row), and each
-  # model call returns the provider's reply. Neither is the row's to keep:
-  # the root keeps everything but the messages, a model call keeps a
-  # digest, its size and the usage the planner needs. Every other
-  # component's output is the caller's result and stays.
-  @assistant_ref_prefix "formula:local.aqua"
-
+  # A child an agent's turn dispatched carries conversation content in its
+  # OUTPUT: a model call returns the provider's reply, a hand the file it
+  # read. The row keeps a digest, its size and the usage the planner
+  # needs; the tape holds what the model reads. Every other component's
+  # output is the caller's result and stays.
   defp persisted_output(%__MODULE__{} = record) do
     cond do
-      assistant_ref?(record.reference) and is_map(record.output) ->
-        Map.drop(record.output, ["messages", :messages])
-
-      assistant_ref?(record.parent_reference) and not is_nil(record.output) ->
+      Compendium.AgentSource.agent_ref?(record.parent_reference) and not is_nil(record.output) ->
         encoded = Jason.encode!(record.output)
 
         %{
@@ -655,11 +649,6 @@ defmodule Opus.ExecutionRecord do
         record.output
     end
   end
-
-  defp assistant_ref?(ref) when is_binary(ref),
-    do: String.starts_with?(ref, @assistant_ref_prefix)
-
-  defp assistant_ref?(_), do: false
 
   defp usage_of(%{"usage" => usage}), do: usage
   defp usage_of(%{usage: usage}), do: usage

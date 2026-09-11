@@ -1219,11 +1219,27 @@ defmodule Aqua.Loop do
           state.activity ++ Enum.map(names, &%{tool: &1, status: :running, preview: nil})
 
         :done ->
-          Enum.reduce(names, state.activity, &Aqua.Turn.mark_tool_done(&2, &1, nil))
+          Enum.reduce(names, state.activity, &mark_done(&2, &1))
       end
 
     announce(state, {:tool_activity, activity})
     %{state | activity: activity}
+  end
+
+  # The newest running entry for `tool` is done; none running adds a done one.
+  defp mark_done(activity, tool) do
+    index =
+      activity
+      |> Enum.with_index()
+      |> Enum.reverse()
+      |> Enum.find_value(fn {entry, i} ->
+        entry.tool == tool and entry.status == :running and i
+      end)
+
+    case index do
+      nil -> activity ++ [%{tool: tool, status: :done, preview: nil}]
+      i -> List.update_at(activity, i, &%{&1 | status: :done})
+    end
   end
 
   defp system_row(%State{} = state, text) do
