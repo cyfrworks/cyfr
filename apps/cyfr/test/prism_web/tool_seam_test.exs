@@ -74,17 +74,6 @@ defmodule PrismWeb.ToolSeamTest do
     # authenticated member context, and the registry gate exists for
     # surfaces that do not. Same functions, two doors —
     # `PrismWeb.Ops` states the rule.
-    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex", "Arca.ConversationStorage.create"},
-    {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.ConversationStorage.delete"},
-    # Following is the person's own sidebar and notify roster — the rows
-    # the `conversation.follow`/`unfollow` verbs write for a headless
-    # client, written directly for the same reason as create/delete above.
-    {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.TopicSubscriptionStorage.follow"},
-    {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.TopicSubscriptionStorage.unfollow"},
-    # Withdrawing an approval the person was shown. The grant belongs to the
-    # click that made it; the runner is told, not asked.
-    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex",
-     "Aqua.ConversationRunner.revoke_grant"},
     # Attachments a person drags into their own chat, and the same call
     # undone when the message they belonged to is not sent. Storage-capped by
     # `Sanctum.Tenancy.Caps.check_storage/2` like every other tenant write.
@@ -205,6 +194,37 @@ defmodule PrismWeb.ToolSeamTest do
 
     assert stale == [],
            "`@console_owned` names calls that are gone: #{inspect(Enum.sort(stale))}"
+  end
+
+  # The chat's verbs go through the tool surface: the same `conversation`
+  # actions a headless client calls, from the page.
+  @chat_verbs %{
+    "apps/cyfr/lib/prism_web/live/conversation_pane_live.ex" =>
+      ~w(create send stop approve decline revoke_grant restart_for_consent),
+    "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(follow unfollow delete)
+  }
+
+  test "the chat's turn writes go through the conversation tool" do
+    for {rel, verbs} <- @chat_verbs, verb <- verbs do
+      source = Cyfr.Test.SourceTree.read(Path.join(root(), rel))
+
+      assert source =~ ~s(call_tool(#{if rel =~ "chat_live", do: "focus", else: ""}) or
+               source =~ "conversation/#{verb}",
+             "#{rel} does not call conversation/#{verb} through PrismWeb.Ops"
+
+      assert source =~ "\"conversation/#{verb}\"",
+             "#{rel} does not name conversation/#{verb}"
+    end
+
+    pane =
+      Cyfr.Test.SourceTree.read(
+        Path.join(root(), "apps/cyfr/lib/prism_web/live/conversation_pane_live.ex")
+      )
+
+    refute pane =~ "RoomExcerpt.read",
+           "the pane passes the room reference, never the excerpt text"
+
+    refute pane =~ "ConversationRunner.send_message"
   end
 
   test "call_tool splits tool/action for both shapes" do

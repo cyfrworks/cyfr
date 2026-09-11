@@ -83,7 +83,7 @@ defmodule Emissary.MCP.ConversationToolTest do
     test "every action is external-plane only and interactive-only" do
       actions = Tool.definition().annotations.actions
 
-      assert map_size(actions) == 10
+      assert map_size(actions) == 16
 
       for {name, spec} <- actions do
         assert spec.planes == [:external], "#{name} is reachable in-chain"
@@ -102,10 +102,10 @@ defmodule Emissary.MCP.ConversationToolTest do
       # the SSOT and the tool renders it as a typed refusal.
       long = String.duplicate("é", 20_000)
 
-      assert {:error, {:invalid_argument, msg}} =
+      assert {:error, :message_too_long} =
                call(ctx, %{"action" => "send", "conversation" => conv.id, "message" => long})
 
-      assert msg =~ "32 KiB"
+      assert Cyfr.Ops.Error.message(:message_too_long) =~ "32 KiB"
     end
   end
 
@@ -407,6 +407,148 @@ defmodule Emissary.MCP.ConversationToolTest do
                })
 
       assert msg =~ "your own lines"
+    end
+  end
+
+  describe "the send envelope and the thread's own verbs" do
+    setup %{ctx: ctx} do
+      # Two members: a bare line is people talking, so a send here writes
+      # a row and starts nothing.
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure("usr_other_#{System.unique_integer([:positive])}",
+          scope: "athanor",
+          athanor_id: ctx.athanor_id
+        )
+
+      :ok
+    end
+
+    test "get answers the thread with its live state", %{ctx: ctx, conv: conv} do
+      assert {:ok, %{id: id, running: false, queued: 0, pending_approvals: []}} =
+               call(ctx, %{"action" => "get", "conversation" => conv.id})
+
+      assert id == conv.id
+
+      assert {:error, {:not_found, "conversation", "conv_nothing"}} =
+               call(ctx, %{"action" => "get", "conversation" => "conv_nothing"})
+    end
+
+    test "files attach under a pre-minted id, and the send names them", %{ctx: ctx, conv: conv} do
+      message_id = Cyfr.UUID7.generate_id("msg")
+
+      assert {:ok, %{message_id: ^message_id, attachments: [ref]}} =
+               call(ctx, %{
+                 "action" => "attach",
+                 "conversation" => conv.id,
+                 "message_id" => message_id,
+                 "files" => [
+                   %{
+                     "filename" => "note.txt",
+                     "media_type" => "text/plain",
+                     "data" => Base.encode64("hi")
+                   }
+                 ]
+               })
+
+      assert {:error, {:invalid_argument, _}} =
+               call(ctx, %{
+                 "action" => "attach",
+                 "conversation" => conv.id,
+                 "message_id" => message_id,
+                 "files" => [%{"filename" => "x", "media_type" => "text/plain", "data" => "%%%"}]
+               })
+
+      assert {:ok, %{accepted: true, message_id: ^message_id, replayed: false, running: false}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "conversation" => conv.id,
+                 "message" => "here is a file",
+                 "id" => message_id,
+                 "attachments" => [ref],
+                 "client_id" => "c-1"
+               })
+
+      {:ok, row} = Conversations.get_message(ctx, message_id)
+      assert Conversations.payload(row)["attachments"] == [ref]
+
+      assert {:ok, %{messages: [%{id: ^message_id}], cursor: cursor}} =
+               call(ctx, %{"action" => "messages", "conversation" => conv.id})
+
+      assert is_integer(cursor)
+    end
+
+    test "a room beside the thread is read for the send and never stored", %{ctx: ctx, conv: conv} do
+      {:ok, room} = Conversations.create(ctx, %{title: "the room"})
+      {:ok, _} = Conversations.append(ctx, room.id, %{author: ctx.user_id, content: "room talk"})
+
+      assert {:ok, %{accepted: true, message_id: id}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "conversation" => conv.id,
+                 "message" => "about the room",
+                 "room" => %{
+                   "athanor_id" => ctx.athanor_id,
+                   "conversation_id" => room.id,
+                   "title" => "the room"
+                 }
+               })
+
+      {:ok, row} = Conversations.get_message(ctx, id)
+      assert row.content == "about the room"
+      refute inspect(Conversations.payload(row)) =~ "room talk"
+
+      # A room the sender cannot read leaves the send as it is.
+      assert {:ok, %{accepted: true}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "conversation" => conv.id,
+                 "message" => "still sent",
+                 "room" => %{"athanor_id" => "ath_elsewhere", "conversation_id" => "conv_x"}
+               })
+    end
+
+    test "delete removes the thread whole", %{ctx: ctx, conv: conv} do
+      {:ok, _} = Conversations.append(ctx, conv.id, %{author: ctx.user_id, content: "bye"})
+
+      assert {:ok, %{deleted: true}} =
+               call(ctx, %{"action" => "delete", "conversation" => conv.id})
+
+      assert {:error, {:not_found, "conversation", _}} =
+               call(ctx, %{"action" => "get", "conversation" => conv.id})
+
+      assert {:error, {:not_found, "conversation", _}} =
+               call(ctx, %{"action" => "delete", "conversation" => conv.id})
+    end
+
+    test "revoke_grant withdraws a standing answer for the agent it was given for", %{
+      ctx: ctx,
+      conv: conv
+    } do
+      {:ok, _} =
+        Aqua.ToolGrants.put(ctx, %{
+          scope: "conversation",
+          effect: "allow",
+          conversation_id: conv.id,
+          agent_name: "aqua",
+          tool: "notes",
+          action: "keep"
+        })
+
+      assert {:ok, [_]} = Aqua.ToolGrants.for_conversation(ctx, conv.id, "aqua")
+
+      assert {:ok, %{revoked: true}} =
+               call(ctx, %{
+                 "action" => "revoke_grant",
+                 "conversation" => conv.id,
+                 "agent_name" => "aqua",
+                 "tool" => "notes",
+                 "tool_action" => "keep"
+               })
+
+      assert {:ok, []} = Aqua.ToolGrants.for_conversation(ctx, conv.id, "aqua")
     end
   end
 end

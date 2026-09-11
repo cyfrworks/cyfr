@@ -305,7 +305,11 @@ defmodule PrismWeb.ConversationPaneLive do
 
       conv ->
         {:noreply,
-         run(socket, &ConversationRunner.stop_turn(&1, conv.id), cancel_requested: true)}
+         run(
+           socket,
+           &PrismWeb.Ops.call_tool(&1, "conversation/stop", %{"conversation" => conv.id}),
+           cancel_requested: true
+         )}
     end
   end
 
@@ -324,7 +328,15 @@ defmodule PrismWeb.ConversationPaneLive do
 
       conv ->
         {:noreply,
-         run(socket, &ConversationRunner.revoke_grant(&1, conv.id, agent, tool, action))}
+         run(
+           socket,
+           &PrismWeb.Ops.call_tool(&1, "conversation/revoke_grant", %{
+             "conversation" => conv.id,
+             "agent_name" => agent,
+             "tool" => tool,
+             "tool_action" => action
+           })
+         )}
     end
   end
 
@@ -437,7 +449,15 @@ defmodule PrismWeb.ConversationPaneLive do
         {:noreply, socket}
 
       conv ->
-        {:noreply, run(socket, &ConversationRunner.restart_for_consent(&1, conv.id, result))}
+        {:noreply,
+         run(
+           socket,
+           &PrismWeb.Ops.call_tool(&1, "conversation/restart_for_consent", %{
+             "conversation" => conv.id,
+             "profile_id" => Map.get(result, :profile_id),
+             "revision" => Map.get(result, :revision)
+           })
+         )}
     end
   end
 
@@ -513,15 +533,16 @@ defmodule PrismWeb.ConversationPaneLive do
   defp decide(socket, {:approval_approve, id, scope}) do
     case socket.assigns.conversation do
       %{id: conv_id} ->
-        case ConversationRunner.approve(socket.assigns.context, conv_id, id, scope) do
-          :ok ->
+        case PrismWeb.Ops.call_tool(socket, "conversation/approve", %{
+               "conversation" => conv_id,
+               "message_id" => id,
+               "scope" => Aqua.ApprovalScope.to_string(scope)
+             }) do
+          {:ok, _} ->
             socket
 
           {:error, :already_resolved} ->
             socket
-
-          {:error, {:scope_not_permitted, _} = refusal} ->
-            put_flash(socket, :error, Aqua.ToolGrants.refusal_message(refusal))
 
           {:error, reason} ->
             Logger.warning("[ConversationPane] approve failed: #{inspect(reason)}")
@@ -536,8 +557,13 @@ defmodule PrismWeb.ConversationPaneLive do
   defp decide(socket, {:approval_decline, id, reason, scope}) do
     case socket.assigns.conversation do
       %{id: conv_id} ->
-        case ConversationRunner.decline(socket.assigns.context, conv_id, id, reason, scope) do
-          :ok ->
+        case PrismWeb.Ops.call_tool(socket, "conversation/decline", %{
+               "conversation" => conv_id,
+               "message_id" => id,
+               "reason" => reason,
+               "scope" => Aqua.ApprovalScope.to_string(scope)
+             }) do
+          {:ok, _} ->
             socket
 
           {:error, :already_resolved} ->
@@ -716,18 +742,20 @@ defmodule PrismWeb.ConversationPaneLive do
   # where the refusal is decided (membership, archive, a full queue), so
   # the cleanup belongs on its answer.
   defp send_or_discard(ctx, conv, message, message_id, refs, room, socket) do
-    opts =
-      [
-        id: message_id,
-        attachments: refs,
-        model: socket.assigns.model_override,
-        # The whole entry, not the name: the runner must know whose tree
-        # the picked soul or role lives in.
-        orchestrator: socket.assigns.assistant
-      ] ++ room
+    args =
+      %{
+        "conversation" => conv.id,
+        "message" => message,
+        "id" => message_id,
+        "attachments" => refs,
+        "model" => socket.assigns.model_override,
+        "agent" => socket.assigns.assistant && socket.assigns.assistant["name"]
+      }
+      |> Map.merge(Map.new(room, fn {k, v} -> {Atom.to_string(k), v} end))
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
-    case ConversationRunner.send_message(ctx, conv.id, message, opts) do
-      :ok ->
+    case PrismWeb.Ops.call_tool(ctx, "conversation/send", args) do
+      {:ok, _} ->
         :ok
 
       {:error, _reason} = error ->
@@ -736,32 +764,14 @@ defmodule PrismWeb.ConversationPaneLive do
     end
   end
 
-  # What the room beside this pane shows, read for this send — the panel
-  # alone, and not a thread reading itself. A room the person can no
-  # longer read is said so; the message still goes.
+  # The room beside this pane, named for this send — the panel alone, and
+  # not a thread reading itself. The room's lines are read server-side,
+  # for this one turn.
   defp room_context(
          %{assigns: %{panel?: true, read_room?: true, room: %{} = room}} = socket,
          conv
        ) do
-    if reads_room?(room, conv) do
-      case Aqua.RoomExcerpt.read(socket.assigns.context, PrismWeb.RoomFeed.excerpt_room(room)) do
-        {:ok, text} ->
-          {[context: text], socket}
-
-        {:error, :nothing_said} ->
-          {[], socket}
-
-        {:error, reason} ->
-          {[],
-           put_flash(
-             socket,
-             :error,
-             "Could not read #{PrismWeb.RoomFeed.label(room)} (#{error_message(reason)}) — sent without it."
-           )}
-      end
-    else
-      {[], socket}
-    end
+    if reads_room?(room, conv), do: {[room: room], socket}, else: {[], socket}
   end
 
   defp room_context(socket, _conv), do: {[], socket}
@@ -777,13 +787,17 @@ defmodule PrismWeb.ConversationPaneLive do
   defp current_or_new(%{assigns: %{conversation: %{} = conv}}), do: {:ok, conv, false}
 
   defp current_or_new(socket) do
-    with {:ok, conv} <- Conversations.create(socket.assigns.context), do: {:ok, conv, true}
+    with {:ok, %{id: id}} <- PrismWeb.Ops.call_tool(socket, "conversation/create", %{}),
+         {:ok, conv} <- Conversations.get(socket.assigns.context, id) do
+      {:ok, conv, true}
+    end
   end
 
-  # A runner call for the current member; `assigns` are applied on `:ok`.
+  # A conversation verb for the current member, through the tool surface;
+  # `assigns` are applied when it answers.
   defp run(socket, fun, assigns \\ []) do
     case fun.(socket.assigns.context) do
-      :ok -> assign(socket, assigns)
+      {:ok, _} -> assign(socket, assigns)
       {:error, reason} -> put_flash(socket, :error, "Could not do that: #{error_message(reason)}")
     end
   end

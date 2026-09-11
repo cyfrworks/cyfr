@@ -18,7 +18,7 @@ defmodule Aqua.ToolSeamTest do
 
   use ExUnit.Case, async: true
 
-  @seam "apps/cyfr/lib/aqua/mcp_helpers.ex"
+  @seam "apps/cyfr/lib/aqua/ops.ex"
 
   defp root, do: Path.expand("../../../..", __DIR__)
 

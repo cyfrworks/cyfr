@@ -566,7 +566,8 @@ defmodule PrismWeb.ChatLive do
     focus = socket.assigns.focus
 
     with true <- topic_here?(socket, id),
-         :ok <- Arca.TopicSubscriptionStorage.follow(focus, id, focus.user_id) do
+         {:ok, _} <-
+           PrismWeb.Ops.call_tool(focus, "conversation/follow", %{"conversation" => id}) do
       {:noreply, socket |> update(:followed, &MapSet.put(&1, id)) |> patch_row()}
     else
       false -> {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
@@ -578,7 +579,8 @@ defmodule PrismWeb.ChatLive do
     focus = socket.assigns.focus
 
     with true <- topic_here?(socket, id),
-         :ok <- Arca.TopicSubscriptionStorage.unfollow(focus, id, focus.user_id) do
+         {:ok, _} <-
+           PrismWeb.Ops.call_tool(focus, "conversation/unfollow", %{"conversation" => id}) do
       {:noreply, socket |> update(:followed, &MapSet.delete(&1, id)) |> patch_row()}
     else
       false -> {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
@@ -597,12 +599,9 @@ defmodule PrismWeb.ChatLive do
       not topic_here?(socket, id) ->
         {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
 
-      Aqua.ConversationRunner.turn_running?(focus, id) ->
-        {:noreply, put_flash(socket, :error, "Stop the running turn before deleting.")}
-
       true ->
-        case Conversations.delete(focus, id) do
-          :ok ->
+        case PrismWeb.Ops.call_tool(focus, "conversation/delete", %{"conversation" => id}) do
+          {:ok, _} ->
             current = socket.assigns.conversation && socket.assigns.conversation.id
 
             if current == id do

@@ -33,6 +33,12 @@ defmodule Cyfr.Ops.Error do
           | {:unknown_action, name_action :: String.t()}
           | :control_plane_lost
           | :not_provisioned
+          | :busy
+          | :not_member
+          | :archived
+          | :no_orchestrator
+          | :execution_unavailable
+          | :message_too_long
 
   @doc "Whether a term is this vocabulary — the renderers' dispatch test."
   @spec reason?(term()) :: boolean()
@@ -49,6 +55,13 @@ defmodule Cyfr.Ops.Error do
   def reason?({:unknown_action, name_action}) when is_binary(name_action), do: true
   def reason?(:control_plane_lost), do: true
   def reason?(:not_provisioned), do: true
+  # A conversation's own refusals: what a send or a decision is held to.
+  def reason?(:busy), do: true
+  def reason?(:not_member), do: true
+  def reason?(:archived), do: true
+  def reason?(:no_orchestrator), do: true
+  def reason?(:execution_unavailable), do: true
+  def reason?(:message_too_long), do: true
   def reason?(_), do: false
 
   @doc """
@@ -89,6 +102,18 @@ defmodule Cyfr.Ops.Error do
   # the tree answer meanwhile.
   def message(:not_provisioned),
     do: "This estate is still being prepared — retry shortly"
+
+  # A conversation's own refusals, one sentence each, the same on the
+  # wire and on the page.
+  def message(:busy), do: "The turn queue is full — send again after the current turn"
+  def message(:not_member), do: "Only a member of the estate can act in its conversations"
+  def message(:archived), do: "This estate is archived — nothing runs in it"
+
+  def message(:no_orchestrator),
+    do: "This estate has no assistant to address — reset its AQUA tree"
+
+  def message(:execution_unavailable), do: "The execution engine is unavailable — retry shortly"
+  def message(:message_too_long), do: "The message is longer than the 32 KiB bound"
 
   @doc """
   The client-safe sentence for ANY refusal a tool can produce, or `nil` when
