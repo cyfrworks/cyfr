@@ -272,6 +272,19 @@ defmodule Aqua.Tape do
         decision: decision
       })
 
+      # The runner holding the turn learns the decision from the topic,
+      # after the commit like every row.
+      broadcast(ctx, turn.conversation_id, {
+        :approval_resolved,
+        %{
+          approval_id: approval_id,
+          turn_id: turn.id,
+          step_id: step.id,
+          decision: decision,
+          resolution_kind: Map.get(resolved.approval, :resolution_kind)
+        }
+      })
+
       {:ok, resolved}
     end
   end
@@ -365,6 +378,10 @@ defmodule Aqua.Tape do
     do: Arca.AgentRevisions.get(Context.athanor!(ctx), digest)
 
   def agent_revision(_ctx, _turn), do: {:error, :no_revision}
+
+  @doc "One message row of the tenant."
+  @spec message(Context.t(), String.t()) :: {:ok, row()} | {:error, term()}
+  def message(%Context{} = ctx, message_id), do: Conversations.get_message(ctx, message_id)
 
   @doc "The conversation a turn belongs to."
   @spec conversation(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}

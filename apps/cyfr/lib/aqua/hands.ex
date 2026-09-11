@@ -243,6 +243,15 @@ defmodule Aqua.Hands do
     reference |> String.split(":", parts: 3) |> Enum.take(2) |> Enum.join(":")
   end
 
+  @doc "Whether a reference names a catalyst a hand runs on, at any version."
+  @spec hand_catalyst?(String.t()) :: boolean()
+  def hand_catalyst?(reference) when is_binary(reference) do
+    name = name_level(reference)
+    Enum.any?(@catalog, fn {_tool, %{catalyst: catalyst}} -> catalyst == name end)
+  end
+
+  def hand_catalyst?(_), do: false
+
   @doc "Whether a reference names the AQUA formula itself, at any version."
   @spec self_reference?(String.t()) :: boolean()
   def self_reference?(reference) when is_binary(reference),

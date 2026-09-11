@@ -271,11 +271,23 @@ defmodule Aqua.ToolGrants do
   @spec put(Context.t(), map()) :: {:ok, ToolGrant.t()} | {:error, term()}
   def put(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
       when scope in @scopes and effect in @effects do
+    with {:ok, row} <- row(ctx, attrs), do: ToolGrantStorage.put(row)
+  end
+
+  @doc """
+  The row a decision writes, checked and not written: `put/2`'s attrs
+  with the athanor, the deciding person and the conversation the scope
+  keys on, for a caller that lands it inside a transaction of its own
+  (`Arca.ToolGrantStorage.put/1`).
+  """
+  @spec row(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def row(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
+      when scope in @scopes and effect in @effects do
     with :ok <- check_standing(attrs, scope, effect) do
-      attrs
-      |> Map.merge(%{athanor_id: Context.athanor!(ctx), granted_by: ctx.user_id})
-      |> Map.put(:conversation_id, conversation_for(scope, attrs))
-      |> ToolGrantStorage.put()
+      {:ok,
+       attrs
+       |> Map.merge(%{athanor_id: Context.athanor!(ctx), granted_by: ctx.user_id})
+       |> Map.put(:conversation_id, conversation_for(scope, attrs))}
     end
   end
 

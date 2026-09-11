@@ -25,6 +25,8 @@ config :cyfr,
     # Chat on the wire, so Prism is a client of the agent runtime rather
     # than the only way to reach it.
     Emissary.MCP.ConversationTool,
+    # A card decided from the wire: the same door the console's buttons use.
+    Emissary.MCP.ApprovalTool,
     # What was kept out of a conversation — a separate object from the tape,
     # which is what lets a thread be erased honestly.
     Emissary.MCP.NotesTool,
