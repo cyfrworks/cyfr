@@ -9,10 +9,16 @@ defmodule Compendium.AgentIndex do
   edited or dropped, the seed synced — the index is rewritten from what
   the overlay serves: one row per soul or role, with the digest of the
   file's bytes (its revision) and of its security-relevant subset
-  (`Compendium.AquaAgent.to_manifest/1`, its capability). A file that
+  (`Compendium.AquaAgent.to_manifest/1`, its capability). Every revision's
+  bytes are kept by digest (`Arca.AgentRevisions`) before the row names
+  it, so a turn that pins a revision can always retrieve it. A file that
   fails to parse leaves no row and is reported; the index is never a
   second mutable source, and a sync that cannot read the tree leaves the
   rows as they were.
+
+  A sync sweeps the estate's activation and live-shape caches: an agent
+  is a consent source (`Compendium.AgentSource`), and its shape must be
+  re-derived from the file as it now stands.
   """
 
   alias Arca.Schemas.Agent
@@ -23,8 +29,10 @@ defmodule Compendium.AgentIndex do
   @spec sync(Context.t()) :: {:ok, [Agent.t()]} | {:error, term()}
   def sync(%Context{} = ctx) do
     with {:ok, agents, _errors} <- AquaAgent.list(ctx),
-         {:ok, rows} <- rows_for(ctx, agents) do
-      Arca.AgentStorage.replace_all(Context.athanor!(ctx), rows)
+         {:ok, rows} <- rows_for(ctx, agents),
+         {:ok, replaced} <- Arca.AgentStorage.replace_all(Context.athanor!(ctx), rows) do
+      Compendium.Registry.invalidate_executor_caches(ctx)
+      {:ok, replaced}
     end
   end
 
@@ -42,7 +50,8 @@ defmodule Compendium.AgentIndex do
 
     Enum.reduce_while(agents, {:ok, []}, fn agent, {:ok, acc} ->
       with {:ok, bytes} <- Arca.get(ctx, AquaPath.agent_file(agent.name)),
-           {:ok, capability} <- AquaAgent.capability_digest(agent) do
+           {:ok, capability} <- AquaAgent.capability_digest(agent),
+           {:ok, revision} <- Arca.AgentRevisions.put(athanor_id, bytes) do
         {:cont,
          {:ok,
           [
@@ -51,7 +60,7 @@ defmodule Compendium.AgentIndex do
               athanor_id: athanor_id,
               name: agent.name,
               kind: AquaAgent.type_of(agent),
-              revision_digest: Cyfr.Digest.sha256(bytes),
+              revision_digest: revision,
               capability_digest: capability,
               catalyst_ref: agent.catalyst_ref,
               disabled: agent.disabled == true,

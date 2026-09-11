@@ -39,6 +39,12 @@ defmodule Sanctum.Consent.Bootstrap do
   immutable, and its caps are auditable once at build time rather than per
   athanor.
 
+  The estate's agents (`agent:local.<name>`, `Compendium.AgentSource`)
+  are sources here too, minted after the components they run on. An
+  agent is minted only while it is vouched for — the shipped file, or a
+  head that already names it unchanged; a role a member authored, or a
+  soul a member edited, consents through the walk.
+
   Bootstrap consent applies only to the operator's seed bundle.
   Components discovered by `component.register` require explicit consent.
   """
@@ -57,8 +63,9 @@ defmodule Sanctum.Consent.Bootstrap do
           skipped: [{String.t(), term()}]
         }
 
-  # Dependencies before the sources that select them.
-  @type_rank %{"catalyst" => 0, "reagent" => 1, "tincture" => 2, "formula" => 3}
+  # Dependencies before the sources that select them; roles before the
+  # soul that clones into them.
+  @type_rank %{"catalyst" => 0, "reagent" => 1, "tincture" => 2, "formula" => 3, "agent" => 4}
 
   # The profile a shipped source's selection names on a shipped dependency.
   @selected_label "default"
@@ -73,10 +80,9 @@ defmodule Sanctum.Consent.Bootstrap do
   @spec run(Context.t()) :: {:ok, result()}
   def run(%Context{} = ctx) do
     components =
-      ctx
-      |> executable_local_components()
+      (executable_local_components(ctx) ++ agent_rows(ctx))
       |> Enum.sort_by(fn row ->
-        {Map.get(@type_rank, to_string(row.component_type), 9), row.name}
+        {Map.get(@type_rank, to_string(row.component_type), 9), soul?(row), row.name}
       end)
 
     # The shipped releases a live closure may consist of: the newest local
@@ -110,6 +116,24 @@ defmodule Sanctum.Consent.Bootstrap do
      }}
   end
 
+  defp agent_rows(ctx) do
+    case Compendium.AgentSource.rows(ctx) do
+      {:ok, rows} ->
+        rows
+
+      {:error, reason} ->
+        Logger.error(
+          "[Sanctum.Consent.Bootstrap] agent listing failed for " <>
+            "#{ctx.athanor_id}: #{inspect(reason)}; bootstrapping no agent"
+        )
+
+        []
+    end
+  end
+
+  defp agent?(row), do: to_string(row.component_type) == Compendium.AgentSource.type()
+  defp soul?(row), do: agent?(row) and Compendium.AgentSource.soul?(row.name)
+
   defp executable_local_components(ctx) do
     # Every valid type is profile-bearing: tinctures are not executable,
     # but a profile is what makes one invocable at all — the route selects
@@ -140,7 +164,12 @@ defmodule Sanctum.Consent.Bootstrap do
     case claimed(ctx, source_ref) do
       :unclaimed ->
         vouched = %{shipped: shipped_nodes, named: %{}, selected: MapSet.new()}
-        mint(ctx, component, source_ref, selection_fn(component, source_ref, vouched))
+
+        if agent?(component) and not vouched?(vouched, source_ref, release_digest(component)) do
+          {:skip, :not_vouched}
+        else
+          mint(ctx, component, source_ref, selection_fn(component, source_ref, vouched))
+        end
 
       {:claimed, nil} ->
         {:skip, :already_bootstrapped}
@@ -249,13 +278,20 @@ defmodule Sanctum.Consent.Bootstrap do
   defp release_digest(row), do: Map.get(row, :release_digest) || Map.get(row, "release_digest")
 
   defp shipped?(ctx, row) do
+    type = to_string(Map.get(row, :component_type) || Map.get(row, "component_type"))
+    name = Map.get(row, :name) || Map.get(row, "name")
+
     unit =
-      Compendium.ComponentPath.version_dir(
-        to_string(Map.get(row, :component_type) || Map.get(row, "component_type")),
-        Map.get(row, :publisher) || Map.get(row, "publisher"),
-        Map.get(row, :name) || Map.get(row, "name"),
-        Map.get(row, :version) || Map.get(row, "version")
-      )
+      if type == Compendium.AgentSource.type() do
+        Compendium.AgentSource.unit(name)
+      else
+        Compendium.ComponentPath.version_dir(
+          type,
+          Map.get(row, :publisher) || Map.get(row, "publisher"),
+          name,
+          Map.get(row, :version) || Map.get(row, "version")
+        )
+      end
 
     Arca.Overlay.unit_status(ctx, unit) == {:ok, :shipped}
   end

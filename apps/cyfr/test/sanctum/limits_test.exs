@@ -242,6 +242,7 @@ defmodule Sanctum.LimitsTest do
       assert Limits.defaults(:formula).timeout == "5m"
       assert Limits.defaults(:reagent).timeout == "1m"
       assert Limits.defaults(:tincture).timeout == "1m"
+      assert Limits.defaults(:agent) == Limits.defaults(:formula)
     end
 
     test "every default is a complete, valid Limits" do

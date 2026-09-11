@@ -134,6 +134,17 @@ defmodule Sanctum.Limits do
       rate_limit: %{requests: 100, window: "1m"},
       max_concurrent_tasks: 10,
       batch_timeout: "5m"
+    },
+    # An agent is a consent source that runs on the host, not in WASM: its
+    # limits bound the turn's dispatch, the same ceilings as a formula's.
+    agent: %{
+      timeout: "5m",
+      max_memory_bytes: @default_max_memory_bytes,
+      max_request_size: @default_max_request_size,
+      max_response_size: @default_max_response_size,
+      rate_limit: %{requests: 100, window: "1m"},
+      max_concurrent_tasks: 10,
+      batch_timeout: "5m"
     }
   }
 

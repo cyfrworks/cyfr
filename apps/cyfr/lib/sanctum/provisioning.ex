@@ -305,9 +305,13 @@ defmodule Sanctum.Provisioning do
   defp do_provision(%{id: athanor_id} = athanor, acting_ctx) do
     ctx = acting_ctx || seed_ctx(athanor_id)
 
+    # The agents are indexed before the consents are minted: an agent is a
+    # consent source, and its revision bytes are registered by the index
+    # before any consent names it.
     with :ok <- Arca.ensure_roots(seed_ctx(athanor_id)),
          {:ok, _scan} <- register_bundle(athanor_id),
          :ok <- aqua_definitions(athanor_id),
+         :ok <- index_agents(ctx),
          {:ok, closure} <- pull_required_deps(ctx),
          optional <- pull_optional_deps(ctx),
          {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx),
@@ -317,8 +321,6 @@ defmodule Sanctum.Provisioning do
           "(pulled #{length(closure.pulled)} required and #{optional} optional, " <>
           "minted #{length(bootstrap.minted)})"
       )
-
-      index_agents(ctx)
 
       # The estate's own topic, the kind every console subscriber already
       # re-reads the row on: a page rendering "still being prepared" clears
@@ -623,8 +625,8 @@ defmodule Sanctum.Provisioning do
 
     _ = pull_optional_deps(ctx)
 
-    bootstrap_synced(ctx, athanor.id)
     index_agents(ctx)
+    bootstrap_synced(ctx, athanor.id)
     :ok
   end
 
@@ -810,8 +812,13 @@ defmodule Sanctum.Provisioning do
 
   # Every executable local component must hold a consent; a skip for any
   # reason other than "already bootstrapped" is a provisioning failure.
+  # The fill is whole without an agent's consent: an agent nobody vouches
+  # for consents through the walk, and one whose closure the bundle does
+  # not resolve is re-minted by a later sync once it does.
   defp all_minted(%{skipped: skipped}) do
-    case Enum.reject(skipped, &match?({_, :already_bootstrapped}, &1)) do
+    case Enum.reject(skipped, fn {ref, reason} ->
+           reason == :already_bootstrapped or Compendium.AgentSource.agent_ref?(ref)
+         end) do
       [] -> :ok
       unminted -> {:unminted, unminted}
     end

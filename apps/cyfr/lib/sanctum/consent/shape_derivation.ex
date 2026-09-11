@@ -66,7 +66,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   defp live_shape_key(_ctx, _source_ref), do: nil
 
-  @doc "The `ShapeDigest.compute/1` input derived from live state."
+  @doc """
+  The `ShapeDigest.compute/1` input derived from live state. An agent
+  source's shape also carries its model target (`catalyst#model`): the
+  model an agent runs on is what it may do, so changing it re-asks.
+  """
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref) do
     with {:ok, row, needs, caps} <- manifest_row(ctx, source_ref) do
@@ -82,7 +86,27 @@ defmodule Sanctum.Consent.ShapeDerivation do
          tool_actions: expand_tools(caps.tools),
          slots: Enum.sort(Enum.map(needs, & &1.name)),
          dependency_releases: dependency_releases(ctx, row, source_ref)
-       }}
+       }
+       |> Cyfr.MapUtil.put_present(:model_target, model_target(row))}
+    end
+  end
+
+  defp model_target(row) do
+    manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+
+    case {manifest["type"], manifest["model"]} do
+      {"agent", model} when is_binary(model) and model != "" ->
+        catalyst =
+          manifest
+          |> get_in(["dependencies", "static"])
+          |> List.wrap()
+          |> Enum.map(& &1["ref"])
+          |> Enum.find("", &String.starts_with?(&1 || "", "catalyst:"))
+
+        "#{catalyst}##{model}"
+
+      _ ->
+        nil
     end
   end
 

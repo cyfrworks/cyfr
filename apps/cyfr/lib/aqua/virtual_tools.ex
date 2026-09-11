@@ -95,6 +95,19 @@ defmodule Aqua.VirtualTools do
     }
   }
 
+  @doc """
+  The catalyst a virtual tool family runs on (`"files"` and `"storage"`
+  on the files catalyst, `"http"` on the http catalyst), or nil for a
+  family that is not a virtual tool or runs on none.
+  """
+  @spec catalyst_for(String.t()) :: String.t() | nil
+  def catalyst_for(tool) when is_binary(tool) do
+    case Map.get(@catalog, tool) do
+      %{catalyst: catalyst} -> catalyst
+      nil -> nil
+    end
+  end
+
   @http_page_ops ~w(read links metadata head)
   @http_methods ~w(get options post put patch delete)
 

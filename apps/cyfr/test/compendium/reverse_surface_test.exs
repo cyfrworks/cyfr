@@ -46,8 +46,10 @@ defmodule Compendium.ReverseSurfaceTest do
     "Compendium.Resolver",
 
     # Provisioning uses AutoIndexer and Pull for component scans and
-    # dependency closure, and AgentIndex to derive the agent roster.
+    # dependency closure, and AgentIndex to derive the agent roster; the
+    # consent bootstrap mints the estate's agents as sources (AgentSource).
     "Compendium.AgentIndex",
+    "Compendium.AgentSource",
     "Compendium.AquaTemplate",
     "Compendium.AutoIndexer",
     "Compendium.Pull",

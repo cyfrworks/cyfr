@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Cyfr.Test.SeedBundle do
+  @moduledoc """
+  A private seed tree for one test: the shipped AQUA tree and the named
+  catalysts at their newest shipped version, copied from the repository's
+  `seed/` without build droppings. Points `:seed_path` at it until the
+  test exits.
+  """
+
+  @repo_seed Path.expand("../../../../seed", __DIR__)
+
+  @doc "Lay the tree, set `:seed_path` to it, and answer its path."
+  @spec lay!([String.t()]) :: String.t()
+  def lay!(catalysts) when is_list(catalysts) do
+    dir = Path.join(System.tmp_dir!(), "seed_bundle_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    File.cp_r!(Path.join(@repo_seed, "aqua"), Path.join(dir, "aqua"))
+
+    for name <- catalysts do
+      versions =
+        [@repo_seed, "components", "catalysts", "local", name, "*"]
+        |> Path.join()
+        |> Path.wildcard()
+        |> Enum.map(&Path.basename/1)
+        |> Compendium.Semver.sort_desc()
+
+      version = hd(versions)
+      src = Path.join([@repo_seed, "components", "catalysts", "local", name, version])
+      dest = Path.join([dir, "components", "catalysts", "local", name, version])
+      copy_unit!(src, dest)
+    end
+
+    previous = Application.get_env(:cyfr, :seed_path)
+    Application.put_env(:cyfr, :seed_path, dir)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      if previous,
+        do: Application.put_env(:cyfr, :seed_path, previous),
+        else: Application.delete_env(:cyfr, :seed_path)
+
+      File.rm_rf!(dir)
+    end)
+
+    dir
+  end
+
+  defp copy_unit!(src, dest) do
+    src
+    |> Path.join("**")
+    |> Path.wildcard(match_dot: false)
+    |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
+    |> Enum.each(fn file ->
+      target = Path.join(dest, Path.relative_to(file, src))
+      File.mkdir_p!(Path.dirname(target))
+      File.cp!(file, target)
+    end)
+  end
+end

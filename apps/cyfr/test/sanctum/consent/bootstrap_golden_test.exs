@@ -4,9 +4,9 @@
 defmodule Sanctum.Consent.BootstrapGoldenTest do
   @moduledoc """
   What baseline consent grants, pinned: every athanor is minted from the
-  tracked bundle, and each executable local component gets one consent
-  whose blob (`resolved_policy`, already JCS) is a pure function of the
-  bundle's manifests. This compares those blobs byte for byte against
+  tracked bundle, and each executable local component and each shipped
+  agent gets one consent whose blob (`resolved_policy`, already JCS) is a
+  pure function of the bundle's manifests and the shipped agent files. This compares those blobs byte for byte against
   `test/support/fixtures/consent_golden.json` — a diff is a deliberate
   change to what strangers on a `*` server are granted, and is bumped by
   re-recording (`CYFR_GOLDEN_RECORD=1 mix test <this file>`).
@@ -30,6 +30,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     seed_dir = Path.join(test_dir, "seed")
     bundle_dir = Path.join(seed_dir, "components")
     copy_bundle!(bundle_dir)
+    File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
     prev_base = Application.get_env(:cyfr, :base_path)
     prev_seed = Application.get_env(:cyfr, :seed_path)
@@ -53,9 +54,12 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     # The server's own mint: `granted_by` is the constant "system:bootstrap".
     ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor.id, scope: :athanor)
 
-    # The bundle is copied in and the scan mints its rows, as a fill does.
+    # The bundle is copied in and the scan mints its rows, as a fill does;
+    # the AQUA tree is copied in and indexed the same way.
     {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "components")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "aqua")
+    {:ok, _rows} = Compendium.AgentIndex.sync(ctx)
 
     {:ok, ctx: ctx}
   end

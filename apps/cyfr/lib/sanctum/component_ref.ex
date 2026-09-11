@@ -64,6 +64,11 @@ defmodule Sanctum.ComponentRef do
 
   @valid_types ~w(catalyst reagent formula tincture)
   @type_shorthands %{"c" => "catalyst", "r" => "reagent", "f" => "formula", "t" => "tincture"}
+  # Consent source types that are not components: an agent ref
+  # (`agent:local.<name>`, `Compendium.AgentSource`) parses like a
+  # component ref and is a node in the same graphs, but it names no
+  # registry row and never executes.
+  @source_types ~w(agent)
 
   # Anchored \A…\z, never ^…$: PCRE `$` also matches just before a final
   # newline, so "alice\n" passed every one of these — and they are the
@@ -240,7 +245,10 @@ defmodule Sanctum.ComponentRef do
   def normalize_flexible(ref) when is_binary(ref) do
     case parse(ref) do
       {:ok, %__MODULE__{version: nil} = parsed} ->
-        with :ok <- validate_type(parsed.type),
+        # A name-level ref may name a source that is no component (an
+        # agent); a versioned one is a registry row and must be a
+        # component type.
+        with :ok <- validate_ref_type(parsed.type),
              :ok <- validate_namespace(parsed.namespace),
              :ok <- validate_name(parsed.name) do
           {:ok, parsed}
@@ -429,7 +437,20 @@ defmodule Sanctum.ComponentRef do
   Check if a string is a known type prefix (full name or shorthand).
   """
   @spec type_prefix?(String.t()) :: boolean()
-  def type_prefix?(s), do: s in @valid_types or Map.has_key?(@type_shorthands, s)
+  def type_prefix?(s),
+    do: s in @valid_types or s in @source_types or Map.has_key?(@type_shorthands, s)
+
+  @doc """
+  Source types a ref may carry beside the component types: parseable and
+  consentable, never registered or executed.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.source_types()
+      ["agent"]
+  """
+  @spec source_types() :: [String.t()]
+  def source_types, do: @source_types
 
   # ============================================================================
   # Private: Parsing Helpers
@@ -524,6 +545,9 @@ defmodule Sanctum.ComponentRef do
   # ============================================================================
   # Field Validators (single source of truth for all services)
   # ============================================================================
+
+  defp validate_ref_type(type) when type in @source_types, do: :ok
+  defp validate_ref_type(type), do: validate_type(type)
 
   defp validate_parsed(%__MODULE__{type: type, namespace: ns, name: name, version: version}) do
     with :ok <- validate_type(type),

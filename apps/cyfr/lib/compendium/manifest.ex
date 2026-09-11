@@ -120,6 +120,8 @@ defmodule Compendium.Manifest do
     end
   end
 
+  def validate(_), do: :ok
+
   defp validate_contracts_block(%{"contracts" => list}) when is_list(list) do
     case Enum.reject(list, &(is_binary(&1) and Regex.match?(@contract_pattern, &1))) do
       [] ->
@@ -138,8 +140,6 @@ defmodule Compendium.Manifest do
   end
 
   defp validate_contracts_block(_), do: :ok
-
-  def validate(_), do: :ok
 
   # The tincture block is presentation metadata plus one capability grant:
   # `connect` feeds the served page's CSP connect-src. Shapes are enforced

@@ -542,6 +542,7 @@ defmodule Compendium.Registry do
   def get_latest(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
       when is_binary(name) do
     case latest_row(ctx, name, publisher, component_type) do
+      {:ok, %{component_type: "agent"} = row} -> {:ok, row}
       {:ok, row} -> {:ok, decode_row_json_fields(row)}
       {:error, reason} -> {:error, reason}
     end
@@ -564,6 +565,16 @@ defmodule Compendium.Registry do
           {:ok, map()} | {:error, :not_found | term()}
   def latest_row(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
       when is_binary(name) do
+    if component_type == Compendium.AgentSource.type() do
+      # An agent is a source node projected from the estate's aqua/ tree,
+      # never a registry row; its one version is the file as it stands.
+      Compendium.AgentSource.latest_row(ctx, name)
+    else
+      component_latest_row(ctx, name, publisher, component_type)
+    end
+  end
+
+  defp component_latest_row(ctx, name, publisher, component_type) do
     opts = [name: name, limit: :none]
     opts = if publisher, do: Keyword.put(opts, :publisher, publisher), else: opts
     opts = if component_type, do: Keyword.put(opts, :component_type, component_type), else: opts
