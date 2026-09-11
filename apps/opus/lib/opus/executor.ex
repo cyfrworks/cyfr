@@ -627,33 +627,19 @@ defmodule Opus.Executor do
 
       Opus.Telemetry.execute_stop(completed_record, exec_metadata)
 
+      # The terminal event is the row's, published by the record's write
+      # in the order the rows were numbered: nothing is pushed here.
       case write_result do
         {:error, :not_running} ->
           # The row already reads `cancelled` and its terminal event is on
-          # the wire; a `complete` pushed here would follow it and resurrect
-          # the turn for every subscriber.
+          # the wire.
           Logger.info(
             "[Opus.Executor] execution #{completed_record.id} finished after cancel; " <>
               "the cancelled row stands"
           )
 
-        {:error, {:result_lost, _}} ->
-          Opus.ExecutionEventBuffer.push_terminal(
-            completed_record.id,
-            "error",
-            %{error: "result not retained"},
-            999_999_999,
-            completed_record
-          )
-
         _ ->
-          Opus.ExecutionEventBuffer.push_terminal(
-            completed_record.id,
-            "complete",
-            %{status: "completed", duration_ms: completed_record.duration_ms},
-            999_999_999,
-            completed_record
-          )
+          :ok
       end
 
       metadata = %{
@@ -1416,19 +1402,19 @@ defmodule Opus.Executor do
     if target_id do
       case Opus.Remediation.analyze(reason) do
         {:setup_required, remediation} ->
-          Opus.ExecutionEventBuffer.push(
-            target_id,
-            %{
-              "kind" => "setup_required",
-              "component_ref" => remediation["component_ref"],
-              "issues" => remediation["issues"],
-              "setup_command" => remediation["setup_command"],
-              "message" => failure_message(reason)
-            },
-            System.unique_integer([:positive]),
-            ctx,
-            origin: "host"
-          )
+          _ =
+            Opus.ExecutionEventBuffer.push(
+              target_id,
+              %{
+                "kind" => "setup_required",
+                "component_ref" => remediation["component_ref"],
+                "issues" => remediation["issues"],
+                "setup_command" => remediation["setup_command"],
+                "message" => failure_message(reason)
+              },
+              ctx,
+              origin: "host"
+            )
 
         :not_setup_error ->
           :ok
@@ -1498,14 +1484,8 @@ defmodule Opus.Executor do
         )
 
       _ ->
-        # Push terminal error event so SSE/LiveView subscribers know execution failed
-        Opus.ExecutionEventBuffer.push_terminal(
-          record.id,
-          "error",
-          %{error: error_msg},
-          999_999_999,
-          record
-        )
+        # The terminal event is the row's, published by the record's write.
+        :ok
     end
 
     cascade_children_failure(record)
@@ -1535,23 +1515,9 @@ defmodule Opus.Executor do
     # before we touch the global, id-keyed process registry — otherwise a caller
     # could kill another tenant's execution just by knowing its id. (Same
     # authorize-before-act ordering the SSE read path uses.)
-    case ExecutionRecord.cancel(ctx, execution_id) do
+    case ExecutionRecord.cancel(ctx, execution_id, Keyword.take(opts, [:restart_required])) do
       {:ok, record} ->
         kill_running_process(execution_id, record.athanor_id)
-
-        # Route with the record's own athanor (like every other producer) —
-        # a platform-scoped canceller may carry a different athanor than the
-        # execution it just cancelled.
-        {event_type, event_data} = cancel_event(opts)
-
-        ExecutionEventBuffer.push_terminal(
-          execution_id,
-          event_type,
-          event_data,
-          System.unique_integer([:positive]),
-          record
-        )
-
         emit_cancel_telemetry(ctx, execution_id)
         cascade_children_failure_by_id(execution_id)
         {:ok, %{cancelled: true, execution_id: execution_id}}
@@ -1571,15 +1537,6 @@ defmodule Opus.Executor do
   @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def cancel_for_restart(%Context{} = ctx, execution_id, payload) when is_map(payload) do
     cancel(ctx, execution_id, restart_required: payload)
-  end
-
-  # A restart-required cancellation reports itself as such, so a surface
-  # can say "approved — re-run to continue" instead of "cancelled".
-  defp cancel_event(opts) do
-    case Keyword.get(opts, :restart_required) do
-      nil -> {"cancelled", %{}}
-      payload when is_map(payload) -> {"restart_required", payload}
-    end
   end
 
   # The liability is acknowledged before the kill. A semaphore that does
@@ -1718,7 +1675,7 @@ defmodule Opus.Executor do
       duration_ms = DateTime.diff(now, child.started_at, :millisecond)
       error_msg = "Parent execution (#{parent_id}) terminated"
 
-      {count, _} =
+      {count, event_seq} =
         Arca.Execution.mark_failed_if_running(
           child.id,
           %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
@@ -1749,13 +1706,10 @@ defmodule Opus.Executor do
           }
         )
 
-        ExecutionEventBuffer.push_terminal(
-          child.id,
-          "error",
-          %{error: error_msg},
-          999_999_999,
-          child
-        )
+        ExecutionEventBuffer.publish(child.id, child, "execution.failed", event_seq, %{
+          "status" => "failed",
+          "error" => error_msg
+        })
       end
     end
   end

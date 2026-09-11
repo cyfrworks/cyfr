@@ -63,6 +63,14 @@ defmodule Opus.GenServerCatchallTest do
   end
 
   describe "ExecutionEventBuffer catch-all" do
+    # The buffer reads the execution's row for its durable prefix when it
+    # starts, so it needs the sandbox connection.
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      :ok
+    end
+
     test "survives unexpected message and logs warning" do
       {:ok, pid} = GenServer.start_link(Opus.ExecutionEventBuffer, {"test_exec", ""}, [])
 

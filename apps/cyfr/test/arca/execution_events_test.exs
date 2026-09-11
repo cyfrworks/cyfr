@@ -45,17 +45,20 @@ defmodule Arca.ExecutionEventsTest do
     )
     |> Stream.run()
 
-    assert {:ok, rows} = ExecutionEvents.since(ctx.athanor_id, exec.id, 0)
-    assert Enum.map(rows, & &1.seq) == Enum.to_list(1..12)
-    assert Arca.Repo.get!(Arca.Execution, exec.id).event_seq == 12
+    # Admission appended `execution.started` as 1; the twelve follow it.
+    assert {:ok, [%{seq: 1, type: "execution.started"} | rows]} =
+             ExecutionEvents.since(ctx.athanor_id, exec.id, 0)
 
-    assert {:ok, tail} = ExecutionEvents.since(ctx.athanor_id, exec.id, 10)
-    assert Enum.map(tail, & &1.seq) == [11, 12]
+    assert Enum.map(rows, & &1.seq) == Enum.to_list(2..13)
+    assert Arca.Repo.get!(Arca.Execution, exec.id).event_seq == 13
+
+    assert {:ok, tail} = ExecutionEvents.since(ctx.athanor_id, exec.id, 11)
+    assert Enum.map(tail, & &1.seq) == [12, 13]
     assert Enum.all?(rows, &is_integer(ExecutionEvents.data(&1)["i"]))
   end
 
   test "an execution of another estate takes no event", %{ctx: ctx, exec: exec} do
     assert {:error, _} = ExecutionEvents.append("ath_elsewhere", exec.id, "step.closed")
-    assert {:ok, []} = ExecutionEvents.since(ctx.athanor_id, exec.id, 0)
+    assert {:ok, []} = ExecutionEvents.since(ctx.athanor_id, exec.id, 1)
   end
 end

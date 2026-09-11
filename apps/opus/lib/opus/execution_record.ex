@@ -204,7 +204,9 @@ defmodule Opus.ExecutionRecord do
   end
 
   @doc """
-  Cancel a running execution.
+  Cancel a running execution. `opts[:restart_required]` — a consent
+  payload — rides the `execution.cancelled` event, so a surface can say
+  "approved — re-run to continue" instead of "cancelled".
 
   Only running executions can be cancelled. Returns:
   - `{:ok, record}` - Successfully cancelled
@@ -213,14 +215,16 @@ defmodule Opus.ExecutionRecord do
   """
   @spec cancel(Context.t(), String.t()) ::
           {:ok, t()} | {:error, :not_found | :not_cancellable | term()}
-  def cancel(%Context{} = ctx, id) do
+  def cancel(ctx, id, opts \\ [])
+
+  def cancel(%Context{} = ctx, id, opts) do
     case get(ctx, id) do
       {:ok, %{status: :running} = record} ->
         # `get/2` authorized the READ; cancelling is a mutation and takes the
         # :execute permission — every ingress funnels through here, so a
         # viewer credential cannot kill executions.
         case Context.authorize(ctx, :execute, {:execution, Map.from_struct(record)}) do
-          :ok -> do_cancel(record)
+          :ok -> do_cancel(record, cancel_data(opts))
           {:error, _} = error -> error
         end
 
@@ -232,7 +236,14 @@ defmodule Opus.ExecutionRecord do
     end
   end
 
-  defp do_cancel(record) do
+  defp cancel_data(opts) do
+    case Keyword.get(opts, :restart_required) do
+      payload when is_map(payload) -> %{"restart_required" => payload}
+      _ -> %{}
+    end
+  end
+
+  defp do_cancel(record, event_data) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
 
@@ -243,7 +254,7 @@ defmodule Opus.ExecutionRecord do
         duration_ms: duration_ms
     }
 
-    case write_failed(cancelled_record) do
+    case write_failed(cancelled_record, event_data) do
       :ok ->
         {:ok, cancelled_record}
 
@@ -331,10 +342,25 @@ defmodule Opus.ExecutionRecord do
              Keyword.take(opts, [:charge, :step, :occurrence_id])
            )
          ) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:ok, %{execution: execution}} ->
+        publish(record, "execution.started", execution.event_seq, %{
+          "attempt" => record.attempt,
+          "reference" => encode_reference(record.reference)
+        })
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  # The lifecycle row committed; its subscribers hear of it now, in the
+  # order the rows were numbered.
+  defp publish(%__MODULE__{} = record, type, seq, data) when is_integer(seq) do
+    _ = Opus.ExecutionEventBuffer.publish(record.id, record, type, seq, data)
+    :ok
+  end
+
+  defp publish(_record, _type, _seq, _data), do: :ok
 
   defp stage(ctx, %__MODULE__{} = record, kind, bytes),
     do: Arca.ExecutionPayloads.stage(ctx, record.id, kind, bytes, record.retention_class)
@@ -410,8 +436,11 @@ defmodule Opus.ExecutionRecord do
                Map.put(close, :payloads, List.wrap(staged)),
                record.attempt
              ) do
-          {:ok, _} ->
-            :ok
+          {:ok, execution} ->
+            publish(record, "execution.completed", execution.event_seq, %{
+              "status" => "completed",
+              "duration_ms" => record.duration_ms
+            })
 
           {:error, {:payload_not_retained, reason}} ->
             if staged, do: Arca.ExecutionPayloads.discard(staged)
@@ -442,28 +471,42 @@ defmodule Opus.ExecutionRecord do
         "the attempt closes result_lost"
     )
 
-    _ =
-      Arca.Execution.record_end(
-        ctx,
-        record.id,
-        "failed",
-        %{
-          completed_at: record.completed_at,
-          duration_ms: record.duration_ms,
-          error_message: "result not retained",
-          outcome: "result_lost"
-        },
-        record.attempt
-      )
+    case Arca.Execution.record_end(
+           ctx,
+           record.id,
+           "failed",
+           %{
+             completed_at: record.completed_at,
+             duration_ms: record.duration_ms,
+             error_message: "result not retained",
+             outcome: "result_lost"
+           },
+           record.attempt
+         ) do
+      {:ok, execution} ->
+        publish(record, "execution.result_lost", execution.event_seq, %{
+          "status" => "failed",
+          "error" => "result not retained",
+          "duration_ms" => record.duration_ms
+        })
+
+      _ ->
+        :ok
+    end
 
     {:error, {:result_lost, reason}}
   end
 
   @doc """
-  Write execution failure record AFTER failed or cancelled execution.
+  Close the row as failed or cancelled, and publish the lifecycle event
+  with `event_data` merged into what it carries (a cancel that asks for
+  a restart says so there).
   """
-  @spec write_failed(t()) :: :ok | {:error, term()}
-  def write_failed(%__MODULE__{status: status} = record) when status in [:failed, :cancelled] do
+  @spec write_failed(t(), map()) :: :ok | {:error, term()}
+  def write_failed(record, event_data \\ %{})
+
+  def write_failed(%__MODULE__{status: status} = record, event_data)
+      when status in [:failed, :cancelled] and is_map(event_data) do
     ctx = record_to_ctx(record)
 
     case Arca.Execution.record_end(
@@ -473,16 +516,25 @@ defmodule Opus.ExecutionRecord do
            %{
              completed_at: record.completed_at,
              duration_ms: record.duration_ms,
-             error_message: record.error
+             error_message: record.error,
+             event: event_data
            },
            record.attempt
          ) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:ok, execution} ->
+        data =
+          %{"status" => Atom.to_string(status), "error" => record.error}
+          |> Map.reject(fn {_k, v} -> is_nil(v) end)
+          |> Map.merge(event_data)
+
+        publish(record, "execution." <> Atom.to_string(status), execution.event_seq, data)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  def write_failed(%__MODULE__{status: status}) do
+  def write_failed(%__MODULE__{status: status}, _event_data) do
     {:error, "Cannot write failed record for status: #{status}"}
   end
 

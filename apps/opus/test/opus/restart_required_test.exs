@@ -44,11 +44,12 @@ defmodule Opus.RestartRequiredTest do
              Opus.Executor.cancel_for_restart(ctx, record.id, @payload)
 
     assert_receive {:execution_event, event}, 2_000
-    assert event.type == "restart_required"
+    assert event.type == "execution.cancelled"
     assert event.origin == "host"
-    assert event.data.profile_id == "prof-restart"
-    assert event.data.new_revision == 2
-    assert event.data.missing.edge == "catalyst:local.gmail"
+    assert %{"restart_required" => payload} = event.data
+    assert payload.profile_id == "prof-restart"
+    assert payload.new_revision == 2
+    assert payload.missing.edge == "catalyst:local.gmail"
   end
 
   test "the execution is really stopped, not re-bound", %{ctx: ctx} do
@@ -75,8 +76,8 @@ defmodule Opus.RestartRequiredTest do
     assert {:ok, _} = Opus.Executor.cancel(ctx, record.id)
 
     assert_receive {:execution_event, event}, 2_000
-    assert event.type == "cancelled"
-    assert event.data == %{}
+    assert event.type == "execution.cancelled"
+    refute Map.has_key?(event.data, "restart_required")
   end
 
   test "a surface reading the event sees a payload it can act on", %{ctx: ctx} do
@@ -92,7 +93,13 @@ defmodule Opus.RestartRequiredTest do
 
     # Everything the console needs to say "approved — re-run to continue"
     # and to show what was missing, without re-deriving anything.
-    assert %{profile_id: _, new_revision: _, missing: %{chain: _, edge: _, activation: _}} =
+    assert %{
+             "restart_required" => %{
+               profile_id: _,
+               new_revision: _,
+               missing: %{chain: _, edge: _, activation: _}
+             }
+           } =
              event.data
   end
 end

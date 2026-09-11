@@ -62,9 +62,10 @@ defmodule Opus.Host do
   @spec record_failed(Opus.ExecutionRecord.t()) :: :ok | {:error, term()}
   defdelegate record_failed(record), to: Opus.ExecutionRecord, as: :write_failed
 
-  @doc "Deliver an execution event to its subscribers and the replay buffer."
-  @spec broadcast(String.t(), map(), non_neg_integer(), term(), keyword()) :: :ok
-  defdelegate broadcast(execution_id, data, sequence, ctx, opts \\ []),
+  @doc "Deliver a delta to an execution's subscribers and its replay buffer, numbered under the last durable event."
+  @spec broadcast(String.t(), map(), term(), keyword()) ::
+          {:ok, String.t()} | {:error, :missing_athanor}
+  defdelegate broadcast(execution_id, data, ctx, opts \\ []),
     to: Opus.ExecutionEventBuffer,
     as: :push
 end

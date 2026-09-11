@@ -37,7 +37,10 @@ defmodule Cyfr.Execution do
 
   @callback subscribe_events(String.t(), event_scope()) :: :ok | {:error, term()}
   @callback unsubscribe_events(String.t(), event_scope()) :: :ok | {:error, term()}
-  @callback events_since(String.t(), non_neg_integer(), String.t()) :: [map()]
+  # The cursor is `{durable, n}`: the last durable event delivered and,
+  # under it, the last delta.
+  @callback events_since(String.t(), {non_neg_integer(), non_neg_integer()}, String.t()) ::
+              [map()]
   # The in-chain entry, mirrored one to one as the rest: `authority` is the
   # chain's, `need` the edge's (nil for none), and `opts` carry `ctx` and
   # the host lineage (`parent_execution_id`, `root_execution_id`) exactly
@@ -104,15 +107,15 @@ defmodule Cyfr.Execution do
   @spec unsubscribe_events(String.t(), event_scope()) :: :ok | {:error, term()}
   def unsubscribe_events(execution_id, ctx), do: call(:unsubscribe_events, [execution_id, ctx])
 
-  @spec events_since(String.t(), non_neg_integer(), String.t()) :: [map()]
-  def events_since(execution_id, last_sequence, athanor_id) do
+  @spec events_since(String.t(), {non_neg_integer(), non_neg_integer()}, String.t()) :: [map()]
+  def events_since(execution_id, cursor, athanor_id) do
     # Dispatched on the impl directly, not through call/2: the callback
     # answers a bare list, and a `case` that matched one error tuple and
     # fell everything else through would hand a future impl's `{:error, _}`
     # to callers typed `[map()]` as if it were the events.
     case impl() do
       nil -> []
-      mod -> mod.events_since(execution_id, last_sequence, athanor_id)
+      mod -> mod.events_since(execution_id, cursor, athanor_id)
     end
   end
 

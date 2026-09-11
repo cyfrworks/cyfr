@@ -55,7 +55,7 @@ defmodule Cyfr.ExecutionTest do
              Cyfr.Execution.run_root(ctx, :default, "f:local.x", %{})
 
     assert {:error, :execution_unavailable} = Cyfr.Execution.cancel(ctx, "exec_1")
-    assert Cyfr.Execution.events_since("exec_1", 0, ctx.athanor_id) == []
+    assert Cyfr.Execution.events_since("exec_1", {0, 0}, ctx.athanor_id) == []
   end
 
   test "a registered engine answers through the port" do
@@ -67,7 +67,7 @@ defmodule Cyfr.ExecutionTest do
              Cyfr.Execution.run_root(ctx, {:label, "prof"}, "f:local.x", %{}, route: :protected)
 
     assert {:ok, "exec_1"} = Cyfr.Execution.cancel(ctx, "exec_1")
-    assert [%{seq: 1}] = Cyfr.Execution.events_since("exec_1", 0, ctx.athanor_id)
+    assert [%{seq: 1}] = Cyfr.Execution.events_since("exec_1", {0, 0}, ctx.athanor_id)
   end
 
   @tag :requires_opus

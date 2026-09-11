@@ -997,12 +997,18 @@ defmodule Opus.FormulaHandler do
           :untrusted -> [origin: "guest"]
         end
 
-      # Use the root stream’s shared sequence counter for nested emits.
-      seq = Opus.ExecutionEventBuffer.Sequence.next(execution_id)
       data = Opus.SecretMasker.mask(data, secrets)
-      Opus.ExecutionEventBuffer.push(execution_id, data, seq, ctx, origin_opts)
-      Opus.Telemetry.formula_emit(execution_id, seq)
-      safe_encode(%{"ok" => true, "sequence" => seq})
+
+      # Numbered under the root stream's last durable event, shared by
+      # every emitter under the root.
+      case Opus.ExecutionEventBuffer.push(execution_id, data, ctx, origin_opts) do
+        {:ok, seq} ->
+          Opus.Telemetry.formula_emit(execution_id, seq)
+          safe_encode(%{"ok" => true, "sequence" => seq})
+
+        {:error, :missing_athanor} ->
+          encode_error(:dispatch_error, "emit event could not be routed")
+      end
     else
       {:error, :event_too_large} ->
         encode_error(:resource_limit, "emit event exceeds the node's request size limit")
@@ -1120,21 +1126,21 @@ defmodule Opus.FormulaHandler do
   end
 
   defp maybe_emit_setup_event(target_id, remediation, message, ctx) do
-    seq = Opus.ExecutionEventBuffer.Sequence.next(target_id)
+    _ =
+      Opus.ExecutionEventBuffer.push(
+        target_id,
+        %{
+          "kind" => "setup_required",
+          "component_ref" => remediation["component_ref"],
+          "issues" => remediation["issues"],
+          "setup_command" => remediation["setup_command"],
+          "message" => message
+        },
+        ctx,
+        origin: "host"
+      )
 
-    Opus.ExecutionEventBuffer.push(
-      target_id,
-      %{
-        "kind" => "setup_required",
-        "component_ref" => remediation["component_ref"],
-        "issues" => remediation["issues"],
-        "setup_command" => remediation["setup_command"],
-        "message" => message
-      },
-      seq,
-      ctx,
-      origin: "host"
-    )
+    :ok
   end
 
   defp build_await_response(task_id, json_result, metadata) do

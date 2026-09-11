@@ -204,7 +204,9 @@ defmodule Arca.Execution do
     (`Arca.ScheduleOccurrences.start!/3`), and admission is refused
     `{:error, :occurrence_not_claimed}` when it is not claimed.
 
-  Answers `{:ok, %{execution: t(), attempt: ExecutionAttempt.t()}}`.
+  Answers `{:ok, %{execution: t(), attempt: ExecutionAttempt.t()}}`; the
+  execution's `event_seq` is the number of the `execution.started` event
+  the transaction appended, for the caller to publish.
   """
   @spec admit(map(), keyword()) ::
           {:ok, %{execution: struct(), attempt: struct()}} | {:error, term()}
@@ -274,7 +276,15 @@ defmodule Arca.Execution do
             :ok
         end
 
-        %{execution: %{execution | current_attempt: attempt_id}, attempt: attempt}
+        event =
+          Arca.ExecutionEvents.append!(athanor_id, execution.id, "execution.started",
+            data: %{"attempt" => attempt_id}
+          )
+
+        %{
+          execution: %{execution | current_attempt: attempt_id, event_seq: event.seq},
+          attempt: attempt
+        }
       end)
     end)
   end
@@ -673,15 +683,28 @@ defmodule Arca.Execution do
               end
 
             if retired? do
-              from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
-              |> Arca.Repo.update_all(
-                set: [
-                  status: "failed",
-                  completed_at: attrs[:completed_at],
-                  duration_ms: attrs[:duration_ms],
-                  error_message: attrs[:error_message]
-                ]
-              )
+              {count, _} =
+                from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
+                |> Arca.Repo.update_all(
+                  set: [
+                    status: "failed",
+                    completed_at: attrs[:completed_at],
+                    duration_ms: attrs[:duration_ms],
+                    error_message: attrs[:error_message]
+                  ]
+                )
+
+              # The lifecycle row of a run ended from outside: swept
+              # (`execution.lapsed`) or failed by its parent's end.
+              event =
+                Arca.ExecutionEvents.append!(
+                  execution.athanor_id,
+                  id,
+                  Keyword.get(fence, :event, "execution.failed"),
+                  data: %{"status" => "failed", "error" => attrs[:error_message]}
+                )
+
+              {count, event.seq}
             else
               {0, nil}
             end
@@ -696,8 +719,10 @@ defmodule Arca.Execution do
 
   @doc """
   End an execution from the attempt that owns it: the attempt closes with
-  `outcome` and the row leaves `running`/`paused` as `status`, in one
-  transaction. `attempt` nil means the row's current attempt (a cancel
+  `outcome`, the row leaves `running`/`paused` as `status`, and the
+  lifecycle event (`execution.<status>`, or `execution.result_lost` for
+  a completed run whose result was not kept) is appended — its number is
+  the answered execution's `event_seq` — in one transaction. `attempt` nil means the row's current attempt (a cancel
   from a read-back record). `{:error, :not_running}` when the row is not
   open or the attempt does not own it.
   """
@@ -708,7 +733,8 @@ defmodule Arca.Execution do
       when status in @terminal_statuses do
     # `attrs[:payloads]` are staged payloads committed for the owning
     # attempt in this transaction; `attrs[:outcome]` names the attempt's
-    # outcome when it is not the status's own.
+    # outcome when it is not the status's own; `attrs[:event]` is data the
+    # lifecycle event carries besides the status.
     Arca.Repo.Errors.with_db_rescue("Execution.record_end", fn ->
       Arca.Repo.transaction(fn ->
         execution =
@@ -738,8 +764,45 @@ defmodule Arca.Execution do
           |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
           |> Arca.Repo.update_all(set: Map.to_list(changeset.changes))
 
-        Ecto.Changeset.apply_changes(changeset)
+        event =
+          Arca.ExecutionEvents.append!(
+            execution.athanor_id,
+            id,
+            lifecycle_type(status, Map.get(attrs, :outcome)),
+            data:
+              %{
+                "status" => status,
+                "outcome" => outcome,
+                "duration_ms" => Map.get(attrs, :duration_ms),
+                "error" => Map.get(attrs, :error_message)
+              }
+              |> Map.reject(fn {_k, v} -> is_nil(v) end)
+              |> Map.merge(Map.get(attrs, :event, %{}))
+          )
+
+        %{Ecto.Changeset.apply_changes(changeset) | event_seq: event.seq}
       end)
+    end)
+  end
+
+  # The lifecycle event a terminal write appends; a completed run whose
+  # result was lost is its own kind.
+  defp lifecycle_type("failed", "result_lost"), do: "execution.result_lost"
+  defp lifecycle_type(status, _outcome), do: "execution." <> status
+
+  @doc "The execution's durable event counter, within the athanor."
+  @spec event_seq(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def event_seq(athanor_id, id) when is_binary(athanor_id) and is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Execution.event_seq", fn ->
+      case Arca.Repo.one(
+             from(e in __MODULE__,
+               where: e.id == ^id and e.athanor_id == ^athanor_id,
+               select: e.event_seq
+             )
+           ) do
+        nil -> {:error, :not_found}
+        seq -> {:ok, seq}
+      end
     end)
   end
 

@@ -649,6 +649,60 @@ defmodule Opus.ExecutionRecordTest do
   # Cancel
   # ============================================================================
 
+  describe "lifecycle events" do
+    test "every write appends its row, numbered in order, and a lost result is its own kind",
+         %{ctx: ctx} do
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      :ok = ExecutionRecord.write_started(record)
+      :ok = ExecutionRecord.write_completed(ExecutionRecord.complete(record, %{"sum" => 2}))
+
+      {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, record.id, 0)
+
+      assert [
+               %{seq: 1, type: "execution.started"},
+               %{seq: 2, type: "execution.completed"}
+             ] = rows
+
+      assert %{"attempt" => attempt} = Arca.ExecutionEvents.data(hd(rows))
+      assert attempt == record.attempt
+      assert %{"status" => "completed"} = Arca.ExecutionEvents.data(List.last(rows))
+
+      failed = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = ExecutionRecord.write_started(failed)
+      :ok = ExecutionRecord.write_failed(ExecutionRecord.fail(failed, "boom"))
+
+      assert {:ok, [_, %{type: "execution.failed"} = row]} =
+               Arca.ExecutionEvents.since(ctx.athanor_id, failed.id, 0)
+
+      assert %{"error" => "boom"} = Arca.ExecutionEvents.data(row)
+
+      lost = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = ExecutionRecord.write_started(lost)
+      Application.put_env(:cyfr, :execution_payload_store, __MODULE__.RefusingStore)
+      on_exit(fn -> Application.delete_env(:cyfr, :execution_payload_store) end)
+
+      {:error, {:result_lost, _}} =
+        ExecutionRecord.write_completed(ExecutionRecord.complete(lost, %{"sum" => 2}))
+
+      assert {:ok, [_, %{type: "execution.result_lost"}]} =
+               Arca.ExecutionEvents.since(ctx.athanor_id, lost.id, 0)
+    end
+
+    test "a cancel that asks for a restart says so on its event", %{ctx: ctx} do
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = ExecutionRecord.write_started(record)
+
+      {:ok, _} =
+        ExecutionRecord.cancel(ctx, record.id, restart_required: %{"profile_id" => "prof_1"})
+
+      assert {:ok, [_, %{type: "execution.cancelled"} = row]} =
+               Arca.ExecutionEvents.since(ctx.athanor_id, record.id, 0)
+
+      assert %{"restart_required" => %{"profile_id" => "prof_1"}} =
+               Arca.ExecutionEvents.data(row)
+    end
+  end
+
   describe "cancel/2" do
     test "cancels a running execution", %{ctx: ctx} do
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})

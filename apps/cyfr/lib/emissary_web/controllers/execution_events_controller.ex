@@ -5,17 +5,23 @@ defmodule EmissaryWeb.ExecutionEventsController do
   @moduledoc """
   SSE endpoint for streaming execution events.
 
-  `GET /api/executions/:id/events` — subscribes to PubSub for the given
-  execution, replays buffered events on connect, and streams SSE until
-  a terminal event (`complete` or `error`) is received.
+  `GET /api/executions/:id/events` — subscribes to the execution's
+  stream, replays what a client at its cursor has yet to see, and streams
+  SSE until a terminal lifecycle event (`execution.completed`, `.failed`,
+  `.cancelled`, `.lapsed`, `.result_lost`).
 
-  Supports reconnection via the `Last-Event-ID` header (replays from
-  the given sequence number).
+  An event's `id` is its number: a durable row's `<seq>`, a delta's
+  `<durable>.<n>`. `Last-Event-ID` resumes from either; the durable rows
+  after it are replayed in order, then the deltas still buffered under
+  the last of them. Delivery is in commit order whatever order
+  publications arrive in: a live event that does not immediately follow
+  the cursor is a trigger to read the rows again.
   """
 
   use EmissaryWeb, :controller
 
   @keep_alive_interval_ms EmissaryWeb.SSE.keep_alive_ms()
+  @terminal_types Arca.ExecutionEvents.terminal_types()
 
   def stream(conn, %{"id" => execution_id}) do
     cond do
@@ -35,11 +41,11 @@ defmodule EmissaryWeb.ExecutionEventsController do
                {:exec, Arca.Execution.get_tenant(ctx, execution_id)},
              :ok <- authorize_execution_read(ctx, exec),
              :ok <- EmissaryWeb.SSE.claim_slot(:sse_slot, ctx, :execution_events_max_concurrent) do
-          last_seq = parse_last_event_id(conn)
+          cursor = parse_last_event_id(conn)
 
           conn
           |> EmissaryWeb.SSE.open()
-          |> stream_events(execution_id, last_seq, exec)
+          |> stream_events(execution_id, cursor, exec)
         else
           {:auth, _} ->
             EmissaryWeb.ApiError.send(
@@ -90,68 +96,73 @@ defmodule EmissaryWeb.ExecutionEventsController do
     end
   end
 
-  # Subscribe and replay with the RECORD's athanor, not the viewer's
-  # context: producers publish/buffer under the execution's own athanor, and
-  # a platform-scoped viewer may carry a different one than the record it
-  # was authorized to read.
-  defp stream_events(conn, execution_id, last_seq, exec) do
+  # `exec` rides along so unsubscribe targets the SAME tenant-scoped topic
+  # subscribe used, and a platform-scoped viewer may carry a different
+  # athanor than the record it was authorized to read. The subscription
+  # comes first and the replay once, so replay and live never overlap.
+  defp stream_events(conn, execution_id, cursor, exec) do
     Cyfr.Execution.subscribe_events(execution_id, exec)
 
-    # Replay buffered events since last_seq
-    buffered = Cyfr.Execution.events_since(execution_id, last_seq, exec.athanor_id)
+    case drain(conn, execution_id, exec, cursor) do
+      {conn, _cursor, true} ->
+        Cyfr.Execution.unsubscribe_events(execution_id, exec)
+        conn
 
-    {conn, terminal?} =
-      Enum.reduce_while(buffered, {conn, false}, fn event, {acc_conn, _} ->
-        case send_sse_event(acc_conn, event) do
-          {:ok, new_conn} ->
-            if terminal_event?(event),
-              do: {:halt, {new_conn, true}},
-              else: {:cont, {new_conn, false}}
-
-          {:error, _} ->
-            {:halt, {acc_conn, true}}
-        end
-      end)
-
-    if terminal? do
-      Cyfr.Execution.unsubscribe_events(execution_id, exec)
-      conn
-    else
-      deadline = EmissaryWeb.SSE.deadline(:execution_events_max_ms)
-      event_loop(conn, execution_id, exec, deadline)
+      {conn, cursor, false} ->
+        deadline = EmissaryWeb.SSE.deadline(:execution_events_max_ms)
+        event_loop(conn, execution_id, exec, cursor, deadline)
     end
   end
 
-  # `exec` rides along so unsubscribe targets the SAME tenant-scoped topic
-  # subscribe used — a topic built from anything else would silently leave
-  # the process subscribed to the athanor's stream. The deadline
-  # bounds a stream whose execution never reaches a terminal event — the
-  # client reconnects with Last-Event-ID and misses nothing.
-  defp event_loop(conn, execution_id, exec, deadline) do
+  # Everything after the cursor, in order, from the port: the durable
+  # rows first, then the deltas under the last of them. Answers the
+  # cursor delivered to, and whether a terminal event ended the stream.
+  defp drain(conn, execution_id, exec, cursor) do
+    execution_id
+    |> Cyfr.Execution.events_since(cursor, exec.athanor_id)
+    |> Enum.reduce_while({conn, cursor, false}, fn event, {acc_conn, acc_cursor, _} ->
+      case send_sse_event(acc_conn, event) do
+        {:ok, new_conn} ->
+          cursor = cursor_after(event, acc_cursor)
+
+          if terminal_event?(event),
+            do: {:halt, {new_conn, cursor, true}},
+            else: {:cont, {new_conn, cursor, false}}
+
+        {:error, _} ->
+          {:halt, {acc_conn, acc_cursor, true}}
+      end
+    end)
+  end
+
+  # A live event is a trigger. The one that immediately follows the
+  # cursor goes straight out; anything else means rows the notification
+  # overtook, or a prefix this client has not reached, and the port is
+  # asked for everything after the cursor instead — so delivery is in
+  # commit order whatever order publications arrive in, and nothing is
+  # sent twice. The deadline bounds a stream whose execution never
+  # reaches a terminal event — the client reconnects with Last-Event-ID
+  # and misses nothing.
+  defp event_loop(conn, execution_id, exec, cursor, deadline) do
     if System.monotonic_time(:millisecond) >= deadline do
       Cyfr.Execution.unsubscribe_events(execution_id, exec)
       conn
     else
       receive do
         {:execution_event, event} ->
-          case send_sse_event(conn, event) do
-            {:ok, conn} ->
-              if terminal_event?(event) do
-                Cyfr.Execution.unsubscribe_events(execution_id, exec)
-                conn
-              else
-                event_loop(conn, execution_id, exec, deadline)
-              end
-
-            {:error, _} ->
+          case forward(conn, execution_id, exec, cursor, event) do
+            {conn, _cursor, true} ->
               Cyfr.Execution.unsubscribe_events(execution_id, exec)
               conn
+
+            {conn, cursor, false} ->
+              event_loop(conn, execution_id, exec, cursor, deadline)
           end
       after
         @keep_alive_interval_ms ->
           case chunk(conn, EmissaryWeb.SSE.keep_alive_comment()) do
             {:ok, conn} ->
-              event_loop(conn, execution_id, exec, deadline)
+              event_loop(conn, execution_id, exec, cursor, deadline)
 
             {:error, _} ->
               Cyfr.Execution.unsubscribe_events(execution_id, exec)
@@ -161,8 +172,40 @@ defmodule EmissaryWeb.ExecutionEventsController do
     end
   end
 
-  defp terminal_event?(%{type: type}) when type in ["complete", "error"], do: true
-  defp terminal_event?(_), do: false
+  defp forward(conn, execution_id, exec, {durable, n} = cursor, event) do
+    cond do
+      # Already delivered: an older prefix, or a delta the replay covered.
+      behind?(event, cursor) ->
+        {conn, cursor, false}
+
+      # The next durable row, or the next delta under the current prefix.
+      next?(event, durable, n) ->
+        case send_sse_event(conn, event) do
+          {:ok, conn} -> {conn, cursor_after(event, cursor), terminal_event?(event)}
+          {:error, _} -> {conn, cursor, true}
+        end
+
+      true ->
+        drain(conn, execution_id, exec, cursor)
+    end
+  end
+
+  defp behind?(%{durable: d, delta: nil}, {durable, _n}), do: d <= durable
+
+  defp behind?(%{durable: d, delta: delta}, {durable, n}),
+    do: d < durable or (d == durable and delta <= n)
+
+  defp behind?(_event, _cursor), do: false
+
+  defp next?(%{durable: d, delta: nil}, durable, _n), do: d == durable + 1
+  defp next?(%{durable: d, delta: delta}, durable, n), do: d == durable and delta == n + 1
+  defp next?(_event, _durable, _n), do: false
+
+  defp cursor_after(%{durable: d, delta: nil}, _cursor), do: {d, 0}
+  defp cursor_after(%{durable: d, delta: delta}, _cursor), do: {d, delta}
+  defp cursor_after(_event, cursor), do: cursor
+
+  defp terminal_event?(%{type: type}), do: type in @terminal_types
 
   defp send_sse_event(conn, event) do
     data =
@@ -175,16 +218,29 @@ defmodule EmissaryWeb.ExecutionEventsController do
     chunk(conn, sse_message)
   end
 
+  # `Last-Event-ID` is `<durable>` or `<durable>.<n>`: the last durable
+  # event delivered and, under it, the last delta. Anything else resumes
+  # from the start.
   defp parse_last_event_id(conn) do
     case get_req_header(conn, "last-event-id") do
-      [val | _] ->
-        case Integer.parse(val) do
-          {n, _} -> n
-          :error -> 0
-        end
+      [val | _] -> parse_cursor(val)
+      [] -> {0, 0}
+    end
+  end
 
-      [] ->
-        0
+  @doc false
+  @spec parse_cursor(String.t()) :: {non_neg_integer(), non_neg_integer()}
+  def parse_cursor(value) when is_binary(value) do
+    case String.split(value, ".", parts: 2) do
+      [durable] -> {parse_int(durable), 0}
+      [durable, n] -> {parse_int(durable), parse_int(n)}
+    end
+  end
+
+  defp parse_int(value) do
+    case Integer.parse(value) do
+      {n, ""} when n >= 0 -> n
+      _ -> 0
     end
   end
 end

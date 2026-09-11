@@ -41,7 +41,11 @@ defmodule Opus.HostSurfaceTest do
     # resumes — a worker on another node would renew and close its
     # attempt through a client.
     "Arca.ExecutionAttempts",
-    # A non-chat execution's result is kept as a payload once it completes.
+    # The durable half of an execution's stream: the rows a replay reads
+    # and the counter a delta rides under — a worker on another node would
+    # read them through a client.
+    "Arca.ExecutionEvents",
+    # An execution's result is kept as a payload once it completes.
     "Arca.ExecutionPayloads",
     "Arca.QueryHelpers",
     "Arca.Storage",

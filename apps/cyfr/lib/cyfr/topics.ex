@@ -181,8 +181,10 @@ defmodule Cyfr.Topics do
   @doc """
   One execution's event stream.
 
-  Messages: `{:execution_event, %{type:, execution_id:, sequence:, timestamp:,
-  data:}}` where `type` is `"emit"`, `"complete"` or `"error"`.
+  Messages: `{:execution_event, %{type:, execution_id:, sequence:, durable:,
+  delta:, timestamp:, data:, origin:}}` — a durable row (`execution.*`, a
+  turn's own rows; `sequence` is its number) or a delta (`emit`;
+  `sequence` is `<durable>.<n>`).
   """
   @spec execution_events(String.t(), athanor()) :: String.t()
   def execution_events(execution_id, athanor),

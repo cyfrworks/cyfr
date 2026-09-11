@@ -18,6 +18,12 @@ defmodule Arca.ExecutionEvents do
 
   alias Arca.Schemas.ExecutionEvent
 
+  @terminal ~w(execution.completed execution.failed execution.cancelled execution.lapsed execution.result_lost)
+
+  @doc "The lifecycle types that end an execution's stream."
+  @spec terminal_types() :: [String.t()]
+  def terminal_types, do: @terminal
+
   @doc """
   Append one durable event to `execution_id` inside the caller's
   transaction and answer the row. `opts`: `:turn_id`, `:step_id`,

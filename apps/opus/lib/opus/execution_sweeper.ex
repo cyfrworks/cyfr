@@ -111,12 +111,13 @@ defmodule Opus.ExecutionSweeper do
     # the exact lease it saw lapse. A renewal that landed between the scan
     # and this write changed `lease_until`, and the update matches nothing —
     # a live execution is never failed by a stale observation.
-    {count, _} =
+    {count, event_seq} =
       Arca.Execution.mark_failed_if_running(
         record.id,
         %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
         attempt: record.attempt,
-        lease_until: record.lease_until
+        lease_until: record.lease_until,
+        event: "execution.lapsed"
       )
 
     if count > 0 do
@@ -148,13 +149,10 @@ defmodule Opus.ExecutionSweeper do
         }
       )
 
-      ExecutionEventBuffer.push_terminal(
-        record.id,
-        "error",
-        %{error: error_msg},
-        999_999_999,
-        record
-      )
+      ExecutionEventBuffer.publish(record.id, record, "execution.lapsed", event_seq, %{
+        "status" => "failed",
+        "error" => error_msg
+      })
 
       # Cascade to children for executions that run children: formulas
       # and turn roots.

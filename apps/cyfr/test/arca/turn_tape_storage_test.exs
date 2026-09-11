@@ -231,7 +231,9 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:error, :not_open} = TurnStorage.close_step(ctx, call_step.id, "ok")
 
       assert {:ok, events} = Arca.ExecutionEvents.since(ctx.athanor_id, root.execution.id, 0)
-      assert Enum.map(events, & &1.type) == ["turn.started", "model.completed", "step.closed"]
+
+      assert Enum.map(events, & &1.type) ==
+               ["execution.started", "turn.started", "model.completed", "step.closed"]
     end
 
     test "the step barrier binds only a dispatched, current, uncancelled generation", %{

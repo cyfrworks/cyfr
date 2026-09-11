@@ -95,7 +95,7 @@ defmodule Opus do
     to: Opus.ExecutionEventBuffer,
     as: :unsubscribe
 
-  @doc "Buffered events after `last_sequence` for an execution of `athanor_id`, for replay on (re)connect."
+  @doc "The events after cursor `{durable, n}` for an execution of `athanor_id`: rows, then deltas, for replay on (re)connect."
   @impl Cyfr.Execution
   defdelegate events_since(execution_id, last_sequence, athanor_id),
     to: Opus.ExecutionEventBuffer,
