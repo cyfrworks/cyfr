@@ -10,8 +10,17 @@ defmodule Sanctum.Consent.Bootstrap do
   the ingress edge carries the source's own resources, and every edge into
   a node carries **that node's** resources.
 
-  Idempotent: a source ref that already has an owner profile is skipped.
-  Machine-minted revisions record `granted_via: "bootstrap"`.
+  A shipped source's edge into a shipped dependency that declares a
+  credential need **selects** that dependency's `default` profile: the
+  key a person binds on the catalyst's own profile is what the shipped
+  formula runs it with, and revoking or rebinding it there is one act. A
+  boot that finds a bootstrap-only consent missing a selection its
+  dependencies now declare revises it — selections only, never a moved
+  shape.
+
+  Idempotent: a source ref that already has an owner profile is skipped
+  (revised only as above). Machine-minted revisions record
+  `granted_via: "bootstrap"`.
 
   ## Why provisioning is the only caller
 
@@ -34,7 +43,17 @@ defmodule Sanctum.Consent.Bootstrap do
   alias Sanctum.Context
   alias Sanctum.JCS
 
-  @type result :: %{minted: [String.t()], skipped: [{String.t(), term()}]}
+  @type result :: %{
+          minted: [String.t()],
+          revised: [String.t()],
+          skipped: [{String.t(), term()}]
+        }
+
+  # Dependencies before the sources that select them.
+  @type_rank %{"catalyst" => 0, "reagent" => 1, "tincture" => 2, "formula" => 3}
+
+  # The profile a shipped source's selection names on a shipped dependency.
+  @selected_label "default"
 
   @doc """
   Bootstrap every executable local component in the caller's athanor.
@@ -45,22 +64,35 @@ defmodule Sanctum.Consent.Bootstrap do
   """
   @spec run(Context.t()) :: {:ok, result()}
   def run(%Context{} = ctx) do
-    run_components(ctx, executable_local_components(ctx))
+    components =
+      ctx
+      |> executable_local_components()
+      |> Enum.sort_by(fn row ->
+        {Map.get(@type_rank, to_string(row.component_type), 9), row.name}
+      end)
+
+    run_components(ctx, components)
   end
 
   defp run_components(ctx, components) do
-    {minted, skipped} =
-      Enum.reduce(components, {[], []}, fn component, {minted, skipped} ->
+    {minted, revised, skipped} =
+      Enum.reduce(components, {[], [], []}, fn component, {minted, revised, skipped} ->
         source_ref = Compendium.Activation.node_key(component)
 
         case bootstrap_component(ctx, component, source_ref) do
-          {:ok, _profile_id} -> {[source_ref | minted], skipped}
-          {:skip, reason} -> {minted, [{source_ref, reason} | skipped]}
-          {:error, reason} -> {minted, [{source_ref, reason} | skipped]}
+          {:ok, _profile_id} -> {[source_ref | minted], revised, skipped}
+          {:revised, _profile_id} -> {minted, [source_ref | revised], skipped}
+          {:skip, reason} -> {minted, revised, [{source_ref, reason} | skipped]}
+          {:error, reason} -> {minted, revised, [{source_ref, reason} | skipped]}
         end
       end)
 
-    {:ok, %{minted: Enum.reverse(minted), skipped: Enum.reverse(skipped)}}
+    {:ok,
+     %{
+       minted: Enum.reverse(minted),
+       revised: Enum.reverse(revised),
+       skipped: Enum.reverse(skipped)
+     }}
   end
 
   defp executable_local_components(ctx) do
@@ -90,9 +122,10 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp bootstrap_component(ctx, component, source_ref) do
-    # Nothing legacy exists to point at: connections bind through the
-    # walk, so machine-minted revisions carry no vault resource.
-    vault_fn = fn _node_key, _row, _manifest -> nil end
+    # A machine-minted revision binds no entry of its own: a shipped
+    # source's edges select what its shipped dependencies' default
+    # profiles bind, and every other edge carries no vault resource.
+    vault_fn = selection_fn(ctx, component, source_ref)
 
     with :ok <- check_unclaimed(ctx, source_ref),
          {:ok, activation} <- resolve_activation(ctx, component),
@@ -101,16 +134,136 @@ defmodule Sanctum.Consent.Bootstrap do
          {:ok, digests} <- compute_digests(ctx, source_ref, JCS.hash_binary(blob_json)),
          {:ok, activation_json} <- JCS.encode(activation.graph) do
       insert(ctx, source_ref, blob_json, digests, activation_json, BlobBuilder.vault_refs(nodes))
+    else
+      {:skip, {:already_bootstrapped, profile}} ->
+        revise_selections(ctx, component, source_ref, profile, vault_fn)
+
+      other ->
+        other
     end
   end
 
   defp check_unclaimed(ctx, source_ref) do
     case Arca.ProfileStorage.list_for_source(ctx.athanor_id, source_ref) do
       {:ok, []} -> :ok
-      {:ok, _existing} -> {:skip, :already_bootstrapped}
+      {:ok, existing} -> {:skip, {:already_bootstrapped, default_owner(existing)}}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp default_owner(profiles),
+    do: Enum.find(profiles, &(&1.kind == "owner" and &1.label == "default"))
+
+  # ---------------------------------------------------------------------------
+  # Selections — a shipped source runs a shipped dependency with the key
+  # bound on that dependency's own default profile
+  # ---------------------------------------------------------------------------
+
+  defp selection_fn(ctx, source_row, source_ref) do
+    shipped_source? = shipped?(ctx, source_row)
+
+    fn node_key, row, manifest ->
+      if node_key != source_ref and shipped_source? and credential_needs?(manifest) and
+           shipped?(ctx, row) do
+        %{"via" => %{"label" => @selected_label}}
+      end
+    end
+  end
+
+  # Only what the seed ships selects and is selected: a person's own
+  # component consents through the walk, where the selection is shown.
+  defp shipped?(ctx, row) do
+    unit =
+      Compendium.ComponentPath.version_dir(
+        to_string(Map.get(row, :component_type) || Map.get(row, "component_type")),
+        Map.get(row, :publisher) || Map.get(row, "publisher"),
+        Map.get(row, :name) || Map.get(row, "name"),
+        Map.get(row, :version) || Map.get(row, "version")
+      )
+
+    Arca.Overlay.unit_status(ctx, unit) == {:ok, :shipped}
+  end
+
+  defp credential_needs?(manifest) do
+    case Compendium.Manifest.Needs.from_manifest(manifest) do
+      needs when is_list(needs) -> Enum.any?(needs, &(&1.kind in ~w(api_key oauth bundle)))
+      _ -> false
+    end
+  end
+
+  # A bootstrap-only head is revised when the selections it would carry
+  # today differ from what it carries — an estate minted before
+  # selections existed, or a release that started declaring a need —
+  # and nothing else about the blob or the shape moved. A person's
+  # revision on the head, or a moved shape, is theirs to revisit.
+  defp revise_selections(_ctx, _component, _source_ref, nil, _vault_fn),
+    do: {:skip, :already_bootstrapped}
+
+  defp revise_selections(ctx, component, source_ref, profile, vault_fn) do
+    with {:ok, head, _refs} <- Arca.ConsentStorage.get_head(ctx.athanor_id, profile.id),
+         true <- head.granted_via == "bootstrap" || {:skip, :already_bootstrapped},
+         {:ok, activation} <- resolve_activation(ctx, component),
+         {:ok, nodes} <- BlobBuilder.build(ctx, activation.graph, source_ref, vault_fn),
+         {:ok, blob_json} <- BlobBuilder.encode(nodes),
+         true <- blob_json != head.resolved_policy || {:skip, :already_bootstrapped},
+         true <-
+           same_but_selections?(blob_json, head.resolved_policy) || {:skip, :already_bootstrapped},
+         {:ok, digests} <- compute_digests(ctx, source_ref, JCS.hash_binary(blob_json)),
+         true <- digests.shape_digest == head.shape_digest || {:skip, :shape_moved},
+         {:ok, activation_json} <- JCS.encode(activation.graph),
+         {:ok, _consent} <-
+           Arca.ConsentStorage.insert_revision(
+             %{
+               athanor_id: ctx.athanor_id,
+               profile_id: profile.id,
+               revision: head.revision + 1,
+               scope: head.scope,
+               pinned_version: head.pinned_version,
+               invoke_mode: head.invoke_mode,
+               shape_digest: digests.shape_digest,
+               commit_digest: digests.commit_digest,
+               blob_digest: digests.blob_digest,
+               resolved_policy: blob_json,
+               activation: activation_json,
+               granted_by: granted_by(ctx),
+               granted_via: "bootstrap"
+             },
+             BlobBuilder.vault_refs(nodes),
+             head.id
+           ) do
+      {:revised, profile.id}
+    else
+      {:skip, _} = skip -> skip
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp same_but_selections?(blob_json, head_json) do
+    with {:ok, fresh} <- Jason.decode(blob_json),
+         {:ok, head} <- Jason.decode(head_json) do
+      strip_selections(fresh) == strip_selections(head)
+    else
+      _ -> false
+    end
+  end
+
+  defp strip_selections(%{"nodes" => nodes} = blob) do
+    %{
+      blob
+      | "nodes" =>
+          Map.new(nodes, fn {ref, node} ->
+            edges =
+              Map.new(node["edges"] || %{}, fn
+                {key, %{"vault" => %{"via" => _}} = edge} -> {key, Map.delete(edge, "vault")}
+                {key, edge} -> {key, edge}
+              end)
+
+            {ref, Map.put(node, "edges", edges)}
+          end)
+    }
+  end
+
+  defp strip_selections(other), do: other
 
   defp resolve_activation(ctx, component) do
     case Compendium.Activation.resolve(ctx, component) do

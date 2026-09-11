@@ -690,9 +690,10 @@ defmodule Sanctum.Provisioning do
   # `skipped`, so only what the release just added mints anything.
   defp bootstrap_synced(ctx, athanor_id) do
     case Sanctum.Consent.Bootstrap.run(ctx) do
-      {:ok, %{minted: [_ | _] = minted}} ->
+      {:ok, %{minted: minted, revised: revised}} when minted != [] or revised != [] ->
         Logger.info(
-          "[Provisioning] #{athanor_id}: minted baseline consents for #{Enum.join(minted, ", ")}"
+          "[Provisioning] #{athanor_id}: baseline consents minted for " <>
+            "[#{Enum.join(minted, ", ")}], selections revised for [#{Enum.join(revised, ", ")}]"
         )
 
       {:ok, _nothing_new} ->

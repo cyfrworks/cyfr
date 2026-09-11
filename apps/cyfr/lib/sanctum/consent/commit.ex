@@ -41,6 +41,7 @@ defmodule Sanctum.Consent.Commit do
           optional(:scope) => :versionless | :pinned,
           optional(:invoke_mode) => :open_inert | :edge_only,
           optional(:bindings) => [map()],
+          optional(:selections) => [map()],
           optional(:override) => boolean(),
           optional(:publish_from) => String.t(),
           optional(:need_ids) => [String.t()],
@@ -178,8 +179,25 @@ defmodule Sanctum.Consent.Commit do
       scope: head.scope,
       invoke_mode: head.invoke_mode,
       bindings: bindings,
+      selections: head_selections(head),
       tool_servers: []
     }
+  end
+
+  # The selections the head carries, re-decided as they stand: the same
+  # lender, the same fields, the digest pinned again from the live entry.
+  defp head_selections(head) do
+    with {:ok, %{"nodes" => nodes}} <- Jason.decode(head.resolved_policy) do
+      for {_node_key, node} <- nodes,
+          {edge_key, %{"vault" => %{"via" => %{"label" => label}} = vault}} <-
+            node["edges"] || %{},
+          {:ok, dep} <- [Sanctum.Authority.Blob.edge_target(edge_key)],
+          uniq: true do
+        %{dep: dep, label: label, fields: get_in(vault, ["projection", "fields"]) || []}
+      end
+    else
+      _ -> []
+    end
   end
 
   # A tool-server grant lives on the head's ingress edge and is not a
@@ -292,12 +310,15 @@ defmodule Sanctum.Consent.Commit do
            Plan.locate_profile(ctx, source_ref, label, kind),
          declared = declared_needs(component),
          {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published, declared),
+         {:ok, selections} <-
+           prepared_selections(ctx, decisions, published, activation, source_ref),
          {:ok, tool_servers} <- resolve_tool_servers(ctx, decisions),
          # Build the blob before digest validation; preview renders these same bytes.
          blob_inputs = %{
            source_ref: source_ref,
            activation: activation,
            bindings: bindings,
+           selections: selections,
            tool_servers: tool_servers,
            publish_nodes: published && published.nodes
          },
@@ -311,6 +332,7 @@ defmodule Sanctum.Consent.Commit do
              kind,
              invoke_mode,
              bindings,
+             selections,
              tool_servers,
              decisions
            ),
@@ -331,6 +353,7 @@ defmodule Sanctum.Consent.Commit do
          blob_digest: blob_digest,
          blob_refs: blob_refs,
          bindings: bindings,
+         selections: selections,
          entries: entries,
          tool_servers: tool_servers,
          profile_id: profile_id,
@@ -432,6 +455,102 @@ defmodule Sanctum.Consent.Commit do
   defp prepared_bindings(_ctx, _decisions, published, _declared),
     do: {:ok, published.bindings, published.entries}
 
+  # A public twin lends no other profile's entry.
+  defp prepared_selections(_ctx, _decisions, published, _activation, _source_ref)
+       when is_map(published),
+       do: {:ok, []}
+
+  defp prepared_selections(ctx, decisions, nil, activation, source_ref),
+    do: resolve_selections(ctx, decisions, activation, source_ref)
+
+  # Each selection names a dependency of the closure and, by label, one
+  # of its active owner profiles whose head binds an entry on its
+  # ingress; the binding digest is pinned from that live entry, so a
+  # rebind of the lender after this commit leaves the selection
+  # unresolved rather than lending a differently shaped credential.
+  defp resolve_selections(ctx, decisions, activation, source_ref) do
+    decisions
+    |> Map.get(:selections, [])
+    |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
+      with {:ok, dep} <- selection_target(raw, activation, source_ref),
+           {:ok, profile} <- lender_profile(ctx, dep, Map.get(raw, :label, "default")),
+           {:ok, bound} <- lender_binding(ctx, profile),
+           {:ok, entry} <- fetch_active_entry(ctx, bound.entry_id),
+           {:ok, live_digest} <- VaultReader.binding_digest(entry),
+           :ok <- check_lender_digest(live_digest, bound, dep, profile.label),
+           {:ok, fields} <- selected_fields(Map.get(raw, :fields, []), bound, dep) do
+        selection = %{
+          dep: dep,
+          label: profile.label,
+          profile_id: profile.id,
+          binding_digest: live_digest,
+          entry_id: entry.id,
+          entry_name: entry.name,
+          fields: fields
+        }
+
+        {:cont, {:ok, [selection | acc]}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, selections} -> {:ok, Enum.reverse(selections)}
+      error -> error
+    end
+  end
+
+  defp selection_target(raw, activation, source_ref) do
+    with {:ok, dep} <- Plan.name_ref(Map.get(raw, :dep) || ""),
+         true <- dep != source_ref and Map.has_key?(activation.graph, dep) do
+      {:ok, dep}
+    else
+      _ -> {:error, {:selection_target_unknown, Map.get(raw, :dep)}}
+    end
+  end
+
+  defp lender_profile(ctx, dep, label) when is_binary(label) do
+    with {:ok, profiles} <- Source.impl().profiles(ctx, dep),
+         %{status: :active} = profile <-
+           Enum.find(profiles, &(&1.label == label and &1.kind == :owner)) do
+      {:ok, profile}
+    else
+      _ -> {:error, {:selection_profile_unavailable, dep, label}}
+    end
+  end
+
+  defp lender_profile(_ctx, dep, label),
+    do: {:error, {:selection_profile_unavailable, dep, label}}
+
+  defp lender_binding(ctx, profile) do
+    with {:ok, head} <- Source.impl().head_consent(ctx, profile.id),
+         {:ok, blob} <- Sanctum.Authority.Blob.parse(head.resolved_policy),
+         {:ok, ingress} <- Sanctum.Authority.Blob.ingress(blob, profile.source_ref),
+         true <- Sanctum.Authority.Blob.bound_vault?(ingress.vault) do
+      {:ok, ingress.vault}
+    else
+      _ -> {:error, {:selection_unbound, profile.source_ref, profile.label}}
+    end
+  end
+
+  defp check_lender_digest(live, %{binding_digest: bound}, dep, label) do
+    if Plug.Crypto.secure_compare(live, bound),
+      do: :ok,
+      else: {:error, {:selection_unbound, dep, label}}
+  end
+
+  # The selection may narrow the lender's fields, never widen them.
+  defp selected_fields([], _bound, _dep), do: {:ok, []}
+
+  defp selected_fields(fields, %{projection: %{fields: [_ | _] = granted}}, dep) do
+    case Enum.reject(fields, &(&1 in granted)) do
+      [] -> {:ok, Enum.sort(fields)}
+      missing -> {:error, {:selection_fields_unavailable, dep, missing}}
+    end
+  end
+
+  defp selected_fields(fields, _unprojected, _dep), do: {:ok, Enum.sort(fields)}
+
   defp declared_needs(component) do
     (Map.get(component, :manifest) || Map.get(component, "manifest"))
     |> Compendium.Manifest.decode()
@@ -497,13 +616,13 @@ defmodule Sanctum.Consent.Commit do
           edge
       end
 
-    # Public profiles grant no external MCP access.
+    # Public profiles grant no external MCP access, and lend no other
+    # profile's entry: a selection never publishes.
     edge = Map.delete(edge, "tool_servers")
 
-    if edge_key in need_ids do
-      edge
-    else
-      Map.delete(edge, "vault")
+    case Map.get(edge, "vault") do
+      %{"entry_id" => _} -> if edge_key in need_ids, do: edge, else: Map.delete(edge, "vault")
+      _ -> Map.delete(edge, "vault")
     end
   end
 
@@ -651,6 +770,7 @@ defmodule Sanctum.Consent.Commit do
          kind,
          invoke_mode,
          bindings,
+         selections,
          tool_servers,
          decisions
        ) do
@@ -666,6 +786,7 @@ defmodule Sanctum.Consent.Commit do
        kind: kind,
        invoke_mode: invoke_mode,
        bindings: bindings,
+       selections: Enum.map(selections, &Map.take(&1, [:dep, :label, :binding_digest, :fields])),
        tool_servers:
          Enum.map(tool_servers, &Map.take(&1, [:server_name, :server_digest, :tool_patterns])),
        override: Map.get(decisions, :override, false)
@@ -789,11 +910,15 @@ defmodule Sanctum.Consent.Commit do
     # The single credential binding rides the ingress edge whatever its
     # need name — "@ingress" for no-needs manifests, the declared need
     # for manifests with one. resolve_bindings already refused a second.
+    # A selected dependency's edges carry the selection.
     source_binding = List.first(prep.bindings)
+    selections = Map.new(prep.selections, &{&1.dep, &1})
 
     vault_fn = fn node_key, _row, _manifest ->
-      if node_key == prep.source_ref and source_binding != nil do
-        vault_resource(source_binding)
+      cond do
+        node_key == prep.source_ref and source_binding != nil -> vault_resource(source_binding)
+        node_key == prep.source_ref -> nil
+        true -> selections |> Map.get(node_key) |> selection_resource()
       end
     end
 
@@ -834,6 +959,19 @@ defmodule Sanctum.Consent.Commit do
     base = %{"entry_id" => binding.entry_id, "binding_digest" => binding.binding_digest}
 
     if projection == %{}, do: base, else: Map.put(base, "projection", projection)
+  end
+
+  defp selection_resource(nil), do: nil
+
+  defp selection_resource(selection) do
+    base = %{
+      "via" => %{"label" => selection.label, "binding_digest" => selection.binding_digest}
+    }
+
+    case put_projection(%{}, "fields", selection.fields) do
+      projection when projection == %{} -> base
+      projection -> Map.put(base, "projection", projection)
+    end
   end
 
   defp put_projection(map, _key, []), do: map
@@ -974,7 +1112,18 @@ defmodule Sanctum.Consent.Commit do
         "Uses #{entry.name} (#{projected})"
       end)
 
-    [header | bindings] ++ render_grants(prep)
+    selections =
+      Enum.map(prep.selections, fn selection ->
+        projected =
+          if selection.fields == [],
+            do: "all fields",
+            else: Enum.join(selection.fields, ", ")
+
+        "#{selection.dep} runs with #{selection.entry_name}, the key bound on its " <>
+          "'#{selection.label}' profile (#{projected})"
+      end)
+
+    [header | bindings ++ selections] ++ render_grants(prep)
   end
 
   defp render_grants(prep) do

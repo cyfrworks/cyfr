@@ -29,13 +29,31 @@ defmodule Sanctum.Authority.Blob do
     The resources one consent edge grants. `"@ingress"` and resource-less
     invocation edges are all-empty instances of the same type — an edge that
     authorizes invocation while granting nothing is representable.
+
+    A vault resource is either **bound** — an entry and the binding digest
+    the consent approved — or **selected**: the entry that the edge's
+    target binds on the ingress of its own owner profile of the named
+    label, pinned to a binding digest when the consent pinned one.
+    `Sanctum.Consent.Loader` turns a selection into a bound resource when
+    that profile is active and its ingress carries a matching entry; a
+    selection that does not resolve stays a selection, and a run under it
+    answers setup_required.
     """
 
-    @type vault :: %{
+    @type projection :: %{fields: [String.t()], scopes: [String.t()]} | nil
+
+    @type bound_vault :: %{
             entry_id: String.t(),
             binding_digest: String.t(),
-            projection: %{fields: [String.t()], scopes: [String.t()]} | nil
+            projection: projection()
           }
+
+    @type selected_vault :: %{
+            via: %{label: String.t(), binding_digest: String.t() | nil},
+            projection: projection()
+          }
+
+    @type vault :: bound_vault() | selected_vault()
     @type egress :: %{
             domains: [String.t()],
             methods: [String.t()],
@@ -196,6 +214,13 @@ defmodule Sanctum.Authority.Blob do
     |> put_resource("projection", projection && string_lists_to_map(projection))
   end
 
+  defp vault_to_map(%{via: %{label: label, binding_digest: digest}, projection: projection}) do
+    via = %{"label" => label} |> put_resource("binding_digest", digest)
+
+    %{"via" => via}
+    |> put_resource("projection", projection && string_lists_to_map(projection))
+  end
+
   # `%{domains: [...], methods: [...]}` → `%{"domains" => [...], ...}`,
   # dropping nil lists (an absent key on the way in).
   defp string_lists_to_map(map) do
@@ -245,6 +270,38 @@ defmodule Sanctum.Authority.Blob do
   @spec edge_key(String.t(), String.t()) :: String.t()
   def edge_key(ref, ""), do: ref
   def edge_key(ref, need) when is_binary(need), do: ref <> "|" <> need
+
+  @doc """
+  The target ref an edge key names: the bare ref for the unnamed slot, the
+  ref before `|need` for a named one. The ingress key names no target.
+  """
+  @spec edge_target(String.t()) :: {:ok, String.t()} | :ingress
+  def edge_target(@ingress_key), do: :ingress
+  def edge_target(key) when is_binary(key), do: {:ok, key |> String.split("|", parts: 2) |> hd()}
+
+  @doc """
+  Whether a vault resource is bound to an entry (as opposed to selected
+  from another profile, or absent).
+  """
+  @spec bound_vault?(Edge.vault() | nil) :: boolean()
+  def bound_vault?(%{entry_id: _}), do: true
+  def bound_vault?(_), do: false
+
+  @doc """
+  The blob with every edge rewritten by `fun`, which receives the node
+  ref, the edge key and the edge and answers the edge to keep.
+  """
+  @spec map_edges(t(), (String.t(), String.t(), Edge.t() -> Edge.t())) :: t()
+  def map_edges(%__MODULE__{nodes: nodes} = blob, fun) when is_function(fun, 3) do
+    %{
+      blob
+      | nodes:
+          Map.new(nodes, fn {ref, %Node{edges: edges} = node} ->
+            {ref,
+             %{node | edges: Map.new(edges, fn {key, edge} -> {key, fun.(ref, key, edge)} end)}}
+          end)
+    }
+  end
 
   @doc """
   A node's `"@ingress"` edge.
@@ -411,6 +468,17 @@ defmodule Sanctum.Authority.Blob do
           {:halt, {:error, {:invalid_resource, node_ref, edge_key, kind, reason}}}
       end
     end)
+  end
+
+  defp validate_resource(:vault, %{"via" => via} = raw) when is_map(raw) do
+    with :ok <- keys_or_reason(raw, ["via", "projection"]),
+         {:ok, via_map} <- as_object(via, "via"),
+         :ok <- keys_or_reason(via_map, ["label", "binding_digest"]),
+         {:ok, label} <- required_string(via_map, "label"),
+         {:ok, digest} <- optional_string(via_map, "binding_digest"),
+         {:ok, projection} <- validate_projection(Map.get(raw, "projection")) do
+      {:ok, %{via: %{label: label, binding_digest: digest}, projection: projection}}
+    end
   end
 
   defp validate_resource(:vault, raw) when is_map(raw) do

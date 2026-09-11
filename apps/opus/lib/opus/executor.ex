@@ -471,13 +471,25 @@ defmodule Opus.Executor do
   # Stage 4: resolve credentials. The callee-keyed grant plane is never
   # consulted: credentials come only from the current edge's vault
   # resource, projected by the vault reader. No vault edge means no
-  # secrets — an ungranted read denies exactly as an empty resolution.
+  # secrets — an ungranted read denies exactly as an empty resolution. A
+  # selection the loader could not resolve is a declared need unmet: the
+  # profile it names binds nothing usable yet.
   defp stage_resolve_vault_fields(%ExecutionPipeline{} = p) do
     staged(p, resolve_vault_fields(p))
   end
 
   defp resolve_vault_fields(%ExecutionPipeline{} = p) do
     case p.opts[:authority] do
+      %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{via: via}}} = authority ->
+        {:error,
+         {:setup_required,
+          %{
+            profile_id: authority.profile_id,
+            node_ref: p.component_ref,
+            need: p.opts[:need] || "",
+            reason: vault_setup_reason({:selection_unbound, via.label})
+          }}}
+
       %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
         case Opus.Host.unseal(p.ctx, vault) do
           {:ok, secrets} ->
@@ -1404,6 +1416,7 @@ defmodule Opus.Executor do
   # The typed payload crosses the JSON error envelope, so its reason must
   # be JSON-encodable — vault loader tuples are flattened here.
   defp vault_setup_reason({:entry_unavailable, status}), do: "vault_entry_#{status}"
+  defp vault_setup_reason({:selection_unbound, _label}), do: "vault_selection_unbound"
   defp vault_setup_reason(reason) when is_atom(reason), do: reason
   defp vault_setup_reason(reason), do: inspect(reason)
 

@@ -249,9 +249,16 @@ defmodule Sanctum.MCP.ProfileTool do
          {:ok, invoke_mode} <-
            enum(raw, "invoke_mode", %{"open_inert" => :open_inert, "edge_only" => :edge_only}),
          {:ok, bindings} <- decode_bindings(Map.get(raw, "bindings", [])),
+         {:ok, selections} <- decode_selections(Map.get(raw, "selections", [])),
          {:ok, tool_servers} <- decode_tool_servers(Map.get(raw, "tool_servers", [])) do
       decisions =
-        %{ref: raw["ref"] || "", kind: kind, bindings: bindings, tool_servers: tool_servers}
+        %{
+          ref: raw["ref"] || "",
+          kind: kind,
+          bindings: bindings,
+          selections: selections,
+          tool_servers: tool_servers
+        }
         |> Cyfr.MapUtil.put_present(:label, raw["label"])
         |> Cyfr.MapUtil.put_present(:scope, scope)
         |> Cyfr.MapUtil.put_present(:invoke_mode, invoke_mode)
@@ -321,6 +328,21 @@ defmodule Sanctum.MCP.ProfileTool do
 
   defp decode_bindings(_), do: {:error, "bindings must be a list"}
 
+  # A selection names a dependency of the closure and one of its profiles
+  # by label (the default one when unnamed); the fields, when given, narrow
+  # what that profile's entry lends.
+  defp decode_selections(list) when is_list(list) do
+    decoded =
+      Enum.map(list, fn selection ->
+        %{dep: selection["dep"], label: selection["label"] || "default"}
+        |> Cyfr.MapUtil.put_present(:fields, selection["fields"])
+      end)
+
+    {:ok, decoded}
+  end
+
+  defp decode_selections(_), do: {:error, {:invalid_argument, "selections must be a list"}}
+
   defp kind(args) do
     enum(args, "kind", %{"owner" => :owner, "public" => :public})
     |> case do
@@ -383,6 +405,20 @@ defmodule Sanctum.MCP.ProfileTool do
 
   defp fmt({:unknown_need, need}),
     do: "unknown_need: #{inspect(need)} — this component declares no such need"
+
+  defp fmt({:selection_target_unknown, dep}),
+    do: "selection_target_unknown: #{inspect(dep)} is not a dependency of this component"
+
+  defp fmt({:selection_profile_unavailable, dep, label}),
+    do:
+      "selection_profile_unavailable: #{dep} has no active owner profile labelled #{inspect(label)}"
+
+  defp fmt({:selection_unbound, dep, label}),
+    do:
+      "selection_unbound: the '#{label}' profile of #{dep} binds no usable entry — connect a key there first"
+
+  defp fmt({:selection_fields_unavailable, dep, fields}),
+    do: "selection_fields_unavailable: #{dep}'s profile does not lend #{Enum.join(fields, ", ")}"
 
   defp fmt({:entry_unavailable, id, status}),
     do: "entry_unavailable: #{id} is #{inspect(status)}"

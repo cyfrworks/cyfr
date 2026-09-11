@@ -150,10 +150,10 @@ defmodule Sanctum.ContextFocusTest do
 
     # and so is B's storage: a URI is rooted in the focused athanor, never another
     assert {:error, {:not_found, "File", _}} =
-             Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/guest/secret.txt")
+             Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/data/secret.txt")
 
     assert {:ok, %{content: content}} =
-             Emissary.MCP.Tools.RecordsProvider.read(b_ctx, "arca://files/guest/secret.txt")
+             Emissary.MCP.Tools.RecordsProvider.read(b_ctx, "arca://files/data/secret.txt")
 
     assert Base.decode64!(content) == "b's bytes"
   end

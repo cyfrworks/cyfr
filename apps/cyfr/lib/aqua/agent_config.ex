@@ -209,6 +209,11 @@ defmodule Aqua.AgentConfig do
     |> Map.new(fn ref -> {ref, catalyst_status(ctx, listing, ref)} end)
   end
 
+  # A model is ready when its own profile binds a key AND the assistant's
+  # consent selects that profile on its edge to the catalyst — the key
+  # the assistant actually runs it with, resolved as a turn would resolve
+  # it. A bound key the assistant's edge does not select is still a key
+  # to connect.
   defp catalyst_status(ctx, listing, ref) do
     with {:ok, resolved} <- find_matching_catalyst(listing, ref),
          {:ok, plan} <-
@@ -216,9 +221,23 @@ defmodule Aqua.AgentConfig do
              "action" => "setup_plan",
              "reference" => resolved
            }) do
-      if plan[:ready] || plan["ready"], do: {:ready, resolved}, else: {:needs_key, resolved}
+      if (plan[:ready] || plan["ready"]) == true and lent_to_assistant?(ctx, ref),
+        do: {:ready, resolved},
+        else: {:needs_key, resolved}
     else
       _ -> {:missing, ref}
+    end
+  end
+
+  defp lent_to_assistant?(ctx, catalyst_ref) do
+    aqua = Aqua.VirtualTools.aqua_formula()
+
+    with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, aqua),
+         {:ok, edge} <-
+           Sanctum.Authority.Blob.lookup_edge(authority.policy, aqua, catalyst_ref, "") do
+      Sanctum.Authority.Blob.bound_vault?(edge.vault)
+    else
+      _ -> false
     end
   end
 

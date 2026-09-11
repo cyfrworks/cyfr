@@ -16,7 +16,10 @@ defmodule Sanctum.Consent.BlobBuilder do
   empty ask — deny-all resources under type-default limits.
 
   The caller supplies a `vault_fn` deciding which vault resource (if any)
-  rides each node; commit binds the operator's chosen entries.
+  rides each node: a bound entry (`entry_id`, `binding_digest`,
+  `projection`) or a selection (`via` a profile of that node). Commit
+  binds the operator's chosen entries and selections; bootstrap selects
+  each shipped dependency's default profile.
   """
 
   alias Compendium.Manifest.Caps
@@ -83,19 +86,17 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   @doc """
-  The derived vault references for `consent_vault_refs`, deduplicated.
-
-  Deduplicates by {entry_id, binding_digest}. A consent contains at most
-  one vault resource, attached to its source node, satisfying the table’s
-  unique (consent_id, vault_entry_id) key.
+  The derived vault references for `consent_vault_refs`, deduplicated by
+  `{entry_id, binding_digest}`. Only a bound entry is a reference; a
+  selection names another profile's entry, which that profile's own
+  consent already references.
   """
   @spec vault_refs(map()) :: [%{vault_entry_id: String.t(), binding_digest: String.t()}]
   def vault_refs(nodes) do
     for {_key, node} <- nodes,
-        vault = node.resources["__vault__"],
-        vault != nil,
+        %{"entry_id" => entry_id, "binding_digest" => digest} <- [node.resources["__vault__"]],
         uniq: true do
-      %{vault_entry_id: vault["entry_id"], binding_digest: vault["binding_digest"]}
+      %{vault_entry_id: entry_id, binding_digest: digest}
     end
   end
 

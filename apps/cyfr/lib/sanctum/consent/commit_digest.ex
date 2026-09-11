@@ -53,6 +53,13 @@ defmodule Sanctum.Consent.CommitDigest do
           required(:tool_patterns) => [String.t()]
         }
 
+  @type selection :: %{
+          required(:dep) => String.t(),
+          required(:label) => String.t(),
+          required(:binding_digest) => String.t(),
+          optional(:fields) => [String.t()]
+        }
+
   @type commit :: %{
           required(:shape_digest) => String.t(),
           required(:blob_digest) => String.t(),
@@ -60,6 +67,7 @@ defmodule Sanctum.Consent.CommitDigest do
           required(:kind) => :owner | :public,
           required(:invoke_mode) => :open_inert | :edge_only,
           optional(:bindings) => [binding()],
+          optional(:selections) => [selection()],
           optional(:tool_servers) => [tool_server_grant()],
           optional(:override) => boolean()
         }
@@ -104,7 +112,7 @@ defmodule Sanctum.Consent.CommitDigest do
     with :ok <-
            Normalize.only_keys(
              commit,
-             ~w(shape_digest blob_digest label kind invoke_mode bindings tool_servers override)a,
+             ~w(shape_digest blob_digest label kind invoke_mode bindings selections tool_servers override)a,
              tag
            ),
          {:ok, shape_digest} <- Normalize.required_string(commit, :shape_digest, tag),
@@ -115,6 +123,7 @@ defmodule Sanctum.Consent.CommitDigest do
            Normalize.enum(commit, :invoke_mode, [:open_inert, :edge_only], tag),
          :ok <- check_public_is_contained(kind, invoke_mode),
          {:ok, bindings} <- bindings(commit),
+         {:ok, selections} <- selections(commit),
          {:ok, tool_servers} <- tool_servers(commit),
          {:ok, override} <- override(commit) do
       {:ok,
@@ -125,6 +134,7 @@ defmodule Sanctum.Consent.CommitDigest do
          "kind" => Atom.to_string(kind),
          "invoke_mode" => Atom.to_string(invoke_mode),
          "bindings" => bindings,
+         "selections" => selections,
          "tool_servers" => tool_servers,
          "override" => override
        }}
@@ -184,6 +194,65 @@ defmodule Sanctum.Consent.CommitDigest do
 
   defp normalize_binding(other) do
     {:error, {:invalid_commit, :bindings, "each binding must be a map, got: #{inspect(other)}"}}
+  end
+
+  # One dependency, one selected profile: the digest covers which labelled
+  # profile of which dependency lends its entry, at which binding digest,
+  # narrowed to which fields.
+  defp selections(commit) do
+    tag = :invalid_commit
+
+    case Map.get(commit, :selections, []) do
+      list when is_list(list) ->
+        list
+        |> Enum.reduce_while({:ok, []}, fn selection, {:ok, acc} ->
+          case normalize_selection(selection) do
+            {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+            error -> {:halt, error}
+          end
+        end)
+        |> case do
+          {:ok, selections} -> ensure_one_selection_per_dep(selections)
+          error -> error
+        end
+
+      other ->
+        {:error, {tag, :selections, "must be a list, got: #{inspect(other)}"}}
+    end
+  end
+
+  defp normalize_selection(selection) when is_map(selection) do
+    tag = :invalid_commit
+
+    with :ok <- Normalize.only_keys(selection, ~w(dep label binding_digest fields)a, tag),
+         {:ok, dep} <- Normalize.required_string(selection, :dep, tag),
+         {:ok, label} <- Normalize.required_string(selection, :label, tag),
+         {:ok, binding_digest} <- Normalize.required_string(selection, :binding_digest, tag),
+         {:ok, fields} <- Normalize.string_set(selection, :fields, tag) do
+      {:ok,
+       %{
+         "dep" => dep,
+         "label" => label,
+         "binding_digest" => binding_digest,
+         "fields" => fields
+       }}
+    end
+  end
+
+  defp normalize_selection(other) do
+    {:error,
+     {:invalid_commit, :selections, "each selection must be a map, got: #{inspect(other)}"}}
+  end
+
+  defp ensure_one_selection_per_dep(selections) do
+    sorted = Enum.sort_by(selections, & &1["dep"])
+    deps = Enum.map(sorted, & &1["dep"])
+
+    if length(Enum.uniq(deps)) == length(deps) do
+      {:ok, sorted}
+    else
+      {:error, {:invalid_commit, :selections, "each dependency may be selected exactly once"}}
+    end
   end
 
   # One need, one credential. Two bindings for the same need would make the

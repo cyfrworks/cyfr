@@ -12,13 +12,19 @@ defmodule Sanctum.Consent.Loader do
   3. consent internal validity (pinned ⟺ non-empty version — the database
      cannot enforce it portably, so the loader is the gate)
   4. the resolved policy blob parses (`Sanctum.Authority.Blob.parse/1`)
-  5. **blob/refs equality** — every vault reference inside the blob must
-     exactly equal the consent's stored `vault_refs`; any asymmetry means
-     the blob and the reverse index disagree about what was granted, and
-     the consent is refused
-  6. the `Sanctum.Consent.Loader.Decision` table over granted vs installed
+  5. **blob/refs equality** — every bound vault reference inside the blob
+     must exactly equal the consent's stored `vault_refs`; any asymmetry
+     means the blob and the reverse index disagree about what was
+     granted, and the consent is refused
+  6. **selections resolved** — an edge whose vault selects a labelled
+     profile of its target is rewritten to that profile's own bound entry
+     when the profile is an active owner profile, its head consent is
+     intact and its ingress binds an entry of the pinned digest;
+     otherwise the selection stays, and a run under that edge answers
+     setup_required
+  7. the `Sanctum.Consent.Loader.Decision` table over granted vs installed
      activation
-  7. `Sanctum.Authority.root/3` — ceiling clamping happens inside
+  8. `Sanctum.Authority.root/3` — ceiling clamping happens inside
 
   The live side of step 6 (`live` and `live_shape_digest`) is supplied by
   the caller, because resolving installed components is registry work the
@@ -75,6 +81,7 @@ defmodule Sanctum.Consent.Loader do
          :ok <- check_blob_digest(consent),
          {:ok, blob} <- parse_blob(consent),
          :ok <- check_blob_refs_equality(blob, consent),
+         blob = resolve_selections(ctx, source, blob),
          {:ok, running} <- evaluate_activation(ctx, profile, consent, opts),
          {:ok, authority} <- build_root(profile, consent, blob, running, opts) do
       {:ok, authority, %{activation_digest: running.digest, activation_graph: running.graph}}
@@ -157,9 +164,106 @@ defmodule Sanctum.Consent.Loader do
   defp blob_vault_refs(%Blob{nodes: nodes}) do
     for {_ref, node} <- nodes,
         {_key, edge} <- node.edges,
-        edge.vault != nil,
+        Blob.bound_vault?(edge.vault),
         into: MapSet.new() do
       {edge.vault.entry_id, edge.vault.binding_digest}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Selections — a vault borrowed from the target's own profile
+  # ---------------------------------------------------------------------------
+
+  # Every selected vault edge is resolved against the profile it names:
+  # the edge's target must have an active owner profile of that label,
+  # its head consent must be intact (the same digest check this consent
+  # passed), and its ingress must bind an entry whose digest matches the
+  # pinned one when the selection pinned it. The bound entry then rides
+  # the edge, projected to what both the selection and the ingress allow.
+  # Anything else leaves the selection in place, which no run can unseal.
+  defp resolve_selections(ctx, source, %Blob{} = blob) do
+    Blob.map_edges(blob, fn _node_ref, key, edge ->
+      case {edge.vault, Blob.edge_target(key)} do
+        {%{via: via, projection: projection}, {:ok, target}} ->
+          case resolve_selection(ctx, source, target, via, projection) do
+            {:ok, vault} ->
+              %{edge | vault: vault}
+
+            {:error, reason} ->
+              Logger.debug(
+                "[Consent.Loader] selection on #{key} not resolved: #{inspect(reason)}"
+              )
+
+              edge
+          end
+
+        _bound_absent_or_ingress ->
+          edge
+      end
+    end)
+  end
+
+  defp resolve_selection(ctx, source, target, via, projection) do
+    with {:ok, profile} <- selected_profile(ctx, source, target, via.label),
+         {:ok, consent} <- fetch_head(source, ctx, profile),
+         :ok <- check_blob_digest(consent),
+         {:ok, target_blob} <- parse_blob(consent),
+         {:ok, ingress} <- ingress_edge(target_blob, target),
+         {:ok, bound} <- bound_ingress_vault(ingress),
+         :ok <- check_pinned_digest(via, bound),
+         {:ok, narrowed} <- narrow_projection(projection, bound.projection) do
+      {:ok, %{bound | projection: narrowed}}
+    end
+  end
+
+  defp selected_profile(ctx, source, target, label) do
+    with {:ok, profiles} <- source.profiles(ctx, target) do
+      case Enum.find(profiles, &(&1.label == label and &1.kind == :owner)) do
+        %{status: :active} = profile -> {:ok, profile}
+        %{status: status} -> {:error, {:profile_unavailable, status}}
+        nil -> {:error, {:no_such_profile, target, label}}
+      end
+    end
+  end
+
+  defp ingress_edge(blob, target) do
+    case Blob.ingress(blob, target) do
+      {:ok, edge} -> {:ok, edge}
+      {:error, :missing_ingress} -> {:error, {:missing_ingress, target}}
+    end
+  end
+
+  defp bound_ingress_vault(%Blob.Edge{vault: vault}) do
+    if Blob.bound_vault?(vault), do: {:ok, vault}, else: {:error, :nothing_bound}
+  end
+
+  defp check_pinned_digest(%{binding_digest: nil}, _bound), do: :ok
+
+  defp check_pinned_digest(%{binding_digest: pinned}, %{binding_digest: bound}) do
+    if Plug.Crypto.secure_compare(pinned, bound), do: :ok, else: {:error, :binding_moved}
+  end
+
+  # A projection narrows: the selection's fields and scopes intersect the
+  # ingress's, an empty list on either side meaning "all of the other's".
+  # A selection that asks for fields the ingress does not grant resolves
+  # to nothing rather than to a wider set.
+  defp narrow_projection(nil, bound), do: {:ok, bound}
+  defp narrow_projection(selected, nil), do: {:ok, selected}
+
+  defp narrow_projection(selected, bound) do
+    with {:ok, fields} <- narrow_list(selected.fields, bound.fields),
+         {:ok, scopes} <- narrow_list(selected.scopes, bound.scopes) do
+      {:ok, %{fields: fields, scopes: scopes}}
+    end
+  end
+
+  defp narrow_list([], bound), do: {:ok, bound}
+  defp narrow_list(selected, []), do: {:ok, selected}
+
+  defp narrow_list(selected, bound) do
+    case Enum.filter(selected, &(&1 in bound)) do
+      [] -> {:error, :projection_unsatisfiable}
+      common -> {:ok, common}
     end
   end
 

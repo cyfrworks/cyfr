@@ -98,4 +98,88 @@ defmodule Opus.SeedModelCatalystsTest do
                })
     end
   end
+
+  test "the shipped assistant runs claude with the key bound on claude's own profile", %{
+    ctx: ctx
+  } do
+    for {plural, name} <- [
+          {"catalysts", "claude"},
+          {"catalysts", "files"},
+          {"catalysts", "http"},
+          {"formulas", "aqua"}
+        ] do
+      unit = ["components", plural, "local", name, newest_shipped(plural, name)]
+      :ok = Arca.Overlay.pull_shipped(ctx, unit)
+      {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+    end
+
+    # The baseline consents: the formula's edge to claude selects claude's
+    # default profile, which binds nothing yet.
+    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
+    assert "formula:local.aqua" in minted and "catalyst:local.claude" in minted
+
+    child_opts = [
+      ctx: Sanctum.Context.enter_guest(ctx),
+      parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+      root_execution_id: "exec_root_#{System.unique_integer([:positive])}"
+    ]
+
+    input = %{"operation" => "nothing.here", "params" => %{}}
+
+    {:ok, before} = Opus.Chain.authority_for(ctx, :default, "formula:local.aqua")
+
+    assert {:error, {:setup_required, %{node_ref: "catalyst:local.claude:" <> _, reason: reason}}} =
+             Opus.run_child(before, "catalyst:local.claude", nil, input, child_opts)
+
+    assert reason == "vault_selection_unbound"
+
+    # The person connects the key on the catalyst — one act, on the model.
+    {:ok, entry} =
+      Sanctum.Vault.create(ctx, %{
+        name: "claude key",
+        kind: "api_key",
+        fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"}
+      })
+
+    {:ok, walk_plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: "catalyst:local.claude"})
+
+    decisions = %{
+      ref: "catalyst:local.claude",
+      bindings: [%{need: "api_key", entry_id: entry.id}]
+    }
+
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: walk_plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: walk_plan.expected_consent_revision
+      })
+
+    # The assistant's authority, loaded again, lends the key on its edge;
+    # the child reads it and runs to its own refusal.
+    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, "formula:local.aqua")
+
+    assert {:error, "Unknown operation: nothing.here"} =
+             Opus.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
+
+    # Revoking the catalyst's profile cuts the assistant off at the next load.
+    {:ok, [claude_profile]} = Source.DB.profiles(ctx, "catalyst:local.claude")
+    :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, claude_profile.id, "revoked")
+    {:ok, revoked} = Opus.Chain.authority_for(ctx, :default, "formula:local.aqua")
+
+    assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
+             Opus.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
+  end
+
+  defp newest_shipped(plural, name) do
+    Path.join(@seed_root, "components/#{plural}/local/#{name}/*")
+    |> Path.wildcard()
+    |> Enum.map(&Path.basename/1)
+    |> Compendium.Semver.sort_desc()
+    |> hd()
+  end
 end
