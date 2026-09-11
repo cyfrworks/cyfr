@@ -46,9 +46,13 @@ defmodule Opus.Host do
   @spec enforce(map()) :: :ok
   defdelegate enforce(attrs), to: Sanctum.Policy.Enforcement, as: :record
 
-  @doc "Open an execution's row before it runs."
-  @spec record_start(Opus.ExecutionRecord.t()) :: :ok | {:error, term()}
-  defdelegate record_start(record), to: Opus.ExecutionRecord, as: :write_started
+  @doc """
+  Open an execution's row before it runs. `opts` carry the admission
+  barriers (`:charge`, `:step`, `:occurrence_id`) the record's own
+  admission performs in its transaction.
+  """
+  @spec record_start(Opus.ExecutionRecord.t(), keyword()) :: :ok | {:error, term()}
+  defdelegate record_start(record, opts \\ []), to: Opus.ExecutionRecord, as: :write_started
 
   @doc "Close an execution's row as completed."
   @spec record_complete(Opus.ExecutionRecord.t()) :: :ok | {:error, term()}

@@ -317,8 +317,28 @@ defmodule Opus.Chain do
         |> Arca.QueryHelpers.maybe_put(:need, decision.need)
         # Who invoked this child, for what the row keeps of its output.
         |> Arca.QueryHelpers.maybe_put(:parent_reference, Keyword.get(opts, :parent_reference))
+        # The barriers admission performs for a loop-dispatched child: the
+        # hold row its charge names, and the step on its generation.
+        |> Arca.QueryHelpers.maybe_put(:charge, hold_of(decision.authority, opts))
+        |> Arca.QueryHelpers.maybe_put(:step, step_of(opts))
 
       Opus.Executor.run(ctx, decision.reference, input, exec_opts)
+    end
+  end
+
+  defp hold_of(%Authority{budget: budget}, opts) do
+    case Keyword.get(opts, :charge) do
+      %{id: id} -> %{reservation_id: budget.id, id: id}
+      _ -> nil
+    end
+  end
+
+  defp step_of(opts) do
+    with step_id when is_binary(step_id) <- Keyword.get(opts, :step_id),
+         %{generation: generation} <- Keyword.get(opts, :charge) do
+      %{id: step_id, generation: generation}
+    else
+      _ -> nil
     end
   end
 

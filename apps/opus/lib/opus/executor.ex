@@ -471,13 +471,19 @@ defmodule Opus.Executor do
   defp stage_record_start(%ExecutionPipeline{} = p) do
     staged(
       p,
-      with :ok <- Opus.Host.record_start(p.record) do
+      with :ok <- Opus.Host.record_start(p.record, admission_opts(p)) do
         :atomics.put(p.started_written, 1, 1)
         Opus.Telemetry.execute_start(p.record)
         {:ok, p}
       end
     )
   end
+
+  # The barriers admission performs inside its own transaction: the hold
+  # row a loop-dispatched child's charge names, the step on its
+  # generation, the schedule occurrence a scheduled root starts.
+  defp admission_opts(%ExecutionPipeline{} = p),
+    do: Keyword.take(p.opts, [:charge, :step, :occurrence_id])
 
   # Stage 4: resolve credentials. The callee-keyed grant plane is never
   # consulted: credentials come only from the current edge's vault
@@ -1434,7 +1440,7 @@ defmodule Opus.Executor do
     failed_record = ExecutionRecord.fail(record, error_msg)
 
     if :atomics.get(p.started_written, 1) == 0 do
-      case Opus.Host.record_start(record) do
+      case Opus.Host.record_start(record, admission_opts(p)) do
         :ok ->
           :ok
 

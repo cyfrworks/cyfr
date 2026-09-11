@@ -904,5 +904,53 @@ defmodule Opus.ChainTest do
 
       assert Authority.budget(auth).in_flight == 0
     end
+
+    test "a hold past its admission window refuses the child before it runs", %{ctx: ctx} do
+      import Ecto.Query, only: [from: 2]
+
+      auth = authority_with_edges(%{@target_node => %{}})
+
+      {:ok, %{attempt: root_attempt}} =
+        Arca.Execution.admit(
+          %{
+            id: "exec_hold_root_#{System.unique_integer([:positive])}",
+            reference: "formula:local.root:1.0.0",
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "formula"
+          },
+          reservation: %{budget_id: auth.budget.id, cap: 2}
+        )
+
+      child_id = Cyfr.UUID7.execution_id()
+
+      charge = %{
+        id: "call:t:1:c2:g0",
+        attempt: root_attempt.attempt,
+        generation: 0,
+        holder_execution_id: child_id
+      }
+
+      :ok = Arca.BudgetReservations.charge(ctx.athanor_id, auth.budget.id, charge, 1)
+      past = DateTime.add(DateTime.utc_now(), -1, :second)
+
+      {1, _} =
+        from(c in Arca.Schemas.BudgetCharge,
+          where: c.athanor_id == ^ctx.athanor_id and c.id == ^charge.id
+        )
+        |> Arca.Repo.update_all(set: [admit_by: past])
+
+      assert {:error, _} =
+               Opus.run_child(
+                 auth,
+                 "#{@target_node}:0.1.0",
+                 nil,
+                 %{},
+                 child_opts(ctx, guest_fn: :spawn, charge: charge, execution_id: child_id)
+               )
+
+      assert Arca.Repo.get(Arca.Execution, child_id) == nil
+      assert Authority.budget(auth).in_flight == 0
+    end
   end
 end
