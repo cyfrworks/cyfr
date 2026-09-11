@@ -88,11 +88,23 @@ defmodule Opus.AgentAuthorityTest do
       })
 
     {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    assert Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
+
+    # A root pin whose profile row is missing is not intact: the loader
+    # fails closed rather than trusting a constructed authority.
+    refute Sanctum.Consent.Loader.pinned_intact?(ctx, %{authority | profile_id: "prof_missing"})
 
     assert {:ok, %{output: output}} =
              Opus.run_child(authority, "catalyst:local.claude", nil, describe, child_opts)
 
     assert {:ok, %{"contracts" => ["model/chat@1"]}} = Cyfr.Models.decode_envelope(output)
+
+    {:ok, [claude]} = Source.DB.profiles(ctx, "catalyst:local.claude")
+    :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, claude.id, "revoked")
+    refute Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
+
+    assert {:error, {:setup_required, %{reason: "consent_moved"}}} =
+             Opus.run_child(authority, "catalyst:local.claude", nil, describe, child_opts)
 
     # A role the soul may clone into loads as a source of its own, with its
     # edge into the http hand carrying the hand's egress.
@@ -103,5 +115,92 @@ defmodule Opus.AgentAuthorityTest do
       Sanctum.Authority.Blob.lookup_edge(web.policy, "agent:local.web", "catalyst:local.http", "")
 
     assert http_edge.egress.domains != []
+  end
+
+  test "two roles on the soul run one catalyst with two keys", %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+
+    home =
+      bind_claude!(ctx, name: "home key", fields: %{"ANTHROPIC_API_KEY" => "sk-home"})
+
+    work =
+      bind_claude!(ctx,
+        label: "work",
+        name: "work key",
+        fields: %{"ANTHROPIC_API_KEY" => "sk-work"}
+      )
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @soul})
+
+    decisions = %{
+      ref: @soul,
+      selections: [
+        %{from: "agent:local.web", dep: "catalyst:local.claude", label: "default"},
+        %{from: "agent:local.artisan", dep: "catalyst:local.claude", label: "work"}
+      ]
+    }
+
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    {:ok, soul} = Opus.Chain.authority_for(ctx, :default, @soul)
+
+    {:ok, web_edge} =
+      Sanctum.Authority.Blob.lookup_edge(
+        soul.policy,
+        "agent:local.web",
+        "catalyst:local.claude",
+        ""
+      )
+
+    {:ok, artisan_edge} =
+      Sanctum.Authority.Blob.lookup_edge(
+        soul.policy,
+        "agent:local.artisan",
+        "catalyst:local.claude",
+        ""
+      )
+
+    assert web_edge.vault.entry_id == home.id
+    assert artisan_edge.vault.entry_id == work.id
+  end
+
+  defp bind_claude!(ctx, opts) do
+    {:ok, entry} =
+      Sanctum.Vault.create(ctx, %{
+        name: Keyword.fetch!(opts, :name),
+        kind: "api_key",
+        fields: Keyword.get(opts, :fields, %{"ANTHROPIC_API_KEY" => "sk-test-claude"})
+      })
+
+    label = Keyword.get(opts, :label, "default")
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: "catalyst:local.claude", label: label})
+
+    decisions = %{
+      ref: "catalyst:local.claude",
+      label: label,
+      bindings: [%{need: "api_key", entry_id: entry.id}]
+    }
+
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    entry
   end
 end

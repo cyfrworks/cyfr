@@ -810,14 +810,15 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  # Every executable local component must hold a consent; a skip for any
-  # reason other than "already bootstrapped" is a provisioning failure.
-  # The fill is whole without an agent's consent: an agent nobody vouches
-  # for consents through the walk, and one whose closure the bundle does
-  # not resolve is re-minted by a later sync once it does.
+  # Every vouched local source must hold a consent. A skip for "already
+  # bootstrapped" or "not vouched" (a member-authored or edited source)
+  # is not a provisioning failure: those consent through the walk. An
+  # agent whose closure the bundle does not resolve is re-minted by a
+  # later sync once it does.
   defp all_minted(%{skipped: skipped}) do
     case Enum.reject(skipped, fn {ref, reason} ->
-           reason == :already_bootstrapped or Compendium.AgentSource.agent_ref?(ref)
+           reason in [:already_bootstrapped, :not_vouched] or
+             Compendium.AgentSource.agent_ref?(ref)
          end) do
       [] -> :ok
       unminted -> {:unminted, unminted}

@@ -328,13 +328,15 @@ defmodule Sanctum.MCP.ProfileTool do
 
   defp decode_bindings(_), do: {:error, "bindings must be a list"}
 
-  # A selection names a dependency of the closure and one of its profiles
-  # by label (the default one when unnamed); the fields, when given, narrow
-  # what that profile's entry lends.
+  # A selection names a dependency edge of the closure and one of its
+  # profiles by label (the default one when unnamed); `from` defaults to
+  # the source at commit. The fields, when given, narrow what that
+  # profile's entry lends.
   defp decode_selections(list) when is_list(list) do
     decoded =
       Enum.map(list, fn selection ->
         %{dep: selection["dep"], label: selection["label"] || "default"}
+        |> Cyfr.MapUtil.put_present(:from, selection["from"])
         |> Cyfr.MapUtil.put_present(:fields, selection["fields"])
       end)
 

@@ -61,8 +61,24 @@ defmodule Compendium.AgentSourceTest do
     assert {:ok, ^soul} = Registry.get_latest(ctx, "aqua", "local", "agent")
     assert {:error, :not_found} = Registry.get_latest(ctx, "nobody", "local", "agent")
     assert AgentSource.ref("web") == "agent:local.web"
+    assert AgentSource.soul_ref() == @soul
     assert AgentSource.agent_ref?("agent:local.web")
     refute AgentSource.agent_ref?("catalyst:local.web")
+  end
+
+  test "snapshot keeps the bytes and parses the same ones", %{ctx: ctx} do
+    {:ok, snap} = Compendium.AgentIndex.snapshot(ctx, "aqua")
+    assert snap.agent.name == "aqua"
+    assert String.starts_with?(snap.revision_digest, "sha256:")
+    assert String.starts_with?(snap.capability_digest, "sha256:")
+
+    {:ok, again} = Compendium.AgentIndex.snapshot(ctx, "aqua")
+    assert again.revision_digest == snap.revision_digest
+    assert again.capability_digest == snap.capability_digest
+
+    {:ok, bytes} = Arca.AgentRevisions.get(ctx.athanor_id, snap.revision_digest)
+    assert {:ok, ^bytes} = Arca.get(ctx, AquaPath.soul_file())
+    assert {:ok, snap.agent} == AquaAgent.parse("aqua", bytes)
   end
 
   test "the soul's manifest names its tools, its model, its hands and its roles", %{ctx: ctx} do
@@ -75,7 +91,9 @@ defmodule Compendium.AgentSourceTest do
     refute Enum.any?(tools, &String.ends_with?(&1, "artisan.*"))
     refute "native_search" in tools
     assert tools == Enum.sort(tools)
-    assert manifest["model"] == agent.model
+    assert manifest["agent"]["model"] == agent.model
+    assert manifest["agent"]["catalyst"] == agent.catalyst_ref
+    refute Map.has_key?(manifest, "model")
 
     deps = manifest["dependencies"]["static"]
     by_ref = Map.new(deps, &{&1["ref"], &1})
@@ -95,7 +113,7 @@ defmodule Compendium.AgentSourceTest do
 
     assert web.manifest["dependencies"]["static"] |> Enum.map(& &1["ref"]) |> Enum.sort() ==
              Enum.sort([
-               web.manifest |> Map.fetch!("model") |> then(fn _ -> "catalyst:local.claude" end),
+               web.manifest |> get_in(["agent", "catalyst"]),
                "catalyst:local.http"
              ])
   end
@@ -166,5 +184,29 @@ defmodule Compendium.AgentSourceTest do
     refute soul_after.release_digest == soul_before.release_digest
     {:ok, live} = Activation.resolve_verified(ctx, soul_after)
     refute Map.has_key?(live.graph, "agent:local.web")
+  end
+
+  test "shipped_row/3 equals the tenant row while the seed file is unchanged", %{ctx: ctx} do
+    {:ok, tenant} = AgentSource.latest_row(ctx, "web")
+    {:ok, rows} = AgentSource.rows(ctx)
+    roster = MapSet.new(rows, & &1.name)
+    path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit("web"), 1)
+    {:ok, bytes} = Arca.get(Sanctum.system_context(), path)
+    assert {:ok, ^tenant} = AgentSource.shipped_row("web", bytes, roster)
+  end
+
+  test "a policy edit of the tenant copy does not change the seed row", %{ctx: ctx} do
+    {:ok, before} = AgentSource.latest_row(ctx, "web")
+    write_agent!(ctx, "web", &%{&1 | tool_policy: Map.put(&1.tool_policy, "files.read", "auto")})
+    {:ok, edited} = AgentSource.latest_row(ctx, "web")
+    refute edited.release_digest == before.release_digest
+
+    {:ok, rows} = AgentSource.rows(ctx)
+    roster = MapSet.new(rows, & &1.name)
+    path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit("web"), 1)
+    {:ok, bytes} = Arca.get(Sanctum.system_context(), path)
+    assert {:ok, seed} = AgentSource.shipped_row("web", bytes, roster)
+    assert seed.release_digest == before.release_digest
+    refute seed.release_digest == edited.release_digest
   end
 end

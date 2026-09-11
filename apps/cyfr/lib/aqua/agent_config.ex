@@ -230,11 +230,11 @@ defmodule Aqua.AgentConfig do
   end
 
   defp lent_to_assistant?(ctx, catalyst_ref) do
-    aqua = Aqua.VirtualTools.aqua_formula()
+    soul = Compendium.AgentSource.soul_ref()
 
-    with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, aqua),
+    with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, soul),
          {:ok, edge} <-
-           Sanctum.Authority.Blob.lookup_edge(authority.policy, aqua, catalyst_ref, "") do
+           Sanctum.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
       Sanctum.Authority.Blob.bound_vault?(edge.vault)
     else
       _ -> false

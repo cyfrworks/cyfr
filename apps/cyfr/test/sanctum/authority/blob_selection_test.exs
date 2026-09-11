@@ -125,4 +125,44 @@ defmodule Sanctum.Authority.BlobSelectionTest do
 
     assert back.policy == root.policy
   end
+
+  test "a bound vault's lender survives parse, encode and the wire" do
+    bound = %{
+      "entry_id" => "vault-1",
+      "binding_digest" => "sha256:key",
+      "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]},
+      "lender" => %{"profile_id" => "prof-claude", "consent_id" => "consent-claude"}
+    }
+
+    assert {:ok, blob} = Blob.parse(graph(bound))
+    assert {:ok, edge} = Blob.lookup_edge(blob, @formula, @catalyst, "")
+
+    assert edge.vault == %{
+             entry_id: "vault-1",
+             binding_digest: "sha256:key",
+             projection: %{fields: ["ANTHROPIC_API_KEY"], scopes: []},
+             lender: %{profile_id: "prof-claude", consent_id: "consent-claude"}
+           }
+
+    assert Blob.parse(Blob.to_map(blob)) == {:ok, blob}
+
+    profile = %{
+      profile_id: "prof-aqua",
+      consent_id: "consent-aqua",
+      source_ref: @formula,
+      kind: :owner,
+      invoke_mode: :open_inert,
+      activation: %{@formula => "sha256:f", @catalyst => "sha256:c"}
+    }
+
+    {:ok, root} = Authority.root(profile, blob)
+    {:ok, edge} = Blob.lookup_edge(root.policy, @formula, @catalyst, "")
+    child = Authority.bound_child(root, @catalyst, edge)
+    assert {:ok, back} = Authority.from_wire(Authority.to_wire(child))
+
+    assert back.resources.vault.lender == %{
+             profile_id: "prof-claude",
+             consent_id: "consent-claude"
+           }
+  end
 end

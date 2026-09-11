@@ -44,32 +44,53 @@ defmodule Compendium.AgentIndex do
     end
   end
 
+  @doc """
+  One read of the agent's file: keep the bytes, parse the same bytes,
+  and answer the revision and capability digests a turn pins.
+  """
+  @spec snapshot(Context.t(), String.t()) ::
+          {:ok,
+           %{
+             agent: AquaAgent.t(),
+             revision_digest: String.t(),
+             capability_digest: String.t()
+           }}
+          | {:error, term()}
+  def snapshot(%Context{} = ctx, name) when is_binary(name) do
+    with {:ok, bytes} <- Arca.get(ctx, AquaPath.agent_file(name)),
+         {:ok, revision} <- Arca.AgentRevisions.put(Context.athanor!(ctx), bytes),
+         {:ok, agent} <- AquaAgent.parse(name, bytes),
+         {:ok, capability} <- AquaAgent.capability_digest(agent) do
+      {:ok, %{agent: agent, revision_digest: revision, capability_digest: capability}}
+    end
+  end
+
   defp rows_for(ctx, agents) do
     athanor_id = Context.athanor!(ctx)
     now = DateTime.utc_now()
 
     Enum.reduce_while(agents, {:ok, []}, fn agent, {:ok, acc} ->
-      with {:ok, bytes} <- Arca.get(ctx, AquaPath.agent_file(agent.name)),
-           {:ok, capability} <- AquaAgent.capability_digest(agent),
-           {:ok, revision} <- Arca.AgentRevisions.put(athanor_id, bytes) do
-        {:cont,
-         {:ok,
-          [
-            %{
-              id: Cyfr.UUID7.generate_id("agt"),
-              athanor_id: athanor_id,
-              name: agent.name,
-              kind: AquaAgent.type_of(agent),
-              revision_digest: revision,
-              capability_digest: capability,
-              catalyst_ref: agent.catalyst_ref,
-              disabled: agent.disabled == true,
-              synced_at: now
-            }
-            | acc
-          ]}}
-      else
-        {:error, reason} -> {:halt, {:error, {:agent_unreadable, agent.name, reason}}}
+      case snapshot(ctx, agent.name) do
+        {:ok, snap} ->
+          {:cont,
+           {:ok,
+            [
+              %{
+                id: Cyfr.UUID7.generate_id("agt"),
+                athanor_id: athanor_id,
+                name: snap.agent.name,
+                kind: AquaAgent.type_of(snap.agent),
+                revision_digest: snap.revision_digest,
+                capability_digest: snap.capability_digest,
+                catalyst_ref: snap.agent.catalyst_ref,
+                disabled: snap.agent.disabled == true,
+                synced_at: now
+              }
+              | acc
+            ]}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:agent_unreadable, agent.name, reason}}}
       end
     end)
     |> case do

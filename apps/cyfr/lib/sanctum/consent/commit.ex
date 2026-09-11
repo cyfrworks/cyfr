@@ -188,12 +188,16 @@ defmodule Sanctum.Consent.Commit do
   # lender, the same fields, the digest pinned again from the live entry.
   defp head_selections(head) do
     with {:ok, %{"nodes" => nodes}} <- Jason.decode(head.resolved_policy) do
-      for {_node_key, node} <- nodes,
+      for {from, node} <- nodes,
           {edge_key, %{"vault" => %{"via" => %{"label" => label}} = vault}} <-
             node["edges"] || %{},
-          {:ok, dep} <- [Sanctum.Authority.Blob.edge_target(edge_key)],
-          uniq: true do
-        %{dep: dep, label: label, fields: get_in(vault, ["projection", "fields"]) || []}
+          {:ok, dep} <- [Sanctum.Authority.Blob.edge_target(edge_key)] do
+        %{
+          from: from,
+          dep: dep,
+          label: label,
+          fields: get_in(vault, ["projection", "fields"]) || []
+        }
       end
     else
       _ -> []
@@ -472,7 +476,7 @@ defmodule Sanctum.Consent.Commit do
     decisions
     |> Map.get(:selections, [])
     |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
-      with {:ok, dep} <- selection_target(raw, activation, source_ref),
+      with {:ok, from, dep} <- selection_target(ctx, raw, activation, source_ref),
            {:ok, profile} <- lender_profile(ctx, dep, Map.get(raw, :label, "default")),
            {:ok, bound} <- lender_binding(ctx, profile),
            {:ok, entry} <- fetch_active_entry(ctx, bound.entry_id),
@@ -480,6 +484,7 @@ defmodule Sanctum.Consent.Commit do
            :ok <- check_lender_digest(live_digest, bound, dep, profile.label),
            {:ok, fields} <- selected_fields(Map.get(raw, :fields, []), bound, dep) do
         selection = %{
+          from: from,
           dep: dep,
           label: profile.label,
           profile_id: profile.id,
@@ -500,12 +505,30 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  defp selection_target(raw, activation, source_ref) do
+  defp selection_target(ctx, raw, activation, source_ref) do
     with {:ok, dep} <- Plan.name_ref(Map.get(raw, :dep) || ""),
-         true <- dep != source_ref and Map.has_key?(activation.graph, dep) do
-      {:ok, dep}
+         {:ok, from} <- selection_from(raw, source_ref),
+         true <- Map.has_key?(activation.graph, from),
+         {:ok, manifest} <- node_manifest(ctx, from),
+         true <- dep in BlobBuilder.dep_edges(manifest, activation.graph, from) do
+      {:ok, from, dep}
     else
       _ -> {:error, {:selection_target_unknown, Map.get(raw, :dep)}}
+    end
+  end
+
+  defp selection_from(raw, source_ref) do
+    case Map.get(raw, :from) do
+      nil -> {:ok, source_ref}
+      from when is_binary(from) and from != "" -> Plan.name_ref(from)
+      _ -> {:error, :invalid_from}
+    end
+  end
+
+  defp node_manifest(ctx, node_key) do
+    with {:ok, ref} <- Sanctum.ComponentRef.parse(node_key),
+         {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
+      {:ok, Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
     end
   end
 
@@ -786,7 +809,8 @@ defmodule Sanctum.Consent.Commit do
        kind: kind,
        invoke_mode: invoke_mode,
        bindings: bindings,
-       selections: Enum.map(selections, &Map.take(&1, [:dep, :label, :binding_digest, :fields])),
+       selections:
+         Enum.map(selections, &Map.take(&1, [:from, :dep, :label, :binding_digest, :fields])),
        tool_servers:
          Enum.map(tool_servers, &Map.take(&1, [:server_name, :server_digest, :tool_patterns])),
        override: Map.get(decisions, :override, false)
@@ -901,7 +925,8 @@ defmodule Sanctum.Consent.Commit do
       |> Enum.map(&%{vault_entry_id: &1.entry_id, binding_digest: &1.binding_digest})
       |> Enum.uniq()
 
-    with {:ok, blob_json} <- JCS.encode(%{"canonical" => "jcs-1", "nodes" => nodes}) do
+    with {:ok, blob_json} <- JCS.encode(%{"canonical" => "jcs-1", "nodes" => nodes}),
+         :ok <- check_binding_digests(blob_json, prep) do
       {:ok, blob_json, refs}
     end
   end
@@ -912,14 +937,16 @@ defmodule Sanctum.Consent.Commit do
     # for manifests with one. resolve_bindings already refused a second.
     # A selected dependency's edges carry the selection.
     source_binding = List.first(prep.bindings)
-    selections = Map.new(prep.selections, &{&1.dep, &1})
+    selections = Map.new(prep.selections, &{{&1.from, &1.dep}, &1})
 
     vault_fn = fn node_key, _row, _manifest ->
-      cond do
-        node_key == prep.source_ref and source_binding != nil -> vault_resource(source_binding)
-        node_key == prep.source_ref -> nil
-        true -> selections |> Map.get(node_key) |> selection_resource()
+      if node_key == prep.source_ref and source_binding != nil do
+        vault_resource(source_binding)
       end
+    end
+
+    edge_vault_fn = fn from, dep, _row, _manifest ->
+      selections |> Map.get({from, dep}) |> selection_resource()
     end
 
     extras =
@@ -930,11 +957,39 @@ defmodule Sanctum.Consent.Commit do
 
     with {:ok, nodes} <-
            BlobBuilder.build(ctx, prep.activation.graph, prep.source_ref, vault_fn,
-             ingress_extras: extras
+             ingress_extras: extras,
+             edge_vault_fn: edge_vault_fn
            ),
-         {:ok, blob_json} <- BlobBuilder.encode(nodes) do
+         {:ok, blob_json} <- BlobBuilder.encode(nodes),
+         :ok <- check_binding_digests(blob_json, prep) do
       {:ok, blob_json, BlobBuilder.vault_refs(nodes)}
     end
+  end
+
+  defp check_binding_digests(blob_json, prep) do
+    parsed =
+      case Sanctum.Authority.Blob.parse(blob_json) do
+        {:ok, blob} -> Sanctum.Authority.Blob.entry_digest_conflicts(blob)
+        _ -> []
+      end
+
+    decided = conflicting_entry_ids(prep.bindings ++ prep.selections)
+
+    case Enum.uniq(parsed ++ decided) do
+      [id | _] -> {:error, {:inconsistent_binding_digest, id}}
+      [] -> :ok
+    end
+  end
+
+  defp conflicting_entry_ids(items) do
+    items
+    |> Enum.filter(fn item ->
+      is_binary(Map.get(item, :entry_id)) and is_binary(Map.get(item, :binding_digest))
+    end)
+    |> Enum.group_by(& &1.entry_id, & &1.binding_digest)
+    |> Enum.filter(fn {_id, digests} -> digests |> Enum.uniq() |> length() > 1 end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
   end
 
   defp tool_server_resource(grant) do

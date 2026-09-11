@@ -3,8 +3,8 @@
 
 defmodule Cyfr.ConsentDrift do
   @moduledoc """
-  Whether the consent this estate signed for the AQUA formula still covers
-  what the shipped manifest grants.
+  Whether the consent this estate signed for the AQUA soul (and its
+  formulas) still covers what the shipped source grants.
 
   The chain authority checks every in-chain call against the consent blob
   the estate froze, not against the manifest on disk. A seed upgrade that
@@ -33,16 +33,17 @@ defmodule Cyfr.ConsentDrift do
   end
 
   @doc """
-  Every local formula whose consent no longer answers, with what is wrong.
+  Every local formula or agent whose consent no longer answers, with
+  what is wrong.
 
   Installing a component widens the closure a consent was minted against,
-  and it widens it for every formula that names the component — the
-  assistant and the model listing both. Recovery is per formula, so the
-  caller is told which, not just that something drifted.
+  and it widens it for every source that names the component. Recovery
+  is per source, so the caller is told which, not just that something
+  drifted.
   """
   @spec stale_refs(Context.t()) :: [{String.t(), {:drifted, [String.t()]} | :stale}]
   def stale_refs(%Context{} = ctx) do
-    for ref <- local_formula_refs(ctx),
+    for ref <- local_formula_refs(ctx) ++ local_agent_refs(ctx),
         state = state(ctx, ref),
         state != :ok and state != :unknown,
         do: {ref, state}
@@ -61,11 +62,19 @@ defmodule Cyfr.ConsentDrift do
     end
   end
 
-  @doc """
-  What stands between a formula and the authority a turn pins.
+  defp local_agent_refs(%Context{} = ctx) do
+    case Compendium.AgentIndex.list(ctx) do
+      {:ok, rows} -> Enum.map(rows, &Compendium.AgentSource.ref(&1.name))
+      _ -> []
+    end
+  end
 
-  `:ok` — the consented set covers what the shipped manifest declares.
-  `{:drifted, actions}` — the consent predates the manifest and lacks these.
+  @doc """
+  What stands between a source and the authority a turn pins. With no
+  ref, the soul.
+
+  `:ok` — the consented set covers what the shipped source declares.
+  `{:drifted, actions}` — the consent predates the source and lacks these.
   `:stale` — the consent no longer answers for the estate's closure at all,
   which is what installing a dependency does to it: a turn is refused
   `consent_required` until a member consents again.
@@ -73,7 +82,7 @@ defmodule Cyfr.ConsentDrift do
   unreadable manifest, a store that did not answer).
   """
   @spec state(Context.t()) :: :ok | {:drifted, [String.t()]} | :stale | :unknown
-  def state(%Context{} = ctx), do: state(ctx, Aqua.VirtualTools.aqua_formula())
+  def state(%Context{} = ctx), do: state(ctx, Compendium.AgentSource.soul_ref())
 
   @spec state(Context.t(), String.t()) :: :ok | {:drifted, [String.t()]} | :stale | :unknown
   def state(%Context{} = ctx, ref) when is_binary(ref) do

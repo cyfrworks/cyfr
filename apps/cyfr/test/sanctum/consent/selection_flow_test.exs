@@ -13,14 +13,19 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Authority.Blob
+  alias Sanctum.Authority.Transition
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
   alias Sanctum.Consent.Source
   alias Sanctum.MCP.ProfileTool
+  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
   alias Sanctum.Vault
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
   @dep "reagent:local.sel-dep"
+  @role_a "reagent:local.sel-role-a"
+  @role_b "reagent:local.sel-role-b"
+  @root "reagent:local.sel-root"
 
   setup do
     Arca.Cache.init()
@@ -132,7 +137,10 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     lenders = lenders!(ctx)
     {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.sel-source"})
 
-    assert [%{dep: @dep, needs: [need], candidates: candidates}] = plan.dependency_needs
+    assert [
+             %{from: "reagent:local.sel-source", dep: @dep, needs: [need], candidates: candidates}
+           ] = plan.dependency_needs
+
     assert need.need == "api_key" and need.reason =~ "example API"
 
     assert Enum.sort_by(candidates, & &1.label) == [
@@ -200,7 +208,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   test "the commit digest covers the selection", %{ctx: ctx} do
-    lenders = lenders!(ctx)
+    _lenders = lenders!(ctx)
     {:ok, plain} = Commit.preview(ctx, %{ref: "reagent:local.sel-source"})
 
     {:ok, selected} =
@@ -305,6 +313,17 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     assert %{projection: %{fields: ["KEY"]}} = edge_vault(ctx, ref)
 
+    {:ok, with_from} =
+      ProfileTool.handle(ctx, %{
+        "action" => "preview",
+        "decisions" => %{
+          "ref" => ref,
+          "selections" => [%{"from" => ref, "dep" => @dep, "label" => "default"}]
+        }
+      })
+
+    assert is_binary(with_from.commit_digest)
+
     assert {:error, msg} =
              ProfileTool.handle(ctx, %{
                "action" => "preview",
@@ -315,5 +334,105 @@ defmodule Sanctum.Consent.SelectionFlowTest do
              })
 
     assert msg =~ "selection_profile_unavailable"
+  end
+
+  test "two roles on one catalyst carry two keys under one root", %{ctx: ctx} do
+    lenders = lenders!(ctx)
+    tree!(ctx)
+
+    {{:ok, _}, preview} =
+      walk!(ctx, @root, %{
+        selections: [
+          %{from: @role_a, dep: @dep, label: "default"},
+          %{from: @role_b, dep: @dep, label: "work"}
+        ]
+      })
+
+    {:ok, same_from_a} =
+      Commit.preview(ctx, %{
+        ref: @root,
+        selections: [%{from: @role_a, dep: @dep, label: "default"}]
+      })
+
+    {:ok, same_from_b} =
+      Commit.preview(ctx, %{
+        ref: @root,
+        selections: [%{from: @role_b, dep: @dep, label: "default"}]
+      })
+
+    assert preview.commit_digest != same_from_a.commit_digest
+    assert same_from_a.commit_digest != same_from_b.commit_digest
+
+    {:ok, plan} = Plan.plan(ctx, %{ref: @root})
+
+    assert [
+             %{from: @role_a, dep: @dep},
+             %{from: @role_b, dep: @dep}
+           ] = Enum.sort_by(plan.dependency_needs, & &1.from)
+
+    home_id = lenders.home_entry.id
+    work_id = lenders.work_entry.id
+
+    assert %{entry_id: ^home_id} = root_edge_vault(ctx, @role_a)
+    assert %{entry_id: ^work_id} = root_edge_vault(ctx, @role_b)
+
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @root)
+
+    {:child, via_a} =
+      authority
+      |> Transition.step(:call, Fixtures.invoke(@role_a, need: nil, declared_needs: []))
+      |> then(fn {:child, child} ->
+        Transition.step(child, :call, Fixtures.invoke(@dep, need: nil, declared_needs: []))
+      end)
+
+    {:child, via_b} =
+      authority
+      |> Transition.step(:call, Fixtures.invoke(@role_b, need: nil, declared_needs: []))
+      |> then(fn {:child, child} ->
+        Transition.step(child, :call, Fixtures.invoke(@dep, need: nil, declared_needs: []))
+      end)
+
+    assert via_a.resources.vault.entry_id == home_id
+    assert via_b.resources.vault.entry_id == work_id
+
+    :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, lenders.work, "revoked")
+    assert %{entry_id: ^home_id} = root_edge_vault(ctx, @role_a)
+    assert %{via: %{label: "work"}} = root_edge_vault(ctx, @role_b)
+  end
+
+  test "one key may ride two edges under two projections", %{ctx: ctx} do
+    lenders = lenders!(ctx)
+    tree!(ctx)
+
+    {{:ok, _}, _} =
+      walk!(ctx, @root, %{
+        selections: [
+          %{from: @role_a, dep: @dep, label: "default", fields: ["KEY"]},
+          %{from: @role_b, dep: @dep, label: "default", fields: ["KEY", "ORG"]}
+        ]
+      })
+
+    home_id = lenders.home_entry.id
+
+    assert %{entry_id: ^home_id, projection: %{fields: ["KEY"]}} =
+             root_edge_vault(ctx, @role_a)
+
+    assert %{entry_id: ^home_id, projection: %{fields: ["KEY", "ORG"]}} =
+             root_edge_vault(ctx, @role_b)
+  end
+
+  defp tree!(ctx) do
+    publish!(ctx, "sel-role-a", %{"dependencies" => %{"static" => [%{"ref" => @dep}]}})
+    publish!(ctx, "sel-role-b", %{"dependencies" => %{"static" => [%{"ref" => @dep}]}})
+
+    publish!(ctx, "sel-root", %{
+      "dependencies" => %{"static" => [%{"ref" => @role_a}, %{"ref" => @role_b}]}
+    })
+  end
+
+  defp root_edge_vault(ctx, from) do
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @root)
+    {:ok, edge} = Blob.lookup_edge(authority.policy, from, @dep, "")
+    edge.vault
   end
 end

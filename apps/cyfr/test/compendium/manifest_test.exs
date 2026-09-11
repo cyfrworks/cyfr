@@ -86,4 +86,31 @@ defmodule Compendium.ManifestTest do
       assert Manifest.contracts(%{"contracts" => "model/chat@1"}) == []
     end
   end
+
+  describe "agent" do
+    @valid_agent %{
+      "type" => "agent",
+      "agent" => %{
+        "catalyst" => "catalyst:local.claude",
+        "model" => "claude-sonnet-4-6",
+        "policy" => %{"auto" => ["http.get"], "ask" => ["files.read"]}
+      }
+    }
+
+    test "an agent block is accepted on type agent and refused elsewhere" do
+      assert :ok = Manifest.validate(@valid_agent)
+      assert "agent" in Manifest.known_keys()
+
+      assert {:error, {:invalid_agent, _}} =
+               Manifest.validate(%{"type" => "reagent", "agent" => @valid_agent["agent"]})
+    end
+
+    test "auto and ask must be disjoint, and catalyst must be a name-level ref" do
+      overlap = put_in(@valid_agent, ["agent", "policy", "ask"], ["http.get"])
+      assert {:error, {:invalid_agent, _}} = Manifest.validate(overlap)
+
+      pinned = put_in(@valid_agent, ["agent", "catalyst"], "catalyst:local.claude:1.2.0")
+      assert {:error, {:invalid_agent, _}} = Manifest.validate(pinned)
+    end
+  end
 end

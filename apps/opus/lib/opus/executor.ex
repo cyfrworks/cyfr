@@ -491,23 +491,34 @@ defmodule Opus.Executor do
           }}}
 
       %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
-        case Opus.Host.unseal(p.ctx, vault) do
-          {:ok, secrets} ->
-            {:ok, %{p | preloaded_fields: secrets}}
+        if Sanctum.Consent.Loader.pinned_intact?(p.ctx, authority) do
+          case Opus.Host.unseal(p.ctx, vault) do
+            {:ok, secrets} ->
+              {:ok, %{p | preloaded_fields: secrets}}
 
-          {:error, reason} ->
-            # A consented vault edge that cannot produce material is a
-            # declared need unmet at run: a typed setup_required, so the
-            # error envelope and the parent-stream setup event carry the
-            # structural cause instead of flattened prose.
-            {:error,
-             {:setup_required,
-              %{
-                profile_id: authority.profile_id,
-                node_ref: p.component_ref,
-                need: p.opts[:need] || "",
-                reason: vault_setup_reason(reason)
-              }}}
+            {:error, reason} ->
+              # A consented vault edge that cannot produce material is a
+              # declared need unmet at run: a typed setup_required, so the
+              # error envelope and the parent-stream setup event carry the
+              # structural cause instead of flattened prose.
+              {:error,
+               {:setup_required,
+                %{
+                  profile_id: authority.profile_id,
+                  node_ref: p.component_ref,
+                  need: p.opts[:need] || "",
+                  reason: vault_setup_reason(reason)
+                }}}
+          end
+        else
+          {:error,
+           {:setup_required,
+            %{
+              profile_id: authority.profile_id,
+              node_ref: p.component_ref,
+              need: p.opts[:need] || "",
+              reason: vault_setup_reason(:consent_moved)
+            }}}
         end
 
       _ ->
@@ -1417,6 +1428,7 @@ defmodule Opus.Executor do
   # be JSON-encodable — vault loader tuples are flattened here.
   defp vault_setup_reason({:entry_unavailable, status}), do: "vault_entry_#{status}"
   defp vault_setup_reason({:selection_unbound, _label}), do: "vault_selection_unbound"
+  defp vault_setup_reason(:consent_moved), do: "consent_moved"
   defp vault_setup_reason(reason) when is_atom(reason), do: reason
   defp vault_setup_reason(reason), do: inspect(reason)
 

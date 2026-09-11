@@ -6,8 +6,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   A shipped formula's baseline consent selects, on its edge to each
   shipped catalyst that needs a credential, that catalyst's default
   profile — so the key a person binds on the catalyst is what the
-  assistant runs it with. A person's own formula selects nothing at
-  bootstrap. A boot re-mints a bootstrap-only consent that lacks the
+  assistant runs it with. A person's own formula is not machine-minted.
+  A boot re-mints a bootstrap-only consent that lacks the
   selections its dependencies offer, or whose closure the seed moved,
   and leaves a person's consent and a person's closure alone.
   """
@@ -97,8 +97,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
   end
 
-  test "a person's own formula selects nothing at bootstrap", %{ctx: ctx} do
-    # The athanor's own copy of the shipped formula, under its own name.
+  test "a person's own formula is not machine-minted", %{ctx: ctx} do
     shipped = ["components", "formulas", "local", "aqua", shipped_version("formulas", "aqua")]
     mine = ["components", "formulas", "local", "mine", "0.1.0"]
     {:ok, manifest} = Arca.get_json(ctx, shipped ++ ["cyfr-manifest.json"])
@@ -114,11 +113,31 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
 
     {:ok, _} = Compendium.Registry.register_from_arca(ctx, mine)
 
-    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert "formula:local.mine" in minted
+    {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
+    refute "formula:local.mine" in minted
+    assert {"formula:local.mine", :not_vouched} in skipped
+    assert {:ok, []} = Source.DB.profiles(ctx, "formula:local.mine")
+  end
 
-    {_mine, mine_head, _} = head!(ctx, "formula:local.mine")
-    assert edge!(mine_head.resolved_policy, "formula:local.mine", @claude).vault == nil
+  test "an edited shipped component is not re-minted", %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+    {_claude, first, _} = head!(ctx, @claude)
+    version = shipped_version("catalysts", "claude")
+    unit = ["components", "catalysts", "local", "claude", version]
+    {:ok, manifest} = Arca.get_json(ctx, unit ++ ["cyfr-manifest.json"])
+
+    :ok =
+      Arca.put_json(
+        ctx,
+        unit ++ ["cyfr-manifest.json"],
+        put_in(manifest, ["caps", "egress", "methods"], ["GET", "POST", "DELETE"])
+      )
+
+    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+    {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
+    assert {@claude, :shape_moved} in skipped
+    {_, still, _} = head!(ctx, @claude)
+    assert still.revision == first.revision
   end
 
   test "a boot revises a bootstrap-only consent that lacks its selections, and no other", %{

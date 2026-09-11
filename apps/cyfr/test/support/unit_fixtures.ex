@@ -48,6 +48,43 @@ defmodule Arca.Test.UnitFixtures do
     dir
   end
 
+  @doc """
+  Lay a unit in the seed tree, copy it into the athanor, and register it.
+  `:seed_path` must be a writable tree, not the tracked repo seed.
+  """
+  def ship_and_register!(ctx, type, publisher, name, version, opts \\ []) do
+    seed_component!(type, publisher, name, version, opts)
+    unit = ComponentPath.version_dir(type, publisher, name, version)
+    :ok = Arca.Overlay.pull_shipped(ctx, unit)
+    Compendium.Registry.register_from_arca(ctx, unit)
+  end
+
+  @doc """
+  Plant `wasm` in a writable seed tree and register it, so bootstrap
+  can mint it. `:seed_path` must already be a private tree.
+  """
+  def ship_bytes!(ctx, wasm, metadata) when is_binary(wasm) and is_map(metadata) do
+    type = metadata[:type] || metadata["type"]
+    name = metadata[:name] || metadata["name"]
+    version = metadata[:version] || metadata["version"]
+    publisher = metadata[:publisher] || metadata["publisher"] || "local"
+
+    manifest =
+      case metadata[:manifest] || metadata["manifest"] do
+        json when is_binary(json) -> Jason.decode!(json)
+        map when is_map(map) -> map
+        _ -> %{}
+      end
+      |> Map.merge(%{
+        "name" => name,
+        "type" => type,
+        "version" => version,
+        "publisher" => publisher
+      })
+
+    ship_and_register!(ctx, type, publisher, name, version, manifest: manifest, wasm: wasm)
+  end
+
   defp write_unit!(dir, type, publisher, name, version, opts) do
     File.mkdir_p!(dir)
 

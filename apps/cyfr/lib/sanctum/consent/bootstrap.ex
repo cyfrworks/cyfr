@@ -20,11 +20,13 @@ defmodule Sanctum.Consent.Bootstrap do
   dependencies now declare under an unmoved shape, or its shape moved
   because the seed did — every node of the live closure is vouched for,
   so the revision is the same operator-vouched mint as the first. A node
-  is vouched for when it is a shipped release, or when the head already
-  names it at the same release digest: a release that retires the version
-  an estate holds does not turn that unchanged copy into a person's own.
-  A closure a person widened (an installed or edited dependency) or a
-  head a person committed is theirs to consent again.
+  is vouched for when the seed ships it at the seed's own digest, or when
+  the head already names it at that digest: a release that retires the
+  version an estate holds does not turn that unchanged copy into a
+  person's own. An edited shipped copy is not the seed: its digest is
+  not the seed's, and it is not re-minted. A member-authored source
+  has no machine profile. A closure a person widened or a head a person
+  committed is theirs to consent again.
 
   Idempotent: a source ref that already has an owner profile is skipped
   (revised only as above). Machine-minted revisions record
@@ -40,10 +42,10 @@ defmodule Sanctum.Consent.Bootstrap do
   athanor.
 
   The estate's agents (`agent:local.<name>`, `Compendium.AgentSource`)
-  are sources here too, minted after the components they run on. An
-  agent is minted only while it is vouched for — the shipped file, or a
-  head that already names it unchanged; a role a member authored, or a
-  soul a member edited, consents through the walk.
+  are sources here too, minted after the components they run on. A
+  source is minted only while it is vouched for — the seed's own bytes,
+  or a head that already names it unchanged. A member-authored agent or
+  component, and an edited shipped copy, consent through the walk.
 
   Bootstrap consent applies only to the operator's seed bundle.
   Components discovered by `component.register` require explicit consent.
@@ -85,12 +87,9 @@ defmodule Sanctum.Consent.Bootstrap do
         {Map.get(@type_rank, to_string(row.component_type), 9), soul?(row), row.name}
       end)
 
-    # The shipped releases a live closure may consist of: the newest local
-    # version of each component, when that version is the seed's own copy.
-    shipped_nodes =
-      components
-      |> Enum.filter(&shipped?(ctx, &1))
-      |> Map.new(&{Compendium.Activation.node_key(&1), &1.release_digest})
+    # The releases the seed itself ships, at the seed's own digest — never
+    # the athanor's copy. An edited shipped unit is absent here.
+    shipped_nodes = shipped_nodes(ctx, components)
 
     run_components(ctx, components, shipped_nodes)
   end
@@ -165,10 +164,10 @@ defmodule Sanctum.Consent.Bootstrap do
       :unclaimed ->
         vouched = %{shipped: shipped_nodes, named: %{}, selected: MapSet.new()}
 
-        if agent?(component) and not vouched?(vouched, source_ref, release_digest(component)) do
-          {:skip, :not_vouched}
+        if vouched?(vouched, source_ref, release_digest(component)) do
+          mint(ctx, component, source_ref, vouched)
         else
-          mint(ctx, component, source_ref, selection_fn(component, source_ref, vouched))
+          {:skip, :not_vouched}
         end
 
       {:claimed, nil} ->
@@ -178,8 +177,7 @@ defmodule Sanctum.Consent.Bootstrap do
         case Arca.ConsentStorage.get_head(ctx.athanor_id, profile.id) do
           {:ok, %{granted_via: "bootstrap"} = head, _refs} ->
             vouched = vouched_by(head, shipped_nodes)
-            vault_fn = selection_fn(component, source_ref, vouched)
-            revise_bootstrap(ctx, component, source_ref, profile, head, vault_fn, vouched)
+            revise_bootstrap(ctx, component, source_ref, profile, head, vouched)
 
           {:ok, _person_head, _refs} ->
             {:skip, :already_bootstrapped}
@@ -205,11 +203,14 @@ defmodule Sanctum.Consent.Bootstrap do
     do: Enum.find(profiles, &(&1.kind == "owner" and &1.label == "default"))
 
   # A machine-minted revision binds no entry of its own: a vouched
-  # source's edges select what its vouched dependencies' default profiles
-  # bind, and every other edge carries no vault resource.
-  defp mint(ctx, component, source_ref, vault_fn) do
+  # edge selects what its vouched dependency's default profile binds,
+  # and every other edge carries no vault resource.
+  defp mint(ctx, component, source_ref, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
-         {:ok, nodes} <- BlobBuilder.build(ctx, activation.graph, source_ref, vault_fn),
+         {:ok, nodes} <-
+           BlobBuilder.build(ctx, activation.graph, source_ref, fn _, _, _ -> nil end,
+             edge_vault_fn: selection_fn(activation.graph, vouched)
+           ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <- compute_digests(ctx, source_ref, JCS.hash_binary(blob_json)),
          {:ok, activation_json} <- JCS.encode(activation.graph) do
@@ -229,10 +230,11 @@ defmodule Sanctum.Consent.Bootstrap do
     selected =
       case Jason.decode(head.resolved_policy || "") do
         {:ok, %{"nodes" => nodes}} when is_map(nodes) ->
-          for {_ref, node} <- nodes,
+          for {from, node} <- nodes,
               {key, %{"vault" => %{"via" => _}}} <- node["edges"] || %{},
+              {:ok, dep} <- [Sanctum.Authority.Blob.edge_target(key)],
               into: MapSet.new(),
-              do: key |> String.split("|", parts: 2) |> hd()
+              do: {from, dep}
 
         _ ->
           MapSet.new()
@@ -255,20 +257,19 @@ defmodule Sanctum.Consent.Bootstrap do
   # ---------------------------------------------------------------------------
 
   # Only what is vouched for selects and is selected — the seed's own, or
-  # what the head already selected at an unchanged digest: a person's own
-  # component consents through the walk, where the selection is shown.
-  defp selection_fn(source_row, source_ref, vouched) do
-    source_vouched? = vouched?(vouched, source_ref, release_digest(source_row))
-
-    fn node_key, row, manifest ->
+  # what the head already selected on that edge at an unchanged digest: a
+  # person's own component consents through the walk, where the selection
+  # is shown. An unvouched from never selects.
+  defp selection_fn(graph, vouched) do
+    fn from, dep, row, manifest ->
       digest = release_digest(row)
 
       dep_vouched? =
-        Map.get(vouched.shipped, node_key) == digest or
-          (MapSet.member?(vouched.selected, node_key) and
-             Map.get(vouched.named, node_key) == digest)
+        Map.get(vouched.shipped, dep) == digest or
+          (MapSet.member?(vouched.selected, {from, dep}) and
+             Map.get(vouched.named, dep) == digest)
 
-      if node_key != source_ref and source_vouched? and credential_needs?(manifest) and
+      if vouched?(vouched, from, Map.get(graph, from)) and credential_needs?(manifest) and
            dep_vouched? do
         %{"via" => %{"label" => @selected_label}}
       end
@@ -277,23 +278,65 @@ defmodule Sanctum.Consent.Bootstrap do
 
   defp release_digest(row), do: Map.get(row, :release_digest) || Map.get(row, "release_digest")
 
-  defp shipped?(ctx, row) do
+  defp shipped_nodes(ctx, components) do
+    roster =
+      components
+      |> Enum.filter(&agent?/1)
+      |> MapSet.new(& &1.name)
+
+    Enum.reduce(components, %{}, fn row, acc ->
+      case shipped_digest(ctx, row, roster) do
+        {:ok, digest} -> Map.put(acc, Compendium.Activation.node_key(row), digest)
+        _ -> acc
+      end
+    end)
+  end
+
+  defp shipped_digest(ctx, row, roster) do
     type = to_string(Map.get(row, :component_type) || Map.get(row, "component_type"))
     name = Map.get(row, :name) || Map.get(row, "name")
 
-    unit =
-      if type == Compendium.AgentSource.type() do
-        Compendium.AgentSource.unit(name)
-      else
-        Compendium.ComponentPath.version_dir(
-          type,
-          Map.get(row, :publisher) || Map.get(row, "publisher"),
-          name,
-          Map.get(row, :version) || Map.get(row, "version")
-        )
-      end
+    cond do
+      type == Compendium.AgentSource.type() ->
+        seed_agent_digest(name, roster)
 
-    Arca.Overlay.unit_status(ctx, unit) == {:ok, :shipped}
+      type == "tincture" ->
+        pristine_tincture_digest(ctx, row)
+
+      type in ~w(catalyst reagent formula) ->
+        Compendium.Provenance.shipped_release_digest(row)
+
+      true ->
+        :error
+    end
+  end
+
+  defp seed_agent_digest(name, roster) do
+    path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(Compendium.AgentSource.unit(name), 1)
+
+    with {:ok, bytes} <- Arca.get(Sanctum.system_context(), path),
+         {:ok, row} <- Compendium.AgentSource.shipped_row(name, bytes, roster) do
+      {:ok, release_digest(row)}
+    end
+  end
+
+  # A tincture's artifact is its directory; vouch only an unedited shipped copy.
+  defp pristine_tincture_digest(ctx, row) do
+    unit =
+      Compendium.ComponentPath.version_dir(
+        "tincture",
+        Map.get(row, :publisher) || Map.get(row, "publisher"),
+        Map.get(row, :name) || Map.get(row, "name"),
+        Map.get(row, :version) || Map.get(row, "version")
+      )
+
+    with {:ok, :shipped} <- Arca.Overlay.unit_status(ctx, unit),
+         {:ok, false} <- Arca.Overlay.edited?(ctx, unit),
+         digest when is_binary(digest) <- release_digest(row) do
+      {:ok, digest}
+    else
+      _ -> :error
+    end
   end
 
   defp credential_needs?(manifest) do
@@ -306,9 +349,12 @@ defmodule Sanctum.Consent.Bootstrap do
   # A bootstrap-only head is re-minted when what a mint would produce today
   # differs from it in a way the seed alone accounts for (see
   # `revisable/5`).
-  defp revise_bootstrap(ctx, component, source_ref, profile, head, vault_fn, vouched) do
+  defp revise_bootstrap(ctx, component, source_ref, profile, head, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
-         {:ok, nodes} <- BlobBuilder.build(ctx, activation.graph, source_ref, vault_fn),
+         {:ok, nodes} <-
+           BlobBuilder.build(ctx, activation.graph, source_ref, fn _, _, _ -> nil end,
+             edge_vault_fn: selection_fn(activation.graph, vouched)
+           ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <- compute_digests(ctx, source_ref, JCS.hash_binary(blob_json)),
          :ok <- revisable(head, blob_json, digests, activation.graph, vouched),

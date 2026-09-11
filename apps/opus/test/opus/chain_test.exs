@@ -526,6 +526,20 @@ defmodule Opus.ChainTest do
       # the structural cause), never a flattened prose string.
       {entry, digest} = revoked_vault_entry(ctx)
 
+      # The root pin is checked before the vault: the constructed authority
+      # needs its profile row, active at the pinned consent, or the run is
+      # refused as consent_moved before the entry is looked at.
+      {:ok, _} =
+        Arca.ProfileStorage.put(%{
+          id: "prof-chain",
+          athanor_id: ctx.athanor_id,
+          source_ref: @root_node,
+          kind: "owner",
+          label: "default",
+          status: "active",
+          head_consent_id: "consent-chain"
+        })
+
       auth =
         authority_with_edges(%{
           @target_node => %{

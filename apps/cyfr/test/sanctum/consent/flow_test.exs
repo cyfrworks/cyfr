@@ -676,6 +676,20 @@ defmodule Sanctum.Consent.FlowTest do
     })
   end
 
+  defp ship!(ctx, name, manifest \\ %{}) do
+    {:ok, row} =
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, "reagent", "local", name, "1.0.0",
+        manifest:
+          Map.merge(
+            %{"name" => name, "type" => "reagent", "version" => "1.0.0", "publisher" => "local"},
+            manifest
+          ),
+        wasm: @wasm
+      )
+
+    row
+  end
+
   describe "declared needs" do
     test "the plan shows the declared need's reason, never key names", %{ctx: ctx} do
       publish_needs!(ctx, "flow-needs-plan")
@@ -831,7 +845,8 @@ defmodule Sanctum.Consent.FlowTest do
     end
 
     test "setup readiness joins the declared needs", %{ctx: ctx} do
-      publish_needs!(ctx, "flow-needs-ready")
+      Cyfr.Test.SeedBundle.isolate!()
+      ship!(ctx, "flow-needs-ready", @needs_manifest)
       {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
 
       # Bootstrapped with nothing bound: the required need is unmet.
@@ -895,7 +910,8 @@ defmodule Sanctum.Consent.FlowTest do
       publish!(ctx, "flow-walked")
       {:ok, _} = walk!(ctx, "reagent:local.flow-walked")
 
-      publish!(ctx, "flow-machine")
+      Cyfr.Test.SeedBundle.isolate!()
+      ship!(ctx, "flow-machine")
       {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run(ctx)
       assert "reagent:local.flow-machine" in minted
 

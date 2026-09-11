@@ -102,14 +102,22 @@ defmodule Compendium.RegisterMintsNothingTest do
 
     test "provisioning's seed mint is untouched — that path still consents", %{ctx: ctx} do
       # The counterpart: `Bootstrap.run/1` is what provisioning calls, and
-      # it must still mint, or a fresh athanor arrives with nothing usable.
+      # it must still mint a unit the seed ships, or a fresh athanor
+      # arrives with nothing usable. A published-but-unshipped unit is
+      # not the seed.
+      Cyfr.Test.SeedBundle.isolate!()
+
       {:ok, _component} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
-          name: "seedish",
-          version: "1.0.0",
-          type: "reagent",
-          description: "stands in for a bundle component"
-        })
+        Arca.Test.UnitFixtures.ship_and_register!(ctx, "reagent", "local", "seedish", "1.0.0",
+          manifest: %{
+            "name" => "seedish",
+            "type" => "reagent",
+            "version" => "1.0.0",
+            "publisher" => "local",
+            "description" => "stands in for a bundle component"
+          },
+          wasm: @wasm
+        )
 
       assert {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run(ctx)
       assert "reagent:local.seedish" in minted

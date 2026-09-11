@@ -42,7 +42,12 @@ defmodule Sanctum.Consent.ShapeDigest do
           optional(:caps) => map(),
           optional(:tool_actions) => [String.t()],
           optional(:slots) => [String.t()],
-          optional(:dependency_releases) => [String.t()]
+          optional(:dependency_releases) => [String.t()],
+          optional(:model_target) => String.t(),
+          optional(:tool_policy) => %{
+            optional(:auto) => [String.t()],
+            optional(:ask) => [String.t()]
+          }
         }
 
   @type error :: {:invalid_shape, atom(), String.t()} | {:invalid_digest_input, JCS.error()}
@@ -98,7 +103,7 @@ defmodule Sanctum.Consent.ShapeDigest do
            Normalize.only_keys(
              shape,
              ~w(scope source_ref release_identity needs caps tool_actions slots
-                dependency_releases model_target)a,
+                dependency_releases model_target tool_policy)a,
              :invalid_shape
            ),
          {:ok, scope} <- Normalize.enum(shape, :scope, [:versionless, :pinned], :invalid_shape),
@@ -110,7 +115,8 @@ defmodule Sanctum.Consent.ShapeDigest do
          {:ok, slots} <- Normalize.string_set(shape, :slots, :invalid_shape),
          {:ok, dependency_releases} <-
            Normalize.string_set(shape, :dependency_releases, :invalid_shape),
-         {:ok, model_target} <- Normalize.optional_string(shape, :model_target, :invalid_shape) do
+         {:ok, model_target} <- Normalize.optional_string(shape, :model_target, :invalid_shape),
+         {:ok, tool_policy} <- Normalize.tool_policy(shape, :tool_policy, :invalid_shape) do
       canonical =
         %{
           "scope" => Atom.to_string(scope),
@@ -123,6 +129,7 @@ defmodule Sanctum.Consent.ShapeDigest do
         }
         |> Normalize.put_optional("release_identity", release_identity)
         |> Normalize.put_optional("model_target", model_target)
+        |> Normalize.put_optional("tool_policy", tool_policy)
 
       {:ok, canonical}
     end

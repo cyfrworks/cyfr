@@ -11,6 +11,44 @@ defmodule Cyfr.Test.SeedBundle do
 
   @repo_seed Path.expand("../../../../seed", __DIR__)
 
+  @doc "Point `:seed_path` at an empty temp tree until the test exits."
+  @spec isolate!() :: String.t()
+  def isolate! do
+    dir = Path.join(System.tmp_dir!(), "seed_isolate_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    previous = Application.get_env(:cyfr, :seed_path)
+    Application.put_env(:cyfr, :seed_path, dir)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      if previous,
+        do: Application.put_env(:cyfr, :seed_path, previous),
+        else: Application.delete_env(:cyfr, :seed_path)
+
+      File.rm_rf!(dir)
+    end)
+
+    dir
+  end
+
+  @doc "Copy `source` into a private tree and point `:seed_path` at it until the test exits."
+  @spec isolate_from!(String.t()) :: String.t()
+  def isolate_from!(source) when is_binary(source) do
+    dir = Path.join(System.tmp_dir!(), "seed_isolate_#{System.unique_integer([:positive])}")
+    File.cp_r!(source, dir)
+    previous = Application.get_env(:cyfr, :seed_path)
+    Application.put_env(:cyfr, :seed_path, dir)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      if previous,
+        do: Application.put_env(:cyfr, :seed_path, previous),
+        else: Application.delete_env(:cyfr, :seed_path)
+
+      File.rm_rf!(dir)
+    end)
+
+    dir
+  end
+
   @doc "Lay the tree, set `:seed_path` to it, and answer its path."
   @spec lay!([String.t()]) :: String.t()
   def lay!(catalysts) when is_list(catalysts) do

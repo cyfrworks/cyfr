@@ -54,6 +54,7 @@ defmodule Sanctum.Consent.CommitDigest do
         }
 
   @type selection :: %{
+          required(:from) => String.t(),
           required(:dep) => String.t(),
           required(:label) => String.t(),
           required(:binding_digest) => String.t(),
@@ -196,9 +197,9 @@ defmodule Sanctum.Consent.CommitDigest do
     {:error, {:invalid_commit, :bindings, "each binding must be a map, got: #{inspect(other)}"}}
   end
 
-  # One dependency, one selected profile: the digest covers which labelled
-  # profile of which dependency lends its entry, at which binding digest,
-  # narrowed to which fields.
+  # One edge, one selected profile: the digest covers which labelled
+  # profile of which dependency lends its entry to which lender, at which
+  # binding digest, narrowed to which fields.
   defp selections(commit) do
     tag = :invalid_commit
 
@@ -212,7 +213,7 @@ defmodule Sanctum.Consent.CommitDigest do
           end
         end)
         |> case do
-          {:ok, selections} -> ensure_one_selection_per_dep(selections)
+          {:ok, selections} -> ensure_one_selection_per_edge(selections)
           error -> error
         end
 
@@ -224,13 +225,15 @@ defmodule Sanctum.Consent.CommitDigest do
   defp normalize_selection(selection) when is_map(selection) do
     tag = :invalid_commit
 
-    with :ok <- Normalize.only_keys(selection, ~w(dep label binding_digest fields)a, tag),
+    with :ok <- Normalize.only_keys(selection, ~w(from dep label binding_digest fields)a, tag),
+         {:ok, from} <- Normalize.required_string(selection, :from, tag),
          {:ok, dep} <- Normalize.required_string(selection, :dep, tag),
          {:ok, label} <- Normalize.required_string(selection, :label, tag),
          {:ok, binding_digest} <- Normalize.required_string(selection, :binding_digest, tag),
          {:ok, fields} <- Normalize.string_set(selection, :fields, tag) do
       {:ok,
        %{
+         "from" => from,
          "dep" => dep,
          "label" => label,
          "binding_digest" => binding_digest,
@@ -244,14 +247,14 @@ defmodule Sanctum.Consent.CommitDigest do
      {:invalid_commit, :selections, "each selection must be a map, got: #{inspect(other)}"}}
   end
 
-  defp ensure_one_selection_per_dep(selections) do
-    sorted = Enum.sort_by(selections, & &1["dep"])
-    deps = Enum.map(sorted, & &1["dep"])
+  defp ensure_one_selection_per_edge(selections) do
+    sorted = Enum.sort_by(selections, &{&1["from"], &1["dep"]})
+    edges = Enum.map(sorted, &{&1["from"], &1["dep"]})
 
-    if length(Enum.uniq(deps)) == length(deps) do
+    if length(Enum.uniq(edges)) == length(edges) do
       {:ok, sorted}
     else
-      {:error, {:invalid_commit, :selections, "each dependency may be selected exactly once"}}
+      {:error, {:invalid_commit, :selections, "each from/dep edge may be selected exactly once"}}
     end
   end
 

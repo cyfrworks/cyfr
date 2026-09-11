@@ -87,23 +87,37 @@ defmodule Sanctum.Consent.ShapeDerivation do
          slots: Enum.sort(Enum.map(needs, & &1.name)),
          dependency_releases: dependency_releases(ctx, row, source_ref)
        }
-       |> Cyfr.MapUtil.put_present(:model_target, model_target(row))}
+       |> Cyfr.MapUtil.put_present(:model_target, model_target(row))
+       |> Cyfr.MapUtil.put_present(:tool_policy, tool_policy(row))}
     end
   end
 
   defp model_target(row) do
     manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+    agent = manifest["agent"] || %{}
 
-    case {manifest["type"], manifest["model"]} do
-      {"agent", model} when is_binary(model) and model != "" ->
-        catalyst =
-          manifest
-          |> get_in(["dependencies", "static"])
-          |> List.wrap()
-          |> Enum.map(& &1["ref"])
-          |> Enum.find("", &String.starts_with?(&1 || "", "catalyst:"))
-
+    case {manifest["type"], agent["catalyst"], agent["model"]} do
+      {"agent", catalyst, model}
+      when is_binary(catalyst) and catalyst != "" and is_binary(model) and model != "" ->
         "#{catalyst}##{model}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp tool_policy(row) do
+    manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+
+    case get_in(manifest, ["agent", "policy"]) do
+      %{"auto" => auto, "ask" => ask} when is_list(auto) and is_list(ask) ->
+        %{auto: auto, ask: ask}
+
+      %{"auto" => auto} when is_list(auto) ->
+        %{auto: auto, ask: []}
+
+      %{"ask" => ask} when is_list(ask) ->
+        %{auto: [], ask: ask}
 
       _ ->
         nil

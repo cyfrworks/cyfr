@@ -70,7 +70,7 @@ defmodule Compendium.Manifest do
     description license tags category
     needs caps dependencies tincture
     schema examples defaults forked_from
-    contracts
+    contracts agent
   )
 
   # A contract is `<family>/<name>@<major>`: the operations a component
@@ -115,7 +115,8 @@ defmodule Compendium.Manifest do
          :ok <- Compendium.Manifest.Needs.validate(manifest),
          :ok <- Compendium.Manifest.Caps.validate(manifest),
          :ok <- validate_tincture_block(manifest),
-         :ok <- validate_contracts_block(manifest) do
+         :ok <- validate_contracts_block(manifest),
+         :ok <- validate_agent_block(manifest) do
       validate_dependencies_block(manifest)
     end
   end
@@ -140,6 +141,103 @@ defmodule Compendium.Manifest do
   end
 
   defp validate_contracts_block(_), do: :ok
+
+  # The `agent` block is the projected consent shape of an AQUA agent
+  # (`Compendium.AgentSource`): catalyst, model, and the auto/ask policy
+  # sets. It is refused on every other type.
+  defp validate_agent_block(%{"type" => "agent", "agent" => agent}),
+    do: validate_agent_value(agent)
+
+  defp validate_agent_block(%{"agent" => _}) do
+    {:error, {:invalid_agent, "agent is only valid on type agent"}}
+  end
+
+  defp validate_agent_block(_), do: :ok
+
+  defp validate_agent_value(agent) when is_map(agent) do
+    extras =
+      agent
+      |> Map.keys()
+      |> Enum.filter(&(is_binary(&1) and &1 not in ~w(catalyst model policy)))
+
+    cond do
+      extras != [] ->
+        {:error, {:invalid_agent, "unknown key(s): #{Enum.join(Enum.sort(extras), ", ")}"}}
+
+      not valid_agent_catalyst?(agent["catalyst"]) ->
+        {:error, {:invalid_agent, "agent.catalyst must be a name-level component ref"}}
+
+      not valid_agent_model?(agent["model"]) ->
+        {:error, {:invalid_agent, "agent.model must be a non-empty string"}}
+
+      true ->
+        validate_agent_policy(agent["policy"])
+    end
+  end
+
+  defp validate_agent_value(other) do
+    {:error, {:invalid_agent, "agent must be an object, got: #{inspect(other)}"}}
+  end
+
+  defp valid_agent_catalyst?(nil), do: true
+
+  defp valid_agent_catalyst?(ref) when is_binary(ref) and ref != "" do
+    match?({:ok, %{version: nil}}, Sanctum.ComponentRef.parse(ref))
+  end
+
+  defp valid_agent_catalyst?(_), do: false
+
+  defp valid_agent_model?(nil), do: true
+  defp valid_agent_model?(model) when is_binary(model) and model != "", do: true
+  defp valid_agent_model?(_), do: false
+
+  defp validate_agent_policy(nil), do: :ok
+
+  defp validate_agent_policy(policy) when is_map(policy) do
+    extras =
+      policy
+      |> Map.keys()
+      |> Enum.filter(&(is_binary(&1) and &1 not in ~w(auto ask)))
+
+    auto = policy["auto"]
+    ask = policy["ask"]
+
+    cond do
+      extras != [] ->
+        {:error,
+         {:invalid_agent, "agent.policy unknown key(s): #{Enum.join(Enum.sort(extras), ", ")}"}}
+
+      not (is_nil(auto) or string_list?(auto)) ->
+        {:error, {:invalid_agent, "agent.policy.auto must be a list of strings"}}
+
+      not (is_nil(ask) or string_list?(ask)) ->
+        {:error, {:invalid_agent, "agent.policy.ask must be a list of strings"}}
+
+      overlap?(auto, ask) ->
+        {:error, {:invalid_agent, "agent.policy auto and ask must be disjoint"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_agent_policy(other) do
+    {:error, {:invalid_agent, "agent.policy must be an object, got: #{inspect(other)}"}}
+  end
+
+  defp string_list?(list) when is_list(list),
+    do: Enum.all?(list, &(is_binary(&1) and &1 != ""))
+
+  defp string_list?(_), do: false
+
+  defp overlap?(auto, ask) when is_list(auto) and is_list(ask) do
+    auto
+    |> MapSet.new()
+    |> MapSet.intersection(MapSet.new(ask))
+    |> MapSet.size() > 0
+  end
+
+  defp overlap?(_, _), do: false
 
   # The tincture block is presentation metadata plus one capability grant:
   # `connect` feeds the served page's CSP connect-src. Shapes are enforced

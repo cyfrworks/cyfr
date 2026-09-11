@@ -169,8 +169,10 @@ defmodule Opus.BootstrapFirstRunTest do
       }
     }
 
+    Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:cyfr, :seed_path))
+
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, wasm, %{
+      Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm, %{
         name: "llm",
         version: "1.1.0",
         type: "catalyst",

@@ -18,15 +18,16 @@ defmodule Sanctum.Consent.Plan do
   the edge the bound credential rides. The blob edge-key grammar reserves
   `@`-prefixed names, so a future manifest need can never collide.
 
-  A dependency of the closure that declares a credential need is a
-  `dependency_needs` row: what it needs, and which of its own owner
-  profiles bind an entry for it — the candidates a `selections` decision
-  picks from, so the source runs the dependency with the key bound on
-  that profile rather than a copy of its own.
+  A dependency edge of the closure whose target declares a credential
+  need is a `dependency_needs` row: who lends, what it needs, and which
+  of its own owner profiles bind an entry — the candidates a `selections`
+  decision picks from, so that edge runs the dependency with the key
+  bound on that profile rather than a copy of its own.
   """
 
   alias Arca.Schemas.Profile
   alias Sanctum.Consent.Authz
+  alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.Proof
   alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
@@ -187,25 +188,42 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
-  # The closure's dependencies that declare a credential need, each with
-  # the owner profiles of theirs that bind one — what a selection may
-  # name. A closure that cannot be resolved offers none; the commit
-  # refuses a selection it cannot place anyway.
-  defp dependency_needs(ctx, component, source_ref) do
+  # The closure's dependency edges whose target declares a credential
+  # need, each with the owner profiles of that target that bind one —
+  # what a selection may name. A closure that cannot be resolved offers
+  # none; the commit refuses a selection it cannot place anyway.
+  defp dependency_needs(ctx, component, _source_ref) do
     case Compendium.Activation.resolve(ctx, component) do
       {:ok, %{graph: graph}} ->
         graph
         |> Map.keys()
-        |> Enum.reject(&(&1 == source_ref))
         |> Enum.sort()
-        |> Enum.flat_map(fn dep -> dependency_rows(ctx, dep) end)
+        |> Enum.flat_map(fn from ->
+          case node_manifest(ctx, from) do
+            {:ok, manifest} ->
+              manifest
+              |> BlobBuilder.dep_edges(graph, from)
+              |> Enum.sort()
+              |> Enum.flat_map(&dependency_rows(ctx, from, &1))
+
+            _ ->
+              []
+          end
+        end)
 
       _unresolvable ->
         []
     end
   end
 
-  defp dependency_rows(ctx, dep) do
+  defp node_manifest(ctx, node_key) do
+    with {:ok, ref} <- Sanctum.ComponentRef.parse(node_key),
+         {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
+      {:ok, Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
+    end
+  end
+
+  defp dependency_rows(ctx, from, dep) do
     case ShapeDerivation.manifest_blocks(ctx, dep) do
       {:ok, needs, _caps} when is_list(needs) ->
         case Enum.filter(needs, &(&1.kind in ~w(api_key oauth bundle))) do
@@ -215,6 +233,7 @@ defmodule Sanctum.Consent.Plan do
           credential_needs ->
             [
               %{
+                from: from,
                 dep: dep,
                 needs:
                   Enum.map(credential_needs, fn need ->

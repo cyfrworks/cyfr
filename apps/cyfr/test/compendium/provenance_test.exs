@@ -327,6 +327,47 @@ defmodule Compendium.ProvenanceTest do
 
   defp lineage(ctx, row), do: Provenance.upstream_status(ctx, row)
 
+  test "shipped_release_digest/1 matches the registered digest of an unedited seed unit", %{
+    bundled: bundled
+  } do
+    assert {:ok, bundled.release_digest} == Provenance.shipped_release_digest(bundled)
+  end
+
+  test "shipped_release_digest/1 stays the seed's digest after a tenant edit", %{
+    ctx: ctx,
+    bundled: bundled
+  } do
+    {:ok, seed_digest} = Provenance.shipped_release_digest(bundled)
+    {:ok, manifest} = Arca.get_json(ctx, @bundled_dir ++ ["cyfr-manifest.json"])
+
+    :ok =
+      Arca.put_json(
+        ctx,
+        @bundled_dir ++ ["cyfr-manifest.json"],
+        Map.put(manifest, "caps", %{"tools" => ["component.list"]})
+      )
+
+    {:ok, _} = Registry.register_from_arca(ctx, @bundled_dir)
+    {:ok, edited} = Registry.get(ctx, "bundled-tool", "1.0.0")
+    refute edited.release_digest == seed_digest
+    assert {:ok, ^seed_digest} = Provenance.shipped_release_digest(edited)
+  end
+
+  test "shipped_release_digest/1 is :not_shipped for a tenant-only unit", %{ctx: ctx} do
+    own_dir = ["components", "reagents", "local", "own-digest", "0.1.0"]
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "reagent", "local", "own-digest", "0.1.0",
+      manifest: %{"type" => "reagent", "version" => "0.1.0"},
+      wasm: @valid_wasm
+    )
+
+    {:ok, own} = Registry.register_from_arca(ctx, own_dir)
+    assert {:error, :not_shipped} = Provenance.shipped_release_digest(own)
+
+    assert {:error, :not_wasm_unit} =
+             Provenance.shipped_release_digest(%{component_type: "tincture"})
+  end
+
   test "deleting a user component still deletes outright", %{ctx: ctx} do
     {:ok, _} =
       Registry.publish_bytes(ctx, @valid_wasm, %{

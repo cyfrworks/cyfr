@@ -168,7 +168,8 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     assert edge_vault(authority) == %{
              entry_id: "vault-anthropic",
              binding_digest: "sha256:anthropic",
-             projection: %{fields: ["ANTHROPIC_API_KEY", "ANTHROPIC_ORG"], scopes: []}
+             projection: %{fields: ["ANTHROPIC_API_KEY", "ANTHROPIC_ORG"], scopes: []},
+             lender: %{profile_id: "prof-claude", consent_id: "consent-claude"}
            }
 
     # The formula's own ingress lends nothing; its consent references no entry.
@@ -181,6 +182,11 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
     assert child.profile_id == "prof-aqua"
     assert child.resources.vault.entry_id == "vault-anthropic"
+
+    assert child.resources.vault.lender == %{
+             profile_id: "prof-claude",
+             consent_id: "consent-claude"
+           }
   end
 
   test "a pinned digest resolves only while the binding stands", %{ctx: ctx} do
@@ -261,6 +267,96 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     # And once the profile is whole again, the same consent resolves.
     put_catalyst!(ctx)
     assert %{entry_id: "vault-anthropic"} = edge_vault(load!(ctx, profile))
+  end
+
+  test "the same entry with two binding digests is refused", %{ctx: ctx} do
+    role = "agent:local.web"
+
+    :ok =
+      Source.Memory.put_profile(ctx, %{
+        id: "prof-aqua",
+        kind: :owner,
+        source_ref: @formula,
+        label: "default",
+        status: :active
+      })
+
+    policy =
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          @formula => %{
+            "limits" => Fixtures.limits_map(),
+            "edges" => %{
+              "@ingress" => %{},
+              @catalyst => %{
+                "vault" => %{
+                  "entry_id" => "vault-anthropic",
+                  "binding_digest" => "sha256:anthropic",
+                  "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]}
+                }
+              }
+            }
+          },
+          role => %{
+            "limits" => Fixtures.limits_map(),
+            "edges" => %{
+              @catalyst => %{
+                "vault" => %{
+                  "entry_id" => "vault-anthropic",
+                  "binding_digest" => "sha256:other",
+                  "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]}
+                }
+              }
+            }
+          },
+          @catalyst => %{"limits" => Fixtures.limits_map(), "edges" => %{}}
+        }
+      })
+
+    :ok =
+      Source.Memory.put_head_consent(ctx, "prof-aqua", %{
+        id: "consent-aqua",
+        revision: 1,
+        scope: :versionless,
+        pinned_version: "",
+        invoke_mode: :open_inert,
+        shape_digest: "sha256:shape-aqua",
+        commit_digest: "sha256:commit-aqua",
+        blob_digest: JCS.hash_binary(policy),
+        resolved_policy: policy,
+        activation: Map.put(@activation, role, "sha256:act-r"),
+        vault_refs: [
+          %{vault_entry_id: "vault-anthropic", binding_digest: "sha256:anthropic"},
+          %{vault_entry_id: "vault-anthropic", binding_digest: "sha256:other"}
+        ]
+      })
+
+    profile = %{
+      id: "prof-aqua",
+      kind: :owner,
+      source_ref: @formula,
+      label: "default",
+      status: :active
+    }
+
+    graph = Map.put(@activation, role, "sha256:act-r")
+    {:ok, digest} = JCS.hash(graph)
+
+    live =
+      {:ok,
+       %{
+         digest: digest,
+         graph: graph,
+         nodes: Map.new(graph, fn {k, d} -> {k, %{release_digest: d, integrity: :ok}} end)
+       }}
+
+    assert {:error, {:inconsistent_binding_digest, "vault-anthropic"}} =
+             Loader.load_root(ctx, profile,
+               source: Source.Memory,
+               live: live,
+               live_shape_digest: nil
+             )
   end
 
   test "an unresolved selection is a bound child that unseals nothing", %{ctx: ctx} do

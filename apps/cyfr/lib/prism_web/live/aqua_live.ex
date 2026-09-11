@@ -248,7 +248,7 @@ defmodule PrismWeb.AquaLive do
     end
   end
 
-  # The sentence for a consent that no longer answers, named by its formula.
+  # The sentence for a consent that no longer answers, named by its source.
   defp consent_warning(ref, {:drifted, missing}) do
     shown = missing |> Enum.take(4) |> Enum.join(", ")
     rest = if length(missing) > 4, do: ", …", else: ""
@@ -269,6 +269,7 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp short_ref("formula:local." <> name), do: name
+  defp short_ref("agent:local." <> name), do: name
   defp short_ref(ref), do: ref
 
   # ============================================================================
@@ -288,13 +289,9 @@ defmodule PrismWeb.AquaLive do
 
       <.live_loading :if={@loading} message="Loading AQUA…" />
 
-      <%!-- The consent this estate froze for the formula is behind the
-            shipped manifest: a policy may name an action the chain
-            authority will deny on the click. Re-consenting is the fix,
-            and the sheet is one click away. --%>
-      <%!-- One row per formula whose consent no longer answers. Installing a
-            component widens the closure every formula that names it was
-            consented against, so recovery is per formula. --%>
+      <%!-- One row per formula or agent whose consent no longer answers.
+            Installing a component widens the closure every source that
+            names it was consented against, so recovery is per source. --%>
       <div
         :for={{ref, state} <- @stale_consents}
         id={"aqua-consent-drift-" <> ref}

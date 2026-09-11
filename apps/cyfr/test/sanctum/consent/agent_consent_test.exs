@@ -65,18 +65,20 @@ defmodule Sanctum.Consent.AgentConsentTest do
     edge
   end
 
-  defp bind_claude!(ctx) do
+  defp bind_claude!(ctx, opts \\ []) do
     {:ok, entry} =
       Sanctum.Vault.create(ctx, %{
-        name: "claude key",
+        name: Keyword.get(opts, :name, "claude key"),
         kind: "api_key",
-        fields: %{"ANTHROPIC_API_KEY" => "sk-test"}
+        fields: %{"ANTHROPIC_API_KEY" => Keyword.get(opts, :key, "sk-test")}
       })
 
-    {:ok, plan} = Plan.plan(ctx, %{ref: "catalyst:local.claude"})
+    label = Keyword.get(opts, :label, "default")
+    {:ok, plan} = Plan.plan(ctx, %{ref: "catalyst:local.claude", label: label})
 
     decisions = %{
       ref: "catalyst:local.claude",
+      label: label,
       bindings: [%{need: "api_key", entry_id: entry.id}]
     }
 
@@ -146,6 +148,38 @@ defmodule Sanctum.Consent.AgentConsentTest do
              edge!(explorer.resolved_policy, "agent:local.explorer", "catalyst:local.gemini").vault
 
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
+  end
+
+  test "ask-to-auto and native_search move the shape; a gemini agent with files names gemini",
+       %{ctx: ctx} do
+    {:ok, before} = ShapeDerivation.live_digest(ctx, "agent:local.web")
+
+    write_agent!(ctx, "web", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "ask")})
+    {:ok, asked} = ShapeDerivation.live_digest(ctx, "agent:local.web")
+    refute asked == before
+
+    write_agent!(ctx, "web", &%{&1 | tool_policy: Map.put(&1.tool_policy, "http.get", "auto")})
+    {:ok, restored} = ShapeDerivation.live_digest(ctx, "agent:local.web")
+    assert restored == before
+
+    write_agent!(
+      ctx,
+      "web",
+      &%{&1 | tool_policy: Map.put(&1.tool_policy, "native_search", "auto")}
+    )
+
+    {:ok, searched} = ShapeDerivation.live_digest(ctx, "agent:local.web")
+    refute searched == before
+
+    write_agent!(
+      ctx,
+      "explorer",
+      &%{&1 | tool_policy: Map.put(&1.tool_policy, "files.read", "ask")}
+    )
+
+    {:ok, input} = ShapeDerivation.shape_input(ctx, "agent:local.explorer")
+    assert input.model_target == "catalyst:local.gemini#gemini-pro-latest"
+    assert "files.read" in input.tool_policy.ask
   end
 
   test "the shape reads the model target and never the prompt", %{ctx: ctx} do
@@ -224,6 +258,111 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
     assert %{via: %{label: "default"}} =
              edge!(consented.resolved_policy, @soul, "catalyst:local.claude").vault
+  end
+
+  test "an edited shipped role is not re-minted", %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+    {_, first, _} = head!(ctx, "agent:local.web")
+
+    write_agent!(ctx, "web", fn agent ->
+      %{agent | tool_policy: Map.put(agent.tool_policy, "files.read", "auto")}
+    end)
+
+    {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
+    assert {"agent:local.web", :shape_moved} in skipped
+    {_, still, _} = head!(ctx, "agent:local.web")
+    assert still.revision == first.revision
+    assert {:ok, []} = Source.DB.profiles(ctx, "agent:local.nobody")
+  end
+
+  test "a prose-only soul edit still re-mints under a seed bump", %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+    {_, first, _} = head!(ctx, @soul)
+    write_agent!(ctx, "aqua", &%{&1 | prompt: &1.prompt <> "\n\nBe brief."})
+    Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:cyfr, :seed_path))
+
+    seed_dir = Application.get_env(:cyfr, :seed_path)
+
+    current =
+      [seed_dir, "components", "catalysts", "local", "claude", "*"]
+      |> Path.join()
+      |> Path.wildcard()
+      |> Enum.map(&Path.basename/1)
+      |> hd()
+
+    src = Path.join([seed_dir, "components", "catalysts", "local", "claude", current])
+    dest = Path.join([seed_dir, "components", "catalysts", "local", "claude", "9.0.0"])
+    File.mkdir_p!(dest)
+    File.cp!(Path.join(src, "catalyst.wasm"), Path.join(dest, "catalyst.wasm"))
+
+    manifest =
+      src
+      |> Path.join("cyfr-manifest.json")
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.put("version", "9.0.0")
+      |> put_in(["caps", "egress", "methods"], ["GET", "POST", "DELETE"])
+
+    File.write!(Path.join(dest, "cyfr-manifest.json"), Jason.encode!(manifest))
+    File.rm_rf!(src)
+
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "components")
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+    {:ok, %{revised: revised}} = Bootstrap.run(ctx)
+    assert @soul in revised
+    {_, healed, _} = head!(ctx, @soul)
+    assert healed.revision == first.revision + 1
+    assert healed.granted_via == "bootstrap"
+  end
+
+  test "two roles on one catalyst carry two keys under the soul", %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+    home = bind_claude!(ctx)
+    work = bind_claude!(ctx, label: "work", name: "work key", key: "sk-work")
+
+    {_, soul_head, _} = head!(ctx, @soul)
+    {:ok, plan} = Plan.plan(ctx, %{ref: @soul})
+
+    decisions = %{
+      ref: @soul,
+      selections: [
+        %{from: "agent:local.web", dep: "catalyst:local.claude", label: "default"},
+        %{from: "agent:local.artisan", dep: "catalyst:local.claude", label: "work"}
+      ]
+    }
+
+    {:ok, preview} = Commit.preview(ctx, decisions)
+
+    {:ok, %{revision: revision}} =
+      Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    assert revision == soul_head.revision + 1
+    {_, consented, _} = head!(ctx, @soul)
+
+    assert edge!(consented.resolved_policy, "agent:local.web", "catalyst:local.claude").vault.via.label ==
+             "default"
+
+    assert edge!(consented.resolved_policy, "agent:local.artisan", "catalyst:local.claude").vault.via.label ==
+             "work"
+
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+
+    {:ok, web} =
+      Blob.lookup_edge(authority.policy, "agent:local.web", "catalyst:local.claude", "")
+
+    {:ok, artisan} =
+      Blob.lookup_edge(authority.policy, "agent:local.artisan", "catalyst:local.claude", "")
+
+    assert web.vault.entry_id == home.id
+    assert artisan.vault.entry_id == work.id
   end
 
   test "the soul's authority loads with its tools and its edge into the model", %{ctx: ctx} do

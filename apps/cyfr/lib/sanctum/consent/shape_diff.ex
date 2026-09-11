@@ -57,7 +57,8 @@ defmodule Sanctum.Consent.ShapeDiff do
          "tools" => resources["tools"] || [],
          "egress" => Map.take(resources["egress"] || %{}, @egress),
          "storage" => Map.take(resources["storage"] || %{}, @storage)
-       }}
+       }
+       |> Map.merge(policy_caps(manifest))}
     end
   end
 
@@ -90,8 +91,22 @@ defmodule Sanctum.Consent.ShapeDiff do
         entry("storage.#{key}", get_in(granted, ["storage", key]), get_in(live, ["storage", key]))
       end)
 
-    ([tools] ++ egress ++ storage) |> Enum.reject(&is_nil/1)
+    policy =
+      Enum.map(~w(policy.auto policy.ask), fn key ->
+        entry(key, granted[key], live[key])
+      end)
+
+    ([tools] ++ egress ++ storage ++ policy) |> Enum.reject(&is_nil/1)
   end
+
+  defp policy_caps(%{"agent" => %{"policy" => policy}}) when is_map(policy) do
+    %{
+      "policy.auto" => policy["auto"] || [],
+      "policy.ask" => policy["ask"] || []
+    }
+  end
+
+  defp policy_caps(_), do: %{}
 
   defp entry(capability, granted, live) do
     granted = normalize(granted)

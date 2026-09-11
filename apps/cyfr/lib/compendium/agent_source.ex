@@ -27,7 +27,9 @@ defmodule Compendium.AgentSource do
       (required), the catalysts behind the tool families it names — its
       hands — (required), and every role its policy lets it clone into
       (optional: a role that cannot resolve is simply not clonable).
-    * `model` is the model target, which the shape digest reads.
+    * `agent` is the model target and the policy modes (`auto` / `ask`
+      sets), which the shape digest reads. The flat `"model"` key is not
+      written.
 
   A disabled agent has no row: it is out of the roster, and a soul's
   clone edge to it resolves to nothing.
@@ -47,6 +49,10 @@ defmodule Compendium.AgentSource do
   @doc "The name-level ref of the agent `name`: `agent:local.<name>`."
   @spec ref(String.t()) :: String.t()
   def ref(name) when is_binary(name), do: ComponentRef.build(@type_name, @publisher, name)
+
+  @doc "The soul's name-level ref: `agent:local.aqua`."
+  @spec soul_ref() :: String.t()
+  def soul_ref, do: ref(AquaPath.soul_name())
 
   @doc "Whether `ref` names an agent source."
   @spec agent_ref?(String.t()) :: boolean()
@@ -118,6 +124,20 @@ defmodule Compendium.AgentSource do
       |> Enum.uniq_by(& &1["ref"])
       |> Enum.sort_by(& &1["ref"])
 
+    {auto, ask} =
+      (agent.tool_policy || %{})
+      |> Enum.split_with(fn {_key, mode} -> mode == "auto" end)
+
+    agent_block =
+      %{
+        "policy" => %{
+          "auto" => auto |> Enum.map(&elem(&1, 0)) |> Enum.sort(),
+          "ask" => ask |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+        }
+      }
+      |> Cyfr.MapUtil.put_present("catalyst", agent.catalyst_ref)
+      |> Cyfr.MapUtil.put_present("model", agent.model)
+
     %{
       "name" => name,
       "type" => @type_name,
@@ -125,9 +145,9 @@ defmodule Compendium.AgentSource do
       "publisher" => @publisher,
       "description" => agent.description || "",
       "caps" => %{"tools" => Enum.sort(tools)},
-      "dependencies" => %{"static" => dependencies}
+      "dependencies" => %{"static" => dependencies},
+      "agent" => agent_block
     }
-    |> Cyfr.MapUtil.put_present("model", agent.model)
   end
 
   @doc "Whether `name` is the estate's soul."
@@ -138,7 +158,29 @@ defmodule Compendium.AgentSource do
   @spec unit(String.t()) :: Arca.Storage.path()
   def unit(name) when is_binary(name), do: AquaPath.agent_file(name)
 
-  defp row(agent, roster) do
+  @doc """
+  The consent row of an agent file — the soul or a role — under `roster`,
+  the names of the estate's enabled agents (which decide clone edges).
+  """
+  @spec row(AquaAgent.t(), MapSet.t(String.t())) :: map()
+  def row(%{name: _} = agent, %MapSet{} = roster), do: do_row(agent, roster)
+
+  @doc """
+  The consent row the seed file would project under the estate's enabled
+  roster. A prose-only edit of the athanor's copy does not change this
+  row; a policy, model or catalyst edit of the seed file does. A
+  disabled seed agent has no row.
+  """
+  @spec shipped_row(String.t(), binary(), MapSet.t(String.t())) ::
+          {:ok, map()} | {:error, term()}
+  def shipped_row(name, bytes, %MapSet{} = roster)
+      when is_binary(name) and is_binary(bytes) do
+    with {:ok, agent} <- AquaAgent.parse(name, bytes) do
+      if agent.disabled, do: {:error, :disabled}, else: {:ok, row(agent, roster)}
+    end
+  end
+
+  defp do_row(agent, roster) do
     manifest = manifest(agent, roster)
     {:ok, digest} = AquaAgent.capability_digest(agent)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)

@@ -35,17 +35,21 @@ defmodule Sanctum.Authority.Blob do
     target binds on the ingress of its own owner profile of the named
     label, pinned to a binding digest when the consent pinned one.
     `Sanctum.Consent.Loader` turns a selection into a bound resource when
-    that profile is active and its ingress carries a matching entry; a
-    selection that does not resolve stays a selection, and a run under it
-    answers setup_required.
+    that profile is active and its ingress carries a matching entry, and
+    pins the lender (`profile_id`, `consent_id`) so a later revoke or
+    revision refuses the next unseal; a selection that does not resolve
+    stays a selection, and a run under it answers setup_required.
     """
 
     @type projection :: %{fields: [String.t()], scopes: [String.t()]} | nil
 
+    @type lender :: %{profile_id: String.t(), consent_id: String.t()}
+
     @type bound_vault :: %{
-            entry_id: String.t(),
-            binding_digest: String.t(),
-            projection: projection()
+            required(:entry_id) => String.t(),
+            required(:binding_digest) => String.t(),
+            required(:projection) => projection(),
+            optional(:lender) => lender()
           }
 
     @type selected_vault :: %{
@@ -209,9 +213,10 @@ defmodule Sanctum.Authority.Blob do
   defp put_resource(map, _key, nil), do: map
   defp put_resource(map, key, value), do: Map.put(map, key, value)
 
-  defp vault_to_map(%{entry_id: id, binding_digest: digest, projection: projection}) do
+  defp vault_to_map(%{entry_id: id, binding_digest: digest, projection: projection} = vault) do
     %{"entry_id" => id, "binding_digest" => digest}
     |> put_resource("projection", projection && string_lists_to_map(projection))
+    |> put_resource("lender", lender_to_map(Map.get(vault, :lender)))
   end
 
   defp vault_to_map(%{via: %{label: label, binding_digest: digest}, projection: projection}) do
@@ -220,6 +225,11 @@ defmodule Sanctum.Authority.Blob do
     %{"via" => via}
     |> put_resource("projection", projection && string_lists_to_map(projection))
   end
+
+  defp lender_to_map(%{profile_id: profile_id, consent_id: consent_id}),
+    do: %{"profile_id" => profile_id, "consent_id" => consent_id}
+
+  defp lender_to_map(_), do: nil
 
   # `%{domains: [...], methods: [...]}` → `%{"domains" => [...], ...}`,
   # dropping nil lists (an absent key on the way in).
@@ -286,6 +296,23 @@ defmodule Sanctum.Authority.Blob do
   @spec bound_vault?(Edge.vault() | nil) :: boolean()
   def bound_vault?(%{entry_id: _}), do: true
   def bound_vault?(_), do: false
+
+  @doc """
+  Entry ids that appear on more than one bound vault with unequal
+  binding digests. Commit and the loader refuse rather than pick.
+  """
+  @spec entry_digest_conflicts(t()) :: [String.t()]
+  def entry_digest_conflicts(%__MODULE__{nodes: nodes}) do
+    nodes
+    |> Enum.flat_map(fn {_ref, %Node{edges: edges}} ->
+      for {_key, %Edge{vault: %{entry_id: id, binding_digest: digest}}} <- edges,
+          do: {id, digest}
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.filter(fn {_id, digests} -> digests |> Enum.uniq() |> length() > 1 end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
+  end
 
   @doc """
   The blob with every edge rewritten by `fun`, which receives the node
@@ -482,11 +509,13 @@ defmodule Sanctum.Authority.Blob do
   end
 
   defp validate_resource(:vault, raw) when is_map(raw) do
-    with :ok <- keys_or_reason(raw, ["entry_id", "binding_digest", "projection"]),
+    with :ok <- keys_or_reason(raw, ["entry_id", "binding_digest", "projection", "lender"]),
          {:ok, entry_id} <- required_string(raw, "entry_id"),
          {:ok, digest} <- required_string(raw, "binding_digest"),
-         {:ok, projection} <- validate_projection(Map.get(raw, "projection")) do
-      {:ok, %{entry_id: entry_id, binding_digest: digest, projection: projection}}
+         {:ok, projection} <- validate_projection(Map.get(raw, "projection")),
+         {:ok, lender} <- validate_lender(Map.get(raw, "lender")) do
+      vault = %{entry_id: entry_id, binding_digest: digest, projection: projection}
+      {:ok, if(lender, do: Map.put(vault, :lender, lender), else: vault)}
     end
   end
 
@@ -527,6 +556,18 @@ defmodule Sanctum.Authority.Blob do
 
   defp validate_resource(_kind, raw),
     do: {:error, "unexpected shape: #{inspect(Sanctum.Sanitizer.sanitize(raw))}"}
+
+  defp validate_lender(nil), do: {:ok, nil}
+
+  defp validate_lender(raw) when is_map(raw) do
+    with :ok <- keys_or_reason(raw, ["profile_id", "consent_id"]),
+         {:ok, profile_id} <- required_string(raw, "profile_id"),
+         {:ok, consent_id} <- required_string(raw, "consent_id") do
+      {:ok, %{profile_id: profile_id, consent_id: consent_id}}
+    end
+  end
+
+  defp validate_lender(_), do: {:error, "lender must be an object"}
 
   # Match grants by server digest. server_name identifies configuration
   # drift; descriptions_digest records an advisory description baseline

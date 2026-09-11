@@ -22,14 +22,16 @@ defmodule Sanctum.Consent.Loader do
      intact and its ingress binds an entry of the pinned digest;
      otherwise the selection stays, and a run under that edge answers
      setup_required
-  7. the `Sanctum.Consent.Loader.Decision` table over granted vs installed
+  7. **binding digest consistency** — the same vault entry on two edges
+     with unequal binding digests is refused; the loader never picks
+  8. the `Sanctum.Consent.Loader.Decision` table over granted vs installed
      activation
-  8. `Sanctum.Authority.root/3` — ceiling clamping happens inside
+  9. `Sanctum.Authority.root/3` — ceiling clamping happens inside
 
-  The live side of step 6 (`live` and `live_shape_digest`) is supplied by
-  the caller, because resolving installed components is registry work the
-  loader deliberately cannot do — its inputs stay inert data. A nil
-  `live_shape_digest` compares as unknown and fails closed to
+  The live side of the integrity evaluation (`live` and `live_shape_digest`)
+  is supplied by the caller, because resolving installed components is
+  registry work the loader deliberately cannot do — its inputs stay inert
+  data. A nil `live_shape_digest` compares as unknown and fails closed to
   `consent_required` on drift.
   """
 
@@ -55,6 +57,7 @@ defmodule Sanctum.Consent.Loader do
           | {:invalid_profile, atom()}
           | {:unknown_source_node, String.t()}
           | {:missing_ingress, String.t()}
+          | {:inconsistent_binding_digest, String.t()}
 
   @typedoc "What run_root stamps on the execution row."
   @type stamp :: %{activation_digest: String.t(), activation_graph: %{String.t() => String.t()}}
@@ -82,6 +85,7 @@ defmodule Sanctum.Consent.Loader do
          {:ok, blob} <- parse_blob(consent),
          :ok <- check_blob_refs_equality(blob, consent),
          blob = resolve_selections(ctx, source, blob),
+         :ok <- check_entry_digest_conflicts(blob),
          {:ok, running} <- evaluate_activation(ctx, profile, consent, opts),
          {:ok, authority} <- build_root(profile, consent, blob, running, opts) do
       {:ok, authority, %{activation_digest: running.digest, activation_graph: running.graph}}
@@ -161,6 +165,13 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
+  defp check_entry_digest_conflicts(blob) do
+    case Blob.entry_digest_conflicts(blob) do
+      [id | _] -> {:error, {:inconsistent_binding_digest, id}}
+      [] -> :ok
+    end
+  end
+
   defp blob_vault_refs(%Blob{nodes: nodes}) do
     for {_ref, node} <- nodes,
         {_key, edge} <- node.edges,
@@ -212,8 +223,71 @@ defmodule Sanctum.Consent.Loader do
          {:ok, bound} <- bound_ingress_vault(ingress),
          :ok <- check_pinned_digest(via, bound),
          {:ok, narrowed} <- narrow_projection(projection, bound.projection) do
-      {:ok, %{bound | projection: narrowed}}
+      {:ok,
+       Map.put(%{bound | projection: narrowed}, :lender, %{
+         profile_id: profile.id,
+         consent_id: consent.id
+       })}
     end
+  end
+
+  @doc """
+  Whether the pins this authority carries still name the live heads:
+  the root profile is active at `consent_id`, and every lender pin on
+  the current edge or the loaded blob is active at its consent. One
+  primary-key read per pin.
+  """
+  @spec pinned_intact?(Context.t(), Authority.t()) :: boolean()
+  def pinned_intact?(%Context{} = ctx, %Authority{} = auth) do
+    root_pin_intact?(ctx, auth.profile_id, auth.consent_id) and
+      Enum.all?(lender_pins(auth), fn %{profile_id: profile_id, consent_id: consent_id} ->
+        pin_intact?(ctx, profile_id, consent_id)
+      end)
+  end
+
+  # The root pin holds only while its profile row is active at the pinned
+  # consent; a missing row, a moved head or a store that cannot answer all
+  # refuse.
+  defp root_pin_intact?(ctx, profile_id, consent_id)
+       when is_binary(profile_id) and is_binary(consent_id) do
+    case Arca.ProfileStorage.get(ctx.athanor_id, profile_id) do
+      {:ok, %{status: "active", head_consent_id: ^consent_id}} -> true
+      _ -> false
+    end
+  end
+
+  defp root_pin_intact?(_ctx, _profile_id, _consent_id), do: false
+
+  defp pin_intact?(_ctx, profile_id, consent_id)
+       when not is_binary(profile_id) or not is_binary(consent_id),
+       do: false
+
+  defp pin_intact?(ctx, profile_id, consent_id) do
+    case Arca.ProfileStorage.get(ctx.athanor_id, profile_id) do
+      {:ok, %{status: "active", head_consent_id: ^consent_id}} -> true
+      _ -> false
+    end
+  end
+
+  defp lender_pins(%Authority{} = auth) do
+    from_resources =
+      case auth.resources do
+        %Blob.Edge{vault: %{lender: lender}} -> [lender]
+        _ -> []
+      end
+
+    from_policy =
+      case auth.policy do
+        %Blob{nodes: nodes} ->
+          for {_ref, node} <- nodes,
+              {_key, %Blob.Edge{vault: %{lender: lender}}} <- node.edges,
+              do: lender
+
+        _ ->
+          []
+      end
+
+    Enum.uniq(from_resources ++ from_policy)
   end
 
   defp selected_profile(ctx, source, target, label) do

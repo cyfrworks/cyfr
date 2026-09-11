@@ -164,7 +164,9 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, %{"disabled" => true}} = get_agent(ctx, "planner")
 
       # Still on the page — `list` drops it, the page does not — as
-      # disabled, edited, and with the way back.
+      # disabled, edited, and with the way back. The write answers before
+      # the section re-reads, so the card is awaited.
+      settled(fn -> has_element?(view, "#aqua-card-planner", "disabled") end, "the disabled card")
       assert has_element?(view, "#aqua-card-planner", "disabled")
       assert has_element?(view, "#aqua-card-planner", "edited")
 
@@ -216,6 +218,7 @@ defmodule PrismWeb.AquaLiveTest do
       view |> element("#aqua-restore button[phx-click=restore_all]") |> render_click()
 
       assert {:error, _} = get_agent(ctx, "scout")
+      settled(fn -> not has_element?(view, "#aqua-card-scout") end, "the scout card to go")
       refute has_element?(view, "#aqua-card-scout")
       assert has_element?(view, "#aqua-restore-result", "aqua/roles/scout.md")
     end
@@ -242,6 +245,11 @@ defmodule PrismWeb.AquaLiveTest do
       assert render(view) =~ "the soul may now clone into it"
 
       # The soul card shows the leave, and the toggle takes it back.
+      settled(
+        fn -> has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]") end,
+        "the clone strip to show scout"
+      )
+
       assert has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]")
 
       view
@@ -250,6 +258,14 @@ defmodule PrismWeb.AquaLiveTest do
 
       {:ok, %{"tool_policy" => soul_policy}} = get_agent(ctx, "aqua")
       refute Map.has_key?(soul_policy, "scout.*")
+
+      settled(
+        fn ->
+          not has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]")
+        end,
+        "the clone strip to drop scout"
+      )
+
       refute has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]")
 
       # A role the roster does not hold cannot be named.
@@ -785,4 +801,8 @@ defmodule PrismWeb.AquaLiveTest do
       assert after_toggle["vault.get"] == "ask"
     end
   end
+
+  # A section re-reads itself on a message the write sends after it
+  # answers, so a card's new state is awaited rather than read at once.
+  defp settled(fun, label), do: Cyfr.Test.Wait.wait_until(fun, 2_000, label)
 end

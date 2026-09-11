@@ -275,7 +275,9 @@ defmodule Compendium.Provenance do
 
   defp remote_row?(row), do: Compendium.Source.remote?(Map.get(row, :source))
 
-  defp type_of(row), do: to_string(Map.get(row, :component_type, ""))
+  defp type_of(row) do
+    to_string(Map.get(row, :component_type) || Map.get(row, "component_type") || "")
+  end
 
   # The fork's stamp, read through the manifest module's lenient decode —
   # the same read-side SSOT every other manifest consumer speaks, whatever
@@ -311,6 +313,66 @@ defmodule Compendium.Provenance do
   end
 
   defp sort_versions_desc(versions), do: Compendium.Semver.sort_desc(versions)
+
+  @wasm_types ~w(catalyst reagent formula)
+
+  @doc """
+  The release digest of the unit the seed ships at this row's path —
+  the install media's artifact and manifest, not the athanor's copy.
+  A version the seed does not hold is `{:error, :not_shipped}`. Cached
+  under a seed-only key: a version directory is immutable.
+  """
+  @spec shipped_release_digest(map()) :: {:ok, String.t()} | {:error, term()}
+  def shipped_release_digest(component) when is_map(component) do
+    type = type_of(component)
+
+    publisher =
+      ComponentPath.normalize_publisher(
+        Map.get(component, :publisher) || Map.get(component, "publisher")
+      )
+
+    name = Map.get(component, :name) || Map.get(component, "name")
+    version = Map.get(component, :version) || Map.get(component, "version")
+
+    cond do
+      type not in @wasm_types ->
+        {:error, :not_wasm_unit}
+
+      not (is_binary(name) and name != "" and is_binary(version) and version != "") ->
+        {:error, :invalid_row}
+
+      true ->
+        key =
+          {:seed_release_digest, Application.get_env(:cyfr, :seed_path), type, publisher, name,
+           version}
+
+        case Arca.Cache.get(key) do
+          {:ok, digest} when is_binary(digest) ->
+            {:ok, digest}
+
+          :miss ->
+            with {:ok, digest} <- compute_seed_release(type, publisher, name, version) do
+              Arca.Cache.put(key, digest, :timer.hours(24))
+              {:ok, digest}
+            end
+        end
+    end
+  end
+
+  defp compute_seed_release(type, publisher, name, version) do
+    rel = [ComponentPath.type_plural(type), publisher, name, version]
+    prefix = Arca.Storage.seed_prefix("components") ++ rel
+    ctx = Sanctum.system_context()
+
+    with {:ok, manifest} <- Arca.get_json(ctx, prefix ++ [ComponentPath.manifest_name()]),
+         {:ok, bytes} <- Arca.get(ctx, prefix ++ [ComponentPath.wasm_name(type)]) do
+      digest = Compendium.WasmValidator.compute_digest(bytes)
+      Compendium.ReleaseDigest.compute(digest, Compendium.Manifest.decode(manifest))
+    else
+      {:error, :not_found} -> {:error, :not_shipped}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   @doc false
   @spec version_dir(map()) :: [String.t()]

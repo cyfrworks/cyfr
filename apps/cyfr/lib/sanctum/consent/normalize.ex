@@ -209,6 +209,32 @@ defmodule Sanctum.Consent.Normalize do
     do: {:error, {tag, :caps, "key must be a string, got: #{inspect(key)}"}}
 
   @doc false
+  # An agent's policy modes: two disjoint string sets. A key in both
+  # would be two answers to one question.
+  def tool_policy(map, key, tag) do
+    case Map.get(map, key) do
+      nil ->
+        {:ok, nil}
+
+      policy when is_map(policy) ->
+        with :ok <- only_keys(policy, ~w(auto ask)a, tag),
+             {:ok, auto} <- string_set(policy, :auto, tag),
+             {:ok, ask} <- string_set(policy, :ask, tag) do
+          overlap = auto -- (auto -- ask)
+
+          if overlap == [] do
+            {:ok, %{"auto" => auto, "ask" => ask}}
+          else
+            {:error, {tag, key, "auto and ask must be disjoint"}}
+          end
+        end
+
+      other ->
+        {:error, {tag, key, "must be a map, got: #{inspect(other)}"}}
+    end
+  end
+
+  @doc false
   def put_optional(map, _key, nil), do: map
   def put_optional(map, key, value), do: Map.put(map, key, value)
 end
