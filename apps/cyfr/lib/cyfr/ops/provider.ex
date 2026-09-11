@@ -139,7 +139,12 @@ defmodule Cyfr.Ops.Provider do
           optional(:permission) => atom(),
           optional(:consent) => :interactive | :staging,
           optional(:scope) => :platform,
-          optional(:standing) => :conversation | false
+          optional(:standing) => :conversation | false,
+          # A read whose re-dispatch after an uncertain recovery is safe by
+          # review: no effect beyond its answer. A recovered turn may
+          # re-run only these; `kind: :read` alone says nothing about an
+          # arbitrary endpoint. Refused by the boot audit on any other kind.
+          optional(:recovery) => :replay_safe
         }
 
   @type tool_definition :: %{

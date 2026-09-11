@@ -81,8 +81,8 @@ defmodule Compendium.MCP.AquaTool do
           "list" => %{kind: :read, planes: [:external, :in_chain]},
           "get" => %{kind: :read, planes: [:external, :in_chain]},
           "status" => %{kind: :read, planes: [:external, :in_chain]},
-          "skill_list" => %{kind: :read, planes: [:external, :in_chain]},
-          "skill_get" => %{kind: :read, planes: [:external, :in_chain]},
+          "skill_list" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
+          "skill_get" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
           # Every write is `consent: :interactive`: a person's own session
           # changes the soul, the closet and the scrolls, never a standing
           # credential — an API key, a `*` key included, is refused at the

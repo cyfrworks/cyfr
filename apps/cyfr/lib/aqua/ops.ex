@@ -48,6 +48,19 @@ defmodule Aqua.Ops do
   end
 
   @doc """
+  Whether `tool`/`action` is reviewed as safe to re-dispatch after an
+  uncertain recovery (`recovery: :replay_safe`); false for an unknown
+  tool or any other action.
+  """
+  @spec replay_safe?(String.t(), String.t()) :: boolean()
+  def replay_safe?(tool, action) do
+    case Cyfr.Ops.Catalog.get_tool(tool) do
+      {:ok, tool_def} -> Cyfr.Ops.Annotations.recovery(tool_def, action) == :replay_safe
+      _ -> false
+    end
+  end
+
+  @doc """
   The registry's `standing` annotation for `tool`/`action` — `:conversation`,
   `false`, or nil when the action declares none or the tool is unknown.
   """

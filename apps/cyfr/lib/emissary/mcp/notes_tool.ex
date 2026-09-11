@@ -86,9 +86,24 @@ defmodule Emissary.MCP.NotesTool do
             planes: [:external, :in_chain],
             consent: :interactive
           },
-          "list" => %{kind: :read, planes: [:external, :in_chain], consent: :interactive},
-          "read" => %{kind: :read, planes: [:external, :in_chain], consent: :interactive},
-          "search" => %{kind: :read, planes: [:external, :in_chain], consent: :interactive}
+          "list" => %{
+            kind: :read,
+            planes: [:external, :in_chain],
+            consent: :interactive,
+            recovery: :replay_safe
+          },
+          "read" => %{
+            kind: :read,
+            planes: [:external, :in_chain],
+            consent: :interactive,
+            recovery: :replay_safe
+          },
+          "search" => %{
+            kind: :read,
+            planes: [:external, :in_chain],
+            consent: :interactive,
+            recovery: :replay_safe
+          }
         }
       },
       input_schema: %{

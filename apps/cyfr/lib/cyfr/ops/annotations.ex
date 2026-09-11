@@ -87,6 +87,19 @@ defmodule Cyfr.Ops.Annotations do
   def standing(source, action), do: field(source, action, :standing)
 
   @doc """
+  The `recovery` annotation of an action: `:replay_safe` for a read
+  reviewed as safe to re-dispatch after an uncertain recovery, nil for
+  every other action.
+  """
+  @spec recovery(map(), String.t()) :: :replay_safe | nil
+  def recovery(source, action) do
+    case field(source, action, :recovery) do
+      :replay_safe -> :replay_safe
+      _ -> nil
+    end
+  end
+
+  @doc """
   The one codec for a `standing` value as it travels: the annotation's
   atom, the wire's string, or nothing. `standing/1` decodes any spelling
   to `:conversation` (a standing allow for one conversation only),

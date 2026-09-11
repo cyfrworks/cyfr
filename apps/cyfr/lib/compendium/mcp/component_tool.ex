@@ -38,7 +38,7 @@ defmodule Compendium.MCP.ComponentTool do
         destructiveHint: true,
         actions: %{
           "search" => %{kind: :read, planes: [:external, :in_chain]},
-          "inspect" => %{kind: :read, planes: [:external, :in_chain]},
+          "inspect" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
           "pull" => %{
             kind: :write,
             planes: [:external, :in_chain],
@@ -67,7 +67,7 @@ defmodule Compendium.MCP.ComponentTool do
             permission: :component_read
           },
           "setup_plan" => %{kind: :read, planes: [:external, :in_chain]},
-          "list" => %{kind: :read, planes: [:external, :in_chain]},
+          "list" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
           "status" => %{kind: :read, planes: [:external, :in_chain]},
           "delete" => %{kind: :destructive, planes: [:external], permission: :component_manage},
           # Reverts a bundled component's local edits to exactly what the

@@ -895,6 +895,7 @@ defmodule Cyfr.Ops.Catalog do
   @valid_consent [:interactive, :staging]
   @valid_scopes [:platform]
   @valid_standing [:conversation, false]
+  @valid_recovery [:replay_safe]
 
   defp audit_action(%{} = annotation) do
     kind = Map.get(annotation, :kind)
@@ -905,6 +906,7 @@ defmodule Cyfr.Ops.Catalog do
     scope = Map.get(annotation, :scope)
     standing = Map.get(annotation, :standing)
     host = Map.get(annotation, :host)
+    recovery = Map.get(annotation, :recovery)
 
     cond do
       is_nil(kind) or not is_atom(kind) -> {:error, :missing_kind}
@@ -920,11 +922,35 @@ defmodule Cyfr.Ops.Catalog do
       not (is_nil(standing) or standing in @valid_standing) -> {:error, :invalid_standing}
       # An operator-only action is an external-plane act; nothing in a chain is one.
       scope == :platform and planes != [:external] -> {:error, :invalid_scope}
+      not (is_nil(recovery) or recovery in @valid_recovery) -> {:error, :invalid_recovery}
+      # Replay safety is a reviewed property of a read; a write can never carry it.
+      not is_nil(recovery) and kind != :read -> {:error, :invalid_recovery}
       true -> :ok
     end
   end
 
   defp audit_action(_annotation), do: {:error, :missing_annotation}
+
+  @doc """
+  Every `tool.action` declared `recovery: :replay_safe`, derived from the
+  providers' declarations: the operations a recovered turn may still
+  dispatch past an uncertain step. There is no second list.
+  """
+  @spec replay_safe_actions([module()]) :: [String.t()]
+  def replay_safe_actions(providers \\ available_providers()) do
+    providers
+    |> Enum.flat_map(fn module ->
+      Enum.flat_map(module.tools(), fn tool ->
+        tool
+        |> Annotations.declared_actions()
+        |> Enum.filter(fn {_verb, annotation} ->
+          Map.get(annotation, :recovery) == :replay_safe
+        end)
+        |> Enum.map(fn {verb, _} -> "#{tool.name}.#{verb}" end)
+      end)
+    end)
+    |> Enum.sort()
+  end
 
   defp known_permission?(permission) when is_atom(permission),
     do: Atom.to_string(permission) in Sanctum.Atoms.known_permissions()
