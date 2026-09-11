@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.CronMCPTest do
+defmodule Cyfr.Schedules.ProviderTest do
   use ExUnit.Case, async: false
 
-  alias Opus.CronMCP
+  alias Cyfr.Schedules.Provider
   alias Sanctum.Context
 
   # Valid minimal WASM with export section
@@ -53,7 +53,7 @@ defmodule Opus.CronMCPTest do
 
   describe "tools/0" do
     test "returns schedule tool definition" do
-      tools = CronMCP.tools()
+      tools = Provider.tools()
       assert length(tools) == 1
       assert hd(tools).name == "schedule"
     end
@@ -69,7 +69,7 @@ defmodule Opus.CronMCPTest do
         "reference" => "reagent:local.test:1.0.0"
       }
 
-      assert {:ok, result} = CronMCP.handle("schedule", ctx, args)
+      assert {:ok, result} = Provider.handle("schedule", ctx, args)
       assert result.name == "test-create"
       assert result.cron_expression == "*/5 * * * *"
       assert result.status == "active"
@@ -87,7 +87,7 @@ defmodule Opus.CronMCPTest do
         "metadata" => %{"env" => "test"}
       }
 
-      assert {:ok, result} = CronMCP.handle("schedule", ctx, args)
+      assert {:ok, result} = Provider.handle("schedule", ctx, args)
       assert result.input == %{"key" => "value"}
       assert result.metadata == %{"env" => "test"}
     end
@@ -101,13 +101,13 @@ defmodule Opus.CronMCPTest do
         "reference" => "reagent:local.test:1.0.0"
       }
 
-      assert {:error, msg} = CronMCP.handle("schedule", ctx, args)
+      assert {:error, msg} = Provider.handle("schedule", ctx, args)
       assert msg =~ "Invalid cron"
     end
 
     test "rejects missing required fields", %{ctx: ctx} do
       args = %{"action" => "create", "name" => "no-ref"}
-      assert {:error, msg} = CronMCP.handle("schedule", ctx, args)
+      assert {:error, msg} = Provider.handle("schedule", ctx, args)
       assert msg =~ "Missing required"
     end
 
@@ -121,7 +121,7 @@ defmodule Opus.CronMCPTest do
           "reference" => "reagent:local.test:1.0.0"
         }
 
-        assert {:ok, _} = CronMCP.handle("schedule", ctx, args)
+        assert {:ok, _} = Provider.handle("schedule", ctx, args)
       end
 
       args = %{
@@ -132,14 +132,14 @@ defmodule Opus.CronMCPTest do
         "reference" => "reagent:local.test:1.0.0"
       }
 
-      assert {:error, msg} = CronMCP.handle("schedule", ctx, args)
+      assert {:error, msg} = Provider.handle("schedule", ctx, args)
       assert msg =~ "limit reached"
     end
   end
 
   describe "list action" do
     test "lists user schedules", %{ctx: ctx} do
-      CronMCP.handle("schedule", ctx, %{
+      Provider.handle("schedule", ctx, %{
         "action" => "create",
         "profile_id" => "prof-cron",
         "name" => "list-test",
@@ -147,7 +147,7 @@ defmodule Opus.CronMCPTest do
         "reference" => "reagent:local.test:1.0.0"
       })
 
-      assert {:ok, result} = CronMCP.handle("schedule", ctx, %{"action" => "list"})
+      assert {:ok, result} = Provider.handle("schedule", ctx, %{"action" => "list"})
       assert result.count >= 1
       assert is_list(result.schedules)
     end
@@ -156,7 +156,7 @@ defmodule Opus.CronMCPTest do
   describe "get action" do
     test "gets schedule by id", %{ctx: ctx} do
       {:ok, created} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "get-test",
@@ -165,7 +165,7 @@ defmodule Opus.CronMCPTest do
         })
 
       assert {:ok, result} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "get",
                  "schedule_id" => created.schedule_id
                })
@@ -174,7 +174,7 @@ defmodule Opus.CronMCPTest do
     end
 
     test "gets schedule by name", %{ctx: ctx} do
-      CronMCP.handle("schedule", ctx, %{
+      Provider.handle("schedule", ctx, %{
         "action" => "create",
         "profile_id" => "prof-cron",
         "name" => "get-by-name",
@@ -183,7 +183,7 @@ defmodule Opus.CronMCPTest do
       })
 
       assert {:ok, result} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "get",
                  "schedule_id" => "get-by-name"
                })
@@ -193,7 +193,7 @@ defmodule Opus.CronMCPTest do
 
     test "returns error for missing schedule", %{ctx: ctx} do
       assert {:error, _} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "get",
                  "schedule_id" => "nonexistent"
                })
@@ -203,7 +203,7 @@ defmodule Opus.CronMCPTest do
   describe "pause/resume actions" do
     test "pauses and resumes schedule", %{ctx: ctx} do
       {:ok, created} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "pause-test",
@@ -212,7 +212,7 @@ defmodule Opus.CronMCPTest do
         })
 
       assert {:ok, paused} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "pause",
                  "schedule_id" => created.schedule_id
                })
@@ -220,7 +220,7 @@ defmodule Opus.CronMCPTest do
       assert paused.status == "paused"
 
       assert {:ok, resumed} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "resume",
                  "schedule_id" => created.schedule_id
                })
@@ -232,7 +232,7 @@ defmodule Opus.CronMCPTest do
       # The cap counts every non-deleted row, so pause → create-another
       # cannot mint a 26th seat — and resume therefore needs no cap check.
       {:ok, first} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "cap-pause-0",
@@ -242,7 +242,7 @@ defmodule Opus.CronMCPTest do
 
       for i <- 1..24 do
         assert {:ok, _} =
-                 CronMCP.handle("schedule", ctx, %{
+                 Provider.handle("schedule", ctx, %{
                    "action" => "create",
                    "profile_id" => "prof-cron",
                    "name" => "cap-pause-#{i}",
@@ -252,13 +252,13 @@ defmodule Opus.CronMCPTest do
       end
 
       assert {:ok, _} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "pause",
                  "schedule_id" => first.schedule_id
                })
 
       assert {:error, msg} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "create",
                  "profile_id" => "prof-cron",
                  "name" => "cap-pause-25",
@@ -270,7 +270,7 @@ defmodule Opus.CronMCPTest do
 
       # And the paused seat resumes cleanly at the cap.
       assert {:ok, resumed} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "resume",
                  "schedule_id" => first.schedule_id
                })
@@ -282,7 +282,7 @@ defmodule Opus.CronMCPTest do
   describe "delete action" do
     test "soft-deletes schedule", %{ctx: ctx} do
       {:ok, created} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "delete-test",
@@ -291,7 +291,7 @@ defmodule Opus.CronMCPTest do
         })
 
       assert {:ok, result} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "delete",
                  "schedule_id" => created.schedule_id
                })
@@ -300,7 +300,7 @@ defmodule Opus.CronMCPTest do
 
       # Should not be findable anymore
       assert {:error, _} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "get",
                  "schedule_id" => created.schedule_id
                })
@@ -310,7 +310,7 @@ defmodule Opus.CronMCPTest do
   describe "profile binding" do
     test "create without a profile_id is refused", %{ctx: ctx} do
       assert {:error, message} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "create",
                  "name" => "unbound",
                  "cron_expression" => "0 * * * *",
@@ -322,7 +322,7 @@ defmodule Opus.CronMCPTest do
 
     test "update with an explicit nil profile_id (unbind) is refused", %{ctx: ctx} do
       {:ok, created} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "no-unbind",
@@ -331,7 +331,7 @@ defmodule Opus.CronMCPTest do
         })
 
       assert {:error, message} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "update",
                  "schedule_id" => created.schedule_id,
                  "profile_id" => nil
@@ -350,7 +350,7 @@ defmodule Opus.CronMCPTest do
       })
 
       {:ok, created} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "repoint-gate",
@@ -359,7 +359,7 @@ defmodule Opus.CronMCPTest do
         })
 
       assert {:error, message} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "update",
                  "schedule_id" => created.schedule_id,
                  "reference" => "reagent:local.unblessed:1.0.0"
@@ -374,7 +374,7 @@ defmodule Opus.CronMCPTest do
 
     test "update re-pointing within the profile's authorized target passes", %{ctx: ctx} do
       {:ok, created} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "repoint-ok",
@@ -383,7 +383,7 @@ defmodule Opus.CronMCPTest do
         })
 
       assert {:ok, updated} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "update",
                  "schedule_id" => created.schedule_id,
                  "reference" => "reagent:local.test:1.0.0"
@@ -403,7 +403,7 @@ defmodule Opus.CronMCPTest do
         "reference" => "c:local.nonexistent-component"
       }
 
-      assert {:error, msg} = CronMCP.handle("schedule", ctx, args)
+      assert {:error, msg} = Provider.handle("schedule", ctx, args)
       assert msg =~ "Cannot create schedule"
       assert msg =~ "failed to resolve"
     end
@@ -417,7 +417,7 @@ defmodule Opus.CronMCPTest do
         "reference" => "reagent:local.nonexistent:1.0.0"
       }
 
-      assert {:error, msg} = CronMCP.handle("schedule", ctx, args)
+      assert {:error, msg} = Provider.handle("schedule", ctx, args)
       assert msg =~ "not found in registry"
     end
   end
@@ -425,7 +425,7 @@ defmodule Opus.CronMCPTest do
   describe "update action - resolution failures" do
     test "rejects update with version-less ref to nonexistent component", %{ctx: ctx} do
       {:ok, created} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "update-resolve-test",
@@ -434,7 +434,7 @@ defmodule Opus.CronMCPTest do
         })
 
       assert {:error, msg} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "update",
                  "schedule_id" => created.schedule_id,
                  "reference" => "c:local.nonexistent-component"
@@ -448,7 +448,7 @@ defmodule Opus.CronMCPTest do
   describe "re-resolve action" do
     test "re-resolve returns error for nonexistent schedule", %{ctx: ctx} do
       assert {:error, msg} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "re_resolve",
                  "schedule_id" => "nonexistent"
                })
@@ -459,7 +459,7 @@ defmodule Opus.CronMCPTest do
     test "re-resolve returns error when reference cannot be resolved", %{ctx: ctx} do
       # Create a schedule with a pinned ref, then manually update reference to version-less
       {:ok, created} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "re-resolve-fail",
@@ -473,7 +473,7 @@ defmodule Opus.CronMCPTest do
       })
 
       assert {:error, msg} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "re_resolve",
                  "schedule_id" => created.schedule_id
                })
@@ -483,7 +483,7 @@ defmodule Opus.CronMCPTest do
 
     test "re-resolve requires schedule_id", %{ctx: _ctx} do
       assert {:error, msg} =
-               CronMCP.handle("schedule", %Context{}, %{
+               Provider.handle("schedule", %Context{}, %{
                  "action" => "re_resolve"
                })
 
@@ -493,7 +493,7 @@ defmodule Opus.CronMCPTest do
     test "re-resolve re-checks the profile binding against the new version", %{ctx: ctx} do
       # Changing a schedule version must pass the same profile-binding gates as creation and update.
       {:ok, created} =
-        CronMCP.handle("schedule", ctx, %{
+        Provider.handle("schedule", ctx, %{
           "action" => "create",
           "profile_id" => "prof-cron",
           "name" => "re-resolve-rebinds",
@@ -504,7 +504,7 @@ defmodule Opus.CronMCPTest do
       # A schedule bound to an authorized target still re-resolves: the two
       # gates now run on this path, and they pass.
       assert {:ok, after_} =
-               CronMCP.handle("schedule", ctx, %{
+               Provider.handle("schedule", ctx, %{
                  "action" => "re_resolve",
                  "schedule_id" => created.schedule_id
                })
@@ -519,15 +519,15 @@ defmodule Opus.CronMCPTest do
 
   describe "invalid actions" do
     test "rejects unknown action", %{ctx: ctx} do
-      assert {:error, _} = CronMCP.handle("schedule", ctx, %{"action" => "nope"})
+      assert {:error, _} = Provider.handle("schedule", ctx, %{"action" => "nope"})
     end
 
     test "rejects missing action", %{ctx: ctx} do
-      assert {:error, _} = CronMCP.handle("schedule", ctx, %{})
+      assert {:error, _} = Provider.handle("schedule", ctx, %{})
     end
 
     test "rejects unknown tool" do
-      assert {:error, _} = CronMCP.handle("unknown", %Context{}, %{})
+      assert {:error, _} = Provider.handle("unknown", %Context{}, %{})
     end
   end
 end

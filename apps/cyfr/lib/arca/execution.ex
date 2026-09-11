@@ -199,6 +199,10 @@ defmodule Arca.Execution do
   - `:payloads` — staged payloads (`Arca.ExecutionPayloads.Staged`)
     committed for the attempt in the same transaction; one that cannot
     be kept refuses admission `{:error, {:payload_not_retained, why}}`.
+  - `:occurrence_id` — the schedule occurrence this root runs; it moves
+    from `claimed` to `started` in the same transaction
+    (`Arca.ScheduleOccurrences.start!/3`), and admission is refused
+    `{:error, :occurrence_not_claimed}` when it is not claimed.
 
   Answers `{:ok, %{execution: t(), attempt: ExecutionAttempt.t()}}`.
   """
@@ -260,6 +264,15 @@ defmodule Arca.Execution do
         end
 
         commit_payloads!(Keyword.get(opts, :payloads, []), attempt_id)
+
+        case Keyword.get(opts, :occurrence_id) do
+          occurrence_id when is_binary(occurrence_id) ->
+            if Arca.ScheduleOccurrences.start!(athanor_id, occurrence_id, execution.id) != 1,
+              do: Arca.Repo.rollback(:occurrence_not_claimed)
+
+          nil ->
+            :ok
+        end
 
         %{execution: %{execution | current_attempt: attempt_id}, attempt: attempt}
       end)

@@ -821,7 +821,7 @@ defmodule Opus.ExecutionSemaphoreTest do
   end
 
   describe "unreaped-kill accounting" do
-    test "a tenant past the unreaped threshold is refused; children, other tenants and recovery are not" do
+    test "a tenant past the unreaped threshold is refused; children and other tenants are not, and a force-release keeps the penalty" do
       tenant = "ath_unreaped_#{System.unique_integer([:positive])}"
       threshold = max(2, div(ExecutionSemaphore.status().tenant_max, 2))
 
@@ -854,10 +854,10 @@ defmodule Opus.ExecutionSemaphoreTest do
       assert :ok = ExecutionSemaphore.acquire(1_000, :child, tenant)
       ExecutionSemaphore.release()
 
-      # The operator's recovery gesture clears the penalty box too.
+      # The operator's recovery gesture frees the slots, not the penalty:
+      # the spinning threads it cannot stop are still the tenant's.
       ExecutionSemaphore.force_release_all()
-      assert :ok = ExecutionSemaphore.acquire(1_000, :root, tenant)
-      ExecutionSemaphore.release()
+      assert {:error, :tenant_unreaped_limit} = ExecutionSemaphore.acquire(1_000, :root, tenant)
     end
 
     test "a cancel's note charges the tenant without the canceller holding a slot" do

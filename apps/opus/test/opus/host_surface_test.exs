@@ -31,7 +31,6 @@ defmodule Opus.HostSurfaceTest do
     # would implement.
     "Arca",
     "Arca.Cache",
-    "Arca.CronSchedule",
     "Arca.Execution",
     # The invoke budget's durable half: a spawn-shaped child's charge row,
     # taken before it runs and given back after — a worker on another
@@ -45,7 +44,6 @@ defmodule Opus.HostSurfaceTest do
     # A non-chat execution's result is kept as a payload once it completes.
     "Arca.ExecutionPayloads",
     "Arca.QueryHelpers",
-    "Arca.Repo",
     "Arca.Storage",
     # The turn a root belongs to: paused and resumed with the root's
     # attempt in one transaction — a worker holding a turn root would
@@ -73,7 +71,6 @@ defmodule Opus.HostSurfaceTest do
     "Sanctum.Cidr",
     "Sanctum.ComponentRef",
     "Sanctum.Limits",
-    "Sanctum.Tenancy",
 
     # Shared primitives — glue, by construction available to any node.
     # This boot's name on every execution row (the lease's runner id).

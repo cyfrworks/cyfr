@@ -23,6 +23,7 @@ defmodule Arca.CronSchedule do
   alias Sanctum.Context
 
   @statuses ~w(active paused deleted needs_consent)
+  @concurrency ~w(forbid allow)
 
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
@@ -43,8 +44,9 @@ defmodule Arca.CronSchedule do
     field :last_execution_id, :string
     field :run_count, :integer, default: 0
     field :error_count, :integer, default: 0
-    field :claimed_by, :string
-    field :claim_expires_at, :utc_datetime_usec
+    # Whether a due occurrence is claimed while another of this schedule
+    # is still open: `forbid` or `allow` (`Arca.ScheduleOccurrences`).
+    field :concurrency, :string, default: "forbid"
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end
@@ -80,6 +82,7 @@ defmodule Arca.CronSchedule do
         :metadata,
         :profile_id,
         :status,
+        :concurrency,
         :athanor_id,
         :next_run_at,
         :created_at,
@@ -97,6 +100,7 @@ defmodule Arca.CronSchedule do
         :updated_at
       ])
       |> validate_inclusion(:status, @statuses)
+      |> validate_inclusion(:concurrency, @concurrency)
       |> Arca.Repo.insert()
       |> mapped_validation()
     end)
@@ -122,6 +126,7 @@ defmodule Arca.CronSchedule do
           :metadata,
           :profile_id,
           :status,
+          :concurrency,
           :next_run_at,
           :last_run_at,
           :last_execution_id,
@@ -130,6 +135,7 @@ defmodule Arca.CronSchedule do
           :updated_at
         ])
         |> validate_inclusion(:status, @statuses)
+        |> validate_inclusion(:concurrency, @concurrency)
         |> Arca.Repo.update()
         |> mapped_validation()
       end
@@ -146,7 +152,7 @@ defmodule Arca.CronSchedule do
   @doc """
   Gets a schedule by ID (unscoped).
 
-  Reserved for the CronScheduler daemon which needs to load schedules
+  Reserved for the scheduler daemon, which needs to load schedules
   before a tenant context can be constructed (chicken-and-egg: we need
   the schedule's user_id/athanor_id to build a context).
   """
@@ -204,7 +210,7 @@ defmodule Arca.CronSchedule do
   @doc """
   Returns all active schedules (unscoped).
 
-  Unscoped daemon query. CronScheduler constructs a context from each
+  Unscoped daemon query. The scheduler constructs a context from each
   schedule's `user_id` and `athanor_id` before executing it.
   """
   @spec active_schedules() :: {:ok, [%__MODULE__{}]} | {:error, :database_error}
@@ -220,80 +226,6 @@ defmodule Arca.CronSchedule do
         |> Arca.Repo.all()
 
       {:ok, rows}
-    end)
-  end
-
-  @doc """
-  Take the schedule for one OCCURRENCE: a compare-and-set that advances
-  `next_run_at` in the same statement that records the claim. Several nodes
-  sharing the database race here and exactly one wins. Returns `:claimed` or
-  `:held`.
-
-  `next_run` is the occurrence after the one being taken — the caller
-  computes it from the cron expression.
-
-  ## Atomic occurrence claim
-
-  The claim and `next_run_at` advance atomically, preventing multiple nodes
-  from executing the same scheduled occurrence after a claim is released.
-
-  With `next_run_at <= now` in the `where` and the advance in the `set`,
-  the loser's CAS matches nothing and answers `:held`.
-
-  ## Delivery semantics
-
-  Occurrences are consumed at claim time, giving at-most-once delivery.
-  A node crash after the claim and before task execution skips that
-  occurrence. Clean shutdown releases outstanding claim markers.
-
-  A run that outlives its own interval can still overlap the next
-  occurrence on ANOTHER node; the per-node `running` set prevents it on
-  the same one. Serialising across nodes would mean holding the claim for
-  the whole run, which trades the overlap for a stall whenever a node dies
-  mid-execution.
-
-  `Opus.CronScheduler.run_claimed_schedule/6` releases the marker after
-  `:claimed` and before spawning the task, allowing later occurrences
-  to be claimed while this run executes.
-  """
-  @spec claim(String.t(), String.t(), pos_integer(), DateTime.t()) ::
-          :claimed | :held | {:error, :database_error}
-  # arca:unscoped-ok a claim races nodes over one known schedule id, before
-  # any context exists; the id came from `active_schedules/0`.
-  def claim(id, node_name, ttl_seconds, %DateTime{} = next_run)
-      when is_binary(id) and is_binary(node_name) do
-    Errors.with_db_rescue("CronSchedule.claim", fn ->
-      now = DateTime.utc_now()
-      expires = DateTime.add(now, ttl_seconds, :second)
-
-      {count, _} =
-        from(s in __MODULE__,
-          where: s.id == ^id and s.status == "active",
-          where: is_nil(s.claim_expires_at) or s.claim_expires_at < ^now,
-          # The occurrence itself. Whoever advances it first has taken it.
-          where: not is_nil(s.next_run_at) and s.next_run_at <= ^now
-        )
-        |> Arca.Repo.update_all(
-          set: [claimed_by: node_name, claim_expires_at: expires, next_run_at: next_run]
-        )
-
-      if count == 1, do: :claimed, else: :held
-    end)
-  end
-
-  @doc "Give a claim back once the firing is over (only the claimant's own)."
-  @spec release_claim(String.t(), String.t()) :: :ok
-  # arca:unscoped-ok the claimant gives back its own claim, matched on
-  # `claimed_by` — a node can only release what it holds.
-  #
-  # Fail-open on a DB error (default :ok): a claim that could not be
-  # released lapses on its own TTL; the release is best-effort cleanup.
-  def release_claim(id, node_name) when is_binary(id) and is_binary(node_name) do
-    Errors.with_db_rescue("CronSchedule.release_claim", :ok, fn ->
-      from(s in __MODULE__, where: s.id == ^id and s.claimed_by == ^node_name)
-      |> Arca.Repo.update_all(set: [claimed_by: nil, claim_expires_at: nil])
-
-      :ok
     end)
   end
 

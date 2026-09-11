@@ -200,7 +200,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       key_ctx = %{ctx | auth_method: :api_key}
 
       assert {:error, message} =
-               Opus.CronMCP.handle("schedule", key_ctx, %{
+               Cyfr.Schedules.Provider.handle("schedule", key_ctx, %{
                  "action" => "create",
                  "name" => "bound-sched",
                  "cron_expression" => "0 * * * *",
@@ -211,7 +211,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert message =~ "profile binding refused"
 
       assert {:ok, created} =
-               Opus.CronMCP.handle("schedule", ctx, %{
+               Cyfr.Schedules.Provider.handle("schedule", ctx, %{
                  "action" => "create",
                  "name" => "bound-sched",
                  "cron_expression" => "0 * * * *",

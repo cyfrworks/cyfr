@@ -175,25 +175,25 @@ defmodule Cyfr.Telemetry.Catalog do
     },
 
     # ——— schedules ———
-    [:cyfr, :opus, :schedule, :fired] => %{consumers: [:bridge]},
-    [:cyfr, :opus, :schedule, :completed] => %{
+    [:cyfr, :schedules, :fired] => %{consumers: [:bridge]},
+    [:cyfr, :schedules, :completed] => %{
       consumers: [:notes],
       note: "a schedule with `keep_outcome` in its metadata files the run's output as a note"
     },
-    [:cyfr, :opus, :schedule, :failed] => %{consumers: [:bridge]},
-    [:cyfr, :opus, :cron_scheduler, :load_failed] => %{
+    [:cyfr, :schedules, :failed] => %{consumers: [:bridge]},
+    [:cyfr, :schedules, :scheduler, :load_failed] => %{
       consumers: [:operator],
       note: "scheduler self-alarm: the schedule table could not be read; retried on a timer"
     },
-    [:cyfr, :opus, :cron_scheduler, :fire_failed] => %{
+    [:cyfr, :schedules, :scheduler, :fire_failed] => %{
       consumers: [:operator],
       note: "scheduler self-alarm: a due schedule could not be dispatched"
     },
-    [:cyfr, :opus, :cron_scheduler, :timer_failed] => %{
+    [:cyfr, :schedules, :scheduler, :timer_failed] => %{
       consumers: [:operator],
       note: "scheduler self-alarm: the tick timer could not be re-armed"
     },
-    [:cyfr, :opus, :cron_scheduler, :record_error_failed] => %{
+    [:cyfr, :schedules, :scheduler, :record_error_failed] => %{
       consumers: [:operator],
       note: "scheduler self-alarm: a failure could not be recorded on the schedule row"
     },

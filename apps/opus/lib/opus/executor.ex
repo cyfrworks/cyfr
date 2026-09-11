@@ -161,7 +161,9 @@ defmodule Opus.Executor do
       profile_id: opts[:profile_id],
       # The class the execution's payloads are kept under; a turn's own
       # dispatches name `chat_step`, everything else derives its own.
-      retention_class: opts[:retention_class]
+      retention_class: opts[:retention_class],
+      # The schedule a scheduled root runs for.
+      schedule_id: opts[:schedule_id]
     ]
 
     record_opts =

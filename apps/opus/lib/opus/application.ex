@@ -57,10 +57,8 @@ defmodule Opus.Application do
            ]},
         type: :supervisor
       },
-      # Supervised fire-and-forget tasks (run_stream, cron execution spawns)
+      # Supervised fire-and-forget tasks (run_stream)
       Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000),
-      # Cron scheduler for recurring component executions
-      Opus.CronScheduler,
       # Periodic sweep to mark stale "running" executions as failed (replaces one-shot startup sweep)
       Opus.ExecutionSweeper,
       # Owns the :protected ETS table of OAuth tokens dispensed to guests (for

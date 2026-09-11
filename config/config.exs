@@ -34,7 +34,7 @@ config :cyfr,
     Emissary.MCP.FileTool,
     # Domain services
     Opus.MCP,
-    Opus.CronMCP,
+    Cyfr.Schedules.Provider,
     Locus.MCP,
     Compendium.MCP,
     # External MCP server management. `Emissary.MCP.ExternalProvider` is not

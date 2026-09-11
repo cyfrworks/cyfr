@@ -265,7 +265,22 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @doc """
+  Clear one athanor's unreaped-kill penalty: the operator has dealt with
+  the spinning threads at the node level, and the athanor may run roots
+  again before the window decays. A force-release does not do this.
+  """
+  @spec forgive_unreaped(String.t()) :: :ok | {:error, :semaphore_unavailable}
+  def forgive_unreaped(tenant) when is_binary(tenant) do
+    try do
+      GenServer.call(__MODULE__, {:forgive_unreaped, tenant})
+    catch
+      :exit, _ -> {:error, :semaphore_unavailable}
+    end
+  end
+
+  @doc """
   Emergency recovery: force-release all held slots and clear the queue.
+  The unreaped-kill penalty box stays (`forgive_unreaped/1`).
   """
   @spec force_release_all() :: :ok | {:error, :semaphore_unavailable}
   def force_release_all do
@@ -436,10 +451,8 @@ defmodule Opus.ExecutionSemaphore do
        | count: 0,
          monitors: %{},
          tenant_roots: %{},
-         # The operator's recovery gesture also clears the penalty box —
-         # the point of force_release is a fresh start, and the spinning
-         # threads it cannot stop are theirs to handle at the node level.
-         tenant_unreaped: %{},
+         # The penalty box stays: the spinning threads a force-release
+         # cannot stop are still charged to the tenants that left them.
          waiters: %{root: :queue.new(), child: :queue.new(), background: :queue.new()},
          waiter_monitors: %{},
          background_waiters: %{}
@@ -447,6 +460,10 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @impl true
+  def handle_call({:forgive_unreaped, tenant}, _from, state) do
+    {:reply, :ok, %{state | tenant_unreaped: Map.delete(state.tenant_unreaped, tenant)}}
+  end
+
   def handle_call({:unreaped, tenant, execution_id}, _from, state) when is_binary(tenant) do
     expiry = System.monotonic_time(:millisecond) + @unreaped_ttl_ms
 

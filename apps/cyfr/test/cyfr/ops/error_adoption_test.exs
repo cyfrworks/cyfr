@@ -27,7 +27,9 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
   # module path => string-returning `{:error, "…"}` sites remaining.
   # Ordered by size, which is also the order worth converting them in.
   @worklist %{
-    "apps/opus/lib/opus/cron_mcp.ex" => 19,
+    # One more than the tool carried before: the concurrency argument's
+    # own refusal, a sentence about the value offered.
+    "apps/cyfr/lib/cyfr/schedules/provider.ex" => 20,
     "apps/cyfr/lib/sanctum/mcp/webhook_tool.ex" => 18,
     "apps/opus/lib/opus/mcp.ex" => 14,
     "apps/cyfr/lib/emissary/mcp/tools/system_provider.ex" => 12,

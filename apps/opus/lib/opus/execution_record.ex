@@ -101,6 +101,8 @@ defmodule Opus.ExecutionRecord do
     # belongs to; a turn root is admitted by `Opus.TurnRoot`.
     :kind,
     :turn_id,
+    # The schedule this root runs for (`Cyfr.Schedules`); nil otherwise.
+    :schedule_id,
     # A root's invocation reservation, `%{budget_id, cap}`, minted at
     # admission; nil for a child.
     :reservation,
@@ -161,6 +163,7 @@ defmodule Opus.ExecutionRecord do
       attempt: Arca.ExecutionAttempts.generate_id(),
       kind: Keyword.get(opts, :kind, "component"),
       turn_id: Keyword.get(opts, :turn_id),
+      schedule_id: Keyword.get(opts, :schedule_id),
       reservation: Keyword.get(opts, :reservation),
       retention_class: Keyword.get(opts, :retention_class) || default_retention_class(ctx)
     }
@@ -315,7 +318,8 @@ defmodule Opus.ExecutionRecord do
              activation_graph: record.activation_graph,
              profile_id: record.profile_id,
              kind: record.kind || "component",
-             turn_id: record.turn_id
+             turn_id: record.turn_id,
+             schedule_id: record.schedule_id
            },
            Keyword.merge(
              [

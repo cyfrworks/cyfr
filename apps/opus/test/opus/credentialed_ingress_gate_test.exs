@@ -136,7 +136,7 @@ defmodule Opus.CredentialedIngressGateTest do
     # (Emissary.Tincture.Invoke), so one kill switch and one row here.
     @ingresses [
       {:mcp, "apps/opus/lib/opus/mcp.ex", :falls_back},
-      {:cron, "apps/opus/lib/opus/cron_scheduler.ex", :no_fallback_when_bound},
+      {:cron, "apps/cyfr/lib/cyfr/schedules/scheduler.ex", :no_fallback_when_bound},
       {:webhook, "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex",
        :no_fallback_when_bound},
       {:tincture, "apps/cyfr/lib/emissary/tincture/invoke.ex", :falls_back}

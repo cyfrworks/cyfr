@@ -31,6 +31,7 @@ defmodule Cyfr.GenServerCatchallTest do
   # gated off (returns :ignore) or not started in the test environment.
   @not_probed %{
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
+    Cyfr.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
     Cyfr.ControlPlane => "gated by :control_plane_claim_enabled",
     Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
     Emissary.MCP.RunningTasks => "probing would race real request tracking",

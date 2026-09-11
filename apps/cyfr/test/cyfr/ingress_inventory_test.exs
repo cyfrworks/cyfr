@@ -25,7 +25,7 @@ defmodule Cyfr.IngressInventoryTest do
     "apps/opus/lib/opus.ex" => :facade,
     # Ingresses proper.
     "apps/opus/lib/opus/mcp.ex" => :mcp,
-    "apps/opus/lib/opus/cron_scheduler.ex" => :cron,
+    "apps/cyfr/lib/cyfr/schedules/scheduler.ex" => :cron,
     "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex" => :webhook,
     # One implementation behind two tincture surfaces (the HTTP controller
     # and the console shell render its outcomes; neither calls run_root
@@ -99,7 +99,7 @@ defmodule Cyfr.IngressInventoryTest do
   # reason to skip the door; it is only a reason it was easy to.
   @ingress_files ~w(
     apps/opus/lib/opus/mcp.ex
-    apps/opus/lib/opus/cron_scheduler.ex
+    apps/cyfr/lib/cyfr/schedules/scheduler.ex
     apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex
     apps/cyfr/lib/emissary/tincture/invoke.ex
   )

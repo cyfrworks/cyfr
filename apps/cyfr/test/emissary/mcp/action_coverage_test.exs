@@ -17,7 +17,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
   @all_providers Application.compile_env(:cyfr, :tool_providers, [])
 
   # Filter to only providers available in this app's compilation context.
-  # Opus.MCP, Opus.CronMCP, and Locus.MCP are cross-app modules that aren't
+  # Opus.MCP and Locus.MCP are cross-app modules that aren't
   # available when running `apps/cyfr` tests standalone.
   @providers Enum.filter(@all_providers, &Code.ensure_loaded?/1)
 

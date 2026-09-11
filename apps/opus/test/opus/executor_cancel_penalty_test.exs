@@ -14,8 +14,16 @@ defmodule Opus.ExecutorCancelPenaltyTest do
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    on_exit(fn -> ExecutionSemaphore.force_release_all() end)
-    {:ok, ctx: Sanctum.TestContext.local()}
+    ctx = Sanctum.TestContext.local()
+
+    # The penalty box outlives a force-release: what this suite fills for
+    # its tenant, it empties.
+    on_exit(fn ->
+      ExecutionSemaphore.force_release_all()
+      ExecutionSemaphore.forgive_unreaped(ctx.athanor_id)
+    end)
+
+    {:ok, ctx: ctx}
   end
 
   defp running!(ctx) do

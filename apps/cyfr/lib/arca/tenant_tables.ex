@@ -62,6 +62,7 @@ defmodule Arca.TenantTables do
     "policy_logs",
     "oauth_provider_credentials",
     "mcp_servers",
+    "schedule_occurrences",
     "cron_schedules",
     "build_records",
     "memberships"

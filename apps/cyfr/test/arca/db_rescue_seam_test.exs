@@ -10,7 +10,7 @@ defmodule Arca.DbRescueSeamTest do
   crept in, go wrap it", never a behavioural assertion.
 
   Value-position uses of `db_errors()` (attribute lists such as
-  `Sanctum.Namespace`'s `@transient` or `Opus.CronScheduler`'s error
+  `Sanctum.Namespace`'s `@transient` or `Cyfr.Schedules.Scheduler`'s error
   rosters) are not rescue clauses and are deliberately not matched.
   """
   use ExUnit.Case, async: true

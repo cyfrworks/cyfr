@@ -79,8 +79,8 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :locus, :build, :start], :build_start},
       {[:cyfr, :locus, :build, :progress], :build_progress},
       {[:cyfr, :locus, :build, :stop], :build_stop},
-      {[:cyfr, :opus, :schedule, :fired], :schedule_fired},
-      {[:cyfr, :opus, :schedule, :failed], :schedule_failed},
+      {[:cyfr, :schedules, :fired], :schedule_fired},
+      {[:cyfr, :schedules, :failed], :schedule_failed},
       {[:cyfr, :compendium, :component, :install], :component_install},
       {[:cyfr, :compendium, :component, :remove], :component_remove},
       {[:cyfr, :compendium, :component, :push], :component_push},
@@ -123,13 +123,13 @@ defmodule Prism.TelemetryBridge do
     safe_broadcast(&Topics.builds/1, metadata, {:build_stopped, metadata, measurements})
   end
 
-  def handle_event([:cyfr, :opus, :schedule, :fired], measurements, metadata, _config) do
+  def handle_event([:cyfr, :schedules, :fired], measurements, metadata, _config) do
     safe_broadcast(&Topics.schedule_runs/1, metadata, {:schedule_fired, metadata, measurements})
   end
 
   # A schedule that could not run, or ran and failed — the one silent loss
   # the tray must show. The event always names the athanor.
-  def handle_event([:cyfr, :opus, :schedule, :failed], measurements, metadata, _config) do
+  def handle_event([:cyfr, :schedules, :failed], measurements, metadata, _config) do
     safe_broadcast(&Topics.schedule_runs/1, metadata, {:schedule_failed, metadata, measurements})
 
     with athanor_id when is_binary(athanor_id) and athanor_id != "" <- metadata[:athanor_id] do

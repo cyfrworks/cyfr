@@ -88,29 +88,6 @@ defmodule Opus.GenServerCatchallTest do
     end
   end
 
-  describe "CronScheduler catch-all" do
-    test "survives unexpected message and logs warning" do
-      # CronScheduler is a singleton that loads schedules from the DB on init.
-      # Start a raw GenServer without the name to avoid conflicts with the
-      # supervised instance and DB dependency.
-      # Since init triggers :load_schedules via handle_continue, which hits
-      # the database, we test against the running singleton if available.
-      case Process.whereis(Opus.CronScheduler) do
-        nil ->
-          # Singleton not running (e.g. standalone test run) — skip gracefully
-          :ok
-
-        pid ->
-          assert capture_log(fn ->
-                   send(pid, :unexpected_test_message)
-                   :sys.get_state(pid)
-                 end) =~ "unexpected message"
-
-          assert Process.alive?(pid)
-      end
-    end
-  end
-
   describe "AsyncTracker catch-all" do
     test "survives unexpected message and logs warning" do
       {:ok, pid} = Opus.AsyncTracker.start_link(parent_execution_id: "test_catchall")

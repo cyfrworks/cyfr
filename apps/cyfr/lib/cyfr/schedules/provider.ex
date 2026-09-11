@@ -1,18 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.CronMCP do
+defmodule Cyfr.Schedules.Provider do
   @moduledoc """
-  MCP tool provider for cron schedule management.
-
-  Provides a single `schedule` tool with action-based dispatch for
-  creating, listing, updating, pausing, resuming, and deleting
-  user-scoped recurring WASM component executions.
+  The `schedule` tool: creating, listing, updating, pausing, resuming and
+  deleting an athanor's recurring component executions
+  (`Arca.CronSchedule`), and telling the scheduler
+  (`Cyfr.Schedules.Scheduler`) what changed. A schedule's `concurrency`
+  — `forbid` (the default) or `allow` — says whether a due occurrence may
+  run while another of the same schedule is still open.
   """
 
   @behaviour Cyfr.Ops.Provider
 
-  def service, do: "opus"
+  def service, do: "schedules"
 
   alias Sanctum.Context
 
@@ -47,6 +48,12 @@ defmodule Opus.CronMCP do
         input_schema: %{
           "type" => "object",
           "properties" => %{
+            "concurrency" => %{
+              "type" => "string",
+              "enum" => ["forbid", "allow"],
+              "description" =>
+                "Whether a due occurrence runs while another of this schedule is still open (default forbid)"
+            },
             "action" => %{
               "type" => "string",
               "enum" => [
@@ -112,6 +119,7 @@ defmodule Opus.CronMCP do
   def handle("schedule", %Context{} = ctx, %{"action" => "create"} = args) do
     with :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),
+         :ok <- validate_concurrency(args["concurrency"]),
          :ok <- validate_limit(ctx),
          {:ok, reference, resolved_reference} <-
            resolve_for_schedule(ctx, args["reference"], "create schedule"),
@@ -136,12 +144,13 @@ defmodule Opus.CronMCP do
         metadata: metadata_json,
         athanor_id: ctx.athanor_id,
         next_run_at: next_run,
-        profile_id: args["profile_id"]
+        profile_id: args["profile_id"],
+        concurrency: args["concurrency"] || "forbid"
       }
 
       case Arca.CronSchedule.create(attrs) do
         {:ok, schedule} ->
-          Opus.CronScheduler.add(schedule.id)
+          Cyfr.Schedules.Scheduler.add(schedule.id)
           {:ok, format_schedule(schedule)}
 
         {:error, reason} ->
@@ -183,8 +192,14 @@ defmodule Opus.CronMCP do
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
     with {:schedule, {:ok, schedule}} <-
            {:schedule, Arca.CronSchedule.get_by_id_or_name(ctx, id)},
-         :ok <- validate_cron_if_present(args["cron_expression"]) do
+         :ok <- validate_cron_if_present(args["cron_expression"]),
+         :ok <- validate_concurrency(args["concurrency"]) do
       update_attrs = %{}
+
+      update_attrs =
+        if args["concurrency"],
+          do: Map.put(update_attrs, :concurrency, args["concurrency"]),
+          else: update_attrs
 
       update_attrs =
         if args["name"], do: Map.put(update_attrs, :name, args["name"]), else: update_attrs
@@ -228,7 +243,7 @@ defmodule Opus.CronMCP do
 
         case Arca.CronSchedule.update(ctx, schedule.id, update_attrs) do
           {:ok, updated} ->
-            Opus.CronScheduler.update(updated.id)
+            Cyfr.Schedules.Scheduler.update(updated.id)
             {:ok, format_schedule(updated)}
 
           {:error, reason} ->
@@ -254,7 +269,7 @@ defmodule Opus.CronMCP do
       {:ok, schedule} ->
         case Arca.CronSchedule.update(ctx, schedule.id, %{status: "paused"}) do
           {:ok, updated} ->
-            Opus.CronScheduler.pause(updated.id)
+            Cyfr.Schedules.Scheduler.pause(updated.id)
             {:ok, format_schedule(updated)}
 
           {:error, reason} ->
@@ -287,7 +302,7 @@ defmodule Opus.CronMCP do
                next_run_at: next_run
              }) do
           {:ok, updated} ->
-            Opus.CronScheduler.resume(updated.id)
+            Cyfr.Schedules.Scheduler.resume(updated.id)
             {:ok, format_schedule(updated)}
 
           {:error, reason} ->
@@ -309,7 +324,7 @@ defmodule Opus.CronMCP do
       {:ok, schedule} ->
         case Arca.CronSchedule.soft_delete(ctx, schedule.id) do
           {:ok, _} ->
-            Opus.CronScheduler.remove(schedule.id)
+            Cyfr.Schedules.Scheduler.remove(schedule.id)
             {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
 
           {:error, reason} ->
@@ -368,9 +383,9 @@ defmodule Opus.CronMCP do
   end
 
   defp validate_cron(expr) do
-    case Opus.CronParser.parse(expr) do
+    case Cyfr.Schedules.Cron.parse(expr) do
       {:ok, _} ->
-        case Opus.CronParser.min_interval_seconds(expr) do
+        case Cyfr.Schedules.Cron.min_interval_seconds(expr) do
           {:ok, interval} when interval < 60 ->
             {:error,
              "Minimum interval is 1 minute. Expression '#{expr}' runs every #{interval}s."}
@@ -386,6 +401,10 @@ defmodule Opus.CronMCP do
         {:error, "Invalid cron expression: #{reason}"}
     end
   end
+
+  defp validate_concurrency(nil), do: :ok
+  defp validate_concurrency(value) when value in ["forbid", "allow"], do: :ok
+  defp validate_concurrency(_), do: {:error, "concurrency must be forbid or allow"}
 
   defp validate_limit(ctx) do
     # A cap check the store cannot answer refuses — a default of zero
@@ -403,8 +422,8 @@ defmodule Opus.CronMCP do
   end
 
   defp compute_next_run(cron_expression) do
-    case Opus.CronParser.parse(cron_expression) do
-      {:ok, parsed} -> Opus.CronParser.next_run(parsed, DateTime.utc_now())
+    case Cyfr.Schedules.Cron.parse(cron_expression) do
+      {:ok, parsed} -> Cyfr.Schedules.Cron.next_run(parsed, DateTime.utc_now())
       error -> error
     end
   end
@@ -419,6 +438,7 @@ defmodule Opus.CronMCP do
       input: decode_json(schedule.input),
       metadata: decode_json(schedule.metadata),
       status: schedule.status,
+      concurrency: schedule.concurrency,
       next_run_at: schedule.next_run_at && DateTime.to_iso8601(schedule.next_run_at),
       last_run_at: schedule.last_run_at && DateTime.to_iso8601(schedule.last_run_at),
       last_execution_id: schedule.last_execution_id,
@@ -431,8 +451,8 @@ defmodule Opus.CronMCP do
 
   # Display plane: a corrupt stored column renders as null (logged); the
   # scheduler's EXECUTION read of the same columns stays fail-closed
-  # (Opus.CronScheduler skips the run).
-  defp decode_json(value), do: Cyfr.Json.decode_or(value, nil, "Opus.CronMCP")
+  # (`Cyfr.Schedules.Scheduler` skips the run).
+  defp decode_json(value), do: Cyfr.Json.decode_or(value, nil, "Cyfr.Schedules.Provider")
 
   # The storage layer answers typed reasons; this seam renders them.
   defp format_store_error(reason, id \\ nil)
@@ -466,7 +486,7 @@ defmodule Opus.CronMCP do
          :ok <- authorize_profile_binding(ctx, pinned, schedule.profile_id),
          {:ok, updated} <-
            Arca.CronSchedule.update(ctx, schedule.id, %{resolved_reference: pinned}) do
-      Opus.CronScheduler.update(updated.id)
+      Cyfr.Schedules.Scheduler.update(updated.id)
       {:ok, format_schedule(updated)}
     else
       {:error, reason} when is_binary(reason) -> {:error, reason}

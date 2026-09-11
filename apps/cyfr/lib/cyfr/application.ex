@@ -106,6 +106,12 @@ defmodule Cyfr.Application do
       # before the repo goes down.
       Cyfr.RecordSink,
       Cyfr.RetentionScheduler,
+      # Recurring component executions: the runs the scheduler fires are
+      # tasks of their own, monitored by it.
+      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Schedules.TaskSupervisor},
+        shutdown: 30_000
+      ),
+      Cyfr.Schedules.Scheduler,
       Arca.AuditHandler,
       # Releases a charged invoke-budget slot when its holder dies without
       # running its `after` (the brutal-kill cancel/timeout paths).
