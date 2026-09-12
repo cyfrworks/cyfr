@@ -494,10 +494,18 @@ jobs:
           # `docker-entrypoint.sh '/app/seed/aqua'` did: the string sits in
           # three header comments above the seeding block it guards, so the
           # block could go and the gate would stay green.
+          # No pipe: `grep -q` exits at the first match, and the strip
+          # upstream of it then dies of SIGPIPE, which `pipefail` reports as
+          # a failed pipeline even though the string was found. That made
+          # these assertions answer differently on a fast machine than a
+          # slow one — `lifecycle.go` was reported as no longer spelling a
+          # string it still contains.
           assert_spelling() {
-            if ! grep -vE '^[[:space:]]*(#|//)' "$1" | grep -qF -- "$2"; then
-              echo "::error::$1 no longer spells '$2' — the deployment layout drifted from Arca.Storage"; fail=1
-            fi
+            stripped="$(grep -vE '^[[:space:]]*(#|//)' "$1" || true)"
+            case "$stripped" in
+              *"$2"*) : ;;
+              *) echo "::error::$1 no longer spells '$2' — the deployment layout drifted from Arca.Storage"; fail=1 ;;
+            esac
           }
           assert_spelling docker-compose.yml './data:/app/data'
           assert_spelling docker-compose.yml './aqua:/app/seed/aqua'
