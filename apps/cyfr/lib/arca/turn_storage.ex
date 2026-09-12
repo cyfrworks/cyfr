@@ -456,25 +456,6 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "Rewrite the pins of a turn (a clone records its own)."
-  @spec update_pins(Context.t(), String.t(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def update_pins(%Context{} = ctx, turn_id, pins) when is_map(pins) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.update_pins", fn ->
-      athanor_id = Context.athanor!(ctx)
-
-      sets =
-        pins
-        |> Map.take([:profile_id, :consent_id, :agent_revision_digest, :agent_capability_digest])
-        |> Map.to_list()
-
-      {count, _} =
-        from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
-        |> Arca.Repo.update_all(set: sets)
-
-      {:ok, count}
-    end)
-  end
-
   # ---------------------------------------------------------------------------
   # Steps
   # ---------------------------------------------------------------------------
@@ -994,8 +975,10 @@ defmodule Arca.TurnStorage do
   the parent's root execution and attempt, the `clone` step in the
   parent (dispatched), and the task as the clone's first row. `attrs`:
   `:role` (the orchestrator), `:task`, `:model`, `:step_id` (an existing
-  clone step to bind, else one is recorded), `:fence`. Answers
-  `{:ok, %{turn, step, task: row}}`.
+  clone step to bind, else one is recorded), `:fence`, and the clone's
+  pins — `:profile_id`, `:consent_id`, `:agent_revision_digest`,
+  `:agent_capability_digest` — written with the row so the clone runs
+  the bytes that were checked. Answers `{:ok, %{turn, step, task: row}}`.
   """
   @spec open_clone_turn(Context.t(), String.t(), map()) ::
           {:ok, %{turn: Turn.t(), step: TurnStep.t(), task: Message.t()}} | {:error, term()}
@@ -1042,6 +1025,10 @@ defmodule Arca.TurnStorage do
                 orchestrator: role,
                 requested_by: parent.requested_by,
                 model: Map.get(attrs, :model),
+                profile_id: Map.get(attrs, :profile_id),
+                consent_id: Map.get(attrs, :consent_id),
+                agent_revision_digest: Map.get(attrs, :agent_revision_digest),
+                agent_capability_digest: Map.get(attrs, :agent_capability_digest),
                 fence: new_fence(),
                 runner_id: Cyfr.Boot.id(),
                 status: "running",

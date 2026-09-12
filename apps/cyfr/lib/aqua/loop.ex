@@ -91,11 +91,24 @@ defmodule Aqua.Loop do
           Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
           {:failed, reason}
 
+        # The source has no consent to run under: the person is asked for it.
+        {:error, :no_profile} ->
+          setup_required(ctx, turn)
+
+        {:error, {:profile_unavailable, _}} ->
+          setup_required(ctx, turn)
+
         {:error, reason} ->
           _ = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
           {:failed, reason}
       end
     end
+  end
+
+  defp setup_required(ctx, turn) do
+    _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
+    Tape.announce(ctx, turn.conversation_id, {:consent_required, source_ref(turn), ctx.user_id})
+    {:failed, :setup_required}
   end
 
   @doc """
@@ -172,12 +185,13 @@ defmodule Aqua.Loop do
 
   defp claim_and_start(ctx, turn) do
     with {:ok, claim} <-
-           Cyfr.Execution.claim_turn_root(ctx, soul_ref(),
+           Cyfr.Execution.claim_turn_root(ctx, source_ref(turn),
              turn_id: turn.id,
              conversation_id: turn.conversation_id,
              envelope: %{"turn" => turn.id}
            ) do
       with {:ok, snapshot} <- Compendium.AgentIndex.snapshot(ctx, turn.orchestrator),
+           :ok <- consented_release(ctx, claim.authority, turn, snapshot),
            {:ok, started} <-
              Tape.start_turn(ctx, turn, %{
                root_execution_id: claim.execution_id,
@@ -224,7 +238,7 @@ defmodule Aqua.Loop do
   # must still be at the pinned consent, and the budget is the turn's
   # reservation.
   defp pinned_authority(ctx, %{profile_id: profile_id} = turn) when is_binary(profile_id) do
-    case Cyfr.Execution.authority_for(ctx, {:id, profile_id}, soul_ref(),
+    case Cyfr.Execution.authority_for(ctx, {:id, profile_id}, source_ref(turn),
            budget_id: turn.budget_id
          ) do
       {:ok, %{consent_id: consent_id} = authority} when consent_id == turn.consent_id ->
@@ -240,7 +254,26 @@ defmodule Aqua.Loop do
 
   defp pinned_authority(_ctx, _turn), do: {:error, :no_pin}
 
-  defp soul_ref, do: Compendium.AgentSource.soul_ref()
+  # The source a turn runs as: the soul, or the role a person addressed.
+  defp source_ref(%{orchestrator: name}) do
+    if Compendium.AgentSource.soul?(name),
+      do: Compendium.AgentSource.soul_ref(),
+      else: Compendium.AgentSource.ref(name)
+  end
+
+  # The file the turn pins must be the release the loaded consent names
+  # for its own node; a file edited past its consent is refused, never
+  # run under the old grant.
+  defp consented_release(ctx, %{activation: activation}, turn, %{agent: agent}) do
+    with {:ok, roster} <- Compendium.AgentSource.enabled_roster(ctx) do
+      consented = Map.get(activation || %{}, source_ref(turn))
+      projected = Compendium.AgentSource.row(agent, roster).release_digest
+
+      if is_binary(consented) and consented == projected,
+        do: :ok,
+        else: {:error, :agent_changed}
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Ending
@@ -817,6 +850,10 @@ defmodule Aqua.Loop do
       step_id: step.id
     })
   end
+
+  # A call whose effect cannot be known closes nothing: the step is marked.
+  defp close(%State{} = state, step, _call, {:uncertain, reason}),
+    do: Tape.mark_uncertain(guest(state), step, describe(reason))
 
   # The step's result row and outcome: `ok`, `error`, or `denied` for a
   # refusal by the policy or the chain.

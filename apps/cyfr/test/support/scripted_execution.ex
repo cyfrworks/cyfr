@@ -63,7 +63,7 @@ defmodule Cyfr.Test.ScriptedExecution do
   @doc "Replace the remaining script."
   def script(items) when is_list(items), do: Agent.update(@agent, &%{&1 | script: items})
 
-  @doc "Every scripted call so far, oldest first: `%{execution_id, input}`."
+  @doc "Every scripted call so far, oldest first: `%{execution_id, input, authority}`."
   def calls, do: @agent |> Agent.get(& &1.calls) |> Enum.reverse()
 
   # ---------------------------------------------------------------------------
@@ -184,7 +184,10 @@ defmodule Cyfr.Test.ScriptedExecution do
     with {:ok, _} <- Arca.Execution.admit(attrs, admission) do
       case slot().acquire(:child, ctx.athanor_id, 30_000, id) do
         {:ok, token} ->
-          Agent.update(@agent, &%{&1 | calls: [%{execution_id: id, input: input} | &1.calls]})
+          Agent.update(@agent, fn state ->
+            call = %{execution_id: id, input: input, authority: decision.authority}
+            %{state | calls: [call | state.calls]}
+          end)
 
           try do
             answer(ctx, id, attempt, started_at, false, input)

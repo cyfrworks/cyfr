@@ -79,6 +79,36 @@ defmodule Aqua.RunnerTest do
       "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
     }
 
+  defp bind_claude!(ctx) do
+    {:ok, entry} =
+      Sanctum.Vault.create(ctx, %{
+        name: "claude key",
+        kind: "api_key",
+        fields: %{"ANTHROPIC_API_KEY" => "sk-test"}
+      })
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @model, label: "default"})
+
+    decisions = %{
+      ref: @model,
+      label: "default",
+      bindings: [%{need: "api_key", entry_id: entry.id}]
+    }
+
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    entry
+  end
+
   defp second_member(ctx) do
     n = System.unique_integer([:positive])
 
@@ -216,16 +246,67 @@ defmodule Aqua.RunnerTest do
   } do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, conv.id, %{
-        message: %{author: ctx.user_id, content: "@ghost go"},
-        turn: %{orchestrator: "ghost", requested_by: ctx.user_id}
+        message: %{author: ctx.user_id, content: "@aqua go"},
+        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
       })
 
-    assert {:failed, _reason} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
-    assert {:ok, %{status: "failed", root_execution_id: nil}} = Tape.turn(ctx, turn.id)
+    # Ended between acceptance and its run: the root is claimed, the start
+    # refuses a turn that is no longer accepted.
+    {:ok, _} = Tape.finish(ctx, turn, "cancelled")
+
+    assert {:failed, :not_accepted} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+    assert {:ok, %{status: "cancelled", root_execution_id: nil}} = Tape.turn(ctx, turn.id)
 
     # The root the claim admitted is closed, not left running under a
     # released slot.
     assert %{status: "failed", kind: "turn"} = Arca.Repo.get_by(Arca.Execution, turn_id: turn.id)
+  end
+
+  test "a turn addressed to a source with no consent claims no root and asks for setup", %{
+    ctx: ctx,
+    conv: conv
+  } do
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "@ghost go"},
+        turn: %{orchestrator: "ghost", requested_by: ctx.user_id}
+      })
+
+    assert {:failed, :setup_required} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+
+    assert {:ok, %{status: "failed", root_execution_id: nil, profile_id: nil}} =
+             Tape.turn(ctx, turn.id)
+
+    assert nil == Arca.Repo.get_by(Arca.Execution, turn_id: turn.id)
+    user = ctx.user_id
+    assert_receive {:conversation, _, {:consent_required, "agent:local.ghost", ^user}}, 5_000
+  end
+
+  test "a role addressed directly runs as its own source, with its own consent and key", %{
+    ctx: ctx,
+    conv: conv
+  } do
+    entry = bind_claude!(ctx)
+    script!([reply("Step one.")])
+
+    {:ok, %{admitted: :turn, turn_id: turn_id}} =
+      Runner.send_message(ctx, conv.id, "@planner plan")
+
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+
+    {:ok, [planner_profile]} = Source.DB.profiles(ctx, "agent:local.planner")
+    {:ok, turn} = Tape.turn(ctx, turn_id)
+    assert turn.status == "completed" and turn.orchestrator == "planner"
+    assert turn.profile_id == planner_profile.id
+    assert {:ok, bytes} = Tape.agent_revision(ctx, turn)
+    assert bytes =~ "Planner"
+
+    assert %{authority: authority} =
+             Enum.find(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+
+    assert authority.chain == ["agent:local.planner", @model]
+    assert authority.profile_id == planner_profile.id
+    assert authority.resources.vault.entry_id == entry.id
   end
 
   test "stop cuts the running turn and drops what waited", %{ctx: ctx, conv: conv} do

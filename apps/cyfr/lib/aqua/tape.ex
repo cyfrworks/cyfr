@@ -175,10 +175,6 @@ defmodule Aqua.Tape do
   @spec supersede(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def supersede(%Context{} = ctx, turn), do: TurnStorage.supersede(ctx, turn.id)
 
-  @doc "Rewrite a turn's pins (a clone records its own)."
-  @spec record_pins(Context.t(), turn(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def record_pins(%Context{} = ctx, turn, pins), do: TurnStorage.update_pins(ctx, turn.id, pins)
-
   # ---------------------------------------------------------------------------
   # Steps
   # ---------------------------------------------------------------------------

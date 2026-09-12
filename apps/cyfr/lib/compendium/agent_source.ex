@@ -75,6 +75,14 @@ defmodule Compendium.AgentSource do
     end
   end
 
+  @doc "The names of the estate's enabled agents — the roster that decides clone edges."
+  @spec enabled_roster(Context.t()) :: {:ok, MapSet.t(String.t())} | {:error, term()}
+  def enabled_roster(%Context{} = ctx) do
+    with {:ok, agents, _errors} <- AquaAgent.list(ctx) do
+      {:ok, agents |> Enum.reject(& &1.disabled) |> MapSet.new(& &1.name)}
+    end
+  end
+
   @doc "The row of the enabled agent `name`, or `{:error, :not_found}`."
   @spec latest_row(Context.t(), String.t()) :: {:ok, map()} | {:error, :not_found | term()}
   def latest_row(%Context{} = ctx, name) when is_binary(name) do

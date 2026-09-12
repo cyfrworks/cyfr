@@ -50,8 +50,7 @@ defmodule Aqua.Loop.Turn do
 
   @doc """
   Build the spec for `turn` as `ctx` (the actor's external-plane context).
-  `opts`: `:authority` (the turn's pinned authority, required), `:agent`
-  (a clone's role definition; the root reads its pinned revision),
+  `opts`: `:authority` (the turn's pinned authority, required),
   `:catalyst` and `:model` (a clone's fallbacks, the parent's),
   `:excerpt?` (read the room excerpt the turn's options name).
   """
@@ -61,7 +60,7 @@ defmodule Aqua.Loop.Turn do
 
     with {:ok, conversation} <- Tape.conversation(ctx, turn.conversation_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
-         {:ok, agent} <- agent(ctx, turn, roster, opts),
+         {:ok, agent} <- agent(ctx, turn, roster),
          soul? = Compendium.AgentSource.soul?(agent["name"]),
          roles = if(soul?, do: roles(roster), else: []),
          {:ok, grants} <-
@@ -137,21 +136,15 @@ defmodule Aqua.Loop.Turn do
   # The agent
   # ---------------------------------------------------------------------------
 
-  # The root runs the agent the turn pinned: the revision bytes, parsed,
-  # and their capability digest checked against the pin. A turn without a
-  # pin (a revision the tree no longer holds is refused, never replaced)
-  # takes the roster's current entry.
-  defp agent(ctx, turn, roster, opts) do
-    case Keyword.get(opts, :agent) do
-      %{"name" => _} = given ->
-        {:ok, given}
-
-      nil ->
-        case Tape.agent_revision(ctx, turn) do
-          {:ok, bytes} -> pinned_agent(turn, bytes)
-          {:error, :no_revision} -> roster_agent(turn, roster)
-          {:error, reason} -> {:error, {:agent_unavailable, reason}}
-        end
+  # A turn runs the agent it pinned — the soul or a clone's role — from the
+  # revision bytes, parsed, with their capability digest checked against
+  # the pin. A turn without a pin (a revision the tree no longer holds is
+  # refused, never replaced) takes the roster's current entry.
+  defp agent(ctx, turn, roster) do
+    case Tape.agent_revision(ctx, turn) do
+      {:ok, bytes} -> pinned_agent(turn, bytes)
+      {:error, :no_revision} -> roster_agent(turn, roster)
+      {:error, reason} -> {:error, {:agent_unavailable, reason}}
     end
   end
 
