@@ -12,14 +12,11 @@
 # NODE_VERSION) — `24-alpine` floated with every upstream release.
 FROM node:24.21.0-alpine AS base
 
-# The base image lags its own fixes: Alpine ships a patched openssl before
-# the node image is rebuilt, and the bundled npm carries the brace-expansion
-# its release was cut with. The bridge launches backends through `npx`, so
-# npm is runtime code here, not build tooling. Both are enforced by the
-# image scan in node-ci.yml, which fails on a fixable HIGH or CRITICAL.
-RUN apk --no-cache upgrade \
-    && npm install -g npm@12.0.2 \
-    && npm cache clean --force
+# Alpine ships a patched package before the node image is rebuilt around
+# it, so take what the index has at build time. The image scan in
+# node-ci.yml fails on a fixable HIGH or CRITICAL, and this is what keeps
+# an OS fix from waiting on an upstream release.
+RUN apk --no-cache upgrade
 
 # ===========================================================================
 # mcp-bridge — HTTP MCP gateway. Single /mcp endpoint that surfaces:

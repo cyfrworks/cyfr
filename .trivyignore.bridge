@@ -1,0 +1,21 @@
+# Findings the bridge image cannot take a fix for, with what would lift each.
+# Read by the image scan in .github/workflows/node-ci.yml. Every other
+# fixable HIGH or CRITICAL still fails that job.
+
+# brace-expansion, in npm's own bundled dependencies
+# (usr/local/lib/node_modules/npm/node_modules/brace-expansion), pinned at
+# 5.0.7 by npm's lockfile. No npm release ships the fix: 12.0.2 is the
+# newest and still bundles 5.0.7, though it was published after 5.0.8
+# existed. Patching a dependency inside npm's own tree is not something an
+# image should do to itself.
+#
+# Reachability: npm is runtime code here because the bridge launches
+# backends through `npx`, and brace-expansion parses glob patterns. What
+# reaches it is a package name an operator supplies through `add_backend` —
+# a caller who already commands arbitrary execution by design, which is what
+# the bridge is for. A denial of service is strictly below what that caller
+# already has.
+#
+# Lift these when an npm release bundles brace-expansion 5.0.9 or later.
+CVE-2026-14257
+CVE-2026-69152

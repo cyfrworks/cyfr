@@ -142,3 +142,6 @@ jobs:
           exit-code: '1'
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          # Findings with no fix in any distribution, each with its reason
+          # and what would lift it. Everything else fixable still fails.
+          trivyignores: .trivyignore.bridge
