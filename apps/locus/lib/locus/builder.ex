@@ -634,7 +634,18 @@ defmodule Locus.Builder do
             {:ok, output_path}
 
           true ->
-            {:error, :output_not_found}
+            # The command believed it succeeded and left nothing at the path
+            # the build expects. Its own output is the only evidence of why,
+            # and discarding it made this indistinguishable from a silent
+            # toolchain difference between one machine and another.
+            trimmed = String.trim(output)
+
+            Logger.error(
+              "[Locus.Builder] #{command} exited 0 without producing " <>
+                "#{output_path}; its output was:\n#{trimmed}"
+            )
+
+            {:error, {:output_not_found, trimmed}}
         end
 
       {:ok, {:ok, exit_code, output}} ->
