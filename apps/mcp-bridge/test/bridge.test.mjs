@@ -170,6 +170,7 @@ test("a child inherits a toolchain path and its own env block, never the bridge'
   assert.equal(seen.keyring, null, "CYFR_CRYPTO_KEYRING reached a child");
   assert.equal(seen.dsn, null, "CYFR_DATABASE_URL reached a child");
   assert.equal(seen.token, null, "MCP_BRIDGE_TOKEN reached a child");
+  assert.deepEqual(seen.cyfr, [], `application variables reached a child: ${seen.cyfr}`);
   assert.equal(seen.own, "mine", "the backend's own env block was dropped");
   assert.ok(seen.path, "PATH was dropped; npx cannot run without it");
 });

@@ -172,7 +172,10 @@ const ADMIN_TOOLS = [
 
 // Children inherit only toolchain, home, locale, proxy, CA and npm settings.
 // Additional variables come from each backend's env block. Never expose the
-// bridge admin bearer or data path to a backend.
+// bridge admin bearer or data path to a backend. This allowlist reduces what
+// a backend is exposed to; it does not isolate backends from each other or
+// from the bridge: children share the bridge's user and filesystem until
+// each backend runs as a user or container of its own.
 const CHILD_ENV_INHERITED = new Set([
   "PATH",
   "HOME",

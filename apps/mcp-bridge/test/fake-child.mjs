@@ -78,6 +78,8 @@ process.stdin.on("data", (chunk) => {
               keyring: process.env.CYFR_CRYPTO_KEYRING ?? null,
               dsn: process.env.CYFR_DATABASE_URL ?? null,
               token: process.env.MCP_BRIDGE_TOKEN ?? null,
+              // Every application variable, as a class: none may reach a child.
+              cyfr: Object.keys(process.env).filter((k) => k.startsWith("CYFR_")),
               own: process.env.PROBE_OWN ?? null,
               path: Boolean(process.env.PATH),
             })
