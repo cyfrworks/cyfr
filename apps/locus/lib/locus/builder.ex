@@ -586,13 +586,20 @@ defmodule Locus.Builder do
         Cyfr.LoggerContext.restore(logger_metadata)
         executable = System.find_executable(command) || command
 
-        # Use a process group when setsid is available. Timeout and orphan
-        # cleanup target -os_pid to include toolchain descendants.
-        # setsid execs in place, preserving the port and making os_pid the group id.
+        # Run the toolchain in its own process group so a timeout can take
+        # its descendants with it.
+        #
+        # `setsid` only execs in place when it is not already a process
+        # group leader; when it is, it forks and the parent returns 0 at
+        # once. A port's child is a group leader on Linux, so without
+        # `--wait` the build detached into its own session, every exit
+        # status read as 0, and a compile that failed came back as a
+        # missing artifact. `--wait` keeps setsid between us and the
+        # program for as long as it runs, and hands back its status.
         {spawn_exec, spawn_args} =
           case System.find_executable("setsid") do
             nil -> {executable, args}
-            setsid -> {setsid, [executable | args]}
+            setsid -> {setsid, ["--wait", executable | args]}
           end
 
         port =
@@ -712,13 +719,19 @@ defmodule Locus.Builder do
   defp kill_os_process(nil), do: :ok
 
   defp kill_os_process(os_pid) do
-    # Kill the process group to clean up cargo and its children. With the
-    # setsid spawn the child leads a group whose pgid == os_pid; without it
-    # (macOS dev host, no setsid binary) no such group exists and the group
-    # kill is ESRCH — fall back to the direct child so at least sh/cargo
-    # itself dies. Any other failure means a cargo/npm tree may have
-    # leaked, and that must not be silent — this is the one zombie-process
-    # risk in the tree.
+    # Under `setsid --wait` the new session belongs to setsid's child, not
+    # to setsid, so the group to kill is the child's — reached through it
+    # rather than through os_pid. Killing setsid alone would leave the
+    # toolchain running.
+    for child <- child_pids(os_pid) do
+      System.cmd("kill", ["-9", "-#{child}"], stderr_to_stdout: true)
+    end
+
+    # Then the direct child. Without setsid (a macOS dev host) there is no
+    # separate group and this is the only kill there is; the group attempt
+    # is ESRCH and falls through. Any other failure means a toolchain tree
+    # may have leaked, and that must not be silent — this is the one
+    # zombie-process risk in the tree.
     case System.cmd("kill", ["-9", "-#{os_pid}"], stderr_to_stdout: true) do
       {_, 0} ->
         :ok
@@ -745,6 +758,18 @@ defmodule Locus.Builder do
     e ->
       Logger.warning("[Locus.Builder] Failed to kill OS process #{os_pid}: #{inspect(e)}")
       :ok
+  end
+
+  # setsid's own child, the process that leads the build's session. `pgrep`
+  # is absent on some minimal images, and a build that cannot be enumerated
+  # is still killed directly below.
+  defp child_pids(os_pid) do
+    case System.cmd("pgrep", ["-P", "#{os_pid}"], stderr_to_stdout: true) do
+      {out, 0} -> out |> String.split("\n", trim: true) |> Enum.filter(&(&1 =~ ~r/^\d+$/))
+      _ -> []
+    end
+  rescue
+    _ -> []
   end
 
   # Compiler chatter kept for the error report is bounded; past the cap
