@@ -6,9 +6,11 @@ defmodule Locus.BuilderOrphanTest do
   The build task is unlinked from the caller, so neither death reaches the
   toolchain on its own: closing the port signals the direct child, never the
   process group, and the caller is the process holding the deadline.
+
+  Not async: these kill process groups, and the OS is shared.
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Locus.Builder
 
@@ -17,55 +19,52 @@ defmodule Locus.BuilderOrphanTest do
       {port, os_pid} = spawn_sleeper()
       caller = spawn_idle()
       task = spawn_idle()
+      task_ref = Process.monitor(task)
 
       Builder.watch_for_orphans(task, caller, os_pid)
       Process.exit(caller, :kill)
 
-      assert until_true(fn -> not os_alive?(os_pid) end),
-             "the toolchain process outlived the caller that was waiting on it"
-
-      assert until_true(fn -> not Process.alive?(task) end),
-             "the task was left holding a port onto a process that is gone"
-
-      close(port)
+      # The port owner is told directly when its child ends, which beats
+      # asking the OS: a killed pid lingers as a zombie until the VM reaps
+      # it, and answers `kill -0` the whole time.
+      assert_receive {^port, {:exit_status, _}}, 2_000
+      assert_receive {:DOWN, ^task_ref, :process, ^task, _}, 2_000
     end
 
     test "a dead task stops the OS process and never touches the caller" do
       {port, os_pid} = spawn_sleeper()
       caller = spawn_idle()
+      caller_ref = Process.monitor(caller)
       task = spawn_idle()
 
       Builder.watch_for_orphans(task, caller, os_pid)
       Process.exit(task, :kill)
 
-      assert until_true(fn -> not os_alive?(os_pid) end)
+      assert_receive {^port, {:exit_status, _}}, 2_000
 
       # The caller owns the result. Reaping the group must not take it down.
-      Process.sleep(50)
-      assert Process.alive?(caller)
+      refute_receive {:DOWN, ^caller_ref, :process, ^caller, _}, 300
 
       Process.exit(caller, :kill)
-      close(port)
     end
 
-    test "an ordinary exit leaves the OS process alone" do
+    test "a task that finishes normally leaves the OS process alone" do
       {port, os_pid} = spawn_sleeper()
       caller = spawn_idle()
 
-      # The task has to still be alive when the watcher arms, which is what
-      # happens in the builder: the watcher is started from inside it.
-      # Monitoring a process that has already gone reports :noproc rather
-      # than :normal, and the watcher reads that as an abnormal death.
+      # The task has to be alive when the watcher arms, which is how the
+      # builder does it: the watcher is started from inside the task.
+      # Monitoring a process that has already gone reports :noproc, which
+      # reads here as an abnormal death.
       task = spawn(fn -> receive(do: (:finish -> :ok)) end)
 
       Builder.watch_for_orphans(task, caller, os_pid)
       send(task, :finish)
 
-      Process.sleep(100)
-      assert os_alive?(os_pid), "a task that finished normally reaped a live build"
+      refute_receive {^port, {:exit_status, _}}, 300
 
       Process.exit(caller, :kill)
-      close(port)
+      close(port, os_pid)
     end
   end
 
@@ -74,7 +73,7 @@ defmodule Locus.BuilderOrphanTest do
       Port.open({:spawn_executable, System.find_executable("sleep")}, [
         :binary,
         :exit_status,
-        {:args, ["300"]}
+        {:args, ["30"]}
       ])
 
     {:os_pid, os_pid} = Port.info(port, :os_pid)
@@ -83,22 +82,8 @@ defmodule Locus.BuilderOrphanTest do
 
   defp spawn_idle, do: spawn(fn -> Process.sleep(:infinity) end)
 
-  defp os_alive?(os_pid) do
-    {_, code} = System.cmd("kill", ["-0", "#{os_pid}"], stderr_to_stdout: true)
-    code == 0
+  defp close(port, os_pid) do
+    if Port.info(port), do: Port.close(port)
+    System.cmd("kill", ["-9", "#{os_pid}"], stderr_to_stdout: true)
   end
-
-  defp until_true(fun, attempts \\ 100)
-  defp until_true(_fun, 0), do: false
-
-  defp until_true(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(20)
-      until_true(fun, attempts - 1)
-    end
-  end
-
-  defp close(port), do: if(Port.info(port), do: Port.close(port))
 end
