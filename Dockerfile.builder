@@ -40,6 +40,11 @@ LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
 # (Sanctum.Limits reaches the builder via Locus.Builder) are FSL-licensed.
 LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
 
+# procps carries `kill` and `pgrep`, which Debian does not ship in a slim
+# base and which `Locus.Builder` shells out to when a build overruns its
+# deadline or its caller goes away. Without them every cleanup was an
+# :enoent the code rescued into a warning, so a runaway cargo or npm tree
+# outlived the request that started it.
 RUN apt-get update && apt-get install -y \
     libstdc++6 \
     openssl \
@@ -48,6 +53,7 @@ RUN apt-get update && apt-get install -y \
     libsqlite3-0 \
     curl \
     locales \
+    procps \
     build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \

@@ -1,0 +1,45 @@
+# Findings the bridge image cannot take a fix for, with what would lift each.
+# Read by the image scan in .github/workflows/node-ci.yml. Every other
+# fixable HIGH or CRITICAL still fails that job.
+#
+# Each entry is scoped to the path where the finding was observed, so the
+# same identifier appearing anywhere else — above all in the bridge's own
+# `app/node_modules` tree — still fails. A bare id would have suppressed it
+# image-wide, which is wider than the reasoning below supports.
+#
+# All four live in npm's bundled dependencies, pinned by npm's lockfile. No
+# npm release ships any of these fixes: 12.0.2 is the newest and was
+# measured carrying all of them. Patching a dependency inside npm's own tree
+# is not something an image should do to itself, and npm cannot be removed —
+# the bridge launches its backends through `npx`, so npm is runtime code
+# here rather than build tooling.
+#
+# What reaches them is a package an operator names through `add_backend`,
+# and running that package is arbitrary execution by design; the bridge
+# exists to do it. A denial of service, or a parser disagreeing about an
+# address, sits below what that caller already commands.
+
+vulnerabilities:
+  # brace-expansion 5.0.7. Lift when an npm release bundles 5.0.9 or later.
+  - id: CVE-2026-14257
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
+    statement: npm's bundled brace-expansion; no npm release ships the fix.
+  - id: CVE-2026-69152
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
+    statement: npm's bundled brace-expansion; no npm release ships the fix.
+
+  # tar 7.5.19: denial of service on a crafted long-path archive, which npm
+  # would meet while extracting a package. Lift at 7.5.21 or later.
+  - id: CVE-2026-73566
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/tar/package.json"
+    statement: npm's bundled tar; no npm release ships the fix.
+
+  # ip-address 10.2.0: inconsistent parsing between it and other consumers
+  # of the same string. Lift at 10.3.1 or later.
+  - id: CVE-2026-69192
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/ip-address/package.json"
+    statement: npm's bundled ip-address; no npm release ships the fix.

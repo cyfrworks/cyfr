@@ -578,6 +578,7 @@ defmodule Locus.Builder do
 
   defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do
     logger_metadata = Cyfr.LoggerContext.capture()
+    caller = self()
 
     # Run unlinked so spawn failures do not kill the caller or skip
     # its build-tree cleanup.
@@ -622,7 +623,7 @@ defmodule Locus.Builder do
         case Port.info(port, :os_pid) do
           {:os_pid, os_pid} ->
             Process.put(:builder_os_pid, os_pid)
-            watch_for_orphans(self(), os_pid)
+            watch_for_orphans(self(), caller, os_pid)
 
           _ ->
             :ok
@@ -677,21 +678,58 @@ defmodule Locus.Builder do
     end
   end
 
-  # The MCP tool layer brutal-kills its provider task on ITS OWN 5-minute
-  # deadline, which reaches this task through the link but never the cargo/
-  # npm process GROUP (closing the port only signals the direct child). An
-  # unlinked watcher survives the kill and reaps the group whenever the
-  # port owner dies abnormally — a double kill against the builder's own
-  # timeout path is a harmless ESRCH.
-  defp watch_for_orphans(owner, os_pid) do
-    spawn(fn ->
-      ref = Process.monitor(owner)
+  # Two processes can strand a build, and neither death closes the toolchain
+  # by itself: closing the port signals only the direct child, never the
+  # cargo/npm process GROUP.
+  #
+  # The task owns the port. The caller owns the deadline — it is the one
+  # inside `Task.yield/2` — and the task is deliberately UNLINKED from it,
+  # so killing the caller (the MCP tool layer brutal-kills its provider task
+  # on its own deadline) leaves the task running with nothing left to time
+  # it out. An earlier comment here claimed that kill arrived "through the
+  # link"; `async_nolink` never made one.
+  #
+  # So the watcher outlives both and reaps the group when either dies
+  # abnormally. A double kill against the builder's own timeout path is a
+  # harmless ESRCH.
+  @doc false
+  # Public for its own test: the behaviour is a race between three
+  # processes and an OS one, which nothing reachable from `compile/3` can
+  # arrange without a real toolchain and a slow build.
+  def watch_for_orphans(task, caller, os_pid) do
+    armed = self()
 
-      receive do
-        {:DOWN, ^ref, :process, _pid, reason} ->
-          unless reason == :normal, do: kill_os_process(os_pid)
-      end
-    end)
+    watcher =
+      spawn(fn ->
+        task_ref = Process.monitor(task)
+        caller_ref = Process.monitor(caller)
+        send(armed, {:watching, self()})
+
+        receive do
+          {:DOWN, ref, :process, _pid, reason} when ref in [task_ref, caller_ref] ->
+            unless reason == :normal do
+              kill_os_process(os_pid)
+
+              # Only ever the task. When the caller is the one that died, the
+              # task is left holding a port onto a process that is now gone and
+              # a deadline nobody is enforcing; when the task died, this is
+              # already false. The caller is never killed from here.
+              if Process.alive?(task), do: Process.exit(task, :kill)
+            end
+        end
+      end)
+
+    # Return only once the monitors exist. `Process.monitor/1` on a process
+    # that has already gone reports :noproc, which reads here as an abnormal
+    # death, so a watcher that armed late would reap a build whose task had
+    # merely finished.
+    receive do
+      {:watching, ^watcher} -> :ok
+    after
+      1_000 -> :ok
+    end
+
+    watcher
   end
 
   defp get_task_os_pid(task) do
