@@ -317,6 +317,107 @@ defmodule Aqua.RunnerTest do
     assert %{running: false, paused: true, queued: 1} = Runner.state(conv.id, ctx.athanor_id)
   end
 
+  test "a call whose outcome is unknown stops the turn; the sender's next line continues it, others wait",
+       %{ctx: ctx, conv: conv} do
+    other = second_member(ctx)
+
+    start_supervised!(
+      {ScriptedExecution,
+       ref: [@model, "catalyst:local.http"],
+       script: [
+         call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+         {:crash, :before_response},
+         reply("carrying on"),
+         reply("me too, done")
+       ]}
+    )
+
+    {:ok, %{turn_id: first}} = Runner.send_message(ctx, conv.id, "@aqua go")
+    assert_receive {:conversation, _, {:turn_paused, ^first, :uncertain}}, 60_000
+
+    assert %{running: false, paused: true, paused_reason: :uncertain} =
+             Runner.state(conv.id, ctx.athanor_id)
+
+    assert {:ok, %{status: "paused", paused_reason: "uncertain"}} = Tape.turn(ctx, first)
+
+    assert {:ok, %{admitted: :turn, turn_id: second}} =
+             Runner.send_message(other, conv.id, "@aqua me too")
+
+    assert %{paused: true, queued: 1} = Runner.state(conv.id, ctx.athanor_id)
+
+    assert {:ok, %{admitted: :steer, turn_id: ^first}} =
+             Runner.send_message(ctx, conv.id, "@aqua go on")
+
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, first)
+    assert {:ok, %{status: "completed", requested_by: requested}} = Tape.turn(ctx, second)
+    assert requested == other.user_id
+  end
+
+  test "a runner that starts over a stopped turn continues it only on the sender's line past the stop",
+       %{ctx: ctx, conv: conv} do
+    start_supervised!(
+      {ScriptedExecution,
+       ref: [@model, "catalyst:local.http"],
+       script: [
+         call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+         {:crash, :before_response},
+         reply("carrying on")
+       ]}
+    )
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "@aqua go"},
+        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+      })
+
+    assert {:paused, :uncertain} =
+             Task.await(Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end), 60_000)
+
+    # A runner over the row: it waits.
+    assert %{paused: true, paused_reason: :uncertain, running: false} =
+             Runner.state(conv.id, ctx.athanor_id)
+
+    # The acknowledging line, and the turn goes on to its end.
+    assert {:ok, %{admitted: :steer}} = Runner.send_message(ctx, conv.id, "@aqua go on")
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn.id)
+  end
+
+  test "a runner that starts with the acknowledging line already on the tape continues at once",
+       %{ctx: ctx, conv: conv} do
+    start_supervised!(
+      {ScriptedExecution,
+       ref: [@model, "catalyst:local.http"],
+       script: [
+         call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+         {:crash, :before_response},
+         reply("carrying on")
+       ]}
+    )
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "@aqua go"},
+        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+      })
+
+    assert {:paused, :uncertain} =
+             Task.await(Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end), 60_000)
+
+    {:ok, _} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "go on"},
+        steer_turn_id: turn.id
+      })
+
+    {:ok, _pid} = Runner.ensure(conv.id, ctx.athanor_id)
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn.id)
+  end
+
   test "the opener offered again while its turn runs is the same send, not a steer", %{
     ctx: ctx,
     conv: conv

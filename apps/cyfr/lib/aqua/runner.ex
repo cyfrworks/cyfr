@@ -410,12 +410,32 @@ defmodule Aqua.Runner do
 
     case Tape.accept(ctx, state.id, %{message: message(ctx, text, opts), steer_turn_id: turn_id}) do
       {:ok, %{message: row, replayed: replayed}} ->
-        {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(state)}
+        {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(acknowledge(state))}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
   end
+
+  # A turn stopped on a call whose outcome is unknown continues on its
+  # sender's next line — the one past the boundary the stop moved; a
+  # replayed earlier line is not that.
+  defp acknowledge(%{live: nil, paused: %{reason: :uncertain, turn_id: turn_id} = paused} = state) do
+    case Tape.turn(state.ctx, turn_id) do
+      {:ok, %{status: "paused"} = turn} ->
+        if Tape.steer_pending?(state.ctx, turn),
+          do: continue(%{state | paused: nil}, entry_of(paused), :resume),
+          else: state
+
+      _ ->
+        state
+    end
+  end
+
+  defp acknowledge(state), do: state
+
+  defp entry_of(paused),
+    do: paused |> Map.take([:turn_id, :user_id, :orchestrator]) |> Map.put(:ctx, nil)
 
   defp accept_turn(state, ctx, name, text, opts) do
     attrs = %{
@@ -629,6 +649,7 @@ defmodule Aqua.Runner do
             }
         }
 
+        broadcast(state, {:turn_paused, live.turn_id, reason})
         settle_paused(state)
 
       {:error, reason} ->
@@ -640,37 +661,59 @@ defmodule Aqua.Runner do
     end
   end
 
-  # The loop died without answering: what it left is settled from the
-  # rows, the turn ended cancelled when a cancel asked for it and
-  # uncertain otherwise. The root's slot went with the process.
+  # The loop died without answering. A turn the rows already show paused
+  # committed its stop before the process went: it is picked up as
+  # paused and its local cleanup finished here. Otherwise what it left
+  # is settled from the rows, the turn ended cancelled when a cancel
+  # asked for it and uncertain otherwise. The root's slot went with the
+  # process.
   defp crashed(%{live: live} = state, reason) do
-    status = if match?({:cancel_requested, _}, reason), do: "cancelled", else: "uncertain"
-
     Logger.warning(
       "[Aqua.Runner] turn #{live.turn_id} stopped without an answer: #{inspect(reason)}"
     )
 
-    %{state | live: nil}
-    |> abort_turn(live.turn_id, describe(reason))
-    |> end_turn(live.turn_id, status, describe(reason))
-    |> start_next()
+    case Tape.turn(state.ctx, live.turn_id) do
+      {:ok, %{status: "paused"} = turn} ->
+        paused = %{
+          turn_id: live.turn_id,
+          user_id: live.user_id,
+          orchestrator: live.orchestrator,
+          reason: pause_reason(turn),
+          expiry: nil
+        }
+
+        state = %{state | live: nil, paused: paused}
+        broadcast(state, {:turn_paused, live.turn_id, paused.reason})
+        settle_paused(state)
+
+      _ ->
+        status = if match?({:cancel_requested, _}, reason), do: "cancelled", else: "uncertain"
+
+        %{state | live: nil}
+        |> abort_turn(live.turn_id, describe(reason))
+        |> end_turn(live.turn_id, status, describe(reason))
+        |> start_next()
+    end
   end
 
   # A paused turn: with cards still pending the runner waits for the
-  # decision (and the expiry); with none it continues as its sender.
+  # decision (and the expiry); stopped on a call whose outcome is unknown
+  # it waits for its sender's next line, unless one is already on the
+  # tape past the stop; with neither it continues as its sender.
   defp settle_paused(%{paused: %{turn_id: turn_id} = paused} = state) do
     case Tape.turn(state.ctx, turn_id) do
+      {:ok, %{status: "paused", paused_reason: "uncertain"} = turn} ->
+        if Tape.steer_pending?(state.ctx, turn),
+          do: continue(%{state | paused: nil}, entry_of(paused), :resume),
+          else: touch(state)
+
       {:ok, %{status: "paused"} = turn} ->
         case Tape.pending_approvals(state.ctx, turn) do
           {:ok, [_ | _] = pending} ->
             arm_expiry(state, pending)
 
           _ ->
-            continue(
-              %{state | paused: nil},
-              Map.take(paused, [:turn_id, :user_id, :orchestrator]) |> Map.put(:ctx, nil),
-              :resume
-            )
+            continue(%{state | paused: nil}, entry_of(paused), :resume)
         end
 
       {:ok, %{status: "running"}} ->
@@ -854,6 +897,7 @@ defmodule Aqua.Runner do
     %{
       running: state.live != nil,
       paused: state.paused != nil,
+      paused_reason: state.paused && state.paused.reason,
       athanor_id: state.athanor_id,
       turn_id: current && current.turn_id,
       streaming_text: "",

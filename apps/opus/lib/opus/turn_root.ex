@@ -82,15 +82,33 @@ defmodule Opus.TurnRoot do
   def pause(%Context{} = ctx, _execution_id, opts) do
     claim = Keyword.fetch!(opts, :claim)
     Lease.stop(claim.keeper)
+    turn_id = Keyword.fetch!(opts, :turn_id)
 
-    case Arca.TurnStorage.pause(ctx, Keyword.fetch!(opts, :turn_id), %{
-           fence: Keyword.get(opts, :fence),
-           reason: Keyword.get(opts, :reason, "approval"),
-           launch_step_id: Keyword.get(opts, :launch_step_id)
-         }) do
-      {:ok, turn} ->
+    moved =
+      case Keyword.get(opts, :uncertain) do
+        # A call whose outcome is unknown: the step's mark, the covering
+        # aborted row and the pause are one transaction.
+        %{step_id: _} = uncertain ->
+          Arca.TurnStorage.pause_uncertain(
+            ctx,
+            turn_id,
+            Map.put(uncertain, :fence, Keyword.get(opts, :fence))
+          )
+
+        nil ->
+          with {:ok, turn} <-
+                 Arca.TurnStorage.pause(ctx, turn_id, %{
+                   fence: Keyword.get(opts, :fence),
+                   reason: Keyword.get(opts, :reason, "approval"),
+                   launch_step_id: Keyword.get(opts, :launch_step_id)
+                 }),
+               do: {:ok, %{turn: turn, aborted: nil}}
+      end
+
+    case moved do
+      {:ok, %{turn: turn, aborted: aborted}} ->
         Opus.Slot.release(claim.token)
-        {:ok, %{turn: turn, execution_id: turn.root_execution_id}}
+        {:ok, %{turn: turn, execution_id: turn.root_execution_id, aborted: aborted}}
 
       {:error, _} = error ->
         # The rows did not move: the turn still runs and its lease must

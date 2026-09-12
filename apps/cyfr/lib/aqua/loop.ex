@@ -36,6 +36,7 @@ defmodule Aqua.Loop do
   @retry_delays_ms [2_000, 8_000, 20_000]
   @resume_backoff_ms [500, 2_000, 8_000]
   @recoverable ~w(rate_limited overloaded)
+  @aborted_content "a call's outcome is unknown; tools may have partially executed"
   @setup ~w(authentication secret_denied)
 
   defmodule State do
@@ -52,13 +53,15 @@ defmodule Aqua.Loop do
       active_ms: 0,
       observed: nil,
       clone?: false,
-      excerpt_sent?: false
+      excerpt_sent?: false,
+      # A call's outcome is unknown: only replay-safe reads run from here.
+      restricted?: false
     ]
   end
 
   @type result ::
           :completed
-          | {:paused, :approval | :launch}
+          | {:paused, :approval | :launch | :uncertain}
           | {:failed, term()}
           | :cancelled
           | {:uncertain, term()}
@@ -167,7 +170,7 @@ defmodule Aqua.Loop do
 
           if replay_safe_step?(step),
             do: Tape.close_step(guest, superseded, step, "error", %{error: reason}),
-            else: Tape.mark_uncertain(guest, step, reason)
+            else: Tape.mark_uncertain(guest, superseded, step, reason)
 
         _ ->
           :ok
@@ -435,7 +438,7 @@ defmodule Aqua.Loop do
         {:halt, {:failed, reason}, state}
 
       {:exit, reason} ->
-        _ = Tape.mark_uncertain(guest(state), step, describe(reason))
+        _ = Tape.mark_uncertain(guest(state), state.turn, step, describe(reason))
         {:halt, {:uncertain, reason}, state}
     end
   end
@@ -597,29 +600,60 @@ defmodule Aqua.Loop do
     {runnable, cards} = Enum.reduce(items, {[], 0}, &decide(state, touched, &1, &2))
     runnable = Enum.reverse(runnable)
 
-    state = run_groups(state, group(runnable))
+    case run_groups(state, group(runnable)) do
+      {:halt, result, state} ->
+        {:halt, result, state}
 
-    cond do
-      over_deadline?(state) ->
-        {:halt, {:failed, :deadline}, state}
+      {:ok, state} ->
+        cond do
+          over_deadline?(state) ->
+            {:halt, {:failed, :deadline}, state}
 
-      cards > 0 and pending?(state) ->
-        pause(state, :approval)
+          cards > 0 and pending?(state) ->
+            pause(state, :approval)
 
-      true ->
-        {:continue, state}
+          true ->
+            {:continue, state}
+        end
     end
   end
 
-  defp decide(_state, _touched, %{approved?: true} = item, {runnable, cards}),
+  # A restricted turn runs replay-safe reads and nothing else — before a
+  # card's approval or the policy can say otherwise.
+  defp decide(
+         %State{restricted?: true} = state,
+         touched,
+         %{step: step, call: {:ok, %Call{} = call}} = item,
+         acc
+       ) do
+    if Policy.replay_safe?(call) do
+      decide_open(state, touched, item, acc)
+    else
+      close(
+        state,
+        step,
+        call,
+        {:error,
+         {:denied,
+          "#{call.tool}.#{call.action} may not run: an earlier call's outcome is unknown, " <>
+            "and until a new turn starts only replay-safe reads run"}}
+      )
+
+      acc
+    end
+  end
+
+  defp decide(state, touched, item, acc), do: decide_open(state, touched, item, acc)
+
+  defp decide_open(_state, _touched, %{approved?: true} = item, {runnable, cards}),
     do: {[item | runnable], cards}
 
-  defp decide(state, _touched, %{step: step, call: {:error, message}}, {runnable, cards}) do
+  defp decide_open(state, _touched, %{step: step, call: {:error, message}}, {runnable, cards}) do
     close(state, step, nil, {:error, message})
     {runnable, cards}
   end
 
-  defp decide(
+  defp decide_open(
          %State{clone?: true} = state,
          _touched,
          %{step: step, call: {:ok, %Call{kind: :clone}}},
@@ -629,7 +663,7 @@ defmodule Aqua.Loop do
     acc
   end
 
-  defp decide(
+  defp decide_open(
          state,
          touched,
          %{step: step, call: {:ok, %Call{} = call}} = item,
@@ -638,7 +672,8 @@ defmodule Aqua.Loop do
     decision =
       Policy.decide(call, state.spec.policy,
         consented?: &consented?(state, &1),
-        touched: touched
+        touched: touched,
+        restricted?: state.restricted?
       )
 
     case decision do
@@ -733,19 +768,24 @@ defmodule Aqua.Loop do
   defp concurrent?(%{call: {:ok, %Call{} = call}}), do: Policy.overlap(call) == :concurrent
   defp concurrent?(_item), do: false
 
+  # Every group's outcome rides out: a group that stopped the turn on an
+  # unknown outcome halts the dispatch with the pause it established.
   defp run_groups(%State{} = state, groups) do
-    Enum.reduce_while(groups, state, fn group, state ->
+    Enum.reduce_while(groups, {:ok, state}, fn group, {:ok, state} ->
       cond do
         over_deadline?(state) ->
           _ = Tape.skip_steps(guest(state), state.turn, "the turn ran out of time")
-          {:halt, state}
+          {:halt, {:ok, state}}
 
         Tape.steer_pending?(guest(state), state.turn) ->
           _ = Tape.skip_steps(guest(state), state.turn, "a newer message arrived")
-          {:halt, state}
+          {:halt, {:ok, state}}
 
         true ->
-          {:cont, run_group(state, group)}
+          case run_group(state, group) do
+            {:ok, state} -> {:cont, {:ok, state}}
+            {:halt, _result, _state} = halt -> {:halt, halt}
+          end
       end
     end)
   end
@@ -757,44 +797,116 @@ defmodule Aqua.Loop do
 
     outcome =
       case worker(fn -> run_one(state, item) end, @step_timeout_ms) do
+        {:ok, {:uncertain, step, reason}} -> {:uncertain, step, reason}
         {:ok, _} -> :ok
         {:exit, reason} -> settle_dead(state, item, reason)
       end
 
-    _ = outcome
-    activity(state, [item], :done)
+    state = activity(state, [item], :done)
+
+    case outcome do
+      {:uncertain, step, reason} -> stop_uncertain(state, step, reason, [])
+      _ -> {:ok, state}
+    end
   end
 
   defp run_group(%State{} = state, {:concurrent, items}) do
     state = activity(state, items, :running)
     cap = max(state.spec.authority.budget.cap, 1)
+    outcome = run_concurrent(state, items, min(length(items), cap))
+    state = activity(state, items, :done)
 
-    Aqua.TaskSupervisor
-    |> Task.Supervisor.async_stream_nolink(items, &run_one(state, &1),
-      max_concurrency: min(length(items), cap),
-      timeout: @step_timeout_ms,
-      on_timeout: :kill_task,
-      ordered: true
-    )
-    |> Enum.zip(items)
-    |> Enum.each(fn
-      {{:ok, _}, _item} -> :ok
-      {{:exit, reason}, item} -> settle_dead(state, item, reason)
-    end)
-
-    activity(state, items, :done)
+    case outcome do
+      {:uncertain, step, reason, rest} -> stop_uncertain(state, step, reason, rest)
+      :ok -> {:ok, state}
+    end
   end
+
+  # The reads of a group run beside each other, at most `cap` at once,
+  # each in a worker of its own: every answer, timeout and death is
+  # attributed to its step as it arrives. The first unknown outcome stops
+  # the group — nothing more is started, and what still runs is handed
+  # back to be cancelled once the turn's stop is durable.
+  defp run_concurrent(%State{} = state, items, cap) do
+    collect(state, items, %{}, cap)
+  end
+
+  defp collect(_state, [], running, _cap) when map_size(running) == 0, do: :ok
+
+  defp collect(state, pending, running, cap) when map_size(running) < cap and pending != [] do
+    [item | rest] = pending
+    task = Task.Supervisor.async_nolink(Aqua.TaskSupervisor, fn -> run_one(state, item) end)
+    deadline = System.monotonic_time(:millisecond) + @step_timeout_ms
+
+    collect(
+      state,
+      rest,
+      Map.put(running, task.ref, %{item: item, task: task, deadline: deadline}),
+      cap
+    )
+  end
+
+  defp collect(state, pending, running, cap) do
+    {soonest_ref, %{deadline: deadline}} = Enum.min_by(running, fn {_ref, r} -> r.deadline end)
+    wait = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {ref, result} when is_map_key(running, ref) ->
+        Process.demonitor(ref, [:flush])
+        {%{item: item}, running} = Map.pop(running, ref)
+
+        case result do
+          {:uncertain, step, reason} ->
+            {:uncertain, step, reason, Map.values(running) ++ pending_items(pending)}
+
+          _ ->
+            collect(state, pending, running, cap)
+        end
+        |> tap(fn _ -> item end)
+
+      {:DOWN, ref, :process, _pid, reason} when is_map_key(running, ref) ->
+        {%{item: item}, running} = Map.pop(running, ref)
+
+        case settle_dead(state, item, reason) do
+          {:uncertain, step, why} ->
+            {:uncertain, step, why, Map.values(running) ++ pending_items(pending)}
+
+          _ ->
+            collect(state, pending, running, cap)
+        end
+    after
+      wait ->
+        {%{item: item, task: task}, running} = Map.pop(running, soonest_ref)
+        Task.shutdown(task, :brutal_kill)
+
+        case settle_dead(state, item, :timeout) do
+          {:uncertain, step, why} ->
+            {:uncertain, step, why, Map.values(running) ++ pending_items(pending)}
+
+          _ ->
+            collect(state, pending, running, cap)
+        end
+    end
+  end
+
+  defp pending_items(pending), do: Enum.map(pending, &%{item: &1, task: nil})
 
   # In a worker: the step is dispatched, run, and closed with what it
   # answered. A step that is no longer proposed (skipped, superseded)
-  # runs nothing.
+  # runs nothing. An outcome that cannot be known is not closed here: it
+  # is reported, and the loop stops the turn on it.
   @doc false
   def run_one(%State{} = state, %{step: step, call: {:ok, %Call{} = call}}) do
     case Tape.mark_dispatched(guest(state), state.turn, step) do
       {:ok, step} ->
-        result = execute(state, step, call)
-        close(state, step, call, result)
-        :ok
+        case normalise(execute(state, step, call)) do
+          {:uncertain, reason} ->
+            {:uncertain, step, describe(reason)}
+
+          result ->
+            _ = close(state, step, call, result)
+            :ok
+        end
 
       {:error, :not_proposed} ->
         :skipped
@@ -847,13 +959,19 @@ defmodule Aqua.Loop do
       agent_ref: Compendium.AgentSource.ref(state.turn.orchestrator),
       charge: Binding.charge(step, state.turn),
       execution_id: step.child_execution_id,
-      step_id: step.id
+      step_id: step.id,
+      cancel_handle: handle(state, step)
     })
   end
 
-  # A call whose effect cannot be known closes nothing: the step is marked.
-  defp close(%State{} = state, step, _call, {:uncertain, reason}),
-    do: Tape.mark_uncertain(guest(state), step, describe(reason))
+  # One outcome vocabulary at the loop's boundary: an effect that may
+  # have happened with no result (`uncertain`), one that happened whose
+  # result could not be kept (`result_lost`), one whose ending could not
+  # be recorded (`not_recorded`) — all unknown outcomes to the turn.
+  defp normalise({:error, {:uncertain, reason}}), do: {:uncertain, reason}
+  defp normalise({:error, {:result_lost, reason}}), do: {:uncertain, reason}
+  defp normalise({:error, {:not_recorded, reason}}), do: {:uncertain, reason}
+  defp normalise(other), do: other
 
   # The step's result row and outcome: `ok`, `error`, or `denied` for a
   # refusal by the policy or the chain.
@@ -901,17 +1019,22 @@ defmodule Aqua.Loop do
   defp render(%Call{} = call, result), do: Binding.render(call, result)
 
   # A worker that died or timed out: a step it never dispatched is
-  # skipped; a dispatched one whose effect is unknown is uncertain,
-  # unless it is safe to run again, in which case it closes as an error
-  # the model may retry.
-  defp settle_dead(%State{} = state, %{step: step, call: call}, reason) do
+  # skipped; a dispatched one that is safe to run again closes as an
+  # error the model may retry; a dispatched one whose effect is unknown
+  # is reported (`:report`, the default) so the loop stops the turn on
+  # it, or marked in place (`:mark`) once the turn's stop already covers
+  # it.
+  defp settle_dead(%State{} = state, %{step: step, call: call}, reason, mode \\ :report) do
     guest = guest(state)
 
     case Tape.step(guest, step.id) do
       {:ok, %{dispatch_state: "proposed"} = fresh} ->
-        Tape.close_step(guest, state.turn, fresh, "skipped", %{
-          result: %{content: "the call was not started", payload: %{"skipped" => true}}
-        })
+        _ =
+          Tape.close_step(guest, state.turn, fresh, "skipped", %{
+            result: %{content: "the call was not started", payload: %{"skipped" => true}}
+          })
+
+        :ok
 
       {:ok, %{dispatch_state: "dispatched"} = fresh} ->
         if fresh.child_execution_id,
@@ -919,13 +1042,15 @@ defmodule Aqua.Loop do
 
         case call do
           {:ok, %Call{} = c} when c.kind != :clone ->
-            if replay_safe?(c),
-              do:
-                close(state, fresh, c, {:error, "the call did not finish: #{describe(reason)}"}),
-              else: Tape.mark_uncertain(guest, fresh, describe(reason))
+            if replay_safe?(c) do
+              _ = close(state, fresh, c, {:error, "the call did not finish: #{describe(reason)}"})
+              :ok
+            else
+              unknown(state, fresh, describe(reason), mode)
+            end
 
           _ ->
-            Tape.mark_uncertain(guest, fresh, describe(reason))
+            unknown(state, fresh, describe(reason), mode)
         end
 
       _ ->
@@ -933,13 +1058,108 @@ defmodule Aqua.Loop do
     end
   end
 
+  defp unknown(_state, step, reason, :report), do: {:uncertain, step, reason}
+
+  defp unknown(%State{} = state, step, reason, :mark) do
+    _ = Tape.mark_uncertain(guest(state), state.turn, step, reason)
+    :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Stopping on an unknown outcome
+  # ---------------------------------------------------------------------------
+
+  # The one sequence for every path. A root turn: the durable stop first
+  # — the step's mark, the cancel-marks, the skips, the covering aborted
+  # row and the pause in one transaction — then the siblings still
+  # running are cancelled and settled against it, and the pause rides out
+  # of the dispatch. A clone marks its own step and halts; its parent's
+  # stop covers the clone step.
+  defp stop_uncertain(%State{clone?: true} = state, step, reason, rest) do
+    guest = guest(state)
+    _ = Tape.mark_uncertain(guest, state.turn, step, reason)
+    cancel_rest(state, rest)
+    _ = Tape.skip_steps(guest, state.turn, "the role stopped: a call's outcome is unknown")
+    {:halt, {:uncertain, reason}, state}
+  end
+
+  defp stop_uncertain(%State{} = state, step, reason, rest) do
+    case pause_uncertain(state, step, reason) do
+      {:ok, state} ->
+        cancel_rest(state, rest)
+        {:halt, {:paused, :uncertain}, %{state | restricted?: true}}
+
+      {:error, error} ->
+        {:halt, {:failed, error}, state}
+    end
+  end
+
+  # The root held: the slot and the keeper go with the rows. The root
+  # already let go around a launch: the rows alone.
+  defp pause_uncertain(%State{claim: %{execution_id: id} = claim} = state, step, reason) do
+    uncertain = %{
+      step_id: step.id,
+      generation: step.generation,
+      reason: reason,
+      content: @aborted_content
+    }
+
+    case Cyfr.Execution.pause_turn_root(ctx(state), id,
+           claim: claim,
+           turn_id: state.turn.id,
+           fence: state.turn.fence,
+           reason: "uncertain",
+           uncertain: uncertain
+         ) do
+      {:ok, %{turn: paused} = moved} ->
+        if moved[:aborted],
+          do: announce(state, {:message, moved.aborted})
+
+        {:ok, %{state | turn: paused, claim: nil, since: nil, active_ms: paused.active_ms}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp pause_uncertain(%State{claim: nil, turn: %{status: "paused"}} = state, step, reason) do
+    case Tape.pause_uncertain(guest(state), state.turn, %{
+           step_id: step.id,
+           generation: step.generation,
+           reason: reason,
+           content: @aborted_content
+         }) do
+      {:ok, %{turn: paused}} -> {:ok, %{state | turn: paused}}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp pause_uncertain(%State{} = state, _step, _reason), do: {:error, {:no_claim, state.turn.id}}
+
+  # What the group still had in flight when it stopped: each child
+  # execution cancelled, each nested handler stopped by its handle, each
+  # worker killed, then the step settled against the boundary.
+  defp cancel_rest(%State{} = state, rest) do
+    Enum.each(rest, fn %{item: %{step: step} = item, task: task} ->
+      if step.child_execution_id, do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
+      Aqua.Ops.cancel_call(handle(state, step))
+      if task, do: Task.shutdown(task, :brutal_kill)
+      _ = settle_dead(state, item, :cancelled, :mark)
+      Aqua.Ops.release_call(handle(state, step))
+    end)
+  end
+
+  # The caller-owned name of one in-chain call, for cancelling its
+  # handler without the request id the loop does not hold.
+  defp handle(%State{} = state, step), do: {state.turn.id, step.id, step.generation}
+
   # ---------------------------------------------------------------------------
   # Launches: the root is let go around the application's own root
   # ---------------------------------------------------------------------------
 
   defp run_launch(%State{clone?: true} = state, %{step: step, call: call}) do
     close(state, step, unwrap(call), {:error, "a role launches nothing"})
-    state
+    {:ok, state}
   end
 
   defp run_launch(%State{} = state, %{step: step, call: call}) do
@@ -949,23 +1169,29 @@ defmodule Aqua.Loop do
       {:ok, step} ->
         case pause_root(state, :launch, step.id) do
           {:ok, state} ->
-            result =
-              case worker(fn -> Aqua.Launch.dispatch(ctx(state), step) end, @launch_timeout_ms) do
-                {:ok, {:ok, %{execution_id: id, result: result}}} -> {:ok, id, result}
-                {:ok, {:error, reason}} -> {:error, reason}
-                {:exit, reason} -> {:exit, reason}
-              end
+            case worker(fn -> Aqua.Launch.dispatch(ctx(state), step) end, @launch_timeout_ms) do
+              {:ok, {:ok, %{execution_id: id, result: result}}} ->
+                {:ok,
+                 state |> close_launch(step, unwrap(call), {:ok, id, result}) |> resume_root(0)}
 
-            state = close_launch(state, step, unwrap(call), result)
-            resume_root(state, 0)
+              {:ok, {:error, reason}} ->
+                {:ok,
+                 state |> close_launch(step, unwrap(call), {:error, reason}) |> resume_root(0)}
 
+              # Whether the application started is not known: the turn
+              # stops here, its root already let go.
+              {:exit, reason} ->
+                stop_uncertain(state, step, describe(reason), [])
+            end
+
+          # The root did not let go: the launch never started.
           {:error, reason} ->
-            _ = Tape.mark_uncertain(guest, step, describe(reason))
-            state
+            _ = close(state, step, unwrap(call), {:error, describe(reason)})
+            {:ok, state}
         end
 
       _ ->
-        state
+        {:ok, state}
     end
   end
 
@@ -990,11 +1216,6 @@ defmodule Aqua.Loop do
 
   defp close_launch(state, step, call, {:error, reason}) do
     close(state, step, call, {:error, describe(reason)})
-    state
-  end
-
-  defp close_launch(state, step, _call, {:exit, reason}) do
-    _ = Tape.mark_uncertain(guest(state), step, describe(reason))
     state
   end
 
@@ -1057,35 +1278,45 @@ defmodule Aqua.Loop do
   # ---------------------------------------------------------------------------
 
   # A step found open: a model step without its response closes as an
-  # error (its request cannot be rebuilt), a dispatched call whose
-  # effect is unknown is uncertain unless it is safe to run again, an
-  # approved or unstarted step is dispatched once; a steer that arrived
-  # while the turn was away skips them all.
+  # error (its request cannot be rebuilt); a dispatched call that is
+  # safe to run again is opened afresh; a dispatched call whose effect is
+  # unknown stops the turn on it — a person continues, never a replay;
+  # an approved or unstarted step is dispatched once; a steer that
+  # arrived while the turn was away skips them all.
   defp settle(%State{} = state) do
     guest = guest(state)
 
     with {:ok, steps} <- Tape.steps(guest, state.turn) do
-      interrupted? = Enum.any?(steps, &(&1.dispatch_state == "dispatched"))
+      open =
+        Enum.reduce(steps, [], fn
+          %{dispatch_state: "dispatched", kind: "model"} = step, open ->
+            _ = Tape.close_step(guest, state.turn, step, "error", %{error: "not reproducible"})
+            open
 
-      Enum.each(steps, fn
-        %{dispatch_state: "dispatched", kind: "model"} = step ->
-          Tape.close_step(guest, state.turn, step, "error", %{error: "not reproducible"})
+          %{dispatch_state: "dispatched"} = step, open ->
+            if step.child_execution_id,
+              do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
 
-        %{dispatch_state: "dispatched"} = step ->
-          if step.child_execution_id,
-            do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
+            if replay_safe_step?(step) do
+              _ = Tape.next_generation(guest, step, Cyfr.UUID7.execution_id())
+              open
+            else
+              [step | open]
+            end
 
-          if replay_safe_step?(step),
-            do: Tape.next_generation(guest, step, Cyfr.UUID7.execution_id()),
-            else: Tape.mark_uncertain(guest, step, "the turn was interrupted")
+          _step, open ->
+            open
+        end)
+        |> Enum.reverse()
 
-        _ ->
-          :ok
-      end)
-
-      if interrupted?, do: Tape.append_aborted(guest, state.turn, "the turn was interrupted")
+      state = %{state | restricted?: open != [] or Tape.restricted?(guest, state.turn)}
 
       cond do
+        open != [] ->
+          [first | others] = open
+          rest = Enum.map(others, &%{item: %{step: &1, call: recall(state, &1)}, task: nil})
+          stop_uncertain(state, first, "the turn was interrupted", rest)
+
         Tape.steer_pending?(guest, state.turn) ->
           _ = Tape.skip_steps(guest, state.turn, "a newer message arrived")
           {:continue, state}
@@ -1229,14 +1460,7 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp replay_safe?(%Call{kind: :hand, tool: tool, action: action}) do
-    get_in(Aqua.Hands.catalog(), [tool, :actions, action, :recovery]) == :replay_safe
-  end
-
-  defp replay_safe?(%Call{kind: :catalog, tool: tool, action: action}),
-    do: Aqua.Ops.replay_safe?(tool, action)
-
-  defp replay_safe?(_call), do: false
+  defp replay_safe?(%Call{} = call), do: Policy.replay_safe?(call)
 
   defp replay_safe_step?(%{recovery: "replay_safe"}), do: true
   defp replay_safe_step?(_step), do: false

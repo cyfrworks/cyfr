@@ -227,10 +227,49 @@ defmodule Aqua.Tape do
     end
   end
 
-  @doc "Mark a dispatched step whose effect cannot be known."
-  @spec mark_uncertain(Context.t(), step(), String.t() | nil) :: {:ok, step()} | {:error, term()}
-  def mark_uncertain(%Context{} = ctx, step, reason \\ nil),
-    do: TurnStorage.mark_step_uncertain(ctx, step.id, reason)
+  @doc """
+  Mark a dispatched step whose effect cannot be known, under the turn's
+  fence and the step's generation: a clone's own step, or a sibling a
+  root turn's pause already covers.
+  """
+  @spec mark_uncertain(Context.t(), turn(), step(), String.t() | nil) ::
+          {:ok, step()} | {:error, term()}
+  def mark_uncertain(%Context{} = ctx, turn, step, reason \\ nil),
+    do:
+      TurnStorage.mark_step_uncertain(ctx, step.id, reason, %{
+        fence: turn.fence,
+        generation: step.generation
+      })
+
+  @doc """
+  Stop a root turn on a call whose outcome is unknown: the durable
+  boundary of D6, in one transaction (`TurnStorage.pause_uncertain/3`).
+  `attrs`: `:step_id`, `:generation`, `:reason`, `:content`. The aborted
+  row is broadcast after commit.
+  """
+  @spec pause_uncertain(Context.t(), turn(), map()) ::
+          {:ok, %{turn: turn(), aborted: row()}} | {:error, term()}
+  def pause_uncertain(%Context{} = ctx, turn, attrs) when is_map(attrs) do
+    with {:ok, %{aborted: aborted} = paused} <-
+           TurnStorage.pause_uncertain(ctx, turn.id, Map.put_new(attrs, :fence, turn.fence)) do
+      broadcast(ctx, turn.conversation_id, {:message, aborted})
+      {:ok, paused}
+    end
+  end
+
+  @doc "Set down a running turn a dead runner left with an unacknowledged uncertainty (`TurnStorage.pause_recovered/3`)."
+  @spec pause_recovered(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
+  def pause_recovered(%Context{} = ctx, turn, content) when is_binary(content),
+    do: TurnStorage.pause_recovered(ctx, turn.id, %{content: content})
+
+  @doc "Whether the turn holds an uncertainty its sender has not acknowledged."
+  @spec unacknowledged_episode?(Context.t(), turn()) :: boolean()
+  def unacknowledged_episode?(%Context{} = ctx, turn),
+    do: TurnStorage.unacknowledged_episode?(ctx, turn.id) == true
+
+  @doc "Whether the turn is restricted to replay-safe reads: any of its steps is `uncertain`."
+  @spec restricted?(Context.t(), turn()) :: boolean()
+  def restricted?(%Context{} = ctx, turn), do: TurnStorage.restricted?(ctx, turn.id) == true
 
   @doc "Close every unstarted step as skipped and invalidate their cards."
   @spec skip_steps(Context.t(), turn(), String.t()) :: {:ok, [step()]} | {:error, term()}

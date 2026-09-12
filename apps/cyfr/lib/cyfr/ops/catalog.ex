@@ -249,10 +249,14 @@ defmodule Cyfr.Ops.Catalog do
   A `:spawn`-shaped call charges the root invoke budget inside the
   transition step and releases it when the synchronous dispatch returns.
 
-  Options: `:guest_fn` (`:call` | `:spawn`, default `:call`), plus
-  `call_external/4`'s options. The runner defaults to `:supervised` here:
-  the handler runs on a guest's behalf, and a crash or a hang inside it
-  must not take the chain's host process with it.
+  Options: `:guest_fn` (`:call` | `:spawn`, default `:call`), `:cancel_handle`
+  (a caller-owned name for this call, `Emissary.MCP.RunningTasks.cancel_handle/1`
+  stops the supervised handler by it alone), plus `call_external/4`'s
+  options. The runner defaults to `:supervised` here: the handler runs on
+  a guest's behalf, and a crash or a hang inside it must not take the
+  chain's host process with it. A supervised handler that dies, exits or
+  times out answers `{:error, {:uncertain, _}}` unless the action is
+  declared `recovery: :replay_safe`: its effect may have happened.
   """
   def call_in_chain(name, ctx, args, authority, opts \\ [])
 
@@ -827,12 +831,9 @@ defmodule Cyfr.Ops.Catalog do
         true -> ctx.request_id
       end
 
-    started = %{
-      tool: name,
-      action: args["action"] || args[:action],
-      method: "tools/call",
-      input: args
-    }
+    action = args["action"] || args[:action]
+    started = %{tool: name, action: action, method: "tools/call", input: args}
+    opts = Keyword.put(opts, :action, action)
 
     Emissary.MCP.RequestLog.around(should_log?, ctx, call_id, started, fn ->
       # A boot that lost its database's control plane dispatches nothing,
@@ -1154,7 +1155,7 @@ defmodule Cyfr.Ops.Catalog do
   defp execute_tool_call(name, ctx, opts, execute_fn) do
     case Keyword.get(opts, :runner, :inline) do
       :inline -> run_inline(name, execute_fn)
-      :supervised -> run_supervised(name, ctx, execute_fn)
+      :supervised -> run_supervised(name, ctx, opts, execute_fn)
     end
   end
 
@@ -1177,12 +1178,28 @@ defmodule Cyfr.Ops.Catalog do
       {:error, {:exit, "Tool #{name} exited unexpectedly"}}
   end
 
-  defp run_supervised(name, ctx, execute_fn) do
+  defp run_supervised(name, ctx, opts, execute_fn) do
+    case Keyword.get(opts, :cancel_handle) do
+      nil ->
+        supervise(name, ctx, opts, nil, execute_fn)
+
+      handle ->
+        # Claimed before the task exists, so a cancel that lands first is
+        # seen when the task registers, and the handler never runs.
+        case Emissary.MCP.RunningTasks.claim(handle) do
+          :ok -> supervise(name, ctx, opts, handle, execute_fn)
+          :cancelled -> {:error, {:exit, "Tool #{name} was cancelled"}}
+        end
+    end
+  end
+
+  defp supervise(name, ctx, opts, handle, execute_fn) do
     # Registered under the server-minted request id, which is also the key
     # `Emissary.MCP.Progress` uses — one identity per request across both
     # subsystems. The transport cancels through this when its caller hangs up;
     # a context without one (an internal call that bypassed `do_call/4`'s
-    # minting) simply is not cancellable.
+    # minting) simply is not cancellable that way — its caller cancels by
+    # handle.
     request_id = ctx.request_id
     trackable? = is_binary(request_id)
 
@@ -1191,10 +1208,20 @@ defmodule Cyfr.Ops.Catalog do
     task =
       Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
         Cyfr.LoggerContext.restore(logger_metadata)
-        execute_fn.()
+
+        if handle && Emissary.MCP.RunningTasks.register_handle(handle, self()) == :cancelled,
+          do: exit(:cancelled),
+          else: execute_fn.()
       end)
 
     if trackable?, do: Emissary.MCP.RunningTasks.register(request_id, task)
+
+    # An in-chain effect the handler may have made before it died is not
+    # undone by its death: unless the action is reviewed as replay-safe,
+    # the caller learns that the outcome is unknown, not that it failed.
+    uncertain? =
+      Keyword.get(opts, :in_chain, false) and
+        not replay_safe?(name, Keyword.get(opts, :action))
 
     result =
       case Task.yield(task, @tool_timeout_ms) || Task.shutdown(task, :brutal_kill) do
@@ -1220,23 +1247,43 @@ defmodule Cyfr.Ops.Catalog do
           # The tuple carries only the tool's name — the exception's own
           # message can hold a query, a path, or the offending bytes, and
           # this tuple renders verbatim on the wire (`Cyfr.Ops.Error.message/1`).
-          {:error, {:crashed, "Tool #{name} crashed"}}
+          if uncertain?,
+            do: {:error, {:uncertain, "Tool #{name} crashed; its outcome is unknown"}},
+            else: {:error, {:crashed, "Tool #{name} crashed"}}
 
         {:exit, :cancelled} ->
-          {:error, {:exit, "Tool #{name} was cancelled"}}
+          if uncertain?,
+            do: {:error, {:uncertain, "Tool #{name} was cancelled; its outcome is unknown"}},
+            else: {:error, {:exit, "Tool #{name} was cancelled"}}
 
         {:exit, reason} ->
           Logger.error("[Cyfr.Ops.Catalog] Tool #{name} exited: #{inspect(reason)}")
-          {:error, {:exit, "Tool #{name} exited unexpectedly"}}
+
+          if uncertain?,
+            do: {:error, {:uncertain, "Tool #{name} exited; its outcome is unknown"}},
+            else: {:error, {:exit, "Tool #{name} exited unexpectedly"}}
 
         nil ->
           Logger.error("[Cyfr.Ops.Catalog] Tool #{name} timed out after #{@tool_timeout_ms}ms")
-          {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
+
+          if uncertain?,
+            do: {:error, {:uncertain, "Tool #{name} timed out; its outcome is unknown"}},
+            else: {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
       end
 
     if trackable?, do: Emissary.MCP.RunningTasks.unregister(request_id, task)
+    if handle, do: Emissary.MCP.RunningTasks.release_handle(handle)
     result
   end
+
+  defp replay_safe?(name, action) when is_binary(action) do
+    case get_tool(name) do
+      {:ok, tool_def} -> Cyfr.Ops.Annotations.recovery(tool_def, action) == :replay_safe
+      _ -> false
+    end
+  end
+
+  defp replay_safe?(_name, _action), do: false
 
   defp schedule_refresh do
     Process.send_after(self(), :refresh_cache, @refresh_interval)

@@ -208,6 +208,8 @@ defmodule PrismWeb.ConversationPaneLive do
   defp reset_live(socket) do
     socket
     |> assign(:running, false)
+    |> assign(:paused, false)
+    |> assign(:paused_reason, nil)
     |> assign(:queued, 0)
     |> assign(:turn_user, nil)
     |> assign(:streaming_text, "")
@@ -223,6 +225,8 @@ defmodule PrismWeb.ConversationPaneLive do
   defp apply_live(socket, %{} = live) do
     socket
     |> assign(:running, live.running)
+    |> assign(:paused, Map.get(live, :paused, false))
+    |> assign(:paused_reason, Map.get(live, :paused_reason))
     |> assign(:queued, Map.get(live, :queued, 0))
     |> assign(:turn_user, live.turn_user)
     |> assign(:streaming_text, live.streaming_text)
@@ -624,6 +628,8 @@ defmodule PrismWeb.ConversationPaneLive do
 
     socket
     |> assign(:running, true)
+    |> assign(:paused, false)
+    |> assign(:paused_reason, nil)
     |> assign(:turn_user, user_id)
     |> assign(:streaming_text, "")
     |> assign(:tool_activity, [])
@@ -633,13 +639,31 @@ defmodule PrismWeb.ConversationPaneLive do
   defp handle_conversation_event(socket, {:queued, n}), do: assign(socket, :queued, n)
 
   defp handle_conversation_event(socket, {:turn_started, _eid}),
-    do: assign(socket, :running, true)
+    do: socket |> assign(:running, true) |> assign(:paused, false) |> assign(:paused_reason, nil)
+
+  # The turn stopped on a card, a launch, or a call whose outcome is
+  # unknown; the sender it waits on stays named.
+  defp handle_conversation_event(socket, {:turn_paused, _turn_id, reason}) do
+    socket =
+      if reason == :uncertain,
+        do: assign(socket, :announcement, "AQUA stopped: a tool's outcome is unknown."),
+        else: socket
+
+    socket
+    |> assign(:running, false)
+    |> assign(:paused, true)
+    |> assign(:paused_reason, reason)
+    |> assign(:streaming_text, "")
+    |> assign(:tool_activity, [])
+  end
 
   defp handle_conversation_event(socket, {:turn_finished}) do
     socket = assign(socket, :announcement, "AQUA replied.")
 
     socket
     |> assign(:running, false)
+    |> assign(:paused, false)
+    |> assign(:paused_reason, nil)
     |> assign(:turn_user, nil)
     |> assign(:streaming_text, "")
     |> assign(:tool_activity, [])
@@ -1416,6 +1440,21 @@ defmodule PrismWeb.ConversationPaneLive do
           <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
           <span>Thinking…</span>
         </div>
+
+        <div
+          :if={@paused and @paused_reason == :uncertain}
+          id={@dom <> "-stopped"}
+          class="flex items-center gap-2 text-xs text-amber-700"
+        >
+          <span class="inline-block h-2 w-2 rounded-full bg-amber-500" />
+          <span>Stopped: a tool's outcome is unknown.</span>
+          <span :if={@turn_user == @context.user_id}>
+            Your next message continues this turn with reads only.
+          </span>
+          <span :if={@turn_user != @context.user_id}>
+            A message from you waits behind this turn.
+          </span>
+        </div>
       </div>
 
       <div
@@ -1567,10 +1606,10 @@ defmodule PrismWeb.ConversationPaneLive do
             Send
           </button>
           <button
-            :if={@running}
+            :if={@running or @paused}
             type="button"
             phx-click="stop"
-            title="Stop the running turn"
+            title="Stop this turn; what waits behind it is dropped"
             class="self-end rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
           >
             {if @cancel_requested, do: "Cancelling…", else: "Stop"}

@@ -19,6 +19,8 @@ defmodule Arca.TurnTapeStorageTest do
   alias Arca.Schemas.Message
   alias Arca.TurnStorage
 
+  import Ecto.Query, only: [from: 2]
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -604,6 +606,163 @@ defmodule Arca.TurnTapeStorageTest do
                TurnStorage.close_clone_turn(ctx, clone.id, "completed")
 
       assert {:error, :not_a_clone} = TurnStorage.close_clone_turn(ctx, parent.id, "completed")
+    end
+  end
+
+  describe "the uncertain stop" do
+    # `n` of the steps proposed for `ids`, in order, flipped to dispatched.
+    defp dispatched!(ctx, turn, ids, n) do
+      {_model, %{calls: calls}} = respond!(ctx, turn, Enum.map(ids, &{&1, "http", "get"}))
+
+      calls
+      |> Enum.with_index()
+      |> Enum.map(fn {%{step: step}, i} ->
+        if i < n do
+          {:ok, step} = TurnStorage.dispatch_step(ctx, step.id, %{fence: turn.fence})
+          step
+        else
+          step
+        end
+      end)
+    end
+
+    test "a mark takes the turn's fence and the step's generation", %{ctx: ctx, conv: conv} do
+      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+      {turn, _root} = start!(ctx, turn)
+      [step] = dispatched!(ctx, turn, ["c1"], 1)
+
+      assert {:error, :no_fence} =
+               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{generation: 0})
+
+      assert {:error, :superseded} =
+               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{fence: "stale", generation: 0})
+
+      assert {:error, :not_dispatched} =
+               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{
+                 fence: turn.fence,
+                 generation: 7
+               })
+
+      assert {:ok, %{dispatch_state: "uncertain", outcome: "uncertain", error: "x"}} =
+               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{
+                 fence: turn.fence,
+                 generation: 0
+               })
+
+      assert TurnStorage.restricted?(ctx, turn.id)
+    end
+
+    test "the stop is one transaction: the mark, the cancel-marks, the skips, the covering row, the boundary",
+         %{ctx: ctx, conv: conv} do
+      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+      {turn, root} = start!(ctx, turn)
+      [c1, c2, c3] = dispatched!(ctx, turn, ["c1", "c2", "c3"], 2)
+      assert c1.dispatch_state == "dispatched" and c2.dispatch_state == "dispatched"
+      assert c3.dispatch_state == "proposed"
+
+      assert {:error, :no_fence} =
+               TurnStorage.pause_uncertain(ctx, turn.id, %{step_id: c1.id, generation: 0})
+
+      assert {:ok, %{turn: paused, aborted: row}} =
+               TurnStorage.pause_uncertain(ctx, turn.id, %{
+                 fence: turn.fence,
+                 step_id: c1.id,
+                 generation: 0,
+                 reason: "the worker died"
+               })
+
+      assert paused.status == "paused" and paused.paused_reason == "uncertain"
+      assert paused.window_upto_seq == row.seq
+      assert row.kind == "turn_aborted"
+
+      assert %{"covers" => covers} = Conversations.payload(row)
+      assert Enum.sort(Enum.map(covers, & &1["step_id"])) == Enum.sort([c1.id, c2.id])
+      assert Enum.all?(covers, &(&1["generation"] == 0))
+
+      {:ok, steps} = TurnStorage.steps(ctx, turn.id)
+
+      assert %{dispatch_state: "uncertain", error: "the worker died"} =
+               Enum.find(steps, &(&1.id == c1.id))
+
+      assert %{dispatch_state: "dispatched", cancel_requested_at: %DateTime{}} =
+               Enum.find(steps, &(&1.id == c2.id))
+
+      assert %{dispatch_state: "closed", outcome: "skipped"} = Enum.find(steps, &(&1.id == c3.id))
+
+      # The root and its attempt left running with the turn.
+      assert execution(root.execution.id).status == "paused"
+      assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, root.attempt.attempt)
+
+      assert TurnStorage.unacknowledged_episode?(ctx, turn.id)
+      assert TurnStorage.restricted?(ctx, turn.id)
+
+      # A sibling settled after the boundary is covered already: a mark, no second row.
+      assert {:ok, _} =
+               TurnStorage.mark_step_uncertain(ctx, c2.id, "cancelled", %{
+                 fence: paused.fence,
+                 generation: 0
+               })
+
+      rows = Conversations.messages(ctx, conv.id)
+      assert [_] = Enum.filter(rows, &(&1.kind == "turn_aborted"))
+
+      # The sender's next line past the boundary acknowledges it.
+      {:ok, _} =
+        TurnStorage.accept_message(ctx, conv.id, %{
+          message: %{author: ctx.user_id, content: "go on"},
+          steer_turn_id: turn.id
+        })
+
+      refute TurnStorage.unacknowledged_episode?(ctx, turn.id)
+      assert TurnStorage.restricted?(ctx, turn.id)
+      assert TurnStorage.steer_pending?(ctx, turn.id)
+    end
+
+    test "a running turn a dead runner left with an uncovered uncertainty is set down paused, its attempt retired",
+         %{ctx: ctx, conv: conv} do
+      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+      {turn, root} = start!(ctx, turn)
+      [c1, c2] = dispatched!(ctx, turn, ["c1", "c2"], 2)
+
+      # A mark alone, as a legacy row or a sibling's, with no covering row.
+      {:ok, _} =
+        TurnStorage.mark_step_uncertain(ctx, c1.id, "lost", %{fence: turn.fence, generation: 0})
+
+      assert TurnStorage.unacknowledged_episode?(ctx, turn.id)
+
+      # The sweeper lapsed the root attempt in the meantime.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^root.attempt.attempt),
+          set: [state: "lapsed", outcome: "uncertain", running_since: nil]
+        )
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Execution, where: e.id == ^root.execution.id),
+          set: [status: "failed"]
+        )
+
+      assert {:ok, paused} = TurnStorage.pause_recovered(ctx, turn.id, %{content: "restarted"})
+      assert paused.status == "paused" and paused.paused_reason == "uncertain"
+      assert paused.attempt != root.attempt.attempt and paused.fence != turn.fence
+      assert paused.recovery_attempts == turn.recovery_attempts
+      assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, paused.attempt)
+      assert execution(root.execution.id).status == "paused"
+
+      {:ok, steps} = TurnStorage.steps(ctx, turn.id)
+      assert %{dispatch_state: "uncertain"} = Enum.find(steps, &(&1.id == c2.id))
+      [row] = Enum.filter(Conversations.messages(ctx, conv.id), &(&1.kind == "turn_aborted"))
+      assert paused.window_upto_seq == row.seq
+
+      covered =
+        row |> Conversations.payload() |> Map.fetch!("covers") |> Enum.map(& &1["step_id"])
+
+      assert Enum.sort(covered) == Enum.sort([c1.id, c2.id])
+
+      # Resumable: the successor attempt is the paused owner.
+      assert {:ok, %{status: "running"}} =
+               TurnStorage.resume(ctx, turn.id, %{fence: paused.fence})
     end
   end
 end

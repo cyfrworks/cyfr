@@ -47,6 +47,14 @@ defmodule Aqua.Ops do
     end
   end
 
+  @doc "Stop the supervised handler of the in-chain call named by `handle`, started or not."
+  @spec cancel_call(term()) :: :ok
+  def cancel_call(handle), do: Emissary.MCP.RunningTasks.cancel_handle(handle)
+
+  @doc "Forget a call's cancellation handle once the loop is done with it."
+  @spec release_call(term()) :: :ok
+  def release_call(handle), do: Emissary.MCP.RunningTasks.release_handle(handle)
+
   @doc """
   Whether `tool`/`action` is reviewed as safe to re-dispatch after an
   uncertain recovery (`recovery: :replay_safe`); false for an unknown

@@ -408,7 +408,7 @@ defmodule Emissary.MCP.ExternalProvider do
            }}
 
         {:error, reason} ->
-          {"failed", %{error_message: if(is_binary(reason), do: reason, else: inspect(reason))}}
+          {"failed", %{error_message: Cyfr.Ops.Error.render(reason) || inspect(reason)}}
       end
 
     _ =

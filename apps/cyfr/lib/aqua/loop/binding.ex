@@ -249,6 +249,7 @@ defmodule Aqua.Loop.Binding do
         conversation_id: Map.get(dispatch, :conversation_id)
       },
       charge: Map.get(dispatch, :charge),
+      cancel_handle: Map.get(dispatch, :cancel_handle),
       runner: :supervised,
       guest_fn: :spawn
     )

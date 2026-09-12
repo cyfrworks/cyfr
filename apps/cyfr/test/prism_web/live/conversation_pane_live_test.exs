@@ -238,4 +238,28 @@ defmodule PrismWeb.ConversationPaneLiveTest do
     refute html =~ ~r/\bagent\b/
     refute html =~ "A.Q.U.A."
   end
+
+  test "a turn stopped on an unknown outcome shows so until it goes on", %{
+    conn: conn,
+    room: room,
+    conv: conv,
+    user: user
+  } do
+    pane = room_pane(conn, room, conv)
+    send(pane.pid, {:conversation, conv.id, {:turn_starting, user.user_id}})
+    assert render(pane) =~ "Thinking"
+
+    send(pane.pid, {:conversation, conv.id, {:turn_paused, "trn_x", :uncertain}})
+    html = render(pane)
+    assert html =~ "Stopped: a tool"
+    assert html =~ "Your next message continues this turn"
+    refute html =~ "Thinking"
+    assert has_element?(pane, ~s(button[phx-click="stop"]))
+
+    send(pane.pid, {:conversation, conv.id, {:turn_starting, user.user_id}})
+    refute render(pane) =~ "Stopped: a tool"
+
+    send(pane.pid, {:conversation, conv.id, {:turn_finished}})
+    refute has_element?(pane, ~s(button[phx-click="stop"]))
+  end
 end

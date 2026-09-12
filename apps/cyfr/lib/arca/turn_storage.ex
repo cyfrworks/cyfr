@@ -456,6 +456,279 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  @aborted_content "a call's outcome is unknown; tools may have partially executed"
+
+  @doc """
+  Stop a root turn on a call whose outcome is unknown, in one transaction:
+  the step `:step_id` at `:generation` is marked `uncertain` with
+  `:reason`; a running turn, its root attempt and its root execution
+  leave `running` together (a turn paused around a launch keeps its
+  released root); every other dispatched step is cancel-marked, so a
+  sibling not yet admitted cannot admit; every proposed step is skipped;
+  a `turn_aborted` row is appended whose payload `covers` names every
+  step that was dispatched or uncertain at that moment; the turn is
+  `paused` with reason `uncertain` and its boundary moved to that row.
+  `:fence` is required. Answers the turn and the aborted row.
+  """
+  @spec pause_uncertain(Context.t(), String.t(), map()) ::
+          {:ok, %{turn: Turn.t(), aborted: Message.t()}} | {:error, term()}
+  def pause_uncertain(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pause_uncertain", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      with_seq_retry(fn ->
+        Arca.Repo.transaction(fn ->
+          turn = turn!(athanor_id, turn_id)
+          require_fence!(turn, attrs)
+          if turn.parent_turn_id, do: Arca.Repo.rollback(:clone)
+          now = DateTime.utc_now()
+          step = step!(athanor_id, Map.fetch!(attrs, :step_id))
+          if step.turn_id != turn.id, do: Arca.Repo.rollback(:step_not_found)
+
+          mark_uncertain!(
+            athanor_id,
+            turn,
+            step,
+            Map.fetch!(attrs, :generation),
+            Map.get(attrs, :reason)
+          )
+
+          ran =
+            case turn do
+              %Turn{status: "running"} ->
+                ran = Arca.ExecutionAttempts.pause!(athanor_id, turn.attempt) || 0
+                execution_status!(athanor_id, turn.root_execution_id, "running", "paused")
+                ran
+
+              %Turn{status: "paused", paused_reason: "launch"} ->
+                0
+
+              _ ->
+                Arca.Repo.rollback(:not_open)
+            end
+
+          content = Map.get(attrs, :content, @aborted_content)
+          cancel_dispatched!(athanor_id, turn, step.id, now)
+          _skipped = skip_proposed!(ctx, athanor_id, turn, content)
+          aborted = aborted_row!(ctx, athanor_id, turn, content)
+
+          {1, _} =
+            from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+            |> Arca.Repo.update_all(
+              set: [
+                status: "paused",
+                paused_at: now,
+                paused_reason: "uncertain",
+                launch_step_id: nil,
+                window_upto_seq: aborted.seq,
+                active_ms: turn.active_ms + ran
+              ]
+            )
+
+          turn = turn!(athanor_id, turn_id)
+          event!(athanor_id, turn, "turn.paused", nil, %{"reason" => "uncertain"})
+          %{turn: turn, aborted: aborted}
+        end)
+      end)
+    end)
+  end
+
+  @doc """
+  A running turn a dead runner left holding an unacknowledged
+  uncertainty is set down as paused `uncertain`, resumable: the
+  predecessor attempt is retired with its running interval bounded by
+  its lease (as a takeover does) and a successor is opened already
+  paused, without counting a recovery; every dispatched step is marked
+  `uncertain`, every proposed step skipped, and — when any of them is
+  not yet covered — a covering `turn_aborted` row appended and the
+  boundary moved to it. Answers the turn.
+  """
+  @spec pause_recovered(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def pause_recovered(%Context{} = ctx, turn_id, attrs \\ %{}) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pause_recovered", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      with_seq_retry(fn ->
+        Arca.Repo.transaction(fn ->
+          turn = turn!(athanor_id, turn_id)
+          if turn.status != "running", do: Arca.Repo.rollback(:not_running)
+          if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
+          now = DateTime.utc_now()
+
+          %{attempt: successor, ran_ms: ran} =
+            Arca.ExecutionAttempts.takeover!(athanor_id, turn.root_execution_id,
+              runner_id: Cyfr.Boot.id(),
+              lease_until: Arca.ExecutionAttempts.lease_until()
+            )
+
+          _ = Arca.ExecutionAttempts.pause!(athanor_id, successor.attempt)
+
+          execution_status!(
+            athanor_id,
+            turn.root_execution_id,
+            ["running", "paused", "failed"],
+            "paused"
+          )
+
+          content = Map.get(attrs, :content, @aborted_content)
+
+          dispatched =
+            Arca.Repo.all(
+              from(s in TurnStep,
+                where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
+                where: s.dispatch_state == "dispatched"
+              )
+            )
+
+          Enum.each(dispatched, &mark_uncertain!(athanor_id, turn, &1, &1.generation, content))
+          _skipped = skip_proposed!(ctx, athanor_id, turn, content)
+
+          window =
+            if dispatched != [] or uncovered_uncertain(athanor_id, turn) != [],
+              do: aborted_row!(ctx, athanor_id, turn, content).seq,
+              else: turn.window_upto_seq
+
+          {1, _} =
+            from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+            |> Arca.Repo.update_all(
+              set: [
+                status: "paused",
+                attempt: successor.attempt,
+                fence: new_fence(),
+                runner_id: Cyfr.Boot.id(),
+                paused_at: now,
+                paused_reason: "uncertain",
+                launch_step_id: nil,
+                window_upto_seq: window,
+                active_ms: turn.active_ms + ran
+              ]
+            )
+
+          turn = turn!(athanor_id, turn_id)
+          event!(athanor_id, turn, "turn.paused", nil, %{"reason" => "uncertain"})
+          turn
+        end)
+      end)
+    end)
+  end
+
+  @doc """
+  Whether the turn holds an uncertainty nobody has acknowledged: an
+  `uncertain` step no `turn_aborted` row covers, or a covering row with
+  no later row from the turn's sender. A covered, acknowledged
+  uncertainty is a restricted continuation, not an open episode.
+  """
+  @spec unacknowledged_episode?(Context.t(), String.t()) :: boolean() | {:error, term()}
+  def unacknowledged_episode?(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.unacknowledged_episode?", fn ->
+      athanor_id = Context.athanor!(ctx)
+      turn = turn!(athanor_id, turn_id)
+
+      uncovered_uncertain(athanor_id, turn) != [] or
+        Enum.any?(covering_rows(athanor_id, turn), fn row ->
+          not Arca.Repo.exists?(
+            from(m in Message,
+              where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
+              where: m.author == ^turn.requested_by and m.seq > ^row.seq
+            )
+          )
+        end)
+    end)
+  end
+
+  @doc "Whether any step of the turn is `uncertain`: the continuation runs replay-safe reads only."
+  @spec restricted?(Context.t(), String.t()) :: boolean() | {:error, term()}
+  def restricted?(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.restricted?", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.exists?(
+        from(s in TurnStep,
+          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
+          where: s.dispatch_state == "uncertain"
+        )
+      )
+    end)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp cancel_dispatched!(athanor_id, %Turn{} = turn, except_step_id, now) do
+    from(s in TurnStep,
+      where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+      where: s.dispatch_state == "dispatched" and is_nil(s.cancel_requested_at),
+      where: s.id != ^except_step_id
+    )
+    |> Arca.Repo.update_all(set: [cancel_requested_at: now])
+  end
+
+  # The covering aborted row: every step dispatched or uncertain now.
+  # arca:db-raise-ok inside the caller's transaction
+  defp aborted_row!(ctx, athanor_id, %Turn{} = turn, content) do
+    covers =
+      Arca.Repo.all(
+        from(s in TurnStep,
+          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+          where: s.dispatch_state in ["dispatched", "uncertain"],
+          order_by: [asc: s.seq],
+          select: %{"step_id" => s.id, "generation" => s.generation}
+        )
+      )
+
+    conv = conversation!(athanor_id, turn.conversation_id)
+
+    Arca.ConversationStorage.insert_message!(ctx, conv, %{
+      author: Message.system_author(),
+      kind: "turn_aborted",
+      content: content,
+      payload: %{"covers" => covers},
+      turn_id: turn.id,
+      execution_id: turn.root_execution_id
+    })
+  end
+
+  defp covering_rows(athanor_id, %Turn{} = turn) do
+    from(m in Message,
+      where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
+      where: m.kind == "turn_aborted",
+      order_by: [asc: m.seq]
+    )
+    |> Arca.Repo.all()
+    |> Enum.map(fn row ->
+      covers =
+        row
+        |> Arca.ConversationStorage.payload()
+        |> Map.get("covers", [])
+        |> Enum.map(&{&1["step_id"], &1["generation"]})
+
+      %{seq: row.seq, covers: covers}
+    end)
+    |> Enum.reject(&(&1.covers == []))
+  end
+
+  defp uncovered_uncertain(athanor_id, %Turn{} = turn) do
+    covered =
+      athanor_id
+      |> covering_rows(turn)
+      |> Enum.flat_map(& &1.covers)
+      |> MapSet.new()
+
+    from(s in TurnStep,
+      where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+      where: s.dispatch_state == "uncertain",
+      select: {s.id, s.generation}
+    )
+    |> Arca.Repo.all()
+    |> Enum.reject(&MapSet.member?(covered, &1))
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp require_fence!(%Turn{} = turn, attrs) do
+    case Map.get(attrs, :fence) do
+      nil -> Arca.Repo.rollback(:no_fence)
+      _ -> check_fence!(turn, attrs)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Steps
   # ---------------------------------------------------------------------------
@@ -645,36 +918,48 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "Mark a dispatched step whose effect cannot be known `uncertain`."
-  @spec mark_step_uncertain(Context.t(), String.t(), String.t() | nil) ::
+  @doc """
+  Mark a dispatched step as `uncertain`: its effect may have happened and
+  its result is not known. `attrs`: `:fence` (the turn's, required) and
+  `:generation` (the step's, required), so a superseded runner or a stale
+  generation marks nothing. Answers `{:error, :not_dispatched}` for a
+  step in any other state. Event `step.uncertain`.
+  """
+  @spec mark_step_uncertain(Context.t(), String.t(), String.t() | nil, map()) ::
           {:ok, TurnStep.t()} | {:error, term()}
-  def mark_step_uncertain(%Context{} = ctx, step_id, reason \\ nil) do
+  def mark_step_uncertain(%Context{} = ctx, step_id, reason, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.mark_step_uncertain", fn ->
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
         step = step!(athanor_id, step_id)
         turn = turn!(athanor_id, step.turn_id)
-
-        {count, _} =
-          from(s in TurnStep,
-            where: s.athanor_id == ^athanor_id and s.id == ^step_id,
-            where: s.dispatch_state == "dispatched"
-          )
-          |> Arca.Repo.update_all(
-            set: [
-              dispatch_state: "uncertain",
-              outcome: "uncertain",
-              error: reason,
-              ended_at: DateTime.utc_now()
-            ]
-          )
-
-        if count != 1, do: Arca.Repo.rollback(:not_dispatched)
-        event!(athanor_id, turn, "step.uncertain", step_id, %{"reason" => reason})
+        require_fence!(turn, attrs)
+        mark_uncertain!(athanor_id, turn, step, Map.fetch!(attrs, :generation), reason)
         step!(athanor_id, step_id)
       end)
     end)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp mark_uncertain!(athanor_id, %Turn{} = turn, %TurnStep{} = step, generation, reason) do
+    {count, _} =
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.id == ^step.id,
+        where: s.dispatch_state == "dispatched" and s.generation == ^generation
+      )
+      |> Arca.Repo.update_all(
+        set: [
+          dispatch_state: "uncertain",
+          outcome: "uncertain",
+          error: reason,
+          ended_at: DateTime.utc_now()
+        ]
+      )
+
+    if count != 1, do: Arca.Repo.rollback(:not_dispatched)
+    event!(athanor_id, turn, "step.uncertain", step.id, %{"reason" => reason})
+    :ok
   end
 
   @doc """
@@ -692,42 +977,44 @@ defmodule Arca.TurnStorage do
         Arca.Repo.transaction(fn ->
           turn = turn!(athanor_id, turn_id)
           check_fence!(turn, attrs)
-
-          steps =
-            Arca.Repo.all(
-              from(s in TurnStep,
-                where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
-                where: s.dispatch_state == "proposed",
-                order_by: [asc: s.seq]
-              )
-            )
-
-          Enum.map(steps, fn step ->
-            if step.approval_id do
-              from(a in Approval,
-                where: a.athanor_id == ^athanor_id and a.id == ^step.approval_id,
-                where: a.status == "pending"
-              )
-              |> Arca.Repo.update_all(
-                set: [status: "invalidated", decided_at: DateTime.utc_now()]
-              )
-
-              from(m in Message,
-                where: m.athanor_id == ^athanor_id and m.approval_id == ^step.approval_id,
-                where: m.status == "pending"
-              )
-              |> Arca.Repo.update_all(set: [status: "invalidated"])
-            end
-
-            %{step: closed} =
-              close_step!(ctx, athanor_id, turn, step, "skipped", %{
-                result: %{content: reason, payload: %{"skipped" => true}}
-              })
-
-            closed
-          end)
+          skip_proposed!(ctx, athanor_id, turn, reason)
         end)
       end)
+    end)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp skip_proposed!(ctx, athanor_id, %Turn{} = turn, reason) do
+    steps =
+      Arca.Repo.all(
+        from(s in TurnStep,
+          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+          where: s.dispatch_state == "proposed",
+          order_by: [asc: s.seq]
+        )
+      )
+
+    Enum.map(steps, fn step ->
+      if step.approval_id do
+        from(a in Approval,
+          where: a.athanor_id == ^athanor_id and a.id == ^step.approval_id,
+          where: a.status == "pending"
+        )
+        |> Arca.Repo.update_all(set: [status: "invalidated", decided_at: DateTime.utc_now()])
+
+        from(m in Message,
+          where: m.athanor_id == ^athanor_id and m.approval_id == ^step.approval_id,
+          where: m.status == "pending"
+        )
+        |> Arca.Repo.update_all(set: [status: "invalidated"])
+      end
+
+      %{step: closed} =
+        close_step!(ctx, athanor_id, turn, step, "skipped", %{
+          result: %{content: reason, payload: %{"skipped" => true}}
+        })
+
+      closed
     end)
   end
 

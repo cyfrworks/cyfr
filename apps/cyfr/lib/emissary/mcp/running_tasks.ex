@@ -36,6 +36,10 @@ defmodule Emissary.MCP.RunningTasks do
 
   use GenServer
   @table __MODULE__
+  @handles Module.concat(__MODULE__, Handles)
+
+  @typedoc "A caller-owned name for one in-chain call, keyed alone: the caller need not know the request id."
+  @type handle :: term()
 
   # ============================================================================
   # Public API
@@ -99,6 +103,59 @@ defmodule Emissary.MCP.RunningTasks do
     end
   end
 
+  @doc """
+  Claim `handle` before the task it names starts: `:ok`, or `:cancelled`
+  when the caller already cancelled it, in which case the handler must
+  not run.
+  """
+  @spec claim(handle()) :: :ok | :cancelled
+  def claim(handle) do
+    case :ets.lookup(@handles, handle) do
+      [{_, :cancelled}] -> :cancelled
+      _ -> if :ets.insert_new(@handles, {handle, :pending}), do: :ok, else: :ok
+    end
+  end
+
+  @doc """
+  Register the task doing the work for `handle`, from inside that task
+  before its handler runs: `:cancelled` when the caller cancelled it in
+  between, and the task exits without running the handler.
+  """
+  @spec register_handle(handle(), pid()) :: :ok | :cancelled
+  def register_handle(handle, pid) when is_pid(pid) do
+    case :ets.lookup(@handles, handle) do
+      [{_, :cancelled}] ->
+        :cancelled
+
+      _ ->
+        :ets.insert(@handles, {handle, pid})
+        :ok
+    end
+  end
+
+  @doc """
+  Cancel the work named by `handle`, whether it has started or not: a
+  registered task is killed, a pending or unclaimed one is refused when
+  it registers or claims. Nothing else under the same request is touched.
+  """
+  @spec cancel_handle(handle()) :: :ok
+  def cancel_handle(handle) do
+    case :ets.lookup(@handles, handle) do
+      [{_, pid}] when is_pid(pid) -> Process.exit(pid, :cancelled)
+      _ -> :ok
+    end
+
+    :ets.insert(@handles, {handle, :cancelled})
+    :ok
+  end
+
+  @doc "Forget `handle` once its caller is done with it."
+  @spec release_handle(handle()) :: :ok
+  def release_handle(handle) do
+    :ets.delete(@handles, handle)
+    :ok
+  end
+
   @doc false
   # The tasks currently registered for a request — for tests and diagnostics.
   @spec pids(String.t()) :: [pid()]
@@ -125,6 +182,10 @@ defmodule Emissary.MCP.RunningTasks do
         read_concurrency: true,
         write_concurrency: true
       ])
+    end
+
+    if :ets.whereis(@handles) == :undefined do
+      :ets.new(@handles, [:named_table, :public, :set, read_concurrency: true])
     end
 
     # monitors: %{monitor_ref => {request_id, pid}}
@@ -185,6 +246,7 @@ defmodule Emissary.MCP.RunningTasks do
   def terminate(_reason, state) do
     Enum.each(state.monitors, fn {ref, _} -> Process.demonitor(ref, [:flush]) end)
     if :ets.whereis(@table) != :undefined, do: :ets.delete(@table)
+    if :ets.whereis(@handles) != :undefined, do: :ets.delete(@handles)
     :ok
   end
 

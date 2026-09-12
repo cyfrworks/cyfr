@@ -15,6 +15,7 @@ defmodule Aqua.LoopTest do
   use ExUnit.Case, async: false
 
   import Cyfr.Test.Wait
+  import Ecto.Query, only: [from: 2]
 
   alias Aqua.{Approvals, Tape}
   alias Arca.ConversationStorage, as: Conversations
@@ -300,30 +301,139 @@ defmodule Aqua.LoopTest do
     assert {:ok, %{status: "approved"}} = Tape.approval(ctx, approval.id)
   end
 
-  test "a policy refusal is the call's own result, and a dead worker leaves an uncertain step", %{
-    ctx: ctx,
-    conv: conv
-  } do
+  test "a policy refusal is the call's own result; a dead worker stops the turn, and the sender's next line continues it with reads only",
+       %{ctx: ctx, conv: conv} do
+    before = roots()
     turn = accept!(ctx, conv, "@aqua do things")
-    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.http"], script: []})
+
+    start_supervised!(
+      {ScriptedExecution,
+       ref: [@model, "catalyst:local.http", "catalyst:local.files"], script: []}
+    )
 
     ScriptedExecution.script([
       calls([
         {"c1", "component", %{"action" => "delete", "name" => "x"}},
         {"c2", "http", %{"action" => "get", "url" => "https://example.test/x"}}
       ]),
-      {:crash, :before_response},
-      reply("moving on")
+      {:crash, :before_response}
     ])
 
-    assert :completed = Task.await(run(ctx, turn), 60_000)
+    assert {:paused, :uncertain} = Task.await(run(ctx, turn), 60_000)
+
+    assert {:ok, %{status: "paused", paused_reason: "uncertain"} = paused} =
+             Tape.turn(ctx, turn.id)
+
+    assert roots() == before
+
     {:ok, steps} = Tape.steps(ctx, turn)
 
     assert %{outcome: "denied", dispatch_state: "closed"} =
              Enum.find(steps, &(&1.tool == "component"))
 
     assert %{dispatch_state: "uncertain", outcome: "uncertain"} =
-             Enum.find(steps, &(&1.action == "get"))
+             get = Enum.find(steps, &(&1.action == "get"))
+
+    [row] = Enum.filter(Conversations.messages(ctx, conv.id), &(&1.kind == "turn_aborted"))
+    assert %{"covers" => [%{"step_id" => step_id}]} = Conversations.payload(row)
+    assert step_id == get.id
+    assert paused.window_upto_seq == row.seq
+
+    # The sender's line past the stop continues the turn: a read runs, a
+    # write is refused until a new turn starts.
+    {:ok, _} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "carry on, carefully"},
+        steer_turn_id: turn.id
+      })
+
+    ScriptedExecution.script([
+      calls([
+        {"c3", "files", %{"action" => "list", "path" => "data"}},
+        {"c4", "files", %{"action" => "write", "path" => "data/x", "content" => "y"}}
+      ]),
+      %{"entries" => []},
+      reply("read only, then")
+    ])
+
+    assert :completed =
+             Task.await(
+               Task.async(fn ->
+                 Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+               end),
+               60_000
+             )
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert %{action: "list", outcome: "ok"} = Enum.find(steps, &(&1.action == "list"))
+
+    assert %{action: "write", outcome: "denied"} =
+             write = Enum.find(steps, &(&1.action == "write"))
+
+    assert {:ok, %{content: content}} = Tape.message(ctx, write.result_message_id)
+    assert content =~ "outcome is unknown"
+    assert roots() == before
+  end
+
+  test "a role's unknown outcome stops the soul", %{ctx: ctx, conv: conv} do
+    turn = accept!(ctx, conv, "@aqua fetch it")
+    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.http"], script: []})
+
+    ScriptedExecution.script([
+      calls([{"r1", "web", %{"task" => "read the page"}}]),
+      # The clone's own round, and the hand that dies under it.
+      calls([{"w1", "http", %{"action" => "get", "url" => "https://example.test/x"}}]),
+      {:crash, :before_response}
+    ])
+
+    assert {:paused, :uncertain} = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{kind: "clone", dispatch_state: "uncertain"} =
+             clone_step = Enum.find(steps, &(&1.kind == "clone"))
+
+    [clone] = Arca.Repo.all(from(t in Arca.Schemas.Turn, where: t.parent_turn_id == ^turn.id))
+    assert clone.status == "uncertain"
+    {:ok, clone_steps} = Tape.steps(ctx, clone)
+
+    assert %{action: "get", dispatch_state: "uncertain"} =
+             Enum.find(clone_steps, &(&1.action == "get"))
+
+    [row] =
+      Enum.filter(
+        Conversations.messages(ctx, conv.id),
+        &(&1.kind == "turn_aborted" and &1.turn_id == turn.id)
+      )
+
+    assert %{"covers" => [%{"step_id" => covered}]} = Conversations.payload(row)
+    assert covered == clone_step.id
+  end
+
+  test "the first unknown outcome stops the group; what still runs is cancelled and covered", %{
+    ctx: ctx,
+    conv: conv
+  } do
+    turn = accept!(ctx, conv, "@aqua fetch both")
+    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.http"], script: []})
+
+    ScriptedExecution.script([
+      calls([
+        {"c1", "http", %{"action" => "get", "url" => "https://example.test/a"}},
+        {"c2", "http", %{"action" => "get", "url" => "https://example.test/b"}}
+      ]),
+      :hang,
+      {:crash, :before_response}
+    ])
+
+    assert {:paused, :uncertain} = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    gets = Enum.filter(steps, &(&1.action == "get"))
+    assert length(gets) == 2
+    assert Enum.all?(gets, &(&1.dispatch_state == "uncertain"))
+
+    [row] = Enum.filter(Conversations.messages(ctx, conv.id), &(&1.kind == "turn_aborted"))
+    covered = row |> Conversations.payload() |> Map.fetch!("covers") |> Enum.map(& &1["step_id"])
+    assert Enum.sort(covered) == Enum.sort(Enum.map(gets, & &1.id))
   end
 
   test "a rate limit is retried and an authentication refusal ends the turn asking for setup", %{

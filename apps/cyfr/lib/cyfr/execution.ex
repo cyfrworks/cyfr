@@ -145,7 +145,13 @@ defmodule Cyfr.Execution do
   def claim_turn_root(ctx, agent_ref, opts \\ []),
     do: call(:claim_turn_root, [ctx, agent_ref, opts])
 
-  @doc "Pause the turn root: keeper stopped, rows flipped, slot released (`:turn_id`, `:fence`, `:reason`, `:launch_step_id`, `:claim`)."
+  @doc """
+  Pause the turn root: keeper stopped, rows flipped, slot released
+  (`:turn_id`, `:fence`, `:reason`, `:launch_step_id`, `:claim`). With
+  `:uncertain` (`%{step_id, generation, reason, content}`) the pause is
+  the uncertain boundary: the step's mark, the covering aborted row and
+  the pause in one transaction; the answer carries the `aborted` row.
+  """
   @spec pause_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def pause_turn_root(ctx, execution_id, opts),
     do: call(:pause_turn_root, [ctx, execution_id, opts])

@@ -30,20 +30,44 @@ defmodule Aqua.Loop.Policy do
   @doc """
   The decision for `call` under `policy`. `opts`: `:consented?` (a
   function of a reference), `:touched` (a `MapSet` of references this
-  turn wrote to).
+  turn wrote to), `:restricted?` (the turn holds a call whose outcome is
+  unknown: only a replay-safe read runs, whatever the policy says).
   """
   @spec decide(Call.t(), map(), keyword()) :: decision()
-  def decide(%Call{kind: :ui}, _policy, _opts), do: :auto
+  def decide(%Call{} = call, policy, opts) do
+    if Keyword.get(opts, :restricted?, false) and not replay_safe?(call),
+      do:
+        {:deny,
+         "#{key(call)} may not run: an earlier call's outcome is unknown, and until a new turn " <>
+           "starts only replay-safe reads run"},
+      else: decide_open(call, policy, opts)
+  end
 
-  def decide(%Call{kind: :clone, target: role}, policy, _opts) do
+  @doc """
+  Whether `call` is reviewed as safe to run again after an uncertain
+  outcome (`recovery: :replay_safe` on its action): a hand's read or a
+  catalog read so declared; nothing else.
+  """
+  @spec replay_safe?(Call.t()) :: boolean()
+  def replay_safe?(%Call{kind: :hand, tool: tool, action: action}),
+    do: get_in(Aqua.Hands.catalog(), [tool, :actions, action, :recovery]) == :replay_safe
+
+  def replay_safe?(%Call{kind: :catalog, tool: tool, action: action}),
+    do: Aqua.Ops.replay_safe?(tool, action)
+
+  def replay_safe?(%Call{}), do: false
+
+  defp decide_open(%Call{kind: :ui}, _policy, _opts), do: :auto
+
+  defp decide_open(%Call{kind: :clone, target: role}, policy, _opts) do
     if Map.get(policy, "#{role}.*") == "auto",
       do: :auto,
       else: {:deny, "the soul may not clone into #{role}: its policy does not allow it"}
   end
 
-  def decide(%Call{kind: :external}, _policy, _opts), do: :ask
+  defp decide_open(%Call{kind: :external}, _policy, _opts), do: :ask
 
-  def decide(%Call{kind: :launch, target: reference} = call, policy, opts) do
+  defp decide_open(%Call{kind: :launch, target: reference} = call, policy, opts) do
     case launch_rule(reference, opts) do
       {:refuse, text} -> {:refuse, text}
       :card -> if Map.get(policy, key(call)) == "deny", do: deny(call), else: :ask
@@ -51,7 +75,7 @@ defmodule Aqua.Loop.Policy do
     end
   end
 
-  def decide(%Call{} = call, policy, _opts), do: by_key(call, policy)
+  defp decide_open(%Call{} = call, policy, _opts), do: by_key(call, policy)
 
   defp by_key(call, policy) do
     case Map.get(policy, key(call)) do

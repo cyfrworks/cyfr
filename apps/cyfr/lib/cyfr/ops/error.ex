@@ -41,6 +41,9 @@ defmodule Cyfr.Ops.Error do
           | :message_too_long
           | :client_id_reused
           | :message_id_reused
+          | {:uncertain, message :: String.t()}
+          | {:result_lost, message :: String.t()}
+          | {:not_recorded, message :: String.t()}
 
   @doc "Whether a term is this vocabulary — the renderers' dispatch test."
   @spec reason?(term()) :: boolean()
@@ -66,6 +69,12 @@ defmodule Cyfr.Ops.Error do
   def reason?(:message_id_reused), do: true
   def reason?(:execution_unavailable), do: true
   def reason?(:message_too_long), do: true
+  # An effect that may have happened with no result to show for it; one
+  # that happened whose result could not be kept; one whose record of
+  # ending could not be written.
+  def reason?({:uncertain, message}) when is_binary(message), do: true
+  def reason?({:result_lost, message}) when is_binary(message), do: true
+  def reason?({:not_recorded, message}) when is_binary(message), do: true
   def reason?(_), do: false
 
   @doc """
@@ -123,6 +132,9 @@ defmodule Cyfr.Ops.Error do
     do: "That client id already names a different send — offer the same send, or a new client id"
 
   def message(:message_id_reused), do: "That message id already names another message"
+  def message({:uncertain, message}), do: message
+  def message({:result_lost, message}), do: message
+  def message({:not_recorded, message}), do: message
 
   @doc """
   The client-safe sentence for ANY refusal a tool can produce, or `nil` when

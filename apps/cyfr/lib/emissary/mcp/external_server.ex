@@ -326,7 +326,7 @@ defmodule Emissary.MCP.ExternalServer do
         Process.demonitor(caller_ref, [:flush])
 
         if reason != :normal,
-          do: GenServer.reply(from, {:error, "External call did not complete"})
+          do: GenServer.reply(from, {:error, {:uncertain, "External call did not complete"}})
 
         {:noreply, %{state | in_flight: Map.delete(state.in_flight, pid)}}
 
@@ -672,10 +672,11 @@ defmodule Emissary.MCP.ExternalServer do
             {:error, reason}
 
           # Transport/connection failure — log detail internally, surface a
-          # generic message to the caller.
+          # generic message to the caller. Whether the request reached the
+          # server is not known from here.
           {:error, reason} ->
             Logger.debug("[ExternalServer] request to #{state.name} failed: #{inspect(reason)}")
-            {:error, "Request failed"}
+            {:error, {:uncertain, "Request failed"}}
         end
 
       {:error, _reason} ->

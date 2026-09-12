@@ -199,4 +199,46 @@ defmodule Emissary.MCP.RunningTasksTest do
       await_running(was)
     end
   end
+
+  describe "a handle" do
+    test "cancels its own task and nothing else under the request" do
+      request_id = "req_#{System.unique_integer([:positive])}"
+      handle = {:turn, System.unique_integer([:positive])}
+      sibling = forever()
+      RunningTasks.register(request_id, sibling)
+
+      assert :ok = RunningTasks.claim(handle)
+
+      task =
+        Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
+          :ok = RunningTasks.register_handle(handle, self())
+          sleep_forever()
+        end)
+
+      RunningTasks.register(request_id, task)
+      ref = Process.monitor(task.pid)
+      Process.sleep(20)
+
+      assert :ok = RunningTasks.cancel_handle(handle)
+      assert_receive {:DOWN, ^ref, :process, _, :cancelled}, 1_000
+      assert Process.alive?(sibling.pid)
+      Task.shutdown(sibling, :brutal_kill)
+      RunningTasks.release_handle(handle)
+    end
+
+    test "cancelled before it is claimed, or between the claim and the registration, it never runs" do
+      early = {:turn, System.unique_integer([:positive])}
+      assert :ok = RunningTasks.cancel_handle(early)
+      assert :cancelled = RunningTasks.claim(early)
+      RunningTasks.release_handle(early)
+
+      late = {:turn, System.unique_integer([:positive])}
+      assert :ok = RunningTasks.claim(late)
+      assert :ok = RunningTasks.cancel_handle(late)
+      assert :cancelled = RunningTasks.register_handle(late, self())
+      RunningTasks.release_handle(late)
+      assert :ok = RunningTasks.claim(late)
+      RunningTasks.release_handle(late)
+    end
+  end
 end
