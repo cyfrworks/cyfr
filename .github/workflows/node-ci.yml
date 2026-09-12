@@ -121,8 +121,17 @@ jobs:
           curl -fsS http://127.0.0.1:8001/health
           # The privilege drop is load-bearing: the bridge spawns shell
           # commands by design and must not do so as root.
-          uid=$(docker exec bridge-ci id -u)
-          [ "$uid" != "0" ] || { echo "bridge is running as root"; exit 1; }
+          #
+          # Assert the uid of the server process itself. `docker exec ... id -u`
+          # answers for a NEW process, which starts as the image's default user
+          # — root, because the entrypoint takes ownership of the /data bind
+          # mount before dropping to node, so the image declares no USER. And
+          # PID 1 is the server only under a plain `docker run`: compose puts
+          # docker-init there (`init: true`).
+          uid=$(docker exec bridge-ci sh -c 'for d in /proc/[0-9]*; do [ "$d" = "/proc/$$" ] && continue; { tr "\0" " " < "$d/cmdline" | grep -q server.mjs; } 2>/dev/null || continue; grep -m1 "^Uid:" "$d/status" | cut -f2; exit 0; done; exit 1' || true)
+          [ -n "$uid" ] || { echo "no server.mjs process in the bridge container"; exit 1; }
+          [ "$uid" != "0" ] || { echo "the bridge server is running as root"; exit 1; }
+          echo "bridge server runs as uid $uid"
           docker rm -f bridge-ci
 
       - name: Scan the image
