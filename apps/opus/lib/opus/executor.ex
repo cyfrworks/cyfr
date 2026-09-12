@@ -162,6 +162,9 @@ defmodule Opus.Executor do
       # The class the execution's payloads are kept under; a turn's own
       # dispatches name `chat_step`, everything else derives its own.
       retention_class: opts[:retention_class],
+      # What the payload store keeps as the input when the sent input
+      # carries transient content the caller excludes from retention.
+      retained_input: opts[:retained_input],
       # The schedule a scheduled root runs for.
       schedule_id: opts[:schedule_id]
     ]

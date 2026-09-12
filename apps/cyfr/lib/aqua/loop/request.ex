@@ -532,6 +532,34 @@ defmodule Aqua.Loop.Request do
     |> Enum.reverse()
   end
 
+  @excerpt_prefix "## Read from the room\n\n"
+
+  @doc """
+  The request without the room excerpt `attach/3` placed last: the form
+  the payload store keeps of a request that carried the transient read.
+  The block is the last content block of the last message, and is
+  removed only when it carries the excerpt's own heading; a message left
+  empty goes with it. A request without one is answered unchanged.
+  """
+  @spec without_excerpt(map()) :: map()
+  def without_excerpt(%{"messages" => messages} = request) when is_list(messages) do
+    with %{"content" => content} = last when is_list(content) <- List.last(messages),
+         %{"type" => "text", "text" => @excerpt_prefix <> _} <- List.last(content) do
+      rest = Enum.drop(content, -1)
+
+      messages =
+        if rest == [],
+          do: Enum.drop(messages, -1),
+          else: List.replace_at(messages, -1, %{last | "content" => rest})
+
+      %{request | "messages" => messages}
+    else
+      _ -> request
+    end
+  end
+
+  def without_excerpt(request), do: request
+
   defp attach(messages, _what, nil), do: strip_ids(messages)
   defp attach(messages, _what, []), do: strip_ids(messages)
 
@@ -548,7 +576,7 @@ defmodule Aqua.Loop.Request do
   end
 
   defp attach(messages, :excerpt, excerpt) when is_binary(excerpt) do
-    block = %{"type" => "text", "text" => "## Read from the room\n\n" <> excerpt}
+    block = %{"type" => "text", "text" => @excerpt_prefix <> excerpt}
 
     case List.last(messages) do
       %{"role" => "user"} = last ->

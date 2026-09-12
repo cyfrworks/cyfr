@@ -351,7 +351,7 @@ defmodule Aqua.Loop do
           })
       end
 
-      ask_model(%{planned | excerpt_sent?: true}, step, request, 0)
+      ask_model(%{planned | excerpt_sent?: true}, step, request, retained(request, excerpt), 0)
     else
       {:error, :superseded} -> {:halt, :cancelled, state}
       {:error, reason} -> {:halt, {:failed, reason}, state}
@@ -406,8 +406,8 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp ask_model(%State{} = state, step, request, retries) do
-    case model_call(state, step, request) do
+  defp ask_model(%State{} = state, step, request, retained, retries) do
+    case model_call(state, step, request, retained) do
       {:ok, data} ->
         on_response(state, step, data)
 
@@ -417,7 +417,7 @@ defmodule Aqua.Loop do
         Process.sleep(Enum.at(@retry_delays_ms, retries))
 
         case open_model_step(state, "chat") do
-          {:ok, again} -> ask_model(state, again, request, retries + 1)
+          {:ok, again} -> ask_model(state, again, request, retained, retries + 1)
           {:error, reason} -> {:halt, {:failed, reason}, state}
         end
 
@@ -446,8 +446,9 @@ defmodule Aqua.Loop do
   # The catalyst runs as a child of the root, in a worker: the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
   # worker's death.
-  defp model_call(%State{spec: spec} = state, step, request) do
+  defp model_call(%State{spec: spec} = state, step, request, retained) do
     input = %{"operation" => "chat", "params" => request}
+    retained_input = retained && %{"operation" => "chat", "params" => retained}
     guest = guest(state)
     turn = state.turn
 
@@ -462,6 +463,7 @@ defmodule Aqua.Loop do
           parent_reference: Compendium.AgentSource.ref(turn.orchestrator),
           declared_needs: [],
           retention_class: "chat_step",
+          retained_input: retained_input,
           charge: Binding.charge(step, turn),
           guest_fn: :spawn
         )
@@ -1390,7 +1392,7 @@ defmodule Aqua.Loop do
           )
 
         with {:ok, step} <- open_model_step(state, "compaction"),
-             {:ok, data} <- model_call(state, step, request),
+             {:ok, data} <- model_call(state, step, request, nil),
              summary =
                data["content"]
                |> List.wrap()
@@ -1531,6 +1533,12 @@ defmodule Aqua.Loop do
       nil -> {:exit, :timeout}
     end
   end
+
+  # The request the store keeps: the one sent, less the room excerpt the
+  # builder placed last — sent to the model, recorded as excluded on the
+  # step, never retained.
+  defp retained(_request, nil), do: nil
+  defp retained(request, _excerpt), do: Request.without_excerpt(request)
 
   defp digest(request) do
     case Sanctum.JCS.hash(request) do

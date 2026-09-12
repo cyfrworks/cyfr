@@ -68,7 +68,8 @@ defmodule Opus.ExecutionRecord do
           activation_digest: String.t() | nil,
           activation_graph: String.t() | nil,
           profile_id: String.t() | nil,
-          retention_class: String.t()
+          retention_class: String.t(),
+          retained_input: map() | nil
         }
 
   defstruct [
@@ -110,7 +111,8 @@ defmodule Opus.ExecutionRecord do
     # (`Cyfr.Retention.Payloads` and its siblings): `api`, `webhook`,
     # `schedule`, `system`, or `chat_step` for a turn's own dispatches.
     # Not a column — the payload rows carry it.
-    :retention_class
+    :retention_class,
+    :retained_input
   ]
 
   @doc """
@@ -123,6 +125,9 @@ defmodule Opus.ExecutionRecord do
   - `:parent_execution_id` - Parent formula execution ID for sub-invocations.
   - `:root_execution_id` - The chain's root execution ID. A root stamps
     itself, so every row in a chain carries the same value.
+  - `:retained_input` - The map kept as the input payload in place of
+    `input`, when the sent input carries transient content; the row's
+    hash and envelope still describe `input`
   - `:retention_class` - The class the execution's payloads are kept
     under; derived from the caller when absent (`webhook` for a webhook
     identity, `system` for the server's own context, else `api`).
@@ -165,7 +170,8 @@ defmodule Opus.ExecutionRecord do
       turn_id: Keyword.get(opts, :turn_id),
       schedule_id: Keyword.get(opts, :schedule_id),
       reservation: Keyword.get(opts, :reservation),
-      retention_class: Keyword.get(opts, :retention_class) || default_retention_class(ctx)
+      retention_class: Keyword.get(opts, :retention_class) || default_retention_class(ctx),
+      retained_input: Keyword.get(opts, :retained_input)
     }
   end
 
@@ -283,15 +289,16 @@ defmodule Opus.ExecutionRecord do
   The row keeps an input envelope — the reference, digest, sizes,
   top-level keys and attachment digests — and the input itself is the
   payload store's, staged first and committed by the admission
-  transaction under the record's retention class: an input that cannot
-  be kept is `{:error, {:payload_not_retained, reason}}` and nothing is
-  admitted.
+  transaction under the record's retention class — the retained form
+  when the record carries one, else the input as sent: an input that
+  cannot be kept is `{:error, {:payload_not_retained, reason}}` and
+  nothing is admitted.
   """
   @spec write_started(t(), keyword()) :: :ok | {:error, term()}
   def write_started(%__MODULE__{} = record, opts \\ []) do
     ctx = record_to_ctx(record)
 
-    case stage(ctx, record, "input", encode_json(record.input || %{})) do
+    case stage(ctx, record, "input", encode_json(record.retained_input || record.input || %{})) do
       {:ok, staged} ->
         case admit(record, opts, [staged]) do
           :ok ->

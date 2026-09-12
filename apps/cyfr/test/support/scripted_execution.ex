@@ -163,6 +163,7 @@ defmodule Cyfr.Test.ScriptedExecution do
     id = Keyword.get(opts, :execution_id) || Cyfr.UUID7.execution_id()
     attempt = Arca.ExecutionAttempts.generate_id()
     started_at = DateTime.utc_now()
+    retained = Keyword.get(opts, :retained_input) || input
 
     attrs = %{
       id: id,
@@ -173,13 +174,24 @@ defmodule Cyfr.Test.ScriptedExecution do
       athanor_id: ctx.athanor_id,
       component_type: "catalyst",
       started_at: started_at,
-      input: Jason.encode!(input),
+      input: Jason.encode!(retained),
       parent_execution_id: Keyword.get(opts, :parent_execution_id),
       root_execution_id: Keyword.get(opts, :root_execution_id) || id,
       kind: "component"
     }
 
-    admission = [attempt: attempt] ++ barrier_opts(decision.authority, opts)
+    # The engine stages the retained form of the input with admission;
+    # the sent form is what `calls/0` answers.
+    {:ok, staged} =
+      Arca.ExecutionPayloads.stage(
+        ctx,
+        id,
+        "input",
+        Jason.encode!(retained),
+        Keyword.get(opts, :retention_class) || "api"
+      )
+
+    admission = [attempt: attempt, payloads: [staged]] ++ barrier_opts(decision.authority, opts)
 
     with {:ok, _} <- Arca.Execution.admit(attrs, admission) do
       case slot().acquire(:child, ctx.athanor_id, 30_000, id) do

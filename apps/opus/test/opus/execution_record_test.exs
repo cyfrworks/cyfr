@@ -792,4 +792,23 @@ defmodule Opus.ExecutionRecordTest do
     @impl true
     def delete(_ctx, _segments), do: :ok
   end
+
+  describe "a retained input" do
+    test "is what the store keeps, while the row's hash and envelope describe the input sent",
+         %{ctx: ctx} do
+      sent = %{"operation" => "chat", "params" => %{"text" => "hello", "transient" => "ROOM"}}
+      kept = %{"operation" => "chat", "params" => %{"text" => "hello"}}
+
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", sent, retained_input: kept)
+      :ok = ExecutionRecord.write_started(record)
+
+      assert {:ok, _payload, bytes} = Arca.ExecutionPayloads.get(ctx, record.id, "input")
+      assert Jason.decode!(bytes) == kept
+
+      row = Arca.Repo.get(Arca.Execution, record.id)
+      assert row.input_hash == Arca.Execution.hash_input(sent)
+      assert %{"keys" => keys} = Jason.decode!(row.input)
+      assert "params" in keys
+    end
+  end
 end

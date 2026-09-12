@@ -375,6 +375,44 @@ defmodule Aqua.LoopTest do
     assert roots() == before
   end
 
+  test "the room excerpt reaches the model and never the retained input", %{ctx: ctx, conv: conv} do
+    # The room is read under the person's own seat.
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+
+    {:ok, room} = Conversations.create(ctx)
+
+    {:ok, _} =
+      Conversations.append(ctx, room.id, %{author: ctx.user_id, content: "ROOM-ONLY-LINE"})
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "@aqua what did they say?"},
+        turn: %{
+          orchestrator: "aqua",
+          requested_by: ctx.user_id,
+          options: %{"room" => %{"athanor_id" => ctx.athanor_id, "conversation_id" => room.id}}
+        }
+      })
+
+    script!([reply("They said hello.")])
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    assert %{execution_id: id, input: sent} =
+             Enum.find(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+
+    assert Jason.encode!(sent) =~ "ROOM-ONLY-LINE"
+
+    assert {:ok, %{retention_class: "chat_step"}, kept} =
+             Arca.ExecutionPayloads.get(ctx, id, "input")
+
+    refute kept =~ "ROOM-ONLY-LINE"
+    assert kept =~ "what did they say?"
+
+    {:ok, [%{kind: "model"} = step | _]} = Tape.steps(ctx, turn)
+    assert Jason.decode!(step.excluded) == ["room_excerpt"]
+  end
+
   test "a role's unknown outcome stops the soul", %{ctx: ctx, conv: conv} do
     turn = accept!(ctx, conv, "@aqua fetch it")
     start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.http"], script: []})

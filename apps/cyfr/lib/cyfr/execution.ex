@@ -124,7 +124,11 @@ defmodule Cyfr.Execution do
   formula host makes for a guest's `execution.run`, offered to the host
   itself so an approved hand call (`Aqua.Loop`)
   runs the wrapped catalyst under the card's pinned authority with the
-  card's execution as its lineage, never as a fresh root.
+  card's execution as its lineage, never as a fresh root. `opts` may
+  carry `:retained_input`: the map the payload store keeps as the
+  execution's input in place of `input`, for a request that carries
+  transient content (the room excerpt); the row's `input_hash` and
+  envelope still describe `input`, the bytes that were sent.
   """
   @spec run_child(Sanctum.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
           {:ok, map()} | {:error, term()}

@@ -219,4 +219,58 @@ defmodule Aqua.Loop.RequestTest do
 
     assert Request.build(model: "m", messages: [])["max_tokens"] == 16_384
   end
+
+  # The excerpt block is what `attach/3` places last; `without_excerpt/1`
+  # takes it back in both shapes and nothing else.
+  describe "without_excerpt/1" do
+    test "removes the trailing excerpt block, or the message it alone made" do
+      prefix = "## Read from the room\n\nthey said hi"
+
+      appended = %{
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "text", "text" => "hi"},
+              %{"type" => "text", "text" => prefix}
+            ]
+          }
+        ]
+      }
+
+      assert %{"messages" => [%{"content" => [%{"text" => "hi"}]}]} =
+               Aqua.Loop.Request.without_excerpt(appended)
+
+      alone = %{
+        "messages" => [
+          %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "ok"}]},
+          %{"role" => "user", "content" => [%{"type" => "text", "text" => prefix}]}
+        ]
+      }
+
+      assert %{"messages" => [%{"role" => "assistant"}]} =
+               Aqua.Loop.Request.without_excerpt(alone)
+
+      # A person's own line that happens to open that way is theirs.
+      theirs = %{
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "text", "text" => "## Read from the room\n\nmine"},
+              %{"type" => "text", "text" => "then"}
+            ]
+          }
+        ]
+      }
+
+      assert Aqua.Loop.Request.without_excerpt(theirs) == theirs
+
+      plain = %{
+        "messages" => [%{"role" => "user", "content" => [%{"type" => "text", "text" => "hi"}]}]
+      }
+
+      assert Aqua.Loop.Request.without_excerpt(plain) == plain
+    end
+  end
 end
