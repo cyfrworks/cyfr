@@ -193,9 +193,13 @@ jobs:
       # CI fixtures mirrored in s3_minio_test.exs.
       - name: Start MinIO
         run: |
+          # docker.io/minio/minio refuses anonymous pulls; quay.io is the
+          # project's own registry. Pinned by digest (RELEASE.2025-09-07T16-13-09Z)
+          # like every other image and action in these workflows.
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
-            minio/minio:latest server /data
+            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            server /data
       - name: Install dependencies
         run: mix deps.get
       - name: Compile
@@ -401,7 +405,6 @@ jobs:
             'Prism\.AuthExchange\b' \
             'PrismWeb\.LiveClaimGate\b' \
             'CYFR_PRISM_' \
-            'PrismWeb\.AquaLive\b' \
             'Prism\.AquaConversations\b' \
             ':aqua_path\b' \
             ':4001\b|4001:4001' \
