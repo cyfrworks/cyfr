@@ -219,7 +219,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # All file/blob I/O must use Arca.Storage unless a direct call is marked
-      # with `arca:bypass-ok=<A|B|C|D>` on its line or within four lines above it.
+      # with `arca:bypass-ok=<A|B|C|D|E>` on its line or within four lines above it.
       # This includes File.*, Path.wildcard, :file, :filelib, :erl_tar and :prim_file.
       # Arca.Storage documents the bypass groups. Scratch-only modules may use
       # `arca:bypass-ok=<X> — entire module`.
@@ -232,7 +232,7 @@ jobs:
               */arca/adapters/*) continue ;;
               apps/cyfr/lib/arca/storage.ex) continue ;;
             esac
-            if grep -qE 'arca:bypass-ok=[A-D] — entire module' "$f"; then continue; fi
+            if grep -qE 'arca:bypass-ok=[A-E] — entire module' "$f"; then continue; fi
             bad="$(awk '
               /arca:bypass-ok/ { ok = NR }
               /(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard|(^|[^A-Za-z0-9_]):(file|filelib|erl_tar|prim_file)\./ {
@@ -248,7 +248,7 @@ jobs:
             fi
           done < <(git ls-files 'apps/cyfr/lib/*.ex' 'apps/cyfr/lib/**/*.ex' 'apps/opus/lib/*.ex' 'apps/opus/lib/**/*.ex' 'apps/locus/lib/*.ex' 'apps/locus/lib/**/*.ex')
           if [ "$fail" -ne 0 ]; then
-            echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D>."
+            echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D|E>."
             exit 1
           fi
 
@@ -459,8 +459,10 @@ jobs:
             echo "::error::guides still describe a pre-unification layout"; echo "$docs_hits"; fail=1
           fi
           # Per-athanor storage diagrams must name physical tenant roots.
-          # The guest's logical data/ scope maps to physical guest/.
-          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(data|config|builds)/ ' -- README.md component-guide.md integration-guide.md tincture-guide.md || true)"
+          # The names below are not tenant roots. `data/` is no longer among
+          # them: the guest's scope and the athanor's root are one name now
+          # (Arca.Storage.tenant_roots/0).
+          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(config|builds)/ ' -- README.md component-guide.md integration-guide.md tincture-guide.md || true)"
           if [ -n "$phantom_hits" ]; then
             echo "::error::guide tree diagrams name a scope that is not a tenant root (see Arca.Storage.tenant_roots/0)"; echo "$phantom_hits"; fail=1
           fi

@@ -323,7 +323,7 @@ defmodule Opus.Telemetry do
   @doc """
   Emit `[:cyfr, :opus, :formula, :emit]` event when a formula pushes an intermediate event.
   """
-  @spec formula_emit(String.t(), non_neg_integer()) :: :ok
+  @spec formula_emit(String.t(), String.t()) :: :ok
   def formula_emit(execution_id, sequence) do
     :telemetry.execute(
       [:cyfr, :opus, :formula, :emit],

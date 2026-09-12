@@ -31,6 +31,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
 
     case args do
       ["--check"] ->
+        # arca:bypass-ok=E — the render's home is a tracked source file.
         if current?(File.read(path), rendered) do
           Mix.shell().info("#{@target} is current")
         else
@@ -38,6 +39,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
         end
 
       _ ->
+        # arca:bypass-ok=E
         File.mkdir_p!(Path.dirname(path))
         File.write!(path, rendered)
         gofmt(path)

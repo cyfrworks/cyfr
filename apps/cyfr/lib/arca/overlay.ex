@@ -336,7 +336,7 @@ defmodule Arca.Overlay do
   provisioning copies and a release offers. Install media that cannot be
   listed is a fault, never an empty bundle.
   """
-  @spec shipped_units(String.t()) :: {:ok, [Arca.Storage.path()]} | {:error, term()}
+  @spec shipped_units(String.t()) :: {:ok, [Arca.Storage.path()]}
   def shipped_units(root) when is_binary(root) do
     if root in Arca.Storage.overlay_roots() do
       with {:ok, seed_leaves} <- seed_list_recursive([root]) do

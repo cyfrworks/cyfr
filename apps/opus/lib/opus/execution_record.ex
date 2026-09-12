@@ -45,30 +45,42 @@ defmodule Opus.ExecutionRecord do
 
   alias Sanctum.Context
 
+  @typedoc """
+  A decoded JSON value. The `input`, `output` and `host_policy` columns hold
+  whatever the execution produced, and a component's result is not required
+  to be an object.
+  """
+  @type json :: map() | list() | String.t() | number() | boolean() | nil
+
   @type t :: %__MODULE__{
           id: String.t(),
           request_id: String.t() | nil,
           user_id: String.t(),
           athanor_id: String.t() | nil,
-          reference: String.t(),
+          reference: String.t() | nil,
           resolved_from: String.t() | nil,
-          component_type: Opus.ComponentType.t(),
+          component_type: Opus.ComponentType.t() | :agent,
           component_digest: String.t() | nil,
-          input: map(),
-          output: map() | nil,
-          status: :running | :paused | :completed | :failed | :cancelled,
-          started_at: DateTime.t(),
+          input: json(),
+          output: json(),
+          status: :running | :paused | :completed | :failed | :cancelled | :unknown,
+          started_at: DateTime.t() | nil,
           completed_at: DateTime.t() | nil,
           duration_ms: non_neg_integer() | nil,
           error: String.t() | nil,
-          host_policy: map() | nil,
+          host_policy: json(),
           parent_execution_id: String.t() | nil,
           root_execution_id: String.t() | nil,
           resolver_digest: String.t() | nil,
           activation_digest: String.t() | nil,
           activation_graph: String.t() | nil,
           profile_id: String.t() | nil,
-          retention_class: String.t(),
+          attempt: String.t() | nil,
+          kind: String.t() | nil,
+          turn_id: String.t() | nil,
+          schedule_id: String.t() | nil,
+          reservation: map() | nil,
+          retention_class: String.t() | nil,
           retained_input: map() | nil
         }
 
@@ -602,6 +614,7 @@ defmodule Opus.ExecutionRecord do
   # Private - Struct Conversion
   # ===========================================================================
 
+  @spec from_mcp_result(map()) :: t()
   defp from_mcp_result(result) when is_map(result) do
     %__MODULE__{
       id: result.id,
@@ -756,6 +769,7 @@ defmodule Opus.ExecutionRecord do
 
   # A read joins the retained bytes back onto the envelope the row keeps;
   # once retention has swept them, the envelope alone answers.
+  @spec hydrate_output(Context.t(), t()) :: t()
   defp hydrate_output(
          ctx,
          %__MODULE__{output: %{"envelope" => "v1", "output_hash" => _}} = record

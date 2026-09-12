@@ -28,6 +28,7 @@ defmodule Arca.CronSchedule do
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
 
+  @type t :: %__MODULE__{}
   schema "cron_schedules" do
     field :user_id, :string
     field :name, :string

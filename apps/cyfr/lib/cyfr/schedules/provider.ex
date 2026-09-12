@@ -464,8 +464,6 @@ defmodule Cyfr.Schedules.Provider do
     Enum.map_join(errors, "; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
   end
 
-  defp format_store_error(other, _), do: inspect(other)
-
   defp resolve_for_schedule(ctx, reference, label) do
     case Compendium.Resolver.resolve(ctx, reference) do
       {:ok, pinned, %{was_resolved: true}} ->

@@ -34,7 +34,8 @@ defmodule Aqua.Loop.Planner do
 
   @doc "The tokens a request may hold: the window less the output ceiling and the margin."
   @spec usable(map(), pos_integer()) :: pos_integer()
-  def usable(%{context_window: window}, max_tokens) when is_integer(window) do
+  def usable(%{context_window: window}, max_tokens)
+      when is_integer(window) and is_integer(max_tokens) do
     max(window - max_tokens - @margin_tokens, 1)
   end
 

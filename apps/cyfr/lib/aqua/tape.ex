@@ -475,7 +475,7 @@ defmodule Aqua.Tape do
 
   @doc "The newest rows of a conversation, for a viewer."
   @spec latest_messages(Context.t(), String.t(), pos_integer()) ::
-          {:ok, [row()]} | {:error, term()}
+          [row()] | {:error, term()}
   def latest_messages(%Context{} = ctx, conversation_id, n),
     do: Conversations.latest_messages(ctx, conversation_id, n)
 

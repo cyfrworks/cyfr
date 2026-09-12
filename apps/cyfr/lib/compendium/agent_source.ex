@@ -199,7 +199,7 @@ defmodule Compendium.AgentSource do
       publisher: @publisher,
       name: agent.name,
       version: "",
-      description: agent.description || "",
+      description: agent.description,
       manifest: manifest,
       digest: digest,
       release_digest: release_digest

@@ -27,6 +27,7 @@ defmodule Arca.Storage do
   | B | Pre-Arca bootstrap | Code runs before `Arca.Repo` / config is up; chicken-and-egg. | `Cyfr.Application.ensure_db_directory!`, `verify_db_writable!` |
   | C | Compile-time embedded resources | Module attribute `@external_resource` — not runtime I/O. | `@sdk_source`, `@component_guide`, `@wit_files_*` |
   | D | Local-only sandbox / OS toolchain / user-import boundary | Tar extraction tmp dirs, cargo build sandbox, user-supplied filesystem paths during publish. After validation, content rejoins Arca. | `Compendium.Registry.extract_and_store_tincture`, `Locus.Builder` |
+  | E | Repo-local code generation | The output is a source file under version control, never an athanor's tree; there is no tenant, adapter or context in reach. | `Mix.Tasks.Ops.Gen.Cli` |
 
   Any code that doesn't fit one of these groups must use `Arca` (which dispatches
   to the configured adapter via `Application.get_env(:cyfr, :storage_adapter, ...)`).

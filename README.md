@@ -134,7 +134,7 @@ your-project/
             ├── components/ # {type}s/{publisher}/{name}/{version}/
             │   ├── catalysts/   # Bundled: files, http, claude, openai, gemini, grok, openrouter
             │   ├── reagents/    # Your local reagents
-            │   ├── formulas/    # Bundled formulas: list-models, aqua
+            │   ├── formulas/    # Bundled formulas: list-models
             │   └── tinctures/   # Bundled example tinctures + your own
             ├── aqua/       # The athanor's own AQUA: the soul, its roles, its scrolls
             ├── conversations/  # Chat attachment files

@@ -107,7 +107,7 @@ defmodule Aqua.Approvals do
       with {:ok, athanor} <- Sanctum.Tenancy.Athanors.get(Context.athanor!(ctx)),
            %{"approvals" => %{"expiry_hours" => hours}} <-
              Sanctum.Tenancy.Athanors.settings(athanor),
-           true <- is_integer(hours) and hours > 0 do
+           hours when is_integer(hours) and hours > 0 <- hours do
         hours
       else
         _ -> nil
