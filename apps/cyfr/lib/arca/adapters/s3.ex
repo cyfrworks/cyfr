@@ -360,7 +360,12 @@ defmodule Arca.Adapters.S3 do
         url,
         base_headers,
         body,
-        []
+        # `encode_key/1` has already percent-encoded every segment, and
+        # S3 is the one service whose canonical URI is not encoded a second
+        # time (the library's own words). Left at its default, a key with a
+        # space, a plus or any non-ASCII character signed a path the server
+        # never saw and came back 403.
+        [{:uri_encode_path, false}]
       )
 
     headers = Enum.map(signed, fn {k, v} -> {to_string(k), to_string(v)} end)

@@ -154,7 +154,8 @@ defmodule Arca.Adapters.S3MinioTest do
         url,
         headers,
         "",
-        []
+        # S3 does not re-encode its canonical URI; see Arca.Adapters.S3.
+        [{:uri_encode_path, false}]
       )
 
     {:ok, %{status: status, body: body}} =
