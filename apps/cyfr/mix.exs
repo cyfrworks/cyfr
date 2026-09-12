@@ -90,7 +90,7 @@ defmodule Cyfr.App.MixProject do
       {:ueberauth_oidcc, "~> 0.4.2"},
       # Prism deps
       {:phoenix_html, "~> 4.2"},
-      {:phoenix_live_view, "~> 1.0"},
+      {:phoenix_live_view, "~> 1.1.33"},
       {:phoenix_live_reload, "~> 1.6", only: :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
       {:esbuild, "~> 0.9", runtime: Mix.env() == :dev},
