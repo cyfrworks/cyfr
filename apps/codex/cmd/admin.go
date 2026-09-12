@@ -6,6 +6,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
@@ -41,7 +42,7 @@ var adminListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Show the door",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "door", map[string]any{"action": "list"})
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{"action": ops.DoorList})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -70,7 +71,7 @@ var adminRequestsCmd = &cobra.Command{
 	Use:   "requests",
 	Short: "Pending invites for addresses the door does not know",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "door", map[string]any{"action": "requests"})
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{"action": ops.DoorRequests})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -100,8 +101,8 @@ var adminAllowCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
-		result, err := newClient().CallTool(cmd.Context(), "door", map[string]any{
-			"action": "allow", "value": args[0], "note": note,
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{
+			"action": ops.DoorAllow, "value": args[0], "note": note,
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -121,8 +122,8 @@ var adminDenyCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
-		result, err := newClient().CallTool(cmd.Context(), "door", map[string]any{
-			"action": "deny", "value": args[0], "note": note,
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{
+			"action": ops.DoorDeny, "value": args[0], "note": note,
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -141,7 +142,7 @@ var adminRemoveCmd = &cobra.Command{
 	Short: "Delete an entry",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "door", map[string]any{"action": "remove", "id": args[0]})
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{"action": ops.DoorRemove, "id": args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -168,8 +169,8 @@ var adminResolveCmd = &cobra.Command{
 		if allow {
 			decision = "allow"
 		}
-		result, err := newClient().CallTool(cmd.Context(), "door", map[string]any{
-			"action": "resolve", "id": args[0], "decision": decision,
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{
+			"action": ops.DoorResolve, "id": args[0], "decision": decision,
 		})
 		if err != nil {
 			return handleToolError(err)

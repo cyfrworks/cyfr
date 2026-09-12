@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"os"
 
 	"github.com/cyfr/codex/internal/output"
@@ -30,8 +31,8 @@ var statusCmd = &cobra.Command{
 		scope, _ := cmd.Flags().GetString("scope")
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "system", map[string]any{
-			"action": "status",
+		result, err := client.CallTool(cmd.Context(), ops.System, map[string]any{
+			"action": ops.SystemStatus,
 			"scope":  scope,
 		})
 		if err != nil {
@@ -71,8 +72,8 @@ var notifyCmd = &cobra.Command{
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "system", map[string]any{
-			"action": "notify",
+		result, err := client.CallTool(cmd.Context(), ops.System, map[string]any{
+			"action": ops.SystemNotify,
 			"event":  args[0],
 			"target": args[1],
 		})

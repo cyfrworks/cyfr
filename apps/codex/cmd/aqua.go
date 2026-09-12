@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -53,14 +54,14 @@ var aquaListCmd = &cobra.Command{
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "aqua", map[string]any{
-			"action": "list",
+		result, err := client.CallTool(cmd.Context(), ops.Aqua, map[string]any{
+			"action": ops.AquaList,
 		})
 		if err != nil {
 			return handleToolError(err)
 		}
-		scrolls, err := client.CallTool(cmd.Context(), "aqua", map[string]any{
-			"action": "skill_list",
+		scrolls, err := client.CallTool(cmd.Context(), ops.Aqua, map[string]any{
+			"action": ops.AquaSkillList,
 		})
 		result = withScrolls(result, scrolls, err)
 
@@ -95,8 +96,8 @@ var aquaGetCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "aqua", map[string]any{
-			"action": "get",
+		result, err := client.CallTool(cmd.Context(), ops.Aqua, map[string]any{
+			"action": ops.AquaGet,
 			"name":   name,
 		})
 		if err != nil {
@@ -123,8 +124,8 @@ var aquaStatusCmd = &cobra.Command{
   cyfr aqua status --json`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "aqua", map[string]any{
-			"action": "status",
+		result, err := newClient().CallTool(cmd.Context(), ops.Aqua, map[string]any{
+			"action": ops.AquaStatus,
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -171,7 +172,7 @@ var aquaResetCmd = &cobra.Command{
 		if all {
 			toolArgs["all"] = true
 		}
-		result, err := newClient().CallTool(cmd.Context(), "aqua", toolArgs)
+		result, err := newClient().CallTool(cmd.Context(), ops.Aqua, toolArgs)
 		if err != nil {
 			return handleToolError(err, "Reset failed")
 		}
@@ -205,8 +206,8 @@ var aquaSkillsListCmd = &cobra.Command{
 }
 
 func runAquaSkillsList(cmd *cobra.Command, args []string) error {
-	result, err := newClient().CallTool(cmd.Context(), "aqua", map[string]any{
-		"action": "skill_list",
+	result, err := newClient().CallTool(cmd.Context(), ops.Aqua, map[string]any{
+		"action": ops.AquaSkillList,
 	})
 	if err != nil {
 		return handleToolError(err)
@@ -239,8 +240,8 @@ var aquaSkillsGetCmd = &cobra.Command{
 			return err
 		}
 
-		result, err := newClient().CallTool(cmd.Context(), "aqua", map[string]any{
-			"action": "skill_get",
+		result, err := newClient().CallTool(cmd.Context(), ops.Aqua, map[string]any{
+			"action": ops.AquaSkillGet,
 			"name":   name,
 		})
 		if err != nil {

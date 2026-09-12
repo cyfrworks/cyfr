@@ -3,18 +3,20 @@
 
 defmodule Cyfr.Ops.LiteralDriftTest do
   @moduledoc """
-  Every operation a client spells as a literal exists in the catalog.
+  Every operation a client spells as a literal exists in the catalog, and
+  the CLI's generated table of names is the catalog's.
 
-  The CLI names the operations it calls as string pairs (`CallTool(ctx,
-  "webhook", map[string]any{"action": "get", …})`), and so does the one
-  library site that dispatches by name across an app boundary (the build
-  host registering a compiled component). Neither can compile against the
-  catalog, so this is the binding: a renamed or retired action fails here,
-  naming the file, before a person finds the dead command.
+  The CLI names the operations its built-in commands call through
+  `apps/codex/internal/ops/catalog_gen.go`, rendered by `mix ops.gen.cli`
+  from the catalog: a renamed or retired action fails `go build` there.
+  This test refuses a checked-in render that is stale, so the build sees
+  the catalog as it is. Argument names are not in the table — a command's
+  arguments are bound by its own test until the catalog declares them.
 
-  Only literal pairs are read — a call whose arguments are a variable is
-  bound by its own test. The catalog is the loaded one, so the run needs
-  every provider app.
+  The one library site that dispatches by name across an app boundary
+  (the build host registering a compiled component) still spells a
+  literal pair; that pair is checked against the catalog here. The catalog
+  is the loaded one, so the run needs every provider app.
   """
   use ExUnit.Case, async: false
 
@@ -46,7 +48,7 @@ defmodule Cyfr.Ops.LiteralDriftTest do
 
     pairs = go_pairs ++ ex_pairs
 
-    assert pairs != [],
+    assert ex_pairs != [],
            "no literal operation calls found — the regexes no longer match the sources"
 
     unknown = for {file, pair} <- pairs, not MapSet.member?(served, pair), do: "#{file}: #{pair}"
@@ -59,5 +61,22 @@ defmodule Cyfr.Ops.LiteralDriftTest do
 
            A renamed or retired action must take its callers with it.
            """
+  end
+
+  @generated "apps/codex/internal/ops/catalog_gen.go"
+
+  test "the CLI's generated table is the catalog's, and a moved catalog is seen" do
+    rendered = Mix.Tasks.Ops.Gen.Cli.render()
+    file = File.read(Path.join(@root, @generated))
+
+    assert Mix.Tasks.Ops.Gen.Cli.current?(file, rendered),
+           "#{@generated} is stale — run `mix ops.gen.cli` and commit the file"
+
+    # A catalog that lost an action, or the file that kept one, is drift.
+    {:ok, text} = file
+    [line | _] = Regex.run(~r/^\t[A-Z]\w+ += "[a-z_]+"$/m, text)
+    planted = String.replace(text, line <> "\n", "", global: false)
+    refute Mix.Tasks.Ops.Gen.Cli.current?({:ok, planted}, rendered)
+    refute Mix.Tasks.Ops.Gen.Cli.current?({:error, :enoent}, rendered)
   end
 end

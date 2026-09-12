@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -109,8 +110,8 @@ Header values can reference a stored vault entry with the vault: prefix.`,
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
-			"action": "create",
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
+			"action": ops.McpServersCreate,
 			"name":   name,
 			"config": config,
 		})
@@ -164,8 +165,8 @@ var mcpRemoveCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
-			"action": "delete",
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
+			"action": ops.McpServersDelete,
 			"name":   name,
 		})
 		if err != nil {
@@ -187,8 +188,8 @@ var mcpListCmd = &cobra.Command{
 	Example: "  cyfr mcp list",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
-			"action": "list",
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
+			"action": ops.McpServersList,
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -238,8 +239,8 @@ var mcpGetCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
-			"action": "get",
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
+			"action": ops.McpServersGet,
 			"name":   name,
 		})
 		if err != nil {
@@ -267,8 +268,8 @@ var mcpTestCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
-			"action": "test",
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
+			"action": ops.McpServersTest,
 			"name":   name,
 		})
 		if err != nil {
@@ -285,8 +286,8 @@ var mcpEnableCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
-			"action": "enable",
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
+			"action": ops.McpServersEnable,
 			"name":   args[0],
 		})
 		if err != nil {
@@ -308,8 +309,8 @@ var mcpDisableCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
-			"action": "disable",
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
+			"action": ops.McpServersDisable,
 			"name":   args[0],
 		})
 		if err != nil {
@@ -340,7 +341,7 @@ var mcpRefreshCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_servers", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, toolArgs)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -371,8 +372,8 @@ var mcpRefreshCmd = &cobra.Command{
 // labelling each with its status.
 func fetchServerOptions(ctx context.Context) ([]prompt.Option, error) {
 	client := newClient()
-	result, err := client.CallTool(ctx, "mcp_servers", map[string]any{
-		"action": "list",
+	result, err := client.CallTool(ctx, ops.McpServers, map[string]any{
+		"action": ops.McpServersList,
 	})
 	if err != nil {
 		return nil, err

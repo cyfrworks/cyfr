@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"os"
 	"strings"
 
@@ -136,7 +137,7 @@ Run without --name for an interactive form.`,
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "webhook", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, toolArgs)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -158,8 +159,8 @@ var webhookGetCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "webhook", map[string]any{
-			"action": "get",
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, map[string]any{
+			"action": ops.WebhookGet,
 			"name":   args[0],
 		})
 		if err != nil {
@@ -181,8 +182,8 @@ var webhookListCmd = &cobra.Command{
 	Example: "  cyfr webhook list",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "webhook", map[string]any{
-			"action": "list",
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, map[string]any{
+			"action": ops.WebhookList,
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -244,7 +245,7 @@ use 'cyfr webhook rotate' to replace it.`,
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "webhook", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, toolArgs)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -271,8 +272,8 @@ var webhookRevokeCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "webhook", map[string]any{
-			"action": "revoke",
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, map[string]any{
+			"action": ops.WebhookRevoke,
 			"name":   name,
 		})
 		if err != nil {
@@ -300,8 +301,8 @@ var webhookRotateCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "webhook", map[string]any{
-			"action": "rotate",
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, map[string]any{
+			"action": ops.WebhookRotate,
 			"name":   name,
 		})
 		if err != nil {

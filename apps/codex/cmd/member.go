@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
@@ -41,7 +42,7 @@ var memberListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the members",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "member", memberArgs(cmd, "list"))
+		result, err := newClient().CallTool(cmd.Context(), ops.Member, memberArgs(cmd, "list"))
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -72,7 +73,7 @@ var memberAddCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		payload := memberArgs(cmd, "add")
 		payload[memberKey(args[0])] = args[0]
-		result, err := newClient().CallTool(cmd.Context(), "member", payload)
+		result, err := newClient().CallTool(cmd.Context(), ops.Member, payload)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -92,7 +93,7 @@ var memberRemoveCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		payload := memberArgs(cmd, "remove")
 		payload[memberKey(args[0])] = args[0]
-		result, err := newClient().CallTool(cmd.Context(), "member", payload)
+		result, err := newClient().CallTool(cmd.Context(), ops.Member, payload)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -109,7 +110,7 @@ var memberLeaveCmd = &cobra.Command{
 	Use:   "leave",
 	Short: "Leave the group",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "member", memberArgs(cmd, "leave"))
+		result, err := newClient().CallTool(cmd.Context(), ops.Member, memberArgs(cmd, "leave"))
 		if err != nil {
 			return handleToolError(err)
 		}

@@ -6,6 +6,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -83,7 +84,7 @@ Reports appear in the admin UI. Categories:
 			toolArgs["target_namespace"] = namespace
 		}
 
-		result, err := client.CallTool(cmd.Context(), "registry", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Registry, toolArgs)
 		if err != nil {
 			return handleToolError(err, "Report failed")
 		}

@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
@@ -32,7 +33,7 @@ var listCmd = &cobra.Command{
 		if t, _ := cmd.Flags().GetString("type"); t != "" {
 			toolArgs["type"] = t
 		}
-		result, err := client.CallTool(cmd.Context(), "component", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Component, toolArgs)
 		if err != nil {
 			return handleToolError(err, "List failed")
 		}

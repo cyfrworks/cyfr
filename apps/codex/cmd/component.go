@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cyfr/codex/internal/mcp"
+	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
 	"github.com/cyfr/codex/internal/ref"
@@ -53,8 +54,8 @@ var searchCmd = &cobra.Command{
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
-			"action": "search",
+		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
+			"action": ops.ComponentSearch,
 			"query":  strings.Join(args, " "),
 		})
 		if err != nil {
@@ -223,7 +224,7 @@ var inspectCmd = &cobra.Command{
 		if includeReadme, _ := cmd.Flags().GetBool("readme"); includeReadme {
 			callArgs["include_readme"] = true
 		}
-		result, err := client.CallTool(cmd.Context(), "component", callArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Component, callArgs)
 		if err != nil {
 			return handleToolError(err, "Inspect failed")
 		}
@@ -261,8 +262,8 @@ var pullCmd = &cobra.Command{
 		}
 		progressID := randomHex(8)
 
-		result, err := client.CallToolWithProgress(cmd.Context(), "component", map[string]any{
-			"action":      "pull",
+		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, map[string]any{
+			"action":      ops.ComponentPull,
 			"reference":   normalized,
 			"progress_id": progressID,
 		}, progressPrinter())
@@ -311,7 +312,7 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		if registry, _ := cmd.Flags().GetString("registry"); registry != "" {
 			toolArgs["registry"] = registry
 		}
-		result, err := client.CallToolWithProgress(cmd.Context(), "component", toolArgs, progressPrinter())
+		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, toolArgs, progressPrinter())
 		if err != nil {
 			return handleToolError(err, "Push failed")
 		}
@@ -350,7 +351,7 @@ Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeSc
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "component", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Component, toolArgs)
 		if err != nil {
 			return handleToolError(err, "Scaffold failed")
 		}
@@ -413,7 +414,7 @@ Copies source code, manifest, and compiled artifact. Requires source code
 			toolArgs["version"] = version
 		}
 
-		result, err := client.CallTool(cmd.Context(), "component", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Component, toolArgs)
 		if err != nil {
 			return handleToolError(err, "Fork failed")
 		}
@@ -472,8 +473,8 @@ token for the component's namespace (i.e. you are the publisher).`,
 		}
 		reason, _ := cmd.Flags().GetString("reason")
 
-		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
-			"action":    "deprecate",
+		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
+			"action":    ops.ComponentDeprecate,
 			"reference": normalized,
 			"reason":    reason,
 		})
@@ -515,8 +516,8 @@ token for the component's namespace.`,
 		}
 		reason, _ := cmd.Flags().GetString("reason")
 
-		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
-			"action":    "yank",
+		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
+			"action":    ops.ComponentYank,
 			"reference": normalized,
 			"reason":    reason,
 		})
@@ -552,8 +553,8 @@ var registryDiscoverCmd = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
-			"action":   "discover",
+		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
+			"action":   ops.ComponentDiscover,
 			"registry": args[0],
 		})
 		if err != nil {

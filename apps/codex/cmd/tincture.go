@@ -6,6 +6,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"os"
 
 	"github.com/cyfr/codex/internal/output"
@@ -84,8 +85,8 @@ var tinctureVisibilityGetCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "tincture_visibility", map[string]any{
-			"action":    "get",
+		result, err := client.CallTool(cmd.Context(), ops.TinctureVisibility, map[string]any{
+			"action":    ops.TinctureVisibilityGet,
 			"publisher": publisher,
 			"name":      name,
 		})

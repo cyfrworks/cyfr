@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"os"
 
 	"github.com/cyfr/codex/internal/output"
@@ -30,15 +31,15 @@ fails.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		session, sessionErr := client.CallTool(cmd.Context(), "session", map[string]any{
-			"action": "whoami",
+		session, sessionErr := client.CallTool(cmd.Context(), ops.Session, map[string]any{
+			"action": ops.SessionWhoami,
 		})
 		if sessionErr != nil {
 			return handleToolError(sessionErr)
 		}
 
-		registry, registryErr := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action": "whoami",
+		registry, registryErr := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action": ops.RegistryWhoami,
 		})
 		// Don't abort on registry errors — the local identity is still useful.
 
