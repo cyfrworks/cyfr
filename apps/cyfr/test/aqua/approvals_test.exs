@@ -376,4 +376,32 @@ defmodule Aqua.ApprovalsTest do
     {:ok, _} = Users.deny(approver)
     assert {:error, {:approver_unavailable, :denied}} = Launch.dispatch(ctx, step)
   end
+
+  describe "ttl_seconds/1" do
+    test "is the estate's setting in hours, else the configured default, never a bad value" do
+      ctx = Sanctum.TestContext.local()
+      assert Approvals.ttl_seconds(ctx) == 24 * 3600
+
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+
+      {:ok, _} =
+        Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => 2}})
+
+      assert Approvals.ttl_seconds(ctx) == 7200
+
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+
+      {:ok, _} =
+        Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => "x"}})
+
+      assert Approvals.ttl_seconds(ctx) == 24 * 3600
+
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+
+      {:ok, _} =
+        Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => 0}})
+
+      assert Approvals.ttl_seconds(ctx) == 24 * 3600
+    end
+  end
 end

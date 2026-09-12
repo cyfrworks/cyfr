@@ -176,6 +176,11 @@ config :cyfr, :model_context_window_default, 128_000
 
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 
+# How long an approval card waits for a decision before it expires as a
+# denial the agent observes, in hours. An estate overrides it in its
+# settings under `approvals.expiry_hours`.
+config :cyfr, Aqua.Approvals, expiry_hours: 24
+
 # Default retention windows used by Cyfr.Retention sweeps.
 config :cyfr, Cyfr.Retention,
   # Newest N executions kept per athanor.

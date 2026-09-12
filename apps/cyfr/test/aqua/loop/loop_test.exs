@@ -413,6 +413,69 @@ defmodule Aqua.LoopTest do
     assert Jason.decode!(step.excluded) == ["room_excerpt"]
   end
 
+  test "the step cap counts every model step of the turn, across a pause and a retry", %{
+    ctx: ctx,
+    conv: conv
+  } do
+    turn = accept!(ctx, conv, "@aqua keep going")
+    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.files"], script: []})
+
+    # Two rounds, a retried third, then a card.
+    ScriptedExecution.script([
+      calls([{"c1", "files", %{"action" => "list", "path" => "data"}}]),
+      %{"entries" => []},
+      calls([{"c2", "files", %{"action" => "list", "path" => "data"}}]),
+      %{"entries" => []},
+      {:refuse, %{"type" => "rate_limited", "message" => "slow down"}},
+      calls([{"c3", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}])
+    ])
+
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    opened = Enum.count(steps, &(&1.kind == "model"))
+    assert opened == 4
+
+    # Resumed: reads until the cap, which counts what came before.
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, _} = Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
+
+    ScriptedExecution.script(
+      List.flatten(
+        for _ <- 1..40 do
+          [calls([{"cx", "files", %{"action" => "list", "path" => "data"}}]), %{"entries" => []}]
+        end
+      )
+    )
+
+    assert {:failed, :step_cap} =
+             Task.await(
+               Task.async(fn ->
+                 Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+               end),
+               120_000
+             )
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert Enum.count(steps, &(&1.kind == "model")) == 30
+  end
+
+  test "a card expires when the estate says, not after a day", %{ctx: ctx, conv: conv} do
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+
+    {:ok, _} =
+      Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => 1}})
+
+    turn = accept!(ctx, conv, "@aqua keep it")
+    script!([calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}])])
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    left = DateTime.diff(approval.expires_at, DateTime.utc_now(), :second)
+    assert left in 3500..3600
+  end
+
   test "a role's unknown outcome stops the soul", %{ctx: ctx, conv: conv} do
     turn = accept!(ctx, conv, "@aqua fetch it")
     start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.http"], script: []})

@@ -96,6 +96,33 @@ defmodule Aqua.Approvals do
   end
 
   @doc """
+  How long a card stays open, in seconds: the estate's
+  `settings["approvals"]["expiry_hours"]` (a positive integer, read
+  defensively — member-writable settings are not trusted to have a
+  shape), else `config :cyfr, Aqua.Approvals, expiry_hours:`.
+  """
+  @spec ttl_seconds(Context.t()) :: pos_integer()
+  def ttl_seconds(%Context{} = ctx) do
+    configured =
+      with {:ok, athanor} <- Sanctum.Tenancy.Athanors.get(Context.athanor!(ctx)),
+           %{"approvals" => %{"expiry_hours" => hours}} <-
+             Sanctum.Tenancy.Athanors.settings(athanor),
+           true <- is_integer(hours) and hours > 0 do
+        hours
+      else
+        _ -> nil
+      end
+
+    default =
+      case Keyword.get(Application.get_env(:cyfr, __MODULE__, []), :expiry_hours, 24) do
+        hours when is_integer(hours) and hours > 0 -> hours
+        _ -> 24
+      end
+
+    (configured || default) * 3600
+  end
+
+  @doc """
   Resolve every pending approval of the estate past its expiry as
   `expired`. Answers how many were settled.
   """

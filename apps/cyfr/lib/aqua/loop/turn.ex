@@ -41,6 +41,7 @@ defmodule Aqua.Loop.Turn do
     :system,
     :tools,
     :deadline_ms,
+    :approval_ttl_s,
     :options,
     :excerpt,
     :attachments,
@@ -100,6 +101,7 @@ defmodule Aqua.Loop.Turn do
             soul?: soul?
           ),
         deadline_ms: deadline_ms(authority),
+        approval_ttl_s: Aqua.Approvals.ttl_seconds(ctx),
         options: options,
         excerpt: if(Keyword.get(opts, :excerpt?, true), do: excerpt(ctx, options), else: nil),
         attachments: attachments(ctx, turn),

@@ -41,6 +41,7 @@ defmodule Aqua.Loop do
 
   defmodule State do
     @moduledoc false
+    @type t :: %__MODULE__{}
     defstruct [
       :spec,
       :claim,
@@ -339,9 +340,10 @@ defmodule Aqua.Loop do
     with {:ok, _drained} <- Tape.drain_steer(guest(state), state.turn),
          {:ok, rows} <- Tape.projection(guest(state), state.turn),
          {:ok, planned, rows} <- compact(state, rows),
-         {:ok, step} <- open_model_step(planned, "chat") do
+         first? = planned.steps == 0,
+         {:ok, step, planned} <- open_model_step(planned, "chat") do
       excerpt = if planned.excerpt_sent?, do: nil, else: planned.spec.excerpt
-      request = request(planned, rows, excerpt)
+      request = request(planned, rows, excerpt, first?)
 
       if excerpt do
         _ =
@@ -358,7 +360,9 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp request(%State{spec: spec} = state, rows, excerpt) do
+  # The turn's first request carries the sender's attachments; a later
+  # round reads them from the rows.
+  defp request(%State{spec: spec} = state, rows, excerpt, first?) do
     rows = Planner.prune(rows)
     authors = rows |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.reject(&agent_or_system?/1)
     multi? = spec.several_people? or length(authors) > 1
@@ -371,7 +375,7 @@ defmodule Aqua.Loop do
         names: names,
         multi_author?: multi?,
         excerpt: excerpt,
-        attachments: if(state.steps == 0, do: spec.attachments, else: [])
+        attachments: if(first?, do: spec.attachments, else: [])
       )
 
     Request.build(
@@ -393,6 +397,12 @@ defmodule Aqua.Loop do
 
   # The model step is dispatched before the call: a recovery finds it
   # without a response and never replays it.
+  # Every model step opened — a chat round, its retry, a compaction —
+  # counts against the turn's cap, before it opens; the count is the
+  # turn's, rebuilt from its rows on a continuation.
+  defp open_model_step(%State{steps: steps}, _action) when steps >= @max_steps,
+    do: {:error, :step_cap}
+
   defp open_model_step(%State{} = state, action) do
     with {:ok, step} <-
            Tape.record_model_intent(guest(state), state.turn, %{
@@ -401,8 +411,9 @@ defmodule Aqua.Loop do
              child_execution_id: Cyfr.UUID7.execution_id(),
              tool: state.spec.catalyst,
              action: action
-           }) do
-      Tape.mark_dispatched(guest(state), state.turn, step)
+           }),
+         {:ok, step} <- Tape.mark_dispatched(guest(state), state.turn, step) do
+      {:ok, step, %{state | steps: state.steps + 1}}
     end
   end
 
@@ -417,7 +428,7 @@ defmodule Aqua.Loop do
         Process.sleep(Enum.at(@retry_delays_ms, retries))
 
         case open_model_step(state, "chat") do
-          {:ok, again} -> ask_model(state, again, request, retained, retries + 1)
+          {:ok, again, state} -> ask_model(state, again, request, retained, retries + 1)
           {:error, reason} -> {:halt, {:failed, reason}, state}
         end
 
@@ -508,10 +519,7 @@ defmodule Aqua.Loop do
            tool_calls: tool_calls
          }) do
       {:ok, %{calls: recorded}} ->
-        state =
-          state
-          |> count_usage(usage)
-          |> Map.update!(:steps, &(&1 + 1))
+        state = count_usage(state, usage)
 
         items =
           Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
@@ -721,7 +729,7 @@ defmodule Aqua.Loop do
     case Tape.open_approval(guest(state), state.turn, step, %{
            id: intent["id"],
            proposal_digest: Policy.proposal_digest(intent),
-           expires_at: DateTime.add(DateTime.utc_now(), 24 * 3600, :second),
+           expires_at: DateTime.add(DateTime.utc_now(), state.spec.approval_ttl_s, :second),
            card: %{content: intent["title"], payload: %{"intent" => intent}}
          }) do
       {:ok, _} -> :ok
@@ -1312,7 +1320,11 @@ defmodule Aqua.Loop do
         end)
         |> Enum.reverse()
 
-      state = %{state | restricted?: open != [] or Tape.restricted?(guest, state.turn)}
+      state = %{
+        state
+        | restricted?: open != [] or Tape.restricted?(guest, state.turn),
+          steps: Enum.count(steps, &(&1.kind == "model"))
+      }
 
       cond do
         open != [] ->
@@ -1392,41 +1404,48 @@ defmodule Aqua.Loop do
             previous_summary: previous && previous.content
           )
 
-        with {:ok, step} <- open_model_step(state, "compaction"),
-             {:ok, data} <- model_call(state, step, request, nil),
-             summary =
-               data["content"]
-               |> List.wrap()
-               |> Enum.filter(&(&1["type"] == "text"))
-               |> Enum.map_join("", & &1["text"]),
-             {:ok, _} <-
-               Tape.record_response(guest(state), state.turn, step, %{
-                 text: nil,
-                 usage: data["usage"] || %{},
-                 stop_reason: data["stop_reason"],
-                 tool_calls: []
-               }),
-             {:ok, _} <-
-               Tape.append_compaction(guest(state), state.turn, %{
-                 summary: summary,
-                 first_kept_seq: boundary.first_kept_seq,
-                 summarized_through_seq: boundary.summarized_through_seq,
-                 step_id: step.id
-               }),
-             {:ok, projected} <- Tape.projection(guest(state), state.turn) do
-          {:ok, %{state | observed: nil, steps: state.steps + 1}, projected}
-        else
-          {:error, :superseded} ->
-            {:error, :superseded}
-
-          other ->
-            Logger.warning(
-              "[Aqua.Loop] compaction skipped for turn #{state.turn.id}: #{inspect(other)}"
-            )
-
-            {:ok, state, rows}
+        case open_model_step(state, "compaction") do
+          {:error, :step_cap} -> {:error, :step_cap}
+          {:error, reason} -> skip_compaction(state, rows, reason)
+          {:ok, step, state} -> summarize(state, rows, boundary, request, step)
         end
     end
+  end
+
+  defp summarize(%State{} = state, rows, boundary, request, step) do
+    with {:ok, data} <- model_call(state, step, request, nil),
+         summary =
+           data["content"]
+           |> List.wrap()
+           |> Enum.filter(&(&1["type"] == "text"))
+           |> Enum.map_join("", & &1["text"]),
+         {:ok, _} <-
+           Tape.record_response(guest(state), state.turn, step, %{
+             text: nil,
+             usage: data["usage"] || %{},
+             stop_reason: data["stop_reason"],
+             tool_calls: []
+           }),
+         {:ok, _} <-
+           Tape.append_compaction(guest(state), state.turn, %{
+             summary: summary,
+             first_kept_seq: boundary.first_kept_seq,
+             summarized_through_seq: boundary.summarized_through_seq,
+             step_id: step.id
+           }),
+         {:ok, projected} <- Tape.projection(guest(state), state.turn) do
+      {:ok, %{state | observed: nil}, projected}
+    else
+      {:error, :superseded} -> {:error, :superseded}
+      other -> skip_compaction(state, rows, other)
+    end
+  end
+
+  # A compaction that did not land leaves the rows as they were; the
+  # model step it opened stays counted.
+  defp skip_compaction(%State{} = state, rows, reason) do
+    Logger.warning("[Aqua.Loop] compaction skipped for turn #{state.turn.id}: #{inspect(reason)}")
+    {:ok, state, rows}
   end
 
   # ---------------------------------------------------------------------------
