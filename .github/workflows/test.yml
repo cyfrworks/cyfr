@@ -216,6 +216,10 @@ jobs:
       - name: Run the S3 integration suite
         working-directory: apps/cyfr
         run: mix test --only s3_integration
+      # What the server thought of the requests, when it refused them.
+      - name: MinIO logs
+        if: failure()
+        run: docker logs minio
 
   arca-seam:
     name: Arca single-seam (no untagged filesystem I/O)
@@ -421,16 +425,20 @@ jobs:
           done
           # Check athanor_id constraints in every migration. Only the baseline's
           # memberships and sessions columns may be nullable.
+          # `grep -c` exits 1 when the count is zero, and the job's shell is
+          # `bash -e`, so an unguarded count on a migration that adds no
+          # athanor_id column kills the job silently — which is what every
+          # check below this point had been dying behind.
           m=apps/cyfr/priv/repo/migrations/20260815000000_baseline.exs
-          nullable="$(grep -cE 'add :athanor_id' "$m")"
-          notnull="$(grep -cE 'add :athanor_id.*null: false' "$m")"
+          nullable="$(grep -cE 'add :athanor_id' "$m" || true)"
+          notnull="$(grep -cE 'add :athanor_id.*null: false' "$m" || true)"
           if [ "$((nullable - notnull))" -ne 2 ]; then
             echo "::error::exactly two nullable athanor_id columns are allowed (memberships, sessions); found $((nullable - notnull))"; fail=1
           fi
           for other in apps/cyfr/priv/repo/migrations/*.exs; do
             [ "$other" = "$m" ] && continue
-            n="$(grep -cE 'add :athanor_id' "$other")"
-            nn="$(grep -cE 'add :athanor_id.*null: false' "$other")"
+            n="$(grep -cE 'add :athanor_id' "$other" || true)"
+            nn="$(grep -cE 'add :athanor_id.*null: false' "$other" || true)"
             if [ "$n" -ne "$nn" ]; then
               echo "::error file=$other::athanor_id must be null: false outside the baseline (the two nullable fabrics are baseline-only)"; fail=1
             fi
@@ -438,7 +446,7 @@ jobs:
           if grep -nE 'add :athanor_id.*default:' apps/cyfr/priv/repo/migrations/*.exs; then
             echo "::error::athanor_id column with a default — a forgotten athanor must fail, never default into somebody's"; fail=1
           fi
-          if [ "$(grep -c 'COALESCE(athanor_id' "$m")" -ne 1 ]; then
+          if [ "$(grep -c 'COALESCE(athanor_id' "$m" || true)" -ne 1 ]; then
             echo "::error::expected exactly one COALESCE(athanor_id (the membership assignment index)"; fail=1
           fi
           # Runtime storage must stay under data/.

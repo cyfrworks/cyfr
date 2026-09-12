@@ -158,7 +158,7 @@ defmodule Arca.Adapters.S3MinioTest do
         []
       )
 
-    {:ok, %{status: status}} =
+    {:ok, %{status: status, body: body}} =
       Req.request(
         method: :put,
         url: url,
@@ -168,7 +168,10 @@ defmodule Arca.Adapters.S3MinioTest do
       )
 
     unless status in [200, 409] do
-      raise "could not create MinIO bucket #{@bucket}: HTTP #{status}"
+      # The body carries S3's error code, which is the whole diagnosis:
+      # SignatureDoesNotMatch, InvalidAccessKeyId and AccessDenied are all
+      # 403 and have nothing to do with each other.
+      raise "could not create MinIO bucket #{@bucket}: HTTP #{status} #{inspect(body)}"
     end
   end
 end
