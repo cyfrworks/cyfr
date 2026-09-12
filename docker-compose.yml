@@ -87,7 +87,9 @@ services:
     # Only cyfr can reach the builder: it sits on its own network, which
     # cyfr also joins; the bridge and caddy never see port 4100. The
     # network is not `internal` — cargo and npm need crates.io and the
-    # registry — so the isolation is who is attached, not egress.
+    # registry — so the isolation is who is attached, not egress. This is
+    # the container's only network, so listening on every interface is
+    # listening on it (CYFR_BUILDER_BIND is for a builder outside compose).
     networks:
       - builder
     # No /data mount, read-only root: the builder holds no tenant state —

@@ -45,6 +45,14 @@ defmodule Cyfr.StackShapeTest do
     assert services == ["builder", "caddy", "cyfr", "mcp-bridge"]
     refute compose =~ ~r/porta|4001|8080/
 
+    # The builder is attached to its own network and no other: what it
+    # listens on is that network, which is its isolation.
+    [_, builder_block | _] = Regex.split(~r/^  builder:\s*$/m, services_block)
+    [builder_block | _] = Regex.split(~r/^  [a-z]/m, builder_block)
+    [_, networks | _] = Regex.split(~r/^    networks:\s*$/m, builder_block)
+    [networks | _] = Regex.split(~r/^    [a-z]/m, networks)
+    assert Regex.scan(~r/^      - (\S+)/m, networks, capture: :all_but_first) == [["builder"]]
+
     # Runtime storage uses one data root.
     refute compose =~ ~r/^\s*- \.\/components:/m
   end

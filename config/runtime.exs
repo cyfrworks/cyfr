@@ -125,6 +125,10 @@ if config_env() != :test do
   config :cyfr, :builder_token, env_str.("CYFR_BUILDER_TOKEN", nil)
   config :cyfr, :builder_listen, env_bool.("CYFR_BUILDER_LISTEN", false)
   config :cyfr, :builder_port, env_int.("CYFR_BUILDER_PORT", 4100)
+  # The address the builder listens on. The compose builder container is
+  # attached to the builder network alone, so every interface there is
+  # that network; a builder run outside compose binds one address here.
+  config :cyfr, :builder_bind, env_str.("CYFR_BUILDER_BIND", "0.0.0.0")
 
   # Whether this server builds components at all — `build.compile` on every
   # surface. An appliance that only runs what it pulled turns it off, and
