@@ -247,10 +247,18 @@ defmodule Emissary.MCP.RequestLog do
   # The write-behind never fails the call either: inline (the test env)
   # it writes in the caller, and a caller with no connection of its own
   # loses the row, as it would have under the synchronous start.
+  #
+  # A store that goes away does not raise, it exits — `DBConnection` exits
+  # the caller when its connection dies, and under the test sandbox that
+  # happens whenever the owning process finishes first. `rescue` alone left
+  # that exit to travel into the call this is supposed to never fail.
   defp safe_enqueue(item) do
     Cyfr.RecordSink.enqueue(item)
   rescue
     e -> Logger.warning("[RequestLog] log row not queued: #{Exception.message(e)}")
+  catch
+    :exit, reason ->
+      Logger.warning("[RequestLog] log row not queued: store exited #{inspect(reason)}")
   end
 
   defp put_routed(data, %{routed_to: routed}) when not is_nil(routed),
@@ -277,6 +285,12 @@ defmodule Emissary.MCP.RequestLog do
     e ->
       Logger.error("[RequestLog] log_started raised for #{call_id}: #{Exception.message(e)}")
       :ok
+  catch
+    # "Always returns :ok" has to cover an exit too: a store whose
+    # connection dies exits its caller rather than raising.
+    :exit, reason ->
+      Logger.error("[RequestLog] log_started exited for #{call_id}: #{inspect(reason)}")
+      :ok
   end
 
   @doc """
@@ -289,6 +303,12 @@ defmodule Emissary.MCP.RequestLog do
     e ->
       Logger.error("[RequestLog] log_completed raised for #{call_id}: #{Exception.message(e)}")
       :ok
+  catch
+    # "Always returns :ok" has to cover an exit too: a store whose
+    # connection dies exits its caller rather than raising.
+    :exit, reason ->
+      Logger.error("[RequestLog] log_completed exited for #{call_id}: #{inspect(reason)}")
+      :ok
   end
 
   @doc """
@@ -300,6 +320,12 @@ defmodule Emissary.MCP.RequestLog do
   rescue
     e ->
       Logger.error("[RequestLog] log_failed raised for #{call_id}: #{Exception.message(e)}")
+      :ok
+  catch
+    # "Always returns :ok" has to cover an exit too: a store whose
+    # connection dies exits its caller rather than raising.
+    :exit, reason ->
+      Logger.error("[RequestLog] log_failed exited for #{call_id}: #{inspect(reason)}")
       :ok
   end
 
