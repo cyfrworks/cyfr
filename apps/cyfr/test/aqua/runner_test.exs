@@ -215,6 +215,108 @@ defmodule Aqua.RunnerTest do
     assert %{turn_id: ^first} = Enum.find(rows, &(&1.content == "@aqua also this"))
   end
 
+  test "the sender's line to another agent waits behind the running turn", %{
+    ctx: ctx,
+    conv: conv
+  } do
+    script!([{:probe, self()}, reply("first"), reply("second")])
+
+    {:ok, %{turn_id: first}} = Runner.send_message(ctx, conv.id, "@aqua go")
+    assert_receive {:scripted_probe, worker, _}, 30_000
+
+    assert {:ok, %{admitted: :turn, turn_id: second}} =
+             Runner.send_message(ctx, conv.id, "also this", orchestrator: "planner")
+
+    assert second != first
+    assert %{running: true, queued: 1} = Runner.state(conv.id, ctx.athanor_id)
+
+    send(worker, :continue)
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+
+    assert {:ok, %{status: "completed", orchestrator: "aqua"}} = Tape.turn(ctx, first)
+    assert {:ok, %{status: "completed", orchestrator: "planner"}} = Tape.turn(ctx, second)
+  end
+
+  test "a steer offered again is the same steer", %{ctx: ctx, conv: conv} do
+    script!([{:probe, self()}, reply("done")])
+
+    {:ok, %{turn_id: first}} = Runner.send_message(ctx, conv.id, "@aqua go")
+    assert_receive {:scripted_probe, worker, _}, 30_000
+
+    assert {:ok, %{admitted: :steer, turn_id: ^first, replayed: false, message_id: mid}} =
+             Runner.send_message(ctx, conv.id, "@aqua also this", client_id: "steer-1")
+
+    assert {:ok, %{admitted: :steer, turn_id: ^first, replayed: true, message_id: ^mid}} =
+             Runner.send_message(ctx, conv.id, "@aqua also this", client_id: "steer-1")
+
+    assert {:error, :client_id_reused} =
+             Runner.send_message(ctx, conv.id, "@aqua something else", client_id: "steer-1")
+
+    send(worker, :continue)
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+
+    assert [_] =
+             Enum.filter(Conversations.messages(ctx, conv.id), &(&1.content == "@aqua also this"))
+  end
+
+  test "the sender's line while the turn is paused on a card steers it, drained on resume", %{
+    ctx: ctx,
+    conv: conv
+  } do
+    script!([call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"})])
+
+    {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, conv.id, "@aqua keep it")
+    wait_until(fn -> match?({:ok, %{status: "paused"}}, Tape.turn(ctx, turn_id)) end, 60_000)
+
+    assert {:ok, %{admitted: :steer, turn_id: ^turn_id}} =
+             Runner.send_message(ctx, conv.id, "@aqua never mind")
+
+    assert %{running: false, paused: true, queued: 0} = Runner.state(conv.id, ctx.athanor_id)
+
+    {:ok, paused} = Tape.turn(ctx, turn_id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    ScriptedExecution.script([reply("never minded")])
+
+    assert {:ok, %{decision: "approved"}} =
+             Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+    assert_receive {:conversation, _, {:turn_finished}}, 60_000
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn_id)
+
+    # The steer rode the paused turn and displaced the card's step.
+    {:ok, steps} = Tape.steps(ctx, paused)
+    assert %{action: "keep", outcome: "skipped"} = Enum.find(steps, &(&1.action == "keep"))
+
+    assert %{turn_id: ^turn_id} =
+             Enum.find(Conversations.messages(ctx, conv.id), &(&1.content == "@aqua never mind"))
+  end
+
+  test "a runner that starts over a paused row knows it before the first send", %{
+    ctx: ctx,
+    conv: conv
+  } do
+    script!([call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"})])
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "@aqua keep it"},
+        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+      })
+
+    assert {:paused, :approval} =
+             Task.await(Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end), 60_000)
+
+    assert nil == Runner.whereis(conv.id)
+    other = second_member(ctx)
+
+    assert {:ok, %{admitted: :turn, turn_id: second}} =
+             Runner.send_message(other, conv.id, "@aqua me too")
+
+    assert second != turn.id
+    assert %{running: false, paused: true, queued: 1} = Runner.state(conv.id, ctx.athanor_id)
+  end
+
   test "the opener offered again while its turn runs is the same send, not a steer", %{
     ctx: ctx,
     conv: conv

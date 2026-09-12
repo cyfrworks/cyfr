@@ -242,25 +242,31 @@ defmodule Aqua.Runner do
          {:ok, %{status: "active"}} <- Athanors.get(athanor_id) do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor_id))
       :ok = subscribe(conv.id, athanor_id)
-      send(self(), :recover)
 
-      {:ok,
-       touch(%{
-         id: conv.id,
-         athanor_id: athanor_id,
-         ctx: ctx,
-         # The running loop: its turn, task, sender and agent.
-         live: nil,
-         # A turn paused on a card or around a launch, waiting here.
-         paused: nil,
-         # Turns accepted behind the running one, oldest first.
-         queue: [],
-         usage: %{input: 0, output: 0},
-         tool_activity: [],
-         grants: MapSet.new(),
-         orchestrator: conv.orchestrator,
-         idle_ref: nil
-       })}
+      state =
+        touch(%{
+          id: conv.id,
+          athanor_id: athanor_id,
+          ctx: ctx,
+          # The running loop: its turn, task, sender and agent.
+          live: nil,
+          # A turn paused on a card or around a launch, waiting here.
+          paused: nil,
+          # Turns accepted behind the running one, oldest first.
+          queue: [],
+          usage: %{input: 0, output: 0},
+          tool_activity: [],
+          grants: MapSet.new(),
+          orchestrator: conv.orchestrator,
+          idle_ref: nil
+        })
+
+      # What the rows hold is known before the first send is admitted; a
+      # runner that cannot read them admits nothing.
+      case recover(state) do
+        {:ok, state} -> {:ok, state}
+        {:error, reason} -> {:stop, {:unavailable, reason}}
+      end
     else
       _ -> :ignore
     end
@@ -347,7 +353,7 @@ defmodule Aqua.Runner do
       opened_before?(state, ctx, opts) ->
         accept_turn(state, ctx, name, text, opts)
 
-      steer?(state, ctx) ->
+      steer?(state, ctx, name) ->
         steer(state, ctx, text, opts)
 
       Sanctum.Provisioning.ready(ctx) != :ok ->
@@ -380,20 +386,31 @@ defmodule Aqua.Runner do
     end
   end
 
-  # The running turn's own sender writing again steers it.
-  defp steer?(%{live: %{user_id: user_id}}, %Context{user_id: user_id}), do: true
-  defp steer?(_state, _ctx), do: false
+  # The turn's own sender writing again to the same agent steers it —
+  # while it runs, or while it is paused (the row waits on the tape and
+  # is drained on resume). A line to another agent, or from another
+  # member, is a turn of its own.
+  defp steer?(%{live: %{user_id: user_id, orchestrator: name}}, %Context{user_id: user_id}, name),
+    do: true
+
+  defp steer?(
+         %{live: nil, paused: %{user_id: user_id, orchestrator: name}},
+         %Context{user_id: user_id},
+         name
+       ),
+       do: true
+
+  defp steer?(_state, _ctx, _name), do: false
 
   defp busy?(%{live: nil, paused: nil}), do: false
   defp busy?(_state), do: true
 
   defp steer(state, ctx, text, opts) do
-    case Tape.accept(ctx, state.id, %{
-           message: message(ctx, text, opts),
-           steer_turn_id: state.live.turn_id
-         }) do
+    %{turn_id: turn_id} = state.live || state.paused
+
+    case Tape.accept(ctx, state.id, %{message: message(ctx, text, opts), steer_turn_id: turn_id}) do
       {:ok, %{message: row, replayed: replayed}} ->
-        {:reply, {:ok, result(row, state.live.turn_id, replayed, :steer)}, touch(state)}
+        {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(state)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -510,12 +527,18 @@ defmodule Aqua.Runner do
     state = %{state | queue: rest}
     broadcast(state, {:queued, length(rest)})
 
-    if Members.member?(entry.user_id, state.athanor_id) do
-      start(state, entry)
-    else
-      state
-      |> end_turn(entry.turn_id, "cancelled", "the sender is no longer a member")
-      |> start_next()
+    cond do
+      not Members.member?(entry.user_id, state.athanor_id) ->
+        state
+        |> end_turn(entry.turn_id, "cancelled", "the sender is no longer a member")
+        |> start_next()
+
+      # Queued from its row by a recovery: it runs as its sender's continuation.
+      is_nil(entry.ctx) ->
+        recovered_start(state, entry)
+
+      true ->
+        start(state, entry)
     end
   end
 
@@ -560,8 +583,6 @@ defmodule Aqua.Runner do
     do: {:noreply, settle_paused(state)}
 
   def handle_info({:resume, _turn_id}, state), do: {:noreply, state}
-
-  def handle_info(:recover, state), do: {:noreply, recover(state)}
 
   # The athanor changed: an archive ends the runner, its turns cut.
   def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
@@ -742,10 +763,14 @@ defmodule Aqua.Runner do
   # ---------------------------------------------------------------------------
 
   defp recover(state) do
-    state.ctx
-    |> RecoveryTable.plan(state.id)
-    |> Enum.reduce(state, fn
-      {:queue, turn}, state ->
+    with {:ok, actions} <- RecoveryTable.plan(state.ctx, state.id) do
+      {:ok, Enum.reduce(actions, state, &recover_one/2)}
+    end
+  end
+
+  defp recover_one(action, state) do
+    case action do
+      {:queue, turn} ->
         entry = %{
           turn_id: turn.id,
           user_id: turn.requested_by,
@@ -755,18 +780,18 @@ defmodule Aqua.Runner do
 
         recovered_start(state, entry)
 
-      {:wait, turn}, state ->
+      {:wait, turn} ->
         paused = %{
           turn_id: turn.id,
           user_id: turn.requested_by,
           orchestrator: turn.orchestrator,
-          reason: :approval,
+          reason: pause_reason(turn),
           expiry: nil
         }
 
         settle_paused(%{state | paused: paused})
 
-      {:continue, turn}, state ->
+      {:continue, turn} ->
         entry = %{
           turn_id: turn.id,
           user_id: turn.requested_by,
@@ -778,7 +803,7 @@ defmodule Aqua.Runner do
           do: %{state | queue: state.queue ++ [entry]},
           else: continue(state, entry, :resume)
 
-      {:adopt, turn}, state ->
+      {:adopt, turn} ->
         entry = %{
           turn_id: turn.id,
           user_id: turn.requested_by,
@@ -790,10 +815,14 @@ defmodule Aqua.Runner do
           do: %{state | queue: state.queue ++ [entry]},
           else: continue(state, entry, :adopt)
 
-      {:uncertain, turn, why}, state ->
+      {:uncertain, turn, why} ->
         state |> abort_turn(turn.id, why) |> end_turn(turn.id, "uncertain", why)
-    end)
+    end
   end
+
+  defp pause_reason(%{paused_reason: "launch"}), do: :launch
+  defp pause_reason(%{paused_reason: "uncertain"}), do: :uncertain
+  defp pause_reason(_turn), do: :approval
 
   # A queued turn recovered from its row runs as its sender's continuation.
   defp recovered_start(state, entry) do

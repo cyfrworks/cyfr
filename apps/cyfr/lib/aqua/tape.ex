@@ -43,8 +43,9 @@ defmodule Aqua.Tape do
 
   A `client_id` this conversation already accepted answers the existing
   acceptance as `replayed: true` when it is the same send — same actor,
-  text, attachments, agent, model and room — and
-  `{:error, :client_id_reused}` when it is not. A message `id` already
+  text, attachments, and the same work: the agent, model and room of the
+  turn it opened, or the turn it steered — and `{:error, :client_id_reused}`
+  when it is not. A message `id` already
   taken is answered the same way through its `client_id`, and refused
   `{:error, :message_id_reused}` without one or under another's.
   """
@@ -479,8 +480,7 @@ defmodule Aqua.Tape do
 
   defp same_work?(nil, nil, nil), do: true
 
-  defp same_work?(%{id: id, parent_turn_id: nil, message_id: nil}, nil, steer_id),
-    do: id == steer_id
+  defp same_work?(%{id: id}, nil, steer_id) when is_binary(steer_id), do: id == steer_id
 
   defp same_work?(%{message_id: message_id} = turn, %{} = wanted, nil)
        when is_binary(message_id) do

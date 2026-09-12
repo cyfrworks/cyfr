@@ -22,12 +22,14 @@ defmodule Aqua.Runner.RecoveryTable do
           | {:adopt, Tape.turn()}
           | {:uncertain, Tape.turn(), String.t()}
 
-  @doc "The action for every open root turn of the conversation, oldest first."
-  @spec plan(Context.t(), String.t()) :: [action()]
+  @doc """
+  The action for every open root turn of the conversation, oldest first.
+  A store that cannot answer refuses: no plan is not an empty plan.
+  """
+  @spec plan(Context.t(), String.t()) :: {:ok, [action()]} | {:error, term()}
   def plan(%Context{} = ctx, conversation_id) do
-    case Tape.open_turns(ctx, conversation_id) do
-      {:ok, turns} -> turns |> Enum.reject(& &1.parent_turn_id) |> Enum.map(&classify(ctx, &1))
-      {:error, _} -> []
+    with {:ok, turns} <- Tape.open_turns(ctx, conversation_id) do
+      {:ok, turns |> Enum.reject(& &1.parent_turn_id) |> Enum.map(&classify(ctx, &1))}
     end
   end
 
