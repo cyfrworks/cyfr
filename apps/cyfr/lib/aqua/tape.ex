@@ -425,6 +425,10 @@ defmodule Aqua.Tape do
   @spec closed_calls(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
   def closed_calls(%Context{} = ctx, turn), do: TurnStorage.closed_calls(ctx, turn.id)
 
+  @doc "The decoded `payload` of a message row."
+  @spec payload(row()) :: map()
+  def payload(row), do: Conversations.payload(row)
+
   @doc "One message row of the tenant."
   @spec message(Context.t(), String.t()) :: {:ok, row()} | {:error, term()}
   def message(%Context{} = ctx, message_id), do: Conversations.get_message(ctx, message_id)

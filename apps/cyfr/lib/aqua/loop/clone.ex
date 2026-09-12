@@ -76,7 +76,7 @@ defmodule Aqua.Loop.Clone do
         rows
         |> Enum.filter(fn row ->
           row.kind == "text" and row.author == agent and
-            Arca.ConversationStorage.payload(row)["as"] != "task"
+            Tape.payload(row)["as"] != "task"
         end)
         |> List.last()
         |> case do

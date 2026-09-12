@@ -27,7 +27,7 @@ defmodule Aqua.TapeSeamTest do
 
   defp offenders(globs, pattern) do
     for path <- files(globs),
-        {line, n} <- Cyfr.Test.CodeLines.code_lines(path),
+        {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
         line =~ pattern,
         do: "#{Path.relative_to(path, @root)}:#{n}: #{String.trim(line)}"
   end
@@ -54,6 +54,10 @@ defmodule Aqua.TapeSeamTest do
              ["apps/cyfr/lib/aqua/runner.ex", "apps/cyfr/lib/aqua/runner/**/*.ex"],
              @root_run
            ) == []
+  end
+
+  test "the scanner reads sources: the tape itself names storage" do
+    refute offenders(["apps/cyfr/lib/aqua/tape.ex"], @storage) == []
   end
 
   test "the tape and the launch dispatcher are below the runner and the loop" do

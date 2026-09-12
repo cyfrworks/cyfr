@@ -27,7 +27,7 @@ defmodule Aqua.Loop.Request do
   in the server's voice and errors are not the model's to read.
   """
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Aqua.Tape
   alias Arca.Schemas.Message
 
   @default_max_tokens 16_384
@@ -364,7 +364,7 @@ defmodule Aqua.Loop.Request do
         Enum.reject(rows, &(&1.kind == "compaction"))
 
       %Message{} = compaction ->
-        %{"first_kept_seq" => first} = Conversations.payload(compaction)
+        %{"first_kept_seq" => first} = Tape.payload(compaction)
 
         kept = Enum.filter(rows, &(&1.kind != "compaction" and &1.seq >= first))
 
@@ -388,7 +388,7 @@ defmodule Aqua.Loop.Request do
   defp shape(%Message{kind: "text"} = row, acc, opts) do
     # A clone's task is the soul speaking to the role: the role reads it
     # as the person's words.
-    task? = Conversations.payload(row)["as"] == "task"
+    task? = Tape.payload(row)["as"] == "task"
 
     if row.author in [Message.agent_author(), Message.system_author()] and not task? do
       step = step_of(row)
@@ -420,7 +420,7 @@ defmodule Aqua.Loop.Request do
   end
 
   defp shape(%Message{kind: "tool_call"} = row, acc, _opts) do
-    payload = Conversations.payload(row)
+    payload = Tape.payload(row)
     step = payload["step_id"]
 
     block =
@@ -443,7 +443,7 @@ defmodule Aqua.Loop.Request do
   end
 
   defp shape(%Message{kind: "tool_result"} = row, acc, _opts) do
-    payload = Conversations.payload(row)
+    payload = Tape.payload(row)
 
     block = %{
       "type" => "tool_result",
@@ -563,7 +563,7 @@ defmodule Aqua.Loop.Request do
   defp strip_ids(messages), do: Enum.map(messages, &Map.delete(&1, :message_id))
 
   defp step_of(row) do
-    case Conversations.payload(row) do
+    case Tape.payload(row) do
       %{"step_id" => step} when is_binary(step) -> step
       _ -> nil
     end

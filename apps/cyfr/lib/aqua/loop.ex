@@ -1085,7 +1085,7 @@ defmodule Aqua.Loop do
   # The call a proposed step was recorded for, from its tool_call row.
   defp recall(%State{} = state, %{message_id: message_id}) when is_binary(message_id) do
     with {:ok, row} <- Tape.message(guest(state), message_id) do
-      payload = Arca.ConversationStorage.payload(row)
+      payload = Tape.payload(row)
 
       Binding.resolve(payload["name"] || "", payload["arguments"] || %{},
         roles: Turn.role_names(state.spec),
