@@ -90,6 +90,10 @@ defmodule Opus.HostSurfaceTest do
     "Cyfr.Network",
     # The operation catalog: an in-chain tool call is dispatched through it.
     "Cyfr.Ops",
+    # The class an execution's payloads are kept under when its caller
+    # names none — a worker on another node would take it from its
+    # assignment, which names the retention class with the input.
+    "Cyfr.Retention",
     "Cyfr.PathSafety",
     # The signed-pulls posture, read at execution as well as at pull so a
     # component stored before the knob was turned on cannot keep running. A

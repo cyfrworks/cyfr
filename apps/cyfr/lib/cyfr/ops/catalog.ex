@@ -263,6 +263,15 @@ defmodule Cyfr.Ops.Catalog do
   def call_in_chain(name, %Context{} = ctx, args, %Sanctum.Authority{} = authority, opts)
       when is_map(args) do
     guest_fn = Keyword.get(opts, :guest_fn, :call)
+
+    # An outbound call is an execution of its own: its id exists before
+    # the charge, so the hold names it as its holder and admission can
+    # stamp the hold admitted.
+    opts =
+      if String.contains?(name, ":") and guest_fn == :spawn,
+        do: Keyword.put_new_lazy(opts, :execution_id, &Cyfr.UUID7.execution_id/0),
+        else: opts
+
     opts = opts |> Keyword.put_new(:runner, :supervised) |> with_charge_identity(guest_fn)
 
     args =
@@ -291,6 +300,7 @@ defmodule Cyfr.Ops.Catalog do
                   ctx,
                   args,
                   opts
+                  |> Keyword.put(:hold, hold_of(authority, Keyword.get(opts, :charge)))
                   |> Keyword.drop([:guest_fn, :charge])
                   |> Keyword.put(:in_chain, true)
                   # The server row the transition was judged on is the one
@@ -344,7 +354,7 @@ defmodule Cyfr.Ops.Catalog do
           id: Cyfr.UUID7.generate_id("chg"),
           attempt: attempt,
           generation: 0,
-          holder_execution_id: nil
+          holder_execution_id: Keyword.get(opts, :execution_id)
         })
 
       _ ->
@@ -353,6 +363,13 @@ defmodule Cyfr.Ops.Catalog do
   end
 
   defp with_charge_identity(opts, _guest_fn), do: opts
+
+  # The hold an outbound execution's admission stamps: the reservation the
+  # chain's authority was minted with and the charge row taken at the gate.
+  defp hold_of(%Sanctum.Authority{budget: %{id: reservation_id}}, %{id: id}),
+    do: %{reservation_id: reservation_id, id: id}
+
+  defp hold_of(_authority, _charge), do: nil
 
   # `opts[:charge]` is `%{id, attempt, generation, holder_execution_id}`;
   # the row's deadline is the dispatcher's own timeout.
@@ -881,7 +898,11 @@ defmodule Cyfr.Ops.Catalog do
 
               execute_tool_call(name, ctx, opts, fn ->
                 Emissary.MCP.ExternalProvider.try_handle(name, ctx, args, plane,
-                  server: Keyword.get(opts, :server)
+                  server: Keyword.get(opts, :server),
+                  execution_id: Keyword.get(opts, :execution_id),
+                  step: Keyword.get(opts, :step),
+                  hold: Keyword.get(opts, :hold),
+                  retention_class: Keyword.get(opts, :retention_class)
                 )
               end)
           end

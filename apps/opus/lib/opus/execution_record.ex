@@ -175,9 +175,7 @@ defmodule Opus.ExecutionRecord do
     }
   end
 
-  defp default_retention_class(%Context{user_id: "webhook:" <> _}), do: "webhook"
-  defp default_retention_class(%Context{auth_method: :system}), do: "system"
-  defp default_retention_class(_ctx), do: "api"
+  defp default_retention_class(%Context{} = ctx), do: Cyfr.Retention.default_class(ctx)
 
   @doc "Mark execution as completed with output."
   @spec complete(t(), map()) :: t()

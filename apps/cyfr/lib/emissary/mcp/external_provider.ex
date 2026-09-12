@@ -293,7 +293,7 @@ defmodule Emissary.MCP.ExternalProvider do
                    "server's config to call it from the console"}
 
               plane == :in_chain ->
-                attempted(ctx, server, server_name, remote_tool, args, fn ->
+                attempted(ctx, server, server_name, remote_tool, args, opts, fn ->
                   dispatch_external(server, server_name, remote_tool, ctx, args)
                 end)
 
@@ -325,15 +325,22 @@ defmodule Emissary.MCP.ExternalProvider do
 
   # An outbound call from a chain is an execution of its own: a row of
   # kind `tool_call` with an attempt, admitted under the caller's lineage
-  # before the call, its lease kept while the call is in flight, closed
-  # with an envelope of what came back. A cancel asked of the attempt, or
-  # a lease lost, exits the caller mid-call (`Cyfr.Execution.LeaseWatch`)
-  # — the step that made the call closes uncertain, never with a result
-  # that arrived after. A console call writes no row.
-  defp attempted(ctx, server, server_name, remote_tool, args, call) do
-    id = Cyfr.UUID7.execution_id()
+  # before the call — under the id the caller allocated for its step when
+  # it did, the step and the hold the gate charged as admission's
+  # barriers — its input retained with admission, its lease kept while
+  # the call is in flight, its result retained and the row closed after.
+  # A cancel asked of the attempt, or a lease lost, exits the caller
+  # mid-call (`Cyfr.Execution.LeaseWatch`) — the step that made the call
+  # closes uncertain, never with a result that arrived after. The answer
+  # is the caller's only once it is kept and the row is closed: a result
+  # that cannot be kept is `result_lost`, a close that cannot be written
+  # `not_recorded`, and neither hands the answer back. A console call
+  # writes no row.
+  defp attempted(ctx, server, server_name, remote_tool, args, opts, call) do
+    id = Keyword.get(opts, :execution_id) || Cyfr.UUID7.execution_id()
     started_at = DateTime.utc_now()
     input = Map.drop(args, ["action", "parent_execution_id", "root_execution_id", "attempt"])
+    class = Keyword.get(opts, :retention_class) || Cyfr.Retention.default_class(ctx)
 
     attrs = %{
       id: id,
@@ -352,17 +359,44 @@ defmodule Emissary.MCP.ExternalProvider do
       kind: "tool_call"
     }
 
-    case Arca.Execution.admit(attrs, runner_id: Cyfr.Boot.id()) do
-      {:ok, %{attempt: %{attempt: attempt}}} ->
-        {:ok, watch} = Cyfr.Execution.LeaseWatch.start(self(), id, attempt)
-        result = call.()
+    admission =
+      [runner_id: Cyfr.Boot.id()]
+      |> Arca.QueryHelpers.maybe_put(:charge, Keyword.get(opts, :hold))
+      |> Arca.QueryHelpers.maybe_put(:step, Keyword.get(opts, :step))
+
+    with {:ok, staged} <- stage(ctx, id, "input", input, class),
+         {:ok, attempt} <- admit(attrs, [{:payloads, [staged]} | admission], staged) do
+      {:ok, watch} = Cyfr.Execution.LeaseWatch.start(self(), id, attempt)
+
+      try do
+        close(ctx, id, attempt, started_at, class, call.())
+      after
         Cyfr.Execution.LeaseWatch.stop(watch)
-        close(ctx, id, attempt, started_at, result)
-        result
+      end
+    else
+      {:error, {:refused, reason}} ->
+        {:error,
+         {:refused,
+          "Call to #{remote_tool} on server '#{server_name}' not admitted: " <>
+            (Cyfr.Ops.Error.render(reason) || inspect(reason))}}
+    end
+  end
+
+  defp stage(ctx, id, kind, value, class) do
+    case Arca.ExecutionPayloads.stage(ctx, id, kind, Jason.encode!(value), class) do
+      {:ok, staged} -> {:ok, staged}
+      {:error, reason} -> {:error, {:refused, {:payload_not_retained, reason}}}
+    end
+  end
+
+  defp admit(attrs, admission, staged) do
+    case Arca.Execution.admit(attrs, admission) do
+      {:ok, %{attempt: %{attempt: attempt}}} ->
+        {:ok, attempt}
 
       {:error, reason} ->
-        {:error,
-         "Call to #{remote_tool} on server '#{server_name}' not admitted: #{inspect(reason)}"}
+        _ = Arca.ExecutionPayloads.discard(staged)
+        {:error, {:refused, reason}}
     end
   end
 
@@ -386,41 +420,92 @@ defmodule Emissary.MCP.ExternalProvider do
     end
   end
 
-  # The row keeps an envelope of the answer, never the answer: what came
-  # back is the caller's, and the tape's when a turn made the call.
-  defp close(ctx, id, attempt, started_at, result) do
+  # The row keeps an envelope of the answer and the store keeps the
+  # answer, committed as the row closes; a refusal from the server closes
+  # the row failed with its sentence. The answer is handed back only
+  # once both are written.
+  defp close(ctx, id, attempt, started_at, class, {:ok, answer} = result) do
+    encoded = Jason.encode!(answer)
     now = DateTime.utc_now()
-    duration_ms = DateTime.diff(now, started_at, :millisecond)
 
-    {status, attrs} =
-      case result do
-        {:ok, answer} ->
-          encoded = Jason.encode!(answer)
+    attrs = %{
+      output:
+        Jason.encode!(%{
+          "envelope" => "v1",
+          "output_hash" => Cyfr.Digest.sha256(encoded),
+          "bytes" => byte_size(encoded)
+        }),
+      completed_at: now,
+      duration_ms: DateTime.diff(now, started_at, :millisecond)
+    }
 
-          {"completed",
-           %{
-             output:
-               Jason.encode!(%{
-                 "envelope" => "v1",
-                 "output_hash" => Cyfr.Digest.sha256(encoded),
-                 "bytes" => byte_size(encoded)
-               })
-           }}
+    case Arca.ExecutionPayloads.stage(ctx, id, "result", encoded, class) do
+      {:ok, staged} ->
+        case Arca.Execution.record_end(
+               ctx,
+               id,
+               "completed",
+               Map.put(attrs, :payloads, [staged]),
+               attempt
+             ) do
+          {:ok, _} ->
+            result
 
-        {:error, reason} ->
-          {"failed", %{error_message: Cyfr.Ops.Error.render(reason) || inspect(reason)}}
-      end
+          {:error, {:payload_not_retained, reason}} ->
+            _ = Arca.ExecutionPayloads.discard(staged)
+            result_lost(ctx, id, attempt, started_at, reason)
 
-    _ =
-      Arca.Execution.record_end(
-        ctx,
-        id,
-        status,
-        Map.merge(attrs, %{completed_at: now, duration_ms: duration_ms}),
-        attempt
-      )
+          {:error, reason} ->
+            _ = Arca.ExecutionPayloads.discard(staged)
 
-    :ok
+            {:error,
+             {:not_recorded, "the call's ending could not be recorded: #{inspect(reason)}"}}
+        end
+
+      {:error, reason} ->
+        result_lost(ctx, id, attempt, started_at, reason)
+    end
+  end
+
+  defp close(ctx, id, attempt, started_at, _class, {:error, reason} = result) do
+    now = DateTime.utc_now()
+
+    attrs = %{
+      error_message: Cyfr.Ops.Error.render(reason) || inspect(reason),
+      completed_at: now,
+      duration_ms: DateTime.diff(now, started_at, :millisecond)
+    }
+
+    _ = Arca.Execution.record_end(ctx, id, "failed", attrs, attempt)
+    result
+  end
+
+  # The call happened and answered; its answer could not be kept. The
+  # attempt closes `result_lost`, durably where it can, and the answer
+  # is never handed back — a caller that retried would run the effect
+  # twice.
+  defp result_lost(ctx, id, attempt, started_at, reason) do
+    now = DateTime.utc_now()
+
+    attrs = %{
+      error_message: "result not retained",
+      outcome: "result_lost",
+      completed_at: now,
+      duration_ms: DateTime.diff(now, started_at, :millisecond)
+    }
+
+    case Arca.Execution.record_end(ctx, id, "failed", attrs, attempt) do
+      {:ok, _} ->
+        {:error, {:result_lost, "the call answered, but its result could not be kept"}}
+
+      {:error, why} ->
+        Logger.error(
+          "[ExternalProvider] execution #{id} result lost (#{inspect(reason)}) and its ending not recorded: #{inspect(why)}"
+        )
+
+        {:error,
+         {:not_recorded, "the call answered, but neither its result nor its ending could be kept"}}
+    end
   end
 
   defp dispatch_external(server, server_name, remote_tool, ctx, args) do

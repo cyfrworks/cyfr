@@ -728,7 +728,12 @@ defmodule Arca.Execution do
   """
   @spec record_end(Sanctum.Context.t(), String.t(), String.t(), map(), String.t() | nil) ::
           {:ok, %__MODULE__{}}
-          | {:error, :not_running | :not_found | :database_error | Ecto.Changeset.t()}
+          | {:error,
+             :not_running
+             | :not_found
+             | :database_error
+             | {:payload_not_retained, term()}
+             | Ecto.Changeset.t()}
   def record_end(%Sanctum.Context{} = ctx, id, status, attrs, attempt)
       when status in @terminal_statuses do
     # `attrs[:payloads]` are staged payloads committed for the owning

@@ -572,7 +572,7 @@ defmodule Aqua.Loop do
 
   defp recovery_of(%Call{} = call), do: if(replay_safe?(call), do: "replay_safe", else: nil)
 
-  defp child_id_for(%Call{kind: kind}) when kind in [:hand, :launch],
+  defp child_id_for(%Call{kind: kind}) when kind in [:hand, :launch, :external],
     do: Cyfr.UUID7.execution_id()
 
   defp child_id_for(_call), do: nil
@@ -962,6 +962,7 @@ defmodule Aqua.Loop do
       charge: Binding.charge(step, state.turn),
       execution_id: step.child_execution_id,
       step_id: step.id,
+      step: %{id: step.id, generation: step.generation},
       cancel_handle: handle(state, step)
     })
   end

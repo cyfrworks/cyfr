@@ -250,6 +250,9 @@ defmodule Aqua.Loop.Binding do
       },
       charge: Map.get(dispatch, :charge),
       cancel_handle: Map.get(dispatch, :cancel_handle),
+      execution_id: Map.get(dispatch, :execution_id),
+      step: Map.get(dispatch, :step),
+      retention_class: "chat_step",
       runner: :supervised,
       guest_fn: :spawn
     )

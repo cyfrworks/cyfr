@@ -67,6 +67,16 @@ defmodule Cyfr.Retention do
   def kinds, do: @kinds
 
   @doc """
+  The class an execution's payloads are kept under when its caller names
+  none: a webhook's under `webhook`, the system's own under `system`,
+  everything else under `api`. A turn's own dispatches name `chat_step`.
+  """
+  @spec default_class(Context.t()) :: String.t()
+  def default_class(%Context{user_id: "webhook:" <> _}), do: "webhook"
+  def default_class(%Context{auth_method: :system}), do: "system"
+  def default_class(%Context{}), do: "api"
+
+  @doc """
   Get retention settings for the context's athanor — one string key per
   kind, missing keys filled from the kind's default. A missing row means
   the athanor never configured retention; an unreadable row is an error,
