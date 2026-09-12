@@ -69,21 +69,25 @@ defmodule Emissary.MCP.RequestLog do
 
   def log_started(%Context{} = ctx, call_id, data)
       when is_binary(call_id) and is_map(data) do
-    case Arca.McpLog.record(%{
-           id: call_id,
-           request_id: ctx.request_id,
-           user_id: ctx.user_id || "system",
-           athanor_id: ctx.athanor_id,
-           timestamp: DateTime.utc_now(),
-           tool: data[:tool] || data["tool"],
-           action: data[:action] || data["action"],
-           method: data[:method] || data["method"],
-           status: "pending",
-           input: encode_json(sanitize_input(data[:input] || data["input"] || %{}))
-         }) do
+    case Arca.McpLog.record(started_row(ctx, call_id, data)) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp started_row(%Context{} = ctx, call_id, data) do
+    %{
+      id: call_id,
+      request_id: ctx.request_id,
+      user_id: ctx.user_id || "system",
+      athanor_id: ctx.athanor_id,
+      timestamp: DateTime.utc_now(),
+      tool: data[:tool] || data["tool"],
+      action: data[:action] || data["action"],
+      method: data[:method] || data["method"],
+      status: "pending",
+      input: encode_json(sanitize_input(data[:input] || data["input"] || %{}))
+    }
   end
 
   @doc """
@@ -151,7 +155,8 @@ defmodule Emissary.MCP.RequestLog do
   already-formatted error string in place of the sanitized `inspect`.
   Returns `result`. With `log?` false, runs `fun` and only returns.
   """
-  @spec around(boolean(), Context.t(), String.t() | nil, map(), (-> {result, map()})) :: result
+  @spec around(false | true | :behind, Context.t(), String.t() | nil, map(), (-> {result, map()})) ::
+          result
         when result: {:ok, term()} | {:error, term()}
   def around(log?, ctx, call_id, started, fun)
 
@@ -159,6 +164,53 @@ defmodule Emissary.MCP.RequestLog do
     {result, _meta} = fun.()
     result
   end
+
+  # The row's start rides the write-behind as well as its close: an
+  # in-process call is its own root and nothing reads its row before it
+  # ends. The close carries the whole row, so a start that was shed, or
+  # lands late, leaves one complete row either way.
+  def around(:behind, %Context{athanor_id: athanor_id} = ctx, call_id, started, fun)
+      when is_binary(athanor_id) and is_binary(call_id) do
+    row = started_row(ctx, call_id, started)
+    safe_enqueue({:mcp_log_started, row})
+    start_time = System.monotonic_time()
+    {result, meta} = fun.()
+
+    duration_ms =
+      System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+
+    close =
+      case result do
+        {:ok, output} ->
+          put_routed(
+            %{
+              status: "success",
+              duration_ms: duration_ms,
+              output: encode_json(sanitize_output(output))
+            },
+            meta
+          )
+
+        {:error, reason} ->
+          error_text = Map.get(meta, :error_text) || inspect(sanitize_input(reason))
+
+          put_routed(
+            %{
+              status: "error",
+              error_code: Map.get(meta, :code, -32_603),
+              duration_ms: duration_ms,
+              error: error_text
+            },
+            meta
+          )
+      end
+
+    safe_enqueue({:mcp_log_close, row, close})
+    result
+  end
+
+  def around(:behind, ctx, call_id, started, fun),
+    do: around(true, ctx, call_id, started, fun)
 
   def around(true, %Context{} = ctx, call_id, started, fun) do
     safe_log_started(ctx, call_id, started)
@@ -190,6 +242,15 @@ defmodule Emissary.MCP.RequestLog do
     end
 
     result
+  end
+
+  # The write-behind never fails the call either: inline (the test env)
+  # it writes in the caller, and a caller with no connection of its own
+  # loses the row, as it would have under the synchronous start.
+  defp safe_enqueue(item) do
+    Cyfr.RecordSink.enqueue(item)
+  rescue
+    e -> Logger.warning("[RequestLog] log row not queued: #{Exception.message(e)}")
   end
 
   defp put_routed(data, %{routed_to: routed}) when not is_nil(routed),

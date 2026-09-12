@@ -384,4 +384,37 @@ defmodule Emissary.MCP.RequestLogTest do
       assert result == input
     end
   end
+
+  describe "around/5 with the start behind" do
+    test "the call's row is complete once the sink drains, success or failure" do
+      ctx = Sanctum.TestContext.local()
+      ok_id = "call_#{System.unique_integer([:positive])}"
+
+      assert {:ok, 1} =
+               RequestLog.around(:behind, ctx, ok_id, %{tool: "t", action: "a", input: %{}}, fn ->
+                 {{:ok, 1}, %{routed_to: "here"}}
+               end)
+
+      :ok = Cyfr.RecordSink.flush()
+
+      assert %{status: "success", routed_to: "here", tool: "t"} =
+               Arca.Repo.get(Arca.McpLog, ok_id)
+
+      err_id = "call_#{System.unique_integer([:positive])}"
+
+      assert {:error, :nope} =
+               RequestLog.around(
+                 :behind,
+                 ctx,
+                 err_id,
+                 %{tool: "t", action: "a", input: %{}},
+                 fn ->
+                   {{:error, :nope}, %{code: -1, error_text: "no"}}
+                 end
+               )
+
+      :ok = Cyfr.RecordSink.flush()
+      assert %{status: "error", error_code: -1, error: "no"} = Arca.Repo.get(Arca.McpLog, err_id)
+    end
+  end
 end

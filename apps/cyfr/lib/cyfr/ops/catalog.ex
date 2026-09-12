@@ -834,9 +834,19 @@ defmodule Cyfr.Ops.Catalog do
     ctx = if own_root?, do: %{ctx | request_id: Cyfr.UUID7.request_id()}, else: ctx
 
     # Transports log incoming requests; in-chain calls log themselves even
-    # when they inherit the root request id. Exclude mcp_log to avoid logging
+    # when they inherit the root request id, and their start row is written
+    # before the effect; an in-process caller's own root rides the
+    # write-behind, start and close alike. Exclude mcp_log to avoid logging
     # its own queries.
-    should_log? = name != "mcp_log" and (in_chain? or own_root?)
+    log_mode =
+      cond do
+        name == "mcp_log" -> false
+        in_chain? -> true
+        own_root? -> :behind
+        true -> false
+      end
+
+    should_log? = log_mode != false
 
     # A root call *is* its request, so it is filed under the request id. An
     # in-chain call is one of several beneath that request and needs its own
@@ -852,7 +862,7 @@ defmodule Cyfr.Ops.Catalog do
     started = %{tool: name, action: action, method: "tools/call", input: args}
     opts = Keyword.put(opts, :action, action)
 
-    Emissary.MCP.RequestLog.around(should_log?, ctx, call_id, started, fn ->
+    Emissary.MCP.RequestLog.around(log_mode, ctx, call_id, started, fn ->
       # A boot that lost its database's control plane dispatches nothing,
       # catalogued or proxied: the endpoint's plug refuses new requests,
       # but a connected console, an in-process caller and a running

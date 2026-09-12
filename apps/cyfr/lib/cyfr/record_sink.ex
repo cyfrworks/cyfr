@@ -7,8 +7,10 @@ defmodule Cyfr.RecordSink do
 
   Batches bookkeeping writes every 250 ms or 200 items in one transaction:
   allowed policy checks, MCP log completions and vault last-used timestamps.
-  Denials and request starts remain synchronous; a start row must exist
-  before its completion is queued.
+  Denials and a transport's or a chain's request starts remain synchronous;
+  their completion updates the row that exists. An in-process call's start
+  rides here too, with a close that carries the whole row: whichever lands
+  first, and whether the start was shed, one complete row results.
 
   `flush/0` drains synchronously (the retention scheduler runs it before a
   sweep; tests use it for ordering); `terminate/2` drains the buffered
@@ -43,6 +45,8 @@ defmodule Cyfr.RecordSink do
   @type item ::
           {:policy_log, map()}
           | {:mcp_log_update, Sanctum.Context.t(), String.t(), map()}
+          | {:mcp_log_started, map()}
+          | {:mcp_log_close, map(), map()}
           | {:vault_touch, String.t(), String.t()}
 
   def start_link(opts \\ []) do
@@ -164,6 +168,8 @@ defmodule Cyfr.RecordSink do
 
     Arca.Repo.transaction(fn ->
       write_policy_logs(Map.get(grouped, :policy_log, []))
+      write_mcp_starts(Map.get(grouped, :mcp_log_started, []))
+      write_mcp_closes(Map.get(grouped, :mcp_log_close, []))
       write_mcp_updates(Map.get(grouped, :mcp_log_update, []))
       write_vault_touches(Map.get(grouped, :vault_touch, []))
     end)
@@ -238,6 +244,33 @@ defmodule Cyfr.RecordSink do
 
     if rows != [], do: Arca.Repo.insert_all(Arca.PolicyLog, rows)
     :ok
+  end
+
+  # A start inserts only where no row exists, a close writes the whole row
+  # and replaces the fields it closes: order between the two, within a
+  # batch or across batches, changes nothing.
+  defp write_mcp_starts(items) do
+    Enum.each(items, fn {:mcp_log_started, row} ->
+      case Arca.McpLog.record_started(row) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[Cyfr.RecordSink] mcp log start failed: #{inspect(reason)}")
+      end
+    end)
+  end
+
+  defp write_mcp_closes(items) do
+    Enum.each(items, fn {:mcp_log_close, row, close} ->
+      case Arca.McpLog.record_close(row, close) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[Cyfr.RecordSink] mcp log close failed: #{inspect(reason)}")
+      end
+    end)
   end
 
   defp write_mcp_updates([]), do: :ok
