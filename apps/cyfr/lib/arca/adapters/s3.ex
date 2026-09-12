@@ -342,8 +342,12 @@ defmodule Arca.Adapters.S3 do
   # Retries are disabled; callers own retry policy. The receive timeout
   # comes from the storage configuration.
   defp signed_request(method, url, body, extra_headers \\ []) do
-    base_headers =
-      [{"host", host_for(url)}, {"x-amz-content-sha256", sha256_hex(body)}] ++ extra_headers
+    # `sign_v4` adds X-Amz-Content-SHA256 itself, hashing the body it was
+    # given. Passing a second one — the same value under a different case —
+    # put the name into SignedHeaders twice and sent two header lines, so
+    # every real S3 implementation answered SignatureDoesNotMatch. The stub
+    # suite could not see it: it checks request shape, not signatures.
+    base_headers = [{"host", host_for(url)}] ++ extra_headers
 
     signed =
       :aws_signature.sign_v4(
@@ -584,8 +588,6 @@ defmodule Arca.Adapters.S3 do
   defp method_string(:post), do: "POST"
   defp method_string(:delete), do: "DELETE"
   defp method_string(:head), do: "HEAD"
-
-  defp sha256_hex(body), do: Cyfr.Digest.sha256_hex(body)
 
   defp config(key) do
     Application.get_env(:cyfr, :s3, [])[key]

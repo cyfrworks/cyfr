@@ -139,10 +139,9 @@ defmodule Arca.Adapters.S3MinioTest do
     url = "#{endpoint}/#{@bucket}"
     datetime = :calendar.universal_time()
 
-    headers = [
-      {"host", URI.parse(url).authority},
-      {"x-amz-content-sha256", Base.encode16(:crypto.hash(:sha256, ""), case: :lower)}
-    ]
+    # Only the host: sign_v4 supplies X-Amz-Content-SHA256 for the body it
+    # hashes, and a second copy signs the name twice (see Arca.Adapters.S3).
+    headers = [{"host", URI.parse(url).authority}]
 
     signed =
       :aws_signature.sign_v4(
