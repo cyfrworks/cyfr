@@ -34,6 +34,9 @@ defmodule Aqua.Loop do
   @step_timeout_ms 5 * 60 * 1000
   @launch_timeout_ms 10 * 60 * 1000
   @retry_delays_ms [2_000, 8_000, 20_000]
+  # `{"operation":"chat","params":}` around the request, which is what
+  # `Opus.Executor` encodes and weighs against the node's cap.
+  @envelope_bytes 30
   @resume_backoff_ms [500, 2_000, 8_000]
   @recoverable ~w(rate_limited overloaded)
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
@@ -1490,19 +1493,35 @@ defmodule Aqua.Loop do
   end
 
   # nil rather than a guess when the request cannot be encoded: the byte
-  # trigger then stands down and the token estimate decides, which is what
-  # happened before this measurement existed.
+  # trigger stands down and the token estimate decides alone.
   defp encoded_size(request) do
     case Jason.encode(request) do
-      {:ok, json} -> byte_size(json)
+      # What the executor weighs is the invocation envelope, not the bare
+      # request, so the envelope's own bytes are counted here too. Without
+      # them a request just under the cap passes this check and is refused
+      # where it is enforced.
+      {:ok, json} -> byte_size(json) + @envelope_bytes
       {:error, _} -> nil
     end
   end
 
-  defp catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do
-    case Sanctum.Authority.node_limits(authority, catalyst) do
-      {:ok, %Sanctum.Limits{max_request_size: cap}} -> cap
-      {:error, :unknown_node} -> nil
+  @doc false
+  # Public for its own test. Whether the cap resolves is otherwise
+  # unobservable: the token estimate trips before a transcript can reach the
+  # byte cap under ordinary conditions, so no end-to-end turn reaches this
+  # branch, and a cap of nil looks exactly like a request that fits.
+  # By name, without the version. The spec carries a versioned ref because
+  # that is what resolved, but the consent graph keys every node by name —
+  # `Opus.Chain` steps to `name_level/1` and `Authority.limits/1` matches on
+  # that. A versioned key finds nothing, and a cap of nil is a check that
+  # never fires.
+  def catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do
+    with {:ok, name_ref} <- Sanctum.ComponentRef.to_name_ref(catalyst),
+         {:ok, %Sanctum.Limits{max_request_size: cap}} <-
+           Sanctum.Authority.node_limits(authority, name_ref) do
+      cap
+    else
+      _ -> nil
     end
   end
 

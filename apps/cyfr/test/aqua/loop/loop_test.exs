@@ -63,6 +63,38 @@ defmodule Aqua.LoopTest do
     {:ok, ctx: ctx, conv: conv}
   end
 
+  test "the catalyst's consented cap answers to a name, not to the ref the spec carries", %{
+    ctx: ctx
+  } do
+    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+
+    # What `Aqua.AgentConfig` resolves, and so what the spec holds.
+    versioned = @model <> ":1.2.0"
+    {:ok, name_ref} = Sanctum.ComponentRef.to_name_ref(versioned)
+
+    # The graph is keyed the way `Opus.Chain` steps: by name. Asking with
+    # the version answers nothing, and a cap of nil is a size check that
+    # never fires — which is what the loop did while it asked that way.
+    assert {:error, :unknown_node} = Sanctum.Authority.node_limits(authority, versioned)
+
+    assert {:ok, %Sanctum.Limits{max_request_size: cap}} =
+             Sanctum.Authority.node_limits(authority, name_ref)
+
+    assert is_integer(cap) and cap > 0
+  end
+
+  test "the loop resolves a cap for the spec it actually holds", %{ctx: ctx, conv: conv} do
+    turn = accept!(ctx, conv, "hello")
+    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, spec} = Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
+
+    # The spec holds a versioned ref, and the graph is keyed by name. Asking
+    # with what the spec holds answers nothing, and the size trigger then
+    # never fires — indistinguishable, from outside, from a request that fits.
+    assert String.starts_with?(spec.catalyst, @model <> ":")
+    assert is_integer(Aqua.Loop.catalyst_request_cap(spec))
+  end
+
   defp accept!(ctx, conv, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, conv.id, %{
