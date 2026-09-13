@@ -59,6 +59,29 @@ defmodule Arca.Overlay.UnitLock do
     end
   end
 
+  @doc """
+  Run `fun` under the lock if it is free right now, or answer
+  `{:error, :unit_locked}` without waiting.
+
+  For a caller a person is waiting on: queueing behind a background fill
+  would hold a request open for the full acquisition timeout, and a refusal
+  it can retry is the better answer.
+  """
+  @spec try_with_lock(term(), (-> result)) :: result | {:error, :unit_locked} when result: term()
+  def try_with_lock(key, fun) when is_function(fun, 0) do
+    case GenServer.call(__MODULE__, {:try_acquire, key}) do
+      :ok ->
+        try do
+          fun.()
+        after
+          GenServer.cast(__MODULE__, {:release, key, self()})
+        end
+
+      {:error, :unit_locked} = error ->
+        error
+    end
+  end
+
   defp acquire(key, timeout_ms) do
     GenServer.call(__MODULE__, {:acquire, key}, timeout_ms)
   catch
@@ -78,6 +101,13 @@ defmodule Arca.Overlay.UnitLock do
   def init(_opts), do: {:ok, %{}}
 
   @impl true
+  def handle_call({:try_acquire, key}, {pid, _tag}, state) do
+    case state[key] do
+      nil -> {:reply, :ok, Map.put(state, key, {pid, Process.monitor(pid), :queue.new()})}
+      {_holder, _ref, _waiters} -> {:reply, {:error, :unit_locked}, state}
+    end
+  end
+
   def handle_call({:acquire, key}, {pid, _tag} = from, state) do
     case state[key] do
       nil ->

@@ -629,7 +629,7 @@ defmodule PrismWeb.AquaLiveTest do
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "kept-model-1"
 
-      send(view.pid, {:consent_granted, "catalyst:local.http:1.1.0", %{}})
+      send(view.pid, {:consent_granted, "catalyst:local.http:1.1.2", %{}})
       assert render(view) =~ "Model connected."
 
       # The kept entry is gone: a load from here finds no hit to hand back,

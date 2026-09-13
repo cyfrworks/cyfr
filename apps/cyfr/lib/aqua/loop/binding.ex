@@ -148,6 +148,12 @@ defmodule Aqua.Loop.Binding do
 
   defp resolve_action("files", action, args) do
     case Hands.canonical_files(action, args) do
+      # A component's source is host-side: the files catalyst's grant is
+      # `data/`, so the path never belonged to a hand.
+      {:ok, %{tool: "source", action: canonical_action, args: canonical_args}} ->
+        {:ok,
+         %Call{kind: :catalog, tool: "source", action: canonical_action, args: canonical_args}}
+
       {:ok, %{tool: tool, action: canonical_action, args: canonical_args}} ->
         {:ok,
          %Call{

@@ -77,6 +77,22 @@ defmodule Aqua.Loop.Policy do
 
   defp decide_open(%Call{} = call, policy, _opts), do: by_key(call, policy)
 
+  @doc """
+  Whether `policy` still grants `call` without asking.
+
+  The narrow re-check a call makes against the member's live grants as it
+  dispatches. It can only withdraw an `auto`, never widen one, so it needs
+  none of `decide/3`'s turn context: a restricted turn, a touched reference
+  and a launch rule have all already had their say by the time a step runs.
+  """
+  @spec auto?(Call.t(), map()) :: boolean()
+  def auto?(%Call{kind: :ui}, _policy), do: true
+
+  def auto?(%Call{kind: :clone, target: role}, policy),
+    do: Map.get(policy, "#{role}.*") == "auto"
+
+  def auto?(%Call{} = call, policy), do: Map.get(policy, key(call)) == "auto"
+
   defp by_key(call, policy) do
     case Map.get(policy, key(call)) do
       "auto" -> :auto

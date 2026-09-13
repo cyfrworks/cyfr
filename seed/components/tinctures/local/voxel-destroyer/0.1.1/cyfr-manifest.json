@@ -1,0 +1,20 @@
+{
+  "name": "voxel-destroyer",
+  "type": "tincture",
+  "version": "0.1.1",
+  "description": "Voxel destruction game with multiple weapons, particles, and 3D terrain",
+  "tincture": {
+    "build": {
+      "tool": "vite"
+    },
+    "entry": "index.html",
+    "icon": "🎮",
+    "tagline": "Smash voxel worlds with rockets and particles",
+    "window": {
+      "width": 800,
+      "height": 600,
+      "resizable": true
+    }
+  },
+  "publisher": "local"
+}

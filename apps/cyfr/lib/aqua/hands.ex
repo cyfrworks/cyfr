@@ -33,6 +33,8 @@ defmodule Aqua.Hands do
   @http_catalyst "catalyst:local.http"
   @storage_prefix "data/storage/"
   @storage_root "data/storage"
+  @components_prefix "components/"
+  @components_root "components"
 
   @catalog %{
     "files" => %{
@@ -229,7 +231,7 @@ defmodule Aqua.Hands do
 
   @doc """
   A component reference at name level — `type:ns.name`, the version (and
-  anything after it) dropped — so `catalyst:local.files:0.5.1` and
+  anything after it) dropped — so `catalyst:local.files:0.5.2` and
   `catalyst:local.files` are the same catalyst here as they are for the
   chain.
   """
@@ -420,6 +422,13 @@ defmodule Aqua.Hands do
       not Map.has_key?(@catalog["files"].actions, action) ->
         {:error, :unknown_operation}
 
+      component_source_path?(path) ->
+        # A component's source is not the files catalyst's to write: its
+        # grant is `data/`. The host-side `source` tool owns this, with its
+        # own policy keys, so `files.write: auto` for `data/` cannot
+        # auto-approve a rewrite of component code.
+        {:ok, %{tool: "source", action: action, args: args}}
+
       not storage_path?(path) ->
         {:ok, %{tool: "files", action: action, args: args}}
 
@@ -503,6 +512,9 @@ defmodule Aqua.Hands do
     |> String.trim_leading("/")
     |> String.replace_suffix(".json", "")
   end
+
+  defp component_source_path?(path) when is_binary(path),
+    do: path == @components_root or String.starts_with?(path, @components_prefix)
 
   defp storage_path?(path) when is_binary(path),
     do: path == @storage_root or String.starts_with?(path, @storage_prefix)

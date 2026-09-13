@@ -95,6 +95,21 @@ defmodule Aqua.LoopTest do
     assert is_integer(Aqua.Loop.catalyst_request_cap(spec))
   end
 
+  describe "summary_text/1" do
+    test "a summary with words is committed" do
+      assert {:ok, "what was said"} = Aqua.Loop.summary_text("what was said")
+    end
+
+    test "a reply carrying no text is refused, so the boundary does not advance" do
+      # `summarize/5` filters the reply to text blocks and joins them, so a
+      # reply of only tool calls — or of no content at all — arrives here as
+      # "". Committing it would render an empty summary in place of every row
+      # before `first_kept_seq`.
+      assert {:error, :empty_summary} = Aqua.Loop.summary_text("")
+      assert {:error, :empty_summary} = Aqua.Loop.summary_text("   \n\t ")
+    end
+  end
+
   describe "group/1" do
     test "a write between reads runs alone, and the reads on either side do not join it" do
       read1 = item("files", %{"action" => "read", "path" => "a"})
@@ -321,6 +336,42 @@ defmodule Aqua.LoopTest do
              Enum.find(steps, &(&1.action == "keep"))
 
     assert roots() == before
+  end
+
+  test "a grant withdrawn while the model answers does not run the call it used to allow",
+       %{ctx: ctx, conv: conv} do
+    grant = %{
+      scope: "conversation",
+      conversation_id: conv.id,
+      agent_name: "aqua",
+      tool: "notes",
+      action: "keep"
+    }
+
+    {:ok, _} = Aqua.ToolGrants.put(ctx, Map.put(grant, :effect, "allow"))
+
+    turn = accept!(ctx, conv, "@aqua keep a note")
+
+    script!([
+      {:probe, self()},
+      calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}]),
+      reply("understood")
+    ])
+
+    task = run(ctx, turn)
+
+    # The turn's policy was snapshotted at `Turn.build/3` with the grant in
+    # it. Withdrawing it now reaches no loop already running — the call must
+    # ask again as it dispatches.
+    assert_receive {:scripted_probe, worker, _}, 10_000
+    :ok = Aqua.ToolGrants.revoke(ctx, grant)
+    send(worker, :continue)
+
+    assert :completed = Task.await(task, 60_000)
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert %{dispatch_state: "closed", outcome: outcome} = Enum.find(steps, &(&1.kind == "tool"))
+    refute outcome == "ok"
   end
 
   test "a steer that arrived while the turn waited skips the approved step and reaches the model",

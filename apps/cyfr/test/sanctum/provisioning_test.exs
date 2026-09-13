@@ -259,6 +259,58 @@ defmodule Sanctum.ProvisioningTest do
     assert profile.kind == "owner"
   end
 
+  test "installing a shipped component twice succeeds: its consent is already minted",
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|twice-#{n}"}
+    {:ok, group} = Athanors.create_group(ctx.user_id, "Twice #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.start_provisioning(in_group)
+
+    assert {:ok, %{component_ref: ref}} =
+             Provisioning.install_shipped(in_group, "catalyst:local.foo")
+
+    # The walk skips it as `:already_bootstrapped` the second time. That is
+    # not this install failing — the consent it asked for is there.
+    assert {:ok, %{component_ref: ^ref}} =
+             Provisioning.install_shipped(in_group, "catalyst:local.foo")
+  end
+
+  test "an install refuses at once while another filler holds the lock, rather than queueing",
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|busy-#{n}"}
+    {:ok, group} = Athanors.create_group(ctx.user_id, "Busy #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.start_provisioning(in_group)
+
+    held = self()
+
+    holder =
+      spawn(fn ->
+        Arca.Overlay.UnitLock.with_lock({group.id, :provisioning}, fn ->
+          send(held, :locked)
+
+          receive do
+            :release -> :ok
+          end
+        end)
+      end)
+
+    assert_receive :locked, 5_000
+
+    # The shared acquisition timeout is 30s. This must answer well inside it.
+    {elapsed_us, result} =
+      :timer.tc(fn -> Provisioning.install_shipped(in_group, "catalyst:local.foo") end)
+
+    assert result == {:error, :provisioning_busy}
+    assert elapsed_us < 5_000_000
+
+    send(holder, :release)
+  end
+
   test "with no registry, a bundle whose OPTIONAL dependency is not installed still provisions",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir,

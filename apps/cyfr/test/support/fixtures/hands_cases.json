@@ -69,7 +69,7 @@
    "catalyst": "catalyst:local.http", "input": {"operation": "fetch", "params": {"url": "http://x", "method": "DELETE"}},
    "canonical": ["http.delete"]},
 
-  {"reverse_only": true, "catalyst": "catalyst:local.files:0.5.1",
+  {"reverse_only": true, "catalyst": "catalyst:local.files:0.5.2",
    "input": {"action": "delete", "path": "data/storage/k.json"}, "canonical": ["storage.delete"]},
   {"reverse_only": true, "catalyst": "catalyst:local.files",
    "input": {"action": "write_text", "path": "data/storage/k.json", "content": "\"v\""}, "canonical": ["storage.write"]},
@@ -77,7 +77,7 @@
    "input": {"action": "edit", "path": "data/storage/k.json", "edits": []}, "canonical": []},
   {"reverse_only": true, "catalyst": "catalyst:local.files",
    "input": {"action": "bogus", "path": "a.md"}, "canonical": []},
-  {"reverse_only": true, "catalyst": "catalyst:local.http:1.1.1",
+  {"reverse_only": true, "catalyst": "catalyst:local.http:1.1.2",
    "input": {"operation": "fetch", "params": {"url": "http://x", "method": "TRACE"}}, "canonical": []},
   {"reverse_only": true, "catalyst": "catalyst:local.http",
    "input": {"operation": "stream", "params": {}}, "canonical": []}

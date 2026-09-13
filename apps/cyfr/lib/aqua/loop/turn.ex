@@ -288,6 +288,24 @@ defmodule Aqua.Loop.Turn do
   # What the sender attached
   # ---------------------------------------------------------------------------
 
+  @doc """
+  The agent's policy recomposed against the member's grants as they stand.
+
+  `build/3`'s policy is a snapshot. A member withdrawing a standing grant
+  mid-turn writes the rows and refreshes the runner; nothing rebuilds the
+  snapshot a running loop decides from, so a call that has not dispatched
+  yet asks again. The authored half is the pinned agent definition and is
+  never re-read here.
+  """
+  @spec current_policy(t()) :: {:ok, map()} | {:error, term()}
+  def current_policy(%__MODULE__{ctx: ctx, turn: turn, agent: agent}) do
+    name = agent["name"]
+
+    with {:ok, grants} <- Aqua.ToolGrants.for_agents(ctx, turn.conversation_id, [name]) do
+      {:ok, Aqua.ToolGrants.resolve(agent["tool_policy"] || %{}, grants[name] || [])}
+    end
+  end
+
   defp decode(nil), do: %{}
 
   defp decode(json) when is_binary(json) do
