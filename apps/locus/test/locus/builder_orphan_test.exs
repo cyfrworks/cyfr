@@ -14,6 +14,20 @@ defmodule Locus.BuilderOrphanTest do
 
   alias Locus.Builder
 
+  describe "kill_os_process/1" do
+    test "kills a process the builder started" do
+      {port, os_pid} = spawn_sleeper()
+      port_ref = Port.monitor(port)
+
+      Builder.kill_os_process(os_pid)
+
+      # Called straight from the test, not from a watcher. If this passes
+      # where the watcher's cases fail, the cleanup works and the watcher
+      # never reaches it.
+      await_port_down(port_ref, port, os_pid, "kill_os_process/1 did not kill it")
+    end
+  end
+
   describe "watch_for_orphans/3" do
     test "a dead caller stops the OS process and the task it orphaned" do
       {port, os_pid} = spawn_sleeper()

@@ -754,9 +754,12 @@ defmodule Locus.Builder do
     end
   end
 
-  defp kill_os_process(nil), do: :ok
+  @doc false
+  # Public alongside `watch_for_orphans/3`, so a test can tell a cleanup
+  # that does not work from a watcher that never called it.
+  def kill_os_process(nil), do: :ok
 
-  defp kill_os_process(os_pid) do
+  def kill_os_process(os_pid) do
     # Under `setsid --wait` the new session belongs to setsid's child, not
     # to setsid, so the group to kill is the child's — reached through it
     # rather than through os_pid. Killing setsid alone would leave the
