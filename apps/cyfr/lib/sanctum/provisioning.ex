@@ -121,10 +121,50 @@ defmodule Sanctum.Provisioning do
   """
   @spec install_shipped(Context.t(), String.t()) ::
           {:ok, %{status: String.t(), component_ref: String.t()}} | {:error, term()}
-  def install_shipped(%Context{} = ctx, reference) when is_binary(reference) do
-    with {:ok, pulled} <- Pull.pull_shipped(ctx, reference),
-         {:ok, _bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx) do
-      {:ok, pulled}
+  def install_shipped(%Context{athanor_id: athanor_id} = ctx, reference)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(reference) do
+    # The same lock every other filler takes: this mints consent, and a
+    # background fill or a boot sync doing the same walk at the same moment
+    # would interleave two mints over one athanor's sources. Taken without
+    # waiting — a person is holding this request open, and a refusal they can
+    # retry beats queueing behind a fill for the acquisition timeout.
+    case Arca.Overlay.UnitLock.try_with_lock({athanor_id, :provisioning}, fn ->
+           with {:ok, pulled} <- Pull.pull_shipped(ctx, reference),
+                {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx),
+                :ok <- installed_minted(bootstrap, pulled) do
+             {:ok, pulled}
+           end
+         end) do
+      {:error, :unit_locked} -> {:error, :provisioning_busy}
+      result -> result
+    end
+  end
+
+  # What this install answers for is its own consent. The walk covers every
+  # source in the athanor, so a skip belonging to another one is that
+  # source's business — and `all_minted/1`'s benign reasons (already
+  # bootstrapped, not vouched, an agent whose closure is unresolved) are not
+  # failures anywhere.
+  defp installed_minted(bootstrap, %{component_ref: ref}) do
+    case all_minted(bootstrap) do
+      :ok ->
+        :ok
+
+      {:unminted, unminted} ->
+        if Enum.any?(unminted, fn {skipped_ref, _reason} -> same_component?(skipped_ref, ref) end),
+           do: {:error, {:consent_not_minted, ref}},
+           else: :ok
+    end
+  end
+
+  defp installed_minted(_bootstrap, _pulled), do: :ok
+
+  defp same_component?(a, b) do
+    with {:ok, a_name} <- Sanctum.ComponentRef.to_name_ref(a),
+         {:ok, b_name} <- Sanctum.ComponentRef.to_name_ref(b) do
+      a_name == b_name
+    else
+      _ -> a == b
     end
   end
 

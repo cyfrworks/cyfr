@@ -1248,6 +1248,14 @@ defmodule Compendium.MCP.ComponentTool do
       "#{reference} is not a version the server ships — a local component is " <>
         "registered from your tree (`cyfr register`); only shipped versions are pulled from the seed"
 
+  # The estate is being filled by a background attempt, a sign-in retry or a
+  # boot sync. The copy mints consent, so it waits for none of them — and a
+  # person can simply ask again.
+  defp shipped_pull_error(reference, :provisioning_busy),
+    do:
+      "#{reference} was not copied: this estate is being prepared right now. " <>
+        "Try again in a moment."
+
   defp shipped_pull_error(reference, reason) do
     Logger.error("[Compendium.MCP] shipped pull of #{reference} failed: #{inspect(reason)}")
     "Failed to pull #{reference}"
