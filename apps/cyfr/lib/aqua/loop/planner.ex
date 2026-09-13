@@ -18,6 +18,10 @@ defmodule Aqua.Loop.Planner do
   only the projection changes. `prune/2` bounds old tool results in the
   projection alone. Sizes are estimates — a quarter of the bytes — until
   the next response reports what the request cost.
+
+  What is measured is `readable/1`, not every row given: the projection
+  keeps what a compaction already summarized, and only the request drops
+  it, so measuring the whole of it would compact again every turn.
   """
 
   alias Arca.Schemas.Message

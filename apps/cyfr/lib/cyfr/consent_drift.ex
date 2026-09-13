@@ -3,8 +3,9 @@
 
 defmodule Cyfr.ConsentDrift do
   @moduledoc """
-  Whether the consent this estate signed for the AQUA soul (and its
-  formulas) still covers what the shipped source grants.
+  Whether the consent this estate signed still covers what the shipped
+  source grants — for the AQUA soul and its roles, which are agent
+  sources, and for the estate's own formulas, which a person may bring.
 
   The chain authority checks every in-chain call against the consent blob
   the estate froze, not against the manifest on disk. A seed upgrade that
