@@ -52,6 +52,12 @@ defmodule Aqua.Loop.Planner do
     max_tokens = Keyword.fetch!(opts, :max_tokens)
     usable = usable(caps, max_tokens)
 
+    # What the model will actually be sent. The projection keeps every row a
+    # compaction already summarized — only the request drops them — so
+    # measuring the raw projection measures the whole conversation again and
+    # compacts on the first round of every later turn.
+    rows = readable(rows)
+
     observed =
       case Keyword.get(opts, :observed_tokens) do
         n when is_integer(n) and n > 0 -> n + estimate_tokens(Keyword.get(opts, :new_bytes, 0))
@@ -189,6 +195,38 @@ defmodule Aqua.Loop.Planner do
   @doc "How many newest rows `prune/1` leaves whole."
   def preserve_recent, do: @preserve_recent
 
+  @doc """
+  The rows the model reads: everything from the latest compaction's
+  boundary, with that compaction standing in for what came before it. The
+  summary row is kept, because it is sent and it costs tokens.
+  """
+  @spec readable([Message.t()]) :: [Message.t()]
+  def readable(rows) do
+    case rows |> Enum.filter(&(&1.kind == "compaction")) |> List.last() do
+      nil ->
+        Enum.reject(rows, &(&1.kind == "compaction"))
+
+      latest ->
+        first = first_kept_seq(latest)
+        [latest | Enum.filter(rows, &(&1.kind != "compaction" and &1.seq >= first))]
+    end
+  end
+
+  defp first_kept_seq(%Message{payload: payload}) do
+    case payload do
+      %{"first_kept_seq" => seq} when is_integer(seq) -> seq
+      json when is_binary(json) -> decoded_first_kept(json)
+      _ -> 0
+    end
+  end
+
+  defp decoded_first_kept(json) do
+    case Jason.decode(json) do
+      {:ok, %{"first_kept_seq" => seq}} when is_integer(seq) -> seq
+      _ -> 0
+    end
+  end
+
   # Rows of one model step — its reply, its calls and their results —
   # form one group; every other row is a group of its own.
   defp group(rows) do
@@ -197,6 +235,13 @@ defmodule Aqua.Loop.Planner do
       {nil, []},
       fn row, {step, acc} ->
         case {step_of(row), row.kind} do
+          # A result belongs with the call that produced it. `TurnStorage`
+          # stamps a call with the MODEL step's id and a result with its own
+          # CALL step's id, so grouping on the id alone puts every result in
+          # a group of its own and lets the boundary fall between a call and
+          # its answer — which is the one thing this grouping exists to
+          # prevent, and which no provider accepts.
+          {_, "tool_result"} when acc != [] -> {:cont, {step, [row | acc]}}
           {nil, _} when acc == [] -> {:cont, {nil, [row]}}
           {nil, _} -> {:cont, Enum.reverse(acc), {nil, [row]}}
           {s, _} when s == step -> {:cont, {step, [row | acc]}}

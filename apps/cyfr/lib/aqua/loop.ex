@@ -1395,8 +1395,19 @@ defmodule Aqua.Loop do
         {:ok, state, rows}
 
       {:compact, boundary} ->
-        older = Enum.filter(rows, &(&1.seq < boundary.first_kept_seq))
         previous = rows |> Enum.filter(&(&1.kind == "compaction")) |> List.last()
+
+        # Only what the previous summary does not already stand for, and
+        # never a compaction row: `Request.messages/2` renders the latest one
+        # as a summary block, so leaving it in sends the previous summary
+        # twice — once rendered, once as `previous_summary` below.
+        since = if previous, do: Tape.payload(previous)["first_kept_seq"] || 0, else: 0
+
+        older =
+          Enum.filter(rows, fn row ->
+            row.kind != "compaction" and row.seq >= since and
+              row.seq < boundary.first_kept_seq
+          end)
 
         request =
           Planner.summary_request(Request.messages(older),
