@@ -273,7 +273,10 @@ defmodule Compendium.ScaffoldTest do
       assert File.exists?(Path.join(base, "package.json"))
       assert File.exists?(Path.join(base, "tsconfig.json"))
       assert File.exists?(Path.join(base, "vite.config.ts"))
-      assert File.exists?(Path.join(base, "index.html"))
+      # The source entry sits under src/, where a build cannot overwrite it:
+      # the build writes its own index.html at the version root.
+      assert File.exists?(Path.join([base, "src", "index.html"]))
+      refute File.exists?(Path.join(base, "index.html"))
       assert File.exists?(Path.join([base, "src", "main.tsx"]))
       assert File.exists?(Path.join([base, "src", "App.tsx"]))
       assert File.exists?(Path.join([base, "src", "index.css"]))
