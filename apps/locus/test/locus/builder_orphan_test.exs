@@ -86,13 +86,21 @@ defmodule Locus.BuilderOrphanTest do
     end
   end
 
+  # Waits until the child has actually exec'd. `Port.open/2` returns before
+  # that, and `Port.info/2` answers with a pid the OS may not have finished
+  # setting up: a kill sent then finds neither the pid nor its group, and
+  # the builder reads two "No such process" answers as a job already done.
+  # It says so in `already_gone?`, silently, which is right in general and
+  # is exactly what made this test look like a broken cleanup.
   defp spawn_sleeper do
     port =
-      Port.open({:spawn_executable, System.find_executable("sleep")}, [
+      Port.open({:spawn_executable, System.find_executable("sh")}, [
         :binary,
         :exit_status,
-        {:args, ["30"]}
+        {:args, ["-c", "echo ready; exec sleep 30"]}
       ])
+
+    assert_receive {^port, {:data, "ready\n"}}, 5_000
 
     {:os_pid, os_pid} = Port.info(port, :os_pid)
     {port, os_pid}
