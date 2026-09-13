@@ -311,6 +311,34 @@ defmodule Arca.TurnStorage do
   end
 
   @doc """
+  Append one row the turn owns but no step produced — a compaction, an
+  aborted mark, a system note — inside the turn's fence. `attrs`: the
+  message's own fields plus `:fence`.
+
+  These rows are part of what the next request reads, so a runner whose
+  fence has moved must not be able to add one: a superseded loop appending
+  a compaction would change the projection its successor is working from.
+  """
+  @spec append_turn_row(Context.t(), String.t(), map()) :: {:ok, Message.t()} | {:error, term()}
+  def append_turn_row(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.append_turn_row", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        turn = turn!(athanor_id, turn_id)
+        check_fence!(turn, attrs)
+        conv = conversation!(athanor_id, turn.conversation_id)
+
+        Arca.ConversationStorage.insert_message!(
+          ctx,
+          conv,
+          attrs |> Map.drop([:fence]) |> Map.put(:turn_id, turn.id)
+        )
+      end)
+    end)
+  end
+
+  @doc """
   End a turn: the one terminal transaction. `status` is
   `completed | failed | cancelled | uncertain`; `attrs`: `:fence`,
   `:error`. The root attempt is closed with the matching outcome, the

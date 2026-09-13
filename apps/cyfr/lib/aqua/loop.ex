@@ -34,6 +34,9 @@ defmodule Aqua.Loop do
   @step_timeout_ms 5 * 60 * 1000
   @launch_timeout_ms 10 * 60 * 1000
   @retry_delays_ms [2_000, 8_000, 20_000]
+  # `{"operation":"chat","params":}` around the request, which is what
+  # `Opus.Executor` encodes and weighs against the node's cap.
+  @envelope_bytes 30
   @resume_backoff_ms [500, 2_000, 8_000]
   @recoverable ~w(rate_limited overloaded)
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
@@ -53,6 +56,11 @@ defmodule Aqua.Loop do
       since: nil,
       active_ms: 0,
       observed: nil,
+      # The highest seq the measured request carried, so rows appended since
+      # can be counted. A bare token count says nothing about which rows it
+      # was a count of.
+      observed_seq: 0,
+      sent_upto: 0,
       clone?: false,
       excerpt_sent?: false,
       # A call's outcome is unknown: only replay-safe reads run from here.
@@ -294,9 +302,28 @@ defmodule Aqua.Loop do
 
       _ ->
         {status, error} = terminal(result)
-        _ = Tape.finish(ctx(state), ended.turn, status, %{error: error})
+        final = finished(state, ended, status, error, result)
         release(ended)
+        final
+    end
+  end
+
+  defp finished(%State{} = state, ended, status, error, result) do
+    case Tape.finish(ctx(state), ended.turn, status, %{error: error}) do
+      {:ok, _} ->
         result
+
+      other ->
+        # Saying "completed" while the row still says "running" puts the
+        # runtime and the rows in disagreement, and the runner would take
+        # the next message believing this one had landed. The row is left
+        # for recovery, which is what owns a turn nobody finished.
+        Logger.error(
+          "[Aqua.Loop] turn #{ended.turn.id} could not be finished as #{status}: " <>
+            "#{inspect(other)}"
+        )
+
+        {:uncertain, "the turn's terminal write did not land"}
     end
   end
 
@@ -344,6 +371,7 @@ defmodule Aqua.Loop do
          {:ok, step, planned} <- open_model_step(planned, "chat") do
       excerpt = if planned.excerpt_sent?, do: nil, else: planned.spec.excerpt
       request = request(planned, rows, excerpt, first?)
+      planned = %{planned | sent_upto: highest_seq(rows)}
 
       if excerpt do
         _ =
@@ -360,9 +388,12 @@ defmodule Aqua.Loop do
     end
   end
 
-  # The turn's first request carries the sender's attachments; a later
-  # round reads them from the rows.
-  defp request(%State{spec: spec} = state, rows, excerpt, first?) do
+  # Every round carries the sender's attachments. A later round used to send
+  # none, on the belief that the rows carry them: they do not — the
+  # projection renders text, and an image or a document exists only as these
+  # typed blocks. After the first tool call the model could no longer see
+  # what it had been asked about.
+  defp request(%State{spec: spec} = state, rows, excerpt, _first?) do
     rows = Planner.prune(rows)
     authors = rows |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.reject(&agent_or_system?/1)
     multi? = spec.several_people? or length(authors) > 1
@@ -375,7 +406,8 @@ defmodule Aqua.Loop do
         names: names,
         multi_author?: multi?,
         excerpt: excerpt,
-        attachments: if(first?, do: spec.attachments, else: [])
+        attachments: spec.attachments,
+        task_message_id: state.turn.message_id
       )
 
     Request.build(
@@ -595,7 +627,12 @@ defmodule Aqua.Loop do
     output = usage["output_tokens"] || 0
     totals = %{input: state.usage.input + input, output: state.usage.output + output}
     announce(state, {:usage, totals})
-    %{state | usage: totals, observed: if(input > 0, do: input, else: state.observed)}
+
+    if input > 0 do
+      %{state | usage: totals, observed: input, observed_seq: state.sent_upto}
+    else
+      %{state | usage: totals}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -606,7 +643,12 @@ defmodule Aqua.Loop do
   # reads runs beside itself, everything else alone; a steer that
   # arrived skips what has not started.
   defp dispatch(%State{} = state, items) do
-    touched = touched(state)
+    # What the turn has already written to, and what this response is about
+    # to. The closed calls alone are a snapshot from before any of these ran,
+    # so a write, a build and a run proposed together were every one of them
+    # judged against a turn that had touched nothing — and the launch rule
+    # that asks for a card after a write never saw the write.
+    touched = MapSet.union(touched(state), proposes(items))
     {runnable, cards} = Enum.reduce(items, {[], 0}, &decide(state, touched, &1, &2))
     runnable = Enum.reverse(runnable)
 
@@ -737,40 +779,30 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp group(items) do
-    Enum.chunk_while(
-      items,
-      [],
-      fn item, acc ->
+  @doc false
+  # Public for its own test: which calls share a group decides what runs
+  # beside what, and a wrong grouping is invisible from outside until two
+  # things race.
+  #
+  # Reads gather; anything else runs alone. A non-read has to flush the
+  # reads waiting behind it AND stand alone, which is two emissions for one
+  # item — `chunk_while` allows one, so it seeded the next group with the
+  # write instead and the following read joined it.
+  def group(items) do
+    {groups, pending} =
+      Enum.reduce(items, {[], []}, fn item, {groups, reads} ->
         cond do
-          launch?(item) and acc == [] -> {:cont, {:launch, item}, []}
-          launch?(item) -> {:cont, {:concurrent, Enum.reverse(acc)}, [item]}
-          concurrent?(item) -> {:cont, [item | acc]}
-          acc == [] -> {:cont, {:exclusive, item}, []}
-          true -> {:cont, {:concurrent, Enum.reverse(acc)}, [item]}
+          launch?(item) -> {[{:launch, item} | flush(reads, groups)], []}
+          concurrent?(item) -> {groups, [item | reads]}
+          true -> {[{:exclusive, item} | flush(reads, groups)], []}
         end
-      end,
-      fn
-        [] ->
-          {:cont, []}
+      end)
 
-        [item] ->
-          if launch?(item),
-            do: {:cont, {:launch, item}, []},
-            else: {:cont, {:concurrent, [item]}, []}
-
-        acc ->
-          {:cont, {:concurrent, Enum.reverse(acc)}, []}
-      end
-    )
-    |> Enum.flat_map(fn
-      {:concurrent, [item]} ->
-        [if(concurrent?(item), do: {:concurrent, [item]}, else: {:exclusive, item})]
-
-      other ->
-        [other]
-    end)
+    pending |> flush(groups) |> Enum.reverse()
   end
+
+  defp flush([], groups), do: groups
+  defp flush(reads, groups), do: [{:concurrent, Enum.reverse(reads)} | groups]
 
   defp launch?(%{step: %{kind: "launch"}}), do: true
   defp launch?(_item), do: false
@@ -914,8 +946,18 @@ defmodule Aqua.Loop do
             {:uncertain, step, describe(reason)}
 
           result ->
-            _ = close(state, step, call, result)
-            :ok
+            case close(state, step, call, result) do
+              {:ok, _closed} ->
+                :ok
+
+              other ->
+                # The canonical result is what the next round reads. Without
+                # it the step stays dispatched, the model is handed a
+                # synthetic "outcome is unknown", and the turn finishes as
+                # though the call had answered. That is the uncertain path,
+                # and it stops the turn.
+                {:uncertain, step, describe({:result_lost, other})}
+            end
         end
 
       {:error, :not_proposed} ->
@@ -1386,17 +1428,45 @@ defmodule Aqua.Loop do
   # ---------------------------------------------------------------------------
 
   defp compact(%State{spec: spec} = state, rows) do
+    # Size the request the way the executor will: it encodes the input and
+    # refuses it past the consented cap of the node being entered, which for
+    # a model call is the catalyst, not the agent. Without this the turn
+    # fails at admission on a request compaction could have made fit.
+    excerpt = if state.excerpt_sent?, do: nil, else: spec.excerpt
+    probe = request(state, rows, excerpt, state.steps == 0)
+
     case Planner.plan(rows,
            capabilities: spec.capabilities,
            max_tokens: Request.max_tokens(spec.capabilities),
-           observed_tokens: state.observed
+           observed_tokens: state.observed,
+           new_bytes: appended_bytes(rows, state.observed_seq),
+           request_bytes: encoded_size(probe),
+           max_request_size: catalyst_request_cap(spec)
          ) do
       :fit ->
         {:ok, state, rows}
 
+      {:compact, %{summarized_through_seq: 0}} ->
+        # Nothing older than the boundary: a summary of no rows costs a model
+        # call and writes a row that stands for nothing. The estimate counts
+        # only transcript rows, so on a small window the system prompt and
+        # tool definitions alone can ask for this every round.
+        {:ok, state, rows}
+
       {:compact, boundary} ->
-        older = Enum.filter(rows, &(&1.seq < boundary.first_kept_seq))
         previous = rows |> Enum.filter(&(&1.kind == "compaction")) |> List.last()
+
+        # Only what the previous summary does not already stand for, and
+        # never a compaction row: `Request.messages/2` renders the latest one
+        # as a summary block, so leaving it in sends the previous summary
+        # twice — once rendered, once as `previous_summary` below.
+        since = if previous, do: Tape.payload(previous)["first_kept_seq"] || 0, else: 0
+
+        older =
+          Enum.filter(rows, fn row ->
+            row.kind != "compaction" and row.seq >= since and
+              row.seq < boundary.first_kept_seq
+          end)
 
         request =
           Planner.summary_request(Request.messages(older),
@@ -1441,6 +1511,55 @@ defmodule Aqua.Loop do
     end
   end
 
+  defp highest_seq([]), do: 0
+  defp highest_seq(rows), do: rows |> Enum.map(& &1.seq) |> Enum.max()
+
+  # What has arrived since the response whose token count we are reusing —
+  # a steer, a tool result, a clone's summary. Counting the estimate alone
+  # would price the request as it stood one round ago.
+  defp appended_bytes(rows, since) do
+    rows
+    |> Enum.filter(&(&1.seq > since))
+    |> Enum.map(fn row ->
+      byte_size(row.content || "") +
+        byte_size(if(is_binary(row.payload), do: row.payload, else: ""))
+    end)
+    |> Enum.sum()
+  end
+
+  # nil rather than a guess when the request cannot be encoded: the byte
+  # trigger stands down and the token estimate decides alone.
+  defp encoded_size(request) do
+    case Jason.encode(request) do
+      # What the executor weighs is the invocation envelope, not the bare
+      # request, so the envelope's own bytes are counted here too. Without
+      # them a request just under the cap passes this check and is refused
+      # where it is enforced.
+      {:ok, json} -> byte_size(json) + @envelope_bytes
+      {:error, _} -> nil
+    end
+  end
+
+  @doc false
+  # Public for its own test. Whether the cap resolves is otherwise
+  # unobservable: the token estimate trips before a transcript can reach the
+  # byte cap under ordinary conditions, so no end-to-end turn reaches this
+  # branch, and a cap of nil looks exactly like a request that fits.
+  # By name, without the version. The spec carries a versioned ref because
+  # that is what resolved, but the consent graph keys every node by name —
+  # `Opus.Chain` steps to `name_level/1` and `Authority.limits/1` matches on
+  # that. A versioned key finds nothing, and a cap of nil is a check that
+  # never fires.
+  def catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do
+    with {:ok, name_ref} <- Sanctum.ComponentRef.to_name_ref(catalyst),
+         {:ok, %Sanctum.Limits{max_request_size: cap}} <-
+           Sanctum.Authority.node_limits(authority, name_ref) do
+      cap
+    else
+      _ -> nil
+    end
+  end
+
   # A compaction that did not land leaves the rows as they were; the
   # model step it opened stays counted.
   defp skip_compaction(%State{} = state, rows, reason) do
@@ -1473,6 +1592,20 @@ defmodule Aqua.Loop do
       {:ok, payloads} -> Policy.touched_refs(payloads)
       _ -> MapSet.new()
     end
+  end
+
+  # The references this response's own calls would write to, whatever order
+  # they run in and whether or not they have closed.
+  defp proposes(items) do
+    items
+    |> Enum.flat_map(fn
+      %{call: {:ok, %Call{} = call}} ->
+        [%{"tool" => call.tool, "action" => call.action, "arguments" => call.args}]
+
+      _ ->
+        []
+    end)
+    |> Policy.touched_refs()
   end
 
   defp pending?(%State{} = state) do

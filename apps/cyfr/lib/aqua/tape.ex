@@ -115,13 +115,27 @@ defmodule Aqua.Tape do
   @doc "The `turn_aborted` system row: tools may have partially executed."
   @spec append_aborted(Context.t(), turn(), String.t()) :: {:ok, row()} | {:error, term()}
   def append_aborted(%Context{} = ctx, turn, reason) when is_binary(reason) do
-    append(ctx, turn.conversation_id, %{
+    turn_row(ctx, turn, %{
       author: Arca.Schemas.Message.system_author(),
       kind: "turn_aborted",
-      content: reason,
-      turn_id: turn.id,
-      execution_id: turn.root_execution_id
+      content: reason
     })
+  end
+
+  # A row the turn owns, written inside its fence. Both of these change what
+  # the next request reads, so a runner whose fence has moved must not be
+  # able to add one — the generic `append/3` asks the conversation and would
+  # have let a superseded loop rewrite its successor's projection.
+  defp turn_row(%Context{} = ctx, turn, attrs) do
+    attrs =
+      attrs
+      |> Map.put(:execution_id, turn.root_execution_id)
+      |> Map.put(:fence, turn.fence)
+
+    with {:ok, row} <- TurnStorage.append_turn_row(ctx, turn.id, attrs) do
+      broadcast(ctx, turn.conversation_id, {:message, row})
+      {:ok, row}
+    end
   end
 
   @doc """
@@ -130,7 +144,7 @@ defmodule Aqua.Tape do
   """
   @spec append_compaction(Context.t(), turn(), map()) :: {:ok, row()} | {:error, term()}
   def append_compaction(%Context{} = ctx, turn, attrs) when is_map(attrs) do
-    append(ctx, turn.conversation_id, %{
+    turn_row(ctx, turn, %{
       author: Arca.Schemas.Message.system_author(),
       kind: "compaction",
       content: Map.get(attrs, :summary, ""),
@@ -138,9 +152,7 @@ defmodule Aqua.Tape do
         "first_kept_seq" => Map.fetch!(attrs, :first_kept_seq),
         "summarized_through_seq" => Map.fetch!(attrs, :summarized_through_seq),
         "step_id" => Map.get(attrs, :step_id)
-      },
-      turn_id: turn.id,
-      execution_id: turn.root_execution_id
+      }
     })
   end
 

@@ -241,7 +241,9 @@ defmodule Aqua.Loop.Request do
   The projection shaped for the contract. `opts`: `:names` (a map of
   user id to display name, used when `:multi_author?` is true),
   `:excerpt` (the room excerpt, a transient block), `:attachments` (typed
-  blocks for the initiating message), `:task_message_id`.
+  blocks for the initiating message), `:task_message_id` (which message
+  those blocks belong to; without it they land on the first user message,
+  which is only the right one in a transcript of one).
   """
   @spec messages([Message.t()], keyword()) :: [map()]
   def messages(rows, opts \\ []) when is_list(rows) do
@@ -252,7 +254,7 @@ defmodule Aqua.Loop.Request do
     |> Enum.map(&finish_message/1)
     |> answer_dangling_calls()
     |> merge_same_role()
-    |> attach(:attachments, Keyword.get(opts, :attachments))
+    |> attach_blocks(Keyword.get(opts, :attachments), Keyword.get(opts, :task_message_id))
     |> attach(:excerpt, Keyword.get(opts, :excerpt))
   end
 
@@ -560,20 +562,32 @@ defmodule Aqua.Loop.Request do
 
   def without_excerpt(request), do: request
 
-  defp attach(messages, _what, nil), do: strip_ids(messages)
-  defp attach(messages, _what, []), do: strip_ids(messages)
+  defp attach_blocks(messages, nil, _task_message_id), do: strip_ids(messages)
+  defp attach_blocks(messages, [], _task_message_id), do: strip_ids(messages)
 
-  defp attach(messages, :attachments, blocks) when is_list(blocks) do
-    # The initiating message is the first user message when the task id
-    # is not known; blocks go after its text.
+  defp attach_blocks(messages, blocks, task_message_id) when is_list(blocks) do
+    # Onto the message that carried them. Falling back to the first user
+    # message is only right for a transcript of one: with history behind it,
+    # an image sent now would be handed to the oldest thing anyone said.
+    target =
+      if task_message_id && Enum.any?(messages, &(&1[:message_id] == task_message_id)),
+        do: &(&1[:message_id] == task_message_id),
+        else: &(&1["role"] == "user")
+
     messages
     |> Enum.map_reduce(false, fn
-      %{"role" => "user"} = m, false -> {%{m | "content" => m["content"] ++ blocks}, true}
-      m, done -> {m, done}
+      m, false ->
+        if target.(m), do: {%{m | "content" => m["content"] ++ blocks}, true}, else: {m, false}
+
+      m, true ->
+        {m, true}
     end)
     |> elem(0)
     |> strip_ids()
   end
+
+  defp attach(messages, _what, nil), do: strip_ids(messages)
+  defp attach(messages, _what, []), do: strip_ids(messages)
 
   defp attach(messages, :excerpt, excerpt) when is_binary(excerpt) do
     block = %{"type" => "text", "text" => @excerpt_prefix <> excerpt}

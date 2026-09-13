@@ -20,7 +20,7 @@ defmodule Arca.Schemas.Message do
 
   @type t :: %__MODULE__{}
   # `tool_call`, `tool_result`, `compaction` and `turn_aborted` are the
-  # rows the loop that will own a turn writes; nothing writes them yet.
+  # turn's own rows: the loop writes them through `Aqua.Tape`.
   @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted)
   @statuses ~w(pending running approved declined error expired)
   @agent_author "aqua"

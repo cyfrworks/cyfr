@@ -52,6 +52,12 @@ defmodule Aqua.Loop.Planner do
     max_tokens = Keyword.fetch!(opts, :max_tokens)
     usable = usable(caps, max_tokens)
 
+    # What the model will actually be sent. The projection keeps every row a
+    # compaction already summarized — only the request drops them — so
+    # measuring the raw projection measures the whole conversation again and
+    # compacts on the first round of every later turn.
+    rows = readable(rows)
+
     observed =
       case Keyword.get(opts, :observed_tokens) do
         n when is_integer(n) and n > 0 -> n + estimate_tokens(Keyword.get(opts, :new_bytes, 0))
@@ -109,7 +115,53 @@ defmodule Aqua.Loop.Planner do
       end)
 
     first = kept |> List.first() |> List.first()
-    %{first_kept_seq: first.seq, summarized_through_seq: first.seq - 1}
+    kept_seq = with_answered_calls(rows, first.seq)
+    %{first_kept_seq: kept_seq, summarized_through_seq: kept_seq - 1}
+  end
+
+  # Grouping keeps a result beside the call it answers, but only while they
+  # are adjacent: an approval card or an aborted mark writes a row between
+  # them, and the boundary could then land on that row and summarize away a
+  # call whose result it keeps. Providers reject a `tool_result` with no
+  # `tool_call`, and nothing repairs that direction.
+  #
+  # So the boundary is pulled back to include any call whose answer is kept.
+  # Pulling back can bring in further results whose calls are older still,
+  # hence the repeat; it only ever moves earlier, so it settles.
+  defp with_answered_calls(rows, first) do
+    calls =
+      for row <- rows, row.kind == "tool_call", id = call_id(row), id != nil, into: %{} do
+        {id, row.seq}
+      end
+
+    orphaned =
+      for row <- rows,
+          row.seq >= first,
+          row.kind == "tool_result",
+          id = call_id(row),
+          seq = Map.get(calls, id),
+          seq != nil and seq < first,
+          do: seq
+
+    case orphaned do
+      [] -> first
+      seqs -> with_answered_calls(rows, Enum.min(seqs))
+    end
+  end
+
+  defp call_id(%Message{payload: payload}) do
+    case payload do
+      %{"tool_call_id" => id} when is_binary(id) -> id
+      json when is_binary(json) -> decoded_call_id(json)
+      _ -> nil
+    end
+  end
+
+  defp decoded_call_id(json) do
+    case Jason.decode(json) do
+      {:ok, %{"tool_call_id" => id}} when is_binary(id) -> id
+      _ -> nil
+    end
   end
 
   @doc """
@@ -189,6 +241,38 @@ defmodule Aqua.Loop.Planner do
   @doc "How many newest rows `prune/1` leaves whole."
   def preserve_recent, do: @preserve_recent
 
+  @doc """
+  The rows the model reads: everything from the latest compaction's
+  boundary, with that compaction standing in for what came before it. The
+  summary row is kept, because it is sent and it costs tokens.
+  """
+  @spec readable([Message.t()]) :: [Message.t()]
+  def readable(rows) do
+    case rows |> Enum.filter(&(&1.kind == "compaction")) |> List.last() do
+      nil ->
+        Enum.reject(rows, &(&1.kind == "compaction"))
+
+      latest ->
+        first = first_kept_seq(latest)
+        [latest | Enum.filter(rows, &(&1.kind != "compaction" and &1.seq >= first))]
+    end
+  end
+
+  defp first_kept_seq(%Message{payload: payload}) do
+    case payload do
+      %{"first_kept_seq" => seq} when is_integer(seq) -> seq
+      json when is_binary(json) -> decoded_first_kept(json)
+      _ -> 0
+    end
+  end
+
+  defp decoded_first_kept(json) do
+    case Jason.decode(json) do
+      {:ok, %{"first_kept_seq" => seq}} when is_integer(seq) -> seq
+      _ -> 0
+    end
+  end
+
   # Rows of one model step — its reply, its calls and their results —
   # form one group; every other row is a group of its own.
   defp group(rows) do
@@ -197,6 +281,13 @@ defmodule Aqua.Loop.Planner do
       {nil, []},
       fn row, {step, acc} ->
         case {step_of(row), row.kind} do
+          # A result belongs with the call that produced it. `TurnStorage`
+          # stamps a call with the MODEL step's id and a result with its own
+          # CALL step's id, so grouping on the id alone puts every result in
+          # a group of its own and lets the boundary fall between a call and
+          # its answer — which is the one thing this grouping exists to
+          # prevent, and which no provider accepts.
+          {_, "tool_result"} when acc != [] -> {:cont, {step, [row | acc]}}
           {nil, _} when acc == [] -> {:cont, {nil, [row]}}
           {nil, _} -> {:cont, Enum.reverse(acc), {nil, [row]}}
           {s, _} when s == step -> {:cont, {step, [row | acc]}}

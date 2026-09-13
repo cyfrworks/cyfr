@@ -272,6 +272,18 @@ defmodule Sanctum.Authority do
 
   def limits(%__MODULE__{cursor: :unbound}), do: @zero_limits
 
+  @doc """
+  The limits consented for one node of the graph, by ref, whether or not
+  the cursor stands on it. A caller that must size a request before
+  stepping onto the node that will receive it needs this; `limits/1`
+  answers only for where the cursor is.
+  """
+  @spec node_limits(t(), String.t()) :: {:ok, Limits.t()} | {:error, :unknown_node}
+  def node_limits(%__MODULE__{policy: %Blob{} = blob}, node_ref) when is_binary(node_ref),
+    do: Blob.node_limits(blob, node_ref)
+
+  def node_limits(%__MODULE__{}, _node_ref), do: {:error, :unknown_node}
+
   # ============================================================================
   # Root budget
   # ============================================================================

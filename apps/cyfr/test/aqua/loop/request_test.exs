@@ -201,6 +201,24 @@ defmodule Aqua.Loop.RequestTest do
     assert [%{"type" => "text"}, %{"type" => "image"}] = content
   end
 
+  test "attachments land on the turn's own message, not the oldest one in the transcript" do
+    image = %{"type" => "image", "media_type" => "image/png", "data" => "…"}
+
+    rows = [
+      row(1, "text", "usr_a", "something from last week"),
+      row(2, "text", @agent, "an answer"),
+      row(3, "text", "usr_a", "what is in this picture?")
+    ]
+
+    # Without the id there is nothing to aim at and the oldest message takes
+    # it, which is the whole defect in a conversation with history.
+    assert [%{"content" => [_, ^image]}, _, %{"content" => [_]}] =
+             Request.messages(rows, attachments: [image])
+
+    assert [%{"content" => [_]}, _, %{"content" => [_, ^image]}] =
+             Request.messages(rows, attachments: [image], task_message_id: "msg_3")
+  end
+
   test "the request carries the ceiling and the provider tools the catalyst offers" do
     caps = %{max_output_tokens: 4_000, default_max_tokens: 8_000, provider_tools: ["web_search"]}
 

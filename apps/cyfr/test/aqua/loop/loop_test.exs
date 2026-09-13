@@ -63,6 +63,72 @@ defmodule Aqua.LoopTest do
     {:ok, ctx: ctx, conv: conv}
   end
 
+  test "the catalyst's consented cap answers to a name, not to the ref the spec carries", %{
+    ctx: ctx
+  } do
+    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+
+    # What `Aqua.AgentConfig` resolves, and so what the spec holds.
+    versioned = @model <> ":1.2.0"
+    {:ok, name_ref} = Sanctum.ComponentRef.to_name_ref(versioned)
+
+    # The graph is keyed the way `Opus.Chain` steps: by name. Asking with
+    # the version answers nothing, and a cap of nil is a size check that
+    # never fires — which is what the loop did while it asked that way.
+    assert {:error, :unknown_node} = Sanctum.Authority.node_limits(authority, versioned)
+
+    assert {:ok, %Sanctum.Limits{max_request_size: cap}} =
+             Sanctum.Authority.node_limits(authority, name_ref)
+
+    assert is_integer(cap) and cap > 0
+  end
+
+  test "the loop resolves a cap for the spec it actually holds", %{ctx: ctx, conv: conv} do
+    turn = accept!(ctx, conv, "hello")
+    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, spec} = Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
+
+    # The spec holds a versioned ref, and the graph is keyed by name. Asking
+    # with what the spec holds answers nothing, and the size trigger then
+    # never fires — indistinguishable, from outside, from a request that fits.
+    assert String.starts_with?(spec.catalyst, @model <> ":")
+    assert is_integer(Aqua.Loop.catalyst_request_cap(spec))
+  end
+
+  describe "group/1" do
+    test "a write between reads runs alone, and the reads on either side do not join it" do
+      read1 = item("files", %{"action" => "read", "path" => "a"})
+      write = item("files", %{"action" => "write", "path" => "b", "content" => "x"})
+      read2 = item("files", %{"action" => "read", "path" => "c"})
+
+      assert [{:concurrent, [^read1]}, {:exclusive, ^write}, {:concurrent, [^read2]}] =
+               Aqua.Loop.group([read1, write, read2])
+    end
+
+    test "consecutive reads share a group and consecutive writes do not" do
+      r1 = item("files", %{"action" => "read", "path" => "a"})
+      r2 = item("files", %{"action" => "read", "path" => "b"})
+      w1 = item("files", %{"action" => "write", "path" => "c", "content" => "x"})
+      w2 = item("files", %{"action" => "write", "path" => "d", "content" => "y"})
+
+      assert [{:concurrent, [^r1, ^r2]}, {:exclusive, ^w1}, {:exclusive, ^w2}] =
+               Aqua.Loop.group([r1, r2, w1, w2])
+    end
+
+    test "a write last, and a write first, each stand alone" do
+      read = item("files", %{"action" => "read", "path" => "a"})
+      write = item("files", %{"action" => "write", "path" => "b", "content" => "x"})
+
+      assert [{:concurrent, [^read]}, {:exclusive, ^write}] = Aqua.Loop.group([read, write])
+      assert [{:exclusive, ^write}, {:concurrent, [^read]}] = Aqua.Loop.group([write, read])
+    end
+  end
+
+  defp item(name, args) do
+    {:ok, call} = Aqua.Loop.Binding.resolve(name, args)
+    %{step: %{kind: "tool"}, call: {:ok, call}}
+  end
+
   defp accept!(ctx, conv, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, conv.id, %{

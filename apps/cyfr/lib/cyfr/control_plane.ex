@@ -93,8 +93,10 @@ defmodule Cyfr.ControlPlane do
           {:error, {:held, owner, until}} ->
             raise "[Cyfr] FATAL: another control plane (#{owner}) holds this database until " <>
                     "#{DateTime.to_iso8601(until)} and is renewing it. Two servers on one " <>
-                    "database each run every sweep and accept every turn. Stop the other one, " <>
-                    "or set CYFR_CLUSTER=1 only for nodes that share the database by design."
+                    "database each run every sweep and accept every turn. Stop the other one. " <>
+                    "CYFR_CLUSTER lifts this claim, and nothing replaces it: turn ownership, " <>
+                    "provisioning and the singletons are node-local, so both nodes would own " <>
+                    "the same turn and fill the same estate."
 
           {:error, reason} ->
             raise "[Cyfr] FATAL: the control-plane claim could not be written (#{inspect(reason)})."
