@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"os"
 
 	"github.com/cyfr/codex/internal/output"
@@ -50,8 +51,8 @@ The type can be given as a prefix (c:, r:, f:, t:) or as a separate first argume
 
 		fmt.Fprintf(os.Stderr, "Compiling %s...\n", normalized)
 
-		result, err := client.CallToolWithProgress(cmd.Context(), "build", map[string]any{
-			"action":    "compile",
+		result, err := client.CallToolWithProgress(cmd.Context(), ops.Build, map[string]any{
+			"action":    ops.BuildCompile,
 			"reference": normalized,
 			"build_id":  buildID,
 		}, progressPrinter())
@@ -87,8 +88,8 @@ var buildToolchainsCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "build", map[string]any{
-			"action": "toolchains",
+		result, err := client.CallTool(cmd.Context(), ops.Build, map[string]any{
+			"action": ops.BuildToolchains,
 		})
 		if err != nil {
 			return handleToolError(err, "Toolchains query failed")
@@ -130,8 +131,8 @@ var buildValidateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "build", map[string]any{
-			"action":      "validate",
+		result, err := client.CallTool(cmd.Context(), ops.Build, map[string]any{
+			"action":      ops.BuildValidate,
 			"wasm_base64": args[0],
 		})
 		if err != nil {

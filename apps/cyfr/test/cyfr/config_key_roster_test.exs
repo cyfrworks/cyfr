@@ -3,10 +3,8 @@
 
 defmodule Cyfr.ConfigKeyRosterTest do
   @moduledoc """
-  Every `:cyfr` application key the code reads, and what kind of thing it
-  is. A new key fails this test until it is classified — which is the
-  point: whether a value is an operator's to set is a decision, and it was
-  being made silently by whoever added the `Application.get_env` call.
+  Classifies every :cyfr application key read by the code.
+  Unclassified keys fail the roster check.
 
   The classes:
 
@@ -37,7 +35,8 @@ defmodule Cyfr.ConfigKeyRosterTest do
     # Test seams — see `Sanctum.Auth.DeviceFlow.impl/0` for the rule.
     allow_tenancy_resolver_override: :seam,
     tenancy_resolver_override: :seam,
-    aqua_turn: :seam,
+    catalog: :seam,
+    tool_providers_lenient: :seam,
     conversation_recovery: :seam,
     device_flow: :seam,
     provisioning_inline: :seam,
@@ -49,6 +48,8 @@ defmodule Cyfr.ConfigKeyRosterTest do
     external_server_reconciler_enabled: :default,
     provisioning_boot_enabled: :default,
     retention_scheduler_enabled: :default,
+    control_plane_claim_enabled: :default,
+    keyring_fingerprint_check_enabled: :default,
     telemetry_console_enabled: :default,
 
     # Derived at boot from `:crypto_keyring_json`, which IS an operator

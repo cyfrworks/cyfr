@@ -26,7 +26,8 @@ defmodule Sanctum.Consent.ShapeDigestTest do
         %{needs: [%{name: "source", type: "catalyst:supabase.com.database"}]},
         %{caps: %{"allowed_domains" => ["a.example"]}},
         %{tool_actions: ["storage.read"]},
-        %{slots: ["source"]}
+        %{slots: ["source"]},
+        %{tool_policy: %{auto: ["http.get"], ask: ["files.read"]}}
       ]
 
       for variant <- variants do
@@ -45,6 +46,19 @@ defmodule Sanctum.Consent.ShapeDigestTest do
 
       assert digest!(a) == digest!(b)
 
+      assert digest!(
+               Map.put(@base, :tool_policy, %{
+                 auto: ["http.post", "http.get"],
+                 ask: ["files.read"]
+               })
+             ) ==
+               digest!(
+                 Map.put(@base, :tool_policy, %{
+                   auto: ["http.get", "http.post"],
+                   ask: ["files.read"]
+                 })
+               )
+
       # Nor does the prose shown to the operator.
       with_reason = %{name: "source", type: "catalyst:local.db", reason: "to read orders"}
 
@@ -60,9 +74,7 @@ defmodule Sanctum.Consent.ShapeDigestTest do
     end
   end
 
-  # ============================================================================
-  # §6 "Tool-group stability"
-  # ============================================================================
+  # Tool-group stability
 
   describe "tool-group stability" do
     test "a group name is structurally unrepresentable" do
@@ -143,6 +155,13 @@ defmodule Sanctum.Consent.ShapeDigestTest do
 
       assert {:error, {:invalid_shape, :source_ref, _}} =
                ShapeDigest.compute(Map.put(@base, :source_ref, "not a ref"))
+
+      assert {:error, {:invalid_shape, :tool_policy, message}} =
+               ShapeDigest.compute(
+                 Map.put(@base, :tool_policy, %{auto: ["http.get"], ask: ["http.get"]})
+               )
+
+      assert message =~ "disjoint"
     end
 
     test "rejects loose durations in caps" do

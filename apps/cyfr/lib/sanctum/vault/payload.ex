@@ -13,10 +13,8 @@ defmodule Sanctum.Vault.Payload do
   malformed oauth blocks are refused, so a tampered or mis-written payload
   fails before any of it is dispensed.
 
-  The retired v1 pointer document (`{"v":1,"legacy":…}`, which pointed into
-  credential stores that no longer exist) is refused HERE, in the one place
-  every read decodes through, as `:legacy_pointer_retired` — recreate the
-  entry to store real material.
+  Rejects version-1 pointer documents as `:legacy_pointer_retired`.
+  Recreate those entries with credential material.
   """
 
   @type t :: map()

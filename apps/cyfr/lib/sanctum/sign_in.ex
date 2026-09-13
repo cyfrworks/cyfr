@@ -7,26 +7,25 @@ defmodule Sanctum.SignIn do
   never per request.
 
   `admitted/2`: the person's `users` row is written or refreshed; an
-  operator (verdict `:admin`) gets the platform-admin membership and a seat
-  in Home, and a person the env list no longer names loses the platform
-  row; every `invited` group row for the person's verified email becomes
-  their active membership; and — once the cyfr.run namespace is known — the
-  person's own athanor is minted and provisioned
-  (`Sanctum.Provisioning.after_sign_in/1`).
+  operator (verdict `:admin`) gets the platform-admin membership, and a
+  person the env list no longer names loses it; every `invited` group row for the person's verified email becomes
+  their active membership; and the person's own athanor is minted and
+  provisioned (`Sanctum.Provisioning.after_sign_in/1`). Admission is
+  personhood: nothing here waits on a registry.
 
-  `complete/3`: the one decision both sign-in paths (the browser callback
-  and the CLI device flow) take after the door — what the cyfr.run probe
-  says about the person, and what follows. A person this server already
-  knows (`users.namespace` recorded) proceeds whatever the registry
-  answers; a first-time person needs the registry once, to find or claim
-  the namespace that is their identity everywhere.
+  `complete/3`: the one courtesy both sign-in paths (the browser callback
+  and the CLI device flow) extend after the door — a budgeted probe of
+  cyfr.run for the person's publisher namespace and push tokens. Whatever
+  the registry answers, the person proceeds; the report says how it
+  answered. A namespace is a publishing credential, claimed when the
+  person first publishes (`/claim-namespace`), never a gate on signing in.
 
   `record_namespace/2`: the namespace lands on the `users` row the moment a
   probe or a claim yields it — before, and regardless of, the push tokens.
   That row is what every request reads (`Sanctum.Namespace`).
 
   Providers call `admitted/2` between `Sanctum.Door.admit/3` and building
-  the context. `Sanctum.Tenancy.resolve_into/2` — which runs per request —
+  the context. `Sanctum.Caller.establish/2` — which runs per request —
   only ever reads what this wrote.
   """
 
@@ -35,34 +34,30 @@ defmodule Sanctum.SignIn do
   alias Arca.Schemas.User
   alias Compendium.Registry.CredentialStore
   alias Sanctum.Slug
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Members, Users}
 
   @typedoc """
-  What a sign-in does next.
+  What a sign-in reports. The person always proceeds; `unsynced` names
+  namespaces whose push tokens could not be cached (a later probe re-mints
+  them) and `probe` says how the registry answered:
 
-  - `{:proceed, user, report}` — sign in; `report.unsynced` names namespaces
-    whose push tokens could not be cached (a later probe re-mints them) and
-    `report.probe` says how the registry answered (`:ok`, `:skipped` — no
-    token to ask with, `:failed`, `:invalid_token`).
-  - `{:needs_legal, version}` — cyfr.run wants the current policy accepted
-    before it will say more.
-  - `{:needs_claim, suggested}` — no personal namespace yet: claim one.
-  - `{:reauthenticate, :idp_expired}` — the IdP token was refused; a fresh
-    sign-in is the only way to a usable one.
-  - `{:unavailable, reason}` — a first-time person and no registry answer:
-    nothing was set up, try again.
+  - `:ok` — answered; a namespace it named is recorded.
+  - `:skipped` — no IdP token to ask with, or no registry configured.
+  - `:failed` — no usable answer (down, 5xx, past the budget).
+  - `:invalid_token` — the IdP refused the token; the next sign-in asks again.
+  - `:legal_required` — cyfr.run wants its policy accepted before it says
+    more; publishing will ask.
+  - `:namespace_conflict` — the registry names a slug another identity on
+    this server holds; nothing was recorded, and someone must reconcile it.
   """
-  @type report :: %{unsynced: [String.t()], probe: :ok | :skipped | :failed | :invalid_token}
-  @type outcome ::
-          {:proceed, User.t(), report()}
-          | {:needs_legal, String.t() | nil}
-          | {:needs_claim, String.t() | nil}
-          | {:reauthenticate, :idp_expired}
-          | {:unavailable, :registry_unreachable | :no_access_token | :namespace_conflict}
+  @type probe ::
+          :ok | :skipped | :failed | :invalid_token | :legal_required | :namespace_conflict
+  @type report :: %{unsynced: [String.t()], probe: probe()}
+  @type outcome :: {:proceed, User.t(), report()}
 
-  # A person this server knows is not held at the door by a black-holed
-  # registry: their probe gets this long, then they proceed and the push
-  # tokens are refreshed by the next probe. (Configurable for tests.)
+  # Nobody is held at the door by a black-holed registry: the probe gets
+  # this long, then the person proceeds and the push tokens are refreshed
+  # by the next probe. (Configurable for tests.)
   @returning_probe_ms 5_000
 
   @doc """
@@ -70,14 +65,13 @@ defmodule Sanctum.SignIn do
   `email`, `verified` (`true | false | :unknown`) and `name`.
   """
   @spec admitted(map(), :admin | :allowed) :: {:ok, Arca.Schemas.User.t()} | {:error, term()}
-  def admitted(%{id: user_id} = user_info, verdict) when verdict in [:admin, :allowed] do
+  def admitted(%{id: _identity} = user_info, verdict) when verdict in [:admin, :allowed] do
     with {:ok, user} <- Users.upsert_from_provider(user_info) do
+      user_id = user.id
       apply_platform(user_id, verdict)
 
-      # The invited seats activate on the next sign-in; refusing this one
-      # over a store blip would lock the person out. Loud, never silent —
-      # the assertive match this replaces could not fail (both arms were
-      # {:ok, _}), so a failed activation was invisible.
+      # Log invitation activation failures without refusing sign-in.
+      # Pending invitations can activate on the next sign-in.
       case Members.activate_invited(user) do
         {:ok, _n} ->
           :ok
@@ -88,72 +82,64 @@ defmodule Sanctum.SignIn do
           )
       end
 
-      # Provisioning failure is recorded on the athanor and retried on the
-      # next sign-in; it never refuses the sign-in itself.
-      _ = Sanctum.Provisioning.after_sign_in(user_id)
-      Users.get(user_id)
+      # Filling the athanor is a background job whose failure lands on the
+      # row and is retried; it never refuses the sign-in. Failing to MINT
+      # one does refuse it: the caps bound how fast strangers arrive and
+      # how many estates the server holds, and a person admitted without an
+      # athanor would hold a session with nowhere to work.
+      case Sanctum.Provisioning.after_sign_in(user_id) do
+        {:error, reason} -> {:error, reason}
+        _ -> Users.get(user_id)
+      end
     end
   end
 
   @doc """
-  Decide what follows the door: probe cyfr.run with the IdP `access_token`
-  and absorb the answer. See `t:outcome/0`.
+  What follows the door: probe cyfr.run with the IdP `access_token`,
+  absorb what it says, and proceed. See `t:report/0`.
   """
   @spec complete(User.t(), String.t() | atom(), String.t() | nil) :: outcome()
   def complete(%User{} = user, _provider, access_token)
       when not is_binary(access_token) or access_token == "" do
-    if returning?(user) do
-      Logger.warning(
-        "[Sanctum.SignIn] no IdP access token for #{user.id} — signing in without a probe"
-      )
+    Logger.info(
+      "[Sanctum.SignIn] no IdP access token for #{user.id} — signing in without a probe"
+    )
 
-      {:proceed, user, %{unsynced: [], probe: :skipped}}
-    else
-      {:unavailable, :no_access_token}
-    end
+    {:proceed, user, %{unsynced: [], probe: :skipped}}
   end
 
   def complete(%User{} = user, provider, access_token) do
-    returning? = returning?(user)
+    if Compendium.RegistryHost.configured?() do
+      case probe(provider, access_token) do
+        {:ok, body} ->
+          absorb(user, body)
 
-    case probe(provider, access_token, returning?) do
-      {:ok, body} ->
-        absorb(user, body, provider, returning?)
+        {:error, :invalid_access_token} ->
+          {:proceed, user, %{unsynced: [], probe: :invalid_token}}
 
-      {:error, :invalid_access_token} when returning? ->
-        {:proceed, user, %{unsynced: [], probe: :invalid_token}}
+        {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required}} ->
+          {:proceed, user, %{unsynced: [], probe: :legal_required}}
 
-      {:error, :invalid_access_token} ->
-        {:reauthenticate, :idp_expired}
+        {:error, reason} ->
+          Logger.warning(
+            "[Sanctum.SignIn] cyfr.run probe failed for #{user.id} (#{inspect(reason)}) — " <>
+              "signing in without it"
+          )
 
-      {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required} = err} ->
-        {:needs_legal, Compendium.OCI.Errors.required_version(err)}
-
-      {:error, reason} when returning? ->
-        Logger.warning(
-          "[Sanctum.SignIn] cyfr.run probe failed for #{user.id} (#{inspect(reason)}) — " <>
-            "signing in on the recorded namespace"
-        )
-
-        {:proceed, user, %{unsynced: [], probe: :failed}}
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Sanctum.SignIn] cyfr.run probe failed for first-time #{user.id} " <>
-            "(#{inspect(reason)}) — nothing set up"
-        )
-
-        {:unavailable, :registry_unreachable}
+          {:proceed, user, %{unsynced: [], probe: :failed}}
+      end
+    else
+      {:proceed, user, %{unsynced: [], probe: :skipped}}
     end
   end
 
   @doc """
   Record the person's cyfr.run namespace: the durable copy on `users.namespace`
-  that every request reads. Mints their own athanor when the row did not
-  carry a namespace before. Refuses a slug another identity on this server
-  already holds; a row that already carries a *different* slug keeps it
-  (logged — the registry, not this server, would have to say which is
-  right).
+  that every request reads. Their own athanor was minted at admission; this
+  only reruns the provisioning hook so a namespace-holding person's groups
+  retry. Refuses a slug another identity on this server already holds; a
+  row that already carries a *different* slug keeps it (logged — the
+  registry, not this server, would have to say which is right).
   """
   @spec record_namespace(String.t(), String.t()) ::
           {:ok, User.t()}
@@ -195,9 +181,8 @@ defmodule Sanctum.SignIn do
 
             _ ->
               with {:ok, user} <- Users.set_namespace(user, slug) do
-                # The namespace is the person's athanor slug: mint it now.
-                # A failure is recorded on the athanor and retried later; it
-                # never undoes the identity.
+                # The athanor exists since admission; the hook retries any
+                # provisioning that failed. It never undoes the identity.
                 _ = Sanctum.Provisioning.after_sign_in(user_id)
                 Users.get(user_id) |> or_user(user)
               end
@@ -233,14 +218,9 @@ defmodule Sanctum.SignIn do
     store_tokens(user_id, personal, body["memberships"] || [])
   end
 
-  # A person is "returning" when this server has recorded their namespace:
-  # the registry is then a courtesy (push tokens, a legal bump), not the door.
-  defp returning?(%User{namespace: ns}), do: is_binary(ns)
-
-  defp probe(provider, access_token, false),
-    do: Compendium.Registry.Client.probe_identity(provider, access_token)
-
-  defp probe(provider, access_token, true) do
+  # The registry is a courtesy (push tokens, a namespace it already knows),
+  # never the door: the probe is budgeted for everyone.
+  defp probe(provider, access_token) do
     logger_metadata = Cyfr.LoggerContext.capture()
 
     task =
@@ -258,7 +238,7 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  defp absorb(user, body, provider, returning?) do
+  defp absorb(user, body) do
     personal = body["personal_namespace"]
     memberships = body["memberships"] || []
 
@@ -271,34 +251,34 @@ defmodule Sanctum.SignIn do
           {:error, :namespace_owned_by_another_identity} ->
             Logger.error(
               "[Sanctum.SignIn] cyfr.run names #{user.id} #{inspect(slug)}, which another " <>
-                "identity on this server holds — refusing to sign in on it"
+                "identity on this server holds — not recorded; reconcile it at cyfr.run"
             )
 
-            {:unavailable, :namespace_conflict}
-
-          {:error, reason} when returning? ->
-            Logger.warning("[Sanctum.SignIn] namespace not re-recorded: #{inspect(reason)}")
-            {:proceed, user, report(store_tokens(user.id, personal, memberships))}
+            {:proceed, user, %{unsynced: [], probe: :namespace_conflict}}
 
           {:error, reason} ->
-            Logger.error("[Sanctum.SignIn] namespace not recorded: #{inspect(reason)}")
-            {:unavailable, :registry_unreachable}
+            Logger.warning("[Sanctum.SignIn] namespace not recorded: #{inspect(reason)}")
+            {:proceed, user, %{unsynced: [], probe: :failed}}
         end
 
-      _ when returning? ->
-        Logger.warning(
-          "[Sanctum.SignIn] cyfr.run reports no personal namespace for #{user.id}, " <>
-            "which this server recorded as #{inspect(user.namespace)} — proceeding on it"
-        )
-
-        {:proceed, user, report(store_tokens(user.id, nil, memberships))}
-
       _ ->
-        {:needs_claim, suggested_slug(user, provider)}
+        # No publisher namespace yet: theirs to claim when they first
+        # publish. The memberships' tokens are cached regardless.
+        {:proceed, user, report(store_tokens(user.id, nil, memberships))}
     end
   end
 
   defp report(unsynced), do: %{unsynced: unsynced, probe: :ok}
+
+  @doc """
+  The slug to suggest when a person claims a publisher namespace: their
+  screen name, else the address's local part, else a provider-flavoured
+  placeholder.
+  """
+  @spec suggested_slug(User.t(), String.t() | atom()) :: String.t() | nil
+  def suggested_slug(%User{display_name: name, email: email}, provider) do
+    Slug.from_name(name) || Slug.from_email(email) || Slug.from_name("user-#{provider}")
+  end
 
   # Push tokens are cached best-effort: a failed write costs a re-probe,
   # never the sign-in. `:skipped` (no token in the body) is not a failure —
@@ -333,18 +313,12 @@ defmodule Sanctum.SignIn do
   # `alice.smith+work@` address suggests `alice-smith-work` when the GitHub
   # login next to it is simply `alice`. The address is the fallback, and the
   # provider name the last resort.
-  defp suggested_slug(%User{display_name: name, email: email}, provider) do
-    Slug.from_name(name) || Slug.from_email(email) || Slug.from_name("user-#{provider}")
-  end
-
   defp or_user({:ok, user}, _fallback), do: {:ok, user}
   defp or_user(_, fallback), do: {:ok, fallback}
 
-  # An operator's first sign-in mints the platform row and a seat in Home:
-  # the out-of-the-box install is one admin with two athanors, Home and
-  # their own. Removing an email from CYFR_PLATFORM_ADMIN_EMAILS revokes the
-  # platform row on the next sign-in; the Home seat is an ordinary membership
-  # and stays.
+  # An operator's first sign-in mints the platform row: the out-of-the-box
+  # install is one admin with one athanor, their own. Removing an email from
+  # CYFR_PLATFORM_ADMIN_EMAILS revokes the platform row on the next sign-in.
   defp apply_platform(user_id, :admin) do
     already? = platform_admin?(user_id)
 
@@ -357,7 +331,7 @@ defmodule Sanctum.SignIn do
           Members.broadcast_change(user_id, nil, :platform_granted)
         end
 
-        seat_in_home(user_id)
+        :ok
 
       {:error, reason} ->
         Logger.error(
@@ -382,23 +356,6 @@ defmodule Sanctum.SignIn do
           user_id: user_id
         })
 
-        :ok
-    end
-  end
-
-  # A sign-in must not 500 on a broken install: no Home means no seat, loudly.
-  # When the last Home was retired by its final member leaving, the operator's
-  # sign-in mints its successor — the server always has one to seat them in.
-  defp seat_in_home(user_id) do
-    with {:ok, home} <- Athanors.ensure_home(),
-         {:ok, _} <-
-           Members.ensure(user_id, scope: "athanor", athanor_id: home.id, added_by: "system") do
-      # Home is provisioned at boot; an operator's sign-in retries a boot
-      # that could not reach the registry, with their credential.
-      Sanctum.Provisioning.retry_home_async(user_id)
-    else
-      {:error, reason} ->
-        Logger.error("[Sanctum.SignIn] Home seat failed: #{inspect(reason)}")
         :ok
     end
   end

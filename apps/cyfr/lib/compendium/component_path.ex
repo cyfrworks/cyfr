@@ -20,11 +20,11 @@ defmodule Compendium.ComponentPath do
   layout, and the segment can never diverge from the id minted by
   `Compendium.ComponentId`.
 
-  The seed bundle every athanor reads through lives under the reserved
-  `seed/components/{type}s/local/...` prefix
-  (`Arca.Storage.seed_prefix("components")`) and is read in place from the
-  seed tree (`:seed_path`), outside the storage root; it is bytes only and
-  never a tenant.
+  The seed bundle every athanor is provisioned from lives under the
+  reserved `seed/components/{type}s/local/...` prefix
+  (`Arca.Storage.seed_prefix("components")`) in the seed tree
+  (`:seed_path`), outside the storage root; it is bytes only and never a
+  tenant.
 
   Vocabulary note: paths and the components table say `publisher`;
   references and identity (`Sanctum.ComponentRef`) say `namespace` — the
@@ -66,7 +66,6 @@ defmodule Compendium.ComponentPath do
 
       iex> Compendium.ComponentPath.parse(["components", "not-a-type", "local", "x", "1.0.0"])
       :error
-
   """
   @spec parse([String.t()]) ::
           {:ok,
@@ -107,14 +106,12 @@ defmodule Compendium.ComponentPath do
   def manifest_leaves(leaves), do: Enum.filter(leaves, &(List.last(&1) == @manifest_name))
 
   @doc """
-  The manifest's filename — the one file every valid version directory
-  carries, which is why `locate/1` names it the overlay sentinel.
+  Returns the manifest filename used as the version directory’s overlay sentinel.
 
   ## Examples
 
       iex> Compendium.ComponentPath.manifest_name()
       "cyfr-manifest.json"
-
   """
   @spec manifest_name() :: String.t()
   def manifest_name, do: @manifest_name
@@ -124,9 +121,9 @@ defmodule Compendium.ComponentPath do
   (`Arca.Storage.UnitLocator`): every path at or below a version
   directory that `parse/1` accepts belongs to that directory-shaped
   unit, sentinel'd by the manifest; anything else is above the units.
-  A unit is a claim the storage layer acts on — copy-on-write, origin
-  marks, status — so only the grammar mints one: a junk five-segment
-  shape stays plain storage, never a CoW'd, quota-charged phantom unit.
+  A unit is a claim the storage layer acts on — the shipped copy, the
+  lock, status — so only the grammar mints one: a junk five-segment
+  shape stays plain storage, never a phantom unit.
 
   ## Examples
 
@@ -138,7 +135,6 @@ defmodule Compendium.ComponentPath do
 
       iex> Compendium.ComponentPath.locate(["components", "junk", "a", "b", "not-semver"])
       :above_unit
-
   """
   @impl Arca.Storage.UnitLocator
   def locate(path) do
@@ -167,7 +163,6 @@ defmodule Compendium.ComponentPath do
 
       iex> Compendium.ComponentPath.artifact_path("catalyst", "local", "files", "0.5.0")
       ["components", "catalysts", "local", "files", "0.5.0", "catalyst.wasm"]
-
   """
   @spec artifact_path(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
   def artifact_path("tincture", publisher, name, version),
@@ -185,7 +180,6 @@ defmodule Compendium.ComponentPath do
 
       iex> Compendium.ComponentPath.default_publisher()
       "local"
-
   """
   @spec default_publisher() :: String.t()
   def default_publisher, do: @default_publisher
@@ -218,7 +212,6 @@ defmodule Compendium.ComponentPath do
 
       iex> Compendium.ComponentPath.local_publisher?(nil)
       true
-
   """
   @spec local_publisher?(String.t() | nil) :: boolean()
   def local_publisher?(publisher), do: normalize_publisher(publisher) == @default_publisher
@@ -231,7 +224,6 @@ defmodule Compendium.ComponentPath do
 
       iex> Compendium.ComponentPath.type_plural("catalyst")
       "catalysts"
-
   """
   @spec type_plural(String.t()) :: String.t()
   def type_plural(type) when is_binary(type), do: type <> "s"
@@ -242,7 +234,6 @@ defmodule Compendium.ComponentPath do
 
       iex> Compendium.ComponentPath.singular("catalysts")
       "catalyst"
-
   """
   @spec singular(String.t()) :: String.t()
   def singular(type_plural) when is_binary(type_plural),

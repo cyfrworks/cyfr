@@ -3,30 +3,21 @@
 
 defmodule Cyfr.DocsDriftTest do
   @moduledoc """
-  CLAUDE.md is the operating manual every session reads before touching
-  the tree; a storage root it does not name is a root nobody defends.
-  This binds its storage-tree sentence to the layout SSOT the same way
-  the drift guards bind the protocol literals.
+  Checks documented storage roots and manifest fields against their
+  runtime definitions.
 
-  ## One of these guards is local-only, on purpose
+  ## Local documentation
 
-  `CLAUDE.md` is gitignored — it is the operator's own agent contract, not
-  repo content — so a fresh checkout does not have it and **CI never runs
-  that first test** (`:requires_local_docs`, excluded by `test_helper.exs`
-  when the file is absent). Do not mistake it for CI protection: it
-  catches drift on the machine that owns the file, and nowhere else.
+  The CLAUDE.md check runs only when that gitignored file exists.
+  `test_helper.exs` otherwise excludes the :requires_local_docs tag.
 
-  The other four read tracked files (README and the three guides) and do
-  run everywhere. Before this tag the CLAUDE.md test was an unguarded
-  `File.read!`, so a clean clone raised `File.Error` and the whole module
-  — including those four — protected nothing.
+  README and guide checks use tracked files and run in every checkout.
   """
   use ExUnit.Case, async: true
 
   @repo_root Path.expand("../../../..", __DIR__)
   @claude_md Path.join(@repo_root, "CLAUDE.md")
   @readme Path.join(@repo_root, "README.md")
-  @upgrading Path.join(@repo_root, "UPGRADING.md")
 
   @tag :requires_local_docs
   test "CLAUDE.md's storage tree names every tenant root and global prefix" do
@@ -45,43 +36,6 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  test "UPGRADING's roster of the aqua tool's writes and reads is the tool's own" do
-    # The note that says which `aqua` verbs need a person's session, and
-    # which stay open to a key, is read by operators writing scripts; it
-    # is bound to the tool's enum and consent classes so it cannot name a
-    # verb the tool lost or miss one it gained.
-    doc = File.read!(@upgrading)
-
-    [section] =
-      Regex.run(~r/### Writes to the AQUA tree are a person's act\n(.*?)\n### /s, doc,
-        capture: :all_but_first
-      )
-
-    actions = Compendium.MCP.AquaTool.definition().annotations.actions
-
-    {writes, reads} =
-      actions
-      |> Map.keys()
-      |> Enum.split_with(&(actions[&1][:consent] == :interactive))
-
-    [write_sentence] =
-      Regex.run(~r/Every write on the `aqua` tool — (.*?) — now requires/s, section,
-        capture: :all_but_first
-      )
-
-    [read_sentence] =
-      Regex.run(~r/the reads \((.*?)\) are unchanged/s, section, capture: :all_but_first)
-
-    assert Enum.sort(backticked(write_sentence)) == Enum.sort(writes)
-    assert Enum.sort(backticked(read_sentence)) == Enum.sort(reads)
-  end
-
-  defp backticked(text) do
-    ~r/`([a-z_]+)`/
-    |> Regex.scan(text, capture: :all_but_first)
-    |> List.flatten()
-  end
-
   test "README's storage tree names every tenant root and global prefix" do
     doc = File.read!(@readme)
 
@@ -93,10 +47,7 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  # The three operator guides are compile-embedded reference material every
-  # athanor is given (@external_resource into the aqua tool) — they drift
-  # exactly like README did, and only CLAUDE.md/README were pinned here.
-  # component-guide's storage tree shipped without meta/ for that reason.
+  # Check storage trees in the three compile-embedded operator guides.
   @guides ~w(component-guide.md tincture-guide.md integration-guide.md)
 
   test "every guide that draws the athanor tree names every tenant root" do
@@ -179,7 +130,7 @@ defmodule Cyfr.DocsDriftTest do
   # Every action a provider annotates `auth: :anonymous` — the actions that
   # answer without a session, which is exactly what the table claims to list.
   defp anonymous_actions do
-    for provider <- Emissary.MCP.ToolRegistry.available_providers(),
+    for provider <- Cyfr.Ops.Catalog.available_providers(),
         tool <- provider.tools(),
         {action, meta} <- get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{},
         meta[:auth] == :anonymous,
@@ -231,7 +182,7 @@ defmodule Cyfr.DocsDriftTest do
     # published `registry`, `aqua` and `component` reads as needing no auth
     # when all three need a credential, so a client written from it got
     # `-33001` on its first call. `auth: :signed_in` is NOT public — it
-    # serves a live session that has not claimed a namespace yet.
+    # serves a live session, with or without an athanor to work in.
     overclaimed =
       for {tool, row} <- rows,
           [_, action] <- Regex.scan(~r/`(\w+)`/, row),
@@ -248,10 +199,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   test "the guides' tincture-block keys are ones the code actually reads" do
-    # The truth roster: what the validator shape-checks plus what the
-    # registry/controller consume (entry, icon, tagline, public, build,
-    # window, connect, media). A key documented that nothing reads — the
-    # old `sandbox` row — teaches authors a knob that does not exist.
+    # Documented tincture keys must match validator and consumer support.
     documented_only = ~w(sandbox)
 
     for guide <- ~w(component-guide.md tincture-guide.md), key <- documented_only do

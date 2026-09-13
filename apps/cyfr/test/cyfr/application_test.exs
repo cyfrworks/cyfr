@@ -34,6 +34,34 @@ defmodule Cyfr.ApplicationTest do
     end
   end
 
+  # A hosted server (auth configured) must not compile members' sources as
+  # its own service user. builder_enforcement/5 is the pure decision seam
+  # the boot guard uses: auth?, builds?, builder?, accepted?, real release?
+  describe "builder_enforcement/5" do
+    test "auth + builds on + no builder + not accepted + real release => raise" do
+      assert {:raise, msg} = Cyfr.Application.builder_enforcement(true, true, false, false, true)
+      assert msg =~ "FATAL"
+      assert msg =~ "CYFR_BUILDER_URL"
+      assert msg =~ "CYFR_BUILDS=false"
+      assert msg =~ "CYFR_ALLOW_IN_PROCESS_BUILDS"
+    end
+
+    test "the same outside a release => warn (dev/test not blocked)" do
+      assert {:warn, msg} = Cyfr.Application.builder_enforcement(true, true, false, false, false)
+      assert msg =~ "suppressed outside a release"
+    end
+
+    test "a builder, builds off, or an explicit acceptance each satisfy the guard" do
+      assert :ok = Cyfr.Application.builder_enforcement(true, true, true, false, true)
+      assert :ok = Cyfr.Application.builder_enforcement(true, false, false, false, true)
+      assert :ok = Cyfr.Application.builder_enforcement(true, true, false, true, true)
+    end
+
+    test "no auth configured is never blocked" do
+      assert :ok = Cyfr.Application.builder_enforcement(false, true, false, false, true)
+    end
+  end
+
   describe "supervision tiers" do
     test "root supervises exactly the infra and web tier supervisors" do
       children = Supervisor.which_children(Cyfr.Supervisor)
@@ -62,7 +90,7 @@ defmodule Cyfr.ApplicationTest do
 
       assert Arca.Cache.TreeSupervisor in ids
       assert Arca.Cache.Sweeper in cache_tree_ids
-      assert Emissary.MCP.ToolRegistry in cache_tree_ids
+      assert Cyfr.Ops.Catalog in cache_tree_ids
       refute EmissaryWeb.Endpoint in ids
     end
 

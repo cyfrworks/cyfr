@@ -24,6 +24,7 @@ defmodule Sanctum.CallerTest do
     }
   end
 
+  # The identity signs in: from then on the person is named by their own id.
   defp claim!(user) do
     {:ok, row} =
       Sanctum.Tenancy.Users.upsert_from_provider(%{
@@ -34,7 +35,21 @@ defmodule Sanctum.CallerTest do
       })
 
     {:ok, _} = Sanctum.Tenancy.Users.set_namespace(row, user.slug)
-    user
+    %{user | user_id: row.id}
+  end
+
+  # A signed-in person with no publisher namespace: the users row alone,
+  # no membership.
+  defp known!(user) do
+    {:ok, row} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: user.user_id,
+        provider: "github",
+        email: user.email,
+        verified: true
+      })
+
+    %{user | user_id: row.id}
   end
 
   defp session_for(user, attrs \\ []) do
@@ -58,13 +73,19 @@ defmodule Sanctum.CallerTest do
     session
   end
 
+  # A group of this person's own: no estate is shared server-wide, so a
+  # test that needs a seat mints one.
   defp member!(user) do
-    home = Sanctum.Tenancy.Athanors.home!()
+    {:ok, estate} =
+      Sanctum.Tenancy.Athanors.create_group(
+        user.user_id,
+        "Caller #{System.unique_integer([:positive])}"
+      )
 
     {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: home.id)
+      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: estate.id)
 
-    {user, home}
+    {user, estate}
   end
 
   describe "establish/2" do
@@ -92,7 +113,7 @@ defmodule Sanctum.CallerTest do
       _ = other_home
       other_session = session_for(Map.put(other, :namespace, other.slug))
 
-      # The other user holds no membership in Home.
+      # The other user holds no membership in the `home` fixture estate.
       assert {:error, reason} = Caller.establish(other_session.token, focus: home.id)
       assert reason in [:not_member, :no_athanor]
 
@@ -100,13 +121,15 @@ defmodule Sanctum.CallerTest do
                Caller.establish(session.token, focus: "ath_does_not_exist")
     end
 
-    test "a pre-claim session is claim_pending, with its context riding along" do
-      user = new_user()
+    test "a session whose person has no publisher namespace is established like any other" do
+      {user, estate} = new_user() |> known!() |> member!()
       session = session_for(user, namespace: nil)
 
-      assert {:error, {:claim_pending, %Context{} = ctx}} = Caller.establish(session.token)
+      assert {:ok, %Context{} = ctx} = Caller.establish(session.token)
       assert ctx.user_id == user.user_id
-      refute ctx.authenticated
+      assert ctx.authenticated
+      assert ctx.namespace == nil
+      assert ctx.athanor_id == estate.id
     end
 
     test "no token, a blank token, and an unknown token are unauthenticated" do
@@ -143,7 +166,7 @@ defmodule Sanctum.CallerTest do
       assert {:error, {:denied, %Context{}}} = Caller.establish_context(ctx)
     end
 
-    test "an unclaimed unauthenticated context is claim_pending" do
+    test "an unauthenticated context without a namespace is denied just the same" do
       user = new_user()
 
       ctx =
@@ -154,7 +177,7 @@ defmodule Sanctum.CallerTest do
           authenticated: false
         )
 
-      assert {:error, {:claim_pending, _ctx}} = Caller.establish_context(ctx)
+      assert {:error, {:denied, _ctx}} = Caller.establish_context(ctx)
     end
   end
 
@@ -163,7 +186,7 @@ defmodule Sanctum.CallerTest do
       user = new_user()
       session = session_for(user, namespace: nil)
 
-      assert {:ok, %{user_id: user_id, provider: "github", claim_pending?: true}} =
+      assert {:ok, %{user_id: user_id, provider: "github", namespace: nil}} =
                Caller.peek(session.token)
 
       assert user_id == user.user_id
@@ -229,10 +252,7 @@ defmodule Sanctum.CallerTest do
     end
 
     test "a plain member removal drops the memo like the door's revocations do" do
-      # Removal was the one revocation in the set that skipped the memo: a
-      # removed member kept their cached, athanor-focused context on the
-      # stateless surfaces for the TTL — and the test env pins the TTL to
-      # zero, so only a warm-memo test can see it.
+      # Warm the context memo with a nonzero TTL before checking immediate membership revocation.
       {user, home} = new_user() |> claim!() |> member!()
       user = Map.put(user, :namespace, user.slug)
       session = session_for(user)

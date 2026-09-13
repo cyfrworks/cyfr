@@ -51,16 +51,25 @@ defmodule PrismWeb.AquaLive do
       |> assign(:active_nav, "aqua")
       |> assign(:loading, true)
       |> assign(:provenance, %{})
-      |> assign(:consent_missing, [])
+      |> assign(:stale_consents, [])
       |> assign(:models_by_provider, %{})
       |> assign(:catalyst_refs, %{})
       |> assign(:models_loaded, false)
       |> assign(:consent_sheet_ref, nil)
 
-    # Paint first, load after: five tool reads and a registry walk stand
-    # between the mount and the roster, and the frame shows its spinner
-    # while they run.
-    if connected?(socket) and socket.assigns[:context], do: send(self(), :load)
+    # Subscribe before the load asks whether the estate is ready: a fill
+    # that finishes in between must still reach this page.
+    if connected?(socket) and socket.assigns[:context] do
+      Phoenix.PubSub.subscribe(
+        Emissary.PubSub,
+        Cyfr.Topics.notify(socket.assigns.context.athanor_id)
+      )
+
+      # Paint first, load after: five tool reads and a registry walk stand
+      # between the mount and the roster, and the frame shows its spinner
+      # while they run.
+      send(self(), :load)
+    end
 
     {:ok, socket}
   end
@@ -98,6 +107,34 @@ defmodule PrismWeb.AquaLive do
 
   def handle_info(:loaded, socket), do: {:noreply, assign(socket, :loading, false)}
 
+  # A model catalyst arrived (or did not): the agents section reads its
+  # status again either way, and the picker's kept catalogue is dropped so
+  # the new provider is offered.
+  def handle_info({:catalyst_installed, ref, result}, socket) do
+    socket =
+      case result do
+        {:ok, _} ->
+          PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
+          put_flash(socket, :info, "Installed #{ref}.")
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Could not install #{ref}: #{error_message(reason)}")
+      end
+
+    # The section that owns the button hears which install ended, so an
+    # unrelated reload cannot re-enable it mid-download.
+    send_update(AgentsComponent, id: "aqua-agents", installed: ref)
+    send(self(), {:refresh, :agents})
+    {:noreply, load_models(socket)}
+  end
+
+  # The estate's row changed. A fill completing mints the consents the
+  # page reports on, so it is read again.
+  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+    if connected?(socket) and not socket.assigns.loading, do: send(self(), :load)
+    {:noreply, socket}
+  end
+
   def handle_info({:refresh, section}, socket) when section in @sections do
     {:noreply, load_section(socket, section)}
   end
@@ -105,13 +142,21 @@ defmodule PrismWeb.AquaLive do
   # The consent sheet for the soul's catalyst: the model got its key. The
   # kept catalogue predates the key, so it is dropped before the re-read —
   # a key bound here shows in the picker now, not when the entry lapses.
-  def handle_info({:consent_granted, _ref, _result}, socket) do
+  # The same sheet binds a model's key and re-consents a formula whose
+  # closure moved, so what it says names what was consented.
+  def handle_info({:consent_granted, ref, _result}, socket) do
     PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
+
+    said =
+      case ref do
+        "formula:local." <> name -> "#{name} consented again."
+        _ -> "Model connected."
+      end
 
     {:noreply,
      socket
      |> assign(:consent_sheet_ref, nil)
-     |> put_flash(:info, "Model connected.")
+     |> put_flash(:info, said)
      |> load_section(:agents)
      |> load_models()}
   end
@@ -120,7 +165,7 @@ defmodule PrismWeb.AquaLive do
     {:noreply, assign(socket, :consent_sheet_ref, nil)}
   end
 
-  # list-models async result. Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
+  # The catalogue, async. Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
   def handle_info({:list_models_result, {:ok, result}}, socket) do
     %{models: models, refs: refs} = PrismWeb.ModelCatalog.parse(result)
 
@@ -165,15 +210,9 @@ defmodule PrismWeb.AquaLive do
           %{}
       end
 
-    missing =
-      case Cyfr.ConsentDrift.missing(socket.assigns.context) do
-        {:ok, missing} -> missing
-        :unknown -> []
-      end
-
     socket
     |> assign(:provenance, provenance)
-    |> assign(:consent_missing, missing)
+    |> assign(:stale_consents, Cyfr.ConsentDrift.stale_refs(socket.assigns.context))
   end
 
   # Each section reads itself when told, with the provenance as it is now.
@@ -209,7 +248,8 @@ defmodule PrismWeb.AquaLive do
     end
   end
 
-  defp consent_drift_sentence(missing) do
+  # The sentence for a consent that no longer answers, named by its source.
+  defp consent_warning(ref, {:drifted, missing}) do
     shown = missing |> Enum.take(4) |> Enum.join(", ")
     rest = if length(missing) > 4, do: ", …", else: ""
 
@@ -219,9 +259,18 @@ defmodule PrismWeb.AquaLive do
         _many -> "#{length(missing)} actions the shipped manifest grants are"
       end
 
-    "This estate consented to an older AQUA formula: #{count} not in its consent " <>
+    "This estate consented to an older #{short_ref(ref)}: #{count} not in its consent " <>
       "(#{shown}#{rest}), so a card for one is denied on Approve until a member re-consents."
   end
+
+  defp consent_warning(ref, :stale) do
+    "This estate's components changed since it consented — installing one does that — " <>
+      "so #{short_ref(ref)} cannot run until a member consents again."
+  end
+
+  defp short_ref("formula:local." <> name), do: name
+  defp short_ref("agent:local." <> name), do: name
+  defp short_ref(ref), do: ref
 
   # ============================================================================
   # Render
@@ -240,21 +289,20 @@ defmodule PrismWeb.AquaLive do
 
       <.live_loading :if={@loading} message="Loading AQUA…" />
 
-      <%!-- The consent this estate froze for the formula is behind the
-            shipped manifest: a policy may name an action the chain
-            authority will deny on the click. Re-consenting is the fix,
-            and the sheet is one click away. --%>
+      <%!-- One row per formula or agent whose consent no longer answers.
+            Installing a component widens the closure every source that
+            names it was consented against, so recovery is per source. --%>
       <div
-        :if={@consent_missing != []}
-        id="aqua-consent-drift"
+        :for={{ref, state} <- @stale_consents}
+        id={"aqua-consent-drift-" <> ref}
         role="status"
         class="rounded border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200 flex items-start justify-between gap-3"
       >
-        <p>{consent_drift_sentence(@consent_missing)}</p>
+        <p>{consent_warning(ref, state)}</p>
         <button
           type="button"
           phx-click="open_consent"
-          phx-value-ref={Aqua.VirtualTools.aqua_formula()}
+          phx-value-ref={ref}
           class="shrink-0 rounded bg-amber-700 hover:bg-amber-600 px-2 py-1 text-[11px] font-medium text-white"
         >
           Re-consent

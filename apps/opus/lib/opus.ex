@@ -95,7 +95,7 @@ defmodule Opus do
     to: Opus.ExecutionEventBuffer,
     as: :unsubscribe
 
-  @doc "Buffered events after `last_sequence` for an execution of `athanor_id`, for replay on (re)connect."
+  @doc "The events after cursor `{durable, n}` for an execution of `athanor_id`: rows, then deltas, for replay on (re)connect."
   @impl Cyfr.Execution
   defdelegate events_since(execution_id, last_sequence, athanor_id),
     to: Opus.ExecutionEventBuffer,
@@ -122,7 +122,6 @@ defmodule Opus do
 
       ctx = Sanctum.TestContext.local()
       {:ok, records} = Opus.list(ctx, limit: 10)
-
   """
   @spec list(Context.t(), keyword()) :: {:ok, [ExecutionRecord.t()]} | {:error, term()}
   @impl Cyfr.Execution
@@ -135,7 +134,6 @@ defmodule Opus do
 
       ctx = Sanctum.TestContext.local()
       {:ok, record} = Opus.get(ctx, "exec_abc123")
-
   """
   @spec get(Context.t(), String.t()) :: {:ok, ExecutionRecord.t()} | {:error, term()}
   @impl Cyfr.Execution
@@ -150,18 +148,27 @@ defmodule Opus do
 
       ctx = Sanctum.TestContext.local()
       {:ok, record} = Opus.cancel(ctx, "exec_abc123")
-
   """
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   @impl Cyfr.Execution
   defdelegate cancel(ctx, execution_id), to: Opus.Executor
 
+  @impl Cyfr.Execution
+  defdelegate claim_turn_root(ctx, agent_ref, opts \\ []), to: Opus.TurnRoot, as: :claim
+  @impl Cyfr.Execution
+  defdelegate pause_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :pause
+  @impl Cyfr.Execution
+  defdelegate resume_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :resume
+  @impl Cyfr.Execution
+  defdelegate adopt_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :adopt
+  @impl Cyfr.Execution
+  defdelegate release_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :release
+
   @doc """
   Terminate a running execution because its consent changed underneath it.
 
-  The delta revision applies to future roots; this one ends carrying
-  `restart_required` so its surface can say "approved — re-run to
-  continue" (§4.4).
+  The new consent revision applies to future roots. This execution ends
+  with `restart_required`; rerun it to use the approved authority.
   """
   @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   @impl Cyfr.Execution

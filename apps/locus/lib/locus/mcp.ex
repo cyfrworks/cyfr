@@ -16,10 +16,10 @@ defmodule Locus.MCP do
   close to their implementation. Compilation is handled by `Locus.Builder`.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Emissary.MCP.ToolRegistry.
+  which is validated at runtime by Cyfr.Ops.Catalog.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   def service, do: "locus"
 
@@ -119,7 +119,8 @@ defmodule Locus.MCP do
 
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
-    with {:ok, build_id} <- settle_build_id(ctx, args["build_id"]) do
+    with :ok <- builds_enabled(),
+         {:ok, build_id} <- settle_build_id(ctx, args["build_id"]) do
       if args["async"] == true do
         start_async_compile(ctx, reference, build_id)
       else
@@ -156,6 +157,15 @@ defmodule Locus.MCP do
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
+  end
+
+  # `CYFR_BUILDS=false`: this server does not build. Refused in the one
+  # handler every surface reaches — wire, console and in-chain — so a
+  # toggle meant for an appliance cannot be walked around through a door.
+  defp builds_enabled do
+    if Cyfr.RuntimeConfig.builds_enabled?(),
+      do: :ok,
+      else: {:error, "builds are disabled on this server (CYFR_BUILDS=false)"}
   end
 
   defp do_validate(wasm_base64) do
@@ -320,9 +330,7 @@ defmodule Locus.MCP do
             wasm_path =
               Compendium.ComponentPath.wasm_path(type, publisher(), name, version)
 
-            # Bounded output (Locus.Builder caps dist size and the WASM
-            # validator caps binaries), so the store applies the ordinary
-            # tenant cap — the old blanket exemption is gone.
+            # Apply the tenant storage cap to bounded build output.
             Arca.put(ctx, wasm_path, result.wasm_bytes)
           end
 
@@ -341,7 +349,7 @@ defmodule Locus.MCP do
                 Cyfr.LoggerContext.restore(logger_metadata)
 
                 outcome =
-                  case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+                  case Cyfr.Ops.Catalog.call_external("component", ctx, %{
                          "action" => "register"
                        }) do
                     {:ok, _} ->
@@ -569,11 +577,7 @@ defmodule Locus.MCP do
     end
   end
 
-  # Tincture-specific exclusions ON TOP of the shared droppings predicate:
-  # dist/ is the build's own output and data.db a runtime artifact — both
-  # tincture facts, not general ones. target/ rode in here through the
-  # shared predicate now; a tincture that once saw `cargo build` used to
-  # ship its whole Rust target tree into the build request.
+  # Exclude tincture dist/ and data.db in addition to shared build artifacts.
   @tincture_excluded ~w(dist data.db)
 
   defp collect_tincture_source(ctx, base) do

@@ -249,12 +249,7 @@ defmodule PrismWeb.RegistryLive do
           {:error, reason} ->
             Logger.warning("[RegistryLive] appeal poll error: #{inspect(reason)}")
 
-            # Back to :form, like the denied arm above. Leaving it :waiting
-            # wedged the flow permanently: nothing reschedules the poll, and
-            # `start-appeal` refuses to retry while the state says a device
-            # flow is still out — so one transient blip meant a page reload
-            # was the only way back. `LoginLive.finish_poll/2` is the same
-            # decision on the same shape.
+            # Return to :form after polling errors so the user can retry.
             {:noreply,
              socket
              |> assign(:appeal_state, :form)

@@ -23,7 +23,7 @@ your-project/
 │   └── formula/           #   Composition interface (invoke sub-components)
 └── data/                  # Runtime state — cyfr.db plus every athanor's storage
     └── athanors/{athanor_id}/
-        ├── components/    # The athanor's component tree (Home first)
+        ├── components/    # The athanor's component tree
         │   ├── reagents/local/    #   name/version/reagent.wasm + cyfr-manifest.json
         │   ├── catalysts/local/   #   name/version/catalyst.wasm + cyfr-manifest.json + src/
         │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
@@ -31,9 +31,15 @@ your-project/
         ├── aqua/          # The athanor's AQUA: the soul, its roles, its scrolls
         ├── conversations/ # Chat attachment files
         ├── notes/         # What was kept out of a conversation — host-only, never a guest scope
-        ├── guest/         # Files WASM components store — their `data/` scope
-        └── meta/          # Overlay origin marks — system-plane only, never yours to write
+        ├── payloads/      # Retained execution inputs and results — host-only, by digest
+        └── data/          # Files WASM components store — their `data/` scope, and yours
 ```
+
+Every folder is laid when the athanor is provisioned. The Files page in the
+console, and the `file` tool behind it, show this tree by tier: `data/` is
+open, `components/` and `aqua/` are shaped, `notes/` and
+`conversations/` are read-only there, and `payloads/` is the server's own and
+has no name on the page.
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
 ```
@@ -498,6 +504,8 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `tags` | array | Optional | Free-form discovery tags shown in search |
 | `category` | string | Optional | Registry category for browsing |
 | `forked_from` | string | Optional | The ref this component was forked from (`component.fork` stamps it) |
+| `contracts` | string[] | Catalysts (if they answer one) | Named operation sets the component answers on its `run` export, as `family/name@major` — `model/chat@1` is the one the host reads (see [Model catalysts](#model-catalysts-the-modelchat1-contract)) |
+| `agent` | object | Agents | The agent's catalyst, model, and policy (`auto` / `ask` sets). Only valid on `type` `"agent"` |
 
 ### Fields by Type
 
@@ -511,6 +519,7 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `schema` (tables/queries) | — | — | — | Yes (if has data) |
 | `examples` | Recommended | Recommended | Recommended | — |
 | `dependencies.static` | — | — | Yes (if invokes sub-components) | Optional |
+| `contracts` | — | Model catalysts | — | — |
 
 ### `needs` Section
 
@@ -905,11 +914,109 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 
 ---
 
+## Model catalysts: the `model/chat@1` contract
+
+A model catalyst fronts an LLM provider. Beyond whatever provider operations it offers, it declares one contract in its manifest and answers it on its one `run` export, so the assistant, the console's model picker and any formula drive every model the same way:
+
+```json
+"contracts": ["model/chat@1"]
+```
+
+The contract is three operations of the ordinary catalyst envelope (`{"operation", "params"}` in, `{"status", "data"}` or `{"status", "error"}` out). The five bundled catalysts (`catalyst:local.{claude,openai,gemini,grok,openrouter}`) implement it in their `src/src/chat.rs`; the provider's request and response shapes are built and read there and never leave the binary. The HTTP call and the key stay in the catalyst.
+
+**`describe`** — what the catalyst can do, answered without a key:
+
+```json
+{"operation": "describe", "params": {}}
+```
+```json
+{"status": 200, "data": {
+  "contracts": ["model/chat@1"], "provider": "anthropic",
+  "tools": true, "provider_tools": ["web_search"],
+  "media_types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"],
+  "streaming": false, "defaults": {"max_tokens": 16384}
+}}
+```
+
+**`models`** — the models the bound key can reach, in one shape:
+
+```json
+{"operation": "models", "params": {}}
+```
+```json
+{"status": 200, "data": {"models": [
+  {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6"},
+  {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "context_window": 1048576, "max_output_tokens": 65536}
+]}}
+```
+
+`context_window` and `max_output_tokens` appear where the provider reports them. The console's model picker is this operation over every installed catalyst that declares the contract, each run with the key its own profile binds.
+
+**`chat`** — one model turn:
+
+```json
+{"operation": "chat", "params": {
+  "model": "claude-sonnet-4-6",
+  "system": "You are the estate's assistant.",
+  "messages": [
+    {"role": "user", "content": "Read a.txt"},
+    {"role": "assistant", "content": [
+      {"type": "text", "text": "Reading it."},
+      {"type": "tool_call", "id": "call_1", "name": "files.read", "arguments": {"path": "a.txt"}}
+    ]},
+    {"role": "tool", "content": [
+      {"type": "tool_result", "tool_call_id": "call_1", "name": "files.read", "content": "hello", "is_error": false}
+    ]},
+    {"role": "user", "content": [
+      {"type": "text", "text": "And this?"},
+      {"type": "image", "media_type": "image/png", "data": "<base64>"}
+    ]}
+  ],
+  "tools": [{"name": "files.read", "description": "Read a file",
+             "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}],
+  "provider_tools": ["web_search"],
+  "max_tokens": 4096,
+  "temperature": 0.2
+}}
+```
+
+Request fields: `model` (required); `system`; `messages` (required, non-empty — `content` is a string or a list of blocks: `text` in any turn; `image` and `document` (`media_type`, base64 `data`, optional `filename`) in a user turn; `tool_call` (`id`, `name`, `arguments`, and `provider_data` when a response carried it — send it back unchanged) in an assistant turn; `tool_result` (`tool_call_id`, `name`, `content` as a string or text blocks, `is_error`) in a tool turn); `tools` (`name`, `description`, `parameters` as JSON Schema); `provider_tools` (names from `describe`, run inside the provider with no approval round trip); `max_tokens`; `temperature`.
+
+Response:
+
+```json
+{"status": 200, "data": {
+  "model": "claude-sonnet-4-6-20260301",
+  "content": [
+    {"type": "text", "text": "Here is b.txt as well."},
+    {"type": "tool_call", "id": "call_2", "name": "files.read", "arguments": {"path": "b.txt"}}
+  ],
+  "stop_reason": "tool_call",
+  "usage": {"input_tokens": 1200, "output_tokens": 40, "cache_read_tokens": 1000, "cache_write_tokens": 0}
+}}
+```
+
+`stop_reason` is one of `end_turn`, `tool_call`, `max_tokens`, `content_filter`, `other`. `input_tokens` counts the whole prompt; the cache counts are the part of it the provider served from its cache or wrote to it.
+
+A refusal is typed, with the provider's own body beside it when the refusal is the provider's:
+
+```json
+{"status": 429, "error": {"type": "rate_limited", "message": "…", "provider": {"…": "the provider's body"}}}
+```
+
+`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `unknown_operation`.
+
+The catalyst world's `run` returns once, so `describe` reports `streaming: false` and a whole response is answered.
+
+To ship a model catalyst of your own: declare the contract, answer the three operations, and cover the mapping with host-target unit tests (`cargo test` in `src/`, as the bundled ones do). A request that does not parse is refused as `invalid_request` before any key is read; `describe` answers without a key; `chat` and `models` never answer provider-shaped data.
+
 ## Needs & the Vault
 
 Components never hold credentials. A **vault entry** is a credential the operator owns — an API key, an OAuth grant, or a credential bundle, encrypted at rest. A manifest `needs` block names *roles*; the operator names *credentials*; a **consent revision** maps them. The mapping happens in the console's Vault page or `cyfr profile grant <ref>` — a component never writes or learns a vault entry name, and reads only the `fields` its need declared. Reagents cannot access credentials at all.
 
 At runtime nothing changes for your binary: `cyfr:vault/read.get("ANTHROPIC_API_KEY")` is served from the bound vault entry's material, projected to the need's `fields`. Declare the key names your code already reads and no interface change or rebuild is needed.
+
+**A key stays with the component it is for.** When a formula runs a catalyst as a child, the catalyst reads the key bound on *its own* profile — the formula's consent edge to it **selects** that profile (by label, `default` unless the person picked another) rather than carrying a copy. Bind the Anthropic key once on `catalyst:local.claude`; the shipped assistant, and every formula whose consent selects that profile, runs it with that key; revoke or rebind it there and every one of them follows at its next turn. A person's own formula picks the lender on its consent sheet: the `dependency_needs` rows of `profile plan` list each dependency that needs a credential and the profiles of it that bind one, and a `selections` decision (`from` defaulting to the source, `dep`, `label`, optional `fields` to narrow) records the choice under the commit digest. The plan lists one row per dependency edge, so two roles can run one catalyst with two keys under one consent. A selection that no longer resolves — the lender revoked, rebound to a differently shaped credential, or holding no key yet — refuses the child run as `setup_required` rather than lending anything else.
 
 **The credential rule**: *if a value can appear in a log, arguments are fine; otherwise use the sealed path.* Read configuration from input arguments if present, else fall back to the projected vault-entry fields (args-first, vault-fallback). A dev who owns both ends — say, their own Supabase project — needs no vault entry at all: pass public-by-design values (URLs, anon keys) as call arguments.
 
@@ -1119,33 +1226,59 @@ A component that takes everything it needs from call arguments declares no `need
 
 ## Bundled Components and Upgrades
 
-Every athanor sees the components the server ships (`seed/components/`) through
-a copy-on-write overlay — a bundled component costs your athanor **nothing**
-until you edit it. The rules:
+The components the server ships (`seed/components/`) are the default every
+athanor starts from: provisioning copies each shipped version into the
+athanor's own `components/` tree, registers it and mints its baseline
+consent. From then on the copy is the athanor's — served from its tree,
+counted in its storage. The rules:
 
-- **Unedited bundled components track the release live.** A new server version
-  updates them everywhere automatically; new shipped versions appear beside
-  whatever you already have.
-- **Editing makes a copy.** Your first write copies the whole version directory
-  into your athanor (counted against your storage) and freezes it — later
-  releases no longer touch it. `component status` shows it as `bundled_modified`
-  with a diff against shipped.
-- **Delete never means revert.** Deleting a bundled component is refused (it
-  isn't yours to delete — and it costs nothing); the `component` tool's `reset`
-  action reverts an edited copy to exactly what the release ships.
-- **Your own component at a shipped path stays yours.** If a release later
-  ships a component where you already created one, your bytes keep answering
-  (shown as "hides shipped"); deleting yours reveals the shipped one. Reset
-  never destroys your work.
+- **A release never changes an athanor's copy.** A newer shipped version
+  reads as available: the Components page offers **Update to x.y.z** beside
+  the bundled version you hold, `component list` carries `shipped_versions`,
+  and `component pull type:local.name` (or `:version`) copies the shipped
+  version in beside what you hold — the same pull as a registry component,
+  from the seed instead of a registry. Nothing is pulled behind your back.
+- **Edit the copy freely.** It is yours to change in place; `component
+  status` compares it with what ships and shows an edited copy as
+  `bundled_modified` with the diff.
+- **Delete never means revert.** Deleting a bundled copy, edited or not, is
+  refused; the `component` tool's `reset` action, and the Reset button on
+  the Components page, put back exactly what the release ships.
+- **A shipped path is a shipped component.** Whatever bytes stand at a
+  name and version the server ships, they are the bundled copy, and Reset
+  replaces them with what ships. Scaffold refuses shipped names, so this
+  only ever describes a copy you edited.
 - **Forks report their upstream.** A fork remembers what it was cut from
   (`forked_from`); when a newer version of that upstream line is present
   locally, status flags it `upstream_superseded`.
 
-The AQUA tree — the soul, its roles and its scrolls — follows the same overlay
-with per-unit shadows: an unedited file tracks the release automatically, an
-edited one shadows only itself, and the `aqua` tool's `reset` action (from the
-AQUA page or over MCP) reverts edited copies while keeping the roles and
-scrolls the estate made.
+The AQUA tree — the soul, its roles and its scrolls — follows the same
+model: provisioning copies the shipped tree into the athanor's `aqua/`, an
+edited file reads as edited by its bytes, and the `aqua` tool's `reset`
+action (from the AQUA page or over MCP) restores edited copies — one role by name, or every one —
+while keeping the roles and scrolls the estate made; `skill_reset` restores
+one scroll.
+
+### The Files page
+
+The console's Files page is the tree above, browsed like a phone's files
+rather than a desktop's disk: you see the athanor's folders and nothing of
+the server's, and each folder is one of three tiers.
+
+- **Open** — `data/`. Upload, download, edit and delete anything. Every
+  component with a `data/` grant reads and writes the same space.
+- **Shaped** — `components/` and `aqua/`. Files are edited in place, but only
+  inside a unit the folder's grammar knows: a `local` component's version
+  directory, the soul, a role, a scroll. A write outside one is refused with
+  the shape spelled out; a unit is created and removed by its own verb
+  (scaffold, pull, fork, the AQUA page), and one the server ships is reset,
+  never deleted. An edit inside a component re-registers its row; an edit
+  under `aqua/` rewrites the agent index.
+- **Read-only** — `notes/` and `conversations/`. Shown and downloaded here,
+  written by their own surfaces.
+
+The `file` tool (`list`, `read`, `write`, `delete`) is the same surface on
+the wire; reads take `storage_read`, changes `storage_write`.
 
 ---
 

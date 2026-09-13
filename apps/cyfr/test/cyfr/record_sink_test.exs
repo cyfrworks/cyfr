@@ -3,6 +3,8 @@
 
 defmodule Cyfr.RecordSinkTest do
   # async: false — flips the sink out of inline mode for the duration.
+  import Ecto.Query, only: [from: 2]
+
   use ExUnit.Case, async: false
 
   alias Cyfr.RecordSink
@@ -145,5 +147,51 @@ defmodule Cyfr.RecordSinkTest do
              is_pid(Process.whereis(Cyfr.RecordSink))
            end),
            "the record sink did not come back"
+  end
+
+  describe "an in-process call's row" do
+    defp started_row(id) do
+      %{
+        id: id,
+        request_id: id,
+        user_id: "usr_x",
+        athanor_id: "ath_test",
+        timestamp: DateTime.utc_now(),
+        tool: "athanor",
+        action: "get",
+        method: "tools/call",
+        status: "pending",
+        input: "{}"
+      }
+    end
+
+    test "a close that lands before its start, or without it, leaves one complete row" do
+      id = "call_#{System.unique_integer([:positive])}"
+      close = %{status: "success", duration_ms: 3, routed_to: "x", output: "{}"}
+
+      Cyfr.RecordSink.enqueue({:mcp_log_close, started_row(id), close})
+      :ok = Cyfr.RecordSink.flush()
+
+      assert %{status: "success", duration_ms: 3, tool: "athanor"} =
+               Arca.Repo.get(Arca.McpLog, id)
+
+      # The start, shed or late, does not reopen the row.
+      Cyfr.RecordSink.enqueue({:mcp_log_started, started_row(id)})
+      :ok = Cyfr.RecordSink.flush()
+      assert %{status: "success", duration_ms: 3} = Arca.Repo.get(Arca.McpLog, id)
+      assert 1 == Arca.Repo.aggregate(from(l in Arca.McpLog, where: l.id == ^id), :count)
+    end
+
+    test "a start then its close, in one batch or two, is the same row" do
+      id = "call_#{System.unique_integer([:positive])}"
+      Cyfr.RecordSink.enqueue({:mcp_log_started, started_row(id)})
+
+      Cyfr.RecordSink.enqueue(
+        {:mcp_log_close, started_row(id), %{status: "error", error_code: -1, error: "no"}}
+      )
+
+      :ok = Cyfr.RecordSink.flush()
+      assert %{status: "error", error_code: -1, error: "no"} = Arca.Repo.get(Arca.McpLog, id)
+    end
   end
 end

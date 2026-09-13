@@ -10,10 +10,8 @@ defmodule Prism.Tray do
   with the session. Nothing is derived from tables here — the counts are
   the notifies the topbar saw; opening an athanor clears its count.
 
-  Every verb takes that hash (`session_hash/1`), never the token. The tray
-  only ever needed an opaque per-session name, and taking the credential to
-  derive one meant the caller had to hold a live token for the socket's
-  lifetime — in assigns, which a LiveView crash report prints.
+  Every verb takes an opaque session hash from `session_hash/1`.
+  LiveView assigns must not retain the raw bearer token.
   """
 
   @ttl_ms :timer.hours(24)

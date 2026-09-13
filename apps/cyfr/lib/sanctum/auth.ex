@@ -28,9 +28,13 @@ defmodule Sanctum.Auth do
   @callback authenticate(params :: map()) :: {:ok, Context.t()} | {:error, term()}
 
   @doc """
-  Get current user context from request connection.
+  The context a bearer credential of the provider's OWN issue names, or
+  `nil` when the request carries none it recognises.
 
-  Returns the authenticated context or `nil` if not authenticated.
+  Sessions and API keys are this server's credentials, established by
+  `Sanctum.Caller.establish/2` before the provider is asked; a provider
+  answers here only for a token it issued itself (an IdP access token,
+  say). The shipped providers issue none and answer `nil`.
   """
   @callback current_user(conn :: Plug.Conn.t()) :: Context.t() | nil
 end

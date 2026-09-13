@@ -66,24 +66,12 @@ defmodule Sanctum.TinctureAuthTest do
     end
   end
 
-  # The `Mcp-Session-Id` header used to be a third way to present exactly this
-  # credential. It went out with the protocol session it was named for, so the
-  # bearer branch is now the only route a session token takes — which makes it
-  # worth asserting directly rather than only through a controller.
+  # Session tokens authenticate through the Authorization header.
   describe "authenticate/1 — session-token path" do
-    test "a bearer session token authenticates once the namespace is claimed",
+    test "a bearer session token authenticates, carrying the recorded namespace",
          %{ctx: ctx} do
-      # `Session.load` resolves through the namespace on the users row, and a
-      # person with none loads as unauthenticated by design — the claim gate
-      # runs before anything tenant-scoped.
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: ctx.user_id,
-          provider: "local",
-          email: "testns@example.com",
-          verified: true
-        })
-
+      # `Session.load` reads the namespace from the users row.
+      {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "testns@example.com"})
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
 
       # A restored session is re-validated against current memberships; the
@@ -104,19 +92,28 @@ defmodule Sanctum.TinctureAuthTest do
       assert out.authenticated
     end
 
-    # Deliberate, and documented in `try_sanctum_session/1`: a user who has not
-    # yet claimed a namespace loads as unauthenticated for the console, because
-    # the claim gate must run first — but tincture access is not tenant
-    # administration and is granted anyway, athanor-scoped. What the resulting
-    # context can then *do* is decided by its permissions, not by this branch.
-    test "an unclaimed user still authenticates, athanor-scoped", %{ctx: ctx} do
-      {:ok, session} = Sanctum.Session.create(ctx)
+    # A publisher namespace is not identity: a person without one goes
+    # through the same establish as anyone, on the athanor their membership
+    # grants.
+    test "a person without a namespace authenticates like anyone else, athanor-scoped", %{
+      ctx: ctx
+    } do
+      {:ok, estate} =
+        Sanctum.Tenancy.Athanors.create_group(
+          ctx.user_id,
+          "Tincture #{System.unique_integer([:positive])}"
+        )
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: estate.id)
+
+      {:ok, session} = Sanctum.Session.create(%{ctx | namespace: nil, athanor_id: estate.id})
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(session.token))
       assert out.scope == :athanor
-      # The session's persisted athanor rides along — it is what lets the
-      # tenant gate pass for a user who has not claimed a namespace yet.
-      assert out.athanor_id == ctx.athanor_id
+      assert out.authenticated
+      assert out.namespace == nil
+      assert out.athanor_id == estate.id
     end
   end
 
@@ -157,14 +154,7 @@ defmodule Sanctum.TinctureAuthTest do
 
   describe "authenticate/1 — a denied person's surviving session" do
     test "is refused, not re-upgraded", %{ctx: ctx} do
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: ctx.user_id,
-          provider: "local",
-          email: "denied-tincture@example.com",
-          verified: true
-        })
-
+      {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "denied-tincture@example.com"})
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
       Sanctum.TestContext.athanor!()
 

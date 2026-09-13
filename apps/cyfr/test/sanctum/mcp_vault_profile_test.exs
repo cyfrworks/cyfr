@@ -101,7 +101,7 @@ defmodule Sanctum.MCPVaultProfileTest do
     assert reloaded.status == "revoked"
   end
 
-  test "conflicts cross the boundary as a typed §4.3 signal", %{ctx: ctx} do
+  test "conflicts cross the boundary as a typed consent signal", %{ctx: ctx} do
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, @wasm, %{
         name: "mcp-conflict",

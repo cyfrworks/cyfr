@@ -38,31 +38,17 @@ defmodule Compendium.MCP.ComponentTool do
         destructiveHint: true,
         actions: %{
           "search" => %{kind: :read, planes: [:external, :in_chain]},
-          "inspect" => %{kind: :read, planes: [:external, :in_chain]},
+          "inspect" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
           "pull" => %{
             kind: :write,
             planes: [:external, :in_chain],
             permission: :component_manage
           },
           "push" => %{kind: :write, planes: [:external], permission: :component_manage},
-          # `register` is a SCANNER run over the athanor's overlay
-          # `components/` tree, not a bytes upload: it indexes whatever
-          # arrived there by any means. A catalyst holding a storage write
-          # grant over that root can put bytes there, and
-          # `Compendium.Source` cannot tell them from the operator's seed —
-          # both stamp `"filesystem"`.
-          #
-          # The two changes are independent, and the second is not implied
-          # by the first. `consent: :staging` admits `:oidc` and `:api_key`
-          # and refuses `Context.plane: :guest`, which stops a WASM formula
-          # — but AQUA is not a guest: it runs host-side with the person's
-          # own `:external` context, so an approved proposal would still
-          # have registered. Dropping `:in_chain` is what closes that, at
-          # the cost of AQUA no longer being able to offer the action at
-          # all (`Aqua.Actions.proposable?/1` derives from this list, so
-          # the approval card disappears rather than failing on the click).
-          # Registering stays a console or CLI act. Note `planes:` here and
-          # `Context.plane` are different axes despite the shared word.
+          # Registration indexes the athanor's components tree without granting
+          # consent. It requires a console or CLI caller: staging consent refuses
+          # guests, and omitting :in_chain excludes formula and AQUA invocation.
+          # Operation planes and Context.plane are separate checks.
           "register" => %{
             kind: :write,
             planes: [:external],
@@ -81,7 +67,7 @@ defmodule Compendium.MCP.ComponentTool do
             permission: :component_read
           },
           "setup_plan" => %{kind: :read, planes: [:external, :in_chain]},
-          "list" => %{kind: :read, planes: [:external, :in_chain]},
+          "list" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
           "status" => %{kind: :read, planes: [:external, :in_chain]},
           "delete" => %{kind: :destructive, planes: [:external], permission: :component_manage},
           # Reverts a bundled component's local edits to exactly what the
@@ -199,11 +185,8 @@ defmodule Compendium.MCP.ComponentTool do
             "type" => "boolean",
             "description" => "Include README.md content in inspect result (default false)"
           },
-          # No "verify" knob: signature policy is the server's
-          # (`Cyfr.RuntimeConfig.require_signed_pulls?/0`, re-checked at
-          # execute), never a per-call argument. It was advertised here and
-          # read by nothing, so a caller passing `verify: false` was told
-          # it had turned verification off.
+          # Signature verification is controlled by the server’s
+          # require_signed_pulls setting and rechecked at execution.
           "digest" => %{
             "type" => "string",
             "description" => "Component digest (get_blob action)"
@@ -335,13 +318,29 @@ defmodule Compendium.MCP.ComponentTool do
       reference ->
         with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
           oci_reference =
-            if Compendium.OCI.Reference.oci_ref?(reference) do
-              {:ok, reference}
-            else
-              convert_to_oci_ref(reference)
+            cond do
+              Compendium.OCI.Reference.oci_ref?(reference) -> {:ok, reference}
+              shipped_ref?(reference) -> :shipped
+              true -> convert_to_oci_ref(reference)
             end
 
           case oci_reference do
+            # A `local` ref names what the server ships: the pull copies the
+            # shipped version from the seed rather than dialling a registry.
+            :shipped ->
+              broadcast_progress(ctx, progress_id, :pulling, "Copying shipped #{reference}...")
+
+              case Sanctum.Provisioning.install_shipped(ctx, reference) do
+                {:ok, res} ->
+                  broadcast_progress(ctx, progress_id, :complete, "Pulled #{res.component_ref}")
+                  broadcast_components_changed(ctx)
+                  {:ok, res}
+
+                {:error, reason} ->
+                  broadcast_progress(ctx, progress_id, :error, "Pull failed")
+                  {:error, shipped_pull_error(reference, reason)}
+              end
+
             {:ok, ref} ->
               broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
               result = do_oci_pull(ctx, ref)
@@ -475,9 +474,11 @@ defmodule Compendium.MCP.ComponentTool do
 
   # List action - list all installed components (local-only, no remote search)
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
-    # First need, like the agent roster: without it a fresh estate shows an
-    # empty component list until somebody happens to start a turn.
-    Sanctum.Provisioning.ensure_provisioned(ctx)
+    # First need, like the agent roster: an estate nobody has opened starts
+    # filling from here. The listing does not wait for it and answers the
+    # rows that exist, so a bare estate lists nothing until the scan that
+    # registers its bundle lands.
+    Sanctum.Provisioning.start_provisioning(ctx)
 
     filters = %{
       type: args["type"],
@@ -492,8 +493,8 @@ defmodule Compendium.MCP.ComponentTool do
         Enum.map(annotated, fn entry ->
           entry.component
           |> Map.put(:provenance, Compendium.Provenance.label(entry.provenance))
+          |> Map.put(:shipped_versions, entry.shipped_versions)
           |> Map.put(:superseded, entry.superseded)
-          |> Map.put(:shadows_shipped, entry.shadows_shipped)
           |> Map.put(:forked_from, entry.forked_from)
           |> Map.put(:upstream_superseded, entry.upstream_superseded)
         end)
@@ -526,24 +527,13 @@ defmodule Compendium.MCP.ComponentTool do
             broadcast_components_changed(ctx)
             {:ok, %{status: "deleted", reference: reference}}
 
-          {:ok, :revealed_shipped} ->
-            broadcast_components_changed(ctx)
-            # The athanor's copy is gone; the shipped version shows
-            # through again — same wording as aqua's delete.
-            {:ok, %{status: "deleted", reference: reference, restored: "shipped"}}
-
           {:error, :not_found} ->
             {:error, {:not_found, "Component", reference}}
 
           {:error, :bundled} ->
             {:error,
              "#{reference} ships with the server and cannot be deleted — " <>
-               "it costs your athanor nothing until edited"}
-
-          {:error, :bundled_modified} ->
-            {:error,
-             "#{reference} is bundled with local edits — use action=reset to " <>
-               "revert it to the shipped version"}
+               "edit it, or use action=reset to restore it"}
 
           {:error, reason} ->
             Logger.error("[Compendium.MCP] component.delete failed: #{inspect(reason)}")
@@ -559,8 +549,8 @@ defmodule Compendium.MCP.ComponentTool do
     {:error, {:invalid_argument, "Missing required argument: reference"}}
   end
 
-  # Reset action — revert a bundled component's local edits to exactly what
-  # the release shipped ("delete" never means "revert").
+  # Reset action — restore a bundled component to exactly what the release
+  # ships ("delete" never means "revert").
   def handle(%Context{} = ctx, %{"action" => "reset", "reference" => reference}) do
     with {:ok, %{version: version} = cref} when is_binary(version) <-
            Sanctum.ComponentRef.parse(reference) do
@@ -568,9 +558,6 @@ defmodule Compendium.MCP.ComponentTool do
         {:ok, :reset} ->
           broadcast_components_changed(ctx)
           {:ok, %{status: "reset", reference: reference}}
-
-        {:ok, :already_pristine} ->
-          {:ok, %{status: "already_pristine", reference: reference}}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Component", reference}}
@@ -629,8 +616,7 @@ defmodule Compendium.MCP.ComponentTool do
        %{
          reference: reference,
          provenance: Compendium.Provenance.label(overlay.provenance),
-         shipped_versions: shipped,
-         shadows_shipped: overlay.shadows_shipped
+         shipped_versions: shipped
        }
        |> Map.merge(drift)
        |> Map.merge(lineage)}
@@ -678,7 +664,6 @@ defmodule Compendium.MCP.ComponentTool do
               provenance: Compendium.Provenance.label(entry.provenance),
               shipped_versions: entry.shipped_versions,
               superseded: entry.superseded,
-              shadows_shipped: entry.shadows_shipped,
               forked_from: entry.forked_from,
               upstream_superseded: entry.upstream_superseded
             }
@@ -687,7 +672,7 @@ defmodule Compendium.MCP.ComponentTool do
         counts =
           Enum.reduce(
             overview,
-            %{bundled: 0, bundled_modified: 0, user: 0, remote: 0},
+            %{bundled: 0, user: 0, remote: 0},
             fn entry, acc -> Map.update!(acc, entry.provenance, &(&1 + 1)) end
           )
 
@@ -920,15 +905,8 @@ defmodule Compendium.MCP.ComponentTool do
 
     broadcast_components_changed(ctx)
 
-    # Registration does NOT mint consent. It used to, "so it is invocable
-    # without a manual step" — but this is a scanner over the athanor's
-    # own `components/` tree, so it consented to whatever arrived there,
-    # and a catalyst with a storage write grant over that root can arrive
-    # there. `Sanctum.Consent.Bootstrap` still mints for the seed bundle
-    # at provisioning, where the bytes are operator-shipped, immutable per
-    # the `seed-guards` CI job and auditable once at build time. What a
-    # person registers gets a consent walk, like anything else they were
-    # not handed by the operator.
+    # Registration does not mint consent. Registered components require a
+    # consent walk; provisioning bootstraps consent only for the seed bundle.
     dep_fields =
       case dep_info do
         {:error, {:dependency_check_failed, reason}} ->
@@ -1261,10 +1239,28 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   # Convert a component-ref style reference to an OCI reference for pulling.
-  # Local components are registered via `cyfr register`, not pulled. This is
-  # an early, friendlier message only — a ref carrying a registry host skips
-  # this branch entirely, so the binding refusal lives in `OCI.Client.pull/2`.
+  # A ref carrying a registry host skips this branch entirely, so the
+  # binding refusal lives in `OCI.Client.pull/2`.
   defp convert_to_oci_ref(reference), do: Compendium.Pull.oci_reference_for(reference)
+
+  defp shipped_pull_error(reference, :not_shipped),
+    do:
+      "#{reference} is not a version the server ships — a local component is " <>
+        "registered from your tree (`cyfr register`); only shipped versions are pulled from the seed"
+
+  defp shipped_pull_error(reference, reason) do
+    Logger.error("[Compendium.MCP] shipped pull of #{reference} failed: #{inspect(reason)}")
+    "Failed to pull #{reference}"
+  end
+
+  # A component ref in the `local` namespace: the server's own shipped
+  # media, never a registry's.
+  defp shipped_ref?(reference) do
+    case Sanctum.ComponentRef.parse(reference) do
+      {:ok, %{namespace: namespace}} -> Compendium.ComponentPath.local_publisher?(namespace)
+      _ -> false
+    end
+  end
 
   # Shared OCI pull logic used by both explicit OCI refs and converted component refs.
   defp do_oci_pull(ctx, reference) do

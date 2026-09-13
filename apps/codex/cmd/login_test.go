@@ -33,9 +33,7 @@ func devicePollServer(status string) *httptest.Server {
 	}))
 }
 
-// A cancelled context must end the poll loop promptly. Ctrl-C used to be
-// treated as one more transient network error, so the loop spun until the
-// device-flow deadline (~15 minutes).
+// Cancellation must end device polling promptly.
 func TestPollDeviceAuth_ReturnsPromptlyOnCancel(t *testing.T) {
 	srv := devicePollServer("pending")
 	defer srv.Close()

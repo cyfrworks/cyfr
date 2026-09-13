@@ -64,13 +64,6 @@ defmodule Arca.Cache.Keys do
   @doc "The external MCP tool map of an athanor."
   def external_tools(athanor_id), do: {:external_tools, athanor_id}
 
-  @doc "The tool-server digest of one external server within an athanor."
-  def tool_server_digest(athanor_id, server_name),
-    do: {:tool_server_digest, athanor_id, server_name}
-
-  @doc "Match spec shape for every tool-server digest of one athanor."
-  def match_tool_server_digest(athanor_id), do: {:tool_server_digest, athanor_id, :_}
-
   @doc "The byte total of an athanor's whole tree, for the storage cap."
   def athanor_usage(athanor_id), do: {:athanor_usage, athanor_id}
 

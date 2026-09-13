@@ -6,14 +6,9 @@ defmodule EmissaryWeb.SSE do
   The per-caller bounds every SSE surface shares: a concurrent-stream slot
   and a hard deadline.
 
-  Each surface claims a slot under its OWN tag with its own configured
-  budget — sharing a key would let one surface starve the other, which is
-  the collision the exec-events tag was invented to prevent while the
-  listen key stayed untagged. The slot is a `Emissary.MCP.SubscriptionRegistry`
-  entry that dies with the conn process, so a vanished client frees itself.
-  The window between count and register can briefly overshoot under a
-  burst — acceptable slack for a bound whose job is stopping unbounded
-  socket pinning.
+  Each surface uses its own subscription tag and configured budget.
+  Slots are released when the connection process exits. Count and register
+  are separate steps, so bursts can briefly exceed the configured cap.
 
   What happens ON the stream stays per-surface (JSON-RPC notifications vs
   execution events, and their renderers) — only the bounds are one thing.
@@ -34,12 +29,8 @@ defmodule EmissaryWeb.SSE do
   Open a chunked `text/event-stream` response with the headers every SSE
   surface needs.
 
-  Both surfaces set these by hand and disagreed: one added `connection:
-  keep-alive`, which is a hop-by-hop header HTTP/2 forbids a server to send
-  and which the connection handling does not read anyway. `x-accel-buffering`
-  is the one that matters — a reverse proxy buffers by default, which turns a
-  stream into a single delivery at the end, the exact thing a client opening
-  one asked to avoid.
+  Sets SSE headers, including x-accel-buffering: no for reverse proxies.
+  Omits hop-by-hop connection headers for HTTP/2 compatibility.
 
   The framing that follows stays per-surface, deliberately: JSON-RPC
   notifications have nothing to resume to, while execution events carry a

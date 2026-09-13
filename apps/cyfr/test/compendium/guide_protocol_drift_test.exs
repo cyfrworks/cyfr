@@ -8,12 +8,9 @@ defmodule Compendium.GuideProtocolDriftTest do
   `Compendium.MCP.AquaTool` as `@external_resource` and served to the AQUA agent
   as its reference material.
 
-  So a stale protocol sample is not a cosmetic problem. It is the agent being
-  taught, authoritatively, to send requests the server will refuse: for a while
-  the guide documented the `initialize` handshake and `MCP-Session-Id` from
-  `2025-11-25`, both removed, and every sample in it failed header validation.
+  Validate guide samples against the server protocol so copied requests are accepted.
 
-  This test fails on any retired method or header name reappearing.
+  Rejects unsupported methods and headers in protocol samples.
   """
   use ExUnit.Case, async: true
 
@@ -22,8 +19,7 @@ defmodule Compendium.GuideProtocolDriftTest do
   @project_root Path.expand("../../../..", __DIR__)
   @guides ~w(integration-guide.md component-guide.md tincture-guide.md)
 
-  # Removed by 2026-07-28. A guide naming any of these is teaching a protocol
-  # this server does not speak.
+  # Methods and headers unsupported by the current protocol.
   @retired_methods ~w(
     initialize
     notifications/initialized
@@ -34,9 +30,7 @@ defmodule Compendium.GuideProtocolDriftTest do
     tasks/list
   )
 
-  # `Last-Event-ID` is NOT retired: it left the MCP plane but lives on the
-  # non-MCP SSE endpoint (`/api/executions/:id/events`, see the router's
-  # :authenticated_api pipeline) — guides may document reconnection there.
+  # Last-Event-ID is supported by /api/executions/:id/events and may appear in guides.
   @retired_headers ~w(Mcp-Session-Id)
 
   # Version strings only ever appear in a `…protocol…version…` context in the
@@ -48,11 +42,7 @@ defmodule Compendium.GuideProtocolDriftTest do
 
   defp guide(name), do: File.read!(Path.join(@project_root, name))
 
-  # Only the samples are checked, not the prose. Explaining that `initialize` was
-  # removed necessarily names it, and that sentence is worth having — what must
-  # not survive is a code block a reader can copy into a client that will be
-  # refused. Splitting on the fence and keeping the odd-indexed chunks leaves
-  # exactly the fenced blocks.
+  # Check fenced code samples; split on fences and retain odd-indexed chunks.
   defp samples(name) do
     name
     |> guide()

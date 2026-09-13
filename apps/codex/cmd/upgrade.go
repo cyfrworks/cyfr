@@ -71,9 +71,8 @@ var upgradeCmd = &cobra.Command{
 				upgrade.Stderr = os.Stderr
 				upgradeErr := upgrade.Run()
 
-				// `brew upgrade` exits 0 even when it changes nothing (e.g. the cask
-				// is wedged mid formula->cask migration and stays on the old version),
-				// so verify the actually-installed version, not the exit code.
+				// Homebrew can exit successfully without changing the installed version.
+				// Verify the installed version before reporting an upgrade.
 				switch installed := installedCaskVersion(); {
 				case upgradeErr != nil:
 					fmt.Printf("Warning: brew upgrade --cask cyfr: %v\n", upgradeErr)

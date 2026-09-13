@@ -38,8 +38,7 @@ defmodule Sanctum.MCPTest do
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
-      # No "secret" tool: the legacy secrets plane retired; vault entries
-      # are the only credential store.
+      # The vault tool owns credential storage.
       refute "secret" in tool_names
       # No "permission" tool: memberships are presence-only, there are no
       # roles, and the decorative RBAC store is gone.
@@ -47,8 +46,7 @@ defmodule Sanctum.MCPTest do
       assert "key" in tool_names
       assert "vault" in tool_names
       assert "profile" in tool_names
-      # No "policy" tool: the legacy policy plane retired; consents carry
-      # the effective capability.
+      # Consents carry effective capabilities.
       refute "policy" in tool_names
       assert "oauth" in tool_names
       assert "tincture_visibility" in tool_names
@@ -141,11 +139,12 @@ defmodule Sanctum.MCPTest do
       assert err_msg(msg) =~ "Not authenticated"
     end
 
-    test "whoami surfaces :email from Context when present" do
+    test "whoami surfaces :email and :provider from the Context" do
       ctx =
         Context.build(
-          user_id: "github|https://github.com|12345",
+          user_id: "usr_whoami",
           email: "alice@example.com",
+          provider: "github",
           permissions: [:*],
           scope: :athanor,
           auth_method: :oidc,
@@ -201,12 +200,6 @@ defmodule Sanctum.MCPTest do
       assert err_msg(msg) =~ "Unknown action: session.invalid"
     end
   end
-
-  # ============================================================================
-  # Retired: the "secret" tool. The legacy secrets plane is gone — vault
-  # entries (sealed, consent-bound) are the only credential store, managed
-  # through the "vault" tool (covered in mcp_vault_profile_test.exs).
-  # ============================================================================
 
   describe "secret tool retired" do
     test "the secret tool is no longer routable", %{ctx: ctx} do
@@ -344,12 +337,12 @@ defmodule Sanctum.MCPTest do
 
     test "key:list requires admin permission", %{restricted_ctx: ctx} do
       assert {:error, {:missing_permission, :admin}} =
-               Emissary.MCP.ToolRegistry.call_external("key", ctx, %{"action" => "list"})
+               Cyfr.Ops.Catalog.call_external("key", ctx, %{"action" => "list"})
     end
 
     test "key:get requires admin permission", %{restricted_ctx: ctx} do
       assert {:error, {:missing_permission, :admin}} =
-               Emissary.MCP.ToolRegistry.call_external("key", ctx, %{
+               Cyfr.Ops.Catalog.call_external("key", ctx, %{
                  "action" => "get",
                  "name" => "test-key"
                })
@@ -592,7 +585,7 @@ defmodule Sanctum.MCPTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

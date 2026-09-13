@@ -3,21 +3,9 @@
 # Copyright 2026 CYFR Works Inc.
 set -e
 
-# Seed /app/seed/aqua/ from /app/aqua-defaults/ on first start.
-# /app/seed/aqua is the AQUA tree every new athanor reads — the soul, its
-# roles and its scrolls. We bake defaults into /app/aqua-defaults at image
-# build time and copy them on first start so the directory always has a
-# working soul and roles — works whether /app/seed/aqua is the image
-# filesystem or a host bind mount.
-#
-# FIRST start only: the mount is the operator's to edit, so a copy that ran
-# every boot would revert their changes to the shipped files. The guard is
-# the soul file, the one thing every shipped tree has. It used to be
-# agent.json, which is the v2 shape Compendium.AquaTemplate.seed_check/0
-# rejects — never present, so the condition was always true and every
-# restart overwrote the mount. The copy is additive: a mount still shaped
-# around an older agents/ directory gets the shipped tree beside it and
-# nothing removed.
+# Seed /app/seed/aqua from /app/aqua-defaults when the soul file is absent.
+# This supports both image filesystems and host mounts. Preserve the mount
+# on subsequent starts so operator edits remain intact.
 if [ -d /app/aqua-defaults ] && [ ! -f /app/seed/aqua/aqua.md ]; then
     mkdir -p /app/seed/aqua
     cp -r /app/aqua-defaults/. /app/seed/aqua/

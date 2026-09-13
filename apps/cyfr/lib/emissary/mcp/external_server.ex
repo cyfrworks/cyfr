@@ -36,9 +36,7 @@ defmodule Emissary.MCP.ExternalServer do
   @default_max_in_flight 8
   @registry Emissary.MCP.ExternalServerRegistry
 
-  # The revision to offer a peer that turns out not to speak the current one.
-  # `2025-03-26` rather than the newest legacy revision because it is the widest
-  # common denominator among third-party servers still on the handshake.
+  # Offer 2025-03-26 to peers requiring the legacy handshake.
   @legacy_protocol_version "2025-03-26"
 
   # Matched in a pattern, so it has to be a compile-time literal — but it is
@@ -99,9 +97,17 @@ defmodule Emissary.MCP.ExternalServer do
   """
   def call_tool(name, athanor_id, tool_name, arguments) do
     case lookup(name, athanor_id) do
-      {:ok, pid} -> GenServer.call(pid, {:call_tool, tool_name, arguments}, @call_timeout_ms)
+      {:ok, pid} -> call_tool(pid, tool_name, arguments)
       {:error, _} = err -> err
     end
+  end
+
+  @doc "Call a tool on the server process a caller already holds."
+  @spec call_tool(pid(), String.t(), map()) :: {:ok, term()} | {:error, term()}
+  def call_tool(pid, tool_name, arguments) when is_pid(pid) do
+    GenServer.call(pid, {:call_tool, tool_name, arguments}, @call_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:server_exited, reason}}
   end
 
   @doc """
@@ -263,8 +269,13 @@ defmodule Emissary.MCP.ExternalServer do
           {:ok, task_pid} ->
             ref = Process.monitor(task_pid)
             # `from` rides along so an abnormal exit can still answer — see
-            # the :DOWN clause.
-            {:noreply, %{state | in_flight: Map.put(state.in_flight, task_pid, {ref, from})}}
+            # the :DOWN clause; the caller is watched too, so a caller that
+            # goes away mid-call takes its upstream round-trip with it.
+            {caller, _tag} = from
+            caller_ref = Process.monitor(caller)
+
+            {:noreply,
+             %{state | in_flight: Map.put(state.in_flight, task_pid, {ref, from, caller_ref})}}
 
           {:error, reason} ->
             {:reply, {:error, "External call failed to start: #{inspect(reason)}"}, state}
@@ -304,23 +315,33 @@ defmodule Emissary.MCP.ExternalServer do
   end
 
   @impl true
-  def handle_info({:DOWN, _ref, :process, task_pid, reason}, state) do
-    # The task replies on its own way out, and its `rescue` covers a raise
-    # — but not an exit: a supervisor shutdown or a kill leaves `from`
-    # unanswered, and the caller then blocks for the whole two-minute call
-    # timeout on a task that is already gone. Answer for it.
-    case {reason, Map.get(state.in_flight, task_pid)} do
-      {:normal, _} ->
-        :ok
+  def handle_info({:DOWN, ref, :process, pid, reason}, state) do
+    case Map.get(state.in_flight, pid) do
+      {_ref, from, caller_ref} ->
+        # The task replies on its own way out, and its `rescue` covers a
+        # raise — but not an exit: a supervisor shutdown or a kill leaves
+        # `from` unanswered, and the caller then blocks for the whole
+        # two-minute call timeout on a task that is already gone. Answer
+        # for it.
+        Process.demonitor(caller_ref, [:flush])
 
-      {_reason, {_ref, from}} ->
-        GenServer.reply(from, {:error, "External call did not complete"})
+        if reason != :normal,
+          do: GenServer.reply(from, {:error, {:uncertain, "External call did not complete"}})
 
-      _ ->
-        :ok
+        {:noreply, %{state | in_flight: Map.delete(state.in_flight, pid)}}
+
+      nil ->
+        # A caller gone mid-call: its upstream round-trip is nobody's now.
+        case Enum.find(state.in_flight, fn {_task, {_r, _f, caller_ref}} -> caller_ref == ref end) do
+          {task_pid, {task_ref, _from, _caller_ref}} ->
+            Process.demonitor(task_ref, [:flush])
+            Process.exit(task_pid, :kill)
+            {:noreply, %{state | in_flight: Map.delete(state.in_flight, task_pid)}}
+
+          nil ->
+            {:noreply, state}
+        end
     end
-
-    {:noreply, %{state | in_flight: Map.delete(state.in_flight, task_pid)}}
   end
 
   def handle_info(msg, state) do
@@ -651,10 +672,11 @@ defmodule Emissary.MCP.ExternalServer do
             {:error, reason}
 
           # Transport/connection failure — log detail internally, surface a
-          # generic message to the caller.
+          # generic message to the caller. Whether the request reached the
+          # server is not known from here.
           {:error, reason} ->
             Logger.debug("[ExternalServer] request to #{state.name} failed: #{inspect(reason)}")
-            {:error, "Request failed"}
+            {:error, {:uncertain, "Request failed"}}
         end
 
       {:error, _reason} ->
@@ -786,15 +808,8 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
-  # The JSON-RPC response out of an `text/event-stream` reply.
-  #
-  # Two things the previous line-at-a-time reading got wrong. SSE folds a
-  # multi-line payload across consecutive `data:` lines within one event —
-  # they are joined with newlines, not separate messages — so a pretty-
-  # printed body was read as several fragments and all but the last thrown
-  # away. And a conformant server may send progress events before the
-  # result, separated by blank lines; the answer is the last EVENT, not the
-  # last line.
+  # Extract the JSON-RPC response from the last SSE event.
+  # Join consecutive data: lines within each event using newlines.
   defp extract_sse_data(sse_body) do
     sse_body
     # Normalize CRLF: the wire form is \r\n and the split below is on \n.

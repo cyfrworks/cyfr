@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Cyfr.Retention.Payloads do
+  @moduledoc """
+  Retained execution payloads of the default class (`api`) and of chat
+  steps (`chat_step`) older than N days go — the bytes and the rows that
+  reference them. The other classes have kinds of their own
+  (`Cyfr.Retention.WebhookPayloads`, `Cyfr.Retention.SchedulePayloads`,
+  `Cyfr.Retention.SystemPayloads`), each with its own window.
+  """
+  @behaviour Cyfr.Retention.Kind
+
+  @classes ["api", "chat_step"]
+
+  @impl true
+  def key, do: "payload_days"
+
+  @impl true
+  def default,
+    do: Keyword.get(Application.get_env(:cyfr, Cyfr.Retention, []), :payload_days, 30)
+
+  @impl true
+  def unit, do: :days
+
+  @impl true
+  def prune(ctx, days, dry_run), do: prune_classes(ctx, @classes, days, dry_run)
+
+  @doc "Delete — or on a dry run count — the payloads in `classes` older than `days`."
+  @spec prune_classes(Sanctum.Context.t(), [String.t()], pos_integer(), boolean()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def prune_classes(ctx, classes, days, dry_run) do
+    if dry_run,
+      do: Arca.ExecutionPayloads.count_older_than_days(ctx, days, classes),
+      else: Arca.ExecutionPayloads.delete_older_than_days(ctx, days, classes)
+  end
+end

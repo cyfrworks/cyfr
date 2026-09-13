@@ -48,7 +48,7 @@ defmodule Sanctum.Auth.OAuthTest do
       assert user.user_id == "github|https://github.com|12345"
       assert user.email == "alice@example.com"
       assert user.provider == "github"
-      assert MapSet.member?(user.permissions, :*)
+      assert MapSet.equal?(user.permissions, MapSet.new(Sanctum.Context.person_permissions()))
     end
 
     test "rejects GitHub user with missing email" do
@@ -163,12 +163,6 @@ defmodule Sanctum.Auth.OAuthTest do
     end
   end
 
-  describe "authenticate/1 with session token" do
-    test "returns error for invalid session token" do
-      {:error, :invalid_session} = OAuth.authenticate(%{token: "invalid_token_123"})
-    end
-  end
-
   describe "authenticate/1 with invalid params" do
     test "returns error for empty params" do
       {:error, :invalid_params} = OAuth.authenticate(%{})
@@ -195,50 +189,6 @@ defmodule Sanctum.Auth.OAuthTest do
       behaviours = OAuth.__info__(:attributes)[:behaviour]
 
       assert Sanctum.Auth in behaviours
-    end
-  end
-
-  describe "authenticate/1 when the membership read fails" do
-    setup do
-      original = Application.get_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
-
-      Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth,
-        client_id: "test_github_id",
-        client_secret: "test_github_secret"
-      )
-
-      original_resolver = Application.get_env(:cyfr, :tenancy_resolver_override)
-      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.FailingResolver)
-
-      on_exit(fn ->
-        if original do
-          Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth, original)
-        else
-          Application.delete_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
-        end
-
-        if original_resolver do
-          Application.put_env(:cyfr, :tenancy_resolver_override, original_resolver)
-        else
-          Application.delete_env(:cyfr, :tenancy_resolver_override)
-        end
-      end)
-
-      :ok
-    end
-
-    test "refuses :unavailable instead of an athanor-less context" do
-      # A DB blip at sign-in used to hand back the unresolved context, which
-      # the tenant gate downstream 403'd as "you belong nowhere" — a
-      # permanent-sounding answer to a transient fault. The refusal is typed
-      # now, and the controller renders it as a retryable 503.
-      params = %{
-        provider: :github,
-        uid: "12345",
-        info: %{email: "alice@example.com"}
-      }
-
-      assert {:error, :unavailable} = OAuth.authenticate(params)
     end
   end
 end

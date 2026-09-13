@@ -33,9 +33,6 @@ on:
       - 'tests/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
-      # Cyfr.DocsDriftTest binds UPGRADING's roster of the aqua tool's verbs
-      # to the tool's own enum.
-      - 'UPGRADING.md'
       - '.gitignore'
       - '.dockerignore'
   pull_request:
@@ -70,15 +67,9 @@ on:
       - 'tests/**'
       - 'README.md'
       - 'CONTRIBUTING.md'
-      # Cyfr.DocsDriftTest binds UPGRADING's roster of the aqua tool's verbs
-      # to the tool's own enum.
-      - 'UPGRADING.md'
       - '.gitignore'
       - '.dockerignore'
-  # Callable, so the tag-triggered publish workflows can require this
-  # suite before they build or release. They trigger on tags, which this
-  # workflow's own push filter does not match — so a tag could publish a
-  # commit no CI run had ever gone green on.
+  # Expose this workflow for tag-triggered image and release jobs.
   workflow_call:
 permissions:
   contents: read
@@ -149,19 +140,22 @@ jobs:
             cargo install cargo-component --version 0.21.1 --locked
           fi
           cargo-component --version
-      # The AQUA formula guest's own suite — its one dispatch table, the
-      # role gate, the attachment strip — runs on the host target; the
-      # shipped binary is not rebuilt here.
-      - name: Test the AQUA formula guest
+      # Each model catalyst's `model/chat@1` mapping runs on the host
+      # target; the shipped binaries are not rebuilt here.
+      - name: Test the model catalysts
         run: |
-          for src in seed/components/formulas/local/aqua/*/src; do
-            (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/aqua-guest-target")
+          for chat in seed/components/catalysts/local/*/*/src/src/chat.rs; do
+            src="$(dirname "$(dirname "$chat")")"
+            (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/catalyst-guest-target")
           done
-      # The shipped binary is the build of its source: the stamp the build
+      # Every shipped binary is the build of its source: the stamp the build
       # script writes binds the binary's digest to the source tree's, so a
       # guest edit without a rebuild fails here, toolchain or not.
-      - name: The shipped AQUA guest is built from its source
-        run: scripts/build-aqua-guest.sh --check
+      - name: Every stamped seed guest is built from its source
+        run: |
+          for stamp in seed/components/*/local/*/*/src/build.stamp; do
+            scripts/build-seed-guest.sh "$(dirname "$(dirname "$stamp")")" --check
+          done
       - name: Install dependencies
         run: mix deps.get
       - name: Compile with warnings as errors
@@ -199,9 +193,13 @@ jobs:
       # CI fixtures mirrored in s3_minio_test.exs.
       - name: Start MinIO
         run: |
+          # docker.io/minio/minio refuses anonymous pulls; quay.io is the
+          # project's own registry. Pinned by digest (RELEASE.2025-09-07T16-13-09Z)
+          # like every other image and action in these workflows.
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
-            minio/minio:latest server /data
+            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            server /data
       - name: Install dependencies
         run: mix deps.get
       - name: Compile
@@ -218,21 +216,21 @@ jobs:
       - name: Run the S3 integration suite
         working-directory: apps/cyfr
         run: mix test --only s3_integration
+      # What the server thought of the requests, when it refused them.
+      - name: MinIO logs
+        if: failure()
+        run: docker logs minio
 
   arca-seam:
     name: Arca single-seam (no untagged filesystem I/O)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # Arca.Storage's single-seam policy: all file/blob I/O flows through the
-      # storage adapter. A direct File.* / Path.wildcard call — or its Erlang
-      # spelling (:file, :filelib, :erl_tar, :prim_file) — outside the
-      # adapter must be acknowledged with an `# arca:bypass-ok=<A|B|C|D>` tag
-      # (see the bypass-group table in Arca.Storage) on the call's own line or
-      # within the four lines above it — LINE-scoped, so one tag can no longer
-      # exempt a whole file's worth of unrelated calls. A module that is
-      # wholly scratch-dir mechanics may declare
-      # `arca:bypass-ok=<X> — entire module` once instead.
+      # All file/blob I/O must use Arca.Storage unless a direct call is marked
+      # with `arca:bypass-ok=<A|B|C|D|E>` on its line or within four lines above it.
+      # This includes File.*, Path.wildcard, :file, :filelib, :erl_tar and :prim_file.
+      # Arca.Storage documents the bypass groups. Scratch-only modules may use
+      # `arca:bypass-ok=<X> — entire module`.
       - name: Assert direct filesystem calls are tagged
         run: |
           set -uo pipefail
@@ -242,7 +240,7 @@ jobs:
               */arca/adapters/*) continue ;;
               apps/cyfr/lib/arca/storage.ex) continue ;;
             esac
-            if grep -qE 'arca:bypass-ok=[A-D] — entire module' "$f"; then continue; fi
+            if grep -qE 'arca:bypass-ok=[A-E] — entire module' "$f"; then continue; fi
             bad="$(awk '
               /arca:bypass-ok/ { ok = NR }
               /(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard|(^|[^A-Za-z0-9_]):(file|filelib|erl_tar|prim_file)\./ {
@@ -258,7 +256,7 @@ jobs:
             fi
           done < <(git ls-files 'apps/cyfr/lib/*.ex' 'apps/cyfr/lib/**/*.ex' 'apps/opus/lib/*.ex' 'apps/opus/lib/**/*.ex' 'apps/locus/lib/*.ex' 'apps/locus/lib/**/*.ex')
           if [ "$fail" -ne 0 ]; then
-            echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D>."
+            echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D|E>."
             exit 1
           fi
 
@@ -281,15 +279,7 @@ jobs:
             echo "$hits"
             exit 1
           fi
-      # Bundle versions are immutable: the overlay serves unmaterialized
-      # units straight from the seed, so changing bytes under an existing
-      # version directory is a silent live patch for every athanor that
-      # never edited it — and a silent miss for every one that did. New
-      # bytes mean a NEW version directory. (Adding or removing whole
-      # versions is a release decision; modifying files inside one is not.)
-      #
-      # This ran on `pull_request` only, which left the one path that needs
-      # no review — a direct push to main — as the one path that could do it.
+      # Require new version directories for seed changes; existing bundle versions are immutable.
       - name: Existing seed component versions are unmodified
         run: |
           set -euo pipefail
@@ -309,30 +299,31 @@ jobs:
               exit 0
             fi
           fi
-          bad="$(git diff --name-only --diff-filter=M "$base"..HEAD -- 'seed/components/**')"
-          # A deletion or rename inside a version directory that still
-          # ships is a mutation too; retiring the WHOLE directory is a
-          # release decision and passes.
+          # The rule is about paths, not file identity: every query runs with
+          # --no-renames. Rename detection reports a rename under its
+          # DESTINATION path, so shipping a new version by copying the last
+          # one read as "files removed from the version that still ships" —
+          # retiring 1.0.6 for 1.0.7 failed the check the comment below says
+          # it should pass. It also hid an in-place edit whenever git paired
+          # the file with a deletion elsewhere: that pair is R, which the
+          # modified-file query does not select.
+          bad="$(git diff --no-renames --name-only --diff-filter=M "$base"..HEAD -- 'seed/components/**')"
+          # A deletion inside a version directory that still ships is a
+          # mutation too; retiring the WHOLE directory is a release decision
+          # and passes.
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
             if [ -d "$vdir" ]; then bad="$bad"$'\n'"$f"; fi
-          done <<< "$(git diff --name-only --diff-filter=DR "$base"..HEAD -- 'seed/components/**')"
-          # An ADDED file inside a version directory that ALREADY SHIPPED is
-          # new bytes under a frozen version — the overlay serves it straight
-          # from the seed to every athanor that never materialized that unit,
-          # and misses every one that did. Only M, D and R were filtered, so
-          # the one mutation the guard's own comment describes as "new bytes"
-          # was the one it did not look for. A file added inside a
-          # brand-new version directory is the supported way to ship changes,
-          # so the test is whether the directory existed at `base`.
+          done <<< "$(git diff --no-renames --name-only --diff-filter=D "$base"..HEAD -- 'seed/components/**')"
+          # Reject added files inside version directories that already exist at the base revision.
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
             if git rev-parse --verify --quiet "$base:$vdir" >/dev/null 2>&1; then
               bad="$bad"$'\n'"$f"
             fi
-          done <<< "$(git diff --name-only --diff-filter=A "$base"..HEAD -- 'seed/components/**')"
+          done <<< "$(git diff --no-renames --name-only --diff-filter=A "$base"..HEAD -- 'seed/components/**')"
           bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
           if [ -n "$bad" ]; then
             echo "::error::files changed inside existing seed/components version directories — ship a new version instead"
@@ -345,16 +336,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # A key read with `Application.compile_env` is frozen when the module is
-      # compiled; the same key read or written at runtime elsewhere silently
-      # disagrees with it. That is invisible until something behaves one way in
-      # one place and another way somewhere else — the shape that had a test
-      # asserting against a registry host the code under test never used.
-      #
-      # A key that genuinely needs both — Ecto cannot swap adapters at runtime;
-      # a test that generates its cases from a roster must read that roster at
-      # compile time — says so with `# config:compile-runtime-ok` on every one
-      # of its compile_env lines.
+      # Reject runtime reads or writes of compile-time configuration keys.
+      # Intentional exceptions require `# config:compile-runtime-ok` on each
+      # compile_env line.
       - name: Keys read at compile time must not also be read at runtime
         run: |
           set -uo pipefail
@@ -425,7 +409,6 @@ jobs:
             'Prism\.AuthExchange\b' \
             'PrismWeb\.LiveClaimGate\b' \
             'CYFR_PRISM_' \
-            'PrismWeb\.AquaLive\b' \
             'Prism\.AquaConversations\b' \
             ':aqua_path\b' \
             ':4001\b|4001:4001' \
@@ -440,35 +423,33 @@ jobs:
               fail=1
             fi
           done
-          # Positive assertions on the shape the patterns protect.
-          #
-          # EVERY migration, not just the baseline: the rule is about the
-          # column, and a later migration adding a nullable or defaulted
-          # athanor_id used to pass this job untouched. The two documented
-          # nullable fabrics (memberships, sessions) live in the baseline, so
-          # the allowance is counted there and every other file must be clean.
+          # Check athanor_id constraints in every migration. Only the baseline's
+          # memberships and sessions columns may be nullable.
+          # `grep -c` exits 1 when the count is zero, and the job's shell is
+          # `bash -e`, so an unguarded count on a migration that adds no
+          # athanor_id column kills the job silently — which is what every
+          # check below this point had been dying behind.
           m=apps/cyfr/priv/repo/migrations/20260815000000_baseline.exs
-          nullable="$(grep -cE 'add :athanor_id' "$m")"
-          notnull="$(grep -cE 'add :athanor_id.*null: false' "$m")"
+          nullable="$(grep -cE 'add :athanor_id' "$m" || true)"
+          notnull="$(grep -cE 'add :athanor_id.*null: false' "$m" || true)"
           if [ "$((nullable - notnull))" -ne 2 ]; then
             echo "::error::exactly two nullable athanor_id columns are allowed (memberships, sessions); found $((nullable - notnull))"; fail=1
           fi
           for other in apps/cyfr/priv/repo/migrations/*.exs; do
             [ "$other" = "$m" ] && continue
-            n="$(grep -cE 'add :athanor_id' "$other")"
-            nn="$(grep -cE 'add :athanor_id.*null: false' "$other")"
+            n="$(grep -cE 'add :athanor_id' "$other" || true)"
+            nn="$(grep -cE 'add :athanor_id.*null: false' "$other" || true)"
             if [ "$n" -ne "$nn" ]; then
               echo "::error file=$other::athanor_id must be null: false outside the baseline (the two nullable fabrics are baseline-only)"; fail=1
             fi
           done
           if grep -nE 'add :athanor_id.*default:' apps/cyfr/priv/repo/migrations/*.exs; then
-            echo "::error::athanor_id column with a default — a forgotten athanor must fail, not land in Home"; fail=1
+            echo "::error::athanor_id column with a default — a forgotten athanor must fail, never default into somebody's"; fail=1
           fi
-          if [ "$(grep -c 'COALESCE(athanor_id' "$m")" -ne 1 ]; then
+          if [ "$(grep -c 'COALESCE(athanor_id' "$m" || true)" -ne 1 ]; then
             echo "::error::expected exactly one COALESCE(athanor_id (the membership assignment index)"; fail=1
           fi
-          # Runtime storage is one root: data/. The old components/* allowlist
-          # gymnastics must never come back.
+          # Runtime storage must stay under data/.
           if ! grep -q '^/data/$' .gitignore || grep -qE '^(components/\*|!components/_bundle/)$' .gitignore; then
             echo "::error::.gitignore must ignore /data/ and carry no components/* allowlist pair"; fail=1
           fi
@@ -488,17 +469,15 @@ jobs:
           if [ -n "$docs_hits" ]; then
             echo "::error::guides still describe a pre-unification layout"; echo "$docs_hits"; fail=1
           fi
-          # Per-athanor tree diagrams in the guides may only name real tenant
-          # roots. A guide once documented a phantom data/ scope under the
-          # athanor (the guest's LOGICAL vocabulary, physical guest/) and no
-          # pattern caught it; retired roots (config/, builds/) must not
-          # come back either.
-          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(data|config|builds)/ ' -- README.md component-guide.md integration-guide.md tincture-guide.md || true)"
+          # Per-athanor storage diagrams must name physical tenant roots.
+          # The names below are not tenant roots. `data/` is no longer among
+          # them: the guest's scope and the athanor's root are one name now
+          # (Arca.Storage.tenant_roots/0).
+          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(config|builds)/ ' -- README.md component-guide.md integration-guide.md tincture-guide.md || true)"
           if [ -n "$phantom_hits" ]; then
             echo "::error::guide tree diagrams name a scope that is not a tenant root (see Arca.Storage.tenant_roots/0)"; echo "$phantom_hits"; fail=1
           fi
-          # Seed media lives under seed/ — the old root locations must never
-          # come back as tracked content.
+          # Tracked seed media belongs under seed/.
           if git ls-files 'components/*' 'aqua/*' | grep -q .; then
             echo "::error::seed media lives under seed/ — nothing may be tracked at components/ or aqua/"; fail=1
           fi
@@ -515,10 +494,18 @@ jobs:
           # `docker-entrypoint.sh '/app/seed/aqua'` did: the string sits in
           # three header comments above the seeding block it guards, so the
           # block could go and the gate would stay green.
+          # No pipe: `grep -q` exits at the first match, and the strip
+          # upstream of it then dies of SIGPIPE, which `pipefail` reports as
+          # a failed pipeline even though the string was found. That made
+          # these assertions answer differently on a fast machine than a
+          # slow one — `lifecycle.go` was reported as no longer spelling a
+          # string it still contains.
           assert_spelling() {
-            if ! grep -vE '^[[:space:]]*(#|//)' "$1" | grep -qF -- "$2"; then
-              echo "::error::$1 no longer spells '$2' — the deployment layout drifted from Arca.Storage"; fail=1
-            fi
+            stripped="$(grep -vE '^[[:space:]]*(#|//)' "$1" || true)"
+            case "$stripped" in
+              *"$2"*) : ;;
+              *) echo "::error::$1 no longer spells '$2' — the deployment layout drifted from Arca.Storage"; fail=1 ;;
+            esac
           }
           assert_spelling docker-compose.yml './data:/app/data'
           assert_spelling docker-compose.yml './aqua:/app/seed/aqua'

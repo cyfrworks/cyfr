@@ -165,7 +165,7 @@ defmodule Sanctum.WebhookMCPTest do
 
     test "unknown name returns not_found", %{ctx: ctx} do
       {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "get", "name" => "ghost"})
-      assert Emissary.MCP.ToolError.render(msg) =~ "not found"
+      assert Cyfr.Ops.Error.render(msg) =~ "not found"
     end
   end
 
@@ -245,7 +245,7 @@ defmodule Sanctum.WebhookMCPTest do
 
     test "unknown name returns not_found", %{ctx: ctx} do
       {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "revoke", "name" => "ghost"})
-      assert Emissary.MCP.ToolError.render(msg) =~ "not found"
+      assert Cyfr.Ops.Error.render(msg) =~ "not found"
     end
   end
 
@@ -294,7 +294,7 @@ defmodule Sanctum.WebhookMCPTest do
 
     test "unknown name returns not_found", %{ctx: ctx} do
       {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "rotate", "name" => "ghost"})
-      assert Emissary.MCP.ToolError.render(msg) =~ "not found"
+      assert Cyfr.Ops.Error.render(msg) =~ "not found"
     end
   end
 

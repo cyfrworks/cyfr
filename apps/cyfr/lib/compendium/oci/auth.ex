@@ -5,11 +5,8 @@ defmodule Compendium.OCI.Auth do
   @moduledoc """
   OCI Distribution authentication — push-token only.
 
-  cyfr talks to a single registry (cyfr.run apex or a self-deployed cyfr.run).
-  The only credential shape is the opaque push token issued by cyfr.run. There
-  is no realm-exchange dance, no basic/oauth2-client/key-pair dispatch, and no
-  cross-registry fallback — the pre-refactor branches were removed when the
-  registry surface collapsed to a single peer.
+  Uses opaque push tokens for the configured registry, either cyfr.run
+  or a self-deployed instance. Credentials are scoped by user and namespace.
 
   Authentication flow:
 
@@ -27,15 +24,8 @@ defmodule Compendium.OCI.Auth do
   @doc """
   Build authorization headers for an OCI registry request.
 
-  The `namespace_slug` is extracted from the repository path (first segment
-  of the OCI name) and used to scope credential lookup. When no credential
-  is available for the user/namespace pair, returns anonymous (`[]`) — the
-  server will return 401 for authenticated-only operations.
+  Returns bearer headers for the current user and registry, or `[]` when no credential is available.
   """
-  # `_repository` is retained in the signature because `OCI.Transport`
-  # passes the repository path at every call site; pre-refactor it scoped the
-  # token cache (now deleted). Keeping the arg avoids a transport-level churn
-  # for a purely cosmetic rename. Prefixed with `_` to signal no current use.
   @spec auth_headers(String.t(), String.t(), String.t(), Sanctum.Context.t() | nil) ::
           {:ok, [{String.t(), String.t()}]}
   def auth_headers(registry, _repository, namespace_slug, ctx \\ nil) do
@@ -52,9 +42,8 @@ defmodule Compendium.OCI.Auth do
   @doc """
   Fetch the per-namespace push-token credential for a user.
 
-  Returns `{:ok, credential}` or `:anonymous`. When `ctx` is nil or has no
-  user_id, returns `:anonymous` — there is no cross-user fallback (that was
-  a privacy leak in shared deployments, removed at refactor time).
+  Returns `{:ok, credential}` or `:anonymous`. A nil context or missing
+  `user_id` returns `:anonymous`; credentials are never shared across users.
   """
   @spec fetch_credential(String.t(), String.t(), Sanctum.Context.t() | nil) ::
           {:ok, map()} | :anonymous

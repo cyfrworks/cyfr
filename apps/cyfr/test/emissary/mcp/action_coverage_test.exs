@@ -12,17 +12,12 @@ defmodule Emissary.MCP.ActionCoverageTest do
   """
   use ExUnit.Case, async: false
 
-  # The registered providers, read from config rather than listed again
-  # here. A second list meant the two could disagree, and they did:
-  # ExternalProvider and SystemProvider were registered but absent from this
-  # test, so the audit that exists to catch an action with no handler clause
-  # silently skipped two providers.
-  # config:compile-runtime-ok — this roster generates the test cases below, so
-  # it has to exist at compile time; the runtime readers are the live registry.
+  # Use the configured provider roster to generate handler coverage cases.
+  # config:compile-runtime-ok — cases require the live registry’s roster at compile time.
   @all_providers Application.compile_env(:cyfr, :tool_providers, [])
 
   # Filter to only providers available in this app's compilation context.
-  # Opus.MCP, Opus.CronMCP, and Locus.MCP are cross-app modules that aren't
+  # Opus.MCP and Locus.MCP are cross-app modules that aren't
   # available when running `apps/cyfr` tests standalone.
   @providers Enum.filter(@all_providers, &Code.ensure_loaded?/1)
 

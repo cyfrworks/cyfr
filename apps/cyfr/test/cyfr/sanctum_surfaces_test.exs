@@ -28,7 +28,7 @@ defmodule Cyfr.SanctumSurfacesTest do
   #     `emissary` — domain code whose Sanctum reach should stay vocabulary
   #     and the tenancy carrier.
   @surfaces %{
-    # `Sanctum.Authority` is `Aqua.MCPHelpers` alone: the in-chain call an
+    # `Sanctum.Authority` is `Aqua.Ops` alone: the in-chain call an
     # approved proposal runs under carries the chain's authority, and the
     # seam's contract names its type. `Sanctum.Provisioning` is
     # `Aqua.AgentConfig`'s two in-process agent reads alone — the first-need
@@ -37,9 +37,14 @@ defmodule Cyfr.SanctumSurfacesTest do
     # with on first read has to be there before the turn roots an
     # authority in it. The tool keeps the same hook for readers outside
     # the harness.
+    # `Sanctum.JCS` is the canonical form a card's proposal is digested in
+    # (`Aqua.Loop.Policy.proposal_digest/1`) — the same canon the consent
+    # digests use, so a decision consumes exactly what was shown.
+    # `Sanctum.Limits` is the loop's deadline: the timeout the authority's
+    # consented node limits carry, parsed once per turn.
     "aqua" => ~w(
-      Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.Notify
-      Sanctum.Provisioning Sanctum.Sanitizer Sanctum.Tenancy
+      Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.JCS
+      Sanctum.Limits Sanctum.Notify Sanctum.Provisioning Sanctum.Sanitizer Sanctum.Tenancy
     ),
     # `Sanctum.Provisioning` is `Compendium.MCP.AquaTool` and
     # `ComponentTool`'s list action alone — the first-need hook. A group
@@ -59,31 +64,29 @@ defmodule Cyfr.SanctumSurfacesTest do
       Sanctum.Provisioning Sanctum.Sanitizer Sanctum.SignIn Sanctum.ToolPattern
       Sanctum.VaultReader
     ),
-    # `Sanctum.Cipher` is here for `Cyfr.Release` alone: boot tells an
-    # operator with no explicit keyring that rotating their secret orphans
-    # every sealed blob, and that advice needs a rotation they can actually
-    # run. `Sanctum.Cipher.Rotation` had no caller outside its own tests, so
-    # the release task is what makes the warning actionable.
+    # Cyfr.Release uses Sanctum.Cipher for key rotation. Cyfr.Ops uses
+    # consent classes, chain authority, authorization rendering, and
+    # the Sanctum.Catalog port. Cyfr.Models.Windows parses a catalyst
+    # reference to read its exact name (Sanctum.ComponentRef).
     "cyfr" => ~w(
-      Sanctum.Auth Sanctum.Authority Sanctum.Cidr Sanctum.Cipher
-      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
-      Sanctum.OAuth Sanctum.Provisioning Sanctum.ProvisioningSupervisor
-      Sanctum.PubSub Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy
+      Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cidr
+      Sanctum.Cipher Sanctum.ComponentRef Sanctum.Consent Sanctum.Context
+      Sanctum.Door Sanctum.Notify
+      Sanctum.OAuth
+      Sanctum.Provisioning Sanctum.ProvisioningRegistry Sanctum.ProvisioningSupervisor
+      Sanctum.PubSub
+      Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy Sanctum.ToolServerDigest
+      Sanctum.Unauthorized Sanctum.UnauthorizedError
     ),
-    # The notes tool no longer reaches `Sanctum.Tenancy`: reading "your
-    # own" notes resolves `users.personal_athanor_id`, and that read lives
-    # with the domain (`Aqua.Notes`, under the `aqua` surface) rather than
-    # the door.
+    # Aqua.Notes resolves personal notes through users.personal_athanor_id.
     "emissary" => ~w(
-      Sanctum.Atoms Sanctum.Authority Sanctum.ComponentRef Sanctum.Consent
-      Sanctum.Context Sanctum.Sanitizer Sanctum.ToolPattern
-      Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.UnauthorizedError
-      Sanctum.VaultReader
+      Sanctum.ComponentRef Sanctum.Context Sanctum.Sanitizer Sanctum.ToolPattern
+      Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.VaultReader
     ),
     "emissary_web" => ~w(
       Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
       Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Limits
-      Sanctum.Namespace Sanctum.Sanitizer Sanctum.Session Sanctum.SignIn
+      Sanctum.Sanitizer Sanctum.Session Sanctum.SignIn
       Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.TinctureAuth
       Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault
       Sanctum.Webhook
@@ -157,15 +160,8 @@ defmodule Cyfr.SanctumSurfacesTest do
     end
   end
 
-  # Compendium's two SENSITIVE reaches get third-level pins on top of the
-  # namespace roster above: `Sanctum.Cipher` seals registry credentials at
-  # rest, and the `Sanctum.Consent` submodules it may touch are exactly the
-  # read-side trio below — the consent WRITE plane (Commit, Plan, Authz)
-  # must never be reachable from the Apache registry domain.
-  # `Sanctum.Consent.Bootstrap` was here for `component.register`'s mint.
-  # That call is gone — registering now earns a consent walk like anything
-  # else — so the entry goes with it. This assertion only checks the
-  # `extra` direction, so a survivor would have sat here unnoticed.
+  # Restrict Compendium's sensitive Sanctum calls to credential encryption
+  # and the listed consent readers. Consent write operations are excluded.
   @compendium_consent_allowed ~w(
     Sanctum.Consent.ShapeDerivation
     Sanctum.Consent.Source

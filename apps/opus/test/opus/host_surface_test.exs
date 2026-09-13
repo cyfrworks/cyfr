@@ -5,12 +5,7 @@ defmodule Opus.HostSurfaceTest do
   @moduledoc """
   What opus actually needs from cyfr, written down.
 
-  `Opus.Host` declares eight delegates and used to claim a worker on
-  another node "would implement exactly this surface". It would not: opus
-  names cyfr modules in roughly 270 places across the namespaces below, so
-  a worker built to those eight functions would come up with no blob
-  storage, no cache, no schedule table, no egress policy and no id
-  generator.
+  Inventories direct CYFR dependencies in Opus beyond the delegates exposed by `Opus.Host`.
 
   The claim is fixed. This is what keeps it fixed: a namespace opus starts
   reaching into that is not on this list fails here, and adding it means
@@ -36,16 +31,36 @@ defmodule Opus.HostSurfaceTest do
     # would implement.
     "Arca",
     "Arca.Cache",
-    "Arca.CronSchedule",
     "Arca.Execution",
+    # The invoke budget's durable half: a spawn-shaped child's charge row,
+    # taken before it runs and given back after — a worker on another
+    # node would charge and release through a client.
+    "Arca.BudgetReservations",
+    # The attempt that owns an execution: renewed, cancelled and closed by
+    # the runner that holds it, and the turn root a host loop pauses and
+    # resumes — a worker on another node would renew and close its
+    # attempt through a client.
+    "Arca.ExecutionAttempts",
+    # The durable half of an execution's stream: the rows a replay reads
+    # and the counter a delta rides under — a worker on another node would
+    # read them through a client.
+    "Arca.ExecutionEvents",
+    # An execution's result is kept as a payload once it completes.
+    "Arca.ExecutionPayloads",
     "Arca.QueryHelpers",
-    "Arca.Repo",
     "Arca.Storage",
+    # The turn a root belongs to: paused and resumed with the root's
+    # attempt in one transaction — a worker holding a turn root would
+    # move the rows through a client.
+    "Arca.TurnStorage",
     "Arca.Usage",
     "Emissary.PubSub",
 
     # The component catalogue: what to run, and whether it is what it says.
     "Compendium.Activation",
+    # The agent that dispatched a child, named on the row as its parent:
+    # what of the child's output is kept follows from it.
+    "Compendium.AgentSource",
     "Compendium.Component",
     "Compendium.Manifest",
     # The local-namespace trust policy: the storage boundary asks it before
@@ -60,15 +75,25 @@ defmodule Opus.HostSurfaceTest do
     "Sanctum.Cidr",
     "Sanctum.ComponentRef",
     "Sanctum.Limits",
-    "Sanctum.Tenancy",
 
     # Shared primitives — glue, by construction available to any node.
+    # This boot's name on every execution row (the lease's runner id).
+    "Cyfr.Boot",
+    # Whether this boot still owns the control plane — the engine admits
+    # nothing when it does not.
+    "Cyfr.ControlPlane",
     "Cyfr.Digest",
     "Cyfr.Execution",
     "Cyfr.Json",
     "Cyfr.LoggerContext",
     "Cyfr.MediaType",
     "Cyfr.Network",
+    # The operation catalog: an in-chain tool call is dispatched through it.
+    "Cyfr.Ops",
+    # The class an execution's payloads are kept under when its caller
+    # names none — a worker on another node would take it from its
+    # assignment, which names the retention class with the input.
+    "Cyfr.Retention",
     "Cyfr.PathSafety",
     # The signed-pulls posture, read at execution as well as at pull so a
     # component stored before the knob was turned on cannot keep running. A

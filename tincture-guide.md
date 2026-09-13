@@ -72,7 +72,7 @@ data/athanors/{athanor_id}/components/tinctures/local/stock-dashboard/1.0.0/
 1. Scaffold    cyfr new tincture stock-dashboard       (once — creates HTML/JS/CSS scaffold)
 2. Edit        Edit index.html, app.js, style.css      (any web editor or IDE)
 3. Register    cyfr register                           (index the tincture)
-4. View        Open Prism at localhost:4000 → Tinctures tab, or visit /t/home/local/stock-dashboard
+4. View        Open Prism at localhost:4000 → Tinctures tab, or visit /t/@alice/local/stock-dashboard
 5. Iterate     Edit HTML/JS/CSS → reload browser (no compile step)
 ```
 

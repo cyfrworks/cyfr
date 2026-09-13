@@ -18,7 +18,7 @@ defmodule Opus.MCP do
   via Wasmex (Wasmtime backend).
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Emissary.MCP.ToolRegistry.
+  which is validated at runtime by Cyfr.Ops.Catalog.
 
   ## Simplified Lifecycle
 
@@ -27,7 +27,7 @@ defmodule Opus.MCP do
       Develop in components/ → Register via `cyfr register` → Execute by name
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   def service, do: "opus"
 
@@ -64,9 +64,7 @@ defmodule Opus.MCP do
   end
 
   def read(%Context{authenticated: false}, "opus://executions/" <> _rest) do
-    # Typed (a bare atom, keeping opus off Sanctum's vocabulary module):
-    # the router renders the one auth prose and answers auth_required —
-    # the bare string was mislabeled resource_not_found.
+    # Return a typed auth refusal for the router to render.
     {:error, :unauthenticated}
   end
 
@@ -118,7 +116,7 @@ defmodule Opus.MCP do
           request_id: record.request_id,
           status: Atom.to_string(record.status),
           reference: record.reference,
-          component_type: Atom.to_string(record.component_type || :reagent),
+          component_type: Atom.to_string(record.component_type),
           component_digest: record.component_digest,
           started_at: record.started_at && DateTime.to_iso8601(record.started_at),
           completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
@@ -203,7 +201,7 @@ defmodule Opus.MCP do
     lines = [
       "=== Execution #{record.id} ===",
       "Status: #{record.status}",
-      "Component Type: #{record.component_type || :reagent}",
+      "Component Type: #{record.component_type}",
       "Component Digest: #{record.component_digest || "unknown"}",
       "Started: #{Cyfr.Time.iso8601(record.started_at) || "N/A"}",
       "Completed: #{Cyfr.Time.iso8601(record.completed_at) || "N/A"}",
@@ -257,10 +255,23 @@ defmodule Opus.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "run" => %{kind: :execute, planes: [:external, :in_chain], permission: :execute},
+            # External-plane only, and `host: :intercepted`: a running
+            # component's execution request never reaches the catalog — the
+            # formula host intercepts it and runs it as a CHILD of the
+            # chain's authority (`Opus.Chain.run_child/5`), and an approved
+            # card's is run the same way by the assistant. The annotation
+            # says so, and every surface that offers actions to a chain
+            # reads it from here.
+            "run" => %{
+              kind: :execute,
+              planes: [:external],
+              host: :intercepted,
+              permission: :execute
+            },
             "run_stream" => %{
               kind: :execute,
-              planes: [:external, :in_chain],
+              planes: [:external],
+              host: :intercepted,
               permission: :execute
             },
             "list" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
@@ -357,85 +368,20 @@ defmodule Opus.MCP do
      "execution.#{action} cannot be invoked in-chain; a component runs children through the formula host, not by re-rooting"}
   end
 
-  # Run stream action - start execution in background and return execution_id + stream URL
-  # The caller can connect to the SSE endpoint to receive intermediate events.
-  def handle("execution", %Context{} = ctx, %{"action" => "run_stream"} = args) do
+  # An agent is addressed in a conversation (`conversation.send`) and runs
+  # under the turn that claims its root; it is never rooted from here,
+  # whatever the caller's grants, so the harness and the console start a
+  # turn one way.
+  def handle("execution", %Context{} = ctx, %{"action" => action} = args)
+      when action in ["run", "run_stream"] do
     reference = args["reference"] || ""
-    input = args["input"] || %{}
 
-    execution_id = Opus.ExecutionRecord.generate_id()
-
-    opts = build_run_opts(args)
-    opts = [{:execution_id, execution_id} | opts]
-    # This execution IS the root — its emit target is itself
-    opts = [{:root_execution_id, execution_id} | opts]
-
-    opts =
-      case args["parent_execution_id"] do
-        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-        _ -> opts
-      end
-
-    # Spawn execution in background, registering PID for cancellation
-    logger_metadata = Cyfr.LoggerContext.capture()
-
-    case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
-
-           case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
-             {:ok, _} ->
-               run_root_formatted(ctx, reference, input, opts, args)
-
-             {:error, reason} ->
-               Logger.error(
-                 "[Opus.MCP] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
-               )
-           end
-         end) do
-      {:ok, _pid} ->
-        {:ok,
-         %{
-           execution_id: execution_id,
-           stream_url: "/api/executions/#{execution_id}/events"
-         }}
-
-      {:error, reason} ->
-        Logger.error("[Opus.MCP] Failed to spawn execution #{execution_id}: #{inspect(reason)}")
-        {:error, "execution_spawn_failed"}
-    end
-  end
-
-  # Run action - execute a WASM component
-  # Delegates to Opus.run/4 (via Opus.Executor) to avoid duplication
-  # Accepts optional parent_execution_id for formula lineage tracking
-  def handle("execution", %Context{} = ctx, %{"action" => "run"} = args) do
-    reference = args["reference"] || ""
-    input = args["input"] || %{}
-
-    # Build options for Opus.run/4
-    opts = build_run_opts(args)
-
-    # Thread parent_execution_id for formula→component lineage
-    opts =
-      case args["parent_execution_id"] do
-        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-        _ -> opts
-      end
-
-    # Thread root_execution_id so nested emits route to the root stream
-    opts =
-      case args["root_execution_id"] do
-        rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
-        _ -> opts
-      end
-
-    case run_root_formatted(ctx, reference, input, opts, args) do
-      {:ok, result} ->
-        # Format response for MCP (convert atoms to strings for JSON)
-        {:ok, format_run_result(result, reference)}
-
-      {:error, reason} ->
-        {:error, reason}
+    if Compendium.AgentSource.agent_ref?(reference) do
+      {:error,
+       {:invalid_argument,
+        "#{reference} is an agent: it is addressed in a conversation (conversation.send), never run"}}
+    else
+      start_root(action, ctx, args)
     end
   end
 
@@ -496,7 +442,7 @@ defmodule Opus.MCP do
              completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
              duration_ms: record.duration_ms,
              error: record.error,
-             component_type: Atom.to_string(record.component_type || :reagent),
+             component_type: Atom.to_string(record.component_type),
              component_digest: record.component_digest,
              reference: record.reference,
              input: record.input,
@@ -592,13 +538,92 @@ defmodule Opus.MCP do
     {:error, "Unknown tool: #{tool}"}
   end
 
+  # Start the execution in the background and answer its id and stream URL;
+  # the caller follows the SSE endpoint for intermediate events.
+  defp start_root("run_stream", ctx, args) do
+    reference = args["reference"] || ""
+    input = args["input"] || %{}
+
+    execution_id = Opus.ExecutionRecord.generate_id()
+
+    opts = build_run_opts(args)
+    opts = [{:execution_id, execution_id} | opts]
+    # This execution IS the root — its emit target is itself
+    opts = [{:root_execution_id, execution_id} | opts]
+
+    opts =
+      case args["parent_execution_id"] do
+        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+        _ -> opts
+      end
+
+    # Spawn execution in background, registering PID for cancellation
+    logger_metadata = Cyfr.LoggerContext.capture()
+
+    case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
+
+           case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
+             {:ok, _} ->
+               run_root_formatted(ctx, reference, input, opts, args)
+
+             {:error, reason} ->
+               Logger.error(
+                 "[Opus.MCP] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
+               )
+           end
+         end) do
+      {:ok, _pid} ->
+        {:ok,
+         %{
+           execution_id: execution_id,
+           stream_url: "/api/executions/#{execution_id}/events"
+         }}
+
+      {:error, reason} ->
+        Logger.error("[Opus.MCP] Failed to spawn execution #{execution_id}: #{inspect(reason)}")
+        {:error, "execution_spawn_failed"}
+    end
+  end
+
+  # Run the component to completion through `Opus.run/4`; an optional
+  # `parent_execution_id` records the formula lineage.
+  defp start_root("run", ctx, args) do
+    reference = args["reference"] || ""
+    input = args["input"] || %{}
+
+    # Build options for Opus.run/4
+    opts = build_run_opts(args)
+
+    # Thread parent_execution_id for formula→component lineage
+    opts =
+      case args["parent_execution_id"] do
+        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+        _ -> opts
+      end
+
+    # Thread root_execution_id so nested emits route to the root stream
+    opts =
+      case args["root_execution_id"] do
+        rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
+        _ -> opts
+      end
+
+    case run_root_formatted(ctx, reference, input, opts, args) do
+      {:ok, result} ->
+        # Format response for MCP (convert atoms to strings for JSON)
+        {:ok, format_run_result(result, reference)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # ============================================================================
   # Private Helpers
   # ============================================================================
 
-  # Every execution roots under a profile's consent — there is no other
-  # path. No profile means nothing was granted: the §4.3 vocabulary names
-  # the fix instead of running with the caller's ambient authority.
+  # Execution requires a profile; return a typed setup error when none is selected.
   defp run_root_formatted(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
@@ -627,10 +652,7 @@ defmodule Opus.MCP do
   # is what keeps it from being a guess.
   defp profile_selector(args), do: Sanctum.Authority.RootSelect.decode(args["profile"])
 
-  # The §4.3 signals stay TYPED to the boundary: the wire router promotes
-  # them to protocol-level errors (-335xx + error.data), the console and
-  # the guest render them through the shared seam. They used to be
-  # stringified here as "tag: {json}" for the CLI to grep back out.
+  # Keep consent signals typed for protocol codes, structured data and shared rendering.
   defp format_root_result({:error, {tag, payload}})
        when tag in [:setup_required, :consent_required, :consent_conflict, :restart_required] and
               is_map(payload) do
@@ -656,10 +678,9 @@ defmodule Opus.MCP do
   end
 
   defp format_root_result({:error, reason}) when not is_binary(reason) do
-    # A typed refusal renders through the shared seam; an internal term is
-    # logged, never reflected to the MCP client (`inspect/1` here was the
-    # one place this module put Elixir terms on the wire).
-    case Emissary.MCP.ToolError.render(reason) do
+    # Render typed refusals through the shared seam. Log internal terms
+    # without returning them to the client.
+    case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[Opus.MCP] unrenderable authority error: #{inspect(reason)}")
         {:error, "authority_error: the request could not be authorized"}

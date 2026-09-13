@@ -4,21 +4,9 @@
 defmodule EmissaryWeb.ExecutionEventsControllerTest do
   use EmissaryWeb.ConnCase, async: false
 
-  # This route used to live in the unauthenticated :api pipeline, letting any
-  # client probe valid execution ids. It was moved under a pipeline that
-  # resolves the caller's context, with an owner-or-admin check and a uniform
-  # 404 (rather than a 403/404 split) so it cannot leak which ids exist.
-  #
-  # It rode the :mcp pipeline for a while to get that context, which handed an
-  # SSE endpoint the whole protocol along with it. It now has its own
-  # :authenticated_api pipeline and shares only `Plugs.Authenticate`.
-  #
-  # The shared test conn auto-authenticates via Emissary.TestAuthProvider
-  # ("test_user"), so this test exercises the cross-tenant case: an
-  # unknown execution id returns 404 rather than streaming events.
-  # Cross-user-but-same-athanor and admin-overrides-ownership cases require
-  # a real Opus.ExecutionEventBuffer fixture and are left to integration
-  # tests.
+  # Execution-event access requires authentication and an ownership check.
+  # Unknown and inaccessible ids return the same 404. This fixture uses the
+  # shared test user and exercises an unknown execution id.
   describe "GET /api/executions/:id/events" do
     # The controller returns 503 when Opus.ExecutionEventBuffer isn't loaded
     # as an umbrella sibling. cyfr's per-app test runs (`mix cmd --app cyfr`)
@@ -45,7 +33,7 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
       # Dropping the table inside the sandbox transaction is deterministic and
       # rolls back with the test; `sessions` is untouched, so the request still
       # authenticates on its way in.
-      Arca.Repo.query!("DROP TABLE executions")
+      drop_executions!()
 
       conn = get(conn, "/api/executions/exec_anything/events")
 
@@ -62,9 +50,7 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
     # session-with-narrow-permissions fixture exists.
   end
 
-  # This endpoint has never spoken JSON-RPC. While it rode the MCP pipeline its
-  # rejections were rendered as JSON-RPC anyway — an envelope with a `jsonrpc`
-  # field and a null `id`, for a caller that never sent a JSON-RPC request.
+  # This HTTP endpoint must render plain API errors.
   describe "it does not answer in a protocol it does not speak" do
     @describetag :requires_opus
 
@@ -93,5 +79,14 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
       refute Map.has_key?(body, "jsonrpc")
       assert body["code"] == "not_found"
     end
+  end
+
+  # An outage, simulated: the table is gone. Postgres holds the tables that
+  # reference `executions` to it and drops them along; SQLite has no such
+  # clause and no such need.
+  defp drop_executions! do
+    if Arca.Repo.__adapter__() == Ecto.Adapters.Postgres,
+      do: Arca.Repo.query!("DROP TABLE executions CASCADE"),
+      else: Arca.Repo.query!("DROP TABLE executions")
   end
 end

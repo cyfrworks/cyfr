@@ -8,14 +8,9 @@ defmodule Opus.Host do
   tool call, a vault edge unsealed, a policy decision recorded, an execution
   row opened and closed, an event delivered.
 
-  Every one of these is a delegate today, because opus and cyfr are one
-  release. What they are not is the whole of what opus needs from cyfr.
-  This module used to say a worker on another node "would implement exactly
-  this surface", and that was wrong by two orders of magnitude: opus names
-  cyfr modules in ~270 places across the namespaces
-  `Opus.HostSurfaceTest` enumerates. A worker built to these eight
-  functions alone would come up with no blob storage, no cache, no schedule
-  table, no egress policy and no id generator.
+  Delegates selected host operations within the combined Opus/CYFR release.
+  This module is not the complete dependency interface; Opus also calls
+  CYFR storage, policy, scheduling and utility modules directly.
 
   The honest statement is narrower and still useful: **this is the plane a
   component's execution crosses, and it is the one that would go over the
@@ -36,8 +31,12 @@ defmodule Opus.Host do
   @spec tool_call(String.t(), Context.t(), map(), Sanctum.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   defdelegate tool_call(name, ctx, args, authority, opts \\ []),
-    to: Emissary.MCP.ToolRegistry,
+    to: Cyfr.Ops.Catalog,
     as: :call_in_chain
+
+  @doc "Whether the host, not the catalog, runs `tool.action` for a chain."
+  @spec host_intercepted?(String.t(), String.t() | nil) :: boolean()
+  defdelegate host_intercepted?(name, action), to: Cyfr.Ops.Catalog
 
   @doc "The material a consented vault edge projects for this execution."
   @spec unseal(Context.t(), map()) :: {:ok, map()} | {:error, term()}
@@ -47,9 +46,13 @@ defmodule Opus.Host do
   @spec enforce(map()) :: :ok
   defdelegate enforce(attrs), to: Sanctum.Policy.Enforcement, as: :record
 
-  @doc "Open an execution's row before it runs."
-  @spec record_start(Opus.ExecutionRecord.t()) :: :ok | {:error, term()}
-  defdelegate record_start(record), to: Opus.ExecutionRecord, as: :write_started
+  @doc """
+  Open an execution's row before it runs. `opts` carry the admission
+  barriers (`:charge`, `:step`, `:occurrence_id`) the record's own
+  admission performs in its transaction.
+  """
+  @spec record_start(Opus.ExecutionRecord.t(), keyword()) :: :ok | {:error, term()}
+  defdelegate record_start(record, opts \\ []), to: Opus.ExecutionRecord, as: :write_started
 
   @doc "Close an execution's row as completed."
   @spec record_complete(Opus.ExecutionRecord.t()) :: :ok | {:error, term()}
@@ -59,9 +62,10 @@ defmodule Opus.Host do
   @spec record_failed(Opus.ExecutionRecord.t()) :: :ok | {:error, term()}
   defdelegate record_failed(record), to: Opus.ExecutionRecord, as: :write_failed
 
-  @doc "Deliver an execution event to its subscribers and the replay buffer."
-  @spec broadcast(String.t(), map(), non_neg_integer(), term(), keyword()) :: :ok
-  defdelegate broadcast(execution_id, data, sequence, ctx, opts \\ []),
+  @doc "Deliver a delta to an execution's subscribers and its replay buffer, numbered under the last durable event."
+  @spec broadcast(String.t(), map(), term(), keyword()) ::
+          {:ok, String.t()} | {:error, :missing_athanor}
+  defdelegate broadcast(execution_id, data, ctx, opts \\ []),
     to: Opus.ExecutionEventBuffer,
     as: :push
 end

@@ -19,6 +19,7 @@ defmodule Sanctum.Consent.BootstrapTest do
     test_path = Path.join(System.tmp_dir!(), "consent_bootstrap_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
+    Cyfr.Test.SeedBundle.isolate!()
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -31,20 +32,24 @@ defmodule Sanctum.Consent.BootstrapTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  defp publish!(ctx, name, type) do
+  defp ship!(ctx, name, type) do
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, @wasm, %{
-        name: name,
-        version: "1.0.0",
-        type: type,
-        description: "bootstrap test"
-      })
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, type, "local", name, "1.0.0",
+        manifest: %{
+          "name" => name,
+          "type" => type,
+          "version" => "1.0.0",
+          "publisher" => "local",
+          "description" => "bootstrap test"
+        },
+        wasm: @wasm
+      )
 
     component
   end
 
   test "mints a loadable consent whose blob mirrors effective policy", %{ctx: ctx} do
-    publish!(ctx, "boot-plain", "reagent")
+    ship!(ctx, "boot-plain", "reagent")
 
     assert {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert "reagent:local.boot-plain" in minted
@@ -73,7 +78,7 @@ defmodule Sanctum.Consent.BootstrapTest do
   end
 
   test "a second run skips what the first minted", %{ctx: ctx} do
-    publish!(ctx, "boot-idem", "reagent")
+    ship!(ctx, "boot-idem", "reagent")
 
     assert {:ok, %{minted: first}} = Bootstrap.run(ctx)
     assert "reagent:local.boot-idem" in first
@@ -84,9 +89,8 @@ defmodule Sanctum.Consent.BootstrapTest do
   end
 
   test "every local component is considered, past the default listing page", %{ctx: ctx} do
-    # Minimal rows are enough: a component that fails to activate lands in
-    # `skipped`, so the witness is that all 101 were even looked at — the
-    # default 100-row listing page once silently dropped the tail.
+    # Use 101 rows to verify bootstrap traverses beyond one listing page,
+    # including components reported as skipped.
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     for i <- 1..101 do
@@ -128,7 +132,7 @@ defmodule Sanctum.Consent.BootstrapTest do
   end
 
   test "the head pointer only advances by compare-and-swap", %{ctx: ctx} do
-    publish!(ctx, "boot-cas", "reagent")
+    ship!(ctx, "boot-cas", "reagent")
     {:ok, _} = Bootstrap.run(ctx)
 
     {:ok, [profile]} = Source.DB.profiles(ctx, "reagent:local.boot-cas")

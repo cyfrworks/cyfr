@@ -88,13 +88,8 @@ defmodule Arca.QueryHelpers do
   end
 
   @doc """
-  The write-side mirror of `where_tenant/2`: stamp the context's athanor
-  into an attrs map, raising for an unresolved context — same fail-closed
-  backstop, same message shape. Storage writes had grown several private
-  spellings of this (a stamping helper, an explicit `fetch!`, an
-  incidental dot-access); rows with no athanor column (registry tokens,
-  webhook deliveries) and the two documented nullable fabrics stay
-  outside it.
+  Stamps the context’s athanor into write attributes. Raises for an
+  unresolved context, using the same backstop as `where_tenant/2`.
   """
   @spec stamp_tenant!(Sanctum.Context.t(), map()) :: map()
   def stamp_tenant!(%Sanctum.Context{athanor_id: athanor_id} = ctx, attrs)

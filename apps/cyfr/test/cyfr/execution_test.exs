@@ -19,6 +19,14 @@ defmodule Cyfr.ExecutionTest do
     def unsubscribe_events(_id, _ctx), do: :ok
     def events_since(_id, _seq, _athanor), do: [%{seq: 1}]
     def run_child(_authority, ref, _need, input, _opts), do: {:ok, %{child: ref, input: input}}
+
+    def claim_turn_root(_ctx, ref, opts),
+      do: {:ok, %{execution_id: "exec_turn", attempt: "att_turn", ref: ref, opts: opts}}
+
+    def pause_turn_root(_ctx, id, _opts), do: {:ok, %{execution_id: id}}
+    def resume_turn_root(_ctx, id, _opts), do: {:ok, %{execution_id: id}}
+    def adopt_turn_root(_ctx, id, _opts), do: {:ok, %{execution_id: id}}
+    def release_turn_root(_ctx, _id, _opts), do: :ok
     def cancel(_ctx, id), do: {:ok, id}
     def cancel_for_restart(_ctx, _id, _payload), do: :ok
     def get(_ctx, id), do: {:ok, %{id: id}}
@@ -47,7 +55,7 @@ defmodule Cyfr.ExecutionTest do
              Cyfr.Execution.run_root(ctx, :default, "f:local.x", %{})
 
     assert {:error, :execution_unavailable} = Cyfr.Execution.cancel(ctx, "exec_1")
-    assert Cyfr.Execution.events_since("exec_1", 0, ctx.athanor_id) == []
+    assert Cyfr.Execution.events_since("exec_1", {0, 0}, ctx.athanor_id) == []
   end
 
   test "a registered engine answers through the port" do
@@ -59,7 +67,7 @@ defmodule Cyfr.ExecutionTest do
              Cyfr.Execution.run_root(ctx, {:label, "prof"}, "f:local.x", %{}, route: :protected)
 
     assert {:ok, "exec_1"} = Cyfr.Execution.cancel(ctx, "exec_1")
-    assert [%{seq: 1}] = Cyfr.Execution.events_since("exec_1", 0, ctx.athanor_id)
+    assert [%{seq: 1}] = Cyfr.Execution.events_since("exec_1", {0, 0}, ctx.athanor_id)
   end
 
   @tag :requires_opus

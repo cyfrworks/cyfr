@@ -4,19 +4,12 @@
 defmodule PrismWeb.ConversationPaneLive do
   @moduledoc """
   One conversation on screen: the tape, the composer, the approval cards,
-  the consent sheet and the uploads — a window onto `Aqua.ConversationRunner`
+  the consent sheet and the uploads — a window onto `Aqua.Runner`
   for one thread, under one focused context.
 
-  A nested LiveView (`live_render/3` from its host), so the pane has a
-  mailbox of its own: the runner's broadcasts, a card's decision and the
-  consent sheet's outcome arrive here and apply at once, as they did when
-  the chat page was one process. It authenticates from the same session
-  cookie as any page and focuses on the estate the host names — through
-  `PrismWeb.AuthHelpers.authenticate_session/2`, membership checked — so a
-  page may host more than one pane on more than one estate: the room's
-  tape beside the person's own assistant. Nothing here reads the host's
-  focus; every runner call, every row read, every attachment write runs
-  under the pane's context, and two panes on two estates cannot bleed.
+  Each nested LiveView has its own mailbox, authenticated session context,
+  and membership-checked athanor focus. Runner calls, row reads, and
+  attachment writes use that context, independently of the host’s focus.
 
   One pane per estate (`id: "pane-<athanor id>"`): the host names the
   thread at mount and turns the pane to another with `{:switch_thread,
@@ -39,7 +32,7 @@ defmodule PrismWeb.ConversationPaneLive do
   require Logger
 
   alias Arca.ConversationStorage, as: Conversations
-  alias Aqua.ConversationRunner
+  alias Aqua.Runner
   alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Users
 
@@ -91,13 +84,22 @@ defmodule PrismWeb.ConversationPaneLive do
   defp open(socket, ctx, session) do
     dom = socket.assigns.dom
 
+    # Subscribe BEFORE reading the row: the fill may finish between the two,
+    # and a page that read "not yet" without listening would sit on it until
+    # someone reloaded.
+    if connected?(socket), do: subscribe_estate(ctx)
+
     athanor =
       case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
         {:ok, athanor} -> athanor
         _ -> nil
       end
 
-    roster = if connected?(socket), do: Aqua.Turn.roster(ctx), else: []
+    # The tree reads through the seed overlay from the first moment, so the
+    # roster is real before anything is filled. What is not ready is the
+    # consent a turn pins, which is why sending is held rather than reading.
+    preparing? = preparing?(athanor)
+    roster = if connected?(socket), do: Aqua.Roster.roster(ctx), else: []
 
     socket =
       socket
@@ -107,10 +109,12 @@ defmodule PrismWeb.ConversationPaneLive do
       |> assign(:conversation, nil)
       |> assign(:members, member_labels(ctx))
       |> assign(:roster, roster)
+      |> assign(:preparing?, preparing?)
       |> assign(:model_ready, model_ready(ctx, roster))
       |> assign(:solo_human, Sanctum.Tenancy.Members.solo?(ctx.athanor_id))
       |> assign(:own?, Users.own_athanor?(ctx.user_id, ctx.athanor_id))
       |> assign(:links, [])
+      |> assign(:held_send, nil)
       |> assign(:model_override, nil)
       |> assign(:models_by_provider, %{})
       |> assign(:models_loaded, false)
@@ -129,6 +133,17 @@ defmodule PrismWeb.ConversationPaneLive do
 
     open_thread(socket, conversation_of(ctx, session["conversation_id"]))
   end
+
+  # The estate's own topic. `Sanctum.Provisioning` broadcasts
+  # `:athanor_changed` when a fill completes, which is what clears the
+  # preparing state without a reload.
+  defp subscribe_estate(%Sanctum.Context{athanor_id: id}) when is_binary(id) and id != "",
+    do: Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.notify(id))
+
+  defp subscribe_estate(_ctx), do: :ok
+
+  defp preparing?(%{provisioned_at: nil}), do: true
+  defp preparing?(_athanor), do: false
 
   # The thread a host names, under the pane's own context — so a thread
   # another estate holds is nothing here — or the blank slate, where the
@@ -160,8 +175,8 @@ defmodule PrismWeb.ConversationPaneLive do
 
     case {connected?(socket), conversation} do
       {true, %{} = conv} ->
-        ConversationRunner.subscribe(conv.id, conv.athanor_id)
-        live = ConversationRunner.state(conv.id, conv.athanor_id)
+        Runner.subscribe(conv.id, conv.athanor_id)
+        live = Runner.state(conv.id, conv.athanor_id)
 
         # Newest window only: unbounded, this read loaded every row of a
         # long-lived conversation into every viewer's socket. The runner's
@@ -184,7 +199,7 @@ defmodule PrismWeb.ConversationPaneLive do
   end
 
   defp unsubscribe_thread(%{assigns: %{conversation: %{id: id, athanor_id: athanor_id}}} = socket) do
-    ConversationRunner.unsubscribe(id, athanor_id)
+    Runner.unsubscribe(id, athanor_id)
     socket
   end
 
@@ -193,6 +208,8 @@ defmodule PrismWeb.ConversationPaneLive do
   defp reset_live(socket) do
     socket
     |> assign(:running, false)
+    |> assign(:paused, false)
+    |> assign(:paused_reason, nil)
     |> assign(:queued, 0)
     |> assign(:turn_user, nil)
     |> assign(:streaming_text, "")
@@ -208,6 +225,8 @@ defmodule PrismWeb.ConversationPaneLive do
   defp apply_live(socket, %{} = live) do
     socket
     |> assign(:running, live.running)
+    |> assign(:paused, Map.get(live, :paused, false))
+    |> assign(:paused_reason, Map.get(live, :paused_reason))
     |> assign(:queued, Map.get(live, :queued, 0))
     |> assign(:turn_user, live.turn_user)
     |> assign(:streaming_text, live.streaming_text)
@@ -284,6 +303,29 @@ defmodule PrismWeb.ConversationPaneLive do
   def handle_event("dismiss_restart", _params, socket),
     do: {:noreply, assign(socket, :restart_prompt, nil)}
 
+  def handle_event("retry_send", _params, %{assigns: %{held_send: %{} = held}} = socket),
+    do: deliver(socket, held, nil)
+
+  def handle_event("retry_send", _params, socket), do: {:noreply, socket}
+
+  def handle_event("discard_send", _params, %{assigns: %{held_send: %{} = held}} = socket) do
+    ctx = socket.assigns.context
+    Aqua.Attachments.discard(ctx, held.conversation_id, held.message_id, held.attachments)
+    {:noreply, socket |> assign(:held_send, nil) |> mirror(nil)}
+  end
+
+  def handle_event("discard_send", _params, socket), do: {:noreply, socket}
+
+  # The held send the browser kept across a reload, offered back by the
+  # pane's hook. It is trusted no further than a send over the wire: the
+  # shape is checked and the conversation must be this member's to read.
+  def handle_event("restore_draft", params, socket) do
+    case restored(socket, params) do
+      {:ok, envelope} -> deliver(socket, envelope, nil)
+      :error -> {:noreply, mirror(socket, nil)}
+    end
+  end
+
   def handle_event("stop", _params, socket) do
     case socket.assigns.conversation do
       nil ->
@@ -291,7 +333,11 @@ defmodule PrismWeb.ConversationPaneLive do
 
       conv ->
         {:noreply,
-         run(socket, &ConversationRunner.stop_turn(&1, conv.id), cancel_requested: true)}
+         run(
+           socket,
+           &PrismWeb.Ops.call_tool(&1, "conversation/stop", %{"conversation" => conv.id}),
+           cancel_requested: true
+         )}
     end
   end
 
@@ -310,7 +356,15 @@ defmodule PrismWeb.ConversationPaneLive do
 
       conv ->
         {:noreply,
-         run(socket, &ConversationRunner.revoke_grant(&1, conv.id, agent, tool, action))}
+         run(
+           socket,
+           &PrismWeb.Ops.call_tool(&1, "conversation/revoke_grant", %{
+             "conversation" => conv.id,
+             "agent_name" => agent,
+             "tool" => tool,
+             "tool_action" => action
+           })
+         )}
     end
   end
 
@@ -423,7 +477,15 @@ defmodule PrismWeb.ConversationPaneLive do
         {:noreply, socket}
 
       conv ->
-        {:noreply, run(socket, &ConversationRunner.restart_for_consent(&1, conv.id, result))}
+        {:noreply,
+         run(
+           socket,
+           &PrismWeb.Ops.call_tool(&1, "conversation/restart_for_consent", %{
+             "conversation" => conv.id,
+             "profile_id" => Map.get(result, :profile_id),
+             "revision" => Map.get(result, :revision)
+           })
+         )}
     end
   end
 
@@ -462,6 +524,40 @@ defmodule PrismWeb.ConversationPaneLive do
   # The host page opened another thread: the room this pane reads changed.
   def handle_info({:room_in_view, room}, socket), do: {:noreply, assign(socket, :room, room)}
 
+  # The estate's row changed. When it was the fill completing, the reads
+  # skipped at mount are made now and the pane stops saying "preparing".
+  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+    ctx = socket.assigns.context
+
+    case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
+      {:ok, athanor} ->
+        socket = assign(socket, :athanor, athanor)
+
+        if socket.assigns.preparing? and not preparing?(athanor) do
+          roster = Aqua.Roster.roster(ctx)
+
+          socket =
+            socket
+            |> assign(:preparing?, false)
+            |> assign(:roster, roster)
+            |> assign(:model_ready, model_ready(ctx, roster))
+            |> load_models()
+
+          # The send held for the fill goes now, once; a refusal holds it
+          # again for the person's own retry.
+          case socket.assigns.held_send do
+            %{} = held -> deliver(socket, held, nil)
+            nil -> {:noreply, socket}
+          end
+        else
+          {:noreply, socket}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_info(msg, socket) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
@@ -472,15 +568,16 @@ defmodule PrismWeb.ConversationPaneLive do
   defp decide(socket, {:approval_approve, id, scope}) do
     case socket.assigns.conversation do
       %{id: conv_id} ->
-        case ConversationRunner.approve(socket.assigns.context, conv_id, id, scope) do
-          :ok ->
+        case PrismWeb.Ops.call_tool(socket, "conversation/approve", %{
+               "conversation" => conv_id,
+               "message_id" => id,
+               "scope" => Aqua.ApprovalScope.to_string(scope)
+             }) do
+          {:ok, _} ->
             socket
 
           {:error, :already_resolved} ->
             socket
-
-          {:error, {:scope_not_permitted, _} = refusal} ->
-            put_flash(socket, :error, Aqua.ToolGrants.refusal_message(refusal))
 
           {:error, reason} ->
             Logger.warning("[ConversationPane] approve failed: #{inspect(reason)}")
@@ -495,8 +592,13 @@ defmodule PrismWeb.ConversationPaneLive do
   defp decide(socket, {:approval_decline, id, reason, scope}) do
     case socket.assigns.conversation do
       %{id: conv_id} ->
-        case ConversationRunner.decline(socket.assigns.context, conv_id, id, reason, scope) do
-          :ok ->
+        case PrismWeb.Ops.call_tool(socket, "conversation/decline", %{
+               "conversation" => conv_id,
+               "message_id" => id,
+               "reason" => reason,
+               "scope" => Aqua.ApprovalScope.to_string(scope)
+             }) do
+          {:ok, _} ->
             socket
 
           {:error, :already_resolved} ->
@@ -526,6 +628,8 @@ defmodule PrismWeb.ConversationPaneLive do
 
     socket
     |> assign(:running, true)
+    |> assign(:paused, false)
+    |> assign(:paused_reason, nil)
     |> assign(:turn_user, user_id)
     |> assign(:streaming_text, "")
     |> assign(:tool_activity, [])
@@ -535,13 +639,31 @@ defmodule PrismWeb.ConversationPaneLive do
   defp handle_conversation_event(socket, {:queued, n}), do: assign(socket, :queued, n)
 
   defp handle_conversation_event(socket, {:turn_started, _eid}),
-    do: assign(socket, :running, true)
+    do: socket |> assign(:running, true) |> assign(:paused, false) |> assign(:paused_reason, nil)
+
+  # The turn stopped on a card, a launch, or a call whose outcome is
+  # unknown; the sender it waits on stays named.
+  defp handle_conversation_event(socket, {:turn_paused, _turn_id, reason}) do
+    socket =
+      if reason == :uncertain,
+        do: assign(socket, :announcement, "AQUA stopped: a tool's outcome is unknown."),
+        else: socket
+
+    socket
+    |> assign(:running, false)
+    |> assign(:paused, true)
+    |> assign(:paused_reason, reason)
+    |> assign(:streaming_text, "")
+    |> assign(:tool_activity, [])
+  end
 
   defp handle_conversation_event(socket, {:turn_finished}) do
     socket = assign(socket, :announcement, "AQUA replied.")
 
     socket
     |> assign(:running, false)
+    |> assign(:paused, false)
+    |> assign(:paused_reason, nil)
     |> assign(:turn_user, nil)
     |> assign(:streaming_text, "")
     |> assign(:tool_activity, [])
@@ -613,114 +735,182 @@ defmodule PrismWeb.ConversationPaneLive do
 
     with {:ok, conv, created?} <- current_or_new(socket),
          {room, socket} = room_context(socket, conv),
-         {:ok, refs} <- Aqua.Attachments.store(ctx, conv.id, message_id, files),
-         :ok <- send_or_discard(ctx, conv, message, message_id, refs, room, socket) do
-      # A conversation this send created is this pane's now, and the host's
-      # to address — the URL is the host's, the pane only asked for a row.
-      if created?, do: tell_host(socket, {:opened, conv})
-      socket = if created?, do: open_thread(socket, conv), else: socket
-      {:noreply, assign(socket, :input, "")}
+         {:ok, refs} <- Aqua.Attachments.store(ctx, conv.id, message_id, files) do
+      envelope = %{
+        conversation_id: conv.id,
+        client_id: Cyfr.UUID7.generate_id("snd"),
+        message_id: message_id,
+        text: message,
+        attachments: refs,
+        agent: socket.assigns.assistant && socket.assigns.assistant["name"],
+        model: socket.assigns.model_override,
+        room: Keyword.get(room, :room)
+      }
+
+      deliver(socket, envelope, if(created?, do: conv))
     else
-      {:error, :busy} ->
+      {:error, reason} -> {:noreply, refuse(socket, reason)}
+    end
+  end
+
+  # One send, identified once: the envelope carries the message id, the
+  # `client_id` and every argument, so a retry — the person's, the pane's
+  # own when the fill completes, or one after a reload — offers the same
+  # send and is accepted once. The estate being prepared holds the send
+  # with its attachments in place; any other refusal is final, and the
+  # bytes written under the message id are discarded, since a refused
+  # send would otherwise leave blobs that belong to no row.
+  defp deliver(socket, envelope, created) do
+    ctx = socket.assigns.context
+
+    case PrismWeb.Ops.call_tool(ctx, "conversation/send", send_args(envelope)) do
+      {:ok, _} ->
         {:noreply,
-         put_flash(socket, :error, "Too many turns are already waiting — let one finish first.")}
+         socket
+         |> assign(:held_send, nil)
+         |> assign(:input, "")
+         |> mirror(nil)
+         |> opened(created)}
 
-      {:error, :not_member} ->
-        {:noreply, put_flash(socket, :error, "You are no longer a member here.")}
-
-      {:error, :archived} ->
-        {:noreply, put_flash(socket, :error, "This estate has been archived.")}
-
-      {:error, :no_orchestrator} ->
-        {:noreply, put_flash(socket, :error, "This estate has no assistant — see AQUA.")}
-
-      {:error, :storage_full} ->
-        {:noreply, put_flash(socket, :error, "This estate's storage is full.")}
-
-      {:error, :storage_unverifiable} ->
+      {:error, :not_provisioned} ->
         {:noreply,
-         put_flash(socket, :error, "Storage usage can't be verified right now — try again.")}
-
-      {:error, :message_too_long} ->
-        {:noreply,
-         put_flash(socket, :error, "That message is too long — up to 32 KiB of text per line.")}
-
-      {:error, :context_too_long} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "What the room shows is too long to read into one message — untick reading it and send again."
-         )}
-
-      {:error, :too_many_attachments} ->
-        {:noreply, put_flash(socket, :error, "Too many attachments for one message.")}
-
-      {:error, :attachment_too_large} ->
-        {:noreply, put_flash(socket, :error, "An attachment is too large.")}
-
-      {:error, :storage_error} ->
-        {:noreply,
-         put_flash(socket, :error, "Storing the attachments failed — nothing was sent.")}
+         socket
+         |> assign(:held_send, envelope)
+         |> assign(:input, "")
+         |> mirror(envelope)
+         |> opened(created)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not send: #{error_message(reason)}")}
+        Aqua.Attachments.discard(
+          ctx,
+          envelope.conversation_id,
+          envelope.message_id,
+          envelope.attachments
+        )
+
+        {:noreply, socket |> assign(:held_send, nil) |> mirror(nil) |> refuse(reason)}
     end
   end
 
-  # The attachment bytes are written before the runner sees the message, so
-  # that this member writes them in this process. A refused send therefore
-  # leaves blobs behind that belong to no row — nothing lists them, nothing
-  # reads them, and they count against the athanor's quota. The runner is
-  # where the refusal is decided (membership, archive, a full queue), so
-  # the cleanup belongs on its answer.
-  defp send_or_discard(ctx, conv, message, message_id, refs, room, socket) do
-    opts =
-      [
-        id: message_id,
-        attachments: refs,
-        model: socket.assigns.model_override,
-        # The whole entry, not the name: the runner must know whose tree
-        # the picked soul or role lives in.
-        orchestrator: socket.assigns.assistant
-      ] ++ room
+  defp send_args(envelope) do
+    %{
+      "conversation" => envelope.conversation_id,
+      "message" => envelope.text,
+      "id" => envelope.message_id,
+      "client_id" => envelope.client_id,
+      "attachments" => envelope.attachments,
+      "model" => envelope.model,
+      "agent" => envelope.agent,
+      "room" => envelope.room
+    }
+    |> Map.reject(fn {_k, v} -> is_nil(v) end)
+  end
 
-    case ConversationRunner.send_message(ctx, conv.id, message, opts) do
-      :ok ->
-        :ok
+  # A conversation this send created is this pane's now, and the host's
+  # to address — the URL is the host's, the pane only asked for a row.
+  defp opened(socket, nil), do: socket
 
-      {:error, _reason} = error ->
-        Aqua.Attachments.discard(ctx, conv.id, message_id, refs)
-        error
+  defp opened(socket, conv) do
+    tell_host(socket, {:opened, conv})
+    open_thread(socket, conv)
+  end
+
+  # What the browser keeps of a held send, so a reload offers it back
+  # (`restore_draft`) under the same identity; nil clears it.
+  defp mirror(socket, envelope) do
+    push_event(socket, "aqua:held_send", %{
+      pane: pane_id(socket),
+      envelope: envelope && Map.new(envelope, fn {k, v} -> {Atom.to_string(k), v} end)
+    })
+  end
+
+  defp restored(
+         socket,
+         %{
+           "conversation_id" => conversation_id,
+           "client_id" => client_id,
+           "message_id" => message_id,
+           "text" => text
+         } = params
+       )
+       when is_binary(conversation_id) and is_binary(client_id) and is_binary(message_id) and
+              is_binary(text) do
+    attachments = params["attachments"] || []
+    room = params["room"]
+
+    with true <- is_list(attachments) and Enum.all?(attachments, &is_map/1),
+         true <- is_nil(room) or is_map(room),
+         {:ok, _conv} <- Conversations.get(socket.assigns.context, conversation_id) do
+      {:ok,
+       %{
+         conversation_id: conversation_id,
+         client_id: client_id,
+         message_id: message_id,
+         text: text,
+         attachments: attachments,
+         agent: if(is_binary(params["agent"]), do: params["agent"]),
+         model: if(is_binary(params["model"]), do: params["model"]),
+         room: room
+       }}
+    else
+      _ -> :error
     end
   end
 
-  # What the room beside this pane shows, read for this send — the panel
-  # alone, and not a thread reading itself. A room the person can no
-  # longer read is said so; the message still goes.
+  defp restored(_socket, _params), do: :error
+
+  defp refuse(socket, reason) do
+    case reason do
+      :busy ->
+        put_flash(socket, :error, "Too many turns are already waiting — let one finish first.")
+
+      :not_member ->
+        put_flash(socket, :error, "You are no longer a member here.")
+
+      :archived ->
+        put_flash(socket, :error, "This estate has been archived.")
+
+      :no_orchestrator ->
+        put_flash(socket, :error, "This estate has no assistant — see AQUA.")
+
+      :storage_full ->
+        put_flash(socket, :error, "This estate's storage is full.")
+
+      :storage_unverifiable ->
+        put_flash(socket, :error, "Storage usage can't be verified right now — try again.")
+
+      :message_too_long ->
+        put_flash(socket, :error, "That message is too long — up to 32 KiB of text per line.")
+
+      :context_too_long ->
+        put_flash(
+          socket,
+          :error,
+          "What the room shows is too long to read into one message — untick reading it and send again."
+        )
+
+      :too_many_attachments ->
+        put_flash(socket, :error, "Too many attachments for one message.")
+
+      :attachment_too_large ->
+        put_flash(socket, :error, "An attachment is too large.")
+
+      :storage_error ->
+        put_flash(socket, :error, "Storing the attachments failed — nothing was sent.")
+
+      other ->
+        put_flash(socket, :error, "Could not send: #{error_message(other)}")
+    end
+  end
+
+  # The room beside this pane, named for this send — the panel alone, and
+  # not a thread reading itself. The room's lines are read server-side,
+  # for this one turn.
   defp room_context(
          %{assigns: %{panel?: true, read_room?: true, room: %{} = room}} = socket,
          conv
        ) do
-    if reads_room?(room, conv) do
-      case Aqua.RoomExcerpt.read(socket.assigns.context, PrismWeb.RoomFeed.excerpt_room(room)) do
-        {:ok, text} ->
-          {[context: text], socket}
-
-        {:error, :nothing_said} ->
-          {[], socket}
-
-        {:error, reason} ->
-          {[],
-           put_flash(
-             socket,
-             :error,
-             "Could not read #{PrismWeb.RoomFeed.label(room)} (#{error_message(reason)}) — sent without it."
-           )}
-      end
-    else
-      {[], socket}
-    end
+    if reads_room?(room, conv), do: {[room: room], socket}, else: {[], socket}
   end
 
   defp room_context(socket, _conv), do: {[], socket}
@@ -736,13 +926,17 @@ defmodule PrismWeb.ConversationPaneLive do
   defp current_or_new(%{assigns: %{conversation: %{} = conv}}), do: {:ok, conv, false}
 
   defp current_or_new(socket) do
-    with {:ok, conv} <- Conversations.create(socket.assigns.context), do: {:ok, conv, true}
+    with {:ok, %{id: id}} <- PrismWeb.Ops.call_tool(socket, "conversation/create", %{}),
+         {:ok, conv} <- Conversations.get(socket.assigns.context, id) do
+      {:ok, conv, true}
+    end
   end
 
-  # A runner call for the current member; `assigns` are applied on `:ok`.
+  # A conversation verb for the current member, through the tool surface;
+  # `assigns` are applied when it answers.
   defp run(socket, fun, assigns \\ []) do
     case fun.(socket.assigns.context) do
-      :ok -> assign(socket, assigns)
+      {:ok, _} -> assign(socket, assigns)
       {:error, reason} -> put_flash(socket, :error, "Could not do that: #{error_message(reason)}")
     end
   end
@@ -863,6 +1057,7 @@ defmodule PrismWeb.ConversationPaneLive do
         %{kind: "navigate", to: to} = intent -> %{intent | to: PrismWeb.Nav.href(to, route)}
         intent -> intent
       end)
+      |> Enum.filter(&served?/1)
 
     {socket, intents} =
       if socket.assigns.panel?, do: keep_navigates(socket, intents), else: {socket, intents}
@@ -910,6 +1105,21 @@ defmodule PrismWeb.ConversationPaneLive do
   end
 
   defp pane_id(socket), do: socket.assigns.dom <> "-pane"
+
+  # A navigate lands on a page the console serves or nowhere: the link,
+  # focused on this pane's estate, must resolve in the router, and a
+  # redirect stub is not a page. The engine checks a path's shape alone;
+  # this is where it is mapped to a route.
+  defp served?(%{kind: "navigate", to: href}) do
+    if PrismWeb.Nav.page?(href) do
+      true
+    else
+      Logger.warning("[ConversationPane] navigate dropped: #{inspect(href)} is not a page")
+      false
+    end
+  end
+
+  defp served?(_intent), do: true
 
   # A navigate to a page the current mode's nav does not show is dropped —
   # `PrismWeb.Nav` is the one owner of what a mode surfaces, and an
@@ -981,7 +1191,10 @@ defmodule PrismWeb.ConversationPaneLive do
           >
             {assistant_label(current_assistant(@assistant, @roster))}
           </span>
-          <span :if={@roster == []} class="text-xs text-amber-400">
+          <span :if={@preparing?} class="text-xs text-amber-400">
+            Still being prepared
+          </span>
+          <span :if={@roster == [] and not @preparing?} class="text-xs text-amber-400">
             No assistant here
           </span>
           <span
@@ -1066,21 +1279,26 @@ defmodule PrismWeb.ConversationPaneLive do
           :if={not @any_messages and @streaming_text == ""}
           class="flex flex-col items-center justify-center h-full gap-2 text-sm text-gray-500"
         >
-          <%= if @model_ready in [:no_model, :no_key] do %>
-            <span>{athanor_label(@athanor, @context)} has no model yet.</span>
-            <%!-- From the panel a navigate would leave the room being read. --%>
-            <.link
-              :if={not @panel?}
-              navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
-              class="text-blue-400 hover:text-blue-300"
-            >
-              Connect a model
-            </.link>
-            <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
+          <%= if @preparing? do %>
+            <span>{athanor_label(@athanor, @context)} is still being prepared.</span>
+            <span class="text-gray-600">Its agents and components are being installed.</span>
           <% else %>
-            <span>
-              Ask {assistant_label(current_assistant(@assistant, @roster))} anything.
-            </span>
+            <%= if @model_ready in [:no_model, :no_key] do %>
+              <span>{athanor_label(@athanor, @context)} has no model yet.</span>
+              <%!-- From the panel a navigate would leave the room being read. --%>
+              <.link
+                :if={not @panel?}
+                navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
+                class="text-blue-400 hover:text-blue-300"
+              >
+                Connect a model
+              </.link>
+              <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
+            <% else %>
+              <span>
+                Ask {assistant_label(current_assistant(@assistant, @roster))} anything.
+              </span>
+            <% end %>
           <% end %>
         </div>
 
@@ -1222,6 +1440,21 @@ defmodule PrismWeb.ConversationPaneLive do
           <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
           <span>Thinking…</span>
         </div>
+
+        <div
+          :if={@paused and @paused_reason == :uncertain}
+          id={@dom <> "-stopped"}
+          class="flex items-center gap-2 text-xs text-amber-700"
+        >
+          <span class="inline-block h-2 w-2 rounded-full bg-amber-500" />
+          <span>Stopped: a tool's outcome is unknown.</span>
+          <span :if={@turn_user == @context.user_id}>
+            Your next message continues this turn with reads only.
+          </span>
+          <span :if={@turn_user != @context.user_id}>
+            A message from you waits behind this turn.
+          </span>
+        </div>
       </div>
 
       <div
@@ -1256,6 +1489,29 @@ defmodule PrismWeb.ConversationPaneLive do
           class="rounded px-2 py-0.5 text-gray-400 hover:text-gray-200"
         >
           Dismiss
+        </button>
+      </div>
+
+      <div
+        :if={@held_send}
+        class="flex items-center gap-2 border-t border-amber-900/60 bg-amber-900/10 px-3 py-2 text-xs text-amber-200"
+      >
+        <span class="truncate">
+          Still being prepared — your message is held and goes when the estate is ready.
+        </span>
+        <button
+          type="button"
+          phx-click="retry_send"
+          class="ml-auto rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          phx-click="discard_send"
+          class="rounded px-2 py-0.5 text-gray-400 hover:text-gray-200"
+        >
+          Discard
         </button>
       </div>
 
@@ -1350,10 +1606,10 @@ defmodule PrismWeb.ConversationPaneLive do
             Send
           </button>
           <button
-            :if={@running}
+            :if={@running or @paused}
             type="button"
             phx-click="stop"
-            title="Stop the running turn"
+            title="Stop this turn; what waits behind it is dropped"
             class="self-end rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
           >
             {if @cancel_requested, do: "Cancelling…", else: "Stop"}
@@ -1381,9 +1637,8 @@ defmodule PrismWeb.ConversationPaneLive do
   attr :attachment_href, :any, default: nil
 
   defp message_bubble(assigns) do
-    # Strip aqua-actions blocks for display, then trim — a stray block or the
-    # model's surrounding whitespace would inflate the bubble.
-    display = assigns.content |> Aqua.Actions.strip_blocks() |> String.trim()
+    # The model's surrounding whitespace would inflate the bubble.
+    display = String.trim(assigns.content || "")
     assigns = assign(assigns, :display_content, display)
 
     ~H"""

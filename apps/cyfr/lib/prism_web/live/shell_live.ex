@@ -36,11 +36,8 @@ defmodule PrismWeb.ShellLive do
 
     socket =
       if connected?(socket) do
-        # The chat and members pages subscribe to this topic themselves;
-        # the shell must too — it invokes tinctures with its mount-time
-        # context, and it was the one surface an archive did not reach
-        # until the next mount (the HTTP tincture path revalidates per
-        # request; the conversation runner stops itself).
+        # Subscribe to archive notifications so the shell stops using
+        # a context whose athanor is no longer active.
         ctx = socket.assigns.context
 
         if ctx.athanor_id do
@@ -108,10 +105,7 @@ defmodule PrismWeb.ShellLive do
     {:noreply, close_active_tincture(socket)}
   end
 
-  # ============================================================================
-  # Existing events (kept; tooltip/menu handlers removed since the new info bar
-  # shows everything inline)
-  # ============================================================================
+  # Shell events
 
   def handle_event("select_tincture", %{"tincture" => tincture_id}, socket) do
     if Enum.any?(socket.assigns.tinctures, &(&1.id == tincture_id)) do
@@ -319,12 +313,8 @@ defmodule PrismWeb.ShellLive do
   defp load_tinctures(socket) do
     ctx = socket.assigns.context
 
-    # No forced rescan here: `list_tinctures/2` lazily scans an athanor
-    # once and the registry then follows the tinctures topic on its own
-    # (AutoIndexer broadcasts every change), so this read is cached. The
-    # unconditional `reload_athanor` this used to make turned EVERY
-    # navigation into a 30s-budget storage walk — defeating the registry's
-    # documented lazy design. The refresh button still forces one.
+    # Use the cached registry, which scans lazily and follows tincture
+    # change notifications. The refresh button forces a rescan.
     tinctures =
       Prism.TinctureRegistry.list_tinctures(ctx)
       |> Enum.map(fn t ->
@@ -451,12 +441,7 @@ defmodule PrismWeb.ShellLive do
   # ============================================================================
 
   defp handle_iframe_message(socket, window_id, %{"type" => "cyfr:request"} = msg) do
-    # `payload` is whatever the sandboxed frame's own scripts wrote —
-    # `iframe_bridge.js` forwards any `cyfr:`-prefixed object verbatim — so it
-    # is normalized to a map once, here, before anything indexes into it.
-    # `Access.get/3` has no clause for a binary or a number, so a payload of
-    # `"x"` used to raise out of the handler and kill this LiveView, taking
-    # every open tincture window's state with it, on demand and in a loop.
+    # Normalize untrusted iframe payloads to maps before reading fields.
     msg = Map.put(msg, "payload", payload_map(msg["payload"]))
 
     tincture = Enum.find(socket.assigns.tinctures, &(&1.id == window_id))

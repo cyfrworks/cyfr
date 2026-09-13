@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -121,7 +122,7 @@ var scheduleCreateCmd = &cobra.Command{
 			toolArgs["input"] = inputMap
 		}
 
-		result, err := client.CallTool(cmd.Context(), "schedule", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, toolArgs)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -142,8 +143,8 @@ var scheduleListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
-			"action": "list",
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
+			"action": ops.ScheduleList,
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -161,8 +162,8 @@ var scheduleGetCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
-			"action":      "get",
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
+			"action":      ops.ScheduleGet,
 			"schedule_id": args[0],
 		})
 		if err != nil {
@@ -209,7 +210,7 @@ var scheduleUpdateCmd = &cobra.Command{
 			toolArgs["input"] = inputMap
 		}
 
-		result, err := client.CallTool(cmd.Context(), "schedule", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, toolArgs)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -231,8 +232,8 @@ var schedulePauseCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
-			"action":      "pause",
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
+			"action":      ops.SchedulePause,
 			"schedule_id": args[0],
 		})
 		if err != nil {
@@ -256,8 +257,8 @@ var scheduleResumeCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
-			"action":      "resume",
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
+			"action":      ops.ScheduleResume,
 			"schedule_id": args[0],
 		})
 		if err != nil {
@@ -281,8 +282,8 @@ var scheduleDeleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
-			"action":      "delete",
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
+			"action":      ops.ScheduleDelete,
 			"schedule_id": args[0],
 		})
 		if err != nil {

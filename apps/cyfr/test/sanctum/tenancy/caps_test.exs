@@ -64,16 +64,16 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     # Default posture: a writer that states nothing is capped.
     assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
-             Arca.put(ctx, ["guest", "capped.txt"], "too many bytes")
+             Arca.put(ctx, ["data", "capped.txt"], "too many bytes")
 
-    refute Arca.exists?(ctx, ["guest", "capped.txt"])
+    refute Arca.exists?(ctx, ["data", "capped.txt"])
 
     # The uncapped-by-design writers say so, visibly, per call.
-    assert :ok = Arca.put(ctx, ["guest", "exempted.txt"], "still lands", cap: :exempt)
+    assert :ok = Arca.put(ctx, ["data", "exempted.txt"], "still lands", cap: :exempt)
 
     # Anything else is caller misuse, not a policy.
     assert_raise ArgumentError, ~r/cap: must be :checked or :exempt/, fn ->
-      Arca.put(ctx, ["guest", "typo.txt"], "x", cap: :always)
+      Arca.put(ctx, ["data", "typo.txt"], "x", cap: :always)
     end
   end
 
@@ -246,12 +246,12 @@ defmodule Sanctum.Tenancy.CapsTest do
     :ok = Arca.put(ctx, ["components", "cap-probe.txt"], "bytes")
     assert Arca.Cache.get(key) == {:ok, cached + 5}
 
-    :ok = Arca.put(ctx, ["guest", "cap-probe.txt"], "1234567890")
+    :ok = Arca.put(ctx, ["data", "cap-probe.txt"], "1234567890")
     assert Arca.Cache.get(key) == {:ok, cached + 15}
 
     # A delete reclaims space: the entry drops so the next check walks the
     # tree afresh instead of guessing what the delete removed.
-    :ok = Arca.delete(ctx, ["guest", "cap-probe.txt"])
+    :ok = Arca.delete(ctx, ["data", "cap-probe.txt"])
     assert Arca.Cache.get(key) == :miss
 
     # A write to a global root is the server's bytes, not the athanor's,

@@ -5,18 +5,9 @@ defmodule Compendium.RegisterMintsNothingTest do
   @moduledoc """
   `component.register` grants no consent, and cannot be reached in-chain.
 
-  It used to mint an owner consent for every ref it registered — "so it is
-  invocable without a manual step". `Sanctum.Consent.Bootstrap` mints over
-  the **seed bundle**, which is operator-shipped, immutable per the
-  `seed-guards` CI job and auditable once at build time. Register is a
-  different act with the same name: a scanner over the athanor's own
-  overlay `components/` tree, so it consented to whatever had arrived
-  there — and per `Compendium.Source`, `"filesystem"` covers *"bundled
-  seed **or** the athanor's own overlay"*, so the stamp cannot tell the two
-  apart. A catalyst holding a storage write grant over `components/`
-  (`Compendium.NamespacePolicy.require_local_guest_write/1` permits
-  `local/` deliberately) could therefore stage bytes and have them come
-  back pre-consented.
+  Registration scans the tenant components tree without minting consent.
+  Only provisioning the operator's seed bundle may bootstrap consent;
+  filesystem provenance alone does not establish trusted seed content.
 
   Both halves are pinned here because neither implies the other:
   `consent: :staging` refuses `Context.plane: :guest`, which stops a WASM
@@ -26,7 +17,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
@@ -52,7 +43,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   describe "the register action's reach" do
     test "is refused in-chain, so an approved AQUA proposal cannot run it" do
-      assert ToolRegistry.in_chain_refused?("component", "register"),
+      assert Catalog.in_chain_refused?("component", "register"),
              """
              `component.register` is reachable in-chain again.
 
@@ -65,10 +56,10 @@ defmodule Compendium.RegisterMintsNothingTest do
     end
 
     test "still reachable from the external plane, so console and CLI keep working" do
-      refute ToolRegistry.in_chain_refused?("component", "list"),
+      refute Catalog.in_chain_refused?("component", "list"),
              "sanity: a plainly in-chain action must not read as refused"
 
-      {:ok, {_module, definition}} = ToolRegistry.lookup("component")
+      {:ok, {_module, definition}} = Catalog.lookup("component")
       register = Map.fetch!(definition.annotations.actions, "register")
 
       assert :external in register.planes
@@ -104,22 +95,29 @@ defmodule Compendium.RegisterMintsNothingTest do
       assert {:ok, []} = Sanctum.Consent.Source.DB.profiles(ctx, ref),
              "component.register must not mint an owner profile"
 
-      # The response no longer advertises a mint either — `bootstrapped`
-      # was the wire field carrying the refs it consented to.
+      # The response must not advertise bootstrapped consent.
       refute Map.has_key?(result, :bootstrapped),
              "the register response still reports minted consents"
     end
 
     test "provisioning's seed mint is untouched — that path still consents", %{ctx: ctx} do
       # The counterpart: `Bootstrap.run/1` is what provisioning calls, and
-      # it must still mint, or a fresh athanor arrives with nothing usable.
+      # it must still mint a unit the seed ships, or a fresh athanor
+      # arrives with nothing usable. A published-but-unshipped unit is
+      # not the seed.
+      Cyfr.Test.SeedBundle.isolate!()
+
       {:ok, _component} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
-          name: "seedish",
-          version: "1.0.0",
-          type: "reagent",
-          description: "stands in for a bundle component"
-        })
+        Arca.Test.UnitFixtures.ship_and_register!(ctx, "reagent", "local", "seedish", "1.0.0",
+          manifest: %{
+            "name" => "seedish",
+            "type" => "reagent",
+            "version" => "1.0.0",
+            "publisher" => "local",
+            "description" => "stands in for a bundle component"
+          },
+          wasm: @wasm
+        )
 
       assert {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run(ctx)
       assert "reagent:local.seedish" in minted

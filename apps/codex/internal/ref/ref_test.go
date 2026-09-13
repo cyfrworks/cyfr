@@ -106,15 +106,7 @@ func TestParseRef(t *testing.T) {
 			want:  ParsedRef{Type: "c", Name: "supabase"},
 		},
 		{
-			// Post auth-refactor: '@' is NOT normalized. ParseRef is a pure
-			// shape extractor; Validate() is what rejects '@' (see the
-			// TestValidate_RejectsAt test). The last-dot split here sees no
-			// explicit version colon, so it takes the final '.' (between
-			// "supabase@0.1" and "0") as the namespace/name boundary. That's
-			// nonsense, but it's the correct last-dot behavior given a
-			// malformed input — Validate catches it before anything uses it.
-			// Pre-refactor this test asserted normalization to ':' which
-			// masked invalid user input entirely.
+			// ParseRef extracts segments without normalizing @; Validate rejects this malformed input.
 			input: "c:local.supabase@0.1.0",
 			want:  ParsedRef{Type: "c", Namespace: "local.supabase@0.1", Name: "0"},
 		},

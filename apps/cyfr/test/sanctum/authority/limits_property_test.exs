@@ -9,9 +9,7 @@ defmodule Sanctum.Authority.LimitsPropertyTest do
   alias Sanctum.Policy.Ceiling
   alias Sanctum.Test.AuthorityGen, as: Gen
 
-  # §6 "Separate properties", arm 3 — limits: every bound execution runs
-  # under its own node's ceiling-clamped limits (clamped once, at root
-  # construction), and every unbound one under the zero literals.
+  # Bound executions use ceiling-clamped node limits; unbound executions use zero-authority limits.
 
   property "bound limits are the node's clamped limits; unbound are the zero literals" do
     check all(

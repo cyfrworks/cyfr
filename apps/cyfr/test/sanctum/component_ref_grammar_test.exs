@@ -3,10 +3,8 @@
 
 defmodule Sanctum.ComponentRefGrammarTest do
   @moduledoc """
-  A component reference is `type:namespace.name`, optionally `:version`.
-  That grammar had twelve authors: every caller holding the three parts
-  glued them together itself, so the separator characters lived in twelve
-  files and a change to them would have needed twelve edits.
+  Checks construction uses the shared type:namespace.name grammar
+  with an optional :version suffix.
 
   `Sanctum.ComponentRef.build/4` is the one author now. This test keeps it
   that way, and pins the grammar it produces.

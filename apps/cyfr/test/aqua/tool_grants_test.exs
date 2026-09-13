@@ -99,9 +99,7 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "a deny is not defeated, or inverted, by a glob" do
-      # The two shapes that used to fail: a deny against a globbed `ask`
-      # was re-offered every turn, and a deny against an exact `ask` under
-      # a globbed `auto` made the pair directly callable.
+      # Standing denies must override both exact and globbed ask/auto policies.
       deny = [%{effect: "deny", tool: "component", action: "pull"}]
 
       composed = ToolGrants.resolve(%{"component.*" => "ask"}, deny)
@@ -115,8 +113,8 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "a role's delegation glob and the search gate pass through composition untouched" do
-      composed = ToolGrants.resolve(%{"aqua_builder.*" => "auto", "native_search" => "auto"}, [])
-      assert composed == %{"aqua_builder.*" => "auto", "native_search" => "auto"}
+      composed = ToolGrants.resolve(%{"builder.*" => "auto", "native_search" => "auto"}, [])
+      assert composed == %{"builder.*" => "auto", "native_search" => "auto"}
     end
 
     test "the kind ceiling demotes an automatic destructive action, wherever it came from" do
@@ -252,7 +250,7 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "virtual tools are classified by the catalog, not the registry", %{ctx: ctx} do
-      # `files` lives in the formula, not `Emissary.MCP.ToolRegistry` — a
+      # `files` lives in the formula, not `Cyfr.Ops.Catalog` — a
       # standing allow for its write verb must not read as unknown, and
       # its destructive verb is refused like any other.
       assert {:ok, _} = grant(ctx, %{tool: "files", action: "write"})
@@ -295,7 +293,7 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "another agent's grants are not this agent's", %{ctx: ctx} do
-      {:ok, _} = grant(ctx, %{agent_name: "aqua_planner"})
+      {:ok, _} = grant(ctx, %{agent_name: "planner"})
 
       assert [] = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
     end

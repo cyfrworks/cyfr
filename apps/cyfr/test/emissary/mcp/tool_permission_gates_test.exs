@@ -24,13 +24,13 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
   describe "mcp_servers management requires :admin" do
     # Denials are asserted through the dispatcher — the permission gate lives
-    # in the action annotations, enforced by ToolRegistry, not in the handler.
+    # in the action annotations, enforced by the catalog, not in the handler.
     test "mutating actions are denied for an execute-only context" do
       ctx = execute_only_ctx()
 
       for action <- ~w(create delete enable disable test refresh) do
         assert {:error, reason} =
-                 Emissary.MCP.ToolRegistry.call_external("mcp_servers", ctx, %{
+                 Cyfr.Ops.Catalog.call_external("mcp_servers", ctx, %{
                    "action" => action,
                    "name" => "some-server"
                  })
@@ -59,7 +59,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       for action <-
             ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove) do
         assert {:error, reason} =
-                 Emissary.MCP.ToolRegistry.call_external("registry", ctx, %{
+                 Cyfr.Ops.Catalog.call_external("registry", ctx, %{
                    "action" => action,
                    "slug" => "someslug"
                  })
@@ -125,8 +125,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                  })
                )
 
-      # The secrets plane is retired: a secret: reference is rejected at
-      # create with a message naming the vault: replacement.
+      # Reject secret: references with an error directing callers to vault:.
       assert {:error, msg} =
                Emissary.MCP.McpServersTool.handle(
                  "mcp_servers",
@@ -152,7 +151,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       assert {:error, {:missing_permission, :admin}} =
-               Emissary.MCP.ToolRegistry.call_external("system", ctx, %{
+               Cyfr.Ops.Catalog.call_external("system", ctx, %{
                  "action" => "notify",
                  "event" => "test.event"
                })

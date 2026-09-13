@@ -71,7 +71,7 @@ defmodule Sanctum.Tenancy.PairsTest do
 
     test "is a row only — filling it is first need", %{alice: alice, bob: bob} do
       # Opening a chat must not wait on a registry round trip that can
-      # fail. `Sanctum.Provisioning.ensure_provisioned/1` fills it when
+      # fail. `Sanctum.Provisioning.start_provisioning/1` fills it when
       # something first reads its bundle.
       assert {:ok, pair} = Athanors.create_pair(alice, bob)
       refute pair.provisioned_at

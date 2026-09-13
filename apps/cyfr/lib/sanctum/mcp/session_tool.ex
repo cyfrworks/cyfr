@@ -140,9 +140,7 @@ defmodule Sanctum.MCP.SessionTool do
     {:ok, %{message: "Login requires browser authentication", redirect: "/auth/login"}}
   end
 
-  # The MCP transport is stateless; a Sanctum session is not. This action
-  # used to report success without retiring anything, so `cyfr logout`
-  # left a working 30-day credential behind.
+  # Revoke the Sanctum session authenticated by this request.
   def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
       when is_binary(hash) do
     case Sanctum.Session.destroy_by_hash(hash) do
@@ -250,6 +248,15 @@ defmodule Sanctum.MCP.SessionTool do
           Logger.warning("[SessionTool] Token exchange network error: #{inspect(reason)}")
           {:error, {:unavailable, "The sign-in provider"}}
 
+        # The server is at capacity: a person admitted without an athanor
+        # would hold a session with nowhere to work, so the door refuses and
+        # the poller is told why rather than "sign-in failed".
+        {:error, {:limit_reached, :mint_per_hour, _cap}} ->
+          {:error, "This server is admitting new people slowly right now — try again shortly"}
+
+        {:error, {:limit_reached, _key, _cap}} ->
+          {:error, "This server is full and cannot make you an athanor — ask its operator"}
+
         {:error, {:unknown_provider, name}} ->
           {:error, {:invalid_argument, unknown_provider_message(name)}}
 
@@ -283,20 +290,12 @@ defmodule Sanctum.MCP.SessionTool do
       "This server knows: #{Enum.join(Sanctum.Auth.DeviceFlow.providers(), ", ")}."
   end
 
-  # session.whoami helpers: derive display fields from the Context without
-  # reaching into Compendium. user_id is the pipe-delimited identifier and
-  # email is not carried in Context today; we best-effort reverse-engineer
-  # display info from user_id when Sanctum.Session didn't persist an email
-  # alongside.
+  # session.whoami helpers: the display fields the Context carries.
   defp derive_email(%Context{email: email}) when is_binary(email) and email != "", do: email
   defp derive_email(_), do: nil
 
-  defp derive_provider(%Context{user_id: user_id}) when is_binary(user_id) do
-    case String.split(user_id, "|", parts: 3) do
-      [provider, _iss, _sub] -> provider
-      _ -> nil
-    end
-  end
+  defp derive_provider(%Context{provider: provider}) when is_binary(provider) and provider != "",
+    do: provider
 
   defp derive_provider(_), do: nil
 

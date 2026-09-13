@@ -7,10 +7,8 @@ defmodule Cyfr.TelemetryCatalogTest do
   @moduledoc """
   Pins the telemetry roster to `Cyfr.Telemetry.Catalog` in both directions.
 
-  Before the catalog, 39 of the 62 producer events were consumed by
-  nothing — including the tenant-bypass trail and the audit plane's own
-  alarm. These scans keep a new event from shipping without a consumer
-  decision, and a catalog entry from outliving its emitter.
+  Every emitted event must have a catalog classification, and every
+  catalog entry must have a producer.
   """
 
   alias Cyfr.Telemetry.Catalog

@@ -6,13 +6,8 @@ defmodule Arca.Repo.Migrations.PairKeyRehash do
 
   import Ecto.Query
 
-  # A pair's canonical key is now the SHA-256 of the JSON encoding of its
-  # two sorted member ids (`Sanctum.Tenancy.Athanors.pair_key/2`), where it
-  # was a newline join. A key minted the old way is not recognised, so
-  # every existing DM would be found by nothing and clicking the name
-  # would mint a second estate beside it. Re-key every active frozen pair
-  # from its two active seats; a pair with any other number of seats is
-  # left alone — it is not a pair the new key could name.
+  # Recompute pair keys as SHA-256 over JSON-encoded sorted member ids.
+  # Only active frozen athanors with exactly two active members are updated.
   def up do
     frozen =
       from(a in "athanors",
@@ -46,7 +41,6 @@ defmodule Arca.Repo.Migrations.PairKeyRehash do
     end
   end
 
-  # The old spelling is not recomputed on the way down: a key is a lookup
-  # aid, and `create_pair/2` re-derives it from the seats it finds.
+  # Rollback leaves pair lookup keys unchanged.
   def down, do: :ok
 end

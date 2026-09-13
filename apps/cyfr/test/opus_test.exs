@@ -105,8 +105,7 @@ defmodule OpusTest do
 
   describe "run_root/5" do
     test "run creates execution record (core module fails with clear error)", %{ctx: ctx} do
-      # math.wasm is a core module, not a Component Model binary.
-      # execute_component no longer falls back to core module execution.
+      # math.wasm is a core module and must be rejected by Component Model execution.
       {:error, error_msg} = run_consented(ctx, %{"a" => 5, "b" => 10})
 
       assert error_msg =~ "Component Model"

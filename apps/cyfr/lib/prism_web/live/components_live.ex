@@ -25,9 +25,7 @@ defmodule PrismWeb.ComponentsLive do
       socket
       |> assign(:page_title, "Components")
       |> assign(:active_nav, "components")
-      # In HEEx `@local_publisher` reads THIS assign — the same-named
-      # module attribute is invisible there, and expanding a row crashed
-      # on the missing key until this was assigned.
+      # HEEx reads assigns, so expose the publisher as an assign.
       |> assign(:local_publisher, @local_publisher)
       |> assign(:components, [])
       |> assign(:grouped, %{})
@@ -61,10 +59,7 @@ defmodule PrismWeb.ComponentsLive do
     {:ok, socket}
   end
 
-  # Arm a per-kind deadline carrying a generation token: a stale deadline —
-  # one whose operation completed, or that belongs to an earlier operation
-  # of the same kind — matches nothing and is dropped, instead of wiping a
-  # LATER operation's state (pull A's 120s timer used to fire mid-pull-B).
+  # Tag deadlines by operation generation so stale timers cannot clear a later run.
   defp arm_task_timeout(socket, kind) do
     token = make_ref()
     Process.send_after(self(), {:task_timeout, kind, token}, 120_000)
@@ -273,9 +268,7 @@ defmodule PrismWeb.ComponentsLive do
         Enum.find(socket.assigns.component_groups, fn g -> g.name_ref == name_ref end)
 
       if group do
-        # The row opens NOW; the two tool calls it needs run off the
-        # LiveView loop (the same discipline ExecutionsLive's expansion
-        # follows — this one used to block the whole page on them).
+        # Expand the row immediately and run its tool calls outside the LiveView loop.
         send(self(), {:load_expand, group})
 
         {:noreply,
@@ -769,9 +762,7 @@ defmodule PrismWeb.ComponentsLive do
     # Group versions under name-level refs
     groups = group_by_component(all_components)
 
-    # Derived views computed WHERE the data changes, not per render — the
-    # render used to rebuild this MapSet and digest map on every diff,
-    # including ones an unrelated progress line triggered.
+    # Recompute derived views when their source data changes.
     installed_refs = all_components |> Enum.map(&comp_ref/1) |> MapSet.new()
 
     installed_digests =
@@ -801,10 +792,7 @@ defmodule PrismWeb.ComponentsLive do
     Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
       Cyfr.LoggerContext.restore(logger_metadata)
 
-      # Bounded fan-out instead of one sequential pass: a page over N
-      # groups used to serialize N full tool dispatches, so one slow
-      # setup_plan blocked every later one and the map arrived only after
-      # ALL completed. Order is irrelevant — the result is a map.
+      # Fetch setup plans with bounded concurrency; result ordering is irrelevant.
       readiness =
         groups
         |> Task.async_stream(
@@ -977,17 +965,40 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  # Built-in tool results are atom-keyed by contract (`PrismWeb.MCPHelpers`);
+  # Built-in tool results are atom-keyed by contract (`PrismWeb.Ops`);
   # the registry client atomizes remote search entries at its decode
   # boundary, so the string fallback this helper carried is gone.
   defp comp_field(c, key) when is_map(c), do: c[key]
   defp comp_field(_, _), do: nil
 
+  # The ref of the newest shipped version of a bundled row's line that
+  # the athanor does not hold yet — what Update pulls — or nil: the
+  # athanor's own work and remote rows are never offered a shipped
+  # version, and a line whose newest shipped version is already held has
+  # nothing to update to.
+  defp newer_shipped_ref(ver, versions) do
+    with true <- comp_field(ver, :provenance) == "bundled",
+         [newest | _] <- comp_field(ver, :shipped_versions) || [],
+         true <- Compendium.Semver.strictly_newer?(newest, comp_field(ver, :version)),
+         false <- Enum.any?(versions, &(comp_field(&1, :version) == newest)),
+         {:ok, cref} <- Sanctum.ComponentRef.parse(comp_ref(ver)) do
+      Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{cref | version: newest})
+    else
+      _ -> nil
+    end
+  end
+
+  defp shipped_version(ref) do
+    case Sanctum.ComponentRef.parse(ref) do
+      {:ok, %Sanctum.ComponentRef{version: version}} -> version
+      _ -> ref
+    end
+  end
+
   # The version-row badge for a provenance label. "Yours" (user) is the
   # default state and carries no badge noise; an absent label (older wire
   # shape) shows nothing.
   defp provenance_badge("bundled"), do: {"bundled", "bg-gray-800 text-gray-400"}
-  defp provenance_badge("bundled_modified"), do: {"modified", "bg-amber-900/50 text-amber-300"}
   defp provenance_badge("remote"), do: {"remote", "bg-sky-900/50 text-sky-300"}
   defp provenance_badge(_user_or_nil), do: nil
 
@@ -1396,25 +1407,11 @@ defmodule PrismWeb.ComponentsLive do
                                           {elem(badge, 0)}
                                         </span>
                                         <span
-                                          :if={comp_field(ver, :superseded)}
-                                          class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-900/50 text-emerald-300"
-                                          title="a newer shipped version exists"
-                                        >
-                                          update shipped
-                                        </span>
-                                        <span
                                           :if={comp_field(ver, :upstream_superseded)}
                                           class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-900/50 text-emerald-300"
                                           title={"forked from #{comp_field(ver, :forked_from)} — a newer upstream version is available locally"}
                                         >
                                           upstream updated
-                                        </span>
-                                        <span
-                                          :if={comp_field(ver, :shadows_shipped)}
-                                          class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-900/50 text-amber-300"
-                                          title="your component hides a same-named shipped one — removing it reveals the shipped version"
-                                        >
-                                          hides shipped
                                         </span>
                                       </td>
                                       <td class="px-3 py-2 text-sm text-gray-400">
@@ -1429,6 +1426,23 @@ defmodule PrismWeb.ComponentsLive do
                                       </td>
                                       <td class="px-3 py-2 text-right">
                                         <div class="flex items-center justify-end gap-1">
+                                          <% newer_ref = newer_shipped_ref(ver, @expanded_versions) %>
+                                          <span
+                                            :if={newer_ref && MapSet.member?(@pulling, newer_ref)}
+                                            class="text-xs text-emerald-400 animate-pulse"
+                                          >
+                                            Updating...
+                                          </span>
+                                          <.button
+                                            :if={newer_ref && !MapSet.member?(@pulling, newer_ref)}
+                                            variant="ghost"
+                                            class="text-xs px-2 py-0.5 text-emerald-400 hover:text-emerald-300"
+                                            phx-click="pull"
+                                            phx-value-ref={newer_ref}
+                                            title="copy the newer shipped version in beside this one"
+                                          >
+                                            Update to {shipped_version(newer_ref)}
+                                          </.button>
                                           <span
                                             :if={@pushing == ver_ref}
                                             class="text-xs text-blue-400 animate-pulse"
@@ -1450,24 +1464,19 @@ defmodule PrismWeb.ComponentsLive do
                                           </.button>
                                           <.button
                                             :if={
-                                              comp_field(ver, :provenance) == "bundled_modified" &&
-                                                !@pushing
+                                              comp_field(ver, :provenance) == "bundled" && !@pushing
                                             }
                                             variant="ghost"
                                             class="text-xs px-2 py-0.5 text-amber-400 hover:text-amber-300"
                                             phx-click="reset"
                                             phx-value-ref={ver_ref}
-                                            data-confirm={"Reset #{ver_ref} to the shipped version? Your edits will be lost."}
+                                            data-confirm={"Reset #{ver_ref} to the shipped version? Any edits will be lost."}
                                           >
                                             Reset
                                           </.button>
                                           <.button
                                             :if={
-                                              comp_field(ver, :provenance) not in [
-                                                "bundled",
-                                                "bundled_modified"
-                                              ] &&
-                                                !@pushing
+                                              comp_field(ver, :provenance) != "bundled" && !@pushing
                                             }
                                             variant="ghost"
                                             class="text-xs px-2 py-0.5 text-red-400 hover:text-red-300"

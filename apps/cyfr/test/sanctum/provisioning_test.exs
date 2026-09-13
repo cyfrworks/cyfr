@@ -96,7 +96,7 @@ defmodule Sanctum.ProvisioningTest do
     assert Members.member?(ctx.user_id, group.id)
 
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at
     {:ok, [row]} = Arca.ComponentStorage.list_components(in_group, publisher: "local")
@@ -114,7 +114,7 @@ defmodule Sanctum.ProvisioningTest do
     assert at == group.provisioned_at
   end
 
-  test "a person's own athanor is minted once, from their namespace, and recorded",
+  test "a person's own athanor is minted once, under their namespace when it is free, and recorded",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
@@ -126,7 +126,10 @@ defmodule Sanctum.ProvisioningTest do
     assert personal.slug == "prov#{n}"
     assert personal.owner_user_id == user.id
     assert personal.name == "Prov #{n}"
-    assert personal.provisioned_at
+
+    # The mint answers with the row; filling it is background work, so the
+    # mark is on the row rather than on what the mint returned.
+    assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(personal.id)
     assert Members.member?(user.id, personal.id)
     assert {:ok, %{personal_athanor_id: pid}} = Users.get(user.id)
     assert pid == personal.id
@@ -137,29 +140,79 @@ defmodule Sanctum.ProvisioningTest do
     assert [_] = Enum.filter(Athanors.list_for_user(user.id), &(&1.kind == "person"))
   end
 
-  test "a person without a namespace yet is pending, not minted" do
-    user = person(System.unique_integer([:positive]))
-    assert :pending = Provisioning.after_sign_in(user.id)
-    assert {:error, :no_namespace} = Provisioning.ensure_personal_athanor(user)
-  end
-
-  test "sync_seeds registers, consents, and collapses pristine copies", %{
+  test "a person without a namespace is minted one under a slug of their own", %{
     bundle_dir: bundle_dir
   } do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    user = person(n)
+
+    assert {:ok, personal} = Provisioning.after_sign_in(user.id)
+    assert personal.kind == "person"
+    assert personal.slug == "prov-#{n}"
+    assert personal.owner_user_id == user.id
+    assert {:ok, %{personal_athanor_id: pid}} = Users.get(user.id)
+    assert pid == personal.id
+
+    # A namespace recorded later is a credential, not a new address.
+    {:ok, user} = Users.set_namespace(user, "late#{n}")
+    assert {:ok, %{id: same, slug: slug}} = Provisioning.ensure_personal_athanor(user)
+    assert same == personal.id
+    assert slug == "prov-#{n}"
+  end
+
+  test "a namespace another person's athanor already holds is not a refusal, just not the address",
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    first = person(n)
+    assert {:ok, %{slug: taken}} = Provisioning.ensure_personal_athanor(first)
+    assert taken == "prov-#{n}"
+
+    # The second person's namespace is the first person's address here.
+    second = person(n + 1)
+    {:ok, second} = Users.set_namespace(second, "prov-#{n}")
+    assert {:ok, other} = Provisioning.ensure_personal_athanor(second)
+    assert other.owner_user_id == second.id
+    assert other.slug == "prov-#{n + 1}"
+  end
+
+  test "a fill lays every folder of the tree, and a boot sync lays a missing one again", %{
+    bundle_dir: bundle_dir
+  } do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|roots-#{n}"}
+
+    {:ok, group} = Athanors.create_group(ctx.user_id, "Roots #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.start_provisioning(in_group)
+
+    {:ok, entries} = Arca.list_typed(in_group, [])
+
+    assert Enum.sort(entries) ==
+             Enum.sort(for root <- Arca.Storage.tenant_roots(), do: {root, :dir})
+
+    :ok = Arca.delete_tree(in_group, ["notes"])
+    assert :ok = Provisioning.sync_seeds()
+    assert {:ok, [_ | _] = healed} = Arca.list_typed(in_group, [])
+    assert {"notes", :dir} in healed
+  end
+
+  test "sync_seeds leaves the athanor's copies alone; what a release adds is pulled, not pushed",
+       %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|sync-#{n}"}
 
     {:ok, group} = Athanors.create_group(ctx.user_id, "Sync #{n}")
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
 
-    # A member edited foo and reverted the edit by hand — a materialized,
-    # byte-identical copy that costs quota and no longer tracks releases.
+    # A member edited their copy of foo.
     version_dir = ["components", "catalysts", "local", "foo", "1.0.0"]
     :ok = Arca.put(in_group, version_dir ++ ["scratch.txt"], "x")
-    :ok = Arca.delete(in_group, version_dir ++ ["scratch.txt"])
-    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :materialized}
+    assert {:ok, true} = Arca.Overlay.edited?(in_group, version_dir)
 
     # The next release ships a second bundled catalyst.
     src = Path.join([bundle_dir, "catalysts", "local", "fresh", "1.0.0"])
@@ -178,8 +231,25 @@ defmodule Sanctum.ProvisioningTest do
 
     assert :ok = Provisioning.sync_seeds()
 
-    # The new component has a row AND a baseline profile — invocable
-    # without a human walking every athanor's consent sheet.
+    # The edit survives the release, and the new catalyst is only offered.
+    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :shipped}
+    assert {:ok, "x"} = Arca.get(in_group, version_dir ++ ["scratch.txt"])
+
+    fresh_dir = ["components", "catalysts", "local", "fresh", "1.0.0"]
+    assert Arca.Overlay.unit_status(in_group, fresh_dir) == {:ok, :available}
+
+    {:ok, rows} =
+      Arca.ComponentStorage.list_components(in_group, publisher: "local", limit: :none)
+
+    refute Enum.any?(rows, &(&1.name == "fresh"))
+
+    # Pulling it gives the athanor a row AND a baseline profile — invocable
+    # without a human walking the consent sheet.
+    assert {:ok, %{component_ref: "catalyst:local.fresh:1.0.0"}} =
+             Provisioning.install_shipped(in_group, "catalyst:local.fresh")
+
+    assert Arca.Overlay.unit_status(in_group, fresh_dir) == {:ok, :shipped}
+
     {:ok, rows} =
       Arca.ComponentStorage.list_components(in_group, publisher: "local", limit: :none)
 
@@ -187,9 +257,57 @@ defmodule Sanctum.ProvisioningTest do
 
     {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.fresh")
     assert profile.kind == "owner"
+  end
 
-    # The pristine copy collapsed — the seed serves the unit again.
-    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :seed}
+  test "with no registry, a bundle whose OPTIONAL dependency is not installed still provisions",
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir,
+      deps: [%{"ref" => "catalyst:someone.elsewhere", "optional" => true}]
+    )
+
+    previous = Application.get_env(:cyfr, :registry_url)
+    Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:cyfr, :registry_url),
+        else: Application.put_env(:cyfr, :registry_url, previous)
+    end)
+
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
+
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Offline #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.start_provisioning(in_group)
+
+    {:ok, group} = Athanors.get(group.id)
+    assert group.provisioned_at
+    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+    assert profile.kind == "owner"
+  end
+
+  test "with a registry that does not answer, an OPTIONAL dependency is left out and the estate still provisions",
+       %{bundle_dir: bundle_dir} do
+    # The suite's registry host is a closed port: configured, unreachable.
+    assert Compendium.RegistryHost.configured?()
+
+    write_bundle!(bundle_dir,
+      deps: [%{"ref" => "catalyst:someone.elsewhere", "optional" => true}]
+    )
+
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
+
+    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Unreachable #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.start_provisioning(in_group)
+
+    {:ok, group} = Athanors.get(group.id)
+    assert group.provisioned_at
+    refute Map.has_key?(Jason.decode!(group.settings || "{}"), "provisioning_error")
+    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+    assert profile.kind == "owner"
   end
 
   test "a bundle whose closure cannot be pulled leaves the athanor unprovisioned, loudly, and retries",
@@ -213,7 +331,7 @@ defmodule Sanctum.ProvisioningTest do
     # The mint answers a bare row; the failure surfaces at first need.
     assert {:ok, group} = Athanors.create_group(ctx.user_id, "Unpullable #{n}")
     in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+    :ok = Provisioning.start_provisioning(in_group)
 
     assert_receive {:failed, %{step: :closure, athanor_id: id}}
     assert id == group.id
@@ -226,32 +344,41 @@ defmodule Sanctum.ProvisioningTest do
     assert {:error, {:provisioning_failed, :closure, _}} = Provisioning.provision(group, in_group)
   end
 
-  test "a first need that finds another caller filling the estate answers promptly" do
+  test "a first need never waits on the caller already filling the estate" do
+    # The suite runs provisioning inline so its assertions can read rows
+    # straight after the call; this one is about the real path, where the
+    # fill is a task and the caller does not await it.
+    Application.put_env(:cyfr, :provisioning_inline, false)
+    on_exit(fn -> Application.put_env(:cyfr, :provisioning_inline, true) end)
+
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
     {:ok, group} = Athanors.create_group(ctx.user_id, "Held #{n}")
     in_group = %{ctx | athanor_id: group.id}
 
-    # Another caller holds the estate's provisioning lock for the whole
-    # test — the shape of two people opening a fresh estate at once.
+    # Another caller is already filling this estate — the shape of two
+    # people opening a fresh one at once. Holding the CLAIM, not the lock:
+    # the claim is what a starting fill asks for first, so the attempt this
+    # test starts returns there instead of running a fill it never awaits,
+    # which would reach the database without the connection the test owns.
     parent = self()
 
     holder =
       spawn_link(fn ->
-        Arca.Overlay.UnitLock.with_lock({group.id, :provisioning}, fn ->
-          send(parent, :held)
-          receive do: (:release -> :ok)
-        end)
+        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
+        send(parent, :held)
+        receive do: (:release -> :ok)
       end)
 
     assert_receive :held
 
     started = System.monotonic_time(:millisecond)
-    assert :ok = Provisioning.ensure_provisioned(in_group)
-    # The first-need wait is a few seconds; the lock's own default is 30 s.
-    # The bound sits between the two — a LiveView mount is waiting on this
-    # — with room for a loaded box, where the short wait has taken 13 s.
-    assert System.monotonic_time(:millisecond) - started < 20_000
+    assert :ok = Provisioning.start_provisioning(in_group)
+
+    # Nothing waits: the fill is started, never awaited, so a page's mount
+    # cannot be held open by whoever else is filling the estate. Generous
+    # for a loaded box, and still far below the lock's own 30 s.
+    assert System.monotonic_time(:millisecond) - started < 5_000
 
     # Nothing was provisioned by this caller — the holder never let go.
     {:ok, group} = Athanors.get(group.id)
@@ -264,7 +391,7 @@ defmodule Sanctum.ProvisioningTest do
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
 
     assert {:ok, group} = Athanors.create_group(ctx.user_id, "No bundle #{n}")
-    :ok = Provisioning.ensure_provisioned(%{ctx | athanor_id: group.id})
+    :ok = Provisioning.start_provisioning(%{ctx | athanor_id: group.id})
 
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at == nil

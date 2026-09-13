@@ -5,13 +5,7 @@ defmodule Sanctum.Vault.OAuthRedirectUriTest do
   @moduledoc """
   Where the OAuth `redirect_uri` gets its origin.
 
-  It was built from `EmissaryWeb.Endpoint.url()`. Two things were wrong with
-  that. The endpoint's `:url` config carries a host and a port and no scheme,
-  and nothing anywhere sets one — so the URI was always `http://…`, including
-  on the shipped TLS profile, where the provider's registered URI is
-  `https://` and the exchange simply fails. And it is the auth domain reaching
-  into the web layer for a deployment fact, which `Sanctum.TinctureAuth`
-  already refuses to do for key material.
+  Checks that OAuth redirect URIs use the configured public origin, including its scheme.
 
   `CYFR_PUBLIC_URL` is the address this instance is reachable at from
   outside — scheme included — and is what the operator is told to set.

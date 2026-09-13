@@ -4,26 +4,9 @@
 defmodule Arca.Repo.Migrations.TopicSubscriptions do
   use Ecto.Migration
 
-  # Which of an estate's topics are in your sidebar.
-  #
-  # An athanor has always been able to hold many conversations, but every
-  # member saw every one of them and there was nothing to say "this thread
-  # is not mine to follow". That is fine for a two-person estate and wrong
-  # for a working group with a dozen threads.
-  #
-  # ## Subscription, not access control
-  #
-  # A row here says a person FOLLOWS a topic. It does not gate reading one:
-  # access stays `Sanctum.Tenancy.Members.member?/2`, so an unfollowed
-  # topic renders collapsed and opens on a click. Making this an ACL would
-  # be a second, weaker permission system beside membership, and a private
-  # side-conversation has a better answer already — a frozen pair estate,
-  # which gets its own vault and its own audit trail rather than hiding
-  # rows inside somebody else's.
-  #
-  # No backfill: on a fresh install there is nothing to preserve, and an
-  # existing server's topics render collapsed until someone follows them.
-  # That belongs in the release note.
+  # Stores topic follows for each member’s sidebar. Follows control
+  # expanded/collapsed display; athanor membership still controls access.
+  # Existing topics remain unfollowed until a member follows them.
   def up do
     create table(:topic_subscriptions, primary_key: false) do
       add :id, :string, primary_key: true

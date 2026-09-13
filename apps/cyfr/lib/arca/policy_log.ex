@@ -128,10 +128,8 @@ defmodule Arca.PolicyLog do
     if Keyword.get(opts, :with_consent, false), do: join_consents(rows, athanor_id), else: rows
   end
 
-  # §4.5 stored-vs-derived: attribution is JOINED from the consent, never
-  # copied onto the row. Consents are immutable, so the join is stable —
-  # and a hot-path write stays small. Rows with no consent_id come back
-  # untouched.
+  # Join attribution from immutable consent rows. Rows without consent_id
+  # are returned unchanged.
   defp join_consents(rows, athanor_id) do
     consent_ids = rows |> Enum.map(& &1.consent_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 

@@ -16,7 +16,7 @@ defmodule Arca.Adapters.S3 do
   `Arca.Storage.physical_segments/2` under one root, so a key generated
   against one decodes identically against the other —
   `<prefix>/athanors/{athanor_id}/<scope>/<rest>` for every tenant scope
-  in `Arca.Storage.tenant_roots/0` (`components/`, `guest/`, `aqua/`, …)
+  in `Arca.Storage.tenant_roots/0` (`components/`, `data/`, `aqua/`, …)
   and the globals `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`.
 
   An S3 deployment is not a whole-box backup: the bucket holds Arca
@@ -152,6 +152,15 @@ defmodule Arca.Adapters.S3 do
     end
   end
 
+  # An object store has no directories: a prefix exists when a key sits
+  # under it, and nothing needs creating for that.
+  @impl true
+  def ensure_dir(%Context{} = _ctx, segments) do
+    Arca.Storage.refuse_seed_write!(segments)
+    Arca.Storage.validate_path!(segments)
+    :ok
+  end
+
   @impl true
   def list_typed(%Context{} = ctx, segments) do
     prefix = build_key(ctx, segments)
@@ -278,10 +287,11 @@ defmodule Arca.Adapters.S3 do
     case list_entries(prefix_key) do
       {:ok, entries} ->
         # Directory markers (keys ending "/") are not files — the Local
-        # adapter's walk never counts a directory either.
+        # adapter's walk never counts a directory either. An object AT the
+        # key is the file itself, counted like Local's stat of one.
         sizes =
           for {key, size} <- entries,
-              String.starts_with?(key, prefix_with_slash),
+              key == prefix_key or String.starts_with?(key, prefix_with_slash),
               not String.ends_with?(key, "/"),
               do: size
 
@@ -328,16 +338,16 @@ defmodule Arca.Adapters.S3 do
   # Private — HTTP / SigV4
   # ============================================================================
 
-  # Sign and send one request. Everything S3-bound goes through here: one
-  # header set, one SigV4 signing, one Req call — an operation contributes
-  # only its method, URL, body, and any extra headers the signature must
-  # cover. Transport policy is explicit: `retry: false` (callers own retry,
-  # same as Cyfr.Network's outbound path — Req's silent :safe_transient
-  # default re-sent GETs up to three times) and a configured receive
-  # timeout instead of Req's unstated 15s.
+  # Sign and send each request with shared headers and SigV4 signing.
+  # Retries are disabled; callers own retry policy. The receive timeout
+  # comes from the storage configuration.
   defp signed_request(method, url, body, extra_headers \\ []) do
-    base_headers =
-      [{"host", host_for(url)}, {"x-amz-content-sha256", sha256_hex(body)}] ++ extra_headers
+    # `sign_v4` adds X-Amz-Content-SHA256 itself, hashing the body it was
+    # given. Passing a second one — the same value under a different case —
+    # put the name into SignedHeaders twice and sent two header lines, so
+    # every real S3 implementation answered SignatureDoesNotMatch. The stub
+    # suite could not see it: it checks request shape, not signatures.
+    base_headers = [{"host", host_for(url)}] ++ extra_headers
 
     signed =
       :aws_signature.sign_v4(
@@ -350,7 +360,12 @@ defmodule Arca.Adapters.S3 do
         url,
         base_headers,
         body,
-        []
+        # `encode_key/1` has already percent-encoded every segment, and
+        # S3 is the one service whose canonical URI is not encoded a second
+        # time (the library's own words). Left at its default, a key with a
+        # space, a plus or any non-ASCII character signed a path the server
+        # never saw and came back 403.
+        [{:uri_encode_path, false}]
       )
 
     headers = Enum.map(signed, fn {k, v} -> {to_string(k), to_string(v)} end)
@@ -550,11 +565,7 @@ defmodule Arca.Adapters.S3 do
   defp host_only("http://" <> rest), do: String.split(rest, "/", parts: 2) |> List.first()
   defp host_only(other), do: other
 
-  # RFC 9110 §7.2: the Host header carries the port when it is not the
-  # scheme default. SigV4 stays valid either way (the signer canonicalizes
-  # the header we send, and the server verifies against what arrived), but
-  # dropping the port disagreed with `host_only/1`'s virtual-host URLs and
-  # broke any vhost-routing proxy in front of a non-default-port endpoint.
+  # Include non-default ports in the Host header, as required by RFC 9110.
   defp host_for(url) do
     case URI.parse(url) do
       %URI{host: host, port: port, scheme: scheme}
@@ -583,8 +594,6 @@ defmodule Arca.Adapters.S3 do
   defp method_string(:delete), do: "DELETE"
   defp method_string(:head), do: "HEAD"
 
-  defp sha256_hex(body), do: Cyfr.Digest.sha256_hex(body)
-
   defp config(key) do
     Application.get_env(:cyfr, :s3, [])[key]
   end
@@ -608,11 +617,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   defp log_and_error(op, status, body) do
-    # An S3 error body is XML that can echo request parameters — a presigned
-    # URL's `X-Amz-Credential` among them. Truncation alone was the whole
-    # mitigation, and it is not one: those parameters appear EARLY in the
-    # echo, so they survive a 500-byte slice. Scrub them by name, then
-    # truncate to keep the code and message without the rest of the echo.
+    # Scrub credentials from the XML error body before truncating it.
     scrubbed =
       body
       |> to_string()

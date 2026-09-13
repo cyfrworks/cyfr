@@ -15,15 +15,11 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
 
   ## Options
 
-  - `:bucket` — the counter namespace, defaulting to `:mcp`. Routes with
-    different traffic shapes get their own: a page reconnecting to an event
-    stream should not spend the budget its MCP calls need. A bucket's own
-    budget keys (`:<bucket>_rate_limit_max` / `:<bucket>_rate_limit_window_ms`)
-    win when set; otherwise the shared `:mcp_rate_limit_*` values govern —
-    the doc used to promise per-bucket budgets the code did not read.
-  - `:errors` — the module that renders a rejection, defaulting to
-    `EmissaryWeb.MCPError`. Use `EmissaryWeb.ApiError` on a route that does not
-    speak JSON-RPC.
+  - `:bucket` — counter namespace, default `:mcp`. Each bucket uses its own
+    `:<bucket>_rate_limit_max` and `:<bucket>_rate_limit_window_ms` when set,
+    otherwise it uses the shared `:mcp_rate_limit_*` budget.
+  - `:errors` — rejection renderer, default `EmissaryWeb.MCPError`.
+    Use `EmissaryWeb.ApiError` for routes that do not speak JSON-RPC.
 
   Limits are runtime config (defaults are generous — legitimate MCP clients
   make many calls in a row):

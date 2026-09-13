@@ -22,12 +22,7 @@ defmodule Sanctum.AnonymousIngressTest do
   end
 
   describe "credential plane denies anonymous contexts" do
-    # Retired with the legacy secrets plane: by-name secret access,
-    # empty-map resolution for secret-less components, and the loud
-    # preload failure for granted components. The surviving property —
-    # anonymous execution never receives credential material — is pinned
-    # on the vault path (credentialed_ingress_gate_test + the VaultReader
-    # anonymity denials here and in vault_reader_test).
+    # Anonymous execution must never receive vault credential material.
 
     test "delegated OAuth tokens are never dispensed anonymously" do
       anon = anonymous_exec_ctx()

@@ -5,7 +5,7 @@ defmodule Prism.AquaTemplatePolicyTest do
   @moduledoc """
   The shipped agent allowlist offers only what a chat can actually run.
 
-  An approved proposal is executed inside the chain (`Aqua.Turn.run_approved/2`),
+  An approved proposal is executed inside the chain (`Aqua.Loop`),
   so an allowlist key whose action the chain cannot reach is a card that
   fails on the click — and an `"auto"` key of the same shape is a tool call
   the agent is told it may make and then cannot. Those actions live on their
@@ -13,8 +13,8 @@ defmodule Prism.AquaTemplatePolicyTest do
   """
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.ToolRegistry
-  alias Aqua.VirtualTools, as: AquaVirtualTools
+  alias Cyfr.Ops.Catalog
+  alias Aqua.Hands
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
 
@@ -77,11 +77,11 @@ defmodule Prism.AquaTemplatePolicyTest do
         false
 
       [tool, action] ->
-        if AquaVirtualTools.virtual_tool?(tool) do
+        if Hands.hand?(tool) do
           # A virtual tool's ACTION has to exist too. Accepting the whole
           # namespace on the strength of its name let `storage.frobnicate`
           # through — granted in the template, dispatched by nothing.
-          is_nil(AquaVirtualTools.kind_for(tool, action))
+          is_nil(Hands.kind_for(tool, action))
         else
           refused_action?(tool, action)
         end
@@ -91,5 +91,5 @@ defmodule Prism.AquaTemplatePolicyTest do
     end
   end
 
-  defp refused_action?(tool, action), do: ToolRegistry.in_chain_refused?(tool, action)
+  defp refused_action?(tool, action), do: Catalog.in_chain_refused?(tool, action)
 end

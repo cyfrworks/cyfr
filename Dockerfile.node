@@ -10,7 +10,13 @@
 
 # Pinned to the same Node LTS the builder image ships (Dockerfile.builder
 # NODE_VERSION) — `24-alpine` floated with every upstream release.
-FROM node:24.14.1-alpine AS base
+FROM node:24.21.0-alpine AS base
+
+# Alpine ships a patched package before the node image is rebuilt around
+# it, so take what the index has at build time. The image scan in
+# node-ci.yml fails on a fixable HIGH or CRITICAL, and this is what keeps
+# an OS fix from waiting on an upstream release.
+RUN apk --no-cache upgrade
 
 # ===========================================================================
 # mcp-bridge — HTTP MCP gateway. Single /mcp endpoint that surfaces:

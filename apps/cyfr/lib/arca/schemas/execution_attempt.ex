@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Arca.Schemas.ExecutionAttempt do
+  @moduledoc """
+  One attempt at an execution: the fence every attempt-scoped write
+  names. An execution's `current_attempt` points at the attempt that
+  owns it; `fence` increases with each successor. `state` walks
+  `running | paused` to `completed | failed | cancelled | lapsed`, and
+  `outcome` records what a terminal attempt established:
+  `ok | error | result_lost | cancelled | uncertain`. `running_since`
+  is set while the attempt runs and cleared when it pauses or ends, so
+  running time is accounted once per interval. Owned by the athanor.
+  """
+
+  use Ecto.Schema
+
+  @primary_key {:attempt, :string, autogenerate: false}
+
+  @type t :: %__MODULE__{}
+
+  schema "execution_attempts" do
+    field :athanor_id, :string
+    field :execution_id, :string
+    field :fence, :integer
+    field :runner_id, :string
+    field :lease_until, :utc_datetime_usec
+    field :state, :string
+    field :outcome, :string
+    field :cancel_requested_at, :utc_datetime_usec
+    field :started_at, :utc_datetime_usec
+    field :running_since, :utc_datetime_usec
+    field :ended_at, :utc_datetime_usec
+  end
+end

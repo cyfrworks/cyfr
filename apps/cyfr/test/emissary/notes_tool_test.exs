@@ -8,7 +8,7 @@ defmodule Emissary.MCP.NotesToolTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.NotesTool, as: Tool
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
   alias Sanctum.Authority
   alias Sanctum.Authority.Blob
   alias Sanctum.Context
@@ -30,7 +30,11 @@ defmodule Emissary.MCP.NotesToolTest do
     end)
 
     n = System.unique_integer([:positive])
-    user = "local|idp|note-#{n}"
+
+    {:ok, u} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{id: "local|idp|note-#{n}", provider: "local"})
+
+    user = u.id
 
     {:ok, mine} =
       Sanctum.Tenancy.Athanors.create(%{
@@ -41,8 +45,6 @@ defmodule Emissary.MCP.NotesToolTest do
         created_by: user
       })
 
-    {:ok, _} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: user, provider: "local"})
-    {:ok, u} = Sanctum.Tenancy.Users.get(user)
     {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
     # The owner's seat in their own athanor — production mints it in
     # `ensure_personal_athanor/1`, and `Context.focus/2` (the "mine" read)
@@ -60,7 +62,7 @@ defmodule Emissary.MCP.NotesToolTest do
   # A chain authority granting exactly `pairs`, the shape the consent blob
   # mints from a manifest's `caps.tools`.
   defp granting(pairs) do
-    node = "formula:local.aqua"
+    node = "formula:local.assistant"
     tools = pairs |> Enum.map(fn {tool, action} -> "#{tool}.#{action}" end) |> Enum.sort()
 
     {:ok, blob} =
@@ -99,7 +101,7 @@ defmodule Emissary.MCP.NotesToolTest do
   end
 
   defp in_chain(ctx, args, auth, opts \\ []),
-    do: ToolRegistry.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
+    do: Catalog.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
 
   test "a note lands in the estate you are working in, and nowhere else", %{
     ctx: ctx,
@@ -345,7 +347,7 @@ defmodule Emissary.MCP.NotesToolTest do
     # And the door still refuses the guest plane outright — before consent
     # is even consulted.
     assert {:error, {:guest_plane_call, "notes"}} =
-             ToolRegistry.call_external("notes", Context.enter_guest(ctx), args)
+             Catalog.call_external("notes", Context.enter_guest(ctx), args)
 
     # A chain whose authority predates the notes actions is denied before
     # the tool is reached — legibly, so re-consent is the obvious answer.
@@ -489,7 +491,7 @@ defmodule Emissary.MCP.NotesToolTest do
     # blob, minted from the manifest's caps against the loaded providers —
     # a name no provider serves drops silently, so this pins that every
     # notes action the soul may propose survives the expansion.
-    manifest = shipped_aqua_manifest() |> File.read!() |> Jason.decode!()
+    manifest = shipped_soul_manifest()
 
     caps = Compendium.Manifest.Caps.from_manifest(manifest)
     granted = Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
@@ -505,20 +507,20 @@ defmodule Emissary.MCP.NotesToolTest do
     refute "aqua.skill_delete" in granted
   end
 
-  # The newest shipped AQUA formula, found rather than pinned: a release
-  # bump must not leave this test reading a version that no longer ships.
-  defp shipped_aqua_manifest do
-    path =
-      [__DIR__, "../../../../seed/components/formulas/local/aqua/*/cyfr-manifest.json"]
-      |> Path.join()
-      |> Path.wildcard()
-      |> Enum.sort_by(fn path ->
-        path |> Path.split() |> Enum.at(-2) |> String.split(".") |> Enum.map(&String.to_integer/1)
-      end)
-      |> List.last()
+  # The shipped soul's manifest, derived from its own file over the roster
+  # it ships with.
+  defp shipped_soul_manifest do
+    seed = Path.expand("../../../../seed/aqua", __DIR__)
+    roles = Path.join(seed, Compendium.AquaPath.roles_dirname())
 
-    assert path, "no shipped AQUA formula under seed/components/formulas/local/aqua"
-    path
+    names =
+      roles
+      |> File.ls!()
+      |> Enum.filter(&String.ends_with?(&1, ".md"))
+      |> Enum.map(&Path.basename(&1, ".md"))
+
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(seed, "aqua.md")))
+    Compendium.AgentSource.manifest(soul, MapSet.new(["aqua" | names]))
   end
 
   test "the annotations say what a person may pre-answer" do
@@ -543,22 +545,22 @@ defmodule Emissary.MCP.NotesToolTest do
     star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
     assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-             Emissary.MCP.ToolRegistry.call_external("notes", star, %{
+             Cyfr.Ops.Catalog.call_external("notes", star, %{
                "action" => "keep",
                "name" => "sneak",
                "content" => "x"
              })
 
     assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-             Emissary.MCP.ToolRegistry.call_external("notes", star, %{
+             Cyfr.Ops.Catalog.call_external("notes", star, %{
                "action" => "list",
                "scope" => "mine"
              })
 
     # Discovery agrees with dispatch: the key is not shown the tool.
     shown =
-      Emissary.MCP.ToolVisibility.filter_for_context(
-        Emissary.MCP.ToolRegistry.list_tools(),
+      Cyfr.Ops.Visibility.filter_for_context(
+        Cyfr.Ops.Catalog.list_tools(),
         star
       )
 

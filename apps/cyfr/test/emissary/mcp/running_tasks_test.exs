@@ -64,10 +64,7 @@ defmodule Emissary.MCP.RunningTasksTest do
     end
 
     test "concurrent requests are independent — no shared key" do
-      # The whole reason the key is the server-minted request id: two callers
-      # sending `{"id": 1}` used to collide on one ETS row, so the second
-      # registration evicted the first and a cancellation reached the wrong
-      # task. Distinct ids must never interfere.
+      # Distinct server request ids must isolate tasks even when client JSON-RPC ids are identical.
       %Task{ref: ref_a} = a = forever()
       b = forever()
 
@@ -82,11 +79,7 @@ defmodule Emissary.MCP.RunningTasksTest do
     end
 
     test "a nested call registers alongside its parent — one request, several tasks" do
-      # An in-chain tool call inherits its root's request id (that is what
-      # keeps a chain attributable to its ingress). Under the old `:set`
-      # table the nested registration evicted the parent's row AND
-      # demonitored it, so a caller hanging up mid-chain killed the inner
-      # task and left the outer one running forever.
+      # Nested calls sharing a root request id must preserve the parent registration and cancellation monitor.
       %Task{ref: ref_outer} = outer = forever()
       %Task{ref: ref_inner} = inner = forever()
 
@@ -204,6 +197,48 @@ defmodule Emissary.MCP.RunningTasksTest do
       # Wait for the supervisor's own restart before handing the name back to
       # the next test — never start a second one here (see `setup`).
       await_running(was)
+    end
+  end
+
+  describe "a handle" do
+    test "cancels its own task and nothing else under the request" do
+      request_id = "req_#{System.unique_integer([:positive])}"
+      handle = {:turn, System.unique_integer([:positive])}
+      sibling = forever()
+      RunningTasks.register(request_id, sibling)
+
+      assert :ok = RunningTasks.claim(handle)
+
+      task =
+        Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
+          :ok = RunningTasks.register_handle(handle, self())
+          sleep_forever()
+        end)
+
+      RunningTasks.register(request_id, task)
+      ref = Process.monitor(task.pid)
+      Process.sleep(20)
+
+      assert :ok = RunningTasks.cancel_handle(handle)
+      assert_receive {:DOWN, ^ref, :process, _, :cancelled}, 1_000
+      assert Process.alive?(sibling.pid)
+      Task.shutdown(sibling, :brutal_kill)
+      RunningTasks.release_handle(handle)
+    end
+
+    test "cancelled before it is claimed, or between the claim and the registration, it never runs" do
+      early = {:turn, System.unique_integer([:positive])}
+      assert :ok = RunningTasks.cancel_handle(early)
+      assert :cancelled = RunningTasks.claim(early)
+      RunningTasks.release_handle(early)
+
+      late = {:turn, System.unique_integer([:positive])}
+      assert :ok = RunningTasks.claim(late)
+      assert :ok = RunningTasks.cancel_handle(late)
+      assert :cancelled = RunningTasks.register_handle(late, self())
+      RunningTasks.release_handle(late)
+      assert :ok = RunningTasks.claim(late)
+      RunningTasks.release_handle(late)
     end
   end
 end

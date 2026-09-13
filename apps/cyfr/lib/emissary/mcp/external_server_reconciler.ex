@@ -151,11 +151,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   end
 
   defp stop_affected(servers, entry, meta, athanor_id, entry_id, ctx) do
-    # A rename breaks the servers still spelling the OLD name — the row can
-    # only ever show the new one, so the vacated name rides in on the
-    # signal. Matching only the current name reconciled the name-GAINING
-    # side and left the name-losing servers dispensing a cached credential
-    # until an unrelated restart.
+    # Reconcile servers referencing both the current and vacated vault-entry names.
     refs =
       [entry.name | List.wrap(meta[:old_name])]
       |> Enum.uniq()

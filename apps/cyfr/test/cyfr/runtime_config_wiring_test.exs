@@ -3,13 +3,8 @@
 
 defmodule Cyfr.RuntimeConfigWiringTest do
   @moduledoc """
-  `config/runtime.exs` is 600+ lines guarded by `if config_env() != :test`,
-  so the suite never evaluated a line of it. `Cyfr.RuntimeConfig`'s pure
-  resolvers are unit-tested — that is what the injected `getenv` reader is
-  for — but the *wiring* around them was not: which resolver feeds which
-  config key, the release-name gating, and the boot guards that are supposed
-  to refuse a misconfigured deployment. Both of the config bugs this file now
-  covers were wiring bugs of exactly that shape.
+  Evaluates runtime.exs outside its test-environment guard to check
+  resolver wiring, release selection, and deployment validation.
 
   `Config.Reader.read!/2` evaluates the file the way a booting release does,
   without applying the result, so the prod branch can be exercised from the
@@ -86,11 +81,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   end
 
   describe "CYFR_DATABASE — the one setting `.env` cannot decide" do
-    # The adapter is chosen when the release is compiled (Ecto cannot swap
-    # adapters at runtime), and `config/database_choice.exs` reads it with
-    # `System.get_env` — outside the Dotenvy merge every other variable uses.
-    # So `CYFR_DATABASE=postgres` in `.env` used to produce a SQLite build, a
-    # SQLite branch, an ignored CYFR_DATABASE_URL, and no error whatsoever.
+    # Verify .env selection agrees with the compile-time adapter; Ecto cannot switch adapters at runtime.
 
     test "agreeing with the built adapter is accepted" do
       built =

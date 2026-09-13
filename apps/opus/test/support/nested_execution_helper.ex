@@ -15,9 +15,10 @@ defmodule Opus.Test.NestedExecution do
 
   `allowed_tools` matters: the probe's dispatches run under a
   consent-rooted authority, and a tool outside the consented edge is
-  denied. `publish_probe!/2` declares them the way re-released bundles
-  do — a manifest `caps.tools` block that `Sanctum.Consent.Bootstrap`
-  expands into the minted consent's ingress edge.
+  denied. `publish_probe!/2` plants the probe in a private seed tree
+  and registers it — a manifest `caps.tools` block that
+  `Sanctum.Consent.Bootstrap` expands into the minted consent's
+  ingress edge.
   """
 
   @probe_wasm Path.join(__DIR__, "test_wasm/nested_probe/nested_probe.wasm")
@@ -27,31 +28,33 @@ defmodule Opus.Test.NestedExecution do
   def probe_ref, do: @probe_ref
 
   @doc """
-  Publish the probe into the current (sandboxed) registry with its
-  declared tool asks. Call from a setup block that has already pointed
-  `:cyfr, :base_path` at a temp dir and checked out the SQL sandbox;
-  run `Sanctum.Consent.Bootstrap.run/1` afterwards to mint the consent
+  Plant the probe in a private seed tree and register it. Call from a
+  setup block that has already pointed `:cyfr, :base_path` at a temp
+  dir and checked out the SQL sandbox; run
+  `Sanctum.Consent.Bootstrap.run/1` afterwards to mint the consent
   the probe executes under.
   """
   def publish_probe!(ctx, opts \\ []) do
     tools = Keyword.get(opts, :allowed_tools, @default_allowed_tools)
-
-    manifest =
-      Jason.encode!(%{
-        "name" => "nested-probe",
-        "version" => "0.1.0",
-        "type" => "formula",
-        "caps" => %{"tools" => tools}
-      })
+    Cyfr.Test.SeedBundle.isolate!()
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@probe_wasm), %{
-        name: "nested-probe",
-        version: "0.1.0",
-        type: "formula",
-        description: "Nested-execution characterization probe",
-        manifest: manifest
-      })
+      Arca.Test.UnitFixtures.ship_and_register!(
+        ctx,
+        "formula",
+        "local",
+        "nested-probe",
+        "0.1.0",
+        manifest: %{
+          "name" => "nested-probe",
+          "version" => "0.1.0",
+          "type" => "formula",
+          "publisher" => "local",
+          "description" => "Nested-execution characterization probe",
+          "caps" => %{"tools" => tools}
+        },
+        wasm: File.read!(@probe_wasm)
+      )
 
     :ok
   end

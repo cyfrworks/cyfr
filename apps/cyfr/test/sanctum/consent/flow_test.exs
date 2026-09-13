@@ -83,6 +83,57 @@ defmodule Sanctum.Consent.FlowTest do
     })
   end
 
+  describe "grant" do
+    test "binds a credential to an unmoved owner consent as the next revision", %{ctx: ctx} do
+      publish!(ctx, "flow-grant")
+      entry = entry!(ctx)
+      ref = "reagent:local.flow-grant"
+      assert {:ok, %{profile_id: profile_id, revision: 1}} = walk!(ctx, ref)
+
+      grant = %{
+        profile_id: profile_id,
+        bindings: [%{need: "@ingress", entry_id: entry.id}],
+        expected_consent_revision: 1
+      }
+
+      assert {:ok, %{profile_id: ^profile_id, revision: 2}} = Commit.grant(ctx, grant)
+
+      {:ok, head} = Source.DB.head_consent(ctx, profile_id)
+      assert head.revision == 2
+      assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
+
+      # The revision is the compare-and-set: the same grant again is stale.
+      assert {:error, {:consent_conflict, %{cause: :stale_plan}}} = Commit.grant(ctx, grant)
+
+      # A moved shape refuses the grant — a new version with a different ask.
+      publish!(ctx, "flow-grant", "1.1.0", %{
+        manifest:
+          Jason.encode!(%{
+            "name" => "flow-grant",
+            "version" => "1.1.0",
+            "type" => "reagent",
+            "caps" => %{"egress" => %{"domains" => ["api.example"], "methods" => ["GET"]}}
+          })
+      })
+
+      assert {:error, :shape_moved} = Commit.grant(ctx, %{grant | expected_consent_revision: 2})
+    end
+
+    test "only an active owner profile takes a grant", %{ctx: ctx} do
+      publish!(ctx, "flow-grant-owner")
+      entry = entry!(ctx)
+      assert {:ok, %{profile_id: profile_id}} = walk!(ctx, "reagent:local.flow-grant-owner")
+      :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, profile_id, "revoked")
+
+      assert {:error, :profile_revoked} =
+               Commit.grant(ctx, %{
+                 profile_id: profile_id,
+                 bindings: [%{need: "@ingress", entry_id: entry.id}],
+                 expected_consent_revision: 1
+               })
+    end
+  end
+
   describe "plan → preview → commit" do
     test "mints a loadable first revision with a bound vault entry", %{ctx: ctx} do
       publish!(ctx, "flow-happy")
@@ -477,13 +528,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       {:ok, preview} = Commit.preview(ctx, staged.decisions)
 
-      # Now commit the SAME plan token, proof and commit digest with the
-      # flag flipped. Nothing else moves: the shape is manifest-derived,
-      # bindings are empty, tool servers are empty, the target profile and
-      # its expected revision are identical. Before `blob_digest`, the
-      # recomputed digest was therefore identical too — every check passed
-      # and the public profile shipped `write` and `delete` on every
-      # storage path to anonymous callers.
+      # Reuse the plan token, proof and digest with durable_storage flipped; commit must reject it.
       widened = Map.put(staged.decisions, :durable_storage, true)
 
       # `check_presented_digest/2` is the gate: the recomputed digest no
@@ -563,7 +608,7 @@ defmodule Sanctum.Consent.FlowTest do
   end
 
   describe "decision validation" do
-    test "an unknown need fails like §2.7 says", %{ctx: ctx} do
+    test "rejects an undeclared need", %{ctx: ctx} do
       publish!(ctx, "flow-need")
       entry = entry!(ctx)
 
@@ -598,8 +643,7 @@ defmodule Sanctum.Consent.FlowTest do
     "caps" => %{"egress" => %{"domains" => ["api.anthropic.com"]}}
   }
 
-  # A manifest whose egress reaches private space and names its schemes —
-  # the two fields the sheet used to compute and never show.
+  # Include private egress and scheme constraints in the displayed consent.
   @private_egress_manifest %{
     "caps" => %{
       "egress" => %{
@@ -632,6 +676,20 @@ defmodule Sanctum.Consent.FlowTest do
     })
   end
 
+  defp ship!(ctx, name, manifest \\ %{}) do
+    {:ok, row} =
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, "reagent", "local", name, "1.0.0",
+        manifest:
+          Map.merge(
+            %{"name" => name, "type" => "reagent", "version" => "1.0.0", "publisher" => "local"},
+            manifest
+          ),
+        wasm: @wasm
+      )
+
+    row
+  end
+
   describe "declared needs" do
     test "the plan shows the declared need's reason, never key names", %{ctx: ctx} do
       publish_needs!(ctx, "flow-needs-plan")
@@ -648,15 +706,9 @@ defmodule Sanctum.Consent.FlowTest do
       assert Enum.any?(plan.warnings, &(&1 =~ "api_key"))
     end
 
-    # The direct-Elixir walk above omits `:fields` and always got the
-    # manifest's list. The MCP wire did not: `decode_bindings/1` wrote
-    # `fields: []` whether the client sent the key or not, and `[]` is the
-    # same value "no narrowing declared" carries — so the declared subset
-    # was overwritten with "all fields" for every MCP-minted consent. This
-    # walks the tool, not `Commit`, because that is where the widening was.
-    # The sheet is what the operator approves. A grant it computes and does
-    # not print is a grant nobody agreed to — which is how an egress reaching
-    # RFC1918 space, and every node's limits, stayed invisible.
+    # Exercise projection defaults through the MCP tool. Omitted fields
+    # must retain the manifest’s subset, and the consent sheet must show
+    # every granted resource and node limit.
     test "the summary discloses private egress, schemes and the node's limits",
          %{ctx: ctx} do
       publish_private_egress!(ctx, "flow-private-egress")
@@ -731,7 +783,7 @@ defmodule Sanctum.Consent.FlowTest do
       assert auth.resources.egress.domains == ["api.anthropic.com"]
     end
 
-    test "the implicit slot retires when needs are declared (§2.7)", %{ctx: ctx} do
+    test "the implicit slot retires when needs are declared", %{ctx: ctx} do
       publish_needs!(ctx, "flow-needs-implicit")
       entry = entry!(ctx)
 
@@ -793,7 +845,8 @@ defmodule Sanctum.Consent.FlowTest do
     end
 
     test "setup readiness joins the declared needs", %{ctx: ctx} do
-      publish_needs!(ctx, "flow-needs-ready")
+      Cyfr.Test.SeedBundle.isolate!()
+      ship!(ctx, "flow-needs-ready", @needs_manifest)
       {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
 
       # Bootstrapped with nothing bound: the required need is unmet.
@@ -815,12 +868,7 @@ defmodule Sanctum.Consent.FlowTest do
   end
 
   describe "the digest covers which profile the grant lands on" do
-    # Two labels on one source_ref can produce byte-identical blobs, and on
-    # a FIRST consent `Plan.locate_profile/4` answers `{:ok, nil, 0}` for
-    # both — so `profile_id` is dropped by `put_present` and
-    # `expected_revision` is 0 either way. Without `label` in the commit
-    # input the proof bound nothing that told them apart, and one minted
-    # for "prod" was spendable on "staging".
+    # Proofs must distinguish profile labels even when their policy blobs are identical.
     test "a proof minted for one label does not commit under another", %{ctx: ctx} do
       publish!(ctx, "flow-labelled")
       ref = "reagent:local.flow-labelled"
@@ -857,15 +905,13 @@ defmodule Sanctum.Consent.FlowTest do
   end
 
   describe "every minted revision carries a blob digest" do
-    # The X1 regression pair. `Commit.persist/6` and
-    # `Consent.Bootstrap.insert/6` are the only two writers, and Bootstrap
-    # never reaches `persist/6` — so hashing on the commit path alone would
-    # have left every provisioning mint undigested and unverifiable.
+    # Verify blob digests on both commit and bootstrap writes.
     test "an operator walk and a machine mint both store one", %{ctx: ctx} do
       publish!(ctx, "flow-walked")
       {:ok, _} = walk!(ctx, "reagent:local.flow-walked")
 
-      publish!(ctx, "flow-machine")
+      Cyfr.Test.SeedBundle.isolate!()
+      ship!(ctx, "flow-machine")
       {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run(ctx)
       assert "reagent:local.flow-machine" in minted
 

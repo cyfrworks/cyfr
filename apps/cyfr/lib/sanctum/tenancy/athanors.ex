@@ -7,16 +7,13 @@ defmodule Sanctum.Tenancy.Athanors do
 
   An athanor is the unit everything is owned by — a person's or a group's.
   Rows are created here (a person's on first authorized sign-in, a group's
-  when a member creates it, Home once per server) and archived, never
-  deleted. Filling an athanor with components and consents is the caller's
+  when a member creates it) and archived, never deleted. Filling an athanor with components and consents is the caller's
   job (`Sanctum.Provisioning`), not this module's: a row is a name,
   provisioning is what fills it.
 
   A person's athanor is archived only through `Sanctum.Tenancy.Users.deny/1`
   (`force: true`); a group is archived by its members or by its last member
-  leaving. Home is archived by that last leave alone (never by hand, never
-  by a verb) and never comes back: the row stays as the record, its slug is
-  released, and `ensure_home/0` mints its successor.
+  leaving.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -46,14 +43,35 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  # The insert without the server cap: the caller decides whether the row is
-  # a tenant mint (capped) or the server's own Home (not).
+  # The insert without the server caps. `create/1` is the capped mint every
+  # tenant goes through; this is reached only by `create_for_operator/1`.
   defp insert_row(attrs) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.insert_row", fn ->
       %Athanor{}
       |> Athanor.create_changeset(attrs)
       |> Arca.Repo.insert()
     end)
+  end
+
+  @doc """
+  Mint an athanor for a person the server admits as its operator, exempt
+  from the server caps.
+
+  `CYFR_MINT_PER_HOUR` bounds how fast strangers arrive and
+  `CYFR_MAX_ATHANORS` how many estates the server holds; an operator named
+  in `CYFR_PLATFORM_ADMIN_EMAILS` is neither a stranger nor optional — a
+  server at capacity must still admit the person who can act on it. Every
+  other mint goes through `create/1` and is capped.
+  """
+  @spec create_for_operator(map()) :: {:ok, Athanor.t()} | {:error, term()}
+  def create_for_operator(attrs) when is_map(attrs) do
+    now = DateTime.utc_now()
+
+    attrs
+    |> Map.put_new(:id, generate_id())
+    |> Map.put_new(:created_at, now)
+    |> Map.put_new(:updated_at, now)
+    |> insert_row()
   end
 
   @doc """
@@ -97,8 +115,7 @@ defmodule Sanctum.Tenancy.Athanors do
   any other estate, and the door is simply closed.
 
   Find-or-create runs in a transaction keyed on `pair_key`, and a losing
-  racer reads the winner rather than reporting a conflict (the
-  `or_read_the_winner/1` shape `ensure_home/0` uses). Two people
+  racer reads the winner rather than reporting a conflict. Two people
   double-clicking each other's names get one tape.
 
   The per-person cap on pairs applies to a mint, and to both people: a
@@ -108,7 +125,7 @@ defmodule Sanctum.Tenancy.Athanors do
 
   The row only — it is deliberately **not** provisioned here. A pair that
   owns nothing needs no registry pull, no component scan and no consent
-  bootstrap to exist; `Sanctum.Provisioning.ensure_provisioned/1` fills it
+  bootstrap to exist; `Sanctum.Provisioning.start_provisioning/1` fills it
   at first need instead, so clicking a name opens a chat immediately
   instead of waiting on the network.
   """
@@ -150,11 +167,7 @@ defmodule Sanctum.Tenancy.Athanors do
   — a pair is what a frozen estate holds, and a key over any other number
   would name nothing `create_pair/2` can find.
 
-  The hash is over the JSON encoding of the sorted ids, so each id is
-  delimited by the encoding rather than by a separator an id could
-  contain. Keys minted under the earlier newline-joined form were re-keyed
-  by the `pair_key_rehash` migration, so an existing pair is still found
-  by its members.
+  Hashes the JSON encoding of sorted member ids, preserving unambiguous boundaries.
   """
   @spec pair_key([String.t()] | String.t(), String.t() | nil) :: String.t()
   def pair_key(user_a, user_b) when is_binary(user_a) and is_binary(user_b),
@@ -279,6 +292,20 @@ defmodule Sanctum.Tenancy.Athanors do
     end)
   end
 
+  @doc """
+  A person's own athanor, by its owner. At most one exists per person
+  (a partial unique index on `owner_user_id` where `kind = 'person'`).
+  """
+  @spec get_by_owner(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | term()}
+  def get_by_owner(user_id) when is_binary(user_id) do
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.get_by_owner", fn ->
+      case Arca.Repo.get_by(Athanor, kind: "person", owner_user_id: user_id) do
+        nil -> {:error, :not_found}
+        athanor -> {:ok, athanor}
+      end
+    end)
+  end
+
   @doc "Find an athanor by kind and slug."
   @spec get_by_slug(String.t(), String.t()) ::
           {:ok, Athanor.t()} | {:error, :not_found | :database_error}
@@ -315,88 +342,6 @@ defmodule Sanctum.Tenancy.Athanors do
   def route_slug(%Athanor{kind: "person", slug: slug}), do: "@" <> slug
   def route_slug(%Athanor{slug: slug}), do: slug
 
-  @doc """
-  The server's Home athanor — the group every server has. Found by its flag,
-  never by a fixed id, and only while it is active: a retired Home keeps the
-  flag as its record but is nobody's Home any more.
-  """
-  @spec home() :: {:ok, Athanor.t()} | {:error, :not_found | :database_error}
-  def home do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.home", fn ->
-      case Arca.Repo.one(
-             from(a in Athanor, where: a.home == true and a.status == "active", limit: 1)
-           ) do
-        nil -> {:error, :not_found}
-        athanor -> {:ok, athanor}
-      end
-    end)
-  end
-
-  @doc """
-  The server's Home, minting one when the last was retired by its final
-  member leaving. The row only — filling it (seed + consents) is the
-  caller's job, as for every other athanor. Home is the server's own
-  furnace, not somebody's mint, so the per-server cap does not bind it.
-  """
-  @spec ensure_home() :: {:ok, Athanor.t()} | {:error, term()}
-  def ensure_home do
-    case home() do
-      {:ok, athanor} ->
-        {:ok, athanor}
-
-      {:error, :not_found} ->
-        with {:ok, slug} <- resolve_slug(nil, "Home") do
-          %{
-            id: generate_id(),
-            kind: "group",
-            name: "Home",
-            slug: slug,
-            home: true,
-            created_by: "system",
-            created_at: DateTime.utc_now(),
-            updated_at: DateTime.utc_now()
-          }
-          |> insert_row()
-          |> or_read_the_winner()
-        end
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  # Two callers can find no Home and both go on to mint one. The
-  # `athanors_home_index` partial unique index means exactly one insert
-  # lands; the loser's job is to read the row that did, not to report a
-  # broken install to whoever is booting the server.
-  defp or_read_the_winner({:ok, _} = ok), do: ok
-
-  defp or_read_the_winner({:error, _} = err) do
-    case home() do
-      {:ok, athanor} -> {:ok, athanor}
-      _ -> err
-    end
-  end
-
-  @doc "Like `home/0`, raising when the seed is missing — a broken install."
-  @spec home!() :: Athanor.t()
-  def home! do
-    case home() do
-      {:ok, athanor} ->
-        athanor
-
-      # A refusal, not a bare string: the seed being absent is an
-      # authorization-shaped fact (there is no athanor to work in), and
-      # `Sanctum.UnauthorizedError` is what every other surface renders for
-      # that — a `RuntimeError` here rendered as a 500 with the internal
-      # reason inspected into the message.
-      {:error, reason} ->
-        require Logger
-        Logger.error("[Sanctum.Tenancy.Athanors] no Home athanor: #{inspect(reason)}")
-        raise Sanctum.UnauthorizedError, reason: :missing_tenant
-    end
-  end
-
   @spec update(Athanor.t(), map()) :: {:ok, Athanor.t()} | {:error, term()}
   def update(%Athanor{} = athanor, attrs) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.update", fn ->
@@ -426,11 +371,7 @@ defmodule Sanctum.Tenancy.Athanors do
   path leaves work running in a furnace nobody may enter.
 
   A person's athanor refuses unless `force: true` — the arm
-  `Sanctum.Tenancy.Users.deny/1` uses when it ejects a person. Home refuses
-  everything but `reason: :empty`, the last member leaving: no verb and no
-  operator retires the server's own furnace by hand. A retired Home also
-  releases its slug, so its successor is reachable where Home has always
-  been.
+  `Sanctum.Tenancy.Users.deny/1` uses when it ejects a person.
   """
   @spec archive(Athanor.t(), keyword()) :: {:ok, Athanor.t()} | {:error, term()}
   def archive(%Athanor{} = athanor, opts \\ []) do
@@ -443,9 +384,6 @@ defmodule Sanctum.Tenancy.Athanors do
           # closes what the first attempt may not have reached.
           close(current)
           {:ok, current}
-
-        current.home and Keyword.get(opts, :reason) != :empty ->
-          {:error, :home_cannot_be_archived}
 
         current.kind == "person" and not Keyword.get(opts, :force, false) ->
           {:error, :person_athanor_cannot_be_archived}
@@ -460,22 +398,7 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  defp archived_attrs(%Athanor{home: true} = current) do
-    %{status: "archived", archived_at: DateTime.utc_now(), slug: retired_slug(current.slug)}
-  end
-
   defp archived_attrs(%Athanor{}), do: %{status: "archived", archived_at: DateTime.utc_now()}
-
-  # A retired Home hands its address to its successor: the row keeps the flag
-  # and the name for the record, under the next free `<slug>-N`.
-  defp retired_slug(slug) do
-    base = suffixable(slug)
-
-    Enum.find_value(2..50, slug, fn n ->
-      candidate = "#{base}-#{n}"
-      if slug_free?(candidate), do: candidate
-    end)
-  end
 
   # What archiving closes: standing credentials and in-flight work. Runs as
   # the server inside the athanor (an internal context focused on it —
@@ -549,11 +472,9 @@ defmodule Sanctum.Tenancy.Athanors do
 
   ## What it keeps, and why
 
-  The `athanors` row itself survives as an archived tombstone. Home
-  succession reads it (`home!/0` matches `home AND status = 'active'`, so
-  a tombstoned Home already lets `ensure_home/0` mint a successor), and an
-  audit trail that loses the fact an athanor ever existed cannot answer
-  "what happened to it". Everything the tombstone owned is gone.
+  The `athanors` row itself survives as an archived tombstone: an audit
+  trail that loses the fact an athanor ever existed cannot answer "what
+  happened to it". Everything the tombstone owned is gone.
 
   ## What it refuses
 
@@ -600,9 +521,8 @@ defmodule Sanctum.Tenancy.Athanors do
     do: Sanctum.internal_context(athanor_id: id, scope: :athanor)
 
   @doc """
-  Reopen an archived athanor, if the server still has room for it. A retired
-  Home never reopens — it is the record of a furnace that ended;
-  `ensure_home/0` mints its successor. Nor does an ended DM: a frozen
+  Reopen an archived athanor, if the server still has room for it. An ended
+  DM never reopens: a frozen
   estate is archived the moment either person leaves, so its husk holds
   one member, and reopening it would seat that person alone in a second
   You. Clicking the name again mints a new pair instead.
@@ -611,9 +531,6 @@ defmodule Sanctum.Tenancy.Athanors do
   def unarchive(%Athanor{} = athanor) do
     with {:ok, current} <- get(athanor.id) do
       cond do
-        current.home ->
-          {:error, :home_is_final}
-
         current.roster == "frozen" ->
           {:error, :frozen_is_final}
 
@@ -770,13 +687,8 @@ defmodule Sanctum.Tenancy.Athanors do
   defp put_settings_cas(_athanor, _patch, 0), do: {:error, :settings_conflict}
 
   defp put_settings_cas(%Athanor{} = athanor, patch, attempts) do
-    # Merge over what the row says NOW, and land only if it still says so.
-    # The earlier fix closed the stale-struct case (a caller merging over a
-    # copy read a dozen steps ago); this closes the concurrent one — two
-    # simultaneous merges each read-modify-write, and the second used to
-    # overwrite the first within milliseconds. The compare-and-set is
-    # `Arca.ProfileStorage.advance_head/4`'s shape. A read failure falls
-    # back to the caller's copy: the write is still better than none.
+    # Merge against the current row with compare-and-set to avoid lost updates.
+    # If the read fails, fall back to the caller's copy.
     current =
       case get(athanor.id) do
         {:ok, fresh} -> fresh
@@ -846,12 +758,29 @@ defmodule Sanctum.Tenancy.Athanors do
   # A slug given explicitly must be valid and free; one derived from the name
   # gets a numeric suffix when taken.
   defp resolve_slug(explicit, _name) when is_binary(explicit) do
-    if Sanctum.Slug.valid?(explicit) and slug_free?(explicit),
+    if Sanctum.Slug.valid?(explicit) and slug_free?("group", explicit),
       do: {:ok, explicit},
       else: {:error, :slug_taken_or_invalid}
   end
 
-  defp resolve_slug(nil, name) do
+  defp resolve_slug(nil, name), do: derived_slug("group", name)
+
+  @doc """
+  A free slug for a person's own athanor: `hint` (their cyfr.run namespace,
+  when they have one) if it is valid and free, else one derived from
+  `name` with a numeric suffix. A person's athanor is minted at sign-in,
+  before any namespace exists, so the slug is this server's — an address,
+  not an identity — and a hint another person's athanor already holds is
+  no refusal, it just is not the address.
+  """
+  @spec person_slug(String.t() | nil, String.t()) :: {:ok, String.t()} | {:error, term()}
+  def person_slug(hint, name) do
+    if is_binary(hint) and Sanctum.Slug.valid?(hint) and slug_free?("person", hint),
+      do: {:ok, hint},
+      else: derived_slug("person", name)
+  end
+
+  defp derived_slug(kind, name) do
     case Sanctum.Slug.from_name(name) do
       nil ->
         {:error, :invalid_name}
@@ -860,7 +789,7 @@ defmodule Sanctum.Tenancy.Athanors do
         stem = suffixable(base)
         candidates = [base | Enum.map(2..50, &"#{stem}-#{&1}")]
 
-        case Enum.find(candidates, &slug_free?/1) do
+        case Enum.find(candidates, &slug_free?(kind, &1)) do
           nil -> {:error, :slug_taken_or_invalid}
           slug -> {:ok, slug}
         end
@@ -876,12 +805,9 @@ defmodule Sanctum.Tenancy.Athanors do
   # names is over the limit before it starts.
   defp suffixable(base), do: base |> String.slice(0, 36) |> String.trim_trailing("-")
 
-  # Deliberately checks only the "group" kind: the unique index is
-  # `[kind, slug]`, so a group slug never collides with a person's. Group
-  # slugs are the only ones minted here (a person's slug IS their cyfr.run
-  # namespace, claimed elsewhere); a person-slug caller would need its own
-  # check against the "person" kind.
-  defp slug_free?(slug), do: match?({:error, :not_found}, get_by_slug("group", slug))
+  # Per kind: the unique index is `[kind, slug]`, so a group slug never
+  # collides with a person's and each is checked against its own kind.
+  defp slug_free?(kind, slug), do: match?({:error, :not_found}, get_by_slug(kind, slug))
 
   # Only the groups a person deliberately made. A frozen pair is a
   # conversation, not a group they created, and counting DMs against

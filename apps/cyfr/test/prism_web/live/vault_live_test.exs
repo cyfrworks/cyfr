@@ -3,18 +3,17 @@
 
 defmodule PrismWeb.VaultLiveTest do
   @moduledoc """
-  The Vault page: gated behind sign-in; each vault entry says which
-  MCP servers draw on it (so revoking is done knowing what it breaks); the
-  operator's OAuth client credentials are stored, listed by provider and
-  removed from here — the `lite` sheet's client-credentials arm.
+  Tests sign-in gating, vault-entry server references and management of
+  operator OAuth client credentials on the Vault page.
   """
   use PrismWeb.ConnCase, async: false
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
 
   describe "GET /vault (unauthenticated)" do
     test "redirects to login", %{conn: conn} do
-      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/vault"))
+      assert {:error, {:redirect, %{to: "/login"}}} =
+               live(conn, athanor_path("/vault", "@nobody"))
     end
   end
 
@@ -33,7 +32,7 @@ defmodule PrismWeb.VaultLiveTest do
       )
 
     {:ok, _} =
-      ToolRegistry.call_external("vault", ctx, %{
+      Catalog.call_external("vault", ctx, %{
         "action" => "create",
         "name" => "bridge-token",
         "kind" => "api_key",
@@ -41,7 +40,7 @@ defmodule PrismWeb.VaultLiveTest do
       })
 
     {:ok, _} =
-      ToolRegistry.call_external("mcp_servers", ctx, %{
+      Catalog.call_external("mcp_servers", ctx, %{
         "action" => "create",
         "name" => "bridge",
         "config" => %{
@@ -57,7 +56,7 @@ defmodule PrismWeb.VaultLiveTest do
 
     # the list verb carries the names — never the header values
     assert {:ok, %{servers: [server]}} =
-             ToolRegistry.call_external("mcp_servers", ctx, %{"action" => "list"})
+             Catalog.call_external("mcp_servers", ctx, %{"action" => "list"})
 
     assert server.vault_refs == ["bridge-token"]
     refute inspect(server) =~ "Authorization"
@@ -88,7 +87,7 @@ defmodule PrismWeb.VaultLiveTest do
     ctx =
       Sanctum.Context.build(
         user_id: user.user_id,
-        athanor_id: Sanctum.Tenancy.Athanors.home!().id,
+        athanor_id: seated_athanor().id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
@@ -99,7 +98,7 @@ defmodule PrismWeb.VaultLiveTest do
              Sanctum.ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
 
     assert {:ok, %{providers: [%{provider: "google"}]}} =
-             ToolRegistry.call_external("oauth", ctx, %{"action" => "list"})
+             Catalog.call_external("oauth", ctx, %{"action" => "list"})
 
     view
     |> element("button[phx-click=delete_client][phx-value-provider=google]")
@@ -110,7 +109,7 @@ defmodule PrismWeb.VaultLiveTest do
 
     # removing what is not there says so
     assert {:error, msg} =
-             ToolRegistry.call_external("oauth", ctx, %{
+             Catalog.call_external("oauth", ctx, %{
                "action" => "delete_client",
                "provider" => "google"
              })

@@ -11,7 +11,7 @@ defmodule Opus.FormulaHandler do
 
   ## Unified MCP Dispatch
 
-  All formula capabilities go through `Emissary.MCP.ToolRegistry`. Component
+  All formula capabilities go through `Cyfr.Ops.Catalog`. Component
   execution, registry search, build, aqua — everything is an MCP tool call.
   Tool access is decided by the authority's transition relation over the
   consent edge's granted tools.
@@ -95,13 +95,15 @@ defmodule Opus.FormulaHandler do
   - `:limits` - The node's `Sanctum.Limits` (batch timeout, max concurrent tasks)
   - `:authority` - The `Sanctum.Authority` the chain runs under (required).
     Execution dispatch goes through `Opus.Chain` and every other tool through
-    `ToolRegistry.call_in_chain/5`. A formula run always carries one — the
+    `Cyfr.Ops.Catalog.call_in_chain/5`. A formula run always carries one — the
     executor raises before reaching here (`Opus.Executor.stage_enforce_policy`),
     and this fetch keeps a direct caller honest too.
   - `:declared_needs` / `:activation_digest` - host-derived transition inputs
     for this node's onward invocations
   - `:secrets` - credential values dispensed to this execution; emitted
     events are masked with them before leaving the runtime
+  - `:attempt` - the attempt that owns this formula's row, stamped on the
+    lineage of every call it makes
   """
   @spec build_formula_imports(Context.t(), String.t(), keyword()) :: {map(), pid()}
   def build_formula_imports(%Context{} = ctx, parent_execution_id, opts \\ []) do
@@ -144,6 +146,7 @@ defmodule Opus.FormulaHandler do
       [
         parent_execution_id: parent_execution_id,
         root_execution_id: root_execution_id,
+        attempt: opts[:attempt],
         limits: limits,
         parent_reference: opts[:parent_reference],
         parent_roster: opts[:parent_roster] || []
@@ -153,6 +156,7 @@ defmodule Opus.FormulaHandler do
       [
         parent_execution_id: parent_execution_id,
         root_execution_id: root_execution_id,
+        attempt: opts[:attempt],
         limits: limits
       ] ++ authority_opts
 
@@ -234,14 +238,8 @@ defmodule Opus.FormulaHandler do
     {imports, tracker}
   end
 
-  # The raise/exit boundary every other WIT import already has
-  # (`HttpHandler`, `StorageHandler.dispatch_caught/6`,
-  # `HttpStreamHandler.guarded/3`). These closures reach the tracker with
-  # default 5s call timeouts while it can be blocked in an await, and a
-  # dead tracker answers `:noproc` — both arrive as exits, and an uncaught
-  # one killed the Wasmex process and failed the whole execution where a
-  # typed error the guest can act on was available. The message stays
-  # generic; the fault goes to the host log.
+  # Catch host-function raises and exits, including tracker call failures.
+  # Return a generic typed error to the guest and log fault details on the host.
   defp guarded(parent_execution_id, name, fun) do
     fun.()
   rescue
@@ -337,17 +335,29 @@ defmodule Opus.FormulaHandler do
 
   # Execution dispatch never rides the tool registry: the invocation is
   # decided by the transition relation and executed by Opus.Chain with
-  # host-threaded lineage. Everything else — including a parse failure —
+  # host-threaded lineage. Which actions that is, the catalog says — the
+  # ones annotated `host: :intercepted` — so the host and the annotation
+  # cannot drift apart. Everything else — including a parse failure —
   # goes to the in-chain registry chokepoint.
   defp authority_execution_request(json_request, opts) do
     with authority when not is_nil(authority) <- opts[:authority],
-         {:ok, %{tool: "execution", action: action, args: args}}
-         when action in ["run", "run_stream"] <- parse_mcp_request(json_request, opts[:limits]) do
+         {:ok, %{tool: "execution", action: action, args: args}} <-
+           parse_mcp_request(json_request, opts[:limits]),
+         true <- Opus.Host.host_intercepted?("execution", action) do
       {:intercept, action, args}
     else
       _ -> :registry
     end
   end
+
+  @doc false
+  # The host's arm for an action the catalog annotates `host: :intercepted`.
+  # An intercepted action the host has no arm for is a typed refusal, never
+  # a crash; a test pins that every intercepted action has one.
+  @spec child_runner(String.t()) :: {:ok, function()} | :error
+  def child_runner("run"), do: {:ok, &Opus.Chain.run_child/5}
+  def child_runner("run_stream"), do: {:ok, &Opus.Chain.run_child_stream/5}
+  def child_runner(_action), do: :error
 
   defp dispatch_child_call(action, args, ctx, opts) do
     authority = Keyword.fetch!(opts, :authority)
@@ -364,12 +374,9 @@ defmodule Opus.FormulaHandler do
       need = Map.get(args, "need")
 
       result =
-        case action do
-          "run" ->
-            Opus.Chain.run_child(authority, reference, need, input, child_opts)
-
-          "run_stream" ->
-            Opus.Chain.run_child_stream(authority, reference, need, input, child_opts)
+        case child_runner(action) do
+          {:ok, run} -> run.(authority, reference, need, input, child_opts)
+          :error -> {:error, {:invalid_argument, "execution.#{action} has no host dispatch"}}
         end
 
       case result do
@@ -478,8 +485,14 @@ defmodule Opus.FormulaHandler do
       ctx: ctx,
       parent_execution_id: Keyword.fetch!(opts, :parent_execution_id),
       root_execution_id: opts[:root_execution_id],
+      # This formula's own attempt authorizes its children's charges.
+      attempt: opts[:attempt],
       declared_needs: opts[:declared_needs] || [],
-      activation_digest: opts[:activation_digest]
+      activation_digest: opts[:activation_digest],
+      # Who invoked the child — this formula — for what its row keeps of
+      # its output: a model call the assistant made is kept as a digest
+      # and its usage, never the provider's reply.
+      parent_reference: opts[:parent_reference]
     ]
   end
 
@@ -505,9 +518,7 @@ defmodule Opus.FormulaHandler do
     do: encode_error(:invalid_request, "Invalid reference: #{guest_reason(reason)}")
 
   defp encode_child_error({:setup_required, payload} = reason) do
-    # One remediation shape on the wire, whichever dispatch path failed:
-    # Opus.Remediation owns it (component-guide documents that shape).
-    # This clause used to hand-roll a second, incompatible object.
+    # Build the shared remediation payload through Opus.Remediation.
     case Opus.Remediation.analyze(reason) do
       {:setup_required, remediation} ->
         encode_error_with_remediation(
@@ -583,6 +594,9 @@ defmodule Opus.FormulaHandler do
           "run_stream cannot be spawned — spawn execution.run, or call run_stream directly"
         )
 
+      {:intercept, action, _args} ->
+        encode_error(:invalid_request, "execution.#{action} cannot be spawned")
+
       :registry ->
         spawn_via_registry(json_request, ctx, tracker, opts)
     end
@@ -598,77 +612,87 @@ defmodule Opus.FormulaHandler do
 
     case Map.get(args, "reference") do
       reference when is_binary(reference) and reference != "" ->
-        child_opts = Keyword.put(child_opts(ctx, opts), :guest_fn, :spawn)
+        child_opts =
+          ctx
+          |> child_opts(opts)
+          |> Keyword.put(:guest_fn, :spawn)
+          |> Opus.Chain.Charge.identify()
+
         need = Map.get(args, "need")
         input = Map.get(args, "input") || %{}
 
-        case Opus.Chain.step_invoke(authority, reference, need, child_opts) do
-          {:ok, decision} ->
-            fun = fn ->
-              # The task holds the charged slot from here on: the guard's
-              # :DOWN compensation releases it if the task is brutally
-              # killed (cancel / await timeout), where the `after` below
-              # cannot run.
-              Sanctum.Authority.guard_invoke(decision.authority)
-              start_time = System.monotonic_time(:millisecond)
+        with {:ok, decision} <- Opus.Chain.step_invoke(authority, reference, need, child_opts),
+             :ok <- Opus.Chain.Charge.take(decision.authority, child_opts) do
+          fun = fn ->
+            # The task holds the charged slot from here on: the guard's
+            # :DOWN compensation releases it if the task is brutally
+            # killed (cancel / await timeout), where the `after` below
+            # cannot run; the charge row is reclaimed by the sweep once
+            # its holder ends.
+            Sanctum.Authority.guard_invoke(decision.authority)
+            start_time = System.monotonic_time(:millisecond)
 
-              try do
-                case Opus.Chain.execute_child(decision, input, child_opts) do
-                  {:ok, output} ->
-                    emit_telemetry(parent_execution_id, "execution.run", :ok, start_time)
+            try do
+              case Opus.Chain.execute_child(decision, input, child_opts) do
+                {:ok, output} ->
+                  emit_telemetry(parent_execution_id, "execution.run", :ok, start_time)
 
-                    {encode_success(normalize_keys(output)), %{tool: "execution", action: "run"}}
+                  {encode_success(normalize_keys(output)), %{tool: "execution", action: "run"}}
 
-                  {:error, reason} ->
-                    emit_telemetry(parent_execution_id, "execution.run", :error, start_time)
-                    {encode_child_error(reason), %{tool: "execution", action: "run"}}
+                {:error, reason} ->
+                  emit_telemetry(parent_execution_id, "execution.run", :error, start_time)
+                  {encode_child_error(reason), %{tool: "execution", action: "run"}}
+              end
+            after
+              Sanctum.Authority.release_invoke(decision.authority)
+              Opus.Chain.Charge.give_back(decision.authority, child_opts)
+            end
+          end
+
+          # The budget is already charged; an exit from the tracker call
+          # (dead tracker, call timeout) would bypass the release arms
+          # below and leak the slot for the root's remaining life. A
+          # timed-out call has still landed in the tracker's mailbox —
+          # the task will run and its own `after` releases the charge, so
+          # releasing here too would free a concurrent sibling's slot
+          # (mirrors Sanctum.Authority.BudgetGuard.release_after_exit/2);
+          # any other exit means the spawn never landed.
+          spawn_result =
+            try do
+              Opus.AsyncTracker.spawn_task(tracker, fun, "execution.run")
+            catch
+              :exit, reason ->
+                unless match?({:timeout, _}, reason) do
+                  Sanctum.Authority.release_invoke(decision.authority)
+                  Opus.Chain.Charge.give_back(decision.authority, child_opts)
                 end
-              after
-                Sanctum.Authority.release_invoke(decision.authority)
-              end
+
+                Logger.warning(
+                  "[Opus.FormulaHandler] spawn tracker unreachable: #{inspect(reason)}"
+                )
+
+                :tracker_unreachable
             end
 
-            # The budget is already charged; an exit from the tracker call
-            # (dead tracker, call timeout) would bypass the release arms
-            # below and leak the slot for the root's remaining life. A
-            # timed-out call has still landed in the tracker's mailbox —
-            # the task will run and its own `after` releases the charge, so
-            # releasing here too would free a concurrent sibling's slot
-            # (mirrors Sanctum.Authority.BudgetGuard.release_after_exit/2);
-            # any other exit means the spawn never landed.
-            spawn_result =
-              try do
-                Opus.AsyncTracker.spawn_task(tracker, fun, "execution.run")
-              catch
-                :exit, reason ->
-                  unless match?({:timeout, _}, reason) do
-                    Sanctum.Authority.release_invoke(decision.authority)
-                  end
+          case spawn_result do
+            {:ok, task_id} ->
+              Opus.Telemetry.formula_spawn(parent_execution_id, task_id, "execution.run")
+              safe_encode(%{"task_id" => task_id})
 
-                  Logger.warning(
-                    "[Opus.FormulaHandler] spawn tracker unreachable: #{inspect(reason)}"
-                  )
+            {:error, :max_tasks_exceeded} ->
+              Sanctum.Authority.release_invoke(decision.authority)
+              Opus.Chain.Charge.give_back(decision.authority, child_opts)
+              encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
 
-                  :tracker_unreachable
-              end
+            {:error, reason} ->
+              Sanctum.Authority.release_invoke(decision.authority)
+              Opus.Chain.Charge.give_back(decision.authority, child_opts)
+              encode_error(:spawn_failed, guest_reason(reason))
 
-            case spawn_result do
-              {:ok, task_id} ->
-                Opus.Telemetry.formula_spawn(parent_execution_id, task_id, "execution.run")
-                safe_encode(%{"task_id" => task_id})
-
-              {:error, :max_tasks_exceeded} ->
-                Sanctum.Authority.release_invoke(decision.authority)
-                encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
-
-              {:error, reason} ->
-                Sanctum.Authority.release_invoke(decision.authority)
-                encode_error(:spawn_failed, guest_reason(reason))
-
-              :tracker_unreachable ->
-                encode_error(:spawn_failed, "task tracker unavailable")
-            end
-
+            :tracker_unreachable ->
+              encode_error(:spawn_failed, "task tracker unavailable")
+          end
+        else
           {:error, reason} ->
             encode_child_error(reason)
         end
@@ -689,7 +713,8 @@ defmodule Opus.FormulaHandler do
     # re-injects these, so a guest cannot claim another chain's root.
     lineage = %{
       parent_execution_id: opts[:parent_execution_id],
-      root_execution_id: opts[:root_execution_id] || opts[:parent_execution_id]
+      root_execution_id: opts[:root_execution_id] || opts[:parent_execution_id],
+      attempt: opts[:attempt]
     }
 
     Opus.Host.tool_call(tool, ctx, args, authority, guest_fn: guest_fn, lineage: lineage)
@@ -984,15 +1009,18 @@ defmodule Opus.FormulaHandler do
           :untrusted -> [origin: "guest"]
         end
 
-      # Numbered by the stream these events are addressed to, not by this
-      # formula: a nested formula shares the root's id, so a per-formula
-      # counter made two producers emit the same sequence into one buffer and
-      # an SSE reconnect silently dropped the overlap.
-      seq = Opus.ExecutionEventBuffer.Sequence.next(execution_id)
       data = Opus.SecretMasker.mask(data, secrets)
-      Opus.ExecutionEventBuffer.push(execution_id, data, seq, ctx, origin_opts)
-      Opus.Telemetry.formula_emit(execution_id, seq)
-      safe_encode(%{"ok" => true, "sequence" => seq})
+
+      # Numbered under the root stream's last durable event, shared by
+      # every emitter under the root.
+      case Opus.ExecutionEventBuffer.push(execution_id, data, ctx, origin_opts) do
+        {:ok, seq} ->
+          Opus.Telemetry.formula_emit(execution_id, seq)
+          safe_encode(%{"ok" => true, "sequence" => seq})
+
+        {:error, :missing_athanor} ->
+          encode_error(:dispatch_error, "emit event could not be routed")
+      end
     else
       {:error, :event_too_large} ->
         encode_error(:resource_limit, "emit event exceeds the node's request size limit")
@@ -1011,14 +1039,8 @@ defmodule Opus.FormulaHandler do
   defp check_emit_size(json_event, max_size) when byte_size(json_event) <= max_size, do: :ok
   defp check_emit_size(_json_event, _max_size), do: {:error, :event_too_large}
 
-  # D6's other half. The bucket is per execution and comes from platform
-  # config, NOT the node's consented rate_limit: that one is sized for
-  # invocations, while an agent emits a text_delta per token — reusing it
-  # would break streaming on day one.
+  # Use the platform per-execution emit budget, separately from the consented invocation rate limit.
   defp check_emit_rate(execution_id, ctx) do
-    # A constant, not config: the :emit_rate_limit key was documented by
-    # nothing, set by nothing, and readable only here. A knob that only
-    # looks turnable is worse than a number.
     limit = %{requests: 3000, window: "1m"}
 
     case Opus.RateLimiter.check(ctx.athanor_id, "emit:" <> execution_id, %{
@@ -1030,10 +1052,7 @@ defmodule Opus.FormulaHandler do
       {:error, :rate_limited, _retry_after} ->
         {:error, :emit_rate_limited}
 
-      # The limiter's third answer (`Opus.RateLimiter.check/3`'s spec names
-      # it): an athanor-less context cannot be metered. Unmatched, it was a
-      # CaseClauseError raised inside the emit host function — the executor
-      # and the egress gate both handle it, and both deny.
+      # Refuse emission when the context cannot be metered.
       {:error, :missing_tenant} ->
         {:error, :emit_rate_limited}
     end
@@ -1077,10 +1096,7 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  # Checked before `Jason.decode/1` sees the string. Only `emit` and the
-  # storage import had this: the guest's 64 MiB linear memory was the sole
-  # bound on what one `invoke.call`, `invoke.spawn` or await list could make
-  # the host parse, times the concurrency cap.
+  # Enforce the request size cap before JSON decoding.
   defp envelope_bound(json_string, %Limits{} = limits) do
     case Opus.EdgeGuard.check_envelope_size(limits, json_string) do
       :ok ->
@@ -1122,21 +1138,21 @@ defmodule Opus.FormulaHandler do
   end
 
   defp maybe_emit_setup_event(target_id, remediation, message, ctx) do
-    seq = Opus.ExecutionEventBuffer.Sequence.next(target_id)
+    _ =
+      Opus.ExecutionEventBuffer.push(
+        target_id,
+        %{
+          "kind" => "setup_required",
+          "component_ref" => remediation["component_ref"],
+          "issues" => remediation["issues"],
+          "setup_command" => remediation["setup_command"],
+          "message" => message
+        },
+        ctx,
+        origin: "host"
+      )
 
-    Opus.ExecutionEventBuffer.push(
-      target_id,
-      %{
-        "kind" => "setup_required",
-        "component_ref" => remediation["component_ref"],
-        "issues" => remediation["issues"],
-        "setup_command" => remediation["setup_command"],
-        "message" => message
-      },
-      seq,
-      ctx,
-      origin: "host"
-    )
+    :ok
   end
 
   defp build_await_response(task_id, json_result, metadata) do
@@ -1251,7 +1267,7 @@ defmodule Opus.FormulaHandler do
 
   defp stringify_reason(reason), do: render_reason(reason)
 
-  # Guest-facing reason text for terms below the ToolError vocabulary: a
+  # Guest-facing reason text for terms below the `Cyfr.Ops.Error` vocabulary: a
   # crafted binary passes, a bare reason atom names itself verbatim (the
   # "edge_only"/"depth_cap" class of transition denials is a token guests
   # branch on), and anything structured renders through the shared seam or
@@ -1262,7 +1278,7 @@ defmodule Opus.FormulaHandler do
   defp guest_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp guest_reason(reason) do
-    case Emissary.MCP.ToolError.render(reason) do
+    case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[FormulaHandler] unrenderable guest reason: #{inspect(reason)}")
         "the call failed"
@@ -1276,15 +1292,12 @@ defmodule Opus.FormulaHandler do
   The guest's view of a refusal: the same sentence the wire and the console
   render, and never an internal term.
 
-  The same `cond` `Emissary.MCP.Router.format_error_reason/1` applies, for the
-  same reason — a typed reason has one spelling wherever it surfaces. The
-  catch-all used to `inspect/1`, so a guest formula could read an Elixir map,
-  struct or exit tuple, with whatever the reason happened to be carrying.
+  Render recognized typed errors consistently; unknown internal terms must not reach the guest.
   """
   @spec render_reason(term()) :: String.t()
   def render_reason(reason) do
     # `nil` means the term is internal — logged where it was produced, never
     # handed to the guest.
-    Emissary.MCP.ToolError.render(reason) || "The call failed."
+    Cyfr.Ops.Error.render(reason) || "The call failed."
   end
 end

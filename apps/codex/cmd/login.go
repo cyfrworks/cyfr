@@ -12,6 +12,7 @@ import (
 
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/mcp"
+	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
 	"github.com/spf13/cobra"
@@ -76,8 +77,8 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 		}
 
 		// Start device flow
-		result, err := client.CallTool(cmd.Context(), "session", map[string]any{
-			"action":   "device_init",
+		result, err := client.CallTool(cmd.Context(), ops.Session, map[string]any{
+			"action":   ops.SessionDeviceInit,
 			"provider": provider,
 		})
 		if err != nil {
@@ -113,9 +114,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 			return err
 		}
 
-		// Save the session token from the auth response — under the
-		// modern `token` field (SetToken also clears the legacy
-		// `session_id` spelling this flow used to re-create).
+		// Save the session token under `token` and clear the `session_id` alias.
 		sessionID, _ := pollResult["session_token"].(string)
 		if sessionID == "" {
 			sessionID = client.SessionID
@@ -180,13 +179,10 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 				return errors.New("Policy acceptance is required. Run `cyfr login` to try again.")
 			}
 
-			// Re-probe to mint push tokens now that the gate passes.
-			// MCP `registry.probe` writes credentials to the local
-			// CredentialStore for authenticated callers, so a single
-			// call replaces what session.device_poll's internal probe
-			// would have done if acceptance had been current.
-			probeResult, perr := client.CallTool(cmd.Context(), "registry", map[string]any{
-				"action":       "probe",
+			// Re-probe after policy acceptance to mint push tokens and store them
+			// in the local CredentialStore.
+			probeResult, perr := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+				"action":       ops.RegistryProbe,
 				"provider":     provider,
 				"access_token": accessToken,
 			})
@@ -261,12 +257,8 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 	},
 }
 
-// pollDeviceAuth polls session.device_poll every interval until the flow
-// completes (its result is returned), the device code expires or is denied,
-// the deadline passes, or ctx is cancelled. Transient errors — network blips
-// — keep the loop polling; a cancelled context ends it immediately. Ctrl-C
-// used to be read as one more transient error, spinning the loop until the
-// deadline.
+// pollDeviceAuth polls until completion, expiry, denial, deadline or
+// context cancellation. Transient network errors are retried.
 func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCode string, interval time.Duration, deadline time.Time, expiresIn float64) (map[string]any, error) {
 	for {
 		if time.Now().After(deadline) {
@@ -279,8 +271,8 @@ func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCod
 		case <-time.After(interval):
 		}
 
-		pollResult, err := client.CallTool(ctx, "session", map[string]any{
-			"action":      "device_poll",
+		pollResult, err := client.CallTool(ctx, ops.Session, map[string]any{
+			"action":      ops.SessionDevicePoll,
 			"device_code": deviceCode,
 			"provider":    provider,
 		})
@@ -366,7 +358,7 @@ func promptAndClaimPersonalNamespace(ctx context.Context, client *mcp.Client, pr
 			"access_token": accessToken,
 		}
 
-		result, err := client.CallTool(ctx, "registry", args)
+		result, err := client.CallTool(ctx, ops.Registry, args)
 		if err == nil {
 			if slug, ok := result["slug"].(string); ok {
 				fmt.Printf("Claimed personal namespace: %s\n", slug)
@@ -454,8 +446,8 @@ func runLegalAcceptInteractive(ctx context.Context, client *mcp.Client, provider
 		return false
 	}
 
-	verRaw, err := client.CallTool(ctx, "registry", map[string]any{
-		"action": "legal_version",
+	verRaw, err := client.CallTool(ctx, ops.Registry, map[string]any{
+		"action": ops.RegistryLegalVersion,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Couldn't fetch current policy version: %v\n", err)
@@ -490,8 +482,8 @@ func runLegalAcceptInteractive(ctx context.Context, client *mcp.Client, provider
 			continue
 		}
 
-		body, err := client.CallTool(ctx, "registry", map[string]any{
-			"action": "legal_page",
+		body, err := client.CallTool(ctx, ops.Registry, map[string]any{
+			"action": ops.RegistryLegalPage,
 			"name":   name,
 		})
 		if err != nil {
@@ -522,8 +514,8 @@ func runLegalAcceptInteractive(ctx context.Context, client *mcp.Client, provider
 		}
 	}
 
-	_, err = client.CallTool(ctx, "registry", map[string]any{
-		"action":         "legal_accept",
+	_, err = client.CallTool(ctx, ops.Registry, map[string]any{
+		"action":         ops.RegistryLegalAccept,
 		"provider":       provider,
 		"access_token":   accessToken,
 		"policy_version": policyVersion,
@@ -605,8 +597,8 @@ var logoutCmd = &cobra.Command{
 			}
 		}
 
-		result, err := client.CallTool(cmd.Context(), "session", map[string]any{
-			"action": "logout",
+		result, err := client.CallTool(cmd.Context(), ops.Session, map[string]any{
+			"action": ops.SessionLogout,
 		})
 		if err != nil {
 			// Session was already gone on the server — that's fine

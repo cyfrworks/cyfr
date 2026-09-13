@@ -37,9 +37,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   alias Sanctum.Auth.Identity
   alias Sanctum.{Context, Session}
 
-  # The roster this module knows how to speak to. `@provider_urls` below is
-  # keyed by the same names; a provider in one and not the other is the
-  # drift `providers/0` used to invite by spelling its own list.
+  # Supported providers; @provider_urls must have the same keys.
   @known_providers ~w(github google)
 
   # Device-flow endpoints — per-provider URLs and scopes.
@@ -61,23 +59,9 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Default polling configuration
   @default_poll_interval 5
 
-  # Anonymous-surface budgets (checked before any provider round-trip;
-  # rationale at check_poll_budget/2 and check_init_budget/1).
-  #
-  # The invariant every number here keeps: THE GLOBAL CEILING SITS ABOVE
-  # WHAT ONE CLIENT IS ALLOWED TO SEND. It used to be inverted — a 60/min
-  # server-wide `device_init` ceiling under a 120/min per-IP transport
-  # budget (`EmissaryWeb.Plugs.MCPRateLimit`) — so one unauthenticated
-  # address could exhaust it without ever tripping the limiter and answer
-  # "Too many sign-in attempts" to every user on the server. The console
-  # was worse: `/live` is handled by the endpoint before the router, so it
-  # passes no limiter at all and a per-socket debounce is not a bound.
-  #
-  # `Cyfr.RateLimiter` is ETS and node-local, like every other limiter
-  # here, so on a multi-node deployment each of these is a per-node
-  # budget and the effective ceilings multiply by the node count. That is
-  # the same property the transport limiter has; it is recorded, not
-  # relied on.
+  # Check anonymous-surface budgets before contacting providers. Global
+  # ceilings must exceed individual-client budgets. Counters are node-local,
+  # so deployment-wide capacity scales with the number of nodes.
   @poll_per_code_max 30
   @poll_per_ip_max 90
   @poll_global_max 1_800
@@ -106,10 +90,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   config — declaring it would publish a module-swap hook as a supported
   setting. Same shape as `Sanctum.Consent.Source.impl/0`.
 
-  Every caller that starts or polls a flow goes through this, so a suite
-  that swaps it covers all of them; a caller that names this module
-  directly is one the fake cannot reach, which is what left the registry
-  appeal flow untestable while sign-in was covered.
+  Resolves the configured device-flow implementation for start and poll calls.
   """
   @spec impl() :: module()
   def impl, do: Application.get_env(:cyfr, :device_flow, __MODULE__)
@@ -131,7 +112,6 @@ defmodule Sanctum.Auth.DeviceFlow do
 
       {:ok, info} = DeviceFlow.init_device_flow("github", "203.0.113.7")
       # info contains: device_code, user_code, verification_uri, expires_in, interval
-
   """
   @spec init_device_flow(provider(), String.t() | nil) ::
           {:ok, device_code_response()} | {:error, term()}
@@ -173,24 +153,16 @@ defmodule Sanctum.Auth.DeviceFlow do
   Returns one of:
   - `{:ok, %{status: "pending"}}` - User hasn't authorized yet
   - `{:ok, %{status: "complete", session_token: token, user: user_info,
-      needs_personal_namespace: bool, suggested_username: string | nil,
-      needs_policy_acceptance: true (optional), required_policy_version: string | nil,
-      access_token: string (optional), probe_error: string (optional),
-      reauthenticate: true (optional),
-      credential_store_warnings: [slug] (optional)}}` - Authorized.
-    `needs_personal_namespace: true` (first sign-in, no namespace on
-    cyfr.run yet) and `needs_policy_acceptance: true` are the two cases that
-    carry `access_token`, once, so the CLI can forward it to
-    `registry.claim_personal` / `registry.legal_accept`; consumer discards
-    it after the call. `reauthenticate: true` (with no `session_token`): the
-    IdP token was refused; the CLI restarts the flow. `probe_error` without
-    `reauthenticate`: a returning person is signed in but the cyfr.run probe
-    failed transiently — push tokens refresh on the next probe.
-    `credential_store_warnings` lists namespaces whose push tokens were
-    issued but not cached locally.
-  - `{:ok, %{status: "registry_unavailable", message: string}}` - A
-    first-time person and cyfr.run could not be reached: nothing was set
-    up, no session; run `cyfr login` again.
+      needs_personal_namespace: false, probe_error: string (optional),
+      credential_store_warnings: [slug] (optional)}}` - Authorized and
+    signed in. `probe_error` says the cyfr.run courtesy probe did not
+    answer (`probe_failed`, `invalid_access_token`,
+    `policy_acceptance_required`, `namespace_conflict`) — the session is
+    good; `cyfr whoami` re-probes, and publishing asks for whatever is
+    still owed. `credential_store_warnings` lists namespaces whose push
+    tokens were issued but not cached locally. `needs_personal_namespace`
+    is always false: a publisher namespace is claimed at first publish,
+    never at the door.
   - `{:ok, %{status: "expired"}}` - Device code expired
   - `{:ok, %{status: "denied"}}` - User denied authorization, or the door
     refused them
@@ -205,7 +177,6 @@ defmodule Sanctum.Auth.DeviceFlow do
         {:ok, %{status: "expired"}} ->
           # Need to restart flow
       end
-
   """
   @spec poll_for_session(provider(), String.t(), String.t() | nil) ::
           {:ok, map()} | {:error, term()}
@@ -538,58 +509,37 @@ defmodule Sanctum.Auth.DeviceFlow do
   # The door runs before the session exists and before cyfr.run hears of the
   # identity: a refused sign-in leaves no row and makes no call.
   defp admit(user_info, provider) do
-    user_id = Identity.builtin_user_id(provider, user_info.id)
-    user_info = Map.merge(user_info, %{id: user_id, provider: provider})
+    identity = Identity.builtin_key(provider, user_info.id)
+    user_info = Map.merge(user_info, %{id: identity, provider: provider})
 
-    with {:ok, verdict} <- Sanctum.Door.admit_identity(user_id, user_info),
+    with {:ok, verdict} <- Sanctum.Door.admit_identity(identity, user_info),
          {:ok, user} <- Sanctum.SignIn.admitted(user_info, verdict) do
       ctx =
         Context.build(
-          user_id: user_id,
+          user_id: user.id,
           email: user_info.email,
           provider: to_string(provider),
-          # Start athanor-less; resolve_into/2 fills the athanor from memberships.
+          # Start athanor-less; the establish recipe fills the athanor from
+          # memberships (`Sanctum.Caller.establish/2`).
           athanor_id: nil,
-          permissions: [:*]
+          permissions: Context.person_permissions()
         )
 
       {:ok, user, ctx}
     end
   end
 
-  # What follows the door. The sign-in outcome travels intact on the
-  # result — surfaces branch on it, never on a re-derived flag; `wire/1`
-  # flattens it for the CLI. A session is minted only for an outcome the
-  # person can act on with one; the IdP token travels only for the claim
-  # or the policy acceptance it is needed for.
+  # What follows the door. The sign-in report travels intact on the result
+  # — surfaces read it, never a re-derived flag; `wire/1` flattens it for
+  # the CLI. The IdP token never travels: nothing after the door needs it.
   defp complete(user, ctx, user_info, provider, access_token) do
     base = %{
       status: "complete",
       user: %{id: user_info.id, email: user_info.email, name: user_info.name}
     }
 
-    case Sanctum.SignIn.complete(user, provider, access_token) do
-      {:proceed, user, report} ->
-        with_session(base, %{ctx | namespace: user.namespace}, %{outcome: {:proceed, report}})
-
-      {:needs_legal, version} ->
-        with_session(base, ctx, %{
-          outcome: {:needs_legal, version},
-          access_token: access_token
-        })
-
-      {:needs_claim, suggested} ->
-        with_session(base, ctx, %{
-          outcome: {:needs_claim, suggested},
-          access_token: access_token
-        })
-
-      {:reauthenticate, reason} ->
-        Map.put(base, :outcome, {:reauthenticate, reason})
-
-      {:unavailable, reason} ->
-        Map.put(base, :outcome, {:unavailable, reason})
-    end
+    {:proceed, user, report} = Sanctum.SignIn.complete(user, provider, access_token)
+    with_session(base, %{ctx | namespace: user.namespace}, %{outcome: {:proceed, report}})
   end
 
   @doc """
@@ -611,35 +561,8 @@ defmodule Sanctum.Auth.DeviceFlow do
         _ -> base
       end
 
-    case outcome do
-      {:proceed, report} ->
-        base |> Map.put(:needs_personal_namespace, false) |> put_report(report)
-
-      {:needs_legal, version} ->
-        Map.merge(base, %{
-          needs_policy_acceptance: true,
-          required_policy_version: version,
-          needs_personal_namespace: false,
-          access_token: result[:access_token]
-        })
-
-      {:needs_claim, suggested} ->
-        Map.merge(base, %{
-          needs_personal_namespace: true,
-          suggested_username: suggested,
-          access_token: result[:access_token]
-        })
-
-      {:reauthenticate, _reason} ->
-        Map.merge(base, %{
-          reauthenticate: true,
-          probe_error: "invalid_access_token",
-          needs_personal_namespace: true
-        })
-
-      {:unavailable, reason} ->
-        %{status: "registry_unavailable", message: unavailable_message(reason)}
-    end
+    {:proceed, report} = outcome
+    base |> Map.put(:needs_personal_namespace, false) |> put_report(report)
   end
 
   def wire(result), do: result
@@ -685,24 +608,11 @@ defmodule Sanctum.Auth.DeviceFlow do
     case probe do
       :failed -> Map.put(fields, :probe_error, "probe_failed")
       :invalid_token -> Map.put(fields, :probe_error, "invalid_access_token")
+      :legal_required -> Map.put(fields, :probe_error, "policy_acceptance_required")
+      :namespace_conflict -> Map.put(fields, :probe_error, "namespace_conflict")
       _ -> fields
     end
   end
-
-  defp unavailable_message(:no_access_token),
-    do:
-      "Your identity provider returned no access token, so cyfr.run could not be asked " <>
-        "for your namespace. Nothing was set up. Run `cyfr login` again."
-
-  defp unavailable_message(:namespace_conflict),
-    do:
-      "cyfr.run names you by a namespace another identity on this server already holds. " <>
-        "Ask the operator to sort it out."
-
-  defp unavailable_message(_),
-    do:
-      "cyfr.run could not be reached to find or claim your namespace. Nothing was set up. " <>
-        "Run `cyfr login` again in a moment."
 
   # ============================================================================
   # Configuration
@@ -744,11 +654,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   @doc """
   The providers this server can actually start a flow with, as atoms.
 
-  The sign-in page had its own copy of this test, and the two had already
-  come apart: this module treats Google as usable on a client id alone
-  while the page also required the secret — which Google's token endpoint
-  requires, so the page was right and a flow started from anywhere else
-  would have failed at the token exchange.
+  Google device flow requires both the client id and token-exchange secret.
   """
   @spec configured_providers() :: [atom()]
   def configured_providers, do: Enum.filter([:github, :google], &configured?/1)
@@ -766,12 +672,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_), do: false
 
-  # The one gate every flow verb passes: a known provider, with credentials
-  # this server can actually present. It was written out three times as a
-  # bare `get_client_id` nil-check, which had no clause for a name this
-  # module does not know — and `session_tool`'s `device_init` takes its
-  # `provider` argument straight from the caller, so an unknown one was a
-  # FunctionClauseError out of an MCP tool rather than a refusal.
+  # Require a known provider with the credentials needed for token exchange.
   defp usable(provider) do
     provider = normalize_provider(provider)
 

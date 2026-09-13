@@ -5,10 +5,8 @@ defmodule Emissary.MCP.Subscriptions do
   @moduledoc """
   `subscriptions/listen` — the one long-lived stream this revision has.
 
-  A client opts into specific change notifications; the server acknowledges the
-  subset it can actually honour and then pushes those, and only those, until one
-  side closes. It replaces both the standalone `GET` stream and
-  `resources/subscribe`.
+  Clients request specific change notifications. The server acknowledges
+  the supported subset and streams those events until either side closes.
 
   ## Only what can be delivered is acknowledged
 
@@ -28,10 +26,8 @@ defmodule Emissary.MCP.Subscriptions do
 
   ## Tenancy
 
-  Subscriptions ride tenant-scoped PubSub topics, so a listener receives events
-  for its own athanor and no other. That is a property of
-  `Sanctum.PubSub.topic/2` rather than of this module, which is why the context
-  is required to open a stream at all.
+  Subscriptions use tenant-scoped `Sanctum.PubSub.topic/2` topics.
+  Opening a stream requires a context identifying the subscriber’s athanor.
   """
 
   alias Sanctum.Context

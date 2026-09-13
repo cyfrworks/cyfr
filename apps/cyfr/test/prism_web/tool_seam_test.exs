@@ -3,19 +3,17 @@
 
 defmodule PrismWeb.ToolSeamTest do
   @moduledoc """
-  `PrismWeb.MCPHelpers` is the console's seam onto the MCP tool surface —
-  one place that splits `"tool/action"`, one `error_message/1` vocabulary.
-
-  Eight console call sites reached past it and spelled
-  `ToolRegistry.call_external/3` themselves, all for the same reason:
-  `call_tool/3` wanted a socket, and work handed to `Aqua.TaskSupervisor`
-  has a context and no socket. The seam takes a context now, so the reason
-  is gone — and this test is what keeps the sites from coming back.
+  `PrismWeb.Ops` is the console's seam onto the operation catalog — one
+  place that splits `"tool/action"`, one `error_message/1` vocabulary.
+  `call_tool/3` takes a context, so work handed to `Aqua.TaskSupervisor`
+  has no reason to reach past it; this test keeps every other console
+  module from calling the catalog directly.
   """
 
   use ExUnit.Case, async: true
 
-  @seam "apps/cyfr/lib/prism_web/mcp_helpers.ex"
+  @seam "apps/cyfr/lib/prism_web/ops.ex"
+  @direct_call ~r/\bCatalog\.call_external\(/
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -23,22 +21,22 @@ defmodule PrismWeb.ToolSeamTest do
     offenders =
       [Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")]
       |> Enum.flat_map(&Path.wildcard/1)
-      |> Enum.reject(&String.ends_with?(&1, "mcp_helpers.ex"))
+      |> Enum.reject(&String.ends_with?(&1, "/ops.ex"))
       |> Enum.flat_map(fn path ->
         path
         |> Cyfr.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.with_index(1)
         |> Enum.filter(fn {line, _n} ->
-          String.contains?(line, "ToolRegistry.call_external")
+          Regex.match?(@direct_call, line)
         end)
         |> Enum.map(fn {_line, n} -> "#{Path.relative_to(path, root())}:#{n}" end)
       end)
 
     assert offenders == [],
            """
-           These console modules call the tool registry directly instead of
-           `PrismWeb.MCPHelpers.call_tool/3`:
+           These console modules call the catalog directly instead of
+           `PrismWeb.Ops.call_tool/3`:
 
            #{Enum.map_join(offenders, "\n", &"  #{&1}")}
 
@@ -58,10 +56,9 @@ defmodule PrismWeb.ToolSeamTest do
     # invalidation, not persistence.
     {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Arca.Cache.delete_match"},
     # The one transcription of a sign-in outcome to a browser response —
-    # it mints and retires the person's OWN session, before any console
-    # exists for them. Door placement is pinned by Sanctum.DoorPlacementTest.
+    # it mints the person's OWN session, before any console exists for
+    # them. Door placement is pinned by Sanctum.DoorPlacementTest.
     {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.create"},
-    {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.destroy"},
     # Signing out: the same act as above, from the browser's own form post.
     # A person retiring their OWN session, with no agent equivalent.
     {"apps/cyfr/lib/prism_web/controllers/session_controller.ex", "Sanctum.Session.destroy"},
@@ -76,18 +73,7 @@ defmodule PrismWeb.ToolSeamTest do
     # rather than a caller of its own tool: the LiveView already holds an
     # authenticated member context, and the registry gate exists for
     # surfaces that do not. Same functions, two doors —
-    # `PrismWeb.MCPHelpers` states the rule.
-    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex", "Arca.ConversationStorage.create"},
-    {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.ConversationStorage.delete"},
-    # Following is the person's own sidebar and notify roster — the rows
-    # the `conversation.follow`/`unfollow` verbs write for a headless
-    # client, written directly for the same reason as create/delete above.
-    {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.TopicSubscriptionStorage.follow"},
-    {"apps/cyfr/lib/prism_web/live/chat_live.ex", "Arca.TopicSubscriptionStorage.unfollow"},
-    # Withdrawing an approval the person was shown. The grant belongs to the
-    # click that made it; the runner is told, not asked.
-    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex",
-     "Aqua.ConversationRunner.revoke_grant"},
+    # `PrismWeb.Ops` states the rule.
     # Attachments a person drags into their own chat, and the same call
     # undone when the message they belonged to is not sent. Storage-capped by
     # `Sanctum.Tenancy.Caps.check_storage/2` like every other tenant write.
@@ -116,11 +102,8 @@ defmodule PrismWeb.ToolSeamTest do
   # Any `Module.function(` call, whatever the module is called locally.
   @any_call ~r/\b([A-Z]\w*(?:\.[A-Z]\w+)*)\.([a-z_]\w*[!?]?)\(/
 
-  # `alias A.B.C`, `alias A.B.C, as: D`, `alias A.{B, C}` — the local name a
-  # module goes by in this file. Without this the guard anchored on literal
-  # roots, so one `alias Arca.ConversationStorage, as: Conversations` hid
-  # every call through it, and the roster read as two entries when it was
-  # really more.
+  # Resolve plain, renamed, and braced aliases before matching
+  # module dependencies.
   defp aliases(source) do
     simple =
       ~r/^\s*alias\s+([A-Z][\w.]*?)(?:,\s*as:\s*([A-Z]\w*))?\s*$/m
@@ -213,18 +196,49 @@ defmodule PrismWeb.ToolSeamTest do
            "`@console_owned` names calls that are gone: #{inspect(Enum.sort(stale))}"
   end
 
+  # The chat's verbs go through the tool surface: the same `conversation`
+  # actions a headless client calls, from the page.
+  @chat_verbs %{
+    "apps/cyfr/lib/prism_web/live/conversation_pane_live.ex" =>
+      ~w(create send stop approve decline revoke_grant restart_for_consent),
+    "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(follow unfollow delete)
+  }
+
+  test "the chat's turn writes go through the conversation tool" do
+    for {rel, verbs} <- @chat_verbs, verb <- verbs do
+      source = Cyfr.Test.SourceTree.read(Path.join(root(), rel))
+
+      assert source =~ ~s(call_tool(#{if rel =~ "chat_live", do: "focus", else: ""}) or
+               source =~ "conversation/#{verb}",
+             "#{rel} does not call conversation/#{verb} through PrismWeb.Ops"
+
+      assert source =~ "\"conversation/#{verb}\"",
+             "#{rel} does not name conversation/#{verb}"
+    end
+
+    pane =
+      Cyfr.Test.SourceTree.read(
+        Path.join(root(), "apps/cyfr/lib/prism_web/live/conversation_pane_live.ex")
+      )
+
+    refute pane =~ "RoomExcerpt.read",
+           "the pane passes the room reference, never the excerpt text"
+
+    refute pane =~ "ConversationRunner.send_message"
+  end
+
   test "call_tool splits tool/action for both shapes" do
     ctx = Sanctum.TestContext.local()
 
     # An unknown tool is refused by the registry rather than raising, which
     # is enough to show the name/action split happened before dispatch.
-    assert {:error, _} = PrismWeb.MCPHelpers.call_tool(ctx, "no-such-tool/list", %{})
+    assert {:error, _} = PrismWeb.Ops.call_tool(ctx, "no-such-tool/list", %{})
 
     socket = %Phoenix.LiveView.Socket{assigns: %{context: ctx, __changed__: %{}}}
-    assert {:error, _} = PrismWeb.MCPHelpers.call_tool(socket, "no-such-tool/list", %{})
+    assert {:error, _} = PrismWeb.Ops.call_tool(socket, "no-such-tool/list", %{})
 
     assert {:error, :no_context} =
-             PrismWeb.MCPHelpers.call_tool(
+             PrismWeb.Ops.call_tool(
                %Phoenix.LiveView.Socket{assigns: %{__changed__: %{}}},
                "component/list",
                %{}

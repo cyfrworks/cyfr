@@ -16,7 +16,12 @@ defmodule Sanctum.Consent.BlobBuilder do
   empty ask — deny-all resources under type-default limits.
 
   The caller supplies a `vault_fn` deciding which vault resource (if any)
-  rides each node; commit binds the operator's chosen entries.
+  rides each node: a bound entry (`entry_id`, `binding_digest`,
+  `projection`) or a selection (`via` a profile of that node). An
+  optional `opts[:edge_vault_fn]` `(from, dep, row, manifest -> vault | nil)`
+  overrides the vault on one dependency edge; `nil` keeps the node's
+  default. Commit binds the operator's chosen entries and selections;
+  bootstrap selects on each vouched edge into a shipped dependency.
   """
 
   alias Compendium.Manifest.Caps
@@ -25,19 +30,25 @@ defmodule Sanctum.Consent.BlobBuilder do
   @type vault_fn ::
           (node_key :: String.t(), row :: map(), manifest :: map() -> map() | nil)
 
+  @type edge_vault_fn ::
+          (from :: String.t(), dep :: String.t(), row :: map(), manifest :: map() ->
+             map() | nil)
+
   @doc """
   Build the node map for a blob. `graph` is the activation graph
   (node ref → release digest); `source_ref` gets the `@ingress` edge.
   `opts[:ingress_extras]` merges extra resources (tool-server grants)
-  into that edge alone.
+  into that edge alone. `opts[:edge_vault_fn]` overrides one dep edge's
+  vault; `nil` keeps the node's default.
   """
   @spec build(Sanctum.Context.t(), map(), String.t(), vault_fn(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def build(ctx, graph, source_ref, vault_fn, opts \\ []) do
     extras = Keyword.get(opts, :ingress_extras, %{})
+    edge_vault_fn = Keyword.get(opts, :edge_vault_fn)
 
     Enum.reduce_while(Map.keys(graph), {:ok, %{}}, fn node_key, {:ok, acc} ->
-      case build_node(ctx, node_key, source_ref, vault_fn, extras) do
+      case build_node(ctx, graph, node_key, source_ref, vault_fn, edge_vault_fn, extras) do
         {:ok, node} -> {:cont, {:ok, Map.put(acc, node_key, node)}}
         {:error, reason} -> {:halt, {:error, {node_key, reason}}}
       end
@@ -47,12 +58,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   @doc """
   Assemble and JCS-encode the final blob from built nodes.
 
-  A dep edge whose key names no node in the graph answers
-  `{:error, {:dangling_dep, key}}` — the shape every caller here already
-  handles. It used to be a `nil.resources` UndefinedFunctionError, which
-  `Consent.Bootstrap.run_components/2` does not catch (it takes typed skips
-  and refusals), so provisioning crashed instead of recording a skip and
-  `Commit.build_blob/2` answered a 500 rather than a refusal.
+  Returns `{:error, {:dangling_dep, key}}` when a dependency edge names no graph node.
   """
   @spec encode(map()) :: {:ok, binary()} | {:error, term()}
   def encode(nodes) do
@@ -69,15 +75,19 @@ defmodule Sanctum.Consent.BlobBuilder do
             {"@ingress" = key, resources} ->
               {key, finalize_edge(resources)}
 
-            {dep_key, %{"__dep__" => dep_key}} ->
+            {dep_key, %{"__dep__" => dep_key} = placeholder} ->
               # A dep key the activation graph does not carry is a
               # construction bug, not a `nil.resources` UndefinedFunctionError
               # raised out of `Consent.Bootstrap` — whose `run_components/2`
               # catches only typed skips and refusals, so provisioning
               # crashed the whole supervised task instead of recording one.
               case nodes[dep_key] do
-                nil -> throw({:dangling_dep, dep_key})
-                dep -> {dep_key, finalize_edge(dep.resources)}
+                nil ->
+                  throw({:dangling_dep, dep_key})
+
+                dep ->
+                  vault = Map.get(placeholder, "__vault__") || dep.resources["__vault__"]
+                  {dep_key, finalize_edge(Map.put(dep.resources, "__vault__", vault))}
               end
           end)
 
@@ -88,34 +98,49 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   @doc """
-  The derived vault references for `consent_vault_refs`, deduplicated.
-
-  `uniq: true` is over the whole `{entry_id, binding_digest}` pair, while
-  the table's unique index is `(consent_id, vault_entry_id)` — narrower.
-  Those agree only because a consent carries **at most one** vault
-  resource: `Sanctum.Consent.Commit` attaches it to the source node alone,
-  having already refused a second binding, so there is never a second row
-  to collide with. If a `vault_fn` ever binds more than one node, that
-  invariant goes and two nodes sharing an entry under different digests
-  would survive this `uniq` only to violate the index — a data-shape bug
-  reaching the operator as a generic `:database_error`. Dedup on
-  `vault_entry_id` then, and decide which digest wins.
+  The derived vault references for `consent_vault_refs`, deduplicated by
+  `{entry_id, binding_digest}`. Only a bound entry is a reference; a
+  selection names another profile's entry, which that profile's own
+  consent already references.
   """
   @spec vault_refs(map()) :: [%{vault_entry_id: String.t(), binding_digest: String.t()}]
   def vault_refs(nodes) do
-    for {_key, node} <- nodes,
-        vault = node.resources["__vault__"],
-        vault != nil,
+    for {_from, node} <- nodes,
+        vault <- edge_vaults(node, nodes),
+        %{"entry_id" => entry_id, "binding_digest" => digest} <- [vault],
         uniq: true do
-      %{vault_entry_id: vault["entry_id"], binding_digest: vault["binding_digest"]}
+      %{vault_entry_id: entry_id, binding_digest: digest}
     end
   end
+
+  defp edge_vaults(node, nodes) do
+    ingress = node.edges[Sanctum.Authority.Blob.ingress_key()]
+    ingress_vault = if is_map(ingress), do: [ingress["__vault__"]], else: []
+
+    dep_vaults =
+      for {dep_key, %{"__dep__" => _} = placeholder} <- node.edges,
+          dep = nodes[dep_key],
+          is_map(dep) do
+        Map.get(placeholder, "__vault__") || dep.resources["__vault__"]
+      end
+
+    ingress_vault ++ dep_vaults
+  end
+
+  @doc """
+  The dependency refs `from` declares into `graph` — the edges a
+  selection may name.
+  """
+  @spec dep_edges(map(), map(), String.t()) :: [String.t()]
+  def dep_edges(manifest, graph, from)
+      when is_map(manifest) and is_map(graph) and is_binary(from),
+      do: direct_dep_keys(manifest, graph, from)
 
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp build_node(ctx, node_key, source_ref, vault_fn, extras) do
+  defp build_node(ctx, graph, node_key, source_ref, vault_fn, edge_vault_fn, extras) do
     with {:ok, row} <- node_row(ctx, node_key),
          manifest =
            Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest")),
@@ -123,9 +148,13 @@ defmodule Sanctum.Consent.BlobBuilder do
       vault = vault_fn.(node_key, row, manifest)
 
       edges =
-        manifest
-        |> direct_dep_keys(node_key)
-        |> Map.new(fn dep_key -> {dep_key, %{"__dep__" => dep_key}} end)
+        Map.new(direct_dep_keys(manifest, graph, node_key), fn dep_key ->
+          {dep_key,
+           %{
+             "__dep__" => dep_key,
+             "__vault__" => edge_vault(edge_vault_fn, node_key, dep_key, ctx)
+           }}
+        end)
 
       edges =
         if node_key == source_ref do
@@ -145,6 +174,19 @@ defmodule Sanctum.Consent.BlobBuilder do
          resources: Map.put(resources, "__vault__", vault),
          edges: edges
        }}
+    end
+  end
+
+  defp edge_vault(nil, _from, _dep, _ctx), do: nil
+
+  defp edge_vault(edge_vault_fn, from, dep, ctx) do
+    case node_row(ctx, dep) do
+      {:ok, row} ->
+        manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+        edge_vault_fn.(from, dep, row, manifest)
+
+      {:error, _} ->
+        nil
     end
   end
 
@@ -214,13 +256,21 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  defp direct_dep_keys(manifest, node_key) do
+  # The node's dependency edges: every declared dependency, except an
+  # OPTIONAL one the activation does not carry — it is not installed, the
+  # activation attests to what can run, and an edge to nothing would be a
+  # dangling dep. A required dependency always edges: the activation
+  # refused to resolve without it, so it is in the graph.
+  defp direct_dep_keys(manifest, graph, node_key) do
     case Compendium.DependencyResolver.extract_from_manifest(manifest, node_key) do
       {:ok, deps} ->
         deps
         |> Enum.map(fn dep ->
-          Sanctum.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name)
+          {Sanctum.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name),
+           dep.optional == true}
         end)
+        |> Enum.reject(fn {key, optional?} -> optional? and not Map.has_key?(graph, key) end)
+        |> Enum.map(&elem(&1, 0))
         |> Enum.uniq()
         |> Enum.reject(&(&1 == node_key))
 

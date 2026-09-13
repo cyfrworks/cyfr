@@ -129,9 +129,7 @@ defmodule Sanctum.Vault.OAuth do
       {headers, body_params} = apply_auth_style(auth_style, creds, body_params)
       headers = [{"content-type", "application/x-www-form-urlencoded"} | headers]
 
-      # One provider spelling on every event of a refresh: the entry's own
-      # provider_hint — :attempt tagged with the caller's provider argument
-      # while :ok read the hint made one refresh look like two providers.
+      # Use the entry’s provider_hint for every refresh telemetry event.
       emit_telemetry(entry, entry.provider_hint, :attempt)
 
       case http_post(token_url, headers, URI.encode_query(body_params)) do
@@ -314,12 +312,8 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  # One scheme rule, keyed on what the POST carries. A refresh token is a
-  # long-lived credential: it never travels in the clear, door or no door,
-  # and the refusal lands before a socket is ever opened. An authorization
-  # code is single-use and short-lived: a doorless dev server may exchange
-  # it against a local http IdP; a configured door makes https mandatory
-  # for it too. This used to be two independent spellings 60 lines apart.
+  # Refresh-token exchange always requires HTTPS. Authorization-code exchange
+  # allows HTTP only on a server without an auth provider configured.
   defp require_https(url, :refresh_token), do: https_or_refuse(url)
 
   defp require_https(url, :auth_code) do

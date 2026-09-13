@@ -9,10 +9,10 @@ defmodule Compendium.MCP.AquaToolConsentTest do
   use ExUnit.Case, async: false
 
   alias Compendium.MCP.AquaTool, as: Tool
-  alias Emissary.MCP.ToolRegistry
-  alias Emissary.MCP.ToolVisibility
+  alias Cyfr.Ops.Catalog
+  alias Cyfr.Ops.Visibility
 
-  @writes ~w(create update delete reset skill_create skill_update skill_delete)
+  @writes ~w(create update delete reset skill_create skill_update skill_delete skill_reset)
   @reads ~w(list get status skill_list skill_get)
 
   setup do
@@ -54,24 +54,26 @@ defmodule Compendium.MCP.AquaToolConsentTest do
       {"update", %{"name" => "aqua", "content" => "x"}},
       {"create", %{"name" => "sneak", "content" => "x"}},
       {"delete", %{"name" => "aqua"}},
-      {"skill_delete", %{"name" => "capability-acquisition"}}
+      {"reset", %{"name" => "aqua"}},
+      {"skill_delete", %{"name" => "capability-acquisition"}},
+      {"skill_reset", %{"name" => "capability-acquisition"}}
     ]
 
     for {action, args} <- calls do
       assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               ToolRegistry.call_external("aqua", star, Map.put(args, "action", action)),
+               Catalog.call_external("aqua", star, Map.put(args, "action", action)),
              "aqua.#{action} answered a standing credential"
     end
 
     # The reads stay open to the key — a turn resolves its soul and its
     # scrolls through them.
     assert {:ok, %{skills: _}} =
-             ToolRegistry.call_external("aqua", star, %{"action" => "skill_list"})
+             Catalog.call_external("aqua", star, %{"action" => "skill_list"})
 
     # Discovery agrees with dispatch: the key is shown the reads alone.
     [aqua] =
-      ToolRegistry.list_tools()
-      |> ToolVisibility.filter_for_context(star)
+      Catalog.list_tools()
+      |> Visibility.filter_for_context(star)
       |> Enum.filter(&(&1["name"] == "aqua"))
 
     shown = get_in(aqua, ["inputSchema", "properties", "action", "enum"])

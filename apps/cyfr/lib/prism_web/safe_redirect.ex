@@ -5,11 +5,8 @@ defmodule PrismWeb.SafeRedirect do
   @moduledoc """
   Single source of truth for the post-login landing redirect.
 
-  The landing target is the console root — never user input — and every
-  gate that finishes the login flow issues it through this helper so the
-  flows can't drift. It lives with the console (its only callers): a
-  prism_web module naming EmissaryWeb was the transport's one back-edge
-  from the console, and Cyfr.WebDirectionTest holds that direction closed.
+  Redirects completed console sign-in flows to the fixed console root.
+  The destination is never taken from user input.
   """
 
   import Phoenix.Controller, only: [redirect: 2]

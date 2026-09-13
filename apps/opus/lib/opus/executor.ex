@@ -67,7 +67,20 @@ defmodule Opus.Executor do
   @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def run(%Context{} = ctx, reference, input, opts \\ [])
       when is_binary(reference) and is_map(input) do
-    # Ensure request_id exists — MCP callers already have one from ToolRegistry,
+    # Every road into the engine — root, child, cron, webhook — passes here,
+    # so a boot that lost the control plane admits nothing.
+    case Cyfr.ControlPlane.assert_owner() do
+      :ok ->
+        admitted_run(ctx, reference, input, opts)
+
+      {:error, :control_plane_lost} ->
+        {:error,
+         "control plane ownership lost; execution refused until this node reclaims the database"}
+    end
+  end
+
+  defp admitted_run(ctx, reference, input, opts) do
+    # Ensure request_id exists — MCP callers already have one from the catalog,
     # but direct callers (tincture invoke, cron, etc.) may not.
     ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Cyfr.UUID7.request_id()}
 
@@ -145,13 +158,32 @@ defmodule Opus.Executor do
       root_execution_id: opts[:root_execution_id],
       # Set by `Opus.Chain.run_root/5` only: a child walks its parent's
       # authority and roots no profile of its own, so it records none.
-      profile_id: opts[:profile_id]
+      profile_id: opts[:profile_id],
+      # The class the execution's payloads are kept under; a turn's own
+      # dispatches name `chat_step`, everything else derives its own.
+      retention_class: opts[:retention_class],
+      # What the payload store keeps as the input when the sent input
+      # carries transient content the caller excludes from retention.
+      retained_input: opts[:retained_input],
+      # The schedule a scheduled root runs for.
+      schedule_id: opts[:schedule_id]
     ]
 
     record_opts =
       if opts[:execution_id],
         do: [{:execution_id, opts[:execution_id]} | record_opts],
         else: record_opts
+
+    # A root mints its invocation reservation at admission, from the
+    # budget its authority was minted with; a child charges its root's.
+    record_opts =
+      case {opts[:root_execution_id], opts[:authority]} do
+        {nil, %Sanctum.Authority{budget: %Sanctum.Authority.Budget{id: id, cap: cap}}} ->
+          [{:reservation, %{budget_id: id, cap: cap}} | record_opts]
+
+        _ ->
+          record_opts
+      end
 
     record = ExecutionRecord.new(ctx, reference, input, record_opts)
 
@@ -258,11 +290,11 @@ defmodule Opus.Executor do
   end
 
   # The render seam for failure reasons: a typed refusal gets its one
-  # sentence (`Emissary.MCP.ToolError.render/1` — Unauthorized, the tool
+  # sentence (`Cyfr.Ops.Error.render/1` — Unauthorized, the tool
   # reasons, OCI errors, crafted binaries); an internal term goes to the
   # log and never into a message that outlives this call.
   defp client_reason(reason) do
-    case Emissary.MCP.ToolError.render(reason) do
+    case Cyfr.Ops.Error.render(reason) do
       nil ->
         Logger.warning("[Opus.Executor] unrenderable failure reason: #{inspect(reason)}")
         "internal error"
@@ -397,9 +429,7 @@ defmodule Opus.Executor do
     end
   end
 
-  # §4.5: what only the running chain knows. Everything attributable —
-  # who granted it, when, how — is joined from the immutable consent at
-  # read, so this hot-path write stays small.
+  # Store runtime facts and join attribution from immutable consent rows on read.
   defp authority_audit(%ExecutionPipeline{} = p, %Sanctum.Authority{} = authority) do
     %{
       consent_id: authority.consent_id,
@@ -447,7 +477,7 @@ defmodule Opus.Executor do
   defp stage_record_start(%ExecutionPipeline{} = p) do
     staged(
       p,
-      with :ok <- Opus.Host.record_start(p.record) do
+      with :ok <- Opus.Host.record_start(p.record, admission_opts(p)) do
         :atomics.put(p.started_written, 1, 1)
         Opus.Telemetry.execute_start(p.record)
         {:ok, p}
@@ -455,34 +485,63 @@ defmodule Opus.Executor do
     )
   end
 
+  # The barriers admission performs inside its own transaction: the hold
+  # row a loop-dispatched child's charge names, the step on its
+  # generation, the schedule occurrence a scheduled root starts.
+  defp admission_opts(%ExecutionPipeline{} = p),
+    do: Keyword.take(p.opts, [:charge, :step, :occurrence_id])
+
   # Stage 4: resolve credentials. The callee-keyed grant plane is never
   # consulted: credentials come only from the current edge's vault
   # resource, projected by the vault reader. No vault edge means no
-  # secrets — an ungranted read denies exactly as an empty resolution.
+  # secrets — an ungranted read denies exactly as an empty resolution. A
+  # selection the loader could not resolve is a declared need unmet: the
+  # profile it names binds nothing usable yet.
   defp stage_resolve_vault_fields(%ExecutionPipeline{} = p) do
     staged(p, resolve_vault_fields(p))
   end
 
   defp resolve_vault_fields(%ExecutionPipeline{} = p) do
     case p.opts[:authority] do
-      %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
-        case Opus.Host.unseal(p.ctx, vault) do
-          {:ok, secrets} ->
-            {:ok, %{p | preloaded_fields: secrets}}
+      %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{via: via}}} = authority ->
+        {:error,
+         {:setup_required,
+          %{
+            profile_id: authority.profile_id,
+            node_ref: p.component_ref,
+            need: p.opts[:need] || "",
+            reason: vault_setup_reason({:selection_unbound, via.label})
+          }}}
 
-          {:error, reason} ->
-            # A consented vault edge that cannot produce material is a
-            # declared need unmet at run: a typed setup_required, so the
-            # error envelope and the parent-stream setup event carry the
-            # structural cause instead of flattened prose.
-            {:error,
-             {:setup_required,
-              %{
-                profile_id: authority.profile_id,
-                node_ref: p.component_ref,
-                need: p.opts[:need] || "",
-                reason: vault_setup_reason(reason)
-              }}}
+      %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
+        if Sanctum.Consent.Loader.pinned_intact?(p.ctx, authority) do
+          case Opus.Host.unseal(p.ctx, vault) do
+            {:ok, secrets} ->
+              {:ok, %{p | preloaded_fields: secrets}}
+
+            {:error, reason} ->
+              # A consented vault edge that cannot produce material is a
+              # declared need unmet at run: a typed setup_required, so the
+              # error envelope and the parent-stream setup event carry the
+              # structural cause instead of flattened prose.
+              {:error,
+               {:setup_required,
+                %{
+                  profile_id: authority.profile_id,
+                  node_ref: p.component_ref,
+                  need: p.opts[:need] || "",
+                  reason: vault_setup_reason(reason)
+                }}}
+          end
+        else
+          {:error,
+           {:setup_required,
+            %{
+              profile_id: authority.profile_id,
+              node_ref: p.component_ref,
+              need: p.opts[:need] || "",
+              reason: vault_setup_reason(:consent_moved)
+            }}}
         end
 
       _ ->
@@ -500,6 +559,7 @@ defmodule Opus.Executor do
         component_ref: p.component_ref,
         ctx: p.ctx,
         execution_id: p.record.id,
+        execution_attempt: p.record.attempt,
         root_execution_id: p.opts[:root_execution_id],
         reference: p.reference,
         digest: digest,
@@ -541,6 +601,11 @@ defmodule Opus.Executor do
             # handled below.
             nil
 
+          {:error, {:result_lost, reason}} ->
+            # The row reads failed (result_lost): the run happened and its
+            # result was answered, but nothing retained it.
+            inspect(reason)
+
           {:error, reason} ->
             Logger.error(
               "[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
@@ -565,24 +630,19 @@ defmodule Opus.Executor do
 
       Opus.Telemetry.execute_stop(completed_record, exec_metadata)
 
+      # The terminal event is the row's, published by the record's write
+      # in the order the rows were numbered: nothing is pushed here.
       case write_result do
         {:error, :not_running} ->
           # The row already reads `cancelled` and its terminal event is on
-          # the wire; a `complete` pushed here would follow it and resurrect
-          # the turn for every subscriber.
+          # the wire.
           Logger.info(
             "[Opus.Executor] execution #{completed_record.id} finished after cancel; " <>
               "the cancelled row stands"
           )
 
         _ ->
-          Opus.ExecutionEventBuffer.push_terminal(
-            completed_record.id,
-            "complete",
-            %{status: "completed", duration_ms: completed_record.duration_ms},
-            999_999_999,
-            completed_record
-          )
+          :ok
       end
 
       metadata = %{
@@ -621,15 +681,8 @@ defmodule Opus.Executor do
       result =
         if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
 
-      # No cascade here. A formula that finished normally did not terminate
-      # anything: `Opus.Chain.run_child_stream/5` hands the guest an
-      # execution id and a stream URL precisely so the child outlives the
-      # call that started it, and the cascade never killed it — it only
-      # marked the row, so the child went on to write its real result over a
-      # row an SSE subscriber had already been shown as failed. The abnormal
-      # endings (`handle_failure/2`, `cancel/3`) still cascade: there the
-      # parent's chain is gone. A child genuinely abandoned is reaped by
-      # `Opus.ExecutionSweeper` when its lease lapses.
+      # Successful parents leave asynchronous children running. Failure
+      # and cancellation cascade; lease expiry reaps abandoned children.
       {:ok, result}
     end
   end
@@ -913,17 +966,9 @@ defmodule Opus.Executor do
     Cyfr.Digest.sha256(wasm_bytes)
   end
 
-  # The recorded attestation is read on EVERY execution, not only when a
-  # caller asked to pin a signer. `:verify` has exactly one producer —
-  # `Opus.MCP`, from a client's own tool argument — so gating the check on it
-  # meant children (`Opus.Chain`), schedules (`Opus.CronScheduler`) and
-  # tincture ingress (`run_root_edge`) never checked anything, and
-  # `Compendium.OCI.Client` was storing unsigned pulls on the stated grounds
-  # that this check would catch them.
-  #
-  # Only the unsigned-OCI arm is the operator's call. A pinned signer that
-  # does not match, and a source this verifier cannot classify, refuse
-  # whatever the knob says.
+  # Check recorded attestations for every execution. The signed-pulls
+  # setting controls unsigned OCI admission. Signer mismatches and
+  # unclassifiable sources always refuse.
   defp verify_attestation(%ExecutionPipeline{} = p) do
     {identity, issuer} = pinned_signer(p.opts[:verify])
 
@@ -1019,10 +1064,8 @@ defmodule Opus.Executor do
         _ -> nil
       end
 
-    case Opus.ExecutionSemaphore.acquire(semaphore_timeout, class, tenant) do
-      :ok ->
-        registered? = register_execution(exec_opts)
-
+    case Opus.Slot.acquire(class, tenant, semaphore_timeout, execution_id(exec_opts)) do
+      {:ok, token} ->
         try do
           runtime_opts = runtime_opts(exec_opts, opts)
 
@@ -1040,29 +1083,17 @@ defmodule Opus.Executor do
 
           execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
         after
-          Opus.ExecutionSemaphore.release()
-          if registered?, do: Registry.unregister(Opus.ExecutionRegistry, execution_id(exec_opts))
+          Opus.Slot.release(token)
         end
 
-      {:error, :queue_full} ->
-        {:error, "Server at maximum concurrent executions. Retry later."}
-
-      {:error, :tenant_limit} ->
-        {:error, "Athanor at maximum concurrent executions. Retry later."}
-
-      {:error, :tenant_unreaped_limit} ->
-        {:error,
-         "Athanor has too many recently timed-out executions whose CPU could not be " <>
-           "reclaimed. Wait a few minutes, and check for components that never yield."}
+      {:error, sentence} ->
+        {:error, sentence}
     end
   end
 
-  # Every execution registers its driving process under its execution_id so
-  # cancel/2 can actually kill it. run_stream and cron register their task
-  # before calling into the executor (same process, so the second register
-  # is a no-op here and they keep owning their entry); this covers the paths
-  # that previously never registered — synchronous execution.run and every
-  # formula child, which cancel could mark in the DB but not terminate.
+  # Register each execution's driving process for cancellation, including
+  # synchronous runs and children. Existing registration by the same process
+  # is a no-op.
   @runtime_opt_keys [
     :component_type,
     :max_memory_bytes,
@@ -1117,19 +1148,6 @@ defmodule Opus.Executor do
         end)
 
         :ok
-    end
-  end
-
-  defp register_execution(exec_opts) do
-    case execution_id(exec_opts) do
-      nil ->
-        false
-
-      execution_id ->
-        case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
-          {:ok, _} -> true
-          {:error, {:already_registered, _}} -> false
-        end
     end
   end
 
@@ -1232,11 +1250,7 @@ defmodule Opus.Executor do
       )
     end
 
-    # And the streaming ref, for the same reason. The timeout path cleans this
-    # up; cancel could not, because it only ever saw what the registry held —
-    # so a cancelled execution's in-flight streaming task kept fetching from
-    # the guest's allowed domain until its own receive timeout, after the row
-    # had already been stamped cancelled.
+    # Register the streaming ref so cancellation stops in-flight fetching.
     if cleanup_refs[:stream_exec_ref] do
       update_registry_meta(
         runtime_opts,
@@ -1251,36 +1265,57 @@ defmodule Opus.Executor do
     else
       # If we consumed the full timeout waiting for cleanup_refs, kill immediately
       nil ->
+        # The kill frees the BEAM process, not the component call's native
+        # thread (no epoch interruption) — the semaphore records the
+        # liability first, acknowledged, so the tenant's unreaped count
+        # gates its next acquisition whatever order the release lands in.
+        charge_unreaped(tenant_of(runtime_opts), Keyword.get(runtime_opts, :execution_id))
         # Unlink first so the :killed EXIT signal doesn't propagate back and
         # terminate this process before handle_failure can write the DB record.
         Process.unlink(pid)
         Process.exit(pid, :kill)
-        # The kill frees the BEAM process, not the component call's native
-        # thread (no epoch interruption) — tell the semaphore before the
-        # `after` block releases this slot, so the tenant's unreaped count
-        # gates its next acquisition.
-        Opus.ExecutionSemaphore.note_unreaped()
         {:error, "Execution timeout after #{timeout_ms}ms"}
 
       {:refs, _} ->
-        await_result(
-          ref,
-          pid,
-          cleanup_refs,
-          remaining_ms,
-          timeout_ms,
-          Keyword.get(runtime_opts, :execution_id)
-        )
+        await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, lease_watch(runtime_opts))
     end
   end
 
   # Lease renewals while a long execution runs: every minute the row's
   # lease is pushed out, so the sweeper knows a slow execution from a dead
-  # runner. Renewal is a bounded update_all; a failure only shortens the
-  # lease.
+  # runner. A renewal the store refuses stops the runner at once: the row
+  # is another's (cancelled, swept, finished) and any result this attempt
+  # produced would be refused by the fence. A renewal the store cannot
+  # answer keeps the runner working only while the lease it LAST held is
+  # still good.
   @lease_tick_ms 60_000
 
-  defp await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, execution_id) do
+  # What `await_result/6` watches between ticks: the row, the attempt that
+  # owns it, the tenant to charge an unreaped kill to, and the expiry the
+  # attempt last renewed to.
+  defp lease_watch(runtime_opts) do
+    case Keyword.get(runtime_opts, :execution_id) do
+      nil ->
+        nil
+
+      execution_id ->
+        %{
+          execution_id: execution_id,
+          attempt: Keyword.get(runtime_opts, :execution_attempt),
+          tenant: tenant_of(runtime_opts),
+          until: Opus.ExecutionRecord.lease_until()
+        }
+    end
+  end
+
+  defp tenant_of(runtime_opts) do
+    case Keyword.get(runtime_opts, :ctx) do
+      %Context{athanor_id: athanor_id} -> athanor_id
+      _ -> nil
+    end
+  end
+
+  defp await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, watch) do
     wait_ms = min(remaining_ms, @lease_tick_ms)
 
     receive do
@@ -1292,32 +1327,73 @@ defmodule Opus.Executor do
         error
     after
       wait_ms ->
-        if remaining_ms > wait_ms do
-          if execution_id, do: Opus.ExecutionRecord.renew_lease(execution_id)
-          await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, execution_id)
-        else
-          Process.unlink(pid)
-          Process.exit(pid, :kill)
-          # See the handshake-timeout kill above: the native thread survives
-          # this kill, so the semaphore counts it against the tenant.
-          Opus.ExecutionSemaphore.note_unreaped()
-          # Clean up resources the dead process can't clean up
-          if cleanup_refs[:stream_exec_ref],
-            do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
+        cond do
+          remaining_ms <= wait_ms ->
+            kill_unreaped(pid, cleanup_refs, watch)
+            {:error, "Execution timeout after #{timeout_ms}ms"}
 
-          if cleanup_refs[:formula_tracker_pid],
-            do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
+          is_nil(watch) ->
+            await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, watch)
 
-          # The dispensed OAuth tokens are NOT drained here. This error
-          # travels to `handle_failure/2`, which masks it with
-          # `ExecutionPipeline.secrets/1` — and that drains the tracker.
-          # Collecting first threw the tokens away (collect is
-          # collect-and-delete) and left the masker with an empty set for
-          # the rest of the execution. Undrained rows are swept on TTL, so
-          # the only thing a bare call bought was the disarming.
-          {:error, "Execution timeout after #{timeout_ms}ms"}
+          true ->
+            case renew_watch(watch) do
+              {:ok, watch} ->
+                await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, watch)
+
+              :lapsed ->
+                kill_unreaped(pid, cleanup_refs, watch)
+                {:error, "Execution lease lost: the row is no longer this attempt's to finish"}
+
+              :cancelled ->
+                kill_unreaped(pid, cleanup_refs, watch)
+                {:error, "Execution cancelled"}
+            end
         end
     end
+  end
+
+  @doc false
+  @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed | :cancelled
+  def renew_watch(watch, now \\ DateTime.utc_now()) do
+    case Opus.ExecutionRecord.renew_lease(watch.execution_id, watch.attempt) do
+      {:ok, until} ->
+        {:ok, %{watch | until: until}}
+
+      {:cancel_requested, _until} ->
+        :cancelled
+
+      :lost ->
+        :lapsed
+
+      :unavailable ->
+        # Still inside the lease this attempt last held: the store may
+        # merely be slow, and the next tick asks again. Past it, stop.
+        if DateTime.compare(now, watch.until) == :lt,
+          do: {:ok, watch},
+          else: :lapsed
+    end
+  end
+
+  # A kill that leaves the component call's native thread running (no
+  # epoch interruption). The liability is recorded and acknowledged
+  # BEFORE the kill, then the resources the dead process cannot release
+  # are cleaned up. The dispensed OAuth tokens are NOT drained here: the
+  # error travels to `handle_failure/2`, which masks it with
+  # `ExecutionPipeline.secrets/1` — and that drains the tracker.
+  # Collecting first threw the tokens away (collect is collect-and-delete)
+  # and left the masker with an empty set for the rest of the execution.
+  defp kill_unreaped(pid, cleanup_refs, watch) do
+    charge_unreaped(watch && watch.tenant, watch && watch.execution_id)
+    Process.unlink(pid)
+    Process.exit(pid, :kill)
+
+    if cleanup_refs[:stream_exec_ref],
+      do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
+
+    if cleanup_refs[:formula_tracker_pid],
+      do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
+
+    :ok
   end
 
   # Emit a setup_required event on the parent execution's event stream
@@ -1329,19 +1405,19 @@ defmodule Opus.Executor do
     if target_id do
       case Opus.Remediation.analyze(reason) do
         {:setup_required, remediation} ->
-          Opus.ExecutionEventBuffer.push(
-            target_id,
-            %{
-              "kind" => "setup_required",
-              "component_ref" => remediation["component_ref"],
-              "issues" => remediation["issues"],
-              "setup_command" => remediation["setup_command"],
-              "message" => failure_message(reason)
-            },
-            System.unique_integer([:positive]),
-            ctx,
-            origin: "host"
-          )
+          _ =
+            Opus.ExecutionEventBuffer.push(
+              target_id,
+              %{
+                "kind" => "setup_required",
+                "component_ref" => remediation["component_ref"],
+                "issues" => remediation["issues"],
+                "setup_command" => remediation["setup_command"],
+                "message" => failure_message(reason)
+              },
+              ctx,
+              origin: "host"
+            )
 
         :not_setup_error ->
           :ok
@@ -1357,23 +1433,20 @@ defmodule Opus.Executor do
   # The typed payload crosses the JSON error envelope, so its reason must
   # be JSON-encodable — vault loader tuples are flattened here.
   defp vault_setup_reason({:entry_unavailable, status}), do: "vault_entry_#{status}"
+  defp vault_setup_reason({:selection_unbound, _label}), do: "vault_selection_unbound"
+  defp vault_setup_reason(:consent_moved), do: "consent_moved"
   defp vault_setup_reason(reason) when is_atom(reason), do: reason
   defp vault_setup_reason(reason), do: inspect(reason)
 
-  # Failure is an egress like success: the error message reaches the
-  # execution row, telemetry, and the terminal event stream, and it can
-  # carry guest-influenced text (an application error, an exception whose
-  # message echoes a request) — so it is masked with the same
-  # dispensed-secret set as completed output. `secrets/1` also drains the
-  # OAuth tracker, which this function previously did with a bare
-  # collect-and-discard.
+  # Mask failure messages with dispensed secrets before recording or
+  # broadcasting them. secrets/1 also drains the OAuth token tracker.
   defp handle_failure(%ExecutionPipeline{} = p, error_msg) do
     record = p.record
     error_msg = Opus.SecretMasker.mask(error_msg, ExecutionPipeline.secrets(p))
     failed_record = ExecutionRecord.fail(record, error_msg)
 
     if :atomics.get(p.started_written, 1) == 0 do
-      case Opus.Host.record_start(record) do
+      case Opus.Host.record_start(record, admission_opts(p)) do
         :ok ->
           :ok
 
@@ -1414,14 +1487,8 @@ defmodule Opus.Executor do
         )
 
       _ ->
-        # Push terminal error event so SSE/LiveView subscribers know execution failed
-        Opus.ExecutionEventBuffer.push_terminal(
-          record.id,
-          "error",
-          %{error: error_msg},
-          999_999_999,
-          record
-        )
+        # The terminal event is the row's, published by the record's write.
+        :ok
     end
 
     cascade_children_failure(record)
@@ -1451,23 +1518,9 @@ defmodule Opus.Executor do
     # before we touch the global, id-keyed process registry — otherwise a caller
     # could kill another tenant's execution just by knowing its id. (Same
     # authorize-before-act ordering the SSE read path uses.)
-    case ExecutionRecord.cancel(ctx, execution_id) do
+    case ExecutionRecord.cancel(ctx, execution_id, Keyword.take(opts, [:restart_required])) do
       {:ok, record} ->
-        kill_running_process(execution_id)
-
-        # Route with the record's own athanor (like every other producer) —
-        # a platform-scoped canceller may carry a different athanor than the
-        # execution it just cancelled.
-        {event_type, event_data} = cancel_event(opts)
-
-        ExecutionEventBuffer.push_terminal(
-          execution_id,
-          event_type,
-          event_data,
-          System.unique_integer([:positive]),
-          record
-        )
-
+        kill_running_process(execution_id, record.athanor_id)
         emit_cancel_telemetry(ctx, execution_id)
         cascade_children_failure_by_id(execution_id)
         {:ok, %{cancelled: true, execution_id: execution_id}}
@@ -1480,36 +1533,45 @@ defmodule Opus.Executor do
   @doc """
   Terminate a running execution because its consent changed underneath it.
 
-  A delta revision commits for FUTURE roots; it must never re-bind the
-  execution already in flight, which may have taken side effects under
-  the authority it started with (§4.4). The running one ends carrying the
-  typed `restart_required` payload — the surface says "approved, re-run
-  to continue" — and the re-run picks up the new revision.
+  Commits consent for future roots and ends the current execution with
+  `restart_required`. Rerunning selects the new revision; in-flight authority
+  is never rebound.
   """
   @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def cancel_for_restart(%Context{} = ctx, execution_id, payload) when is_map(payload) do
     cancel(ctx, execution_id, restart_required: payload)
   end
 
-  # A restart-required cancellation reports itself as such, so a surface
-  # can say "approved — re-run to continue" instead of "cancelled".
-  defp cancel_event(opts) do
-    case Keyword.get(opts, :restart_required) do
-      nil -> {"cancelled", %{}}
-      payload when is_map(payload) -> {"restart_required", payload}
+  # The liability is acknowledged before the kill. A semaphore that does
+  # not answer leaves the kill uncharged; that is said, by execution, never
+  # dropped silently.
+  defp charge_unreaped(tenant, execution_id) do
+    case Opus.ExecutionSemaphore.note_unreaped(tenant, execution_id) do
+      :ok ->
+        :ok
+
+      {:error, :unavailable} ->
+        Logger.error(
+          "[Executor] unreaped kill of #{inspect(execution_id)} for tenant " <>
+            "#{inspect(tenant)} is uncharged: the semaphore did not answer"
+        )
     end
   end
 
   # Kill the running BEAM process for an execution (if one is still registered)
   # and tear down its async tracker so spawned child tasks die too. Only called
   # after the tenant-scoped cancel above has authorized the operation.
-  defp kill_running_process(execution_id) do
+  defp kill_running_process(execution_id, tenant) do
     case Registry.lookup(Opus.ExecutionRegistry, execution_id) do
       [{pid, meta}] ->
         # Extract tracker PID before killing — needed to stop child tasks.
         tracker_pid = if is_map(meta), do: meta[:tracker_pid], else: nil
         runner_pid = if is_map(meta), do: meta[:runner_pid], else: nil
         stream_exec_ref = if is_map(meta), do: meta[:stream_exec_ref], else: nil
+
+        # Cancellation leaves native work unreapable without epoch interruption.
+        # Record and acknowledge the tenant penalty before killing the caller.
+        charge_unreaped(tenant, execution_id)
 
         # The runner FIRST, and by name. It traps exits, so the kill of its
         # parent below reaches it as an ordinary message and it would keep
@@ -1532,12 +1594,6 @@ defmodule Opus.Executor do
         # stop it. The timeout path has always done this; cancel is the same
         # kill and owes the same cleanup.
         if stream_exec_ref, do: Opus.HttpStreamHandler.cleanup_registry(stream_exec_ref)
-
-        # A cancel kills the component call exactly as a timeout does, and
-        # leaves the same unreapable native thread behind (no epoch
-        # interruption). Counting only timeouts let a tenant cycle cancels to
-        # accumulate spinning cores without ever tripping the penalty box.
-        Opus.ExecutionSemaphore.note_unreaped()
 
         :ok
 
@@ -1622,12 +1678,12 @@ defmodule Opus.Executor do
       duration_ms = DateTime.diff(now, child.started_at, :millisecond)
       error_msg = "Parent execution (#{parent_id}) terminated"
 
-      {count, _} =
-        Arca.Execution.mark_failed_if_running(child.id, %{
-          completed_at: now,
-          duration_ms: duration_ms,
-          error_message: error_msg
-        })
+      {count, event_seq} =
+        Arca.Execution.mark_failed_if_running(
+          child.id,
+          %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
+          attempt: child.current_attempt
+        )
 
       if count > 0 do
         component_type =
@@ -1653,13 +1709,10 @@ defmodule Opus.Executor do
           }
         )
 
-        ExecutionEventBuffer.push_terminal(
-          child.id,
-          "error",
-          %{error: error_msg},
-          999_999_999,
-          child
-        )
+        ExecutionEventBuffer.publish(child.id, child, "execution.failed", event_seq, %{
+          "status" => "failed",
+          "error" => error_msg
+        })
       end
     end
   end

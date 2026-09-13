@@ -18,7 +18,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    home = Sanctum.Tenancy.Athanors.home!()
+    estate = seated_athanor()
 
     base = Path.join(System.tmp_dir!(), "shell_log_#{System.unique_integer([:positive])}")
     original_path = Application.get_env(:cyfr, :base_path)
@@ -26,7 +26,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
 
     dir =
       Arca.Adapters.Local.build_path(
-        %{Sanctum.TestContext.local() | athanor_id: home.id},
+        %{Sanctum.TestContext.local() | athanor_id: estate.id},
         ["components", "tinctures", "local", @tincture, "1.0.0"]
       )
 
@@ -45,10 +45,8 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
 
     File.write!(Path.join(dir, "index.html"), "<html><body>log</body></html>")
 
-    # The shell no longer force-rescans on mount (the registry follows the
-    # tinctures topic in production); files planted directly on disk need
-    # the reload the AutoIndexer broadcast would otherwise trigger.
-    Prism.TinctureRegistry.reload_athanor(home.id)
+    # Reload the registry after writing fixtures directly to disk without an AutoIndexer notification.
+    Prism.TinctureRegistry.reload_athanor(estate.id)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, original_path)
@@ -56,10 +54,10 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
       Prism.TinctureRegistry.reload()
     end)
 
-    {:ok, conn: conn, user: user, home: home}
+    {:ok, conn: conn, user: user, estate: estate}
   end
 
-  test "an invoke files started and finished request-log rows", %{conn: conn, home: home} do
+  test "an invoke files started and finished request-log rows", %{conn: conn, estate: estate} do
     {view, html} = mount_athanor(conn, "/tinctures")
     assert html =~ @tincture
 
@@ -76,7 +74,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
     rows =
       Arca.Repo.all(
         from(l in Arca.McpLog,
-          where: l.method == "LIVE /shell/invoke" and l.athanor_id == ^home.id
+          where: l.method == "LIVE /shell/invoke" and l.athanor_id == ^estate.id
         )
       )
 

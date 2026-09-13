@@ -3,13 +3,11 @@
 
 defmodule Opus.CredentialedIngressGateTest do
   @moduledoc """
-  The §6 "no credentialed execution without a grant" gate, second arm.
+  Verifies that execution entry points require a grant before dispensing credentials.
 
-  For each classified ingress, an execution that has no consent edge
-  naming a vault entry receives no credential material — whatever the
-  legacy grant plane would have handed it. The first arm
-  (`Cyfr.IngressInventoryTest`) is what makes this list total: a new
-  ingress fails there until it is classified and covered here.
+  Every classified ingress must withhold credentials when its consent
+  edge names no vault entry. Cyfr.IngressInventoryTest checks the roster
+  for complete ingress coverage.
   """
 
   use ExUnit.Case, async: false
@@ -138,7 +136,7 @@ defmodule Opus.CredentialedIngressGateTest do
     # (Emissary.Tincture.Invoke), so one kill switch and one row here.
     @ingresses [
       {:mcp, "apps/opus/lib/opus/mcp.ex", :falls_back},
-      {:cron, "apps/opus/lib/opus/cron_scheduler.ex", :no_fallback_when_bound},
+      {:cron, "apps/cyfr/lib/cyfr/schedules/scheduler.ex", :no_fallback_when_bound},
       {:webhook, "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex",
        :no_fallback_when_bound},
       {:tincture, "apps/cyfr/lib/emissary/tincture/invoke.ex", :falls_back}

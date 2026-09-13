@@ -3,11 +3,11 @@
 
 defmodule Sanctum.SignInCompleteTest do
   @moduledoc """
-  The one sign-in decision both paths take after the door: what cyfr.run
-  says about the person, and what follows. A person this server knows
-  proceeds whatever the registry answers; a first-time person needs it
-  once. Push tokens are cached best-effort; the namespace lands on the
-  users row first.
+  The courtesy both sign-in paths extend after the door: a budgeted probe
+  of cyfr.run for the person's publisher namespace and push tokens.
+  Whatever the registry answers, the person proceeds; the report says how
+  it answered. Push tokens are cached best-effort; a namespace lands on
+  the users row first.
   """
   use ExUnit.Case, async: false
 
@@ -77,7 +77,7 @@ defmodule Sanctum.SignInCompleteTest do
     expect.(bypass, "POST", "/v1/identity/probe", fn conn -> json_resp(conn, status, body) end)
   end
 
-  describe "a first-time person" do
+  describe "a person without a recorded namespace" do
     test "with a personal namespace: it is recorded, the athanor minted, tokens cached", %{
       bypass: bypass
     } do
@@ -95,8 +95,8 @@ defmodule Sanctum.SignInCompleteTest do
                SignIn.complete(user, "github", "gho_access")
 
       assert ns == "first#{n}"
-      assert {:ok, %{namespace: ^ns}} = Users.get(user.id)
-      assert {:ok, %{kind: "person"}} = Athanors.get_by_slug("person", ns)
+      assert {:ok, %{namespace: ^ns, personal_athanor_id: pid}} = Users.get(user.id)
+      assert {:ok, %{kind: "person", slug: ^ns}} = Athanors.get(pid)
 
       assert {:ok, %{token: "cyfr_pt_personal"}} =
                CredentialStore.get(user.id, "registry.test", ns)
@@ -118,11 +118,28 @@ defmodule Sanctum.SignInCompleteTest do
       assert :not_found = CredentialStore.get(user.id, "registry.test", ns)
     end
 
-    test "with no personal namespace: claim, suggesting the provider's own screen name",
+    test "with no personal namespace: signed in, nothing recorded, memberships cached",
          %{bypass: bypass} do
+      user = person()
+
+      probe_answers(bypass, 200, %{
+        "personal_namespace" => nil,
+        "memberships" => [%{"slug" => "acme.com", "token" => "cyfr_pt_m", "role" => "member"}]
+      })
+
+      assert {:proceed, %{namespace: nil}, %{unsynced: [], probe: :ok}} =
+               SignIn.complete(user, "github", "gho_access")
+
+      assert {:ok, %{namespace: nil}} = Users.get(user.id)
+
+      assert {:ok, %{token: "cyfr_pt_m"}} =
+               CredentialStore.get(user.id, "registry.test", "acme.com")
+    end
+
+    test "the claim suggestion is the screen name, else the address's local part" do
       n = System.unique_integer([:positive])
 
-      {:ok, user} =
+      {:ok, named} =
         Users.upsert_from_provider(%{
           id: "github|https://github.com|sug-#{n}",
           provider: "github",
@@ -131,25 +148,15 @@ defmodule Sanctum.SignInCompleteTest do
           name: "Alice#{n}"
         })
 
-      probe_answers(bypass, 200, %{"personal_namespace" => nil, "memberships" => []})
+      assert SignIn.suggested_slug(named, "github") == "alice#{n}"
 
-      # The screen name is what the person calls themselves; the address's
-      # local part is the fallback, not the first answer.
-      expected = "alice#{n}"
-      assert {:needs_claim, ^expected} = SignIn.complete(user, "github", "gho_access")
-      assert {:ok, %{namespace: nil}} = Users.get(user.id)
-    end
-
-    test "with no screen name, the address's local part is the suggestion", %{bypass: bypass} do
-      user = person()
-      probe_answers(bypass, 200, %{"personal_namespace" => nil, "memberships" => []})
-
-      assert {:needs_claim, suggested} = SignIn.complete(user, "github", "gho_access")
+      unnamed = person()
+      suggested = SignIn.suggested_slug(unnamed, "github")
       assert is_binary(suggested)
       assert suggested =~ "c"
     end
 
-    test "412: legal acceptance first", %{bypass: bypass} do
+    test "412: signed in; the policy is owed at publish", %{bypass: bypass} do
       user = person()
 
       probe_answers(bypass, 412, %{
@@ -157,22 +164,27 @@ defmodule Sanctum.SignInCompleteTest do
         "required_version" => "2026-01"
       })
 
-      assert {:needs_legal, "2026-01"} = SignIn.complete(user, "github", "gho_access")
+      assert {:proceed, _, %{probe: :legal_required}} =
+               SignIn.complete(user, "github", "gho_access")
     end
 
-    test "401: re-authenticate; 5xx or no answer: unavailable, nothing set up", %{bypass: bypass} do
+    test "401, 5xx and no token each sign the person in with the reason reported", %{
+      bypass: bypass
+    } do
       user = person()
       probe_answers(bypass, 401, %{"error" => "invalid_access_token"})
-      assert {:reauthenticate, :idp_expired} = SignIn.complete(user, "github", "expired")
+      assert {:proceed, _, %{probe: :invalid_token}} = SignIn.complete(user, "github", "expired")
 
       probe_answers(bypass, 500, %{"error" => "internal"}, repeat: true)
-      assert {:unavailable, :registry_unreachable} = SignIn.complete(user, "github", "gho_access")
+      assert {:proceed, _, %{probe: :failed}} = SignIn.complete(user, "github", "gho_access")
       assert {:ok, %{namespace: nil}} = Users.get(user.id)
 
-      assert {:unavailable, :no_access_token} = SignIn.complete(user, "github", nil)
+      assert {:proceed, _, %{probe: :skipped}} = SignIn.complete(user, "github", nil)
     end
 
-    test "a slug another identity here holds is a conflict, not a sign-in", %{bypass: bypass} do
+    test "a slug another identity here holds is reported, not recorded, and not a refusal", %{
+      bypass: bypass
+    } do
       _holder = person("taken-slug")
       user = person()
 
@@ -180,12 +192,22 @@ defmodule Sanctum.SignInCompleteTest do
         "personal_namespace" => %{"slug" => "taken-slug", "token" => "t"}
       })
 
-      assert {:unavailable, :namespace_conflict} = SignIn.complete(user, "github", "gho_access")
+      assert {:proceed, _, %{probe: :namespace_conflict}} =
+               SignIn.complete(user, "github", "gho_access")
+
       assert {:ok, %{namespace: nil}} = Users.get(user.id)
+    end
+
+    test "with no registry configured, nothing is asked" do
+      Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
+      user = person()
+
+      assert {:proceed, %{namespace: nil}, %{unsynced: [], probe: :skipped}} =
+               SignIn.complete(user, "github", "gho_access")
     end
   end
 
-  describe "a returning person (namespace recorded here)" do
+  describe "a person with a recorded namespace" do
     test "proceeds on a good probe, refreshing tokens", %{bypass: bypass} do
       user = person("returning-ok")
 
@@ -234,12 +256,14 @@ defmodule Sanctum.SignInCompleteTest do
       Bypass.pass(bypass)
     end
 
-    test "a 412 still reaches them; a registry that forgot them keeps the recorded name", %{
+    test "a 412 is reported; a registry that forgot them keeps the recorded name", %{
       bypass: bypass
     } do
       user = person("returning-legal")
       probe_answers(bypass, 412, %{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
-      assert {:needs_legal, nil} = SignIn.complete(user, "github", "gho_access")
+
+      assert {:proceed, %{namespace: "returning-legal"}, %{probe: :legal_required}} =
+               SignIn.complete(user, "github", "gho_access")
 
       probe_answers(bypass, 200, %{"personal_namespace" => nil})
       assert {:proceed, %{namespace: "returning-legal"}, _} = SignIn.complete(user, "github", "x")

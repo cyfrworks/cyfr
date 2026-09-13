@@ -22,6 +22,13 @@ defmodule Sanctum.Consent.CommitDigestTest do
     fields: ["url", "anon_key"]
   }
 
+  @selection %{
+    from: "reagent:local.src",
+    dep: "catalyst:local.claude",
+    label: "default",
+    binding_digest: "sha256:sel-1"
+  }
+
   defp digest!(commit) do
     {:ok, digest} = CommitDigest.compute(commit)
     digest
@@ -138,18 +145,41 @@ defmodule Sanctum.Consent.CommitDigestTest do
                CommitDigest.compute(Map.delete(@base, :label))
     end
 
-    # `slot_bindings` and `limits` were in `only_keys` with no producer:
-    # `commit_input/7` and `Consent.Bootstrap` are the only two callers and
-    # neither ever supplied them, so each contributed a constant to every
-    # digest. `limits` was a fossil of the bug the moduledoc describes —
-    # threaded in once, never reaching the blob. The blob hash covers what
-    # they were reaching for.
+    # The resolved blob hash covers slot bindings and node limits.
     test "keys no producer supplies are refused rather than silently accepted" do
       assert {:error, {:invalid_commit, :unknown_field, ":slot_bindings"}} =
                CommitDigest.compute(Map.put(@base, :slot_bindings, %{"source" => "vault-1"}))
 
       assert {:error, {:invalid_commit, :unknown_field, ":limits"}} =
                CommitDigest.compute(Map.put(@base, :limits, %{"timeout" => "30s"}))
+    end
+  end
+
+  describe "selections" do
+    test "from is part of the digest" do
+      other = %{@selection | from: "reagent:local.other"}
+
+      assert digest!(Map.put(@base, :selections, [@selection])) !=
+               digest!(Map.put(@base, :selections, [other]))
+    end
+
+    test "the same dep may be selected once per from" do
+      second = %{@selection | from: "reagent:local.other"}
+
+      assert {:ok, _} =
+               CommitDigest.compute(Map.put(@base, :selections, [@selection, second]))
+
+      dup = %{@selection | label: "work"}
+
+      assert {:error, {:invalid_commit, :selections, message}} =
+               CommitDigest.compute(Map.put(@base, :selections, [@selection, dup]))
+
+      assert message =~ "exactly once"
+    end
+
+    test "from is required" do
+      assert {:error, {:invalid_commit, :from, _}} =
+               CommitDigest.compute(Map.put(@base, :selections, [Map.delete(@selection, :from)]))
     end
   end
 

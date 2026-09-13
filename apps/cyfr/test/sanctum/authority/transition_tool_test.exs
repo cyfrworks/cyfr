@@ -70,9 +70,7 @@ defmodule Sanctum.Authority.TransitionToolTest do
     end
   end
 
-  # ============================================================================
-  # External tool servers (§3.8)
-  # ============================================================================
+  # External tool servers
 
   describe "external tool servers" do
     test "a granted server authorizes tools matching its patterns" do

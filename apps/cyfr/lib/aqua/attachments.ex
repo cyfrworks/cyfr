@@ -104,11 +104,8 @@ defmodule Aqua.Attachments do
   @doc """
   Remove blobs written for a message that never landed.
 
-  `store/4` rolls back its own storage failures, but the send it was
-  written for can still be refused afterwards — the sender is no longer a
-  member, the athanor was archived, the turn queue is full. Those bytes
-  belong to no row: nothing lists them, nothing reads them, and they count
-  against the athanor's quota until someone notices.
+  A send may be refused after attachments are stored. Call this to reclaim
+  those unreferenced bytes when the enclosing send fails.
   """
   @spec discard(Context.t(), String.t(), String.t(), [ref()]) :: :ok
   def discard(%Context{} = ctx, conversation_id, message_id, refs) when is_list(refs) do
@@ -215,11 +212,8 @@ defmodule Aqua.Attachments do
   def safe_filename(_), do: "file"
 
   @doc """
-  Strip C0 control characters and DEL — the character class no filename
-  context tolerates. The shared core of this module's storage-name rule
-  and the attachment controller's Content-Disposition rule (which adds
-  quote/backslash on top for the header): three near-copies of this strip
-  once carried three different ranges.
+  Strip C0 control characters and DEL from a filename.
+  Content-Disposition callers must also filter quotes and backslashes.
   """
   @spec strip_controls(String.t()) :: String.t()
   def strip_controls(name) when is_binary(name) do

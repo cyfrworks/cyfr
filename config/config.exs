@@ -9,11 +9,8 @@
 # General application configuration
 import Config
 
-# Register SSE MIME type for MCP server-sent events. COMPILE-TIME for the
-# :mime dep: it bakes this table into its own build, so changing it (or
-# building against a stale _build) needs `mix deps.clean mime --build` —
-# the :mcp and :authenticated_api pipelines' `accepts ["json",
-# "event-stream"]` silently stop negotiating SSE otherwise.
+# Register the SSE MIME type. This dependency configuration is compiled;
+# run `mix deps.clean mime --build` after changing it.
 config :mime, :types, %{
   "text/event-stream" => ["event-stream"]
 }
@@ -28,17 +25,21 @@ config :cyfr,
     # Chat on the wire, so Prism is a client of the agent runtime rather
     # than the only way to reach it.
     Emissary.MCP.ConversationTool,
+    # A card decided from the wire: the same door the console's buttons use.
+    Emissary.MCP.ApprovalTool,
     # What was kept out of a conversation — a separate object from the tape,
     # which is what lets a thread be erased honestly.
     Emissary.MCP.NotesTool,
+    # The athanor's files as the Files page shows them, one tier per folder.
+    Emissary.MCP.FileTool,
     # Domain services
     Opus.MCP,
-    Opus.CronMCP,
+    Cyfr.Schedules.Provider,
     Locus.MCP,
     Compendium.MCP,
     # External MCP server management. `Emissary.MCP.ExternalProvider` is not
     # here: it owns no tool of its own — the tools it discovers are the
-    # upstream servers', reached through `ToolRegistry.try_handle/3`.
+    # upstream servers', reached through `Cyfr.Ops.Catalog` on a lookup miss.
     Emissary.MCP.McpServersTool,
     # System/transport (cross-cutting)
     Emissary.MCP.Tools.SystemProvider
@@ -48,9 +49,7 @@ config :cyfr,
 # minutes and must survive a restart. Tests override to the ETS store.
 config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB
 
-# Consents themselves live in the database. Pinned here beside the proof
-# store rather than left to an inline default: two halves of one seam, and
-# only one of them was declared. Tests override to the Memory adapter.
+# Store consent revisions in the database; tests override this with the Memory adapter.
 config :cyfr, :consent_source, Sanctum.Consent.Source.DB
 
 # Configures the endpoint
@@ -66,9 +65,7 @@ config :cyfr, EmissaryWeb.Endpoint,
   pubsub_server: Emissary.PubSub,
   live_view: [signing_salt: "cyfrLVdev"]
 
-# Configures Elixir's Logger. `:module` rides on every event from the
-# runtime itself, so filtering by emitter needs no hand-typed "[Prefix]"
-# in the message — 287 of those had grown 119 spellings.
+# Include module metadata in Logger output for filtering by emitter.
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:module, :request_id, :user_id, :athanor_id, :auth_method, :execution_id]
@@ -76,12 +73,12 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# The execution engine, as configuration rather than a boot-time
-# registration — the endpoint must never be live before the engine is
-# named. `Cyfr.Execution.impl/0` answers nil until the module is actually
-# loadable, so a build without the opus app (a headless control plane,
-# the cyfr app's own test runs) still reports the engine unavailable.
+# Configure the execution implementation before endpoint startup; unavailable code reports no engine.
 config :cyfr, :execution_impl, Opus
+
+# The byte store behind retained execution payloads
+# (`Arca.ExecutionPayloads.Store`): the athanor's own tree by default.
+config :cyfr, :execution_payload_store, Arca.ExecutionPayloads.Store.Overlay
 
 # Inbound request-param redaction (:filter_parameters) is set at boot by
 # Cyfr.Application from Sanctum.Sanitizer.filter_parameters/0 — the one
@@ -126,24 +123,15 @@ config :cyfr,
   base_path: Path.expand("./data"),
   seed_path: Path.expand("../seed", __DIR__)
 
-# The unit grammar of each seed-overlaid root (`Arca.Storage.locate/1`):
-# the domain module that owns the root's path spelling answers where its
-# shadow units sit and how they are shaped (`Arca.Storage.UnitLocator`).
-# Config-wired so Arca never compile-depends on Compendium. Every root the
-# layout table marks `:overlay` must have a row here — a missing one
-# raises on first touch.
+# Map each overlaid root to its unit locator. Every overlay root requires
+# a locator defining its unit boundaries.
 config :cyfr, :overlay_locators, %{
   "aqua" => Compendium.AquaPath,
   "components" => Compendium.ComponentPath
 }
 
-# Storage-adjacent knobs, spelled out so the defaults are discoverable —
-# the readers fall back to the same values, but an invisible knob is a knob
-# nobody knows to turn.
-#
-# The recursive file/byte ceiling for unauthenticated (public tincture)
-# guest writes (`Opus.StorageHandler`); the operator's per-athanor cap for
-# authenticated writes is CYFR_ATHANOR_STORAGE_BYTES.
+# Recursive file and byte ceilings for public-profile guest writes.
+# Authenticated tenant storage uses CYFR_ATHANOR_STORAGE_BYTES.
 config :cyfr, :public_storage_quota, %{max_bytes: 26_214_400, max_files: 200}
 
 # Concurrent object reads in the shared subtree dump
@@ -170,17 +158,42 @@ config :cyfr, :external_server_max_in_flight, 8
 # cyfr.run probe before proceeding without it (`Sanctum.SignIn`), and the
 # retention sweep interval (`Cyfr.RetentionScheduler`).
 config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
+
+# The deadline, in milliseconds, for one provisioning attempt's required
+# dependency pulls: the closure of every component the bundle cannot run
+# without, pulled when an athanor is first filled and at the seed sync
+# after a release. A pull past it stops where it is; what landed stays
+# registered, the estate is left unprovisioned with the timeout recorded,
+# and the next attempt resumes from what is installed. The OCI transport
+# waits up to two minutes per request and retries twice, so one stalled
+# blob can hold an attempt for several minutes within this bound.
+config :cyfr, :provisioning_required_pull_budget_ms, :timer.minutes(10)
 config :cyfr, :returning_probe_ms, 5_000
+# The context window assumed for a model whose catalyst reports none and
+# whose catalyst name the host's table does not know, in tokens. The loop
+# compacts a conversation against this when nothing better is reported.
+config :cyfr, :model_context_window_default, 128_000
+
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 
-# What each retention sweep keeps. These were read by the five
-# `Cyfr.Retention.*` modules and declared nowhere, so the only way to learn
-# an athanor's conversations are pruned at a year was to read the source —
-# the "invisible knob" this file's own standard exists to prevent. The
-# readers still fall back to exactly these values.
+# How long an approval card waits for a decision before it expires as a
+# denial the agent observes, in hours. An estate overrides it in its
+# settings under `approvals.expiry_hours`.
+config :cyfr, Aqua.Approvals, expiry_hours: 24
+
+# Default retention windows used by Cyfr.Retention sweeps.
 config :cyfr, Cyfr.Retention,
   # Newest N executions kept per athanor.
   executions: 10_000,
+  # Days an execution record is kept, whatever the count.
+  execution_days: 90,
+  # Days a retained execution payload is kept, per retention class: the
+  # default class and chat steps, webhook-driven runs, scheduled runs and
+  # the server's own runs.
+  payload_days: 30,
+  webhook_payload_days: 14,
+  schedule_payload_days: 30,
+  system_payload_days: 7,
   # Newest N build records kept per athanor.
   builds: 100,
   # Days of policy-enforcement log kept.

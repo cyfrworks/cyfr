@@ -17,9 +17,14 @@ defmodule Sanctum.Tenancy.Users do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.User
+  alias Arca.Schemas.{ExternalIdentity, User}
+  alias Sanctum.Auth.Identity
   alias Sanctum.Tenancy.{Athanors, Members}
 
+  @typedoc """
+  What the door admitted: `id` is the IdP identity key
+  (`Sanctum.Auth.Identity.key/3`), never a person's own id.
+  """
   @type provider_info :: %{
           required(:id) => String.t(),
           required(:provider) => String.t() | atom(),
@@ -29,22 +34,19 @@ defmodule Sanctum.Tenancy.Users do
         }
 
   @doc """
-  Insert or refresh the row for an identity the door just admitted.
+  The person an admitted identity names: their row refreshed, or a new
+  person minted (an id of this server's, `Arca.Schemas.User.id_prefix/0`)
+  with the identity recorded as theirs.
 
   `first_seen_at` is set once; `last_seen_at`, `email`, `email_verified`
   and `display_name` follow what the provider asserted this time —
   `email_verified` as the provider's own three answers, so "it never said"
   is not recorded as "it said no".
 
-  An assertion the provider did NOT make leaves the stored value alone. The
-  same reasoning as `email_verified`: `AuthController` builds `name` from
-  the Ueberauth info, which carries neither `:name` nor `:nickname` for
-  some identities, so an absent claim used to write `nil` over a display
-  name an earlier sign-in had recorded — the row lost information by being
-  refreshed.
+  An absent provider claim preserves the stored value, including name and email verification.
   """
   @spec upsert_from_provider(provider_info()) :: {:ok, User.t()} | {:error, term()}
-  def upsert_from_provider(%{id: id, provider: provider} = info) when is_binary(id) do
+  def upsert_from_provider(%{id: key, provider: provider} = info) when is_binary(key) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.upsert_from_provider", fn ->
       now = DateTime.utc_now()
 
@@ -58,36 +60,107 @@ defmodule Sanctum.Tenancy.Users do
         |> Cyfr.MapUtil.put_present(:email, Map.get(info, :email))
         |> Cyfr.MapUtil.put_present(:display_name, Map.get(info, :name))
 
-      case get(id) do
+      case get_by_identity(key) do
         {:ok, user} ->
+          touch_identity(key, now)
           user |> User.changeset(seen) |> Arca.Repo.update()
 
         {:error, :not_found} ->
-          %User{}
-          |> User.changeset(
-            Map.merge(seen, %{
-              id: id,
-              first_seen_at: now,
-              created_at: now,
-              prefs: Jason.encode!(%{})
-            })
-          )
-          |> Arca.Repo.insert()
-          |> case do
-            {:error, %Ecto.Changeset{}} = err ->
-              # A concurrent first sign-in of the same identity won the insert.
-              case get(id) do
-                {:ok, user} -> {:ok, user}
-                _ -> err
-              end
-
-            other ->
-              other
-          end
+          first_sign_in(key, seen, now)
 
         {:error, _} = err ->
           err
       end
+    end)
+  end
+
+  # The person and the identity that names them, minted together. A
+  # concurrent first sign-in of the same identity wins the unique index;
+  # the loser reads the person it minted.
+  defp first_sign_in(key, seen, now) do
+    with {:ok, %{provider: provider, issuer: issuer, subject: subject}} <- Identity.parse(key) do
+      user_attrs =
+        Map.merge(seen, %{
+          id: Cyfr.UUID7.generate_id(User.id_prefix()),
+          first_seen_at: now,
+          created_at: now,
+          prefs: Jason.encode!(%{})
+        })
+
+      Arca.Repo.transaction(fn ->
+        with {:ok, user} <- %User{} |> User.changeset(user_attrs) |> Arca.Repo.insert(),
+             {:ok, _} <-
+               %ExternalIdentity{}
+               |> ExternalIdentity.changeset(%{
+                 id: Cyfr.UUID7.generate_id("ext"),
+                 user_id: user.id,
+                 key: key,
+                 provider: provider,
+                 issuer: issuer,
+                 subject: subject,
+                 first_seen_at: now,
+                 last_seen_at: now
+               })
+               |> Arca.Repo.insert() do
+          user
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, user} ->
+          {:ok, user}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          case get_by_identity(key) do
+            {:ok, user} -> {:ok, user}
+            _ -> {:error, changeset}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp touch_identity(key, now) do
+    Arca.Repo.update_all(from(i in ExternalIdentity, where: i.key == ^key),
+      set: [last_seen_at: now]
+    )
+
+    :ok
+  end
+
+  @doc "The person an IdP identity key names, if any."
+  @spec get_by_identity(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
+  def get_by_identity(key) when is_binary(key) and key != "" do
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.get_by_identity", fn ->
+      query =
+        from(u in User,
+          join: i in ExternalIdentity,
+          on: i.user_id == u.id,
+          where: i.key == ^key
+        )
+
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        user -> {:ok, user}
+      end
+    end)
+  end
+
+  def get_by_identity(_), do: {:error, :not_found}
+
+  @doc "Every IdP identity that names this person, oldest first."
+  @spec identities(String.t()) :: [ExternalIdentity.t()]
+  def identities(user_id) when is_binary(user_id) do
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.identities", [], fn ->
+      Arca.Repo.all(
+        from(i in ExternalIdentity,
+          where: i.user_id == ^user_id,
+          order_by: [asc: i.first_seen_at]
+        )
+      )
     end)
   end
 

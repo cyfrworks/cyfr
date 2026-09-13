@@ -89,12 +89,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     end
   end
 
-  # The defect these pin: the server-wide `device_init` ceiling was 60/min
-  # while `EmissaryWeb.Plugs.MCPRateLimit` already lets ONE address send
-  # 120/min, so a single unauthenticated IP could exhaust the global budget
-  # without tripping any limiter and answer "Too many sign-in attempts" to
-  # every user on the server. The console was worse: `/live` is handled by
-  # the endpoint before the router, so it passes no limiter at all.
+  # Check per-address device-flow limits and the independent global
+  # sign-in budget on MCP and LiveView surfaces.
   describe "anonymous sign-in budgets are per-address, and the global sits above them" do
     setup do
       Application.delete_env(:cyfr, :github_client_id)
@@ -126,8 +122,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
       for _ <- 1..200, do: init_from(noisy)
 
-      # THE invariant. Before the fix this failed: the noisy address spent
-      # the one server-wide bucket and everyone else got the refusal.
+      # One client must not exhaust the sign-in budget available to other clients.
       assert admitted?(init_from(innocent)),
              "a second address must still be able to start a sign-in"
     end
@@ -211,66 +206,29 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       assert wired.probe_error == "probe_failed"
     end
 
-    test "needs_legal" do
-      assert DeviceFlow.wire(%{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               access_token: "at",
-               outcome: {:needs_legal, "v2"}
-             }) == %{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               needs_policy_acceptance: true,
-               required_policy_version: "v2",
-               needs_personal_namespace: false,
-               access_token: "at"
-             }
-    end
-
-    test "needs_claim" do
-      assert DeviceFlow.wire(%{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               access_token: "at",
-               outcome: {:needs_claim, "alice"}
-             }) == %{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               needs_personal_namespace: true,
-               suggested_username: "alice",
-               access_token: "at"
-             }
-    end
-
-    test "reauthenticate carries no session token" do
-      assert DeviceFlow.wire(%{
-               status: "complete",
-               user: @user,
-               outcome: {:reauthenticate, :idp_expired}
-             }) == %{
-               status: "complete",
-               user: @user,
-               reauthenticate: true,
-               probe_error: "invalid_access_token",
-               needs_personal_namespace: true
-             }
-    end
-
-    test "unavailable becomes the registry_unavailable status" do
-      wired =
+    test "a policy owed or a namespace conflict is a probe error on a signed-in result" do
+      owed =
         DeviceFlow.wire(%{
           status: "complete",
           user: @user,
-          outcome: {:unavailable, :registry_unreachable}
+          session_token: "tok",
+          outcome: {:proceed, %{unsynced: [], probe: :legal_required}}
         })
 
-      assert wired.status == "registry_unavailable"
-      assert is_binary(wired.message)
-      refute Map.has_key?(wired, :user)
+      assert owed.session_token == "tok"
+      assert owed.needs_personal_namespace == false
+      assert owed.probe_error == "policy_acceptance_required"
+
+      conflict =
+        DeviceFlow.wire(%{
+          status: "complete",
+          user: @user,
+          session_token: "tok",
+          outcome: {:proceed, %{unsynced: [], probe: :namespace_conflict}}
+        })
+
+      assert conflict.probe_error == "namespace_conflict"
+      refute Map.has_key?(conflict, :access_token)
     end
 
     test "outcome-less statuses pass through untouched" do
@@ -304,11 +262,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
   end
 
   describe "the MCP surface charges an address too" do
-    # `/mcp` meters every method together at 120/min per IP, so one address
-    # was bounded but several between them were not: the global sign-in
-    # ceiling is a circuit breaker, not a per-caller budget. The context
-    # carries the resolved address now, so `device_init` gets its own
-    # bucket on every surface rather than only in the console.
+    # Device initialization needs its own per-address budget on every surface.
     test "session.device_init charges the context's client_ip" do
       ctx = %{Sanctum.TestContext.local() | client_ip: "203.0.113.9", authenticated: false}
 
@@ -334,6 +288,48 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
       assert Application.get_env(:cyfr, :device_flow_last_ip) == "203.0.113.9",
              "the MCP device flow was charged no address"
+    end
+  end
+
+  defmodule FullServerDeviceFlow do
+    # A server at capacity: the door refuses the mint, so `admitted/2`
+    # refuses the sign-in and the poll carries that reason out.
+    def poll_for_session(_provider, _device_code, _client_ip),
+      do: {:error, {:limit_reached, :max_athanors, 1}}
+  end
+
+  describe "a full server, seen from the CLI" do
+    setup do
+      prev_flow = Application.get_env(:cyfr, :device_flow)
+      prev_provider = Application.get_env(:cyfr, :auth_provider)
+      Application.put_env(:cyfr, :device_flow, FullServerDeviceFlow)
+      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+
+      on_exit(fn ->
+        if prev_flow,
+          do: Application.put_env(:cyfr, :device_flow, prev_flow),
+          else: Application.delete_env(:cyfr, :device_flow)
+
+        if prev_provider,
+          do: Application.put_env(:cyfr, :auth_provider, prev_provider),
+          else: Application.delete_env(:cyfr, :auth_provider)
+      end)
+
+      :ok
+    end
+
+    test "the poller is told the server is full, not that sign-in failed" do
+      ctx = %{Sanctum.TestContext.local() | authenticated: false}
+
+      assert {:error, message} =
+               Sanctum.MCP.SessionTool.handle(ctx, %{
+                 "action" => "device_poll",
+                 "provider" => "github",
+                 "device_code" => "dc_full"
+               })
+
+      assert message =~ "full"
+      refute match?({:unavailable, _}, message)
     end
   end
 end

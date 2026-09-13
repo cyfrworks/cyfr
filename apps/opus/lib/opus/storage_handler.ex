@@ -272,7 +272,7 @@ defmodule Opus.StorageHandler do
   # (`Arca.Storage.locate/1` — pure grammar, safe on unvalidated input):
   # a guest write at `components/junk.txt` would mint a tree shape no
   # unit grammar owns — charged to quota, invisible to every scanner.
-  # `data/` maps to the non-overlaid `guest/` scope and passes untouched.
+  # `data/` is a non-overlaid scope and passes untouched.
   defp validate_mutable_unit(segments, path) do
     case Arca.Storage.locate(segments) do
       :above_unit ->
@@ -327,10 +327,7 @@ defmodule Opus.StorageHandler do
 
   defp validate_write_size(_action, _request, _limits), do: :ok
 
-  # Public profiles write under a byte and file ceiling. The flag rides explicit
-  # opts rather than a callee-derived `is_public` semantic, which no longer
-  # exists — public-ness is a property of the profile, threaded in as an opt.
-  # Read-only publishes never reach this.
+  # Public-profile writes use byte and file ceilings supplied through explicit options.
   defp validate_public_quota(action, request, ctx, opts) when action in @writing_actions do
     if Keyword.get(opts, :public?, false) do
       quota = Keyword.get(opts, :public_quota, default_public_quota())
@@ -592,11 +589,7 @@ defmodule Opus.StorageHandler do
             {name, :file} -> name
           end)
 
-        # A listing is a read, and the moduledoc says reads are bounded by
-        # `max_response_size` — but only `read` checked. A scope may hold up
-        # to `@max_scope_files` entries, and this import carries no rate
-        # limit, so an unbounded listing was a cheap way to build a very large
-        # response in host memory and hand it across the WIT boundary.
+        # Bound listing responses by max_response_size before crossing WIT.
         case check_read_size(limits, Enum.join(files, "\n")) do
           :ok ->
             {:ok,
@@ -713,11 +706,10 @@ defmodule Opus.StorageHandler do
 
   # Every path is tenant-relative and Arca scopes it to the context's
   # athanor — a catalyst can never read or write another athanor's bytes
-  # because no path spelling names one. The one vocabulary difference: the
-  # guest contract says `data/`, and the host stores that scope under the
-  # athanor's `guest/` subtree, a physical sibling of the host scopes
-  # (aqua/, conversations/, …) so a `data/` grant can never see them. Mapped here,
-  # at the boundary; responses keep speaking `data/`.
+  # because no path spelling names one. A guest scope is the athanor's root
+  # of the same name, a physical sibling of the host scopes (aqua/,
+  # conversations/, …) so a `data/` grant can never see them; the roster is
+  # the layout's, applied here at the boundary.
   defp normalize_path(path, _ctx) when is_binary(path) do
     path
     |> String.split("/")

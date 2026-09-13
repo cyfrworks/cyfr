@@ -2,9 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Compendium.RegistryRemoveCascadeTest do
-  # §3.10: removing a component revokes its profiles and takes its
-  # registrations with it. Consents stay as history; vault entries stay
-  # because they are the operator's, not the component's.
+  # Removal revokes profiles and disables registrations while retaining consents and vault entries.
   use ExUnit.Case, async: false
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))

@@ -35,8 +35,11 @@ defmodule Sanctum.Authority do
   an id and a cap, created once per root and copied into every child
   Authority — including unbound ones — so concurrency is bounded per root
   tree, not per level, and the bound survives closure capture across spawn
-  layers. The counter behind the id is node-local; the struct itself is
-  plain data.
+  layers. The id names the root's reservation row
+  (`Arca.BudgetReservations`), which is the authority on what is in
+  flight; the counter behind the id on this node is a pre-check. The
+  struct itself is plain data, and the wire carries the id alone: a
+  reader takes the cap from the row.
 
   ## Wire
 
@@ -180,7 +183,8 @@ defmodule Sanctum.Authority do
          resources: ingress_edge,
          chain: [profile.source_ref],
          depth: 0,
-         budget: Budget.new(source_node.limits.max_concurrent_tasks)
+         budget:
+           Budget.new(source_node.limits.max_concurrent_tasks, Keyword.get(opts, :budget_id))
        }}
     end
   end
@@ -228,9 +232,8 @@ defmodule Sanctum.Authority do
   end
 
   @doc """
-  Self-invocation at the same activation identity (D2): cursor and
-  resources are preserved; only chain and depth advance. A component is not
-  a boundary against itself.
+  Self-invocation at the same activation identity preserves the cursor
+  and resources; only chain and depth advance.
   """
   @spec self_child(t(), String.t()) :: t()
   def self_child(%__MODULE__{cursor: {:bound, _}} = auth, reference) do
@@ -325,7 +328,7 @@ defmodule Sanctum.Authority do
         if(match?(%Blob.Edge{}, auth.resources), do: Blob.edge_to_map(auth.resources), else: nil),
       "chain" => auth.chain,
       "depth" => auth.depth,
-      "budget" => %{"id" => auth.budget.id, "cap" => auth.budget.cap}
+      "budget" => %{"id" => auth.budget.id}
     }
   end
 
@@ -420,13 +423,18 @@ defmodule Sanctum.Authority do
 
   defp wire_resources(other), do: {:error, {:invalid_wire_resources, other}}
 
-  # Shape-validated only — the wire names its own budget id and cap. When
-  # `from_wire/1` gains a non-test caller (a remote worker), the budget
-  # must be RE-MINTED host-side rather than trusted from the wire: a
-  # worker that writes its own cap writes its own ceiling.
-  defp wire_budget(%{"id" => id, "cap" => cap} = map)
-       when is_binary(id) and id != "" and is_integer(cap) and cap >= 0 and map_size(map) == 2,
-       do: {:ok, %Budget{id: id, cap: cap}}
+  # The wire names the reservation; the cap is the row's, never the
+  # sender's — a sender that could write its cap would write its own
+  # ceiling. A reservation the store does not know, or one already
+  # released, does not cross.
+  defp wire_budget(%{"id" => id} = map) when is_binary(id) and id != "" and map_size(map) == 1 do
+    case Arca.BudgetReservations.fetch(id) do
+      {:ok, %{released_at: nil, cap: cap}} -> {:ok, %Budget{id: id, cap: cap}}
+      {:ok, _released} -> {:error, {:released_reservation, id}}
+      {:error, :not_found} -> {:error, {:unknown_reservation, id}}
+      {:error, reason} -> {:error, {:reservation_unavailable, reason}}
+    end
+  end
 
   defp wire_budget(other), do: {:error, {:invalid_wire_budget, other}}
 

@@ -191,9 +191,7 @@ defmodule Compendium.WasmValidator do
   defp format_exports([]), do: "nothing"
   defp format_exports(exports), do: Enum.join(exports, ", ")
 
-  # The type whose world the parsed exports satisfy — an honest suggestion
-  # now that component exports are read, where this used to hardcode
-  # :reagent for every component binary.
+  # Suggest the component type whose world matches the parsed exports.
   defp component_suggested_type(exports) do
     exports
     |> Enum.find_value(&Compendium.WITSource.type_for_export/1)

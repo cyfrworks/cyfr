@@ -261,12 +261,8 @@ defmodule EmissaryWeb.TinctureController do
     end
   end
 
-  # Each refusal answers by name — a bare `_ -> 404` here once collapsed
-  # five distinct outcomes (token expired, token invalid or for another
-  # tincture, standing lost, athanor gone, tincture missing), so a client
-  # could not tell "re-mint your token" from "you were removed", and the
-  # access log said nothing either. The signed URL already names the
-  # tincture, so distinguishing these reveals nothing its holder lacks.
+  # Distinguish token expiry, invalid or mismatched tokens, lost standing,
+  # missing athanors and missing tinctures so clients can choose recovery.
   defp serve_signed_asset(conn, athanor, publisher, tincture_name, token, segments) do
     outcome =
       with {:ok, {^athanor, ^publisher, ^tincture_name, user_id}} <-

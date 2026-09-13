@@ -15,26 +15,16 @@ defmodule Aqua.AgentConfig do
   every read made from outside the harness, still goes through the tool:
   `call_aqua/2` is the MCP door, kept for those.
 
-  One turn used to make a dozen tool calls to compose itself — the
-  orchestrator twice, the roster, the catalyst listing three times, the
-  scroll index, and one `get` per role — each minting a request-log row.
-  Now the tree is read once (`roster/1`), the catalyst listing once
-  (`catalyst_listing/1`), and the roles are built from the roster in hand
-  (`role_definitions/4`).
+  Each turn reads the roster and catalyst listing once, then builds role
+  definitions from those results with `role_definitions/4`.
   """
 
   alias Compendium.AquaAgent
   alias Compendium.AquaPath
   alias Sanctum.Context
 
-  # The agent's `tool_policy` is DECLARED policy — what the agent's author
-  # says it may do, edited on the AQUA page. A chat decision ("always
-  # approve", "never ask again") is not an edit to it: those are
-  # `Aqua.ToolGrants` rows, composed over this at use time. The two used to
-  # share this storage, so clicking a button in one conversation rewrote
-  # the agent's definition for every conversation and every member — and
-  # once agents belong to people rather than estates, it would have
-  # followed a borrowed agent home.
+  # The authored tool_policy is edited on the AQUA page. Chat approvals are
+  # stored separately in Aqua.ToolGrants and composed with it at use time.
 
   # What a storage fault reads as on the tape: the adapter's term is for
   # the log, the person gets the one sentence every storage-backed answer
@@ -54,14 +44,14 @@ defmodule Aqua.AgentConfig do
   (`Compendium.AquaAgent.list/1`).
 
   The read is also where an estate gets its bundle on first need
-  (`Sanctum.Provisioning.ensure_provisioned/1`): a group estate is minted
+  (`Sanctum.Provisioning.start_provisioning/1`): a group estate is minted
   as a bare row and filled the first time something reads it, and a turn
   roots an authority in that bundle right after this read. The `aqua`
   tool hooks its own reads the same way for callers outside the harness.
   """
   @spec roster(Context.t()) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
   def roster(%Context{} = ctx) do
-    Sanctum.Provisioning.ensure_provisioned(ctx)
+    Sanctum.Provisioning.start_provisioning(ctx)
 
     case AquaAgent.list(ctx) do
       {:ok, agents, errors} ->
@@ -89,7 +79,7 @@ defmodule Aqua.AgentConfig do
   @spec agent(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def agent(%Context{} = ctx, name) when is_binary(name) do
     if AquaPath.valid_name?(name) do
-      Sanctum.Provisioning.ensure_provisioned(ctx)
+      Sanctum.Provisioning.start_provisioning(ctx)
 
       with {:ok, agent} <- AquaAgent.get(ctx, name), do: {:ok, project(agent)}
     else
@@ -219,16 +209,35 @@ defmodule Aqua.AgentConfig do
     |> Map.new(fn ref -> {ref, catalyst_status(ctx, listing, ref)} end)
   end
 
+  # A model is ready when its own profile binds a key AND the assistant's
+  # consent selects that profile on its edge to the catalyst — the key
+  # the assistant actually runs it with, resolved as a turn would resolve
+  # it. A bound key the assistant's edge does not select is still a key
+  # to connect.
   defp catalyst_status(ctx, listing, ref) do
     with {:ok, resolved} <- find_matching_catalyst(listing, ref),
          {:ok, plan} <-
-           Aqua.MCPHelpers.call_tool("component", ctx, %{
+           Aqua.Ops.call_tool("component", ctx, %{
              "action" => "setup_plan",
              "reference" => resolved
            }) do
-      if plan[:ready] || plan["ready"], do: {:ready, resolved}, else: {:needs_key, resolved}
+      if (plan[:ready] || plan["ready"]) == true and lent_to_assistant?(ctx, ref),
+        do: {:ready, resolved},
+        else: {:needs_key, resolved}
     else
       _ -> {:missing, ref}
+    end
+  end
+
+  defp lent_to_assistant?(ctx, catalyst_ref) do
+    soul = Compendium.AgentSource.soul_ref()
+
+    with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, soul),
+         {:ok, edge} <-
+           Sanctum.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
+      Sanctum.Authority.Blob.bound_vault?(edge.vault)
+    else
+      _ -> false
     end
   end
 
@@ -246,16 +255,16 @@ defmodule Aqua.AgentConfig do
   def resolve_catalyst(_listing, nil), do: {:error, :no_catalyst_ref}
 
   @doc """
-  The working estate's installed catalysts, as `component.list` answers
-  them — read once per turn and handed to `resolve_catalyst/2` and
-  `role_definitions/4`, which used to fetch it each. Still a tool call:
-  components are the registry's, and this is the registry's own read of
-  them, one per turn.
+  Returns the working athanor's installed catalysts through `component.list`.
+  Read once per turn and pass to `resolve_catalyst/2` and `role_definitions/4`.
+
+  Each row names its release in `component_ref`; that is the key the
+  resolvers match on.
   """
   @spec catalyst_listing(Context.t()) :: {:ok, [map()]} | {:error, :catalyst_lookup_failed}
   def catalyst_listing(%Context{} = ctx) do
     result =
-      Aqua.MCPHelpers.call_tool("component", ctx, %{
+      Aqua.Ops.call_tool("component", ctx, %{
         "action" => "list",
         "type" => "catalyst"
       })
@@ -277,14 +286,14 @@ defmodule Aqua.AgentConfig do
 
     match =
       components
-      |> Enum.filter(fn c -> String.starts_with?(c["reference"] || "", prefix) end)
+      |> Enum.filter(fn c -> String.starts_with?(c["component_ref"] || "", prefix) end)
       # Semver precedence, not lexicographic max — "10.0.0" outranks "9.0.0".
       |> Compendium.Semver.sort_desc_by(fn c -> c["version"] || "0" end)
       |> List.first()
 
     case match do
       nil -> {:error, :catalyst_not_found}
-      c -> {:ok, c["reference"]}
+      c -> {:ok, c["component_ref"]}
     end
   end
 
@@ -294,14 +303,12 @@ defmodule Aqua.AgentConfig do
   console's AQUA page). A turn's own reads are in-process
   (`roster/1`, `agent/2`).
 
-  Every aqua call goes through here so guide maps arrive with ONE key
-  spelling: in-process results are atom-keyed, wire round-trips
-  string-keyed, and consumers must not carry `m[:k] || m["k"]` pairs. The
-  console's AQUA page had a byte-identical private copy of this.
+  Normalizes atom-keyed in-process results and string-keyed wire results
+  to the same string-keyed representation.
   """
   @spec call_aqua(Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_aqua(ctx, args) do
-    case Aqua.MCPHelpers.call_tool("aqua", ctx, args) do
+    case Aqua.Ops.call_tool("aqua", ctx, args) do
       {:ok, result} -> {:ok, stringify_deep(result)}
       other -> other
     end

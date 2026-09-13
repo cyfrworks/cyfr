@@ -5,12 +5,8 @@ defmodule Opus.ExecutorRuntimeOptsTest do
   @moduledoc """
   Who gets the last word on the options the runtime runs under.
 
-  `enforce_authority/3` derives the node's limits, the edge's resources and
-  the memory ceiling from the consented blob and says "nothing is re-resolved
-  at execution time". The merge that built the runtime options said otherwise:
-  caller opts were merged over the pipeline's, so `run/4`'s own documented
-  `:max_memory_bytes` option — and `:limits` and `:edge` with it — outranked
-  what was consented.
+  Checks that consented limits, resources, and memory ceilings take
+  precedence over caller-supplied runtime options.
   """
   use ExUnit.Case, async: true
 

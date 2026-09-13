@@ -3,14 +3,8 @@
 
 defmodule Cyfr.VocabularyDriftTest do
   @moduledoc """
-  The product has one assistant, its roles, its scrolls and its notes.
-  Three of the four readers of the old `type` vocabulary failed open — a
-  renamed string rendered an empty closet, an empty crew, a silent
-  fallback — so the words are held out of the code by test rather than by
-  memory: no `"sub-agent"` literal anywhere under `lib/`, and the
-  `"orchestrator"` literal only where it is a persisted payload key the
-  runner reads back from rows written before the rename (identifiers such
-  as `conversations.orchestrator` are not literals and are not renamed).
+  Checks assistant, role, scroll and note terminology in code and product
+  copy. Persisted payload keys are explicitly exempted where required.
 
   The agent-type values are held the same way: `"soul"` and `"role"` are
   `Compendium.AquaAgent`'s (`soul_type/0`, `role_type/0`, `type_of/1`),
@@ -27,13 +21,8 @@ defmodule Cyfr.VocabularyDriftTest do
   @root Path.expand("../../../..", __DIR__)
   @literals ["\"sub-agent\"", "\"orchestrator\""]
 
-  # Files that keep the literal, by exact count.
-  @orchestrator_literal_allowed %{
-    # The approval row's payload key, written where the card is minted and
-    # read where it is decided.
-    "apps/cyfr/lib/aqua/runner/stream.ex" => 1,
-    "apps/cyfr/lib/aqua/runner/approvals.ex" => 1
-  }
+  # Files that keep the literal, by exact count: none.
+  @orchestrator_literal_allowed %{}
 
   @type_value ~r/"(?:soul|role)"/
   @type_key ~r/\["(?:soul|role)"\]|"(?:soul|role)"\s*=>/
@@ -83,8 +72,7 @@ defmodule Cyfr.VocabularyDriftTest do
 
   # The product's words reach the person through the seed, the CLI, the
   # guides and the formula's manifest as well as the code; none of them
-  # may say what the code no longer does. `UPGRADING.md` is the one file
-  # that keeps the old words on purpose — it explains the rename.
+  # may say what the code no longer does.
   @product_files [
     "seed/aqua/**/*.md",
     "apps/codex/**/*.go",

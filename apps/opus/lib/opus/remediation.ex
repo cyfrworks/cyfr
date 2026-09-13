@@ -5,10 +5,7 @@ defmodule Opus.Remediation do
   @moduledoc """
   Turn setup-related failures into machine-readable fix actions.
 
-  Typed §4.3 error terms are the only source: an unbound need or a
-  drifted consent is known exactly at resolution time, so nothing needs
-  to be recovered from prose. Every fix points at the consent walk
-  (`profile.plan`) — granting is the sheet's job, not a per-field patch.
+  Builds remediation from typed consent errors and directs callers to `profile.plan`.
   """
 
   @type issue :: %{

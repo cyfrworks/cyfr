@@ -264,7 +264,7 @@ defmodule Opus.HttpHandlerTest do
 
   describe "execute/5 edge enforcement" do
     setup do
-      # Start rate limiter since it's no longer in the supervision tree
+      # Start the rate limiter for this test.
       case GenServer.whereis(Opus.RateLimiter) do
         nil -> {:ok, _} = Opus.RateLimiter.start_link([])
         _pid -> :ok

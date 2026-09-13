@@ -3,26 +3,22 @@
 
 defmodule Aqua.ToolSeamTest do
   @moduledoc """
-  `Aqua.MCPHelpers` is the assistant plane's seam onto the MCP tool
+  `Aqua.Ops` is the assistant plane's seam onto the MCP tool
   surface — the same contract `PrismWeb.ToolSeamTest` pins for the
   console.
 
-  Aqua was the one domain namespace with a live tool-dispatch dependency
-  and no roster or helper: `Aqua.Turn`, `Aqua.AgentConfig`,
-  `Aqua.Actions` and the conversation runner each spelled their
-  `Emissary.MCP.*` reaches themselves. This test is what keeps those
-  sites from coming back.
+  Checks that assistant-domain MCP dependencies use Aqua.Ops.
 
   Outside its scope, deliberately: `Emissary.PubSub` used as a process
   NAME (the application's one supervised PubSub, the posture
-  `Cyfr.EmissarySurfaceTest` rosters for sanctum), and `Aqua.Actions`'
+  `Cyfr.EmissarySurfaceTest` rosters for sanctum), and `Aqua.Intents`'
   read of the console route table, rostered in
   `Cyfr.NamespaceDirectionTest`.
   """
 
   use ExUnit.Case, async: true
 
-  @seam "apps/cyfr/lib/aqua/mcp_helpers.ex"
+  @seam "apps/cyfr/lib/aqua/ops.ex"
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -36,7 +32,7 @@ defmodule Aqua.ToolSeamTest do
           do: "#{rel}:#{n}: #{String.trim(line)}"
 
     assert offenders == [],
-           "aqua reaches Emissary.MCP past its seam — go through Aqua.MCPHelpers " <>
+           "aqua reaches Emissary.MCP past its seam — go through Aqua.Ops " <>
              "(or grow the helper), never the registry directly:\n" <>
              Enum.join(offenders, "\n")
   end

@@ -3,9 +3,8 @@
 
 defmodule PrismWeb.AuthenticatedMountTest do
   @moduledoc """
-  The harness contract: a signed-in test user (claimed namespace, membership,
-  session) mounts an authenticated LiveView; a session without a claimed
-  namespace is sent to the claim gate.
+  The harness contract: a signed-in test user (membership, session) mounts
+  an authenticated LiveView, with or without a publisher namespace.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -31,12 +30,13 @@ defmodule PrismWeb.AuthenticatedMountTest do
 
   test "a mounted view lets go when the person loses the athanor in focus", %{conn: conn} do
     user = test_user()
-    conn = log_in_user(conn, user)
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Let go #{user.namespace}")
+    conn = log_in_user(conn, user, athanor_id: group.id)
     {view, _html} = mount_athanor(conn, "/settings")
 
-    home = Sanctum.Tenancy.Athanors.home!()
-    # Home is never archived by a leave; the person simply loses their seat.
-    :ok = Sanctum.Tenancy.Members.remove_member(home, user_id: user.user_id)
+    # A person's own athanor never loses its owner, so the seat that can be
+    # taken away is a group's.
+    :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: user.user_id)
     assert_redirect(view, "/")
   end
 
@@ -58,8 +58,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
              "the #{name} socket holds the raw session token in assigns"
     end
 
-    # ...and it still re-derives standing when a membership changes, which is
-    # what it used to keep the token for.
+    # Re-derive standing after membership changes.
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Re #{user.namespace}")
 
     {:ok, _} =
@@ -71,17 +70,18 @@ defmodule PrismWeb.AuthenticatedMountTest do
   end
 
   test "an anonymous conn is redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/settings"))
+    assert {:error, {:redirect, %{to: "/login"}}} =
+             live(conn, athanor_path("/settings", "@nobody"))
   end
 
-  test "a session without a claimed namespace is sent to the claim gate", %{conn: conn} do
+  test "a session without a publisher namespace mounts like any other", %{conn: conn} do
     conn = log_in_user(conn, test_user(), claim: false)
 
-    assert {:error, {:redirect, %{to: to}}} = live(conn, athanor_path("/settings"))
-    assert to =~ "/claim-namespace"
+    assert {:ok, _view, html} = live(conn, athanor_path("/settings"))
+    assert html =~ "Settings"
   end
 
-  test "focus is the URL: a member mounts their group, a stranger is sent home, an unknown slug too",
+  test "focus is the URL: a member mounts their group, a stranger is turned away, an unknown slug too",
        %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
@@ -100,18 +100,10 @@ defmodule PrismWeb.AuthenticatedMountTest do
 
     assert {:error, {:redirect, %{to: "/"}}} = live(conn, "/a/no-such-group/members")
 
-    # a person's own athanor is addressed as @<namespace>
-    {:ok, personal} =
-      Sanctum.Tenancy.Athanors.create(%{
-        kind: "person",
-        name: "Me",
-        slug: user.namespace,
-        owner_user_id: user.user_id,
-        created_by: user.user_id
-      })
-
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: personal.id)
+    # a person's own athanor — the one they signed in to — is addressed as
+    # @<namespace>
+    personal = seated_athanor()
+    assert personal.kind == "person"
 
     {view, _html} = mount_athanor(conn, "/members", personal)
     assert render(view) =~ "Your own athanor"
@@ -119,9 +111,10 @@ defmodule PrismWeb.AuthenticatedMountTest do
 
   test "the root lands in the chat, on the session's athanor", %{conn: conn} do
     conn = log_in_user(conn, test_user())
-    home = Sanctum.Tenancy.Athanors.home!()
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/")
-    assert to == PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(home))
+
+    assert to ==
+             PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(seated_athanor()))
   end
 
   test "lite mode hides the developer views and speaks the everyday words", %{conn: conn} do
@@ -133,12 +126,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert html =~ "nav-executions"
     assert html =~ "Tinctures"
 
-    {:ok, row} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: user.user_id,
-        provider: "github",
-        email: user.email
-      })
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
 
     {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "lite"})
 
@@ -163,12 +151,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert has_element?(view, "#drawer #drawer-nav-executions")
     assert render(find_live_child(view, "topbar")) =~ ~s(id="live-indicators")
 
-    {:ok, row} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: user.user_id,
-        provider: "github",
-        email: user.email
-      })
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
 
     {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "lite"})
 

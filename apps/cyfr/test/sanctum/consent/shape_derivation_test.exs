@@ -19,6 +19,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     test_path = Path.join(System.tmp_dir!(), "shape_derivation_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
+    Cyfr.Test.SeedBundle.isolate!()
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -32,11 +33,25 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
   end
 
   defp publish!(ctx, name, version, attrs \\ %{}) do
+    type = Map.get(attrs, :type) || Map.get(attrs, "type") || "reagent"
+
+    manifest =
+      case Map.get(attrs, :manifest) || Map.get(attrs, "manifest") do
+        json when is_binary(json) -> Jason.decode!(json)
+        map when is_map(map) -> map
+        _ -> %{}
+      end
+      |> Map.merge(%{
+        "name" => name,
+        "type" => type,
+        "version" => version,
+        "publisher" => "local"
+      })
+
     {:ok, component} =
-      Compendium.Registry.publish_bytes(
-        ctx,
-        @wasm,
-        Map.merge(%{name: name, version: version, type: "reagent"}, attrs)
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, type, "local", name, version,
+        manifest: manifest,
+        wasm: @wasm
       )
 
     component
@@ -78,7 +93,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
              {:ok, consent.shape_digest}
   end
 
-  test "a new release with an unchanged shape allows and records (§2.6)", %{ctx: ctx} do
+  test "a new release with an unchanged shape allows and records", %{ctx: ctx} do
     publish!(ctx, "shape-roll", "1.0.0", %{manifest: Jason.encode!(roll_manifest("original"))})
     {:ok, _} = Bootstrap.run(ctx)
     {profile, consent} = head!(ctx, "reagent:local.shape-roll")

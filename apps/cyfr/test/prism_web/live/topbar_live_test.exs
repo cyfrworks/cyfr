@@ -56,8 +56,8 @@ defmodule PrismWeb.TopbarLiveTest do
     assert has_element?(bar, ~s(a[href="#{PrismWeb.ChatLive.chat_path(route)}"]), "Bells")
     assert has_element?(bar, ~s(a[href="/a/#{route}/aqua"]), "AQUA")
 
-    # something happens in a FOLLOWED thread of the group while Home is in
-    # focus: a badge. The creator follows their own thread.
+    # something happens in a FOLLOWED thread of the group while another
+    # estate is in focus: a badge. The creator follows their own thread.
     group_ctx =
       Sanctum.Context.build(
         user_id: alice.user_id,
@@ -91,7 +91,7 @@ defmodule PrismWeb.TopbarLiveTest do
     {view, _html} = mount_athanor(conn, "")
     bar = topbar(view)
     viewing = fn -> :sys.get_state(bar.pid).socket.assigns.viewing end
-    assert viewing.() == Athanors.home!().id
+    assert viewing.() == seated_athanor().id
 
     send(bar.pid, {:viewing, group.id})
     assert viewing.() == group.id
@@ -153,7 +153,7 @@ defmodule PrismWeb.TopbarLiveTest do
     ctx =
       Sanctum.Context.build(
         user_id: ops.user_id,
-        athanor_id: Sanctum.Tenancy.Athanors.home!().id,
+        athanor_id: seated_athanor().id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
@@ -162,7 +162,7 @@ defmodule PrismWeb.TopbarLiveTest do
       )
 
     assert {:ok, _} =
-             Emissary.MCP.ToolRegistry.call_external("door", ctx, %{
+             Cyfr.Ops.Catalog.call_external("door", ctx, %{
                "action" => "resolve",
                "id" => id,
                "decision" => "reject"
@@ -177,10 +177,7 @@ defmodule PrismWeb.TopbarLiveTest do
     {view, _html} = mount_athanor(conn, "")
     bar = topbar(view)
 
-    # This bar is mounted on every page and a single request fans out to
-    # several telemetry events, so a reload here is the most-multiplied read
-    # in the console. Each event used to reload on arrival: ten of them cost
-    # twenty tool calls per open page.
+    # Coalesce bursts of telemetry into one reload.
     for _ <- 1..10, do: send(bar.pid, {:request, %{}, %{}})
     :sys.get_state(bar.pid)
 

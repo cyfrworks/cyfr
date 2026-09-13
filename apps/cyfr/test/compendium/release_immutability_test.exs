@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Compendium.ReleaseImmutabilityTest do
-  # The model §6 "Release immutability" gate: re-publishing an existing
-  # version with different bytes or a different manifest is refused on every
-  # publish path, and the refusal leaves nothing behind. The directory /
-  # scanner ingress is exempt — that exemption is keyed on the ingress path,
-  # not on the publisher string (D4).
+  # Publishing different bytes or a different manifest under an existing
+  # version must fail without changing storage. Filesystem scanning is
+  # exempt based on ingress, not publisher name.
   use ExUnit.Case, async: false
 
   alias Compendium.Registry
@@ -122,9 +120,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
     end
   end
 
-  # ============================================================================
-  # The directory / scanner exemption (D4)
-  # ============================================================================
+  # Filesystem scanner exemption
 
   describe "directory register exemption" do
     test "a local rebuild re-registers with new bytes at an unchanged version", %{ctx: ctx} do

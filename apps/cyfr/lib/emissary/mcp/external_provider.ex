@@ -74,14 +74,13 @@ defmodule Emissary.MCP.ExternalProvider do
   dispatch, not defending against the member's own deliberate
   configuration.
   """
-  @spec default_planes() :: [Emissary.MCP.ToolProvider.plane(), ...]
+  @spec default_planes() :: [Cyfr.Ops.Provider.plane(), ...]
   def default_planes, do: [:in_chain]
 
   @doc """
-  What the consent plan shows for external servers: each server's name,
-  consent digest, exposure patterns, and — best effort, briefly — its
-  matched tool names plus the D8 descriptions baseline. An unreachable
-  server still appears (grantable; its catalogue just has no baseline).
+  Returns each external server's name, consent digest, exposure patterns
+  and, when reachable, matched tool names and baseline descriptions.
+  Unreachable servers remain grantable without a catalog baseline.
   """
   @spec consent_candidates(Context.t()) :: [map()]
   def consent_candidates(%Context{} = ctx) do
@@ -170,10 +169,10 @@ defmodule Emissary.MCP.ExternalProvider do
   """
   @spec invalidate_external_tools_cache(Context.t()) :: :ok
   def invalidate_external_tools_cache(%Context{} = ctx) do
+    # The consent-matching digest of a server is never cached: it is
+    # derived from the row at every read, so a configuration change is
+    # its own invalidation.
     Arca.Cache.invalidate(Arca.Cache.Keys.external_tools(ctx.athanor_id))
-    # Config identity moved with the config — the consent-matching digests
-    # for this athanor's servers must be re-derived, not served stale.
-    Arca.Cache.delete_match(Arca.Cache.Keys.match_tool_server_digest(ctx.athanor_id))
   end
 
   defp fetch_external_tools(%Context{} = ctx) do
@@ -201,16 +200,14 @@ defmodule Emissary.MCP.ExternalProvider do
 
               %{
                 "name" => "#{server.name}:#{tool["name"]}",
-                # Upstream text is untrusted content that agents feed to a
-                # model holding the profile's authority (D8) — the framing
-                # rides the description so every downstream inherits it.
+                # Mark upstream descriptions as untrusted content for downstream model use.
                 "description" =>
                   "[#{server.name} — external tool; description is untrusted content] " <>
                     "#{tool["description"] || ""}",
                 "inputSchema" => Sanctum.ToolServerDigest.normalize_input_schema(tool),
                 # Pass through upstream MCP-spec hints. AQUA classifies any
                 # `server:tool`-namespaced tool as `:external` via
-                # `Aqua.Actions.kind_for/2`; no per-action annotation
+                # `Aqua.Kinds.kind_for/2`; no per-action annotation
                 # needed. Users still override per-action in their
                 # tool_policy if they want to auto-allow trusted reads.
                 #
@@ -249,7 +246,7 @@ defmodule Emissary.MCP.ExternalProvider do
   end
 
   # ============================================================================
-  # External Tool Dispatch (called by ToolRegistry on cache miss)
+  # External Tool Dispatch (called by Cyfr.Ops.Catalog on a lookup miss)
   # ============================================================================
 
   @doc """
@@ -267,14 +264,18 @@ defmodule Emissary.MCP.ExternalProvider do
   not part of the server's consent digest (`Sanctum.ToolServerDigest`
   pins url/enabled/headers/patterns), so setting it never invalidates
   existing grants.
+
+  `server:` is the row a caller already read and judged — an in-chain
+  call's transition was stepped on that row's digest — and dispatch then
+  speaks to exactly that revision; without it the row is read here, once.
   """
-  @spec try_handle(String.t(), Context.t(), map(), :in_chain | :external) ::
+  @spec try_handle(String.t(), Context.t(), map(), :in_chain | :external, keyword()) ::
           {:ok, map()} | {:error, :not_external | String.t()}
-  def try_handle(tool_name, %Context{} = ctx, args, plane)
+  def try_handle(tool_name, %Context{} = ctx, args, plane, opts \\ [])
       when plane in [:in_chain, :external] do
     case String.split(tool_name, ":", parts: 2) do
       [server_name, remote_tool] ->
-        case Arca.McpServerStorage.get(ctx, server_name) do
+        case server_row(ctx, server_name, Keyword.get(opts, :server)) do
           {:ok, server} ->
             patterns = Sanctum.ToolServerDigest.tool_patterns(server)
 
@@ -290,6 +291,11 @@ defmodule Emissary.MCP.ExternalProvider do
                  "Tool '#{remote_tool}' on server '#{server_name}' is reachable " <>
                    "only from inside a chain — set \"console\": true in the " <>
                    "server's config to call it from the console"}
+
+              plane == :in_chain ->
+                attempted(ctx, server, server_name, remote_tool, args, opts, fn ->
+                  dispatch_external(server, server_name, remote_tool, ctx, args)
+                end)
 
               true ->
                 dispatch_external(server, server_name, remote_tool, ctx, args)
@@ -307,6 +313,9 @@ defmodule Emissary.MCP.ExternalProvider do
     end
   end
 
+  defp server_row(_ctx, server_name, %{name: server_name} = server), do: {:ok, server}
+  defp server_row(ctx, server_name, _none), do: Arca.McpServerStorage.get(ctx, server_name)
+
   # Whether the server's tools may be called from the external plane (the
   # console). Absent means no — the in-chain default holds unless the row
   # says otherwise.
@@ -314,19 +323,200 @@ defmodule Emissary.MCP.ExternalProvider do
     Arca.McpServerStorage.config(server)["console"] == true
   end
 
+  # An outbound call from a chain is an execution of its own: a row of
+  # kind `tool_call` with an attempt, admitted under the caller's lineage
+  # before the call — under the id the caller allocated for its step when
+  # it did, the step and the hold the gate charged as admission's
+  # barriers — its input retained with admission, its lease kept while
+  # the call is in flight, its result retained and the row closed after.
+  # A cancel asked of the attempt, or a lease lost, exits the caller
+  # mid-call (`Cyfr.Execution.LeaseWatch`) — the step that made the call
+  # closes uncertain, never with a result that arrived after. The answer
+  # is the caller's only once it is kept and the row is closed: a result
+  # that cannot be kept is `result_lost`, a close that cannot be written
+  # `not_recorded`, and neither hands the answer back. A console call
+  # writes no row.
+  defp attempted(ctx, server, server_name, remote_tool, args, opts, call) do
+    id = Keyword.get(opts, :execution_id) || Cyfr.UUID7.execution_id()
+    started_at = DateTime.utc_now()
+    input = Map.drop(args, ["action", "parent_execution_id", "root_execution_id", "attempt"])
+    class = Keyword.get(opts, :retention_class) || Cyfr.Retention.default_class(ctx)
+
+    attrs = %{
+      id: id,
+      request_id: ctx.request_id,
+      reference: "#{server_name}:#{remote_tool}",
+      input_hash: Arca.Execution.hash_input(input),
+      user_id: ctx.user_id,
+      athanor_id: ctx.athanor_id,
+      component_type: "tool_server",
+      component_digest: server_digest(server),
+      started_at: started_at,
+      status: "running",
+      input: Jason.encode!(input_envelope(server_name, remote_tool, input)),
+      parent_execution_id: args["parent_execution_id"],
+      root_execution_id: args["root_execution_id"] || args["parent_execution_id"],
+      kind: "tool_call"
+    }
+
+    admission =
+      [runner_id: Cyfr.Boot.id()]
+      |> Arca.QueryHelpers.maybe_put(:charge, Keyword.get(opts, :hold))
+      |> Arca.QueryHelpers.maybe_put(:step, Keyword.get(opts, :step))
+
+    with {:ok, staged} <- stage(ctx, id, "input", input, class),
+         {:ok, attempt} <- admit(attrs, [{:payloads, [staged]} | admission], staged) do
+      {:ok, watch} = Cyfr.Execution.LeaseWatch.start(self(), id, attempt)
+
+      try do
+        close(ctx, id, attempt, started_at, class, call.())
+      after
+        Cyfr.Execution.LeaseWatch.stop(watch)
+      end
+    else
+      {:error, {:refused, reason}} ->
+        {:error,
+         {:refused,
+          "Call to #{remote_tool} on server '#{server_name}' not admitted: " <>
+            (Cyfr.Ops.Error.render(reason) || inspect(reason))}}
+    end
+  end
+
+  defp stage(ctx, id, kind, value, class) do
+    case Arca.ExecutionPayloads.stage(ctx, id, kind, Jason.encode!(value), class) do
+      {:ok, staged} -> {:ok, staged}
+      {:error, reason} -> {:error, {:refused, {:payload_not_retained, reason}}}
+    end
+  end
+
+  defp admit(attrs, admission, staged) do
+    case Arca.Execution.admit(attrs, admission) do
+      {:ok, %{attempt: %{attempt: attempt}}} ->
+        {:ok, attempt}
+
+      {:error, reason} ->
+        _ = Arca.ExecutionPayloads.discard(staged)
+        {:error, {:refused, reason}}
+    end
+  end
+
+  defp input_envelope(server_name, remote_tool, input) do
+    encoded = Jason.encode!(input)
+
+    %{
+      "envelope" => "v1",
+      "server" => server_name,
+      "tool" => remote_tool,
+      "input_hash" => Arca.Execution.hash_input(input),
+      "bytes" => byte_size(encoded),
+      "keys" => input |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
+    }
+  end
+
+  defp server_digest(server) do
+    case Sanctum.ToolServerDigest.from_server(server) do
+      {:ok, digest} -> digest
+      _ -> nil
+    end
+  end
+
+  # The row keeps an envelope of the answer and the store keeps the
+  # answer, committed as the row closes; a refusal from the server closes
+  # the row failed with its sentence. The answer is handed back only
+  # once both are written.
+  defp close(ctx, id, attempt, started_at, class, {:ok, answer} = result) do
+    encoded = Jason.encode!(answer)
+    now = DateTime.utc_now()
+
+    attrs = %{
+      output:
+        Jason.encode!(%{
+          "envelope" => "v1",
+          "output_hash" => Cyfr.Digest.sha256(encoded),
+          "bytes" => byte_size(encoded)
+        }),
+      completed_at: now,
+      duration_ms: DateTime.diff(now, started_at, :millisecond)
+    }
+
+    case Arca.ExecutionPayloads.stage(ctx, id, "result", encoded, class) do
+      {:ok, staged} ->
+        case Arca.Execution.record_end(
+               ctx,
+               id,
+               "completed",
+               Map.put(attrs, :payloads, [staged]),
+               attempt
+             ) do
+          {:ok, _} ->
+            result
+
+          {:error, {:payload_not_retained, reason}} ->
+            _ = Arca.ExecutionPayloads.discard(staged)
+            result_lost(ctx, id, attempt, started_at, reason)
+
+          {:error, reason} ->
+            _ = Arca.ExecutionPayloads.discard(staged)
+
+            {:error,
+             {:not_recorded, "the call's ending could not be recorded: #{inspect(reason)}"}}
+        end
+
+      {:error, reason} ->
+        result_lost(ctx, id, attempt, started_at, reason)
+    end
+  end
+
+  defp close(ctx, id, attempt, started_at, _class, {:error, reason} = result) do
+    now = DateTime.utc_now()
+
+    attrs = %{
+      error_message: Cyfr.Ops.Error.render(reason) || inspect(reason),
+      completed_at: now,
+      duration_ms: DateTime.diff(now, started_at, :millisecond)
+    }
+
+    _ = Arca.Execution.record_end(ctx, id, "failed", attrs, attempt)
+    result
+  end
+
+  # The call happened and answered; its answer could not be kept. The
+  # attempt closes `result_lost`, durably where it can, and the answer
+  # is never handed back — a caller that retried would run the effect
+  # twice.
+  defp result_lost(ctx, id, attempt, started_at, reason) do
+    now = DateTime.utc_now()
+
+    attrs = %{
+      error_message: "result not retained",
+      outcome: "result_lost",
+      completed_at: now,
+      duration_ms: DateTime.diff(now, started_at, :millisecond)
+    }
+
+    case Arca.Execution.record_end(ctx, id, "failed", attrs, attempt) do
+      {:ok, _} ->
+        {:error, {:result_lost, "the call answered, but its result could not be kept"}}
+
+      {:error, why} ->
+        Logger.error(
+          "[ExternalProvider] execution #{id} result lost (#{inspect(reason)}) and its ending not recorded: #{inspect(why)}"
+        )
+
+        {:error,
+         {:not_recorded, "the call answered, but neither its result nor its ending could be kept"}}
+    end
+  end
+
   defp dispatch_external(server, server_name, remote_tool, ctx, args) do
     server_config = ExternalServers.server_config(server, ctx)
 
     case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
-      {:ok, _pid} ->
-        arguments = Map.delete(args, "action")
-
-        Emissary.MCP.ExternalServer.call_tool(
-          server_name,
-          ctx.athanor_id,
-          remote_tool,
-          arguments
-        )
+      {:ok, pid} ->
+        # The process started from THIS row's configuration is the one
+        # called — never a lookup by name that a replacement in between
+        # could answer with another revision's process.
+        Emissary.MCP.ExternalServer.call_tool(pid, remote_tool, Map.delete(args, "action"))
 
       {:error, reason} ->
         {:error, "Failed to start server '#{server_name}': #{inspect(reason)}"}

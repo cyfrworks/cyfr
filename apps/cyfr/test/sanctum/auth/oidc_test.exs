@@ -120,10 +120,8 @@ defmodule Sanctum.Auth.OIDCTest do
 
       {:ok, ctx} = OIDC.authenticate(auth)
 
-      # Passing the operator's configured provider means full trust,
-      # matching the OAuth/DeviceFlow providers. (The old default granted
-      # :read, an atom nothing recognized.)
-      assert MapSet.equal?(ctx.permissions, MapSet.new([:*]))
+      # A configured OIDC provider grants the authenticated session's full permissions.
+      assert MapSet.equal?(ctx.permissions, MapSet.new(Sanctum.Context.person_permissions()))
       assert Sanctum.Context.has_permission?(ctx, :execute)
     end
 
@@ -178,33 +176,6 @@ defmodule Sanctum.Auth.OIDCTest do
     end
   end
 
-  describe "authenticate/1 with session token" do
-    test "authenticates with valid session token" do
-      # First create a session
-      ctx =
-        Context.build(
-          user_id: "user_123",
-          email: "test@example.com",
-          provider: "github",
-          permissions: [:execute],
-          namespace: "testns",
-          authenticated: true
-        )
-
-      {:ok, session} = Session.create(ctx)
-
-      # Authenticate with the token
-      {:ok, authenticated_ctx} = OIDC.authenticate(%{token: session.token})
-
-      assert authenticated_ctx.user_id == "user_123"
-      assert authenticated_ctx.email == "test@example.com"
-    end
-
-    test "returns error for invalid session token" do
-      assert {:error, :invalid_session} = OIDC.authenticate(%{token: "invalid_token"})
-    end
-  end
-
   describe "authenticate/1 with API key params" do
     test "API keys are not an OIDC credential" do
       # Keys authenticate only through EmissaryWeb.Plugs.Authenticate, which
@@ -230,11 +201,10 @@ defmodule Sanctum.Auth.OIDCTest do
       assert nil == OIDC.current_user(conn)
     end
 
-    test "returns user from session token in assigns" do
-      # Create a session
+    test "sessions and keys are the server's credentials, established before the provider is asked" do
       ctx =
         Context.build(
-          user_id: "user_123",
+          user_id: "usr_oidc_bearer",
           email: "test@example.com",
           provider: "github",
           permissions: [],
@@ -244,42 +214,11 @@ defmodule Sanctum.Auth.OIDCTest do
 
       {:ok, session} = Session.create(ctx)
 
-      conn = %{
-        assigns: %{session_token: session.token}
-      }
-
-      authenticated_ctx = OIDC.current_user(conn)
-
-      assert authenticated_ctx.user_id == "user_123"
-    end
-
-    test "returns user from Bearer token with real Plug.Conn" do
-      # Create a session
-      ctx =
-        Context.build(
-          user_id: "user_123",
-          email: "test@example.com",
-          provider: "github",
-          permissions: [],
-          namespace: "testns",
-          authenticated: true
-        )
-
-      {:ok, session} = Session.create(ctx)
-
-      # Create a real Plug.Conn struct
       conn =
         Plug.Test.conn(:get, "/")
         |> Plug.Conn.put_req_header("authorization", "Bearer #{session.token}")
         |> Map.put(:assigns, %{})
 
-      authenticated_ctx = OIDC.current_user(conn)
-
-      assert authenticated_ctx.user_id == "user_123"
-    end
-
-    test "returns nil for invalid session token" do
-      conn = %{assigns: %{session_token: "invalid_token"}}
       assert nil == OIDC.current_user(conn)
     end
   end

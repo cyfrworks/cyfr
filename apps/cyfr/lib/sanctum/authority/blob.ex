@@ -29,13 +29,35 @@ defmodule Sanctum.Authority.Blob do
     The resources one consent edge grants. `"@ingress"` and resource-less
     invocation edges are all-empty instances of the same type — an edge that
     authorizes invocation while granting nothing is representable.
+
+    A vault resource is either **bound** — an entry and the binding digest
+    the consent approved — or **selected**: the entry that the edge's
+    target binds on the ingress of its own owner profile of the named
+    label, pinned to a binding digest when the consent pinned one.
+    `Sanctum.Consent.Loader` turns a selection into a bound resource when
+    that profile is active and its ingress carries a matching entry, and
+    pins the lender (`profile_id`, `consent_id`) so a later revoke or
+    revision refuses the next unseal; a selection that does not resolve
+    stays a selection, and a run under it answers setup_required.
     """
 
-    @type vault :: %{
-            entry_id: String.t(),
-            binding_digest: String.t(),
-            projection: %{fields: [String.t()], scopes: [String.t()]} | nil
+    @type projection :: %{fields: [String.t()], scopes: [String.t()]} | nil
+
+    @type lender :: %{profile_id: String.t(), consent_id: String.t()}
+
+    @type bound_vault :: %{
+            required(:entry_id) => String.t(),
+            required(:binding_digest) => String.t(),
+            required(:projection) => projection(),
+            optional(:lender) => lender()
           }
+
+    @type selected_vault :: %{
+            via: %{label: String.t(), binding_digest: String.t() | nil},
+            projection: projection()
+          }
+
+    @type vault :: bound_vault() | selected_vault()
     @type egress :: %{
             domains: [String.t()],
             methods: [String.t()],
@@ -84,11 +106,8 @@ defmodule Sanctum.Authority.Blob do
   @ingress_key "@ingress"
 
   @doc """
-  The reserved ingress edge-key STRING. This module reads the edge for you
-  (`ingress/2`), but the consent writers (blob builder, commit, plan) and
-  the profile tool construct nodes carrying the key — seven sites used to
-  hardcode the literal, so renaming the slot would compile everywhere and
-  silently split the consent graph in two.
+  Returns the reserved ingress edge-key string used by consent writers
+  and profile-tool node construction. `ingress/2` reads this edge.
   """
   @spec ingress_key() :: String.t()
   def ingress_key, do: @ingress_key
@@ -194,10 +213,23 @@ defmodule Sanctum.Authority.Blob do
   defp put_resource(map, _key, nil), do: map
   defp put_resource(map, key, value), do: Map.put(map, key, value)
 
-  defp vault_to_map(%{entry_id: id, binding_digest: digest, projection: projection}) do
+  defp vault_to_map(%{entry_id: id, binding_digest: digest, projection: projection} = vault) do
     %{"entry_id" => id, "binding_digest" => digest}
     |> put_resource("projection", projection && string_lists_to_map(projection))
+    |> put_resource("lender", lender_to_map(Map.get(vault, :lender)))
   end
+
+  defp vault_to_map(%{via: %{label: label, binding_digest: digest}, projection: projection}) do
+    via = %{"label" => label} |> put_resource("binding_digest", digest)
+
+    %{"via" => via}
+    |> put_resource("projection", projection && string_lists_to_map(projection))
+  end
+
+  defp lender_to_map(%{profile_id: profile_id, consent_id: consent_id}),
+    do: %{"profile_id" => profile_id, "consent_id" => consent_id}
+
+  defp lender_to_map(_), do: nil
 
   # `%{domains: [...], methods: [...]}` → `%{"domains" => [...], ...}`,
   # dropping nil lists (an absent key on the way in).
@@ -248,6 +280,55 @@ defmodule Sanctum.Authority.Blob do
   @spec edge_key(String.t(), String.t()) :: String.t()
   def edge_key(ref, ""), do: ref
   def edge_key(ref, need) when is_binary(need), do: ref <> "|" <> need
+
+  @doc """
+  The target ref an edge key names: the bare ref for the unnamed slot, the
+  ref before `|need` for a named one. The ingress key names no target.
+  """
+  @spec edge_target(String.t()) :: {:ok, String.t()} | :ingress
+  def edge_target(@ingress_key), do: :ingress
+  def edge_target(key) when is_binary(key), do: {:ok, key |> String.split("|", parts: 2) |> hd()}
+
+  @doc """
+  Whether a vault resource is bound to an entry (as opposed to selected
+  from another profile, or absent).
+  """
+  @spec bound_vault?(Edge.vault() | nil) :: boolean()
+  def bound_vault?(%{entry_id: _}), do: true
+  def bound_vault?(_), do: false
+
+  @doc """
+  Entry ids that appear on more than one bound vault with unequal
+  binding digests. Commit and the loader refuse rather than pick.
+  """
+  @spec entry_digest_conflicts(t()) :: [String.t()]
+  def entry_digest_conflicts(%__MODULE__{nodes: nodes}) do
+    nodes
+    |> Enum.flat_map(fn {_ref, %Node{edges: edges}} ->
+      for {_key, %Edge{vault: %{entry_id: id, binding_digest: digest}}} <- edges,
+          do: {id, digest}
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.filter(fn {_id, digests} -> digests |> Enum.uniq() |> length() > 1 end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
+  end
+
+  @doc """
+  The blob with every edge rewritten by `fun`, which receives the node
+  ref, the edge key and the edge and answers the edge to keep.
+  """
+  @spec map_edges(t(), (String.t(), String.t(), Edge.t() -> Edge.t())) :: t()
+  def map_edges(%__MODULE__{nodes: nodes} = blob, fun) when is_function(fun, 3) do
+    %{
+      blob
+      | nodes:
+          Map.new(nodes, fn {ref, %Node{edges: edges} = node} ->
+            {ref,
+             %{node | edges: Map.new(edges, fn {key, edge} -> {key, fun.(ref, key, edge)} end)}}
+          end)
+    }
+  end
 
   @doc """
   A node's `"@ingress"` edge.
@@ -416,12 +497,25 @@ defmodule Sanctum.Authority.Blob do
     end)
   end
 
+  defp validate_resource(:vault, %{"via" => via} = raw) when is_map(raw) do
+    with :ok <- keys_or_reason(raw, ["via", "projection"]),
+         {:ok, via_map} <- as_object(via, "via"),
+         :ok <- keys_or_reason(via_map, ["label", "binding_digest"]),
+         {:ok, label} <- required_string(via_map, "label"),
+         {:ok, digest} <- optional_string(via_map, "binding_digest"),
+         {:ok, projection} <- validate_projection(Map.get(raw, "projection")) do
+      {:ok, %{via: %{label: label, binding_digest: digest}, projection: projection}}
+    end
+  end
+
   defp validate_resource(:vault, raw) when is_map(raw) do
-    with :ok <- keys_or_reason(raw, ["entry_id", "binding_digest", "projection"]),
+    with :ok <- keys_or_reason(raw, ["entry_id", "binding_digest", "projection", "lender"]),
          {:ok, entry_id} <- required_string(raw, "entry_id"),
          {:ok, digest} <- required_string(raw, "binding_digest"),
-         {:ok, projection} <- validate_projection(Map.get(raw, "projection")) do
-      {:ok, %{entry_id: entry_id, binding_digest: digest, projection: projection}}
+         {:ok, projection} <- validate_projection(Map.get(raw, "projection")),
+         {:ok, lender} <- validate_lender(Map.get(raw, "lender")) do
+      vault = %{entry_id: entry_id, binding_digest: digest, projection: projection}
+      {:ok, if(lender, do: Map.put(vault, :lender, lender), else: vault)}
     end
   end
 
@@ -463,11 +557,21 @@ defmodule Sanctum.Authority.Blob do
   defp validate_resource(_kind, raw),
     do: {:error, "unexpected shape: #{inspect(Sanctum.Sanitizer.sanitize(raw))}"}
 
-  # `server_name` exists so a digest mismatch is distinguishable from
-  # never-granted (drift explanation, §4.6 display, and the D8 baseline
-  # anchor); matching stays digest-keyed. `descriptions_digest` is the D8
-  # baseline over the granted tools' descriptions — advisory, absent when
-  # the catalogue was unreachable at commit.
+  defp validate_lender(nil), do: {:ok, nil}
+
+  defp validate_lender(raw) when is_map(raw) do
+    with :ok <- keys_or_reason(raw, ["profile_id", "consent_id"]),
+         {:ok, profile_id} <- required_string(raw, "profile_id"),
+         {:ok, consent_id} <- required_string(raw, "consent_id") do
+      {:ok, %{profile_id: profile_id, consent_id: consent_id}}
+    end
+  end
+
+  defp validate_lender(_), do: {:error, "lender must be an object"}
+
+  # Match grants by server digest. server_name identifies configuration
+  # drift; descriptions_digest records an advisory description baseline
+  # when the catalog is reachable at commit.
   defp validate_tool_server(raw) when is_map(raw) do
     with :ok <-
            keys_or_reason(raw, [

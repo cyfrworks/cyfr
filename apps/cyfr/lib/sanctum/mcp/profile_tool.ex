@@ -6,10 +6,9 @@ defmodule Sanctum.MCP.ProfileTool do
   Profile tool handlers for the Sanctum MCP provider — the consent walk
   over `Sanctum.Consent.{Plan,Commit}` plus thin list/revoke.
 
-  The §4.3 error payloads cross this boundary verbatim in the
-  `tag: {json}` convention the execution surface already speaks. A
-  key-authenticated commit loads its consent capability from the key
-  row itself — callers never supply their own capability.
+  Consent errors remain typed across this boundary. A key-authenticated
+  commit loads its consent capability from the stored key row, never from
+  caller input.
   """
 
   alias Sanctum.Consent.Commit
@@ -39,6 +38,7 @@ defmodule Sanctum.MCP.ProfileTool do
           "plan" => %{kind: :write, planes: [:external], consent: :staging},
           "preview" => %{kind: :write, planes: [:external], consent: :staging},
           "commit" => %{kind: :write, planes: [:external], consent: :staging},
+          "grant" => %{kind: :write, planes: [:external], consent: :interactive},
           "publish" => %{kind: :write, planes: [:external], consent: :staging},
           "list" => %{kind: :read, planes: [:external], consent: :staging},
           "revoke" => %{kind: :destructive, planes: [:external], consent: :interactive}
@@ -49,7 +49,7 @@ defmodule Sanctum.MCP.ProfileTool do
         "properties" => %{
           "action" => %{
             "type" => "string",
-            "enum" => ["plan", "preview", "commit", "publish", "list", "revoke"],
+            "enum" => ["plan", "preview", "commit", "grant", "publish", "list", "revoke"],
             "description" => "Action to perform"
           },
           "need_ids" => %{
@@ -70,7 +70,13 @@ defmodule Sanctum.MCP.ProfileTool do
           },
           "label" => %{"type" => "string", "description" => "Profile label (default 'default')"},
           "kind" => %{"type" => "string", "enum" => ["owner", "public"]},
-          "profile_id" => %{"type" => "string", "description" => "Profile id (list/revoke)"},
+          "profile_id" => %{"type" => "string", "description" => "Profile id (grant/list/revoke)"},
+          "bindings" => %{
+            "type" => "array",
+            "description" =>
+              "grant only: the credentials to bind, " <>
+                "[{need:'@ingress', entry_id, fields, scopes}]"
+          },
           "decisions" => %{
             "type" => "object",
             "description" =>
@@ -148,6 +154,28 @@ defmodule Sanctum.MCP.ProfileTool do
      "commit requires decisions, plan_token, proof, commit_digest and expected_consent_revision"}
   end
 
+  # The simple grant: a credential bound to an existing owner consent
+  # whose shape has not moved, with the revision as the compare-and-set.
+  def handle(%Context{} = ctx, %{"action" => "grant", "profile_id" => profile_id} = args) do
+    with {:ok, bindings} <- decode_bindings(Map.get(args, "bindings", [])) do
+      params = %{
+        profile_id: profile_id,
+        bindings: bindings,
+        expected_consent_revision: args["expected_consent_revision"]
+      }
+
+      case Commit.grant(ctx, params) do
+        {:ok, result} -> {:ok, Map.put(result, :status, "granted")}
+        {:error, reason} -> {:error, fmt(reason)}
+      end
+    end
+  end
+
+  def handle(_ctx, %{"action" => "grant"}) do
+    {:error,
+     {:invalid_argument, "grant requires profile_id, bindings and expected_consent_revision"}}
+  end
+
   def handle(%Context{} = ctx, %{"action" => "publish", "profile_id" => profile_id} = args) do
     params = %{
       profile_id: profile_id,
@@ -207,7 +235,7 @@ defmodule Sanctum.MCP.ProfileTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("profile", action_enum())}
+    {:error, Cyfr.Ops.Provider.invalid_action("profile", action_enum())}
   end
 
   # ---------------------------------------------------------------------------
@@ -221,9 +249,16 @@ defmodule Sanctum.MCP.ProfileTool do
          {:ok, invoke_mode} <-
            enum(raw, "invoke_mode", %{"open_inert" => :open_inert, "edge_only" => :edge_only}),
          {:ok, bindings} <- decode_bindings(Map.get(raw, "bindings", [])),
+         {:ok, selections} <- decode_selections(Map.get(raw, "selections", [])),
          {:ok, tool_servers} <- decode_tool_servers(Map.get(raw, "tool_servers", [])) do
       decisions =
-        %{ref: raw["ref"] || "", kind: kind, bindings: bindings, tool_servers: tool_servers}
+        %{
+          ref: raw["ref"] || "",
+          kind: kind,
+          bindings: bindings,
+          selections: selections,
+          tool_servers: tool_servers
+        }
         |> Cyfr.MapUtil.put_present(:label, raw["label"])
         |> Cyfr.MapUtil.put_present(:scope, scope)
         |> Cyfr.MapUtil.put_present(:invoke_mode, invoke_mode)
@@ -234,12 +269,8 @@ defmodule Sanctum.MCP.ProfileTool do
     end
   end
 
-  # A limits decision used to travel into the commit digest and no further:
-  # the blob is built from the manifest's caps and `Limits.defaults`, so a
-  # tightened number was signed, proofed and recorded while the runtime kept
-  # the manifest's. Refuse it rather than keep signing a knob nothing turns.
-  # The manifest's own limits are already covered by `shape_digest`; raising
-  # or lowering them per consent is an unbuilt sheet feature, not a silent one.
+  # Reject per-consent limits overrides. Runtime limits come from manifest
+  # caps and defaults and are covered by the shape digest.
   defp refuse_limits(raw) do
     case Map.get(raw, "limits") do
       nil ->
@@ -278,28 +309,9 @@ defmodule Sanctum.MCP.ProfileTool do
 
   defp decode_tool_servers(_), do: {:error, "tool_servers must be a list"}
 
-  # `put_present` for the projection keys, as `decode_tool_servers/1` above
-  # already does. Writing `fields: []` unconditionally meant
-  # `Consent.Commit`'s `Map.get(raw, :fields, default_fields(need))` could
-  # never fire its default: an omitted key arrived as `[]`, which is the
-  # same value "no narrowing declared" carries, so the manifest's declared
-  # subset was overwritten with "all fields" — an empty projection is
-  # dropped from the blob and `Sanctum.VaultReader` reads its absence as
-  # `:all`. An absent key now means "the manifest decides".
-  #
-  # This was the WIRE path only. A caller building decisions in Elixir
-  # (`Consent.Commit` directly, and every fixture that walks it) already
-  # omitted the key and always got the manifest's list — which is why
-  # `flow_test`'s "defaulted to the need's declared fields" passed
-  # throughout. Only MCP clients were widened.
-  #
-  # `[]` still reads as "no narrowing", here and everywhere else: a
-  # manifest need that omits `fields` decodes to `[]`
-  # (`Compendium.Manifest.Needs`), and `render_summary/1` prints `[]` as
-  # "all fields". There is deliberately no way to spell "narrow to
-  # nothing" — a binding that grants no field is a binding with no
-  # purpose, and reading `[]` as "none" here would silently empty every
-  # need whose manifest omits the key.
+  # Preserve absent projection keys so Consent.Commit applies manifest
+  # defaults. An explicit empty list means no narrowing (all fields);
+  # it does not grant an empty set of fields.
   defp decode_bindings(list) when is_list(list) do
     decoded =
       Enum.map(list, fn binding ->
@@ -315,6 +327,23 @@ defmodule Sanctum.MCP.ProfileTool do
   end
 
   defp decode_bindings(_), do: {:error, "bindings must be a list"}
+
+  # A selection names a dependency edge of the closure and one of its
+  # profiles by label (the default one when unnamed); `from` defaults to
+  # the source at commit. The fields, when given, narrow what that
+  # profile's entry lends.
+  defp decode_selections(list) when is_list(list) do
+    decoded =
+      Enum.map(list, fn selection ->
+        %{dep: selection["dep"], label: selection["label"] || "default"}
+        |> Cyfr.MapUtil.put_present(:from, selection["from"])
+        |> Cyfr.MapUtil.put_present(:fields, selection["fields"])
+      end)
+
+    {:ok, decoded}
+  end
+
+  defp decode_selections(_), do: {:error, {:invalid_argument, "selections must be a list"}}
 
   defp kind(args) do
     enum(args, "kind", %{"owner" => :owner, "public" => :public})
@@ -346,13 +375,9 @@ defmodule Sanctum.MCP.ProfileTool do
 
   defp key_capability(_ctx), do: {:ok, nil}
 
-  # ---------------------------------------------------------------------------
-  # Error rendering — §4.3 payloads verbatim in the tag: json convention
-  # ---------------------------------------------------------------------------
+  # Error rendering
 
-  # The §4.3 signals pass through TYPED — the wire router promotes them to
-  # protocol errors (-335xx + error.data); the console renders them via the
-  # shared seam. This fmt used to stringify them as "tag: {json}".
+  # Preserve typed consent signals for wire and console rendering.
   defp fmt({tag, payload} = signal)
        when tag in [:setup_required, :consent_required, :consent_conflict, :restart_required] and
               is_map(payload),
@@ -383,12 +408,36 @@ defmodule Sanctum.MCP.ProfileTool do
   defp fmt({:unknown_need, need}),
     do: "unknown_need: #{inspect(need)} — this component declares no such need"
 
+  defp fmt({:selection_target_unknown, dep}),
+    do: "selection_target_unknown: #{inspect(dep)} is not a dependency of this component"
+
+  defp fmt({:selection_profile_unavailable, dep, label}),
+    do:
+      "selection_profile_unavailable: #{dep} has no active owner profile labelled #{inspect(label)}"
+
+  defp fmt({:selection_unbound, dep, label}),
+    do:
+      "selection_unbound: the '#{label}' profile of #{dep} binds no usable entry — connect a key there first"
+
+  defp fmt({:selection_fields_unavailable, dep, fields}),
+    do: "selection_fields_unavailable: #{dep}'s profile does not lend #{Enum.join(fields, ", ")}"
+
   defp fmt({:entry_unavailable, id, status}),
     do: "entry_unavailable: #{id} is #{inspect(status)}"
 
+  defp fmt(:shape_moved),
+    do:
+      "shape_moved: the component's shape changed since this revision — plan, preview and commit again"
+
+  defp fmt(:grant_requires_full_commit),
+    do:
+      "grant_requires_full_commit: this profile grants external tool servers, which a grant cannot carry — plan, preview and commit"
+
+  defp fmt(:grant_requires_owner_profile), do: "grant_requires_owner_profile"
+  defp fmt(:profile_revoked), do: "profile_revoked"
   defp fmt({:component_not_found, _reason}), do: "component_not_found"
   defp fmt({:invalid_ref, reason}), do: "invalid_ref: #{reason}"
   defp fmt(reason), do: inspect(reason)
 
-  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
+  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
 end

@@ -7,7 +7,7 @@ defmodule Opus.ExecutionSweeper do
 
   Runs every 60 seconds, checking for execution records still "running"
   whose lease has lapsed. A running row is leased by the node executing it
-  (`executions.runner_id`, `lease_until`) and the executor renews the lease
+  (`execution_attempts.runner_id`, `lease_until`) and the executor renews the lease
   while the work runs; a lapsed lease means the runner stopped renewing —
   crashed, or a whole node gone. This handles:
 
@@ -107,12 +107,18 @@ defmodule Opus.ExecutionSweeper do
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
     error_msg = "Execution terminated: runner stopped without cleanup"
 
-    {count, _} =
-      Arca.Execution.mark_failed_if_running(record.id, %{
-        completed_at: now,
-        duration_ms: duration_ms,
-        error_message: error_msg
-      })
+    # Fenced on what this sweep observed: the attempt that owns the row and
+    # the exact lease it saw lapse. A renewal that landed between the scan
+    # and this write changed `lease_until`, and the update matches nothing —
+    # a live execution is never failed by a stale observation.
+    {count, event_seq} =
+      Arca.Execution.mark_failed_if_running(
+        record.id,
+        %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
+        attempt: record.attempt,
+        lease_until: record.lease_until,
+        event: "execution.lapsed"
+      )
 
     if count > 0 do
       Logger.info(
@@ -143,16 +149,14 @@ defmodule Opus.ExecutionSweeper do
         }
       )
 
-      ExecutionEventBuffer.push_terminal(
-        record.id,
-        "error",
-        %{error: error_msg},
-        999_999_999,
-        record
-      )
+      ExecutionEventBuffer.publish(record.id, record, "execution.lapsed", event_seq, %{
+        "status" => "failed",
+        "error" => error_msg
+      })
 
-      # Cascade to children for formula-type executions
-      if record.component_type in ["formula"] do
+      # Cascade to children for executions that run children: formulas
+      # and turn roots.
+      if record.component_type in ["formula", "agent"] do
         Opus.Executor.cascade_children_failure_by_id(record.id)
       end
     end

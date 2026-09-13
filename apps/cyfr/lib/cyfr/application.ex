@@ -16,6 +16,18 @@ defmodule Cyfr.Application do
     # list — config files run before this module exists).
     Application.put_env(:phoenix, :filter_parameters, Sanctum.Sanitizer.filter_parameters())
 
+    # This boot's name, before any row can carry it.
+    Cyfr.Boot.mint()
+
+    # Resolve the at-rest cipher keyring before the database opens: the
+    # migration step below compares it with the keyring the database was
+    # sealed with, and refuses a different one. Explicit `CYFR_CRYPTO_KEYRING`
+    # (JSON) wins; otherwise derive a single-key keyring from
+    # `:secret_key_base` so single-user deployments work zero-config.
+    # Rotating `:secret_key_base` invalidates every blob encrypted under the
+    # derived key — platform deployments should set an explicit keyring.
+    resolve_crypto_keyring!()
+
     # Arca storage setup
     ensure_db_directory!()
     # Overlay wiring fails loud here — before Bootstrap or the tincture
@@ -38,17 +50,12 @@ defmodule Cyfr.Application do
 
     # Emissary: RunningTasks GenServer is now in the supervision tree
 
-    # Resolve the at-rest cipher keyring before any worker can encrypt or
-    # decrypt. Explicit `CYFR_CRYPTO_KEYRING` (JSON) wins; otherwise derive a
-    # single-key keyring from `:secret_key_base` so single-user deployments
-    # work zero-config. Rotating `:secret_key_base` invalidates every blob
-    # encrypted under the derived key — platform deployments should set an
-    # explicit keyring to avoid that coupling.
-    resolve_crypto_keyring!()
-
     # CORS hardening once authentication is configured (and thus users other
     # than the operator can make credentialed cross-origin requests).
     enforce_cors_not_wildcard_with_auth()
+
+    # Hosted builds run in the builder container, or not at all.
+    enforce_builder_when_hosting()
 
     # OIDC issuer reserved-host check — only when OIDC is the configured
     # auth provider. A misconfigured generic-OIDC issuer would otherwise
@@ -73,6 +80,13 @@ defmodule Cyfr.Application do
     infra_children = [
       # Arca storage layer
       Arca.Repo,
+      # The keyring this database was sealed with, against the one this boot
+      # resolved — before any worker can seal a row under a different key
+      # wearing the same label. Runs whether or not this boot migrated.
+      keyring_fingerprint_check(),
+      # Who owns this database's control plane — claimed right after the repo
+      # is up, before anything that assumes it is the only one.
+      control_plane_claim(),
       # The cache table's one owner, grouped :rest_for_one with the two
       # registries that write catalogues into it: when the sweeper dies the
       # table dies with it, and the writers restart and repopulate instead
@@ -81,7 +95,7 @@ defmodule Cyfr.Application do
       # might read through the cache.
       group(Arca.Cache.TreeSupervisor, [
         Arca.Cache.Sweeper,
-        Emissary.MCP.ToolRegistry,
+        Cyfr.Ops.Catalog,
         Emissary.MCP.ResourceRegistry
       ]),
       # Orders whole-unit replacement so two commits to one unit cannot
@@ -92,6 +106,12 @@ defmodule Cyfr.Application do
       # before the repo goes down.
       Cyfr.RecordSink,
       Cyfr.RetentionScheduler,
+      # Recurring component executions: the runs the scheduler fires are
+      # tasks of their own, monitored by it.
+      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Schedules.TaskSupervisor},
+        shutdown: 30_000
+      ),
+      Cyfr.Schedules.Scheduler,
       Arca.AuditHandler,
       # Releases a charged invoke-budget slot when its holder dies without
       # running its `after` (the brutal-kill cancel/timeout paths).
@@ -106,10 +126,8 @@ defmodule Cyfr.Application do
       # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
       # process, so a vanished client frees its slot without bookkeeping.
       {Registry, keys: :duplicate, name: Emissary.MCP.SubscriptionRegistry},
-      # External MCP servers: the name registry, the server processes
-      # registered in it, and the reconciler that restarts them when a
-      # vault mutation must bite (§4.6) — one :rest_for_one group, so a
-      # dead registry never leaves live servers unfindable.
+      # Use :rest_for_one for the external-server registry, servers and
+      # reconciler. Registry failure restarts its dependents.
       group(Emissary.MCP.ExternalServerTree, [
         {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
         {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
@@ -133,6 +151,9 @@ defmodule Cyfr.Application do
       ]),
       # Provisioning retries that must not ride a sign-in (registry pulls).
       {Task.Supervisor, name: Sanctum.ProvisioningSupervisor},
+      # One in-flight fill per athanor: a page load asks several readers,
+      # and each would otherwise start a task that only queues on the lock.
+      {Registry, keys: :unique, name: Sanctum.ProvisioningRegistry},
       # Single-use consent authorizations. The shipped store is the DB
       # (config.exs pins Proof.DB); the in-memory GenServer starts only
       # when a deployment explicitly configures it, so production does not
@@ -142,24 +163,25 @@ defmodule Cyfr.Application do
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
       {Task.Supervisor, name: Aqua.TaskSupervisor},
-      # Conversation runners: one process per conversation with a live
-      # turn, started on demand; the recovery task re-follows the turns
-      # that were running when the server last stopped. Registry and the
-      # supervisor whose children register in it restart together.
-      group(Aqua.ConversationTree, [
-        {Registry, keys: :unique, name: Aqua.ConversationRegistry},
-        {DynamicSupervisor, name: Aqua.ConversationSupervisor, strategy: :one_for_one},
+      # Conversation runners: one process per conversation with open
+      # turns, started on demand; the recovery task starts one for every
+      # conversation holding an open turn when the server last stopped.
+      # Registry and the supervisor whose children register in it restart
+      # together.
+      group(Aqua.RunnerTree, [
+        {Registry, keys: :unique, name: Aqua.RunnerRegistry},
+        {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one},
         maybe_conversation_recovery()
       ]),
-      # Last, and synchronous: mints Home's rows from the seed union on first
-      # boot (the overlay serves the bundle in place — no bytes are copied)
-      # and reconciles the platform-admin roster against the env. Needs the
+      # Last, and synchronous: reconciles the platform-admin roster against
+      # the env and offers new seed media to the estates that exist (the
+      # overlay serves the bundle in place — no bytes are copied). Needs the
       # repo, the tincture registry (the scan reloads it) and nothing else.
       #
       # It runs its work in `init/1` and answers `:ignore`, so this child
       # finishing is what gates the web tier below — the endpoint must not
-      # answer requests while Home is half-seeded or while a de-listed
-      # operator's sessions are still live.
+      # answer requests while a de-listed operator's sessions are still
+      # live.
       Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)
     ]
 
@@ -187,8 +209,8 @@ defmodule Cyfr.Application do
     if Application.get_env(:cyfr, :conversation_recovery, true) do
       [
         Supervisor.child_spec(
-          {Task, &Aqua.ConversationRunner.recover_all/0},
-          id: Aqua.ConversationRecovery,
+          {Task, &Aqua.Runner.recover_all/0},
+          id: Aqua.RunnerRecovery,
           restart: :temporary
         )
       ]
@@ -249,16 +271,9 @@ defmodule Cyfr.Application do
     end
   end
 
-  # Run migrations before the connection pool starts to avoid
-  # "database is locked" errors from pool connections racing with
-  # migration DDL statements on first startup. `CYFR_AUTO_MIGRATE=false`
-  # leaves the step to the operator (`Cyfr.Release.migrate/0`).
-  #
-  # A database created before the baseline has older versions in
-  # `schema_migrations` but not this file's version, so Ecto would try to
-  # apply the baseline on top of the old schema. Baseline.up refuses that.
-  # There is no upgrade path: drop the database (or the volume) and let it
-  # be created fresh.
+  # Run migrations before the connection pool starts to avoid concurrent
+  # DDL and database-lock errors. CYFR_AUTO_MIGRATE=false leaves migration
+  # to the operator via Cyfr.Release.migrate/0.
   defp maybe_migrate_before_pool do
     if Application.get_env(:cyfr, :auto_migrate, true) do
       config = Application.get_env(:cyfr, Arca.Repo, [])
@@ -267,18 +282,30 @@ defmodule Cyfr.Application do
       {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 1))
       Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
       configure_database()
-      # Right after the migrations, while the repo that ran them is still
-      # up and the schema is definitive: every table carrying `athanor_id`
-      # must be one `Sanctum.Tenancy.Athanors.destroy/1` deletes. A new
-      # athanor-scoped table that nobody added to the roster would
-      # otherwise survive an erasure that reported success — which is
-      # precisely how the original gap went unnoticed. Raises: a boot that
-      # fails is recoverable, a backup full of data somebody was told was
-      # deleted is not.
+      # Verify the tenant-table roster against the migrated schema.
+      # Refuse boot if an athanor-scoped table would escape tenant deletion.
       Arca.TenantTables.verify_roster!()
       # Stop the temporary repo so the supervisor can start the real one
       Supervisor.stop(repo_pid)
     end
+  end
+
+  # A one-shot check that reads the repo at boot, outside any test's
+  # sandbox; the suite turns it off and exercises `Cyfr.KeyringFingerprint`
+  # directly.
+  defp keyring_fingerprint_check do
+    if Application.get_env(:cyfr, :keyring_fingerprint_check_enabled, true),
+      do: [Cyfr.KeyringFingerprint.Check],
+      else: []
+  end
+
+  # The claim is a permanent GenServer with a DB lease; the test suite's
+  # sandbox cannot lend it a connection, so the suite turns it off and
+  # exercises `Cyfr.ControlPlane.Claim` directly.
+  defp control_plane_claim do
+    if Application.get_env(:cyfr, :control_plane_claim_enabled, true),
+      do: [Cyfr.ControlPlane],
+      else: []
   end
 
   defp verify_db_writable!(nil), do: :ok
@@ -453,6 +480,55 @@ defmodule Cyfr.Application do
     end
   end
 
+  # A build with no builder runs cargo/npm as this service user inside the
+  # app container — `Locus.Builder`'s honest threat model, fine for one
+  # person's own sources. With authentication configured, strangers can
+  # register sources, so that posture is refused at boot: the operator
+  # points at the builder container, turns builds off, or accepts it in
+  # writing. Same release/warn gate as the CORS guard.
+  defp enforce_builder_when_hosting do
+    decision =
+      builder_enforcement(
+        Sanctum.auth_configured?(),
+        Cyfr.RuntimeConfig.builds_enabled?(),
+        Cyfr.RuntimeConfig.builder_url() != nil,
+        Cyfr.RuntimeConfig.allow_in_process_builds?(),
+        Cyfr.RuntimeConfig.release?()
+      )
+
+    case decision do
+      :ok -> :ok
+      {:raise, message} -> raise message
+      {:warn, message} -> Logger.warning(message)
+    end
+  end
+
+  @doc false
+  # Pure decision seam (testable without booting), in the order the
+  # arguments are named: auth configured?, builds enabled?, a builder
+  # configured?, in-process builds accepted?, a real release?
+  @spec builder_enforcement(boolean(), boolean(), boolean(), boolean(), boolean()) ::
+          :ok | {:raise, String.t()} | {:warn, String.t()}
+  def builder_enforcement(auth_configured?, builds_enabled?, builder?, accepted?, real_release?) do
+    if auth_configured? and builds_enabled? and not builder? and not accepted? do
+      message =
+        "[Cyfr] FATAL: authentication is configured and builds are on, but no " <>
+          "builder is configured. `build.compile` would run cargo/npm as this " <>
+          "service user inside the app container, on any member's sources. Set " <>
+          "CYFR_BUILDER_URL (docker compose --profile builder up -d), or " <>
+          "CYFR_BUILDS=false, or CYFR_ALLOW_IN_PROCESS_BUILDS=true to accept " <>
+          "in-process builds."
+
+      if real_release? do
+        {:raise, message}
+      else
+        {:warn, message <> " (boot-raise suppressed outside a release)"}
+      end
+    else
+      :ok
+    end
+  end
+
   # When auth is configured but no platform admin is declared, no user can be
   # admitted until a membership row is seeded (authentication succeeds but the
   # tenant gate yields no_athanor). Warn at boot — both under `mix phx.server` and in
@@ -506,26 +582,9 @@ defmodule Cyfr.Application do
        "CYFR_AUTH_PROVIDER=oidc is selected but :cyfr, :oidc_issuer is absent or blank. " <>
          "Set CYFR_OIDC_ISSUER to your identity provider's issuer URL."}
 
-  # Resolve and pin `:cyfr, :crypto_keyring`. Idempotent — re-runs on app
-  # restart simply re-derive (or re-parse) the same keyring.
-  #
-  # KNOWN GAP, deliberately not fixed here: nothing records WHICH material
-  # a deployment booted with. `nil` and `""` both fall through to
-  # derivation, and the derived key is also labelled "default" — so an
-  # explicit keyring that goes missing is replaced by a different key under
-  # the same label, and the athanor forks into two key generations with no
-  # boundary event. Rows sealed before fail `:aad_or_key_mismatch` while new
-  # writes succeed, which reads as corruption rather than as configuration.
-  #
-  # The fix is a persisted fingerprint and a boot refuse. It is staged rather
-  # than written here because a boot refuse can brick a volume restore:
-  # record the fingerprint first, warn on mismatch for one release to find
-  # the deployments already forked, and only then refuse. The fingerprint
-  # belongs in the database, not a per-volume file — two nodes sharing one
-  # database would disagree the moment they each kept their own — and the
-  # obvious `..._MIGRATE=1` escape hatch would be a lie while
-  # `Sanctum.Cipher` has no bulk re-seal: it would promise a migration it
-  # cannot perform.
+  # Resolve and pin :cyfr, :crypto_keyring. Nil or empty configuration derives
+  # a key labelled "default" from :secret_key_base; explicit JSON is parsed.
+  # KeyringFingerprint checks the result against the database before writes.
   defp resolve_crypto_keyring! do
     case Application.get_env(:cyfr, :crypto_keyring) do
       %{primary: _, keys: _} = keyring when map_size(keyring.keys) > 0 ->

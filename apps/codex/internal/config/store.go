@@ -18,10 +18,8 @@ type Config struct {
 
 // Context is a named server connection.
 //
-// The credential is a live bearer token (a session token from `cyfr login`,
-// or a `cyfr_` API key). `token` is its name; `session_id` is the legacy
-// spelling the login flow wrote for years — read as a fallback so existing
-// config files keep working, never written anew.
+// Token holds a bearer credential from cyfr login or a cyfr_ API key.
+// SessionID is accepted as a fallback when reading existing configuration.
 type Context struct {
 	URL       string `json:"url"`
 	Token     string `json:"token,omitempty"`
@@ -115,11 +113,8 @@ func (c *Config) SaveTo(path string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	// Write-then-rename, never in place: a crash or full disk mid-write
-	// used to truncate the file and lose every stored token. The fresh
-	// temp file (0600 from CreateTemp) also fixes permissions for good —
-	// os.WriteFile applied its mode only on creation, so a pre-existing
-	// 0644 config kept a live bearer world-readable forever.
+	// Write to a private temporary file (0600), then rename atomically.
+	// A failed write leaves the existing credentials intact.
 	tmp, err := os.CreateTemp(dir, ".config-*.json")
 	if err != nil {
 		return fmt.Errorf("create temp config: %w", err)
@@ -158,10 +153,7 @@ func (c *Config) CurrentURL() string {
 }
 
 // SetToken stores the bearer credential for the active context and saves.
-// It writes the modern `token` field and clears the legacy `session_id`
-// spelling — the Context doc promises the legacy field is never written
-// anew, but this function (as SetSessionID) wrote exactly that on every
-// login, leaving `token` permanently dead.
+// It writes token and clears the fallback session_id field.
 func (c *Config) SetToken(token string) error {
 	ctx := c.Current()
 	if ctx == nil {

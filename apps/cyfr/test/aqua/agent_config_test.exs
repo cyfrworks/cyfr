@@ -2,11 +2,10 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.AgentConfigTest do
-  # The agent's tool_policy is DECLARED policy, and the athanor's
-  # definitions come from the shipped template on first read. A chat
-  # decision that outlives the turn ("always" / "never") is not an edit to
-  # it — those are `Aqua.ToolGrants` rows, composed over the declaration at
-  # use time.
+  # The agent's tool_policy is DECLARED policy, read from the athanor's
+  # own copy of the shipped template. A chat decision that outlives the
+  # turn ("always" / "never") is not an edit to it — those are
+  # `Aqua.ToolGrants` rows, composed over the declaration at use time.
   use ExUnit.Case, async: false
 
   alias Aqua.AgentConfig
@@ -27,19 +26,27 @@ defmodule Aqua.AgentConfigTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
+    :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
   defp policy(ctx, name) do
     {:ok, guide} =
-      Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{"action" => "get", "name" => name})
+      Cyfr.Ops.Catalog.call_external("aqua", ctx, %{"action" => "get", "name" => name})
 
     Aqua.AgentConfig.stringify_deep(guide)["tool_policy"]
   end
 
-  test "the shipped roster reads through the overlay — no copy is ever made", %{ctx: ctx} do
+  # Every AQUA unit the athanor holds is an unedited copy of what ships.
+  defp pristine?(ctx) do
+    {:ok, statuses} = Arca.Overlay.unit_statuses(ctx, "aqua")
+    statuses != %{} and Enum.all?(statuses, fn {_unit, status} -> status == :shipped end)
+  end
+
+  test "the shipped roster is read from the athanor's own copy", %{ctx: ctx} do
     assert is_map(policy(ctx, "aqua"))
-    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
+    assert Arca.exists?(ctx, Compendium.AquaPath.agent_file("aqua"))
+    assert pristine?(ctx)
   end
 
   test "a standing decision never rewrites the declared policy", %{ctx: ctx} do
@@ -58,8 +65,37 @@ defmodule Aqua.AgentConfigTest do
     # not an edit to what the author declared.
     assert policy(ctx, "aqua")["component.pull"] == "ask"
 
-    # And nothing was materialized into the athanor's tree to say so.
-    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
+    # And no file in the athanor's tree was edited to say so.
+    assert pristine?(ctx)
+  end
+
+  # Minimal valid WASM with a `run` export — enough to publish a row.
+  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+  test "a catalyst the estate holds resolves to its newest installed release", %{ctx: ctx} do
+    for version <- ["9.0.0", "10.0.0"] do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "resolver-model",
+          version: version,
+          type: "catalyst",
+          description: "Test catalyst"
+        })
+    end
+
+    # `component.list` names a row by `component_ref`. A resolver reading any
+    # other key matches nothing, and every installed model reads as missing.
+    {:ok, listing} = AgentConfig.catalyst_listing(ctx)
+
+    assert {:ok, "catalyst:local.resolver-model:10.0.0"} =
+             AgentConfig.resolve_catalyst(listing, "catalyst:local.resolver-model")
+
+    assert {:error, :catalyst_not_found} =
+             AgentConfig.resolve_catalyst(listing, "catalyst:local.absent")
   end
 
   test "put_formula_tool_surface always attaches the policy, never a tool list" do

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -98,8 +99,8 @@ Run without arguments for interactive selection.`,
 		client := newClient()
 
 		if listFlag, _ := cmd.Flags().GetBool("list"); listFlag {
-			result, err := client.CallTool(cmd.Context(), "execution", map[string]any{
-				"action": "list",
+			result, err := client.CallTool(cmd.Context(), ops.Execution, map[string]any{
+				"action": ops.ExecutionList,
 			})
 			if err != nil {
 				return handleToolError(err)
@@ -108,8 +109,8 @@ Run without arguments for interactive selection.`,
 		}
 
 		if logsID, _ := cmd.Flags().GetString("logs"); logsID != "" {
-			result, err := client.CallTool(cmd.Context(), "execution", map[string]any{
-				"action":       "logs",
+			result, err := client.CallTool(cmd.Context(), ops.Execution, map[string]any{
+				"action":       ops.ExecutionLogs,
 				"execution_id": logsID,
 			})
 			if err != nil {
@@ -119,8 +120,8 @@ Run without arguments for interactive selection.`,
 		}
 
 		if cancelID, _ := cmd.Flags().GetString("cancel"); cancelID != "" {
-			result, err := client.CallTool(cmd.Context(), "execution", map[string]any{
-				"action":       "cancel",
+			result, err := client.CallTool(cmd.Context(), ops.Execution, map[string]any{
+				"action":       ops.ExecutionCancel,
 				"execution_id": cancelID,
 			})
 			if err != nil {
@@ -204,7 +205,7 @@ Run without arguments for interactive selection.`,
 			toolArgs["profile"] = profile
 		}
 
-		result, err := client.CallTool(cmd.Context(), "execution", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Execution, toolArgs)
 		if err != nil {
 			return handleToolError(err)
 		}

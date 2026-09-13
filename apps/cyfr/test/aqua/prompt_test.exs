@@ -11,6 +11,7 @@ defmodule Aqua.PromptTest do
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
@@ -25,9 +26,7 @@ defmodule Aqua.PromptTest do
 
       assert prompt =~ "File paths: none"
 
-      # The regression: this section used to name every guest scope from
-      # `Arca.Storage.guest_scopes/0` on every turn, whatever the edge
-      # granted. A model told it has files will try to read them.
+      # Describe only scopes granted by the current authority.
       for scope <- Map.keys(Arca.Storage.guest_scopes()) do
         refute prompt =~ scope <> "/ for",
                "the prompt still advertises #{scope}/ with no grant behind it"
@@ -80,11 +79,12 @@ defmodule Aqua.PromptTest do
     end
   end
 
-  test "the approval prelude is part of the one composition", %{ctx: ctx} do
+  test "the console prelude is part of the one composition, and lists no approvals", %{ctx: ctx} do
     prompt = Prompt.compose(ctx, agent: agent(%{"component.pull" => "ask"}), authority: nil)
 
-    assert prompt =~ "component.pull"
-    assert prompt =~ "need approval"
+    assert prompt =~ "## AQUA Shell Control"
+    assert prompt =~ "call the `ui` tool"
+    refute prompt =~ "Actions that need approval"
   end
 
   describe "the estate's notes" do
@@ -102,7 +102,14 @@ defmodule Aqua.PromptTest do
       end)
 
       n = System.unique_integer([:positive])
-      user = "local|idp|prompt-#{n}"
+
+      {:ok, u} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "local|idp|prompt-#{n}",
+          provider: "local"
+        })
+
+      user = u.id
 
       {:ok, mine} =
         Sanctum.Tenancy.Athanors.create(%{
@@ -113,11 +120,11 @@ defmodule Aqua.PromptTest do
           created_by: user
         })
 
-      {:ok, _} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: user, provider: "local"})
-      {:ok, u} = Sanctum.Tenancy.Users.get(user)
       {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
       {:ok, _} = Sanctum.Tenancy.Members.create(%{user_id: user, athanor_id: mine.id})
       {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
+      :ok = Sanctum.TestContext.shipped!(estate.id)
+      :ok = Sanctum.TestContext.shipped!(mine.id)
 
       room = %{Sanctum.TestContext.local() | user_id: user, athanor_id: estate.id}
       {:ok, home} = Sanctum.Context.focus(room, mine.id)
@@ -135,7 +142,7 @@ defmodule Aqua.PromptTest do
 
       {before, notes} = split_last(prompt, "## Notes")
       assert before =~ "## Runtime Context"
-      assert before =~ "need approval"
+      assert before =~ "## AQUA Shell Control"
 
       assert notes =~ "### Pinned: about-us\n\nWe are planning a trip."
       # Sorted by name, first line only, no timestamps.
@@ -162,7 +169,7 @@ defmodule Aqua.PromptTest do
       prompt = Prompt.compose(room, agent: agent(%{"component.pull" => "ask"}), authority: nil)
 
       {before, rest} = split_last(prompt, "## Scrolls")
-      assert before =~ "need approval"
+      assert before =~ "## AQUA Shell Control"
       [scrolls, _notes] = String.split(rest, "## Notes", parts: 2)
       assert scrolls =~ "- capability-acquisition — "
       assert scrolls =~ "`aqua.skill_get`"

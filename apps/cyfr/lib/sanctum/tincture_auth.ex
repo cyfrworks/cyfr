@@ -72,10 +72,7 @@ defmodule Sanctum.TinctureAuth do
   the same secret the endpoint signs with (runtime.exs and dev.exs set both
   from one value), read through the domain's own key.
 
-  Public because the `/_s/` asset token in `EmissaryWeb.TinctureController` is
-  the sibling of the `?_t=` token minted here — same feature, same lifetime,
-  same tincture. They were drawing their key from two different places, which
-  is one change away from being two different keys.
+  Provides the signing key shared by tincture access and asset tokens.
   """
   @spec signing_secret() :: binary()
   def signing_secret, do: Application.fetch_env!(:cyfr, :secret_key_base)
@@ -155,62 +152,51 @@ defmodule Sanctum.TinctureAuth do
   end
 
   defp validate_api_key(token, conn) do
-    case Sanctum.ApiKey.validate(token, client_ip: Sanctum.ClientIp.resolve(conn)) do
-      {:ok, metadata} -> {:ok, Sanctum.ApiKey.context_from_metadata(metadata)}
-      _ -> {:error, :invalid_credential}
+    case Sanctum.Caller.establish({:api_key, token}, client_ip: Sanctum.ClientIp.resolve(conn)) do
+      {:ok, %Context{} = ctx} -> {:ok, ctx}
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _} -> {:error, :invalid_credential}
     end
   end
 
   # --- ?_t= short-lived tincture access token ---
 
+  # The request's own tincture comes from the router's path params, so the
+  # token is held to it on every `/t/:athanor/:publisher/:tincture_name`
+  # route — index, asset and invoke — and a route that names none (the
+  # `/t/access-token` mint) refuses minted tokens on its own account.
   defp try_access_token(conn) do
-    # namespace is identity-only (may be nil); the tenant gate in authenticate/1
-    # (tenant_resolved?) is the real control, so no namespace guard here.
     case query_param(conn, "_t") do
       token when is_binary(token) and token != "" ->
-        verify_access_token(token, conn)
+        tincture = {path_param(conn, "publisher"), path_param(conn, "tincture_name")}
+
+        case Sanctum.Caller.establish({:tincture_token, token}, tincture: tincture) do
+          {:ok, %Context{} = ctx} -> {:ok, ctx}
+          {:error, :expired_credential} -> {:error, :expired_token}
+          {:error, _} = refusal -> refusal
+        end
 
       _ ->
         :skip
     end
   end
 
-  defp verify_access_token(token, conn) do
+  @doc """
+  What a `?_t=` token says, once its signature and age check out: the
+  payload `issue_access_token/3` signed. The one place the token is
+  verified; `Sanctum.Caller` builds the context it names and holds it to
+  its standing.
+  """
+  @spec verify_access_token(String.t()) ::
+          {:ok, map()} | {:error, :expired_credential | :invalid_credential}
+  def verify_access_token(token) when is_binary(token) do
     case Phoenix.Token.verify(signing_secret(), @access_token_salt, token,
            max_age: @access_token_max_age
          ) do
-      {:ok, %{u: user_id, a: athanor_id, n: namespace, p: publisher, t: name} = payload} ->
-        with :ok <- names_this_tincture(conn, publisher, name) do
-          Context.build(
-            user_id: user_id,
-            namespace: namespace,
-            athanor_id: athanor_id,
-            permissions: [:execute],
-            scope: :athanor,
-            auth_method: :tincture,
-            authenticated: true
-          )
-          |> still_standing(athanor_id, Map.get(payload, :m, :person))
-        end
-
-      {:error, :expired} ->
-        {:error, :expired_token}
-
-      _ ->
-        {:error, :invalid_credential}
-    end
-  end
-
-  # The token opens the tincture it was minted for and no other. The request's
-  # own tincture comes from the router's path params, so this holds for every
-  # `/t/:athanor/:publisher/:tincture_name` route — index, asset and invoke —
-  # at one place. A route that names no tincture (the `/t/access-token` mint)
-  # has nothing to compare and refuses minted tokens on its own account.
-  defp names_this_tincture(conn, publisher, name) do
-    case {path_param(conn, "publisher"), path_param(conn, "tincture_name")} do
-      {nil, nil} -> :ok
-      {^publisher, ^name} -> :ok
-      _ -> {:error, :wrong_tincture}
+      {:ok, %{u: _, a: _, n: _, p: _, t: _} = payload} -> {:ok, payload}
+      {:error, :expired} -> {:error, :expired_credential}
+      _ -> {:error, :invalid_credential}
     end
   end
 
@@ -219,47 +205,16 @@ defmodule Sanctum.TinctureAuth do
 
   defp path_param(_conn, _key), do: nil
 
-  # A signature says who minted the token, not what they may still do. A
-  # token exchanged for a person's session is held to that person's standing
-  # — the door and their seat here — exactly as a session load is, so a deny
-  # or a removal stops it rather than being outlived by the hour. One
-  # exchanged for an API key is held to the key's own rule (D15): the
-  # athanor is open and the creator is not denied, but a key outlives its
-  # creator's membership on purpose.
-  defp still_standing(%Context{} = ctx, athanor_id, :api_key) do
-    if Sanctum.Tenancy.channel_active?(athanor_id, ctx.user_id),
-      do: {:ok, ctx},
-      else: {:error, :not_standing}
-  end
-
-  defp still_standing(%Context{} = ctx, athanor_id, _person) do
-    case Sanctum.Tenancy.revalidate(ctx) do
-      %Context{authenticated: true, athanor_id: ^athanor_id} = current -> {:ok, current}
-      _ -> {:error, :not_standing}
-    end
-  end
-
   # A session token goes through the one door — `Sanctum.Caller.establish/2`
-  # — so the memo, the door/claim/denied refusal mapping and the tenant
-  # resolve are the same ones every other surface uses (the `:tincture`
-  # surface stamps auth_method `:session` in the loader). Two arms read
-  # differently from the console:
-  #
-  #   * `claim_pending` — a valid session whose person has not claimed a
-  #     namespace yet. Tincture access is not tenant administration and is
-  #     deliberately granted on the session's athanor (documented at the
-  #     loader's `:not_claimed` arm), so the pre-claim context is upgraded
-  #     to the tincture shape here — the ONE deliberate exception, no
-  #     longer a blanket upgrade of whatever loaded.
-  #   * `denied` — the door stopped admitting this person after the session
-  #     was minted. Refused; the old blanket upgrade re-authenticated it.
+  # — so the memo, the door/denied refusal mapping and the tenant resolve
+  # are the same ones every other surface uses (the `:tincture` surface
+  # stamps auth_method `:session` in the loader). `denied` — the door
+  # stopped admitting this person after the session was minted — is
+  # refused; nothing here upgrades what loaded.
   defp try_sanctum_session(token) do
     case Sanctum.Caller.establish(token, surface: :tincture, refresh: false) do
       {:ok, %Context{} = ctx} ->
         {:ok, ctx}
-
-      {:error, {:claim_pending, %Context{} = pre}} ->
-        {:ok, %{pre | auth_method: :session, scope: :athanor, authenticated: true}}
 
       {:error, {:denied, _ctx}} ->
         {:error, :denied}

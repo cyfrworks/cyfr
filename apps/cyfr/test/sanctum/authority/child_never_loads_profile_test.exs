@@ -7,13 +7,8 @@ defmodule Sanctum.Authority.ChildNeverLoadsProfileTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityFixtures, as: Fixtures
 
-  # §6 "Child never loads a callee profile": a shared entry point that
-  # resolves the callee's own profile is precisely the confused-deputy
-  # surface the redesign removes. In the transition relation this is
-  # structural — step/3 takes (authority, function, target) and nothing
-  # else, so there is no profile store it COULD consult — and behavioral:
-  # even when the callee has its own profile with broader grants, the child
-  # gets exactly the caller's edge.
+  # A child receives the caller's selected edge, even when the callee has
+  # a profile with broader grants. Transition must not load callee profiles.
 
   @catalyst "catalyst:supabase.com.database"
 

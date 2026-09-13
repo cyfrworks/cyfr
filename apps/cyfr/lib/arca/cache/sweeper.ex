@@ -5,10 +5,8 @@ defmodule Arca.Cache.Sweeper do
   @moduledoc """
   Periodic sweeper that removes expired entries from the Arca.Cache ETS table.
 
-  Replaces per-module cleanup timers (Session and, formerly, the MCP SSE
-  buffer) with a single
-  centralized sweep every 60 seconds. (Opus.RateLimiter keeps its own
-  table and sweeper.)
+  Sweeps expired cache entries every 60 seconds.
+  `Opus.RateLimiter` owns its separate table and sweeper.
   """
 
   use GenServer
@@ -100,21 +98,9 @@ defmodule Arca.Cache.Sweeper do
       0
   end
 
-  # Short-TTL auth state — a vault OAuth grant mid-flight, a device-login
-  # ticket, an established-caller memo — plus the one key used as a LOCK
-  # (the tincture-scan de-dup). Nearest-to-expiry eviction targets exactly
-  # these (they always expire soonest), so a caller-cardinality flood of
-  # cache entries could sign other tenants out mid-flow or admit a
-  # duplicate scan — the precise class the moduledoc promises this table
-  # does not couple.
-  # The MCP catalogues are here for a different reason: they are not
-  # credentials, they are the *answer to `tools/list`*. `Emissary.MCP.
-  # ToolRegistry` and `ResourceRegistry` keep them under a 24h TTL and refresh
-  # on a 23h timer, so nearest-to-expiry eviction spared them only by
-  # accident — they happen to hold the longest TTL in the table. Any new
-  # long-lived key, or a shorter refresh, would have made a cap breach empty
-  # the server's tool catalogue until the next refresh, with `tools/list`
-  # answering an empty set in the meantime.
+  # Protect authentication state, scan locks, and MCP catalogs from
+  # capacity eviction. Removing these entries can interrupt login flows,
+  # admit duplicate scans, or empty tools/list until the next refresh.
   @protected_key_heads [
     :vault_oauth_pending,
     :login_device_ticket,
@@ -158,10 +144,7 @@ defmodule Arca.Cache.Sweeper do
   defp enforce_binary_budget(table) do
     budget = Application.get_env(:cyfr, :cache_max_binary_bytes, 268_435_456)
 
-    # `protected?/1` applies here too. It did not, so a protected key whose
-    # value happened to be a binary was evictable by the byte budget even
-    # though the entry cap would never touch it — the protection has to hold
-    # in every enforcer or it is not a protection.
+    # Apply protected-key exclusions to the byte budget as well.
     binaries =
       :ets.foldl(
         fn

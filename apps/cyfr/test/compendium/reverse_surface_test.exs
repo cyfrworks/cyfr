@@ -45,14 +45,16 @@ defmodule Compendium.ReverseSurfaceTest do
     "Compendium.Registry",
     "Compendium.Resolver",
 
-    # Provisioning seeds a new athanor's AQUA from the install template,
-    # scans the overlay tree it just wrote, and pulls the bundle's
-    # dependency closure. These two were reached through
-    # `alias Compendium.{AutoIndexer, Pull}` (`Sanctum.Provisioning`), which
-    # no roster regex could see, so they were absent from this list while
-    # being called five times.
+    # Provisioning uses AutoIndexer and Pull for component scans and
+    # dependency closure, and AgentIndex to derive the agent roster; the
+    # consent bootstrap mints the estate's agents as sources (AgentSource)
+    # and vouches a WASM unit by the seed's own release digest
+    # (Provenance.shipped_release_digest/1), never the tenant copy.
+    "Compendium.AgentIndex",
+    "Compendium.AgentSource",
     "Compendium.AquaTemplate",
     "Compendium.AutoIndexer",
+    "Compendium.Provenance",
     "Compendium.Pull",
 
     # First sign-in talks to cyfr.run: the legal-acceptance refusal is an

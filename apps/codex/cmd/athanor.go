@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -40,7 +41,7 @@ var athanorListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the athanors you belong to",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "athanor", map[string]any{"action": "list"})
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, map[string]any{"action": ops.AthanorList})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -69,7 +70,7 @@ var athanorGetCmd = &cobra.Command{
 		if len(args) == 1 {
 			payload["athanor"] = args[0]
 		}
-		result, err := newClient().CallTool(cmd.Context(), "athanor", payload)
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, payload)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -96,7 +97,7 @@ var athanorCreateCmd = &cobra.Command{
 		if slug, _ := cmd.Flags().GetString("slug"); slug != "" {
 			payload["slug"] = slug
 		}
-		result, err := newClient().CallTool(cmd.Context(), "athanor", payload)
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, payload)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -115,8 +116,8 @@ var athanorRenameCmd = &cobra.Command{
 	Short: "Rename an athanor (its slug stays)",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "athanor", map[string]any{
-			"action": "rename", "athanor": args[0], "name": args[1],
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, map[string]any{
+			"action": ops.AthanorRename, "athanor": args[0], "name": args[1],
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -135,8 +136,8 @@ var athanorArchiveCmd = &cobra.Command{
 	Short: "Archive a group (nothing is deleted; every ingress refuses it)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "athanor", map[string]any{
-			"action": "archive", "athanor": args[0],
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, map[string]any{
+			"action": ops.AthanorArchive, "athanor": args[0],
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -155,8 +156,8 @@ var athanorUnarchiveCmd = &cobra.Command{
 	Short: "Reopen an archived group",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "athanor", map[string]any{
-			"action": "unarchive", "athanor": args[0],
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, map[string]any{
+			"action": ops.AthanorUnarchive, "athanor": args[0],
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -191,7 +192,7 @@ var athanorSettingsCmd = &cobra.Command{
 		if len(args) == 1 {
 			payload["athanor"] = args[0]
 		}
-		result, err := newClient().CallTool(cmd.Context(), "athanor", payload)
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, payload)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -213,7 +214,7 @@ var athanorProvisionCmd = &cobra.Command{
 		if len(args) == 1 {
 			payload["athanor"] = args[0]
 		}
-		result, err := newClient().CallTool(cmd.Context(), "athanor", payload)
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, payload)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -269,8 +270,8 @@ var athanorUseCmd = &cobra.Command{
 	Short: "Point this session at an athanor (an id, a group slug, or @namespace)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), "session", map[string]any{
-			"action": "use", "athanor": args[0],
+		result, err := newClient().CallTool(cmd.Context(), ops.Session, map[string]any{
+			"action": ops.SessionUse, "athanor": args[0],
 		})
 		if err != nil {
 			return handleToolError(err)

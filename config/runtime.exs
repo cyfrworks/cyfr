@@ -19,26 +19,10 @@ if config_env() != :test do
   # Runtime configuration for CYFR
   # This file is executed at runtime, not compile time
 
-  # A variable that is present but empty is not a value — it is a line an
-  # operator left blank, which is exactly what copying `.env.example`
-  # leaves behind. Dotenvy's plain types read `""` as a decision: `:integer`
-  # yields 0 and `:boolean` yields false, so `CYFR_SESSION_TTL_HOURS=` would
-  # mean "sessions never expire", `CYFR_MCP_RATE_LIMIT_MAX=` would mean
-  # "refuse every MCP request", and `CYFR_AUTO_MIGRATE=` would mean "never
-  # migrate". The `?` types answer nil for blank instead, so blank reads as
-  # unset here and unset takes the documented default.
-  #
-  # `||` is wrong for booleans (a real `false` would fall through to the
-  # default) and right for the others, since a real `0` is truthy in Elixir.
+  # Treat empty values as unset and apply defaults. Preserve explicit false
+  # for booleans and zero for integers.
   env_str = fn key, default -> env!(key, :string?, nil) || default end
   env_int = fn key, default -> env!(key, :integer?, nil) || default end
-
-  env_bool = fn key, default ->
-    case env!(key, :boolean?, nil) do
-      nil -> default
-      value -> value
-    end
-  end
 
   # Comma-separated lists: origins, CIDRs, egress targets, operator emails.
   # The split-trim-reject-empty was written out five times; a list that reads
@@ -55,25 +39,19 @@ if config_env() != :test do
   # storage, repo) read the same Dotenvy-merged environment this file does.
   getenv = fn key -> env_str.(key, nil) end
 
-  # Which release evaluates this file: "cyfr" (the app), "builder" (the
-  # build-isolation container), or nil under plain `mix` (dev). Set by the
-  # release scripts before the runtime config provider runs. The builder
-  # evaluates only the build-plane blocks — it must never be REQUIRED to
-  # hold the app's secrets (endpoint key base, database URL, OAuth client
-  # secrets) just to run compilers: the blast-radius container holds one
-  # secret, CYFR_BUILDER_TOKEN.
+  # A switch is `on`/`off` (or true/false, yes/no, 1/0); an unrecognised
+  # spelling refuses the boot rather than reading as the default.
+  env_bool = fn key, default ->
+    case Cyfr.RuntimeConfig.switch(getenv, key, default) do
+      {:ok, value} -> value
+      {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+    end
+  end
+
+  # Evaluate only builder settings in the builder release; application secrets are not required there.
   release_name = env_str.("RELEASE_NAME", nil)
 
-  # Elixir's Logger defaults to :debug, and no file set a level outside
-  # `test.exs` — so a release formatted and emitted every debug line every
-  # dependency writes, through the metadata formatter, forever. Redaction
-  # does not help there: `:filter_parameters` covers inbound params and
-  # `Sanctum.Sanitizer` covers what the code hands it, neither covers an
-  # arbitrary debug line. `:info` is the floor; the knob is for an operator
-  # debugging their own box, and an unknown value keeps the floor rather
-  # than crashing the release on a typo.
-  # `:debug` stays the dev default — this file runs there too, and a
-  # developer's own box is exactly where the noise is wanted.
+  # Default to info logging in production and debug in development; invalid levels use the default.
   log_level =
     case env_str.("CYFR_LOG_LEVEL", if(config_env() == :prod, do: "info", else: "debug")) do
       level when level in ~w(emergency alert critical error warning notice info debug) ->
@@ -95,12 +73,21 @@ if config_env() != :test do
   end
 
   if release_name != "builder" do
-    # The explicit at-rest keyring, as JSON (parsed and pinned at boot by
-    # Cyfr.Application.resolve_crypto_keyring!/0; unset = derive from
-    # CYFR_SECRET_KEY_BASE). Through Dotenvy like every other secret: it was
-    # the one secret read with System.get_env/1, which silently ignored a
-    # keyring an operator put in .env alongside everything else.
+    # Load the explicit JSON keyring; unset derives a key from CYFR_SECRET_KEY_BASE.
     config :cyfr, :crypto_keyring_json, env_str.("CYFR_CRYPTO_KEYRING", nil)
+
+    # Accept a keyring whose primary differs from the one this database was
+    # sealed with, by naming its fingerprint — one boot, on purpose. See
+    # `Cyfr.KeyringFingerprint`: accepting records the change, it does not
+    # restore decryptability.
+    config :cyfr,
+           :crypto_keyring_fingerprint_accept,
+           env_str.("CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT", nil)
+
+    # Several control planes share this database by design (a cell of
+    # nodes). Off, a second live claimant refuses to boot
+    # (`Cyfr.ControlPlane`).
+    config :cyfr, :cluster, env_bool.("CYFR_CLUSTER", false)
 
     # Device label attached to registry credentials (unset = hostname).
     config :cyfr, :device_label, env_str.("CYFR_DEVICE_LABEL", nil)
@@ -138,6 +125,20 @@ if config_env() != :test do
   config :cyfr, :builder_token, env_str.("CYFR_BUILDER_TOKEN", nil)
   config :cyfr, :builder_listen, env_bool.("CYFR_BUILDER_LISTEN", false)
   config :cyfr, :builder_port, env_int.("CYFR_BUILDER_PORT", 4100)
+  # The address the builder listens on. The compose builder container is
+  # attached to the builder network alone, so every interface there is
+  # that network; a builder run outside compose binds one address here.
+  config :cyfr, :builder_bind, env_str.("CYFR_BUILDER_BIND", "0.0.0.0")
+
+  # Whether this server builds components at all — `build.compile` on every
+  # surface. An appliance that only runs what it pulled turns it off, and
+  # then needs no builder container to boot with authentication on.
+  config :cyfr, :builds_enabled, env_bool.("CYFR_BUILDS", true)
+
+  # A hosted server builds in the builder container: with an auth provider
+  # configured, builds on and no CYFR_BUILDER_URL, boot refuses unless the
+  # operator explicitly accepts cargo/npm running as this service user.
+  config :cyfr, :allow_in_process_builds, env_bool.("CYFR_ALLOW_IN_PROCESS_BUILDS", false)
 
   if release_name != "builder" do
     # A headless node (default: false) serves the API, MCP and public tinctures
@@ -196,12 +197,7 @@ if config_env() != :test do
       config :cyfr, :api_rate_limit_window_ms, v
     end
 
-    # SSE budgets, per caller (athanor + credential): how many concurrent
-    # streams each surface admits, and how long one may live before the
-    # client must reconnect. Defaults: 8 streams, 30 minutes. These were
-    # code defaults with no lever — an operator facing socket exhaustion,
-    # or one wanting longer-lived execution streams, had no answer short
-    # of a code change.
+    # Per-caller SSE limits: concurrent streams and lifetime. Defaults are 8 streams and 30 minutes.
     if v = env_int.("CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", nil) do
       config :cyfr, :mcp_subscription_max_concurrent, v
     end
@@ -254,27 +250,16 @@ if config_env() != :test do
       config :cyfr, :session_ttl_hours, ttl_hours
     end
 
-    # CYFR_SECRET_KEY_BASE env var overrides config-level secret_key_base (from dev.exs/test.exs).
-    # In production, this env var is required. In dev/test, the config file provides a static key.
-    # Blank reads as unset (see env_str above), so the prod guard below fires
-    # on `CYFR_SECRET_KEY_BASE=` — the line .env.example ships. It used to
-    # pass `""` through a truthiness check, leaving the documented raise dead
-    # and the endpoint holding an empty key base, with both signing salts
-    # derived from a publicly computable constant.
+    # CYFR_SECRET_KEY_BASE overrides the configured key. Required and nonblank
+    # in production; dev/test may use the key from their config files.
     env_key_base = env_str.("CYFR_SECRET_KEY_BASE", nil)
 
     if env_key_base do
       config :cyfr, :secret_key_base, env_key_base
     end
 
-    # These knobs resolve identically in every env — this file's own contract
-    # (see the path-knob note below). They used to live inside the prod block,
-    # where CYFR_MCP_ALLOWED_ORIGINS / CYFR_BEHIND_PROXY /
-    # CYFR_TRUSTED_PROXY_* silently did nothing outside a release: rehearsing
-    # a proxied or embedded setup in dev behaved one way there and another in
-    # production. The extras key is ADDITIVE (Cyfr.RuntimeConfig appends it to
-    # whatever :mcp_allowed_origins resolves to) so setting it in dev extends
-    # the localhost default instead of replacing it.
+    # Apply origin and proxy settings in every environment. Extra MCP origins
+    # extend the configured allowlist, including development localhost defaults.
     config :cyfr, :mcp_extra_origins, env_list.("CYFR_MCP_ALLOWED_ORIGINS")
 
     behind_proxy? = env_bool.("CYFR_BEHIND_PROXY", false)
@@ -303,9 +288,7 @@ if config_env() != :test do
           You can generate one by calling: mix phx.gen.secret
           """
 
-      # A misspelled bind address used to fall back to loopback, which starts
-      # the server on an interface nobody asked for and reads as "the deploy
-      # worked" until the first request from outside never arrives.
+      # Reject invalid bind addresses at boot.
       parse_ip = fn var, ip_string ->
         case :inet.parse_address(String.to_charlist(ip_string)) do
           {:ok, ip_tuple} ->
@@ -332,11 +315,7 @@ if config_env() != :test do
         "http://#{host}:#{port}"
       ]
 
-      # Loopback, but only on the port this server actually listens on: an
-      # `http://localhost` with no port is port 80, which is a page on the
-      # victim's own machine — a trusted origin for their LiveView socket, with
-      # their cookie. Every local flow (the SSH forward the README documents,
-      # dev, the host-bound CLI) names the port.
+      # Allow loopback origins only on this server's configured port.
       localhost_origins = [
         "http://localhost:#{port}",
         "https://localhost:#{port}",
@@ -382,10 +361,8 @@ if config_env() != :test do
       # Dev/test leave this false so http://localhost works.
       config :cyfr, :cookie_secure, true
 
-      # `behind_proxy?` is settled once, above the prod block, as the boolean
-      # it is (`env_bool` — a truthiness read of the string once turned XFF
-      # trust ON for `CYFR_BEHIND_PROXY=false`). The proxy-trust knobs are
-      # hoisted with it; only this warning is prod's own.
+      # Proxy trust is parsed above for every environment. Emit this
+      # configuration warning only in production.
       unless behind_proxy? do
         IO.puts(
           :stderr,
@@ -396,19 +373,9 @@ if config_env() != :test do
       end
     end
 
-    # The filesystem roots, resolved and validated in one place
-    # (Cyfr.RuntimeConfig.resolve_paths/1): the one runtime storage root
-    # (every athanor's data and components, the cache/ and system/ globals,
-    # and the SQLite database unless CYFR_DATABASE_PATH points it
-    # elsewhere), plus the seed tree read in place — the repo/scaffold
-    # checkout by default, the baked image copy in Docker (the Dockerfile
-    # sets CYFR_SEED_PATH; the operator mount overlays its aqua/).
-    #
-    # Dev and prod resolve identically — a path knob that only worked in
-    # releases was a silent fallback in dev, against this module's own
-    # contract. Test keeps its tmp pins: the whole file is skipped there.
-    # With the vars unset the defaults expand from CWD, so run dev from the
-    # umbrella root (locus builds already require it).
+    # Resolve runtime and seed paths in dev and prod. Defaults are relative
+    # to the working directory; start development from the umbrella root.
+    # Tests keep their temporary storage roots.
     paths =
       case Cyfr.RuntimeConfig.resolve_paths(getenv) do
         {:ok, paths} -> paths
@@ -418,13 +385,7 @@ if config_env() != :test do
     config :cyfr, :base_path, paths.base_path
     config :cyfr, :seed_path, paths.seed_path
 
-    # CYFR_DATABASE is the one variable `.env` cannot decide. The adapter is a
-    # BUILD-time choice (config/database_choice.exs, read with System.get_env
-    # before any app is compiled — Ecto cannot swap adapters at runtime),
-    # while everything else here comes from Dotenvy's merged sources. So an
-    # operator who put `CYFR_DATABASE=postgres` in `.env` — the documented
-    # home for every other setting — got a SQLite build, a SQLite branch
-    # below, CYFR_DATABASE_URL ignored, and no error at all. Say so instead.
+    # Reject .env adapter settings that disagree with the compile-time CYFR_DATABASE choice.
     built_adapter = Cyfr.RuntimeConfig.repo_adapter()
 
     requested_database = getenv.("CYFR_DATABASE")
@@ -489,14 +450,8 @@ if config_env() != :test do
         end
     end
 
-    # CORS allowlist for the browser-facing HTTP surface (comma-separated
-    # origins). The boot guard refuses to start a release that has
-    # authentication configured while the wildcard default is in effect, so any
-    # deployment with OAuth/OIDC enabled must set this. An empty value allows no
-    # cross-origin callers at all (fail-closed).
-    # An empty value is a decision — no cross-origin callers at all — so it is
-    # distinguished from unset, which leaves the wildcard default in place for
-    # the boot guard to refuse alongside configured auth.
+    # Browser CORS allowlist. Authenticated releases require an explicit value.
+    # Empty denies cross-origin requests; unset retains the wildcard default.
     if env_str.("CYFR_CORS_ALLOWED_ORIGINS", nil) do
       config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")
     end
@@ -526,11 +481,7 @@ if config_env() != :test do
         client_secret: github_secret
     end
 
-    # Google OAuth
-    # Device flow (CLI and Prism) requires client ID + secret: Google's
-    # device-flow token endpoint rejects exchanges that omit client_secret
-    # with {"error": "invalid_request"}. The leftover Ueberauth web-callback
-    # strategy uses the same pair.
+    # Google device flow requires both client ID and client secret.
     google_id = env_str.("CYFR_GOOGLE_CLIENT_ID", nil)
     google_secret = env_str.("CYFR_GOOGLE_CLIENT_SECRET", nil)
 
@@ -560,6 +511,9 @@ if config_env() != :test do
     # cyfr.run issues per-user push tokens automatically via
     # `/v1/identity/probe` after login, so there is no static
     # username/password to configure at deploy time.
+    # `none` means no registry: an appliance that runs only what it ships.
+    # Sign-in never needs one (`Sanctum.SignIn`); pulls and publishing refuse
+    # with a typed error (`Compendium.RegistryHost`).
     registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
     config :cyfr, :registry_url, registry_url_config
 
@@ -570,7 +524,10 @@ if config_env() != :test do
     config :cyfr, :public_url, env_str.("CYFR_PUBLIC_URL", nil)
 
     oci_registry_url_config =
-      env_str.("CYFR_OCI_REGISTRY_URL", "registry.#{registry_url_config}")
+      env_str.(
+        "CYFR_OCI_REGISTRY_URL",
+        if(registry_url_config == "none", do: "none", else: "registry.#{registry_url_config}")
+      )
 
     config :cyfr, :oci_registry_url, oci_registry_url_config
 
@@ -581,20 +538,12 @@ if config_env() != :test do
       config :cyfr, :github_client_id, github_id
     end
 
-    # Platform admins (comma-separated emails). On first sign-in, a listed email
-    # is granted a platform-scope membership (full access, bypasses the tenant
-    # gate). This is the bootstrap mechanism for any deployment — a solo operator
-    # lists their own email; a shared server lists the platform staff.
-    # Downcased because the door compares addresses that way.
+    # Platform-admin email allowlist. Addresses are normalized to lowercase before matching.
     platform_admins = "CYFR_PLATFORM_ADMIN_EMAILS" |> env_list.() |> Enum.map(&String.downcase/1)
 
     config :cyfr, :platform_admin_emails, platform_admins
 
-    # The public-door caps (Sanctum.Tenancy.Caps). Unset means off: a private
-    # box needs none of them; a server whose door is `*` sets them. The one
-    # exception is the pair cap, on by default (`0` turns it off): a DM is
-    # minted from the wire against anyone the caller shares a room with, so
-    # a ceiling per person is a default, not an opt-in.
+    # Account caps: unset disables limits except pairs (200) and conversations (1000); 0 disables those defaults.
     config :cyfr, :caps,
       max_athanors: env_int.("CYFR_MAX_ATHANORS", nil),
       max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", nil),
@@ -604,18 +553,9 @@ if config_env() != :test do
       mint_per_hour: env_int.("CYFR_MINT_PER_HOUR", nil),
       athanor_storage_bytes: env_int.("CYFR_ATHANOR_STORAGE_BYTES", nil)
 
-    # Auto-configure the auth provider from the environment.
-    # Priority: explicit config > GitHub/Google credentials > none.
-    #
-    # The provider is selected purely from configuration. A deployment with
-    # GitHub/Google credentials uses the built-in OAuth provider. A deployment
-    # that federates against an enterprise IdP supplies its own release runtime
-    # config setting `:cyfr, :auth_provider` to its own module. A deployment with
-    # no credentials runs without sign-in: requests reach the public read-only
-    # surface as an unauthenticated context (tenant-scoped routes are rejected).
-    # Set-or-default: an unset CYFR_AUTH_PROVIDER auto-detects from credentials;
-    # an explicit value must be satisfiable or the boot fails — it never silently
-    # degrades to no authentication.
+    # Select the auth provider from explicit configuration, then OAuth
+    # credentials. Reject unsatisfied explicit settings. Without a provider,
+    # requests are anonymous and tenant-scoped routes are denied.
     auth_provider =
       case Cyfr.RuntimeConfig.resolve_auth_provider(getenv) do
         {:ok, provider} -> provider
@@ -710,7 +650,7 @@ if config_env() != :test do
 
     # Prometheus metrics — the /metrics endpoint is unauthenticated, so it is
     # opt-in. Bind to a private interface or proxy-allowlist it when enabled.
-    if env_str.("CYFR_PROMETHEUS_METRICS", nil) == "true" do
+    if env_bool.("CYFR_PROMETHEUS_METRICS", false) do
       config :cyfr, :prometheus_metrics_enabled, true
     end
 
@@ -722,10 +662,10 @@ if config_env() != :test do
     end
 
     # OpenTelemetry Configuration
-    # Set CYFR_OTEL_ENABLED=true to enable distributed tracing.
+    # Set CYFR_OTEL_ENABLED=on to enable distributed tracing.
     # Traces are exported via OTLP to the endpoint specified by OTEL_EXPORTER_OTLP_ENDPOINT
     # (defaults to http://localhost:4318 for HTTP/protobuf).
-    if env_str.("CYFR_OTEL_ENABLED", nil) == "true" do
+    if env_bool.("CYFR_OTEL_ENABLED", false) do
       config :cyfr, :opentelemetry_enabled, true
 
       config :opentelemetry,

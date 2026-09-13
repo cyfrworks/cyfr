@@ -50,11 +50,11 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       assert actions == ["get", "set", "cleanup"]
     end
 
-    test "record tool has 2 read-only actions" do
+    test "record tool has 3 read-only actions" do
       tools = MCP.tools()
       tool = Enum.find(tools, &(&1.name == "record"))
       actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["get", "list"]
+      assert actions == ["get", "list", "payload"]
     end
 
     test "each tool has required schema fields" do
@@ -103,15 +103,15 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "read/2" do
     test "reads file resource", %{ctx: ctx} do
       # Create a test file using Arca API
-      :ok = Arca.put(ctx, ["guest", "test.txt"], "hello world")
+      :ok = Arca.put(ctx, ["data", "test.txt"], "hello world")
 
-      {:ok, result} = MCP.read(ctx, "arca://files/guest/test.txt")
+      {:ok, result} = MCP.read(ctx, "arca://files/data/test.txt")
       assert result.mimeType == "application/octet-stream"
       assert Base.decode64!(result.content) == "hello world"
     end
 
     test "returns error for missing file", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "arca://files/guest/missing.txt")
+      {:error, msg} = MCP.read(ctx, "arca://files/data/missing.txt")
       assert err_msg(msg) =~ "not found"
     end
 
@@ -122,7 +122,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     # The path is caller input — the boundary answers, it never raises.
     test "a traversal path answers a typed error, never raises", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "arca://files/guest/../aqua/agent.json")
+      {:error, msg} = MCP.read(ctx, "arca://files/data/../aqua/agent.json")
       assert err_msg(msg) =~ "Invalid path"
     end
 
@@ -134,7 +134,108 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     test "a platform context without an athanor answers a typed error, never raises" do
       ctx = Sanctum.Context.internal()
 
-      assert {:error, :missing_tenant} = MCP.read(ctx, "arca://files/guest/x")
+      assert {:error, :missing_tenant} = MCP.read(ctx, "arca://files/data/x")
+    end
+
+    # A person reads the athanor's whole tree; a key scoped to storage reads
+    # sees what an agent could have written or a conversation attached.
+    # A completed execution's result is a payload a member reads by the
+    # execution's id; another estate reads nothing.
+    test "record.payload answers a retained result to a member of the athanor", %{ctx: ctx} do
+      exec = "exec_payload_#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Execution, [
+          %{
+            id: exec,
+            athanor_id: ctx.athanor_id,
+            user_id: ctx.user_id,
+            reference: "reagent:local.pay:0.1.0",
+            status: "completed",
+            started_at: now
+          }
+        ])
+
+      {:ok, _} = Arca.ExecutionPayloads.put(ctx, exec, "result", ~s({"answer":42}), "api")
+
+      assert {:ok, %{execution_id: ^exec, kind: "result", bytes: 13, content: content}} =
+               MCP.handle("record", ctx, %{"action" => "payload", "id" => exec})
+
+      assert Base.decode64!(content) == ~s({"answer":42})
+
+      assert {:error, {:not_found, "Payload", _}} =
+               MCP.handle("record", ctx, %{"action" => "payload", "id" => exec, "kind" => "input"})
+
+      assert {:error, {:not_found, "Payload", _}} =
+               MCP.handle("record", %{ctx | athanor_id: "ath_elsewhere"}, %{
+                 "action" => "payload",
+                 "id" => exec
+               })
+    end
+
+    test "in-chain, record.payload answers the calling execution its own payload for its attempt",
+         %{ctx: ctx} do
+      exec = "exec_payload_#{System.unique_integer([:positive])}"
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Execution, [
+          %{
+            id: exec,
+            athanor_id: ctx.athanor_id,
+            user_id: ctx.user_id,
+            reference: "formula:local.pay:0.1.0",
+            status: "running",
+            started_at: DateTime.utc_now(),
+            current_attempt: "att_1"
+          }
+        ])
+
+      {:ok, _} = Arca.ExecutionPayloads.put(ctx, exec, "input", ~s({"given":1}), "api")
+      guest = Context.enter_guest(ctx)
+
+      # The lineage the host stamps names the caller and its attempt.
+      stamped = %{
+        "action" => "payload",
+        "id" => exec,
+        "kind" => "input",
+        "parent_execution_id" => exec,
+        "attempt" => "att_1"
+      }
+
+      assert {:ok, %{content: content}} = MCP.handle("record", guest, stamped)
+      assert Base.decode64!(content) == ~s({"given":1})
+
+      # Another execution's payload, a stale attempt, or no attempt at all.
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("record", guest, %{stamped | "parent_execution_id" => "exec_other"})
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("record", guest, %{stamped | "attempt" => "att_0"})
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("record", guest, Map.delete(stamped, "attempt"))
+
+      # A member names an attempt outright, and reads that attempt's.
+      member = %{"action" => "payload", "id" => exec, "kind" => "input", "attempt" => "att_1"}
+      assert {:ok, _} = MCP.handle("record", ctx, member)
+
+      assert {:error, {:not_found, "Payload", _}} =
+               MCP.handle("record", ctx, %{member | "attempt" => "att_0"})
+    end
+
+    test "a key scoped to storage reads reaches data/ and conversations/, a person everything",
+         %{ctx: ctx} do
+      :ok = Arca.put(ctx, ["data", "reach.txt"], "g")
+      :ok = Arca.put(ctx, ["aqua", "reach.md"], "a")
+
+      key = %{ctx | permissions: MapSet.new([:storage_read]), auth_method: :api_key}
+
+      assert {:ok, _} = MCP.read(key, "arca://files/data/reach.txt")
+      assert {:error, msg} = MCP.read(key, "arca://files/aqua/reach.md")
+      assert err_msg(msg) =~ "Forbidden path"
+
+      assert {:ok, _} = MCP.read(ctx, "arca://files/aqua/reach.md")
     end
   end
 
@@ -363,12 +464,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "cannot set retention settings", %{app_ctx: app_ctx} do
-      # Through the dispatcher: the gate is the :storage_write annotation.
-      # (The old handler gate checked :storage_write too but answered with a
-      # message claiming admin was required — the denial now names the real
-      # permission.)
+      # The dispatcher must enforce the declared :storage_write permission.
       assert {:error, {:missing_permission, :storage_write}} =
-               Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
+               Cyfr.Ops.Catalog.call_external("retention", app_ctx, %{
                  "action" => "set",
                  "settings" => %{"executions" => 5}
                })
@@ -376,7 +474,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "cannot run cleanup", %{app_ctx: app_ctx} do
       assert {:error, {:missing_permission, :admin}} =
-               Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
+               Cyfr.Ops.Catalog.call_external("retention", app_ctx, %{
                  "action" => "cleanup",
                  "cleanup_type" => "executions"
                })
@@ -612,10 +710,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
   describe "retired write/delete verbs are unknown at dispatch" do
     test "kernel-only and append-only verbs no longer exist on the surface", %{ctx: ctx} do
-      # These clauses used to live in the handler as polite refusals, but
-      # their verbs are absent from every action enum: the dispatcher's
-      # default-deny (and the HTTP schema validator) refuse them before any
-      # handler could. The audit pins that they stay unknown.
+      # Undeclared actions must be refused before handler dispatch.
       retired = [
         {"record", "record_start"},
         {"record", "record_complete"},
@@ -629,7 +724,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
       for {tool, verb} <- retired do
         {:error, {:unknown_action, name_action}} =
-          Emissary.MCP.ToolRegistry.call_external(tool, ctx, %{"action" => verb})
+          Cyfr.Ops.Catalog.call_external(tool, ctx, %{"action" => verb})
 
         assert name_action == "#{tool}.#{verb}"
       end
@@ -643,16 +738,16 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "resource read error paths" do
     test "handles get error other than not_found", %{ctx: ctx} do
       # read/2 with valid file
-      :ok = Arca.put(ctx, ["guest", "resource_test.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "resource_test.txt"], "content")
 
-      {:ok, result} = MCP.read(ctx, "arca://files/guest/resource_test.txt")
+      {:ok, result} = MCP.read(ctx, "arca://files/data/resource_test.txt")
       assert Base.decode64!(result.content) == "content"
     end
 
     test "handles nested path in resource URI", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["guest", "nested", "file.txt"], "nested content")
+      :ok = Arca.put(ctx, ["data", "nested", "file.txt"], "nested content")
 
-      {:ok, result} = MCP.read(ctx, "arca://files/guest/nested/file.txt")
+      {:ok, result} = MCP.read(ctx, "arca://files/data/nested/file.txt")
       assert Base.decode64!(result.content) == "nested content"
     end
   end
@@ -674,7 +769,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "mcp_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error, {:missing_permission, :storage_read}} =
-               Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{
+               Cyfr.Ops.Catalog.call_external("mcp_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
@@ -682,7 +777,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "policy_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error, {:missing_permission, :storage_read}} =
-               Emissary.MCP.ToolRegistry.call_external("policy_log", ctx, %{
+               Cyfr.Ops.Catalog.call_external("policy_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
@@ -717,7 +812,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "stats requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error, {:missing_permission, :storage_read}} =
-               Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{"action" => "stats"})
+               Cyfr.Ops.Catalog.call_external("mcp_log", ctx, %{"action" => "stats"})
     end
 
     test "stats succeeds for a :storage_read context", %{ctx: ctx} do
@@ -759,7 +854,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           action <- tool.input_schema["properties"]["action"]["enum"] do
         args = Map.put(extra_args.(action), "action", action)
 
-        case Emissary.MCP.ToolRegistry.call_external(tool.name, no_perm_ctx, args) do
+        case Cyfr.Ops.Catalog.call_external(tool.name, no_perm_ctx, args) do
           {:error, reason} ->
             assert Sanctum.Unauthorized.reason?(reason),
                    "#{tool.name}.#{action} error is not a permission denial: #{inspect(reason)}"
@@ -781,7 +876,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     # tool crashed". Dropping the table inside the sandbox transaction is
     # the outage: it rolls back with the test, on both adapters.
     test "record.get", %{ctx: ctx} do
-      Arca.Repo.query!("DROP TABLE executions")
+      drop_executions!()
 
       assert {:error, reason} = MCP.handle("record", ctx, %{"action" => "get", "id" => "exec_x"})
       assert err_msg(reason) =~ "unavailable"
@@ -799,7 +894,16 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
+  end
+
+  # An outage, simulated: the table is gone. Postgres holds the tables that
+  # reference `executions` to it and drops them along; SQLite has no such
+  # clause and no such need.
+  defp drop_executions! do
+    if Arca.Repo.__adapter__() == Ecto.Adapters.Postgres,
+      do: Arca.Repo.query!("DROP TABLE executions CASCADE"),
+      else: Arca.Repo.query!("DROP TABLE executions")
   end
 end

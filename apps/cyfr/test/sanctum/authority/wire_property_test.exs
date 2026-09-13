@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Authority.WirePropertyTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   use ExUnitProperties
 
   alias Sanctum.Authority
@@ -9,13 +9,21 @@ defmodule Sanctum.Authority.WirePropertyTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    :ok
+  end
+
+  defp reserve!(auth), do: Sanctum.Test.AuthorityFixtures.reserve!(auth)
+
   # An Authority is plain data end to end: to_wire/from_wire round-trips
   # any authority the relation can produce — rooted, walked bound and
   # unbound, at any depth — and the wire map holds nothing process-bound.
 
   property "to_wire |> from_wire is the identity over rooted authorities and their walks" do
     check all({graph, meta} <- Gen.graph(), program <- Gen.walk(meta), max_runs: 40) do
-      auth = Gen.rooted({graph, meta})
+      auth = reserve!(Gen.rooted({graph, meta}))
 
       auths =
         Enum.scan(program, auth, fn {fun, target, need}, acc ->
@@ -40,7 +48,7 @@ defmodule Sanctum.Authority.WirePropertyTest do
   end
 
   test "the zero authority round-trips" do
-    zero = Authority.zero()
+    zero = reserve!(Authority.zero())
     assert {:ok, ^zero} = Authority.from_wire(Authority.to_wire(zero))
   end
 
@@ -66,10 +74,15 @@ defmodule Sanctum.Authority.WirePropertyTest do
     walk.(walk, wire)
   end
 
-  test "the budget crosses as identity: the read-back authority charges the same counter" do
+  test "the budget crosses as identity: the read-back authority charges the same counter, with the row's cap" do
     {graph, meta} = Gen.graph() |> Enum.take(1) |> hd()
-    auth = Gen.rooted({graph, meta})
-    {:ok, twin} = Authority.from_wire(Authority.to_wire(auth))
+    auth = reserve!(Gen.rooted({graph, meta}))
+
+    # The wire carries the id alone; the cap comes back from the row.
+    assert %{"budget" => %{"id" => id}} = wire = Authority.to_wire(auth)
+    assert id == auth.budget.id
+    {:ok, twin} = Authority.from_wire(wire)
+    assert twin.budget == auth.budget
 
     assert :ok = Authority.try_acquire_invoke(auth)
     assert Authority.budget(twin).in_flight == 1
@@ -77,9 +90,24 @@ defmodule Sanctum.Authority.WirePropertyTest do
     assert Authority.budget(auth).in_flight == 0
   end
 
+  test "a reservation the store does not know, or one released, does not cross" do
+    {graph, meta} = Gen.graph() |> Enum.take(1) |> hd()
+    auth = Gen.rooted({graph, meta})
+
+    assert {:error, {:unknown_reservation, _}} = Authority.from_wire(Authority.to_wire(auth))
+
+    reserve!(auth)
+    {:ok, _} = Authority.from_wire(Authority.to_wire(auth))
+
+    {1, _} =
+      Arca.Repo.update_all(Arca.Schemas.BudgetReservation, set: [released_at: DateTime.utc_now()])
+
+    assert {:error, {:released_reservation, _}} = Authority.from_wire(Authority.to_wire(auth))
+  end
+
   test "from_wire fails closed on a malformed map" do
     {graph, meta} = Gen.graph() |> Enum.take(1) |> hd()
-    wire = Authority.to_wire(Gen.rooted({graph, meta}))
+    wire = Authority.to_wire(reserve!(Gen.rooted({graph, meta})))
 
     assert {:error, {:invalid_wire_keys, _}} = Authority.from_wire(Map.delete(wire, "budget"))
     assert {:error, {:invalid_wire_keys, _}} = Authority.from_wire(Map.put(wire, "extra", 1))
@@ -88,7 +116,7 @@ defmodule Sanctum.Authority.WirePropertyTest do
              Authority.from_wire(%{wire | "cursor" => "bound"})
 
     assert {:error, {:invalid_wire_budget, _}} =
-             Authority.from_wire(%{wire | "budget" => %{"id" => "x"}})
+             Authority.from_wire(%{wire | "budget" => %{"id" => "x", "cap" => 1}})
 
     assert {:error, {:invalid_wire_value, _}} =
              Authority.from_wire(%{wire | "invoke_mode" => "anything"})
@@ -105,7 +133,7 @@ defmodule Sanctum.Authority.WirePropertyTest do
     # re-establish them itself — otherwise the first non-test caller (a remote
     # worker) is a worker that writes its own ceiling and its own depth.
     {graph, meta} = Gen.graph() |> Enum.take(1) |> hd()
-    wire = Authority.to_wire(Gen.rooted({graph, meta}))
+    wire = Authority.to_wire(reserve!(Gen.rooted({graph, meta})))
 
     ceiling = Sanctum.Policy.Ceiling.platform_ceiling()
 

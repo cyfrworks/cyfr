@@ -94,6 +94,8 @@ defmodule EmissaryWeb.WebhookControllerTest do
     test "the channel is the athanor's: a departed creator leaves it running, an archived athanor or a denied creator closes it (no enumeration leak)",
          %{conn: conn, ctx: ctx} do
       n = System.unique_integer([:positive])
+      # The creator is a person this server knows, named by their own id.
+      {ctx, creator} = Sanctum.TestContext.person!(ctx, %{email: "hooks#{n}@example.com"})
       {:ok, group} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Hooks #{n}")
       in_group = %{ctx | athanor_id: group.id}
 
@@ -141,15 +143,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
       {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
 
       # a denied creator closes it too
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: ctx.user_id,
-          provider: "github",
-          email: "hooks#{n}@example.com",
-          verified: true
-        })
-
-      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
+      {:ok, _} = Sanctum.Tenancy.Users.deny(creator)
       assert post_signed(conn, slug, secret, ~s({})).status == 404
     end
 
@@ -255,10 +249,8 @@ defmodule EmissaryWeb.WebhookControllerTest do
       request_id = response["request_id"]
       assert is_binary(request_id)
 
-      # Async path: target component does not exist, so Opus.Executor returns
-      # `{:error, _}`. The spawned task records this via `[:invoke, :stop]`
-      # telemetry with `status: :error`. The HTTP response went out before
-      # this fired — async dispatch is the whole point of P0.2.
+      # The missing target produces an async execution error reported through
+      # [:invoke, :stop] telemetry after the HTTP response has been sent.
       assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,
                       %{request_id: ^request_id, status: :error}},
                      2_000

@@ -59,8 +59,8 @@ defmodule Arca do
   Typed tuples, whoever the caller: `:not_found`; `:forbidden` (unknown or
   reserved root, from `authorize_path/2`); `:seed_read_only`;
   `:reserved_name` (the `.tmp.<n>` shape); `:invalid_path` (a mutation
-  above depth 2); `:bundled` (deleting an unmaterialized seed unit);
-  `{:materialize_failed, reason}` (copy-on-write materialization);
+  above depth 2); `:bundled` (deleting a shipped copy);
+  `{:materialize_failed, reason}` (copying a shipped unit into the athanor);
   `{:limit_reached, :athanor_storage_bytes, cap}` and
   `:storage_unverifiable` (any capped tenant create — the write gate
   checks by default, see `put/4`'s `cap:` option); plus the adapter
@@ -81,18 +81,18 @@ defmodule Arca do
       ctx = Sanctum.TestContext.local()
 
       # Tenant-scoped storage (auto-prefixed with {athanor_id}/)
-      :ok = Arca.put(ctx, ["guest", "notes.txt"], content)
-      {:ok, content} = Arca.get(ctx, ["guest", "notes.txt"])
+      :ok = Arca.put(ctx, ["data", "notes.txt"], content)
+      {:ok, content} = Arca.get(ctx, ["data", "notes.txt"])
 
       # Global storage (no tenant prefix)
       :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
 
       # Append-only storage (JSONL-style logs)
-      :ok = Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], log_line <> "\\n")
+      :ok = Arca.append(ctx, ["data", "logs", "2025-01-15.jsonl"], log_line <> "\\n")
 
       # JSON convenience functions
-      :ok = Arca.put_json(ctx, ["guest", "state.json"], %{...})
-      {:ok, map} = Arca.get_json(ctx, ["guest", "state.json"])
+      :ok = Arca.put_json(ctx, ["data", "state.json"], %{...})
+      {:ok, map} = Arca.get_json(ctx, ["data", "state.json"])
 
   ## Retention
 
@@ -109,7 +109,6 @@ defmodule Arca do
       config :cyfr, Cyfr.Retention,
         executions: 10_000,
         builds: 100
-
   """
 
   alias Sanctum.Context
@@ -120,11 +119,10 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["guest", "file.txt"], "hello")
+      iex> Arca.put(ctx, ["data", "file.txt"], "hello")
       :ok
-      iex> Arca.get(ctx, ["guest", "file.txt"])
+      iex> Arca.get(ctx, ["data", "file.txt"])
       {:ok, "hello"}
-
   """
   @spec get(Context.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
   def get(%Context{} = ctx, path),
@@ -136,20 +134,15 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["guest", "data.json"], %{"key" => "value"})
+      iex> Arca.put_json(ctx, ["data", "data.json"], %{"key" => "value"})
       :ok
-      iex> Arca.get_json(ctx, ["guest", "data.json"])
+      iex> Arca.get_json(ctx, ["data", "data.json"])
       {:ok, %{"key" => "value"}}
-
   """
   @spec get_json(Context.t(), Arca.Storage.path()) :: {:ok, term()} | {:error, term()}
   def get_json(%Context{} = ctx, path) do
     with {:ok, content} <- get(ctx, path) do
-      # `Cyfr.Json.decode/1`, whose moduledoc names host-side storage as
-      # exactly its business. It used to tag Jason's own struct into the
-      # facade's vocabulary — a bare library struct inside a tagged tuple,
-      # and a second spelling of "that column is corrupt" for callers to
-      # match on.
+      # Normalize storage JSON errors through Cyfr.Json.decode/1.
       Cyfr.Json.decode(content)
     end
   end
@@ -176,9 +169,8 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["guest", "nested", "path", "file.txt"], "content")
+      iex> Arca.put(ctx, ["data", "nested", "path", "file.txt"], "content")
       :ok
-
   """
   @spec put(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
   def put(%Context{} = ctx, path, content, opts \\ []),
@@ -193,9 +185,8 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["guest", "data.json"], %{"key" => "value"})
+      iex> Arca.put_json(ctx, ["data", "data.json"], %{"key" => "value"})
       :ok
-
   """
   @spec put_json(Context.t(), Arca.Storage.path(), term(), keyword()) :: :ok | {:error, term()}
   def put_json(%Context{} = ctx, path, data, opts \\ []) do
@@ -224,11 +215,10 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
+      iex> Arca.append(ctx, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
       :ok
-      iex> Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
+      iex> Arca.append(ctx, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
       :ok
-
   """
   @spec append(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
   def append(%Context{} = ctx, path, content, opts \\ []),
@@ -243,13 +233,12 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["guest", "file.txt"], "hello")
+      iex> Arca.put(ctx, ["data", "file.txt"], "hello")
       :ok
-      iex> Arca.delete(ctx, ["guest", "file.txt"])
+      iex> Arca.delete(ctx, ["data", "file.txt"])
       :ok
-      iex> Arca.get(ctx, ["guest", "file.txt"])
+      iex> Arca.get(ctx, ["data", "file.txt"])
       {:error, :not_found}
-
   """
   @spec delete(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, path),
@@ -264,14 +253,13 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["guest", "listdir", "a.txt"], "a")
+      iex> Arca.put(ctx, ["data", "listdir", "a.txt"], "a")
       :ok
-      iex> Arca.put(ctx, ["guest", "listdir", "b.txt"], "b")
+      iex> Arca.put(ctx, ["data", "listdir", "b.txt"], "b")
       :ok
-      iex> {:ok, files} = Arca.list(ctx, ["guest", "listdir"])
+      iex> {:ok, files} = Arca.list(ctx, ["data", "listdir"])
       iex> Enum.sort(files)
       ["a.txt", "b.txt"]
-
   """
   # Names are the typed listing minus its kinds — one adapter callback, not
   # two spellings of the same walk.
@@ -321,13 +309,12 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.exists?(ctx, ["guest", "nonexistent"])
+      iex> Arca.exists?(ctx, ["data", "nonexistent"])
       false
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.exists?(ctx, ["guest", "..", "aqua"])
+      iex> Arca.exists?(ctx, ["data", "..", "aqua"])
       false
-
   """
   @spec exists?(Context.t(), Arca.Storage.path()) :: boolean()
   def exists?(%Context{} = ctx, path) do
@@ -359,7 +346,6 @@ defmodule Arca do
       :ok
       iex> Arca.delete_tree(ctx, ["conversations", "conv_1"])
       :ok
-
   """
   @spec delete_tree(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
   def delete_tree(%Context{} = ctx, path),
@@ -458,6 +444,38 @@ defmodule Arca do
   end
 
   @doc """
+  Make a directory exist at a tenant path, holding nothing — every folder
+  of a fresh estate from the first day (`ensure_roots/1`). Not a write of
+  bytes: nothing is capped or counted, and the reserved roots are not
+  refused — a directory carries no bytes a row could name. Refused like
+  any path outside the tenant roster; seed media stays read-only.
+  """
+  @spec ensure_dir(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
+  def ensure_dir(%Context{} = ctx, path) do
+    path = normalize(path)
+
+    cond do
+      Arca.Storage.classify(path) != :tenant -> {:error, :forbidden}
+      path == [] -> {:error, :invalid_path}
+      true -> guarded(ctx, path, fn p -> adapter(p).ensure_dir(ctx, p) end)
+    end
+  end
+
+  @doc """
+  Make every tenant root of the context's athanor exist — the folder
+  structure a person browses, laid at provisioning and healed at boot.
+  """
+  @spec ensure_roots(Context.t()) :: :ok | {:error, term()}
+  def ensure_roots(%Context{} = ctx) do
+    Enum.reduce_while(Arca.Storage.tenant_roots(), :ok, fn root, :ok ->
+      case ensure_dir(ctx, [root]) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {root, reason}}}
+      end
+    end)
+  end
+
+  @doc """
   Stream a stored object to a `Plug.Conn`.
 
   Caller owns Content-Type, CSP, and caching headers; the adapter handles
@@ -524,11 +542,10 @@ defmodule Arca do
     end
   end
 
-  # Seed media is read-only at this seam, whatever the context: the overlay
-  # materializer only ever reads seed and writes the athanor, so a
-  # write here is always a bug — and letting one through would mutate the
-  # tracked repo tree or the operator's mount. "Read in place" is an
-  # invariant, not a convention.
+  # Seed media is read-only at this seam, whatever the context: a shipped
+  # copy is read from the seed and written into the athanor, so a write
+  # here is always a bug — and letting one through would mutate the
+  # tracked repo tree or the operator's mount.
   #
   # For everything else: a write anywhere in the athanor's tree changes
   # what the storage cap measures, and that total is cached because walking
@@ -541,14 +558,9 @@ defmodule Arca do
       Arca.Storage.classify(path) == :seed ->
         {:error, :seed_read_only}
 
-      # The reserved tenant roots (`meta/` — the overlay's origin marks)
-      # mutate ONLY under the overlay's lexical internal-write scope: a
-      # forged mark would turn "reset to shipped" into deleting member
-      # work. Every legitimate mark writer already rides
-      # `with_internal_writes/1`, so the `auth_method == :system` key this
-      # gate once also accepted only widened the forge surface to every
-      # system-context caller in the codebase. Reads stay ordinary tenant
-      # reads.
+      # Reserved tenant roots mutate only within `with_internal_writes/1`:
+      # the bytes a payload row names by digest are the store's to write.
+      # Reads use ordinary tenant access checks.
       List.first(path) in Arca.Storage.reserved_roots() and
           not Arca.Overlay.internal_writes?() ->
         {:error, :forbidden}
@@ -559,7 +571,7 @@ defmodule Arca do
       # permanently ENOTDIR-ing the tenant. `delete_tree` is exempt: the
       # whole tree (`[]` — the purge) and a whole scope are exactly what
       # it is for. Runs on the normalized path, so a multi-level string
-      # segment (`"guest/notes.txt"`) counts as its real depth.
+      # segment (`"data/notes.txt"`) counts as its real depth.
       kind != :delete_tree and length(path) < 2 ->
         {:error, :invalid_path}
 
@@ -567,9 +579,9 @@ defmodule Arca do
         {:error, :reserved_name}
 
       true ->
-        # Copy-on-write for the seed-overlaid roots happens inside the
-        # `Arca.Overlay` decorator's own put/append/delete callbacks —
-        # this seam only gates, checks, dispatches and accounts.
+        # The unit lock and the `:bundled` refusal of the seeded roots
+        # live inside the `Arca.Overlay` decorator's own callbacks — this
+        # seam only gates, checks, dispatches and accounts.
         # Accounting is universal — every tenant write lands here, so a
         # new writer cannot forget — and the cap check rides the same
         # chokepoint (`check_cap/4` below): checked by default, exempt
@@ -613,9 +625,9 @@ defmodule Arca do
   # (the one seed tree, `:seed_path` — `Arca.Storage.seed_roots/0`), whatever
   # storage adapter is configured: an object-store deployment provisions
   # athanors from the shipped media without the bucket ever holding a copy.
-  # Every other path goes through the `Arca.Overlay` decorator (union
-  # reads, copy-on-write, the `:bundled` refusal — wrapping the configured
-  # adapter), which delegates verbatim for paths outside the overlaid
+  # Every other path goes through the `Arca.Overlay` decorator (the unit
+  # lock, the `:bundled` refusal — wrapping the configured adapter),
+  # which delegates verbatim for paths outside the overlaid
   # roots — one routing decision instead of a per-root classification.
   defp adapter(["seed" | _]), do: Arca.Adapters.Local
   defp adapter(_path), do: Arca.Overlay

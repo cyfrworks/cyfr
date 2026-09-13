@@ -8,9 +8,7 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
-  # §6 "Depth + budget": the depth cap fires at exactly depth_cap on any
-  # graph, and the invoke budget is root-keyed — spawns anywhere in the
-  # tree drain one shared pool that never resets per level.
+  # Depth caps apply at the configured level; all spawns share one root invoke budget.
 
   property "any chain denies at exactly the depth cap" do
     check all({graph, meta} <- Gen.graph(), max_runs: 30) do

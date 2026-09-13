@@ -11,12 +11,12 @@ defmodule Opus.FormulaDelegationTest do
 
   alias Opus.FormulaHandler
 
-  @self "formula:local.aqua:1.0.6"
+  @self "formula:local.demo:1.0.0"
   @roster [
     %{"name" => "builder", "prompt" => "You build.", "tool_policy" => %{"files.write" => "auto"}},
     %{"name" => "web", "prompt" => "You fetch.", "tool_policy" => %{}, "model" => "m-web"}
   ]
-  @opts [parent_reference: "formula:local.aqua", parent_roster: @roster]
+  @opts [parent_reference: "formula:local.demo", parent_roster: @roster]
 
   test "a delegate named by the roster gets the roster's configuration, not the guest's" do
     widened = %{
@@ -55,7 +55,7 @@ defmodule Opus.FormulaDelegationTest do
         ] do
       assert {:error, {:delegation_refused, _}} =
                FormulaHandler.delegated_input(@self, input,
-                 parent_reference: "formula:local.aqua",
+                 parent_reference: "formula:local.demo",
                  parent_roster: []
                )
     end

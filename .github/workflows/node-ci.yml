@@ -1,8 +1,6 @@
 name: Node CI (mcp-bridge)
 
-# Syntax-check and smoke the mcp-bridge on every change so breakage is caught
-# at PR time. It also runs `npm audit` (report-only) so dependency advisories
-# are surfaced — the Elixir/Go supply-chain gate (security.yml) never saw them.
+# Syntax-check and test the MCP bridge; report npm dependency advisories.
 
 on:
   push:
@@ -42,11 +40,7 @@ jobs:
       - name: Syntax check
         run: node --check server.mjs
 
-      # Framing, correlation and child lifecycle against a fake stdio child.
-      # The smoke test below boots the bridge and checks auth; it never
-      # exercises a child, which is where the process-killing bugs lived: a
-      # peer's own JSON-RPC request resolving the bridge's pending call, and
-      # a call to a child that has gone away.
+      # Test framing, request correlation and child lifecycle with a fake stdio server.
       - name: Unit tests
         run: npm test
 
@@ -56,7 +50,10 @@ jobs:
       - name: Smoke test
         run: |
           set -euo pipefail
-          export MCP_BRIDGE_TOKEN=ci-smoke-token MCP_BRIDGE_DATA="$RUNNER_TEMP/backends.json"
+          # CYFR_CRYPTO_KEYRING stands in for the app secrets the bridge's
+          # own environment must never forward to a child.
+          export MCP_BRIDGE_TOKEN=ci-smoke-token MCP_BRIDGE_DATA="$RUNNER_TEMP/backends.json" \
+            CYFR_CRYPTO_KEYRING=planted-keyring
           node server.mjs &
           BRIDGE_PID=$!
           for i in $(seq 1 20); do
@@ -89,6 +86,10 @@ jobs:
             echo "MCP_BRIDGE_TOKEN leaked into a child environment"
             exit 1
           fi
+          if [ -f "$RUNNER_TEMP/child-env.txt" ] && grep -q "planted-keyring" "$RUNNER_TEMP/child-env.txt"; then
+            echo "the bridge's own environment leaked into a child environment"
+            exit 1
+          fi
           kill "$BRIDGE_PID"
           if MCP_BRIDGE_TOKEN= MCP_BRIDGE_DATA="$RUNNER_TEMP/backends2.json" node server.mjs; then
             echo "bridge booted without a token — fail-closed boot is broken"
@@ -99,9 +100,7 @@ jobs:
         continue-on-error: true
         run: npm audit --audit-level=high
 
-  # The bridge image ships to every install (compose builds it locally), yet
-  # it was never built or scanned in CI — a broken Dockerfile.node surfaced
-  # on the user's first `cyfr up`, and its vulnerabilities surfaced nowhere.
+  # Build and scan the MCP bridge image shipped by Compose.
   image:
     name: Build + scan image (mcp-bridge)
     runs-on: ubuntu-latest
@@ -122,8 +121,17 @@ jobs:
           curl -fsS http://127.0.0.1:8001/health
           # The privilege drop is load-bearing: the bridge spawns shell
           # commands by design and must not do so as root.
-          uid=$(docker exec bridge-ci id -u)
-          [ "$uid" != "0" ] || { echo "bridge is running as root"; exit 1; }
+          #
+          # Assert the uid of the server process itself. `docker exec ... id -u`
+          # answers for a NEW process, which starts as the image's default user
+          # — root, because the entrypoint takes ownership of the /data bind
+          # mount before dropping to node, so the image declares no USER. And
+          # PID 1 is the server only under a plain `docker run`: compose puts
+          # docker-init there (`init: true`).
+          uid=$(docker exec bridge-ci sh -c 'for d in /proc/[0-9]*; do [ "$d" = "/proc/$$" ] && continue; { tr "\0" " " < "$d/cmdline" | grep -q server.mjs; } 2>/dev/null || continue; grep -m1 "^Uid:" "$d/status" | cut -f2; exit 0; done; exit 1' || true)
+          [ -n "$uid" ] || { echo "no server.mjs process in the bridge container"; exit 1; }
+          [ "$uid" != "0" ] || { echo "the bridge server is running as root"; exit 1; }
+          echo "bridge server runs as uid $uid"
           docker rm -f bridge-ci
 
       - name: Scan the image
@@ -134,3 +142,8 @@ jobs:
           exit-code: '1'
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          # Findings with no fix in any distribution, each scoped to the
+          # path it was observed at, with its reason and what would lift it.
+          # Everything else fixable still fails, including the same id in
+          # the bridge's own dependency tree.
+          trivyignores: .trivyignore.yaml

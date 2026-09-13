@@ -7,11 +7,7 @@ defmodule Sanctum.Authority.TrampolinePropertyTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
-  # §6 "Trampoline closed": unconsented D invokes inert B; B cannot reach
-  # its own B→X edges. Without monotone unboundness, onward authority
-  # would be a property of the NODE (B's blob entry) rather than of the
-  # PATH (how B was reached) — and D would drive B's privileged edges with
-  # input D controls.
+  # An unbound caller invoking an inert node cannot gain access to that node's granted edges.
 
   property "a node reached through an unconsented interposer cannot use its own edges" do
     check all({graph, meta} <- Gen.graph(), max_runs: 50) do

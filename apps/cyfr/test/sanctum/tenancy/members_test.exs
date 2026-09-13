@@ -180,6 +180,46 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
   end
 
+  describe "add/3 by email" do
+    test "a proved address is seated, an unproven one is invited, a denied one is refused",
+         %{athanor: athanor} do
+      # Seating by email is a grant keyed on the address alone. `true` seats
+      # the known person; `nil` (an issuer that never asserts the claim)
+      # holds an invited row that a proving sign-in claims; `false` refuses.
+      for {claim, expected} <- [{true, :seated}, {nil, :invited}, {false, :refused}] do
+        n = System.unique_integer([:positive])
+        email = "claim#{n}@example.com"
+
+        {:ok, user} =
+          Sanctum.Tenancy.Users.upsert_from_provider(%{
+            id: "oidcc|https://idp.example|claim-#{n}",
+            provider: "oidcc",
+            email: email,
+            verified: claim
+          })
+
+        case expected do
+          :seated ->
+            assert {:ok, _} = Members.add(athanor, [email: email], "system")
+            assert Members.member?(user.id, athanor.id)
+
+          :invited ->
+            assert {:ok, :invited} = Members.add(athanor, [email: email], "system")
+            refute Members.member?(user.id, athanor.id)
+
+            assert Enum.any?(
+                     rows!(Members.list_by_athanor(athanor.id)),
+                     &(&1.status == "invited" and &1.email == email)
+                   )
+
+          :refused ->
+            assert {:error, :email_unverified} = Members.add(athanor, [email: email], "system")
+            refute Members.member?(user.id, athanor.id)
+        end
+      end
+    end
+  end
+
   describe "activate_invited/1" do
     test "activates every invitation for the verified email in one pass and consumes the email",
          %{athanor: athanor} do
@@ -196,7 +236,7 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: user.id,
+          id: "github|https://github.com|mem-#{n}",
           provider: "github",
           email: email,
           verified: true
@@ -226,7 +266,7 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: user.id,
+          id: "github|https://github.com|mem-#{n}",
           provider: "github",
           email: email,
           verified: true
@@ -268,7 +308,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       for claim <- [nil, false] do
         {:ok, user} =
           Sanctum.Tenancy.Users.upsert_from_provider(%{
-            id: user.id,
+            id: "github|https://github.com|mem-#{n}",
             provider: "oidcc",
             email: email,
             verified: claim
@@ -281,7 +321,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       # The seat is still held, so proving the address later still claims it.
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: user.id,
+          id: "github|https://github.com|mem-#{n}",
           provider: "oidcc",
           email: email,
           verified: true
@@ -293,35 +333,17 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   describe "remove_member/2" do
-    test "the last active member leaving a group archives it — Home too, for good", %{
-      athanor: athanor
-    } do
+    test "the last active member leaving a group archives it", %{athanor: athanor} do
       n = System.unique_integer([:positive])
       user = person(n)
       {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
 
       :ok = Members.remove_member(athanor, user_id: user.id)
       assert {:ok, %{status: "archived"}} = Athanors.get(athanor.id)
-
-      # Home ends the same way, and never comes back: the row stays as the
-      # record with its flag, its slug is released, and the next `ensure_home`
-      # mints a successor at the address Home has always had.
-      home = Athanors.home!()
-      {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: home.id)
-      :ok = Members.remove_member(home, user_id: user.id)
-      assert {:ok, %{status: "archived", home: true, slug: retired}} = Athanors.get(home.id)
-      assert retired != home.slug
-
-      assert {:ok, successor} = Athanors.ensure_home()
-      assert successor.id != home.id
-      assert successor.slug == home.slug
-      assert {:error, :home_is_final} = Athanors.unarchive(%{home | status: "archived"})
     end
   end
 
-  # A follow is the person's own row in an athanor — sidebar state, never
-  # access — and it must not outlive the seat: left standing, it resumed
-  # silently the moment the person was re-added.
+  # Topic follows must be removed when membership ends.
   describe "follows end with the seat" do
     test "remove_member/2 drops the leaver's follows and nobody else's", %{athanor: athanor} do
       n = System.unique_integer([:positive])

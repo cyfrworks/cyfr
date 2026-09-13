@@ -45,7 +45,15 @@ defmodule Cyfr.StackShapeTest do
     assert services == ["builder", "caddy", "cyfr", "mcp-bridge"]
     refute compose =~ ~r/porta|4001|8080/
 
-    # One runtime root: the old components bind mount must not come back.
+    # The builder is attached to its own network and no other: what it
+    # listens on is that network, which is its isolation.
+    [_, builder_block | _] = Regex.split(~r/^  builder:\s*$/m, services_block)
+    [builder_block | _] = Regex.split(~r/^  [a-z]/m, builder_block)
+    [_, networks | _] = Regex.split(~r/^    networks:\s*$/m, builder_block)
+    [networks | _] = Regex.split(~r/^    [a-z]/m, networks)
+    assert Regex.scan(~r/^      - (\S+)/m, networks, capture: :all_but_first) == [["builder"]]
+
+    # Runtime storage uses one data root.
     refute compose =~ ~r/^\s*- \.\/components:/m
   end
 
@@ -70,10 +78,11 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  test "the image carries the seed tree and reads it in place" do
+  test "the image carries the seed tree and the release reads it there" do
     # A bare image boot (no host bind mount) must still be able to provision
-    # Home: the bundle rides in the image inside the seed tree and the
-    # release reads it there directly (CYFR_SEED_PATH) — no first-boot copy.
+    # an athanor from its seed: the bundle rides in the image inside the seed
+    # tree (CYFR_SEED_PATH), each athanor's copy is taken from it at
+    # provisioning, and the entrypoint copies nothing into the volume.
     dockerfile = read!("Dockerfile")
     entrypoint = read!("docker-entrypoint.sh")
     dockerignore = read!(".dockerignore")
@@ -82,8 +91,7 @@ defmodule Cyfr.StackShapeTest do
     assert dockerfile =~ ~r/^ENV CYFR_SEED_PATH=\/app\/seed$/m
     refute entrypoint =~ ~r/seed\/components/
 
-    # The bundle source ships in the build context; the old components/*
-    # allowlist pair is gone for good.
+    # Include seed source in the build context.
     refute dockerignore =~ ~r/^components\/\*$/m
     refute dockerignore =~ ~r/^!components\/_bundle\/$/m
     assert dockerignore =~ ~r/^data\/$/m
@@ -100,14 +108,7 @@ defmodule Cyfr.StackShapeTest do
     assert dockerfile =~ ~r/^COPY seed\/aqua\/ \/app\/aqua-defaults\/$/m
     assert entrypoint =~ "cp -r /app/aqua-defaults/. /app/seed/aqua/"
 
-    # "On FIRST start" is the whole contract: the mount is operator-editable
-    # (`Arca.Storage` calls it install media, not athanor state), so a copy
-    # that runs every boot silently reverts their edits to the shipped files.
-    # The guard has to name something the shipped tree actually contains —
-    # it once tested for `agent.json`, which is the v2 shape
-    # `Compendium.AquaTemplate.seed_check/0` REJECTS, so it was never there
-    # and the copy ran on every restart. The soul file is the one thing
-    # every shipped tree has.
+    # Seed only when the shipped soul file is absent; later boots must preserve operator edits.
     soul = Compendium.AquaPath.soul_file() |> Enum.drop(1) |> Enum.join("/")
     roles = Compendium.AquaPath.roles_dirname()
 
@@ -122,9 +123,7 @@ defmodule Cyfr.StackShapeTest do
     assert File.regular?(Path.join(@root, "seed/aqua/#{soul}"))
     assert File.dir?(Path.join(@root, "seed/aqua/#{roles}"))
 
-    # WIT rides in the BUILD context (Compendium.WITSource embeds it — an
-    # absent tree fails the compile), and the runtime image no longer
-    # carries a wit/ directory to read.
+    # WITSource embeds the WIT tree at build time; runtime images need no wit directory.
     stages = String.split(dockerfile, ~r/^FROM /m)
     builder = Enum.find(stages, &String.contains?(&1, "AS builder"))
     runner = Enum.find(stages, &String.contains?(&1, "AS runner"))

@@ -22,9 +22,9 @@ defmodule Compendium.AquaPathTest do
 
   test "one router from a name to its file — the soul's name is reserved" do
     assert AquaPath.soul?("aqua")
-    refute AquaPath.soul?("aqua_web")
+    refute AquaPath.soul?("web")
     assert AquaPath.agent_file("aqua") == AquaPath.soul_file()
-    assert AquaPath.agent_file("aqua_web") == AquaPath.role_file("aqua_web")
+    assert AquaPath.agent_file("web") == AquaPath.role_file("web")
     # A role file named like the soul is not the soul: the router never
     # points at it, so it can only be a stray.
     refute AquaPath.role_file("aqua") == AquaPath.soul_file()

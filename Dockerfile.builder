@@ -40,6 +40,11 @@ LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
 # (Sanctum.Limits reaches the builder via Locus.Builder) are FSL-licensed.
 LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
 
+# procps carries `kill` and `pgrep`, which Debian does not ship in a slim
+# base and which `Locus.Builder` shells out to when a build overruns its
+# deadline or its caller goes away. Without them every cleanup was an
+# :enoent the code rescued into a warning, so a runaway cargo or npm tree
+# outlived the request that started it.
 RUN apt-get update && apt-get install -y \
     libstdc++6 \
     openssl \
@@ -48,6 +53,7 @@ RUN apt-get update && apt-get install -y \
     libsqlite3-0 \
     curl \
     locales \
+    procps \
     build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
@@ -82,11 +88,11 @@ RUN ARCH=$(dpkg --print-architecture) \
 
 # Node.js LTS for tincture builds (npm + Vite). Direct binary install,
 # checksum-pinned against nodejs.org's SHASUMS256.txt for this version.
-ARG NODE_VERSION=24.14.1
+ARG NODE_VERSION=24.21.0
 RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in \
-         amd64) NODE_ARCH=x64; NODE_SHA=84d38715d449447117d05c3e71acd78daa49d5b1bfa8aacf610303920c3322be ;; \
-         arm64) NODE_ARCH=arm64; NODE_SHA=71e427e28b78846f201d4d5ecc30cb13d1508ca099ef3871889a1256c7d6f67e ;; \
+         amd64) NODE_ARCH=x64; NODE_SHA=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6 ;; \
+         arm64) NODE_ARCH=arm64; NODE_SHA=6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2 ;; \
          *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
        esac \
     && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \

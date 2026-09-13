@@ -716,30 +716,34 @@ Connect to the SSE endpoint to receive events as the formula executes:
 curl -N http://localhost:4000/api/executions/exec_abc123/events
 ```
 
-Events use standard SSE format with `event:` set to the event type:
+Events use standard SSE format with `event:` set to the event type. An execution's lifecycle (`execution.started`, `execution.completed`, `execution.failed`, `execution.cancelled`, `execution.lapsed`, `execution.result_lost`) is durable — each is a numbered row, and its `id` is that number. What a formula streams while it runs (`emit`) is a delta under the last durable event: its `id` is `<durable>.<n>`, and deltas are not replayed after a server restart.
 
 ```
 id: 1
+event: execution.started
+data: {"attempt":"att_...","reference":"formula:local.agent:0.4.0"}
+
+id: 1.1
 event: emit
 data: {"kind":"turn_start","turn":1}
 
-id: 2
+id: 1.2
 event: emit
 data: {"kind":"text_delta","content":"Here's my approach...","turn":1}
 
-id: 999999999
-event: complete
+id: 2
+event: execution.completed
 data: {"status":"completed","duration_ms":15234}
 ```
 
-The endpoint supports `Last-Event-ID` for reconnection and sends keep-alive comments every 15 seconds. The connection closes automatically on `complete` or `error` events.
+The endpoint supports `Last-Event-ID` for reconnection — either form of id — and sends keep-alive comments every 15 seconds. Durable events are delivered in the order they were numbered, whatever order they were published in. The connection closes on the terminal lifecycle event.
 
 **Setup required events (during streaming):**
 
 When a formula invokes a sub-component whose consent isn't satisfiable — a need with no live vault entry bound, or a shape that drifted past its approved consent — the system automatically emits a `setup_required` event with machine-readable fix instructions:
 
 ```
-id: 5
+id: 1.5
 event: emit
 data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","profile_id":"prf_...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"setup_command":"cyfr profile grant catalyst:local.stripe:0.1.0","message":"This app needs a vault entry for \"api_key\""}
 ```
@@ -984,9 +988,9 @@ Tinctures are frontend components served by CYFR at dedicated routes. Unlike WAS
 Served inside the Prism shell at `/t/:athanor/:publisher/:tincture_name`. Requires Prism session authentication (same as the dashboard).
 
 ```
-GET /t/home/local/stock-dashboard           → index.html
-GET /t/home/local/stock-dashboard/app.js    → static asset
-GET /t/home/local/stock-dashboard/style.css → static asset
+GET /t/@alice/local/stock-dashboard           → index.html
+GET /t/@alice/local/stock-dashboard/app.js    → static asset
+GET /t/@alice/local/stock-dashboard/style.css → static asset
 ```
 
 ### Public (Unauthenticated)
@@ -994,8 +998,8 @@ GET /t/home/local/stock-dashboard/style.css → static asset
 Public tinctures use the same `/t/` path — no authentication needed. A tincture is public when it has an active public consent profile: publish one with `profile.publish`, revoke it with `profile.revoke`, and read the current answer with `tincture_visibility.get`.
 
 ```
-GET /t/home/local/stock-dashboard              → index.html (no auth needed if public)
-GET /t/home/local/stock-dashboard/app.js       → static asset
+GET /t/@alice/local/stock-dashboard              → index.html (no auth needed if public)
+GET /t/@alice/local/stock-dashboard/app.js       → static asset
 ```
 
 ### Security Headers
@@ -1069,13 +1073,13 @@ A typical live-data pipeline:
 
 ### Platform admins
 
-CYFR is one product: deploy it as-is (sqlite, local FS, the seeded Home
-athanor) or configure OIDC / Postgres / a custom registry. There is no separate
-"edition" or "mode".
+CYFR is one product: deploy it as-is (sqlite, local FS) or configure OIDC /
+Postgres / a custom registry. There is no separate "edition" or "mode".
 
 Once authentication is configured, two lists do two jobs. `CYFR_PLATFORM_ADMIN_EMAILS`
-names the server's operators (platform admins): always let in, seated in the
-Home group, and able to run the operator verbs (`door.*`, `execution.force_release`)
+names the server's operators (platform admins): always let in, minted their
+own athanor past the server caps, and able to run the operator verbs
+(`door.*`, `execution.force_release`)
 — but working inside one athanor at a time like everyone else; there is no
 cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
 <email|user_id|*>`, `cyfr admin deny …`, or the Settings page) is who else may

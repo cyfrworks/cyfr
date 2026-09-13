@@ -5,11 +5,8 @@ defmodule Sanctum.MCPDispatchContractTest do
   @moduledoc """
   Frozen external contract for `Sanctum.MCP`.
 
-  This is THE regression gate for the MCP decomposition (Phase 3 #11): the
-  registry calls `tools/0`, `handle/3`, `resources/0`, `resource_templates/0`,
-  `read/2` by module name, and MCP clients depend on the exact tool names,
-  per-tool action vocabularies, and terminal error strings. The split must
-  keep every assertion below byte-identical.
+  Checks provider exports, tool names, action vocabularies and error
+  contracts used by the registry and MCP clients.
   """
   # async: false — the setups set shared sandbox mode (a global mutation), which
   # would corrupt other async tests' connection ownership if run concurrently.
@@ -41,7 +38,7 @@ defmodule Sanctum.MCPDispatchContractTest do
     "tincture_visibility" => ["get"],
     "webhook" => ["create", "list", "get", "update", "revoke", "rotate"],
     "vault" => ["list", "create", "rename", "rotate", "rebind", "authorize", "revoke", "delete"],
-    "profile" => ["plan", "preview", "commit", "publish", "list", "revoke"]
+    "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "revoke"]
   }
 
   @invalid_action_errors %{
@@ -55,7 +52,8 @@ defmodule Sanctum.MCPDispatchContractTest do
     "webhook" => "Invalid webhook action. Use: create, list, get, update, revoke, or rotate",
     "vault" =>
       "Invalid vault action. Use: list, create, rename, rotate, rebind, authorize, revoke, or delete",
-    "profile" => "Invalid profile action. Use: plan, preview, commit, publish, list, or revoke"
+    "profile" =>
+      "Invalid profile action. Use: plan, preview, commit, grant, publish, list, or revoke"
   }
 
   describe "tools/0 — frozen surface" do
@@ -149,7 +147,7 @@ defmodule Sanctum.MCPDispatchContractTest do
       for {tool, expected} <- @invalid_action_errors do
         assert {:error, reason} = MCP.handle(tool, ctx, %{"action" => "___no_such_action___"})
 
-        assert Emissary.MCP.ToolError.render(reason) == expected,
+        assert Cyfr.Ops.Error.render(reason) == expected,
                "invalid-action message drift for tool #{tool}"
       end
     end

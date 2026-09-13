@@ -52,9 +52,7 @@ defmodule Locus.Builder do
 
   require Logger
 
-  # Compile-time constants. Both were written as `compile_env` on keys no
-  # config file sets, which cannot be changed by an operator and cannot be
-  # changed by a test either — the ceremony bought nothing.
+  # Compile-time build limits.
   @max_source_size 1_024 * 1_024
   # 30s under the MCP tool layer's 5-minute brutal-kill deadline, so a build
   # that exhausts its budget dies here — a graceful {:error, :compilation_timeout}
@@ -310,12 +308,8 @@ defmodule Locus.Builder do
     end
   end
 
-  # `do_compile/5` cleans its tree in an `after` — which never runs when the
-  # MCP tool layer brutal-kills the provider task on its own deadline, so a
-  # multi-hundred-MB node_modules/target tree outlived every build that was
-  # killed rather than finished. Same shape as `watch_for_orphans/2`: an
-  # unlinked janitor survives the kill and sweeps when the owner dies for
-  # any reason (a second rm_rf after the happy path's `after` is a no-op).
+  # An unlinked janitor removes the build tree when its owner exits,
+  # including kills that skip do_compile/5’s after block.
   defp watch_tmp_dir(owner, dir) do
     spawn(fn ->
       ref = Process.monitor(owner)
@@ -584,30 +578,29 @@ defmodule Locus.Builder do
 
   defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do
     logger_metadata = Cyfr.LoggerContext.capture()
+    caller = self()
 
-    # `async_nolink`, not `async`: a linked task that exits abnormally — a
-    # `Port.open/2` that cannot spawn because the executable vanished between
-    # `toolchain_available?/1` and here, or because the node is out of ports
-    # or fds — took its caller down with it, so `do_compile/5`'s
-    # `after File.rm_rf(tmp_dir)` never ran and the whole build tree was left
-    # behind. Nothing here needs the link; the timeout path already reaps the
-    # OS process group itself.
+    # Run unlinked so spawn failures do not kill the caller or skip
+    # its build-tree cleanup.
     task =
       Task.Supervisor.async_nolink(Locus.TaskSupervisor, fn ->
         Cyfr.LoggerContext.restore(logger_metadata)
         executable = System.find_executable(command) || command
 
-        # Lead a fresh process group when the platform can (setsid ships in
-        # every Linux/util-linux image; macOS dev hosts have none): the
-        # timeout/orphan kill targets `-os_pid`, and without a group led by
-        # the child that kill was ESRCH on every invocation — grandchildren
-        # (npm, node, rustc, cargo's job servers) survived every timeout.
-        # setsid execs in place, so os_pid == pgid and the port's fds and
-        # exit_status are unchanged.
+        # Run the toolchain in its own process group so a timeout can take
+        # its descendants with it.
+        #
+        # `setsid` only execs in place when it is not already a process
+        # group leader; when it is, it forks and the parent returns 0 at
+        # once. A port's child is a group leader on Linux, so without
+        # `--wait` the build detached into its own session, every exit
+        # status read as 0, and a compile that failed came back as a
+        # missing artifact. `--wait` keeps setsid between us and the
+        # program for as long as it runs, and hands back its status.
         {spawn_exec, spawn_args} =
           case System.find_executable("setsid") do
             nil -> {executable, args}
-            setsid -> {setsid, [executable | args]}
+            setsid -> {setsid, ["--wait", executable | args]}
           end
 
         port =
@@ -630,7 +623,7 @@ defmodule Locus.Builder do
         case Port.info(port, :os_pid) do
           {:os_pid, os_pid} ->
             Process.put(:builder_os_pid, os_pid)
-            watch_for_orphans(self(), os_pid)
+            watch_for_orphans(self(), caller, os_pid)
 
           _ ->
             :ok
@@ -649,7 +642,18 @@ defmodule Locus.Builder do
             {:ok, output_path}
 
           true ->
-            {:error, :output_not_found}
+            # The command believed it succeeded and left nothing at the path
+            # the build expects. Its own output is the only evidence of why,
+            # and discarding it made this indistinguishable from a silent
+            # toolchain difference between one machine and another.
+            trimmed = String.trim(output)
+
+            Logger.error(
+              "[Locus.Builder] #{command} exited 0 without producing " <>
+                "#{output_path}; its output was:\n#{trimmed}"
+            )
+
+            {:error, {:output_not_found, trimmed}}
         end
 
       {:ok, {:ok, exit_code, output}} ->
@@ -674,21 +678,58 @@ defmodule Locus.Builder do
     end
   end
 
-  # The MCP tool layer brutal-kills its provider task on ITS OWN 5-minute
-  # deadline, which reaches this task through the link but never the cargo/
-  # npm process GROUP (closing the port only signals the direct child). An
-  # unlinked watcher survives the kill and reaps the group whenever the
-  # port owner dies abnormally — a double kill against the builder's own
-  # timeout path is a harmless ESRCH.
-  defp watch_for_orphans(owner, os_pid) do
-    spawn(fn ->
-      ref = Process.monitor(owner)
+  # Two processes can strand a build, and neither death closes the toolchain
+  # by itself: closing the port signals only the direct child, never the
+  # cargo/npm process GROUP.
+  #
+  # The task owns the port. The caller owns the deadline — it is the one
+  # inside `Task.yield/2` — and the task is deliberately UNLINKED from it,
+  # so killing the caller (the MCP tool layer brutal-kills its provider task
+  # on its own deadline) leaves the task running with nothing left to time
+  # it out. An earlier comment here claimed that kill arrived "through the
+  # link"; `async_nolink` never made one.
+  #
+  # So the watcher outlives both and reaps the group when either dies
+  # abnormally. A double kill against the builder's own timeout path is a
+  # harmless ESRCH.
+  @doc false
+  # Public for its own test: the behaviour is a race between three
+  # processes and an OS one, which nothing reachable from `compile/3` can
+  # arrange without a real toolchain and a slow build.
+  def watch_for_orphans(task, caller, os_pid) do
+    armed = self()
 
-      receive do
-        {:DOWN, ^ref, :process, _pid, reason} ->
-          unless reason == :normal, do: kill_os_process(os_pid)
-      end
-    end)
+    watcher =
+      spawn(fn ->
+        task_ref = Process.monitor(task)
+        caller_ref = Process.monitor(caller)
+        send(armed, {:watching, self()})
+
+        receive do
+          {:DOWN, ref, :process, _pid, reason} when ref in [task_ref, caller_ref] ->
+            unless reason == :normal do
+              kill_os_process(os_pid)
+
+              # Only ever the task. When the caller is the one that died, the
+              # task is left holding a port onto a process that is now gone and
+              # a deadline nobody is enforcing; when the task died, this is
+              # already false. The caller is never killed from here.
+              if Process.alive?(task), do: Process.exit(task, :kill)
+            end
+        end
+      end)
+
+    # Return only once the monitors exist. `Process.monitor/1` on a process
+    # that has already gone reports :noproc, which reads here as an abnormal
+    # death, so a watcher that armed late would reap a build whose task had
+    # merely finished.
+    receive do
+      {:watching, ^watcher} -> :ok
+    after
+      1_000 -> :ok
+    end
+
+    watcher
   end
 
   defp get_task_os_pid(task) do
@@ -698,9 +739,7 @@ defmodule Locus.Builder do
     end
   end
 
-  # What a build's toolchain may see of this node's environment. The port
-  # would otherwise hand user-run build scripts every secret the BEAM was
-  # started with.
+  # Allowlist the environment exposed to build scripts; exclude server secrets.
   @build_env_allowlist ~w(
     PATH HOME LANG LC_ALL LC_CTYPE TMPDIR TERM
     CARGO_HOME RUSTUP_HOME CARGO_TARGET_DIR
@@ -715,19 +754,28 @@ defmodule Locus.Builder do
     end
   end
 
-  defp kill_os_process(nil), do: :ok
+  @doc false
+  # Public alongside `watch_for_orphans/3`, so a test can tell a cleanup
+  # that does not work from a watcher that never called it.
+  def kill_os_process(nil), do: {:killed, []}
 
-  defp kill_os_process(os_pid) do
-    # Kill the process group to clean up cargo and its children. With the
-    # setsid spawn the child leads a group whose pgid == os_pid; without it
-    # (macOS dev host, no setsid binary) no such group exists and the group
-    # kill is ESRCH — fall back to the direct child so at least sh/cargo
-    # itself dies. Any other failure means a cargo/npm tree may have
-    # leaked, and that must not be silent — this is the one zombie-process
-    # risk in the tree.
+  def kill_os_process(os_pid) do
+    # Under `setsid --wait` the new session belongs to setsid's child, not
+    # to setsid, so the group to kill is the child's — reached through it
+    # rather than through os_pid. Killing setsid alone would leave the
+    # toolchain running.
+    for child <- child_pids(os_pid) do
+      System.cmd("kill", ["-9", "-#{child}"], stderr_to_stdout: true)
+    end
+
+    # Then the direct child. Without setsid (a macOS dev host) there is no
+    # separate group and this is the only kill there is; the group attempt
+    # is ESRCH and falls through. Any other failure means a toolchain tree
+    # may have leaked, and that must not be silent — this is the one
+    # zombie-process risk in the tree.
     case System.cmd("kill", ["-9", "-#{os_pid}"], stderr_to_stdout: true) do
-      {_, 0} ->
-        :ok
+      {_, 0} = group ->
+        {:killed, group: group}
 
       {out, code} ->
         {direct_out, direct_code} =
@@ -745,12 +793,24 @@ defmodule Locus.Builder do
           )
         end
 
-        :ok
+        {:killed, group: {out, code}, direct: {direct_out, direct_code}}
     end
   rescue
     e ->
       Logger.warning("[Locus.Builder] Failed to kill OS process #{os_pid}: #{inspect(e)}")
-      :ok
+      {:error, Exception.message(e)}
+  end
+
+  # setsid's own child, the process that leads the build's session. `pgrep`
+  # is absent on some minimal images, and a build that cannot be enumerated
+  # is still killed directly below.
+  defp child_pids(os_pid) do
+    case System.cmd("pgrep", ["-P", "#{os_pid}"], stderr_to_stdout: true) do
+      {out, 0} -> out |> String.split("\n", trim: true) |> Enum.filter(&(&1 =~ ~r/^\d+$/))
+      _ -> []
+    end
+  rescue
+    _ -> []
   end
 
   # Compiler chatter kept for the error report is bounded; past the cap

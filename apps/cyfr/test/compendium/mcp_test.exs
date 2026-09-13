@@ -56,7 +56,7 @@ defmodule Compendium.MCPTest do
     )
 
     write.(
-      "aqua_builder",
+      "builder",
       %{
         title: "Builder",
         description: "WASM component builder sub-agent prompt",
@@ -66,7 +66,7 @@ defmodule Compendium.MCPTest do
     )
 
     write.(
-      "aqua_artisan",
+      "artisan",
       %{
         title: "Artisan",
         description: "Tincture app/dashboard sub-agent prompt",
@@ -76,7 +76,7 @@ defmodule Compendium.MCPTest do
     )
 
     write.(
-      "aqua_explorer",
+      "explorer",
       %{
         title: "Explorer",
         description: "Research and web search sub-agent prompt",
@@ -86,13 +86,13 @@ defmodule Compendium.MCPTest do
     )
 
     write.(
-      "aqua_planner",
+      "planner",
       %{title: "Planner", description: "Planning and analysis sub-agent prompt"},
       "# Planner Agent\n\nYou are the Planner."
     )
 
     write.(
-      "aqua_web",
+      "web",
       %{
         title: "Web",
         description: "HTTP interaction sub-agent prompt",
@@ -111,7 +111,9 @@ defmodule Compendium.MCPTest do
     original_base_path = Application.fetch_env!(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_dir)
 
-    # Set up the athanor's aqua/ directory with agent manifest and test prompts
+    # The estate holds the shipped tree, as a fill leaves it; the fixture
+    # then edits every shipped agent.
+    :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     setup_aqua_dir()
 
     # Point API URL at a non-routable address so cyfr.run fallback tests
@@ -473,14 +475,14 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "component tool - pull action" do
-    test "rejects pull of local components", %{ctx: ctx} do
+    test "rejects pull of a local component the server does not ship", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "pull",
           "reference" => "c:local.example-tool:1.0.0"
         })
 
-      assert err_msg(msg) =~ "Cannot pull local components"
+      assert err_msg(msg) =~ "not a version the server ships"
       assert err_msg(msg) =~ "cyfr register"
     end
 
@@ -496,18 +498,16 @@ defmodule Compendium.MCPTest do
           "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
         })
 
-      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert err_msg(msg) =~ "ghcr.io"
     end
 
     test "single-user pull failure returns a binary error with the reference", %{ctx: ctx} do
-      # Post-refactor the anonymous-probe is namespace-scoped and logs a
-      # warning rather than appending a hint to the pull error. We just
-      # check the pull fails cleanly against an unreachable registry.
+      # An unreachable registry must return a clean pull error.
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "pull",
-          "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
+          "reference" => "#{Compendium.RegistryHost.canonical_host()}/cyfr/reagents/test:1.0.0"
         })
 
       assert is_binary(msg)
@@ -528,7 +528,7 @@ defmodule Compendium.MCPTest do
           "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
         })
 
-      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert err_msg(msg) =~ "ghcr.io"
     end
 
@@ -539,7 +539,7 @@ defmodule Compendium.MCPTest do
           "registry" => "ghcr.io"
         })
 
-      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert err_msg(msg) =~ "ghcr.io"
     end
 
@@ -601,10 +601,7 @@ defmodule Compendium.MCPTest do
           "reference" => "c:local.my-tool:1.0.0"
         })
 
-      # Regression: a `local` ref is pushed under the caller's claimed personal
-      # namespace, not the literal "local". With no namespace claimed the error
-      # must guide the user to claim one — never the old, misleading
-      # "No push token for namespace 'local'".
+      # A local publish requires a claimed personal namespace; the error must explain that requirement.
       refute err_msg(msg) =~ "No push token for namespace 'local'"
       assert err_msg(msg) =~ "personal namespace"
       assert err_msg(msg) =~ "cyfr login"
@@ -613,14 +610,7 @@ defmodule Compendium.MCPTest do
     test "push of a local component resolves the caller's claimed personal namespace",
          %{ctx: ctx} do
       # A claimed namespace is on the users row; the push token beside it.
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: ctx.user_id,
-          provider: "local",
-          email: "testns@example.com",
-          verified: true
-        })
-
+      {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "testns@example.com"})
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
 
       :ok =
@@ -665,7 +655,7 @@ defmodule Compendium.MCPTest do
           "registry" => "ghcr.io"
         })
 
-      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert err_msg(msg) =~ "ghcr.io"
     end
   end
@@ -700,7 +690,7 @@ defmodule Compendium.MCPTest do
 
     test "register action does not require directory parameter" do
       tool = Enum.find(MCP.tools(), &(&1.name == "component"))
-      # directory property should no longer exist in schema
+      # The schema does not accept a directory property.
       refute Map.has_key?(tool.input_schema["properties"], "directory")
     end
   end
@@ -1108,9 +1098,8 @@ defmodule Compendium.MCPTest do
       # Every listed row carries its provenance and update facts — the
       # one data path the Components page consumes.
       for comp <- result.components do
-        assert comp[:provenance] in ["bundled", "bundled_modified", "user", "remote"]
+        assert comp[:provenance] in ["bundled", "user", "remote"]
         assert is_boolean(comp[:superseded])
-        assert is_boolean(comp[:shadows_shipped])
         assert is_boolean(comp[:upstream_superseded])
       end
     end
@@ -1286,11 +1275,11 @@ defmodule Compendium.MCPTest do
       assert "tincture-guide" in names
       assert "integration-guide" in names
       assert "aqua" in names
-      assert "aqua_builder" in names
-      assert "aqua_artisan" in names
-      assert "aqua_explorer" in names
-      assert "aqua_planner" in names
-      assert "aqua_web" in names
+      assert "builder" in names
+      assert "artisan" in names
+      assert "explorer" in names
+      assert "planner" in names
+      assert "web" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do
@@ -1362,11 +1351,11 @@ defmodule Compendium.MCPTest do
       assert result.model == "claude-opus-4-6"
     end
 
-    test "get aqua_builder returns a role with metadata", %{ctx: ctx} do
+    test "get builder returns a role with metadata", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
 
-      assert result.name == "aqua_builder"
+      assert result.name == "builder"
       assert result.type == "role"
       refute Map.has_key?(result, :parent)
       assert result.format == "markdown"
@@ -1377,7 +1366,7 @@ defmodule Compendium.MCPTest do
     test "get returns the athanor's declared policy — one allowlist for every member", %{
       ctx: ctx
     } do
-      {:ok, before} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+      {:ok, before} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
       assert before.tool_policy["build.compile"] == "auto"
 
       # Editing declared policy goes through the tool — the agents page's
@@ -1391,11 +1380,11 @@ defmodule Compendium.MCPTest do
       {:ok, _} =
         MCP.handle("aqua", ctx, %{
           "action" => "update",
-          "name" => "aqua_builder",
+          "name" => "builder",
           "tool_policy" => edited
         })
 
-      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
 
       refute Map.has_key?(result.tool_policy, "build.compile")
       assert result.tool_policy["files.write"] == "auto"
@@ -1407,7 +1396,7 @@ defmodule Compendium.MCPTest do
       assert {:error, msg} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"files.delete" => "block"}
                })
 
@@ -1418,7 +1407,7 @@ defmodule Compendium.MCPTest do
       assert {:error, msg} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"no-dot-here" => "auto"}
                })
 
@@ -1458,7 +1447,7 @@ defmodule Compendium.MCPTest do
       assert {:error, {:invalid_argument, msg}} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"files.*" => "auto"}
                })
 
@@ -1468,7 +1457,7 @@ defmodule Compendium.MCPTest do
       assert {:error, {:invalid_argument, msg}} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"files.write" => "ask"}
                })
 
@@ -1497,34 +1486,34 @@ defmodule Compendium.MCPTest do
       assert {:ok, _} =
                MCP.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua_builder",
+                 "name" => "builder",
                  "tool_policy" => %{"files.write" => "auto", "files.read" => "auto"}
                })
     end
 
-    test "get aqua_artisan returns a role prompt", %{ctx: ctx} do
+    test "get artisan returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_artisan"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "artisan"})
 
-      assert result.name == "aqua_artisan"
+      assert result.name == "artisan"
       assert result.type == "role"
       assert result.content =~ "Artisan Agent"
     end
 
-    test "get aqua_web returns a role prompt", %{ctx: ctx} do
+    test "get web returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_web"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "web"})
 
-      assert result.name == "aqua_web"
+      assert result.name == "web"
       assert result.type == "role"
       assert result.content =~ "Web Agent"
     end
 
-    test "get aqua_planner returns a role prompt", %{ctx: ctx} do
+    test "get planner returns a role prompt", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_planner"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "planner"})
 
-      assert result.name == "aqua_planner"
+      assert result.name == "planner"
       assert result.type == "role"
       assert result.content =~ "Planner Agent"
     end
@@ -1672,7 +1661,7 @@ defmodule Compendium.MCPTest do
 
       assert "aqua/roles/keeper.md" in kept
       assert "aqua/skills/pdf" in kept
-      assert "aqua/roles/aqua_web.md" in reverted
+      assert "aqua/roles/web.md" in reverted
       assert Arca.exists?(ctx, ["aqua", "roles", "keeper.md"])
 
       {:ok, %{reset: true, kept: []}} =
@@ -1779,9 +1768,8 @@ defmodule Compendium.MCPTest do
                })
     end
 
-    test "the shipped scroll cannot be deleted; an edited copy reverts; the estate's own goes", %{
-      ctx: ctx
-    } do
+    test "the shipped scroll is never deleted, edited or not; a reset restores it; the estate's own goes",
+         %{ctx: ctx} do
       assert {:error, {:invalid_argument, msg}} =
                MCP.handle("aqua", ctx, %{
                  "action" => "skill_delete",
@@ -1802,13 +1790,26 @@ defmodule Compendium.MCPTest do
       assert %{state: "bundled_modified"} =
                Enum.find(files, &(&1.path == "aqua/skills/capability-acquisition"))
 
-      {:ok, %{deleted: "capability-acquisition", restored: "shipped"}} =
-        MCP.handle("aqua", ctx, %{"action" => "skill_delete", "name" => "capability-acquisition"})
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "skill_delete",
+                 "name" => "capability-acquisition"
+               })
+
+      assert msg =~ "ships with the server"
+
+      {:ok, %{restored: "capability-acquisition"}} =
+        MCP.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "capability-acquisition"})
 
       {:ok, back} =
         MCP.handle("aqua", ctx, %{"action" => "skill_get", "name" => "capability-acquisition"})
 
       assert back.content =~ "component(action: \"search\""
+
+      # Restoring again changes nothing and answers the same; the estate's
+      # own has nothing to restore to.
+      {:ok, %{restored: "capability-acquisition"}} =
+        MCP.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "capability-acquisition"})
 
       {:ok, _} =
         MCP.handle("aqua", ctx, %{
@@ -1818,34 +1819,48 @@ defmodule Compendium.MCPTest do
           "content" => "c"
         })
 
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "pdf"})
+
+      assert msg =~ "estate's own"
+
       {:ok, %{deleted: "pdf"}} =
         MCP.handle("aqua", ctx, %{"action" => "skill_delete", "name" => "pdf"})
 
       assert {:error, {:not_found, "Scroll", "pdf"}} =
                MCP.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
+
+      assert {:error, {:not_found, "Scroll", "pdf"}} =
+               MCP.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "pdf"})
     end
 
-    test "a shipped agent refuses delete and points at disable; an edited one reverts", %{
-      ctx: ctx
-    } do
-      # The throwaway seed ships aqua_web (test_helper copies the real
-      # template); the fixture's tenant copy shadows it — a delete reverts.
-      {:ok, %{deleted: "aqua_web", restored: "shipped"}} =
-        MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
-
-      # Now unmaterialized and shipped: delete refuses, disable is the verb.
-      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
+    test "a shipped role refuses delete, edited or not, and points at disable", %{ctx: ctx} do
+      # The fixture edited the athanor's copy of web: still shipped,
+      # still not deletable — disable is the verb, and reset the way back.
+      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "web"})
       assert err_msg(msg) =~ "cannot be deleted"
       assert err_msg(msg) =~ "disabled=true"
 
+      {:ok, %{restored: "web"}} =
+        MCP.handle("aqua", ctx, %{"action" => "reset", "name" => "web"})
+
+      {:ok, %{files: files}} = MCP.handle("aqua", ctx, %{"action" => "status"})
+      assert %{state: "bundled"} = Enum.find(files, &(&1.path == "aqua/roles/web.md"))
+
+      {:ok, %{restored: "web"}} =
+        MCP.handle("aqua", ctx, %{"action" => "reset", "name" => "web"})
+
+      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "web"})
+      assert err_msg(msg) =~ "cannot be deleted"
+
       {:ok, _} =
-        MCP.handle("aqua", ctx, %{"action" => "update", "name" => "aqua_web", "disabled" => true})
+        MCP.handle("aqua", ctx, %{"action" => "update", "name" => "web", "disabled" => true})
 
       {:ok, listing} = MCP.handle("aqua", ctx, %{"action" => "list"})
-      refute Enum.any?(listing.guides, &(&1.name == "aqua_web"))
+      refute Enum.any?(listing.guides, &(&1.name == "web"))
 
       # get still answers (so it can be re-enabled), flagged.
-      {:ok, got} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_web"})
+      {:ok, got} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "web"})
       assert got.disabled == true
     end
 
@@ -1854,12 +1869,6 @@ defmodule Compendium.MCPTest do
                MCP.handle("aqua", ctx, %{"action" => "create", "name" => "aqua", "content" => "x"})
 
       assert msg =~ "soul"
-
-      # The fixture materialized the soul; deleting that copy reveals the
-      # shipped one, and deleting the shipped one is refused with its own
-      # sentence.
-      {:ok, %{deleted: "aqua", restored: "shipped"}} =
-        MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua"})
 
       assert {:error, {:invalid_argument, msg}} =
                MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua"})
@@ -1973,7 +1982,10 @@ defmodule Compendium.MCPTest do
       segments
     end
 
-    test "rejects pull of local formula", %{ctx: ctx, test_dir: test_dir} do
+    test "rejects pull of a local formula the server does not ship", %{
+      ctx: ctx,
+      test_dir: test_dir
+    } do
       formula_dir =
         setup_component_dir(test_dir, "formula", "test-formula", "0.1.0", %{
           "type" => "formula",
@@ -1989,7 +2001,7 @@ defmodule Compendium.MCPTest do
           "reference" => "formula:local.test-formula:0.1.0"
         })
 
-      assert err_msg(msg) =~ "Cannot pull local components"
+      assert err_msg(msg) =~ "not a version the server ships"
     end
   end
 
@@ -2014,7 +2026,7 @@ defmodule Compendium.MCPTest do
 
     test "component.create denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error, {:missing_permission, :component_manage}} =
-               Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
+               Cyfr.Ops.Catalog.call_external("component", restricted_ctx, %{
                  "action" => "create",
                  "name" => "test-comp",
                  "type" => "reagent"
@@ -2023,7 +2035,7 @@ defmodule Compendium.MCPTest do
 
     test "component.push denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error, {:missing_permission, :component_manage}} =
-               Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
+               Cyfr.Ops.Catalog.call_external("component", restricted_ctx, %{
                  "action" => "push",
                  "reference" => "reagent:local.test:0.1.0"
                })
@@ -2041,7 +2053,7 @@ defmodule Compendium.MCPTest do
       }
 
       {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("component", key_ctx, %{
+        Cyfr.Ops.Catalog.call_external("component", key_ctx, %{
           "action" => "push",
           "reference" => "reagent:local.test:0.1.0"
         })
@@ -2051,14 +2063,14 @@ defmodule Compendium.MCPTest do
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error, {:missing_permission, :component_manage}} =
-               Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
+               Cyfr.Ops.Catalog.call_external("component", restricted_ctx, %{
                  "action" => "register"
                })
     end
 
     test "component.delete denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error, {:missing_permission, :component_manage}} =
-               Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
+               Cyfr.Ops.Catalog.call_external("component", restricted_ctx, %{
                  "action" => "delete",
                  "reference" => "reagent:local.test:0.1.0"
                })
@@ -2114,11 +2126,7 @@ defmodule Compendium.MCPTest do
     end
   end
 
-  # Bypass-based wire tests for the post-refactor error-formatting fixes:
-  # the MCP layer must surface registry errors as readable strings (not
-  # inspected struct dumps), and registry.probe must surface 412
-  # POLICY_ACCEPTANCE_REQUIRED structurally so codex can route into
-  # the clickwrap UI without parsing strings.
+  # Registry errors must be readable and policy-acceptance refusals must carry structured data.
   describe "registry MCP — error formatting + structured probe 412 (Bypass)" do
     setup do
       bypass = Bypass.open()
@@ -2210,7 +2218,7 @@ defmodule Compendium.MCPTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

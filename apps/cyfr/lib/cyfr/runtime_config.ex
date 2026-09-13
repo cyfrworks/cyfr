@@ -18,16 +18,35 @@ defmodule Cyfr.RuntimeConfig do
 
   This module holds two jobs, deliberately:
 
-  1. **Boot-time parsers** (the `getenv`-taking resolvers above) — env in,
-     validated config out, evaluated once by `runtime.exs`.
-  2. **Runtime accessors** (the zero-arity readers: `auth_provider/0`,
-     `cookie_secure?/0`, `cors_allowed_origins/0`, …) — added ONLY when a
-     default was being re-spelled at several call sites. A key with a
-     single reader stays with the module that owns it; blanket
-     centralization is not the pattern here, one-spelling-per-default is.
+  1. **Boot-time parsers** take environment values and return validated
+     configuration, evaluated once by `runtime.exs`.
+  2. **Runtime accessors**, such as `auth_provider/0` and `cookie_secure?/0`,
+     provide shared defaults for settings read by multiple modules.
   """
 
   @type getenv :: (String.t() -> String.t() | nil)
+
+  @doc """
+  Read an on/off switch from the environment.
+
+  Unset or blank values use `default`. Accepts `on`/`off`, `true`/`false`,
+  `yes`/`no`, and `1`/`0`, ignoring case. Other values return `{:error, message}`.
+  """
+  @spec switch(getenv, String.t(), boolean()) :: {:ok, boolean()} | {:error, String.t()}
+  def switch(getenv, key, default) when is_function(getenv, 1) and is_boolean(default) do
+    case getenv.(key) do
+      nil ->
+        {:ok, default}
+
+      raw when is_binary(raw) ->
+        case raw |> String.trim() |> String.downcase() do
+          "" -> {:ok, default}
+          on when on in ["on", "true", "yes", "1"] -> {:ok, true}
+          off when off in ["off", "false", "no", "0"] -> {:ok, false}
+          _ -> {:error, "#{key}=#{inspect(raw)} is not a switch; use on or off."}
+        end
+    end
+  end
 
   @doc """
   Resolve the auth provider module from the environment.
@@ -103,13 +122,6 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   The configured auth provider module, or `nil` when the deployment runs
   without sign-in.
-
-  The most security-load-bearing key in the system, and it was read raw at
-  six call sites — the boot guard, the plug, the login page, the callback,
-  the session tool, and `Sanctum.auth_configured?/0` — each spelling the
-  default itself. This module exists because, as it says of the cookie
-  flag, a security default spelled out at several call sites is several
-  chances to spell it differently.
   """
   @spec auth_provider() :: module() | nil
   def auth_provider, do: Application.get_env(:cyfr, :auth_provider)
@@ -146,6 +158,22 @@ defmodule Cyfr.RuntimeConfig do
   @doc "Whether this node runs as an OTP release (RELEASE_ROOT is set)."
   @spec release?() :: boolean()
   def release?, do: System.get_env("RELEASE_ROOT") != nil
+
+  @doc "Whether this server builds components (`CYFR_BUILDS`, default true)."
+  @spec builds_enabled?() :: boolean()
+  def builds_enabled?, do: Application.get_env(:cyfr, :builds_enabled, true) == true
+
+  @doc "The builder container's URL (`CYFR_BUILDER_URL`), or nil for in-process builds."
+  @spec builder_url() :: String.t() | nil
+  def builder_url, do: Application.get_env(:cyfr, :builder_url)
+
+  @doc """
+  Whether the operator accepted in-process builds on a hosted server
+  (`CYFR_ALLOW_IN_PROCESS_BUILDS`). Read by the boot guard only.
+  """
+  @spec allow_in_process_builds?() :: boolean()
+  def allow_in_process_builds?,
+    do: Application.get_env(:cyfr, :allow_in_process_builds, false) == true
 
   @doc "The consent-proof store module (default: the DB store)."
   @spec consent_proof_store() :: module()
@@ -199,14 +227,9 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  The deployment's origin: `public_url/0` when the operator set one, else
-  a dev default derived from the endpoint's CONFIG — the `:url` host and
-  the `:http` port, as data. Deriving here (rather than the auth domain
-  calling `EmissaryWeb.Endpoint.url()`) keeps the deployment fact behind
-  this module and fixes what that call got wrong: the endpoint `:url`
-  carries no scheme, so it answered `http://…` even on the TLS profile.
-  The dev default is honestly `http` — a TLS deployment sets
-  CYFR_PUBLIC_URL, and `Cyfr.Application` warns at boot when it is unset.
+  Returns `public_url/0` when configured, otherwise an HTTP development
+  origin built from the endpoint’s configured host and port.
+  TLS deployments must set CYFR_PUBLIC_URL.
   """
   @spec origin() :: String.t()
   def origin do
@@ -252,11 +275,8 @@ defmodule Cyfr.RuntimeConfig do
   def sqlite_busy_timeout_ms, do: 5_000
 
   @doc """
-  The default per-window tincture invoke budget. Two ingress surfaces share
-  it — the HTTP pipeline keys it by IP (EmissaryWeb.Plugs.TinctureRateLimit),
-  the console shell keys it by person — deliberately separate buckets, one
-  number, in glue both may name (the console naming the transport's plug
-  was the one console→transport back-edge).
+  Returns the default per-window tincture invocation budget. HTTP uses
+  per-IP buckets; the console shell uses separate per-person buckets.
   """
   @spec tincture_default_invoke_max() :: pos_integer()
   def tincture_default_invoke_max, do: 120
@@ -274,8 +294,9 @@ defmodule Cyfr.RuntimeConfig do
   Resolve the filesystem roots from the environment (release runtime):
 
     * `CYFR_DATA_PATH` — the one runtime storage root (default `"data"`)
-    * `CYFR_SEED_PATH` — the seed tree, read in place: the component bundle
-      under `components/` and the AQUA template under `aqua/`
+    * `CYFR_SEED_PATH` — the seed tree every athanor is provisioned from:
+      the component bundle under `components/` and the AQUA template under
+      `aqua/`
       (default `"seed"`)
     * `CYFR_DATABASE_PATH` — the SQLite file (default `cyfr.db` under the
       data root; ignored on Postgres)
@@ -359,12 +380,10 @@ defmodule Cyfr.RuntimeConfig do
     missing = for {var, key} <- required, is_nil(resolved[key]), do: var
 
     with [] <- missing,
-         # A distant or slow object store is the one storage failure an
-         # operator can fix from the outside. This lived as a top-level
-         # `:s3_receive_timeout_ms` that no config file set, while every other
-         # S3 setting was read from `config :cyfr, :s3`.
+         # Use the configured receive timeout for object-store requests.
          {:ok, receive_timeout_ms} <-
-           positive_int(getenv.("CYFR_S3_RECEIVE_TIMEOUT_MS"), "CYFR_S3_RECEIVE_TIMEOUT_MS") do
+           positive_int(getenv.("CYFR_S3_RECEIVE_TIMEOUT_MS"), "CYFR_S3_RECEIVE_TIMEOUT_MS"),
+         {:ok, path_style} <- switch(getenv, "CYFR_S3_PATH_STYLE", false) do
       opts =
         [
           bucket: resolved.bucket,
@@ -373,7 +392,7 @@ defmodule Cyfr.RuntimeConfig do
           secret_access_key: resolved.secret_access_key,
           endpoint: blank_to_nil(getenv.("CYFR_S3_ENDPOINT")),
           prefix: blank_to_nil(getenv.("CYFR_S3_PREFIX")),
-          path_style: getenv.("CYFR_S3_PATH_STYLE") in ["true", "1"],
+          path_style: path_style,
           receive_timeout_ms: receive_timeout_ms
         ]
         |> Enum.reject(fn {_k, v} -> is_nil(v) end)
@@ -402,17 +421,9 @@ defmodule Cyfr.RuntimeConfig do
            "(e.g. postgres://user:pass@host:5432/dbname)."}
 
       url ->
-        case parse_pool_size(getenv.("CYFR_DB_POOL_SIZE")) do
-          {:ok, pool_size} ->
-            {:ok,
-             [
-               url: url,
-               pool_size: pool_size,
-               ssl: getenv.("CYFR_DB_SSL") == "true"
-             ]}
-
-          {:error, _} = err ->
-            err
+        with {:ok, pool_size} <- parse_pool_size(getenv.("CYFR_DB_POOL_SIZE")),
+             {:ok, ssl} <- switch(getenv, "CYFR_DB_SSL", false) do
+          {:ok, [url: url, pool_size: pool_size, ssl: ssl]}
         end
     end
   end

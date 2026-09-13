@@ -5,18 +5,12 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   @moduledoc """
   Both ingresses hand a tool the same arguments.
 
-  `Emissary.MCP.Router` validates `arguments` against the tool's
-  `inputSchema` before dispatch; `ToolRegistry.call_external/4` — the console's
-  path, through `PrismWeb.MCPHelpers` — did not. So a `phx-click` (or a
-  crafted channel frame, since event params are client-controlled) reached a
-  handler with arguments `POST /mcp` would have refused `-32602`, and every
-  handler had to defend twice. `tool_registry.ex`'s own comment named the gap
-  ("the HTTP path never gets here — InputValidator enforces the schema enum
-  first") without closing it.
+  Checks that HTTP and in-process calls enforce the same inputSchema
+  validation before dispatching to a handler.
   """
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
 
   defmodule Provider do
     # Records exactly what it was handed, so the test can tell "refused before
@@ -41,7 +35,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   }
 
   setup do
-    ToolRegistry.register_tool(
+    Catalog.register_tool(
       "ingress_probe",
       Provider,
       %{
@@ -53,15 +47,14 @@ defmodule Emissary.MCP.IngressSymmetryTest do
 
     Process.register(self(), :ingress_probe_observer)
 
-    on_exit(fn -> ToolRegistry.unregister_tool("ingress_probe") end)
+    on_exit(fn -> Catalog.unregister_tool("ingress_probe") end)
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
   test "a wrongly-typed argument is refused on the console path too", %{ctx: ctx} do
-    # The schema says `id` is a string. Over `POST /mcp` this is a -32602;
-    # through the console it used to reach the handler as an integer.
+    # Require string ids on both HTTP and console dispatch.
     assert {:error, _} =
-             ToolRegistry.call_external("ingress_probe", ctx, %{
+             Catalog.call_external("ingress_probe", ctx, %{
                "action" => "echo",
                "id" => 12_345
              })
@@ -70,19 +63,16 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   end
 
   test "an unknown action is still refused in its own vocabulary", %{ctx: ctx} do
-    # The annotation layer owns which actions exist, and says so as
-    # `{:unknown_action, …}`. Schema validation deliberately does not answer
-    # first here: unknown actions were never the gap, and two refusals for one
-    # condition is the drift `Emissary.MCP.ToolError` exists to end.
+    # The catalog returns unknown_action for undeclared actions before schema validation.
     assert {:error, {:unknown_action, _}} =
-             ToolRegistry.call_external("ingress_probe", ctx, %{"action" => "nope"})
+             Catalog.call_external("ingress_probe", ctx, %{"action" => "nope"})
 
     refute_receive {:reached_handler, _}, 200
   end
 
   test "a well-formed call still reaches the handler", %{ctx: ctx} do
     assert {:ok, _} =
-             ToolRegistry.call_external("ingress_probe", ctx, %{
+             Catalog.call_external("ingress_probe", ctx, %{
                "action" => "echo",
                "id" => "abc"
              })
@@ -91,16 +81,16 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   end
 
   test "a tool with no schema is unaffected", %{ctx: ctx} do
-    ToolRegistry.register_tool(
+    Catalog.register_tool(
       "ingress_probe_bare",
       Provider,
       %{annotations: %{actions: %{"echo" => %{kind: :read, planes: [:external]}}}},
       :timer.minutes(1)
     )
 
-    on_exit(fn -> ToolRegistry.unregister_tool("ingress_probe_bare") end)
+    on_exit(fn -> Catalog.unregister_tool("ingress_probe_bare") end)
 
     assert {:error, {:unknown_action, _}} =
-             ToolRegistry.call_external("ingress_probe_bare", ctx, %{"action" => "nope"})
+             Catalog.call_external("ingress_probe_bare", ctx, %{"action" => "nope"})
   end
 end

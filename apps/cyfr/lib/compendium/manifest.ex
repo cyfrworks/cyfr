@@ -70,7 +70,13 @@ defmodule Compendium.Manifest do
     description license tags category
     needs caps dependencies tincture
     schema examples defaults forked_from
+    contracts agent
   )
+
+  # A contract is `<family>/<name>@<major>`: the operations a component
+  # answers on its one export, named so a host can ask for them by name
+  # (`Cyfr.Models` reads `model/chat@1`).
+  @contract_pattern ~r/\A[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*@[1-9][0-9]*\z/
 
   @legacy_blocks ~w(setup oauth wasi)
 
@@ -79,25 +85,28 @@ defmodule Compendium.Manifest do
   def known_keys, do: @known_keys
 
   @doc """
+  The contracts a manifest declares (`"contracts": ["model/chat@1"]`), as
+  written; an absent or malformed block declares none.
+  """
+  @spec contracts(map()) :: [String.t()]
+  def contracts(%{"contracts" => list}) when is_list(list),
+    do: Enum.filter(list, &(is_binary(&1) and Regex.match?(@contract_pattern, &1)))
+
+  def contracts(_), do: []
+
+  @doc """
   Validate a decoded manifest at a write boundary — the ONE manifest
   validator, called by every ingress (directory registration,
   `publish_bytes`, tincture publish; OCI store lands through those).
 
   The refusals, in order:
 
-    * a retired `setup`/`oauth`/`wasi` block — the frozen model has no arm
-      that could honor it, so accepting one would register a component
-      whose declared ask silently never applies;
-    * an unknown top-level key — a typo'd `nedes` block must refuse, not
-      register as "no needs";
-    * a malformed `needs`/`caps` block, refused by its owning validator;
-    * a malformed `tincture` or `dependencies` block — both feed
-      security-relevant readers (the CSP builder and the activation
-      graph/release digest) that used to shape-check lazily, per caller,
-      or drop bad entries silently.
-
-  "Is this manifest valid?" used to depend on which of five call paths
-  you asked.
+      * unsupported `setup`, `oauth` or `wasi` blocks;
+      * unknown top-level keys;
+      * malformed `needs` or `caps` blocks;
+      * malformed `tincture` or `dependencies` blocks, which feed CSP,
+        activation-graph and release-digest validation;
+      * a `contracts` block that is not a list of `family/name@major` names.
   """
   @spec validate(map()) :: :ok | {:error, term()}
   def validate(manifest) when is_map(manifest) do
@@ -105,12 +114,130 @@ defmodule Compendium.Manifest do
          :ok <- reject_unknown_keys(manifest),
          :ok <- Compendium.Manifest.Needs.validate(manifest),
          :ok <- Compendium.Manifest.Caps.validate(manifest),
-         :ok <- validate_tincture_block(manifest) do
+         :ok <- validate_tincture_block(manifest),
+         :ok <- validate_contracts_block(manifest),
+         :ok <- validate_agent_block(manifest) do
       validate_dependencies_block(manifest)
     end
   end
 
   def validate(_), do: :ok
+
+  defp validate_contracts_block(%{"contracts" => list}) when is_list(list) do
+    case Enum.reject(list, &(is_binary(&1) and Regex.match?(@contract_pattern, &1))) do
+      [] ->
+        :ok
+
+      bad ->
+        {:error,
+         {:invalid_contracts,
+          "Manifest declares contract(s) that are not family/name@major: " <>
+            Enum.map_join(bad, ", ", &inspect/1)}}
+    end
+  end
+
+  defp validate_contracts_block(%{"contracts" => other}) do
+    {:error, {:invalid_contracts, "Manifest `contracts` must be a list, got: #{inspect(other)}"}}
+  end
+
+  defp validate_contracts_block(_), do: :ok
+
+  # The `agent` block is the projected consent shape of an AQUA agent
+  # (`Compendium.AgentSource`): catalyst, model, and the auto/ask policy
+  # sets. It is refused on every other type.
+  defp validate_agent_block(%{"type" => "agent", "agent" => agent}),
+    do: validate_agent_value(agent)
+
+  defp validate_agent_block(%{"agent" => _}) do
+    {:error, {:invalid_agent, "agent is only valid on type agent"}}
+  end
+
+  defp validate_agent_block(_), do: :ok
+
+  defp validate_agent_value(agent) when is_map(agent) do
+    extras =
+      agent
+      |> Map.keys()
+      |> Enum.filter(&(is_binary(&1) and &1 not in ~w(catalyst model policy)))
+
+    cond do
+      extras != [] ->
+        {:error, {:invalid_agent, "unknown key(s): #{Enum.join(Enum.sort(extras), ", ")}"}}
+
+      not valid_agent_catalyst?(agent["catalyst"]) ->
+        {:error, {:invalid_agent, "agent.catalyst must be a name-level component ref"}}
+
+      not valid_agent_model?(agent["model"]) ->
+        {:error, {:invalid_agent, "agent.model must be a non-empty string"}}
+
+      true ->
+        validate_agent_policy(agent["policy"])
+    end
+  end
+
+  defp validate_agent_value(other) do
+    {:error, {:invalid_agent, "agent must be an object, got: #{inspect(other)}"}}
+  end
+
+  defp valid_agent_catalyst?(nil), do: true
+
+  defp valid_agent_catalyst?(ref) when is_binary(ref) and ref != "" do
+    match?({:ok, %{version: nil}}, Sanctum.ComponentRef.parse(ref))
+  end
+
+  defp valid_agent_catalyst?(_), do: false
+
+  defp valid_agent_model?(nil), do: true
+  defp valid_agent_model?(model) when is_binary(model) and model != "", do: true
+  defp valid_agent_model?(_), do: false
+
+  defp validate_agent_policy(nil), do: :ok
+
+  defp validate_agent_policy(policy) when is_map(policy) do
+    extras =
+      policy
+      |> Map.keys()
+      |> Enum.filter(&(is_binary(&1) and &1 not in ~w(auto ask)))
+
+    auto = policy["auto"]
+    ask = policy["ask"]
+
+    cond do
+      extras != [] ->
+        {:error,
+         {:invalid_agent, "agent.policy unknown key(s): #{Enum.join(Enum.sort(extras), ", ")}"}}
+
+      not (is_nil(auto) or string_list?(auto)) ->
+        {:error, {:invalid_agent, "agent.policy.auto must be a list of strings"}}
+
+      not (is_nil(ask) or string_list?(ask)) ->
+        {:error, {:invalid_agent, "agent.policy.ask must be a list of strings"}}
+
+      overlap?(auto, ask) ->
+        {:error, {:invalid_agent, "agent.policy auto and ask must be disjoint"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_agent_policy(other) do
+    {:error, {:invalid_agent, "agent.policy must be an object, got: #{inspect(other)}"}}
+  end
+
+  defp string_list?(list) when is_list(list),
+    do: Enum.all?(list, &(is_binary(&1) and &1 != ""))
+
+  defp string_list?(_), do: false
+
+  defp overlap?(auto, ask) when is_list(auto) and is_list(ask) do
+    auto
+    |> MapSet.new()
+    |> MapSet.intersection(MapSet.new(ask))
+    |> MapSet.size() > 0
+  end
+
+  defp overlap?(_, _), do: false
 
   # The tincture block is presentation metadata plus one capability grant:
   # `connect` feeds the served page's CSP connect-src. Shapes are enforced

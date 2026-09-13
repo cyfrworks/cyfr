@@ -132,11 +132,11 @@ defmodule Sanctum.ContextFocusTest do
       })
 
     b_ctx = ctx.("github|https://github.com|someone", b.id, false)
-    :ok = Arca.put(b_ctx, ["guest", "secret.txt"], "b's bytes")
+    :ok = Arca.put(b_ctx, ["data", "secret.txt"], "b's bytes")
 
     # the audit ledger of B is invisible from A
     assert {:error, msg} =
-             Emissary.MCP.ToolRegistry.call_external("record", focused, %{
+             Cyfr.Ops.Catalog.call_external("record", focused, %{
                "action" => "get",
                "id" => b_exec
              })
@@ -144,34 +144,34 @@ defmodule Sanctum.ContextFocusTest do
     assert err_msg(msg) =~ "not found"
 
     assert {:ok, %{executions: listed}} =
-             Emissary.MCP.ToolRegistry.call_external("record", focused, %{"action" => "list"})
+             Cyfr.Ops.Catalog.call_external("record", focused, %{"action" => "list"})
 
     refute Enum.any?(listed, &(&1.id == b_exec))
 
     # and so is B's storage: a URI is rooted in the focused athanor, never another
     assert {:error, {:not_found, "File", _}} =
-             Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/guest/secret.txt")
+             Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/data/secret.txt")
 
     assert {:ok, %{content: content}} =
-             Emissary.MCP.Tools.RecordsProvider.read(b_ctx, "arca://files/guest/secret.txt")
+             Emissary.MCP.Tools.RecordsProvider.read(b_ctx, "arca://files/data/secret.txt")
 
     assert Base.decode64!(content) == "b's bytes"
   end
 
-  test "resolve_into gives an admin the capability, an :athanor scope, and their own athanor",
+  test "resolve_status gives an admin the capability, an :athanor scope, and their own athanor",
        %{ops: ops} do
-    home = Athanors.home!()
-    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: home.id)
+    {:ok, estate} = Athanors.create_group(ops, "Ops #{System.unique_integer([:positive])}")
+    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: estate.id)
 
-    resolved =
-      Sanctum.Tenancy.resolve_into(
+    {:ok, resolved} =
+      Sanctum.Tenancy.resolve_status(
         %Context{user_id: ops, athanor_id: nil, permissions: MapSet.new()},
         force: true
       )
 
     assert resolved.platform_admin
     assert resolved.scope == :athanor
-    assert resolved.athanor_id == home.id
+    assert resolved.athanor_id == estate.id
   end
 
   test "revalidate keeps a granted athanor and re-derives the capability", %{
@@ -180,12 +180,12 @@ defmodule Sanctum.ContextFocusTest do
     ctx: ctx
   } do
     c = ctx.(alice, a.id, true)
-    out = Sanctum.Tenancy.revalidate(c)
+    {:ok, out} = Sanctum.Tenancy.revalidate(c)
     assert out.athanor_id == a.id
     refute out.platform_admin
 
     :ok = Members.remove_member(a, user_id: alice)
-    out = Sanctum.Tenancy.revalidate(c)
+    {:ok, out} = Sanctum.Tenancy.revalidate(c)
     assert out.athanor_id == nil
   end
 
@@ -193,7 +193,7 @@ defmodule Sanctum.ContextFocusTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

@@ -3,8 +3,7 @@
 
 defmodule Cyfr.IngressInventoryTest do
   @moduledoc """
-  The §6 "no credentialed execution without a grant" gate, first arm:
-  a mechanical inventory of everything that can start an execution.
+  Inventories execution entry points to verify credential-grant checks.
 
   A runtime registry of ingresses would be architecture invented for a
   test. Instead the source is scanned for callers of the run family and
@@ -26,14 +25,19 @@ defmodule Cyfr.IngressInventoryTest do
     "apps/opus/lib/opus.ex" => :facade,
     # Ingresses proper.
     "apps/opus/lib/opus/mcp.ex" => :mcp,
-    "apps/opus/lib/opus/cron_scheduler.ex" => :cron,
+    "apps/cyfr/lib/cyfr/schedules/scheduler.ex" => :cron,
     "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex" => :webhook,
     # One implementation behind two tincture surfaces (the HTTP controller
     # and the console shell render its outcomes; neither calls run_root
     # itself any more).
     "apps/cyfr/lib/emissary/tincture/invoke.ex" => :tincture,
     # Formula children run under the parent's authority, never their own.
-    "apps/opus/lib/opus/formula_handler.ex" => :in_chain
+    "apps/opus/lib/opus/formula_handler.ex" => :in_chain,
+    # The agent loop: the turn's root is claimed without a guest, and every
+    # call it dispatches is a child of that root.
+    "apps/cyfr/lib/aqua/loop.ex" => :in_chain,
+    "apps/cyfr/lib/aqua/loop/binding.ex" => :in_chain,
+    "apps/cyfr/lib/aqua/loop/turn.ex" => :in_chain
   }
 
   @patterns [
@@ -41,6 +45,8 @@ defmodule Cyfr.IngressInventoryTest do
     "Opus.run_root_edge(",
     "Cyfr.Execution.run_root(",
     "Cyfr.Execution.run_root_edge(",
+    "Cyfr.Execution.claim_turn_root(",
+    "Cyfr.Execution.run_child(",
     "Opus.run_child(",
     "Opus.Chain.run_root(",
     "Opus.Chain.run_root_edge(",
@@ -93,7 +99,7 @@ defmodule Cyfr.IngressInventoryTest do
   # reason to skip the door; it is only a reason it was easy to.
   @ingress_files ~w(
     apps/opus/lib/opus/mcp.ex
-    apps/opus/lib/opus/cron_scheduler.ex
+    apps/cyfr/lib/cyfr/schedules/scheduler.ex
     apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex
     apps/cyfr/lib/emissary/tincture/invoke.ex
   )

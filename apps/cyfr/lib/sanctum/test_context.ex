@@ -1,16 +1,9 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# Compiled only in :test (and :dev to keep IEx playable). The production
-# release MUST NOT contain this module — Sanctum.TestContext.local/0
-# synthesises a permissive single-user Context with namespace `"testns"`,
-# which would violate the "every authenticated user has a real claimed
-# namespace" invariant if reachable from production code paths.
-#
-# Cross-app sharing rationale: lives in cyfr/lib/ rather than
-# apps/cyfr/test/support/ so opus, locus, and add-on tests can call
-# `Sanctum.TestContext.local/0` without each app maintaining its own copy.
-# The compile-time guard is the safety mechanism, not the directory.
+# Available only in :test and :dev for shared cross-app fixtures.
+# The compile-time guard must exclude this permissive context builder
+# from production releases.
 if Mix.env() in [:test, :dev] do
   defmodule Sanctum.TestContext do
     @moduledoc """
@@ -87,6 +80,44 @@ if Mix.env() in [:test, :dev] do
     end
 
     @doc """
+    Mark `athanor_id` filled — what a test says when it drives a turn —
+    with the shipped AQUA tree and bundle copied in, as a fill copies
+    them, so the estate has a soul to answer with.
+
+    A turn pins the baseline consent provisioning mints, so an estate a
+    test chats in is one that has been set up. Left off by default: the
+    seeded rows are bare estates, as a fresh server's are, and a
+    server-wide sweep must not find work on every one of them.
+    """
+    def provisioned!(athanor_id) when is_binary(athanor_id) do
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+      shipped!(athanor_id)
+
+      case athanor.provisioned_at do
+        nil ->
+          {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+          filled
+
+        _ ->
+          athanor
+      end
+    end
+
+    @doc """
+    Copy every shipped unit the estate lacks into `athanor_id` — the
+    shipped AQUA tree and the bundle — without marking it provisioned.
+    """
+    def shipped!(athanor_id) when is_binary(athanor_id) do
+      ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
+
+      for root <- Arca.Storage.overlay_roots() do
+        {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, root)
+      end
+
+      :ok
+    end
+
+    @doc """
     Ensure the athanor row behind `local/0` exists and return it.
     """
     def athanor! do
@@ -125,11 +156,34 @@ if Mix.env() in [:test, :dev] do
         provider: "local",
         namespace: ns,
         athanor_id: @athanor_id,
-        permissions: [:*],
+        permissions: Context.person_permissions(),
         scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )
+    end
+
+    @doc """
+    The context's identity signed in: the `users` row minted (or found)
+    for `ctx.user_id` read as an IdP identity key, and the context re-named
+    by the person's own id — what every request carries after admission.
+    Returns the context and the row.
+    """
+    def person!(%Context{} = ctx, attrs \\ %{}) do
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(
+          Map.merge(
+            %{
+              id: ctx.user_id,
+              provider: ctx.provider || "local",
+              email: ctx.email,
+              verified: true
+            },
+            attrs
+          )
+        )
+
+      {%{ctx | user_id: user.id}, user}
     end
 
     @doc """

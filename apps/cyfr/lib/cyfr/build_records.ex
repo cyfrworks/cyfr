@@ -7,10 +7,8 @@ defmodule Cyfr.BuildRecords do
   writes them and `Cyfr.Retention` prunes them — two apps, one owner of
   the shape both rely on.
 
-  Build status was the last structured record living as blob files
-  (`builds/{id}.json`); as rows, "the newest N" is a query instead of a
-  list-read-parse walk. The WASM/tincture artifacts a build produces stay
-  blobs under the athanor's `components/` tree.
+  Build status is stored in database rows. WASM and tincture artifacts
+  remain blobs under the athanor’s `components/` tree.
   """
 
   import Ecto.Query
@@ -196,18 +194,9 @@ defmodule Cyfr.BuildRecords do
           {:ok, non_neg_integer()} | {:error, :database_error}
   def prune(%Context{} = ctx, keep, opts \\ []) when is_integer(keep) and keep >= 0 do
     Arca.Repo.Errors.with_db_rescue("Cyfr.BuildRecords.prune", fn ->
-      # SQLite has no bare OFFSET, so the survivors are the subquery: the
-      # newest `keep` rows stay, everything else in the tenant goes — except
-      # a build still "started", whose row its own
-      # record_finished/record_registration is about to look up.
-      #
-      # "Still started" has to be bounded by age, not by status alone.
-      # Executions can be excluded on status because `Opus.ExecutionSweeper`
-      # marks a lease-lapsed row failed and retention collects it next
-      # cycle; build records have no sweeper and no lease, and a dropped
-      # async task leaves "a row that reads `started` forever"
-      # (`Locus.MCP`). On status alone those rows became immortal and
-      # `keep` stopped being a cap.
+      # Keep the newest rows and recently started builds. Started rows also
+      # need an age limit because builds have no lease sweeper. Use a survivor
+      # subquery to avoid SQLite’s unsupported bare OFFSET.
       stale_cutoff = DateTime.add(DateTime.utc_now(), -@started_grace_ms, :millisecond)
 
       keepers =

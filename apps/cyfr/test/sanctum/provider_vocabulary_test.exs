@@ -3,12 +3,8 @@
 
 defmodule Sanctum.ProviderVocabularyTest do
   @moduledoc """
-  `Sanctum.Atoms` lists the sign-in providers so their atoms exist before
-  anything converts a stored string into one. The list is literal — it has
-  to be, because it runs at compile time — so nothing stopped it drifting,
-  and it had: `okta`, `azure` and `local` are providers this server has
-  never had, and it spelled the generic OIDC provider `oidc` where every
-  other module spells it `oidcc`.
+  Checks the literal compile-time provider atoms match the supported
+  sign-in roster, including :oidcc for generic OIDC.
 
   A vocabulary that names three providers that do not exist and misses the
   one that does is not an allowlist; it is a list.

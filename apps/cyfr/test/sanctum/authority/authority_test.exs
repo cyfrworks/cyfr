@@ -194,7 +194,7 @@ defmodule Sanctum.AuthorityTest do
       assert grandchild.depth == 2
     end
 
-    test "self_child preserves cursor and resources (D2)", %{auth: auth} do
+    test "self_child preserves cursor and resources", %{auth: auth} do
       child = Authority.self_child(auth, @formula)
 
       assert child.cursor == auth.cursor

@@ -111,24 +111,34 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   end
 
   # Same disposition as a role: the estate's own scroll is deleted, an
-  # edited copy of a shipped one reverts.
+  # edited copy of a shipped one is restored.
   def handle_event("skill_delete", %{"name" => name}, socket) do
     case call_aqua(socket.assigns.context, %{"action" => "skill_delete", "name" => name}) do
-      {:ok, result} ->
+      {:ok, _} ->
         open = socket.assigns.skill_open
         socket = if open && open.name == name, do: assign(socket, :skill_open, nil), else: socket
         send(self(), {:refresh, :skills})
-
-        message =
-          if result["restored"],
-            do: "Reverted the scroll '#{name}' to what ships with the server.",
-            else: "Deleted the scroll '#{name}'."
-
-        {:noreply, put_flash(socket, :info, message)}
+        {:noreply, put_flash(socket, :info, "Deleted the scroll '#{name}'.")}
 
       {:error, reason} ->
         {:noreply,
          put_flash(socket, :error, "Could not delete that scroll: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("skill_revert", %{"name" => name}, socket) do
+    case call_aqua(socket.assigns.context, %{"action" => "skill_reset", "name" => name}) do
+      {:ok, _} ->
+        open = socket.assigns.skill_open
+        socket = if open && open.name == name, do: assign(socket, :skill_open, nil), else: socket
+        send(self(), {:refresh, :skills})
+
+        {:noreply,
+         put_flash(socket, :info, "Reverted the scroll '#{name}' to what ships with the server.")}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Could not revert that scroll: #{error_message(reason)}")}
     end
   end
 
@@ -166,8 +176,13 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   defp skill_provenance(provenance, name) when is_binary(name),
     do: Map.get(provenance, Enum.join(AquaPath.skill_dir(name), "/"))
 
-  defp skill_removal("user"), do: {"Delete", "Delete the scroll '"}
-  defp skill_removal("bundled_modified"), do: {"Revert to shipped", "Revert the scroll '"}
+  # Label, confirm prefix and event of the one removal verb an open
+  # scroll may offer.
+  defp skill_removal("user"), do: {"Delete", "Delete the scroll '", "skill_delete"}
+
+  defp skill_removal("bundled_modified"),
+    do: {"Revert to shipped", "Revert the scroll '", "skill_revert"}
+
   defp skill_removal(_state), do: nil
 
   # ============================================================================
@@ -299,7 +314,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
                 <button
                   :if={removal}
                   type="button"
-                  phx-click="skill_delete"
+                  phx-click={elem(removal, 2)}
                   phx-target={@myself}
                   phx-value-name={@skill_open.name}
                   data-confirm={elem(removal, 1) <> @skill_open.name <> "'?"}

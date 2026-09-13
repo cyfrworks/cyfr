@@ -19,11 +19,7 @@ defmodule Cyfr.Release do
 
   ## Key rotation
 
-  Boot warns an operator who has no explicit `CYFR_CRYPTO_KEYRING` that their
-  ciphertexts are keyed to `CYFR_SECRET_KEY_BASE` — advice that only means
-  something if rotating is a thing they can actually do. It was not:
-  `Sanctum.Cipher.Rotation` was reachable from its own tests and nowhere
-  else. These are the two verbs that make it real:
+  Release commands for rotating encryption keys and auditing stored key labels:
 
       bin/cyfr eval "Cyfr.Release.cipher_audit()"
       bin/cyfr eval "Cyfr.Release.rotate_cipher_keys()"

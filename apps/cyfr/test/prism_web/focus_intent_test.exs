@@ -6,16 +6,12 @@ defmodule PrismWeb.FocusIntentTest do
   A `ui.*.focus` intent is only real if the page it lands on reads the key
   it carries.
 
-  `Aqua.Actions` mints a navigation for each focus intent — `?id=req_…`,
-  `?name=…`, `?publisher=&tincture_name=` — and `PrismWeb.ActiveContext`
-  parses exactly those keys back out of the URL to tell the command palette
-  which resource is in focus. Between those two ends sits the page, and for
-  five of the six intents the page's `handle_params/3` never looked: the
-  assistant navigated, the palette believed a resource was focused, and
-  the person saw a bare list. Nothing failed, which is why it lasted.
+  Checks that pages consume the focus parameters emitted by `Aqua.Intents`
+  and interpreted by `PrismWeb.ActiveContext`, displaying the resource
+  identified in the URL.
 
   This walks the seam end to end for every intent, without a hand-kept list
-  of pages: mint the path through `Aqua.Actions`, hand it to a real
+  of pages: mint the path through `Aqua.Intents`, hand it to a real
   `PrismWeb.ConversationPaneLive` the way the runner does and take the path
   it pushes to the browser — the athanor in focus prefixed, a global page
   left alone — ask the router which LiveView serves it, and require that
@@ -30,7 +26,7 @@ defmodule PrismWeb.FocusIntentTest do
   alias Sanctum.Tenancy.Athanors
 
   # Each `ui.*.focus` kind with arguments good enough to mint its path. The
-  # values are shape-checked by `Aqua.Actions` (id prefixes, id-safe
+  # values are shape-checked by `Aqua.Intents` (id prefixes, id-safe
   # characters), so they cannot be arbitrary.
   @intents [
     %{kind: "ui.activity.focus", args: %{"id" => "req_abc123"}},
@@ -43,27 +39,27 @@ defmodule PrismWeb.FocusIntentTest do
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
-  # One pane on Home, on a thread of its own, in the mode whose nav shows
+  # One pane on the person's own estate, on a thread of its own, in the mode whose nav shows
   # every page: what it pushes for a navigate is what the browser would
   # follow.
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    home = Athanors.home!()
-    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: home.id}
+    estate = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
     {:ok, conv} = Conversations.create(ctx)
 
     # A kept catalogue: the pane must not spawn a model-listing run whose
     # writes outlive this test and lock the next one's setup out of SQLite.
-    :ok = PrismWeb.ModelCatalog.remember(home.id, %{"models" => %{}})
-    on_exit(fn -> PrismWeb.ModelCatalog.forget(home.id) end)
+    :ok = PrismWeb.ModelCatalog.remember(estate.id, %{"models" => %{}})
+    on_exit(fn -> PrismWeb.ModelCatalog.forget(estate.id) end)
 
     {:ok, pane, _} =
       live_isolated(conn, PrismWeb.ConversationPaneLive,
-        session: %{"athanor_id" => home.id, "conversation_id" => conv.id, "ui_mode" => "dev"}
+        session: %{"athanor_id" => estate.id, "conversation_id" => conv.id, "ui_mode" => "dev"}
       )
 
-    {:ok, pane: pane, conv: conv, user: user, home: home}
+    {:ok, pane: pane, conv: conv, user: user, estate: estate}
   end
 
   defp pushed(%{pane: pane, conv: conv, user: user}, intent) do
@@ -86,9 +82,9 @@ defmodule PrismWeb.FocusIntentTest do
 
   test "every focus intent the assistant can mint is on the roster" do
     minted =
-      Path.join(root(), "apps/cyfr/lib/aqua/actions.ex")
+      Path.join(root(), "apps/cyfr/lib/aqua/intents.ex")
       |> Cyfr.Test.SourceTree.read()
-      |> then(&Regex.scan(~r/validate_kind\("(ui\.[a-z_]+\.focus)"/, &1))
+      |> then(&Regex.scan(~r/validate\(%\{"kind" => "(ui\.[a-z_]+\.focus)"\}/, &1))
       |> Enum.map(fn [_, kind] -> kind end)
       |> Enum.sort()
 
@@ -96,7 +92,7 @@ defmodule PrismWeb.FocusIntentTest do
 
     assert minted == rostered,
            """
-           `Aqua.Actions` mints focus intents this test does not check:
+           `Aqua.Intents` mints focus intents this test does not check:
 
              only in actions.ex: #{inspect(minted -- rostered)}
              only on the roster:  #{inspect(rostered -- minted)}
@@ -108,15 +104,15 @@ defmodule PrismWeb.FocusIntentTest do
   end
 
   for %{kind: kind, args: args} <- @intents do
-    test "#{kind} lands on a page that reads what it carries", %{home: home} = context do
+    test "#{kind} lands on a page that reads what it carries", %{estate: estate} = context do
       assert {:ok, %{kind: "navigate", to: path} = intent} =
-               Aqua.Actions.validate(Map.put(unquote(Macro.escape(args)), "kind", unquote(kind)))
+               Aqua.Intents.validate(Map.put(unquote(Macro.escape(args)), "kind", unquote(kind)))
 
-      # `Aqua.Actions` mints the page-relative path; the pane prefixes the
+      # `Aqua.Intents` mints the page-relative path; the pane prefixes the
       # athanor in focus before handing it to the client, the same split
       # `PrismWeb.ActiveContext.strip_focus/1` undoes.
       to = pushed(context, intent)
-      assert to == PrismWeb.Focus.path(Athanors.route_slug(home), path)
+      assert to == PrismWeb.Focus.path(Athanors.route_slug(estate), path)
 
       uri = URI.parse(to)
       module = served_by(uri.path)
@@ -145,12 +141,12 @@ defmodule PrismWeb.FocusIntentTest do
   end
 
   test "a global page is pushed as it is, with no estate in its address",
-       %{home: home, conv: conv} = context do
-    path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(home), conv.id)
-    assert Cyfr.GlobalPages.global?(path)
+       %{estate: estate, conv: conv} = context do
+    path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(estate), conv.id)
+    assert PrismWeb.Nav.global?(path)
 
     assert {:ok, %{kind: "navigate", to: ^path} = intent} =
-             Aqua.Actions.validate(%{"kind" => "ui.navigate", "path" => path})
+             Aqua.Intents.validate(%{"kind" => "ui.navigate", "path" => path})
 
     assert pushed(context, intent) == path
     assert served_by(URI.parse(path).path) == PrismWeb.ChatLive

@@ -92,7 +92,7 @@ open http://localhost:4000
 
 ## Prism — the web face
 
-**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your conversation with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an estate with one person in it answers every message, and any room with two or more — Home included — answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own estate that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen estate minted by clicking a person in the chat rail (anyone you share an estate with is there; it ends when either person leaves — clicking again starts a new, empty one), following a topic decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
+**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your conversation with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an estate with one person in it answers every message, and any room with two or more answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own estate that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen estate minted by clicking a person in the chat rail (anyone you share an estate with is there; it ends when either person leaves — clicking again starts a new, empty one), following a topic decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
 Around the chat:
 
@@ -129,24 +129,32 @@ your-project/
     ├── cache/              # Immutable cached artifacts (OCI blobs)
     ├── system/             # Server-internal scratch (health probes)
     ├── mcp-bridge/         # The mcp-bridge sidecar's own files (not managed by cyfr)
-    └── athanors/           # One tree per athanor — Home, then each person's and group's
+    └── athanors/           # One tree per athanor — each person's and each group's
         └── <athanor id>/
             ├── components/ # {type}s/{publisher}/{name}/{version}/
-            │   ├── catalysts/   # local: files, http · moonmoon69: claude, openai, gemini, …
+            │   ├── catalysts/   # Bundled: files, http, claude, openai, gemini, grok, openrouter
             │   ├── reagents/    # Your local reagents
-            │   ├── formulas/    # Bundled formulas: list-models, aqua
+            │   ├── formulas/    # Bundled formulas: list-models
             │   └── tinctures/   # Bundled example tinctures + your own
             ├── aqua/       # The athanor's own AQUA: the soul, its roles, its scrolls
             ├── conversations/  # Chat attachment files
             ├── notes/      # What was kept out of a conversation — host-only, no guest scope
-            ├── guest/      # Files WASM components store (their `data/` scope)
-            └── meta/       # Tenant-reserved: overlay origin marks, system-written
+            ├── payloads/   # Retained execution inputs and results — host-only, by digest
+            └── data/       # Files WASM components store — their `data/` scope, and yours
 ```
 
+> Every folder exists from the moment the athanor is provisioned. The Files
+> page (and the `file` tool) shows the tree the way a phone shows its files:
+> `data/` is yours to fill and clear, `components/` and `aqua/` hold shaped
+> units whose files you edit in place, `notes/` and `conversations/` are read
+> there and managed on their own pages, and the server's own storage
+> (`payloads/`, the seed, the cache) is not a folder at all.
+
 > The seed bundle every athanor starts from rides inside the container image
-> (under `CYFR_SEED_PATH`, mounted so `./aqua` overlays its `aqua/` root) and
-> is read in place — a scaffolded project carries no `components/` directory.
-> Your own components live inside your athanor's tree under `components/`.
+> (under `CYFR_SEED_PATH`, mounted so `./aqua` replaces its `aqua/` root) and
+> is copied into each athanor when it is provisioned — a scaffolded project
+> carries no `components/` directory. Your athanor's copies of the bundle and
+> your own components live together in its tree under `components/`.
 
 ## Using Components
 
@@ -170,8 +178,9 @@ cyfr pull c:moonmoon69.claude
 ```
 
 Generic catalysts, formulas, and example tinctures ship bundled under the
-`local` publisher and register from the packaged tree when you run
-`cyfr register`. The `moonmoon69` API catalysts are **not** bundled: they
+`local` publisher: each athanor gets its own copy when it is provisioned,
+and a newer shipped version is offered on the Components page and pulled
+with `cyfr pull c:local.<name>`. The `moonmoon69` API catalysts are **not** bundled: they
 arrive from the registry, normally pulled automatically as dependencies at
 register time, or explicitly with `cyfr pull`. Use `cyfr list` / `cyfr search`
 to see what's available, then grant one:
@@ -235,9 +244,9 @@ cyfr new tincture stock-dashboard --template react
 cyfr build compile t:local.stock-dashboard:0.1.0
 
 # Open it in Prism (the athanor in focus is in the URL)
-open http://localhost:4000/a/home/tinctures
+open http://localhost:4000/a/@alice/tinctures
 
-# Make it publicly reachable at /t/home/local/stock-dashboard
+# Make it publicly reachable at /t/@alice/local/stock-dashboard
 cyfr tincture visibility set local stock-dashboard true
 ```
 
@@ -360,7 +369,7 @@ docker compose --profile tls up -d
 
 Then open `https://<your-domain>/` (TLS) or `http://localhost:4000/` (direct), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). In TLS mode caddy proxies everything to `cyfr:4000` — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
 
-**Upgrading.** `cyfr update` pulls the latest images, then `cyfr up`. From a source checkout: `docker compose pull && docker compose up -d` (add `--profile tls` if you're running with caddy). Check [UPGRADING.md](UPGRADING.md) — what each release changes for a running server and what to do about it — and the [release notes](https://github.com/cyfrworks/cyfr/releases) first.
+**Upgrading.** `cyfr update` pulls the latest images, then `cyfr up`. From a source checkout: `docker compose pull && docker compose up -d` (add `--profile tls` if you're running with caddy). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server.
 
 ### Wrapping stdio / npx MCP servers (filesystem, github, …)
 
@@ -480,12 +489,11 @@ the others.
 | `CYFR_MAX_PAIRS_PER_PERSON` | DMs one person may hold open (default 200). A DM is minted for two, so either person at the ceiling refuses it; an ended DM frees its place |
 | `CYFR_MAX_MEMBERS_PER_GROUP` | seats in one group, invitations included |
 | `CYFR_MAX_CONVERSATIONS_PER_ATHANOR` | threads one estate may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |
-| `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — its data and the components it has materialized or created; pristine seeded components read through the overlay and cost it nothing |
+| `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — everything in its tree, its copies of the shipped bundle included; copying a shipped version in is never refused by the cap, but its bytes count from then on |
 
-A new athanor reads the shipped bundle in place through the seed overlay —
-no copy exists until it edits a component — so `CYFR_MAX_ATHANORS` bounds
-tenancy and `CYFR_ATHANOR_STORAGE_BYTES` bounds only what each athanor
-actually writes.
+A new athanor is provisioned with its own copy of the shipped bundle and
+AQUA tree, so `CYFR_MAX_ATHANORS` bounds tenancy and
+`CYFR_ATHANOR_STORAGE_BYTES` bounds each athanor's whole tree.
 A specific `cyfr admin deny` always beats `*`.
 
 Closing the door again — `cyfr admin remove` on the `*` entry — ejects
@@ -679,6 +687,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
 | `cyfr aqua list/get/status/reset/skills` | Read the AQUA soul, roles, guides and scrolls, see which files are shipped, edited or yours, and reset to shipped `[i]` |
+| `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `conversations/` read-only |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
 | `cyfr registry probe` | Force a re-probe against cyfr.run (re-mints push tokens) |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |

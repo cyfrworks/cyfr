@@ -5,8 +5,7 @@ defmodule EmissaryWeb.MCPController do
   @moduledoc """
   MCP HTTP controller implementing the Streamable HTTP transport.
 
-  `POST /mcp` is the whole endpoint. `GET` and `DELETE` are routed only so they
-  can answer `405` to clients written against the previous transport.
+  `POST /mcp` accepts requests. `GET` and `DELETE` return `405`.
 
   ## Request
 
@@ -21,14 +20,11 @@ defmodule EmissaryWeb.MCPController do
 
   Two shapes:
 
-    * **`application/json`** — one object. The default, and what a request that
-      never reports progress gets even if it asked for it.
-    * **`text/event-stream`** — opened the moment a request carrying
-      `_meta.progressToken` produces its first `notifications/progress`, then
-      carrying each notification as it happens, then the response, then close.
-      This is what replaced the standalone `GET /mcp` stream; progress belongs
-      to the request that caused it rather than to a connection the client had
-      to open separately and correlate by hand.
+      * **`application/json`** — one response object, including requests that
+        opt into progress but emit no notifications.
+      * **`text/event-stream`** — opens on the first progress notification for
+        a request with `_meta.progressToken`, streams subsequent notifications,
+        then sends the response and closes.
 
   Both carry `MCP-Protocol-Version` and `X-Request-Id`.
 
@@ -82,18 +78,9 @@ defmodule EmissaryWeb.MCPController do
     Cyfr.LoggerContext.set_request_id(request_id)
     start_time = System.monotonic_time()
 
-    # One path for every method, including `server/discover`. It once had a
-    # branch of its own so it could answer before authentication, which it did
-    # not need: an anonymous caller reaches the public surface anyway and the
-    # router gates per action. The branch bought nothing and skipped
-    # `Message.decode/1`, so a discovery request with a null id — which the
-    # specification forbids — was answered 200 instead of rejected.
-    #
-    # `Plugs.Authenticate` has already resolved a context, authenticated or
-    # not; "not authenticated" is the tools' answer to give, not the
-    # transport's. The request id is stamped on it here so everything the
-    # request goes on to do — including a component's own tool calls, which
-    # inherit this context through the guest closure — files under one key.
+    # Decode every method through Message.decode/1. Authenticate has resolved
+    # the caller; the router authorizes each action. Stamp the request id here
+    # so nested component calls retain the root request's correlation id.
     ctx = %{conn.assigns.context | request_id: request_id}
 
     # `subscriptions/listen` is answered here rather than through the dispatcher
@@ -134,11 +121,7 @@ defmodule EmissaryWeb.MCPController do
   @doc """
   Answer `GET` and `DELETE` on the MCP endpoint with `405`.
 
-  Both were part of the previous transport — `GET` opened a standalone
-  notification stream, `DELETE` terminated a session — and a client written
-  against that revision will still try them. `405` tells it plainly that the verb
-  is gone, which a route-miss `404` does not: `404` reads as "wrong URL", and
-  sends the client looking for an endpoint elsewhere.
+  `GET` and `DELETE` return `405 Method Not Allowed`.
   """
   def method_not_allowed(conn, _params) do
     conn
@@ -462,15 +445,9 @@ defmodule EmissaryWeb.MCPController do
     end
   end
 
-  # The work runs in a task so this process stays free to write progress as it
-  # arrives. It used to run inline and the stream was opened afterwards, which
-  # meant every notification sat in the mailbox until the work had finished and
-  # then arrived in one burst — progress reported after the fact is not
-  # progress. It also left nothing for a client to close, so the cancellation
-  # rule below had no way to fire.
-  #
-  # `Progress.listen/2` registers *this* process before the task starts, so a
-  # notification emitted immediately cannot be missed.
+  # Run work in a task while this process streams progress and handles
+  # client disconnection. Register the progress listener before starting
+  # the task so immediate notifications are received.
   defp streamed_dispatch(conn, context, params, request_id, token) do
     Progress.listen(request_id, token)
 
@@ -582,11 +559,8 @@ defmodule EmissaryWeb.MCPController do
   # Private Helpers
   # ============================================================================
 
-  # An unimplemented method is `404`, not `400`. The specification makes the
-  # distinction load-bearing for backward compatibility: a dual-era client reads
-  # the status *and* the body to decide whether it is talking to a modern server
-  # that lacks this method, or a legacy server that lacks the whole endpoint.
-  # Answering `400` for both makes that undecidable.
+  # Return 404 with -32601 for an unimplemented method. Clients use the
+  # status and body to distinguish a missing method from a missing endpoint.
   defp http_status_for(:method_not_found), do: 404
   defp http_status_for(:auth_required), do: 401
   defp http_status_for(:insufficient_permissions), do: 403
@@ -607,8 +581,8 @@ defmodule EmissaryWeb.MCPController do
   defp determine_routed_to(nil, _action), do: "emissary"
 
   defp determine_routed_to(tool, _action) do
-    case Emissary.MCP.ToolRegistry.lookup(tool) do
-      {:ok, {module, _meta}} -> Emissary.MCP.Services.service_name(module)
+    case Cyfr.Ops.Catalog.lookup(tool) do
+      {:ok, {module, _meta}} -> Cyfr.Ops.Services.service_name(module)
       :miss -> "emissary"
     end
   end

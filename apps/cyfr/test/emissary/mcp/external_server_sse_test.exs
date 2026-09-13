@@ -84,4 +84,37 @@ defmodule Emissary.MCP.ExternalServerSseTest do
     assert {_pid, {:ok, tools}} = connect(url, "sse-folded-peer")
     assert Enum.map(tools, & &1["name"]) == ["probe"]
   end
+
+  test "a caller gone mid-call takes its upstream round-trip with it", %{bypass: bypass, url: url} do
+    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      request = Jason.decode!(body)
+
+      if request["method"] == "tools/call", do: Process.sleep(1_500)
+      sse(conn, [result_event(request["id"], [@tool])])
+    end)
+
+    assert {pid, {:ok, _tools}} = connect(url, "sse-abandoned-peer")
+
+    caller = spawn(fn -> ExternalServer.call_tool(pid, "probe", %{}) end)
+
+    wait_until(fn -> map_size(:sys.get_state(pid).in_flight) == 1 end, 2_000)
+    [task_pid] = Map.keys(:sys.get_state(pid).in_flight)
+    task_ref = Process.monitor(task_pid)
+
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 2_000
+    wait_until(fn -> :sys.get_state(pid).in_flight == %{} end, 2_000)
+    Bypass.pass(bypass)
+  end
+
+  defp wait_until(fun, timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    unless fun.() do
+      if System.monotonic_time(:millisecond) > deadline, do: flunk("condition not met in time")
+      Process.sleep(20)
+      wait_until(fun, timeout)
+    end
+  end
 end

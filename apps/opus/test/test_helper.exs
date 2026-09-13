@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 # Ensure the Opus application supervisor is running so GenServers
-# (RateLimiter, SharedEngine, CronScheduler, etc.) are alive during tests.
+# (RateLimiter, SharedEngine, etc.) are alive during tests.
 {:ok, _} = Application.ensure_all_started(:opus)
 
 # `:requires_locus` marks the tests that dispatch to the build tool. Locus is

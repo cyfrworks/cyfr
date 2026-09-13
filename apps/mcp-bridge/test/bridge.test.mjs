@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Framing, correlation and child lifecycle — the three things the CI smoke
-// test does not reach. Every case here is a bug that shipped: a child's own
-// request resolving the bridge's pending handshake, an EPIPE on a dead
-// child's stdin killing the whole process, and a string-typed response id
-// silently hanging a call.
+// Test framing, response correlation, and child-process lifecycle.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -63,8 +59,14 @@ before(async () => {
       MCP_BRIDGE_TOKEN: TOKEN,
       MCP_BRIDGE_PORT: String(port),
       MCP_BRIDGE_DATA: path.join(DIR, `backends.${port}.json`),
-      MCP_BRIDGE_INIT_TIMEOUT_MS: "4000",
-      MCP_BRIDGE_RPC_TIMEOUT_MS: "4000",
+      // Generous: a loaded CI runner spawning node children took the old
+      // 4s budget to the wire and the suite flaked on timing alone.
+      MCP_BRIDGE_INIT_TIMEOUT_MS: "15000",
+      MCP_BRIDGE_RPC_TIMEOUT_MS: "15000",
+      // Planted app secrets: what the compose stack's project .env carries.
+      // A child must never see them.
+      CYFR_CRYPTO_KEYRING: "planted-keyring",
+      CYFR_DATABASE_URL: "planted-dsn",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -120,8 +122,12 @@ test("a call to a child that has died is refused, and the bridge keeps serving",
   // second is not something this harness can do deterministically. The
   // listeners are the guard for it — an unhandled stream 'error' becomes
   // an uncaughtException, and this file answers that with process.exit(1).
+  // The child exits 20ms after its handshake, so whether add_backend reads
+  // "ready" or already "crashed" is a race the test does not care about —
+  // only that the handshake happened and the bridge is still standing.
   const { body } = await addBackend("dying", "die-after-handshake");
-  assert.equal(JSON.parse(body.result.content[0].text).status, "ready");
+  const added = JSON.parse(body.result.content[0].text);
+  assert.ok(["ready", "crashed"].includes(added.status), `unexpected status ${added.status}`);
 
   await new Promise((r) => setTimeout(r, 200));
   const call = await rpc("tools/call", { name: "dying__ping", arguments: {} });
@@ -144,6 +150,29 @@ test("a string-typed response id still matches its pending call", async () => {
     JSON.stringify(call.body).includes("pong"),
     `a "1" echoed for 1 was dropped and the call hung: ${JSON.stringify(call.body)}`,
   );
+});
+
+test("a child inherits a toolchain path and its own env block, never the bridge's secrets", async () => {
+  // The bridge runs beside cyfr and, pointed at the project .env, held the
+  // app's keyring, key base and database URL. Passing its whole
+  // environment to `sh -c <command>` handed those to every backend a
+  // member registered.
+  const { body } = await rpc("tools/call", {
+    name: "add_backend",
+    arguments: { name: "envprobe", command: `node ${CHILD} env-probe`, env: { PROBE_OWN: "mine" } },
+  });
+  assert.equal(JSON.parse(body.result.content[0].text).status, "ready");
+
+  const call = await rpc("tools/call", { name: "envprobe__ping", arguments: {} });
+  assert.equal(call.status, 200);
+  const seen = JSON.parse(call.body.result.content[0].text);
+
+  assert.equal(seen.keyring, null, "CYFR_CRYPTO_KEYRING reached a child");
+  assert.equal(seen.dsn, null, "CYFR_DATABASE_URL reached a child");
+  assert.equal(seen.token, null, "MCP_BRIDGE_TOKEN reached a child");
+  assert.deepEqual(seen.cyfr, [], `application variables reached a child: ${seen.cyfr}`);
+  assert.equal(seen.own, "mine", "the backend's own env block was dropped");
+  assert.ok(seen.path, "PATH was dropped; npx cannot run without it");
 });
 
 test("an explicit null id is a request, not a notification", async () => {

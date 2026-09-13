@@ -61,7 +61,7 @@ defmodule Prism.TelemetryBridgeTest do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(@athanor))
       Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:schedule_runs"))
 
-      :telemetry.execute([:cyfr, :opus, :schedule, :failed], %{count: 1}, %{
+      :telemetry.execute([:cyfr, :schedules, :failed], %{count: 1}, %{
         schedule_id: "sched_x",
         athanor_id: @athanor,
         user_id: "u",
@@ -127,7 +127,7 @@ defmodule Prism.TelemetryBridgeTest do
         {[:cyfr, :opus, :execute, :exception], "prism-execution_exception"},
         {[:cyfr, :emissary, :request], "prism-request"},
         {[:cyfr, :sanctum, :policy, :decision], "prism-policy_decision"},
-        {[:cyfr, :opus, :schedule, :failed], "prism-schedule_failed"}
+        {[:cyfr, :schedules, :failed], "prism-schedule_failed"}
       ]
 
       for {event, handler_id} <- expected do

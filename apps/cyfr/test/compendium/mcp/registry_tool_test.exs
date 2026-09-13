@@ -5,7 +5,7 @@ defmodule Compendium.MCP.RegistryToolTest do
   use ExUnit.Case, async: false
 
   alias Compendium.MCP.RegistryTool
-  alias Emissary.MCP.ToolError
+  alias Cyfr.Ops.Error
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -13,12 +13,7 @@ defmodule Compendium.MCP.RegistryToolTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # The four gated mutations' success clauses were once shadowed by the
-  # @identity_mutations dispatch head: valid args still answered the
-  # arg-missing error, so token revocation and publisher member management
-  # were dead over MCP. These pin that valid args reach the real handler —
-  # with no stored push token that is the credential refusal, never the
-  # arg-missing sentence.
+  # Valid mutation arguments must reach the credential check, not the missing-argument handler.
   describe "gated identity mutations reach their handlers with valid args" do
     test "tokens_revoke", %{ctx: ctx} do
       assert {:error, reason} =
@@ -28,7 +23,7 @@ defmodule Compendium.MCP.RegistryToolTest do
                  "token_id" => "tok_1"
                })
 
-      assert ToolError.render(reason) =~ "no push token"
+      assert Error.render(reason) =~ "no push token"
     end
 
     test "members_add", %{ctx: ctx} do
@@ -40,7 +35,7 @@ defmodule Compendium.MCP.RegistryToolTest do
                  "role" => "member"
                })
 
-      assert ToolError.render(reason) =~ "no push token"
+      assert Error.render(reason) =~ "no push token"
     end
 
     test "members_update", %{ctx: ctx} do
@@ -52,7 +47,7 @@ defmodule Compendium.MCP.RegistryToolTest do
                  "role" => "admin"
                })
 
-      assert ToolError.render(reason) =~ "no push token"
+      assert Error.render(reason) =~ "no push token"
     end
 
     test "members_remove", %{ctx: ctx} do
@@ -63,7 +58,7 @@ defmodule Compendium.MCP.RegistryToolTest do
                  "target_personal_slug" => "bob"
                })
 
-      assert ToolError.render(reason) =~ "no push token"
+      assert Error.render(reason) =~ "no push token"
     end
   end
 
@@ -78,7 +73,7 @@ defmodule Compendium.MCP.RegistryToolTest do
         assert {:error, reason} = RegistryTool.handle(ctx, %{"action" => action}),
                "expected a refusal for bare #{action}"
 
-        assert ToolError.render(reason) =~ sentence,
+        assert Error.render(reason) =~ sentence,
                "expected the arg-missing sentence for #{action}, got: #{inspect(reason)}"
       end
     end

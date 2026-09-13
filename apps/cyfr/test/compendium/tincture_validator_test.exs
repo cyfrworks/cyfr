@@ -169,10 +169,7 @@ defmodule Compendium.TinctureValidatorTest do
   describe "excluded files" do
     test "the two walkers agree on the digest, and the excluded bytes are in neither",
          %{base: base} do
-      # The exclusion used to live in `Compendium.Registry`, applied when
-      # collecting files to WRITE — after this module had already hashed
-      # them. So the digest recorded at publish covered bytes the store then
-      # dropped, and re-validating the stored tree could never reproduce it.
+      # Hash the same filtered files that publication stores.
       dir = setup_valid_tincture(base, "with-sqlite-artifacts")
       assert {:ok, clean} = TinctureValidator.validate(dir)
 

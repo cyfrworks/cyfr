@@ -6,12 +6,8 @@ defmodule Cyfr.GenServerCatchallTest do
   Every named GenServer with a catch-all `handle_info/2` survives an
   unexpected message and logs it BOUNDED.
 
-  Two halves: a behavioral probe of the servers running under test, and a
-  derivation that finds every cyfr-app module spelling both
-  `Cyfr.UnexpectedMessage.log(__MODULE__` and `name: __MODULE__` — so a
-  new named server cannot adopt the helper without landing in a roster
-  here (probed, or excused with a reason). The old hand-kept list had
-  quietly fallen to seven of the adopters.
+  Discovers named GenServers using `Cyfr.UnexpectedMessage.log/3` and
+  requires each to have a behavioral probe or an explicit exemption.
   """
   use ExUnit.Case, async: false
 
@@ -21,7 +17,7 @@ defmodule Cyfr.GenServerCatchallTest do
 
   # Probed live: named, started by the app under test.
   @genservers [
-    {Emissary.MCP.ToolRegistry, "ToolRegistry"},
+    {Cyfr.Ops.Catalog, "Catalog"},
     {Emissary.MCP.ResourceRegistry, "ResourceRegistry"},
     {Arca.Cache.Sweeper, "Sweeper"},
     {Prism.TelemetryBridge, "TelemetryBridge"},
@@ -35,6 +31,8 @@ defmodule Cyfr.GenServerCatchallTest do
   # gated off (returns :ignore) or not started in the test environment.
   @not_probed %{
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
+    Cyfr.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
+    Cyfr.ControlPlane => "gated by :control_plane_claim_enabled",
     Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
     Emissary.MCP.RunningTasks => "probing would race real request tracking",
     Arca.Overlay.UnitLock => "holds live commit locks — a probe interleaves them",
@@ -43,12 +41,7 @@ defmodule Cyfr.GenServerCatchallTest do
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"
   }
 
-  # `Emissary.MCP.Progress` left `@not_probed`: it is a Registry wrapper, not
-  # a GenServer (its `child_spec/1` returns `Registry.child_spec/1`), so it
-  # could never have reached the derivation below and its row excused
-  # nothing. `Sanctum.Consent.Source.Memory` stayed, but for the other
-  # reason: it had no catch-all at all, so the row described a protection
-  # the module did not have. It has one now, and the row is load-bearing.
+  # Classify GenServers requiring fixture setup before catch-all probing.
 
   describe "catch-all handle_info/2" do
     for {mod, label} <- @genservers do

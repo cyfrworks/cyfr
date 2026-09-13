@@ -171,12 +171,8 @@ defmodule Compendium.Fork do
   # Manifest Rewrite
   # ============================================================================
 
-  # A fork's whole point is that the copy carries its OWN name and version.
-  # A manifest that will not parse cannot be given them — and copying it
-  # unchanged, as this used to, produces a component that says it is the one
-  # it was forked from: same publisher, same name, same version, no
-  # forked_from. That reads as a successful fork and is not one, so it
-  # refuses instead.
+  # A fork must record its own name, version and forked_from metadata.
+  # Reject a malformed manifest rather than copying the source identity.
   defp rewrite_manifest(manifest_json, name, version, forked_from) do
     case Jason.decode(manifest_json) do
       {:ok, manifest} when is_map(manifest) ->

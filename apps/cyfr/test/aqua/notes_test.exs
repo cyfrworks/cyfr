@@ -2,9 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.NotesTest do
-  # The one sentence per write outcome — what the tape says when a card
-  # kept something. The domain mints the answers, so the domain owns the
-  # words; the runner used to re-spell them.
+  # The notes domain owns the text rendered for each write outcome.
   use ExUnit.Case, async: true
 
   alias Aqua.Notes

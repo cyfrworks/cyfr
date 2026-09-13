@@ -67,7 +67,6 @@ defmodule Opus.Runtime do
       ...>   )
       iex> result
       %{"sum" => 8}
-
   """
   @spec execute_component(binary(), map(), keyword()) ::
           {:ok, map()} | {:ok, map(), map()} | {:error, term()}
@@ -119,7 +118,10 @@ defmodule Opus.Runtime do
     authority_info = %{
       authority: authority,
       declared_needs: declared_needs,
-      activation_digest: activation_digest
+      activation_digest: activation_digest,
+      # The attempt that owns this execution's row, for the lineage of
+      # every call a formula makes.
+      attempt: Keyword.get(opts, :execution_attempt)
     }
 
     # Build imports and collect cleanup refs
@@ -263,10 +265,8 @@ defmodule Opus.Runtime do
         %{}
       end
 
-    # `&& execution_id` matches the formula guard below: with a nil id
-    # the tracker's `put/2` (guarded is_binary) would raise inside the
-    # host closure AFTER the access token was dispensed — and an
-    # untracked token is one the SecretMasker cannot redact.
+    # Require an execution id so every dispensed token can be tracked
+    # and redacted by SecretMasker.
     oauth_imports =
       if component_type == :catalyst && ctx && execution_id do
         Opus.OAuthHandler.build_oauth_imports(
@@ -287,6 +287,7 @@ defmodule Opus.Runtime do
       if component_type == :formula && ctx && execution_id do
         Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
           root_execution_id: root_execution_id,
+          attempt: authority_info.attempt,
           limits: limits,
           authority: authority_info.authority,
           declared_needs: authority_info.declared_needs,
@@ -418,15 +419,7 @@ defmodule Opus.Runtime do
                 {:ok, result}
 
               {:error, decode_error} ->
-                # Both halves of the old message were guest bytes: the raw
-                # output was spliced in whole, and `inspect/1` on a
-                # `Jason.DecodeError` prints its `data` field — the component's
-                # entire output — a second time. This string is persisted on
-                # the row, streamed as the terminal event and handed back to
-                # MCP clients and parent formulas, so a component that printed
-                # a credential and then returned malformed JSON published it.
-                # `Exception.message/1` is bounded to the position and the one
-                # offending byte, which is what makes the fault actionable.
+                # Report the JSON error position without echoing the component's raw output.
                 detail = Exception.message(decode_error)
 
                 Logger.warning("[Opus.Runtime] Component output is not valid JSON: #{detail}")

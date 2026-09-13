@@ -114,7 +114,7 @@ defmodule Aqua.ToolGrants do
     Enum.reduce(authored, %{}, fn {key, value}, acc ->
       case String.split(key, ".", parts: 2) do
         [tool, "*"] ->
-          case Aqua.Actions.actions_of(tool) do
+          case Aqua.Kinds.actions_of(tool) do
             # A role's glob, or a tool nobody catalogues: not a tool action.
             [] ->
               Map.put(acc, key, authored_decision(value))
@@ -147,13 +147,13 @@ defmodule Aqua.ToolGrants do
       case String.split(key, ".", parts: 2) do
         [tool, action] when action != "*" ->
           cond do
-            not Aqua.Actions.catalogued?(tool) ->
+            not Aqua.Kinds.catalogued?(tool) ->
               [decision]
 
-            action not in Aqua.Actions.actions_of(tool) ->
+            action not in Aqua.Kinds.actions_of(tool) ->
               []
 
-            mode == :auto and not Aqua.Actions.auto_permitted?(tool, action) ->
+            mode == :auto and not Aqua.Kinds.auto_permitted?(tool, action) ->
               [{key, {:ask, by}}]
 
             true ->
@@ -263,6 +263,10 @@ defmodule Aqua.ToolGrants do
     |> MapSet.difference(denied)
   end
 
+  @doc "The grant scopes, as the rows spell them."
+  @spec scopes() :: [String.t()]
+  def scopes, do: @scopes
+
   @doc """
   Record a decision. `scope` is `"conversation"` or `"agent"`, `effect`
   `"allow"` or `"deny"`. A standing allow for a destructive or external
@@ -271,11 +275,23 @@ defmodule Aqua.ToolGrants do
   @spec put(Context.t(), map()) :: {:ok, ToolGrant.t()} | {:error, term()}
   def put(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
       when scope in @scopes and effect in @effects do
+    with {:ok, row} <- row(ctx, attrs), do: ToolGrantStorage.put(row)
+  end
+
+  @doc """
+  The row a decision writes, checked and not written: `put/2`'s attrs
+  with the athanor, the deciding person and the conversation the scope
+  keys on, for a caller that lands it inside a transaction of its own
+  (`Arca.ToolGrantStorage.put/1`).
+  """
+  @spec row(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def row(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
+      when scope in @scopes and effect in @effects do
     with :ok <- check_standing(attrs, scope, effect) do
-      attrs
-      |> Map.merge(%{athanor_id: Context.athanor!(ctx), granted_by: ctx.user_id})
-      |> Map.put(:conversation_id, conversation_for(scope, attrs))
-      |> ToolGrantStorage.put()
+      {:ok,
+       attrs
+       |> Map.merge(%{athanor_id: Context.athanor!(ctx), granted_by: ctx.user_id})
+       |> Map.put(:conversation_id, conversation_for(scope, attrs))}
     end
   end
 
@@ -317,23 +333,10 @@ defmodule Aqua.ToolGrants do
   # Internal
   # ---------------------------------------------------------------------------
 
-  # A standing ALLOW for a destructive or external action is refused at
-  # the write itself — the runner's card handler checks the same rule on
-  # the intent's stored kind, but this is the SSOT for grant writes and a
-  # future surface must not be able to hand one past it. The kind comes
-  # from `Aqua.Actions.kind_for/2` — the SAME classifier the card derives
-  # its risk from: the virtual-tool catalog (`files`/`storage`/`http` are
-  # callable but live in the formula, not the registry), then the
-  # `server:tool` external namespace, then the registry annotation. A nil
-  # kind is refused too: "not known" and "registry not up yet" read the
-  # same here, and only the second could otherwise write a standing allow
-  # for something destructive. A deny needs no kind — "never do this" is
-  # always recordable.
-  #
-  # Past the kind, the action's own `standing:` declaration has the last
-  # word — `false` refuses every standing allow, `:conversation` refuses
-  # the agent scope — read through `Aqua.Actions.standing_for/2`, the
-  # sibling of the kind classifier, so the card and this write agree.
+  # Standing allows require a known read, write or execute kind and must
+  # satisfy the action's standing declaration. Destructive and external
+  # actions always require approval; standing denies can always be recorded.
+  # Use Aqua.Kinds for both the kind and standing limits.
   defp check_standing(_attrs, _scope, "deny"), do: :ok
 
   # A row whose scope or effect is outside the vocabulary — nothing writes
@@ -344,7 +347,7 @@ defmodule Aqua.ToolGrants do
 
   defp check_standing(%{tool: tool, action: action}, scope, "allow")
        when is_binary(tool) and is_binary(action) and scope in @scopes do
-    case Aqua.Actions.kind_for(tool, action) do
+    case Aqua.Kinds.kind_for(tool, action) do
       k when k in [:destructive, :external] -> {:error, {:scope_not_permitted, k}}
       nil -> {:error, {:scope_not_permitted, :unknown_kind}}
       _ -> check_declared_standing(tool, action, scope)
@@ -352,7 +355,7 @@ defmodule Aqua.ToolGrants do
   end
 
   defp check_declared_standing(tool, action, scope) do
-    case Aqua.Actions.standing_for(tool, action) do
+    case Aqua.Kinds.standing_for(tool, action) do
       false -> {:error, {:scope_not_permitted, :never_standing}}
       :conversation when scope == "agent" -> {:error, {:scope_not_permitted, :conversation_only}}
       _ -> :ok

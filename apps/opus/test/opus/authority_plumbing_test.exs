@@ -2,13 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.AuthorityPlumbingTest do
-  # The executor filters runtime opts through a Keyword.take allowlist before
-  # they cross the spawn boundary into Opus.Runtime. If :authority were dropped
-  # from that list, a chain's granted capabilities would be silently stripped
-  # and the guest would run on ambient permissions — failing open with no
-  # compile error. These tests are the tripwire: the sentinel must arrive
-  # inside the runtime, and :authority_required must fail closed at both the
-  # executor and the runtime layer.
+  # Verify authority survives the runtime-option allowlist and that
+  # authority_required fails closed in both executor and runtime.
   use ExUnit.Case, async: false
 
   alias Sanctum.Context

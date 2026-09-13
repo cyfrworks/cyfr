@@ -1,36 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package ref provides component type prefix detection, expansion, and
-// lightweight CLI-side ref parsing.
+// Package ref parses and validates CLI component references.
+// Types are catalyst, reagent, formula and tincture, with shorthands c, r, f and t.
+// Sanctum.ComponentRef performs full server validation.
 //
-// Component types in CYFR: catalyst, reagent, formula, tincture.
-// Shorthand prefixes: c, r, f, t.
-//
-// Full parsing and validation of component references is handled server-side
-// by Sanctum.ComponentRef (Elixir). The CLI uses [ParseRef] for splitting a
-// raw input into parts (e.g. to detect whether a version is present) and
-// [Validate] to enforce the three-shape namespace model on user-facing
-// inputs before sending them to the server.
-//
-// # Parser invariants (post auth-refactor)
-//
-// The '@' character is INVALID anywhere in a ref — there is no "@alice"
-// shorthand for personal namespaces. Personal slugs are bare ("alice"),
-// publishers use dots ("stripe.com"). The pre-refactor parser silently
-// converted '@' → ':' (as if '@' were a version separator) which masked
-// invalid input from users and let malicious lockfile entries bypass
-// validation. The new parser surfaces '@' explicitly via [Validate].
-//
-// Splits use LAST occurrence semantics:
-//   - Version is after the LAST ':' (so a publisher like "stripe.com.api"
-//     doesn't eat the ":version" with a greedy first-colon split).
-//   - Namespace/name split on the LAST '.' in the pre-version segment (so
-//     multi-label publishers like "api.stripe.com.widget" parse as
-//     namespace="api.stripe.com", name="widget").
-//
-// The type prefix detector uses FIRST colon because "c:local.foo:0.1.0"
-// always has the type in the leading short segment.
+// ParseRef splits the type at the first colon, version at the last colon,
+// and namespace/name at the last dot. Validate rejects @ anywhere in a ref;
+// personal namespaces are bare slugs and publisher namespaces may contain dots.
 package ref
 
 import (
@@ -181,9 +158,7 @@ func Validate(p ParsedRef) error {
 		return fmt.Errorf("invalid ref: name is required")
 	}
 
-	// Defense in depth — '@' in any segment is invalid. Personal slugs are
-	// bare (e.g. "alice"); publishers use dots (e.g. "stripe.com"). The
-	// pre-refactor parser converted '@' → ':' silently; we now reject.
+	// Reject @ in every segment; personal namespaces are bare slugs.
 	for _, field := range []string{p.Namespace, p.Name, p.Version} {
 		if strings.Contains(field, "@") {
 			return fmt.Errorf(
@@ -316,18 +291,9 @@ func validateName(name string) error {
 	return nil
 }
 
-// CompareVersions compares two semver strings by semver.org precedence:
-// numeric core, then prerelease — a version WITHOUT a prerelease ranks
-// ABOVE one with ("1.0.0" > "1.0.0-rc1"), numeric identifiers rank below
-// alphanumeric ones, and build metadata is ignored. The old dot-split
-// with a byte-compare fallback ranked "1.0.0-rc1" above "1.0.0" — the
-// opposite of the server's Compendium.Semver — so interactive version
-// resolution could pick a prerelease the server never would. The fallback
-// matches the server's exactly (Compendium.Semver.compare/2, pinned by the
-// shared version_ordering fixture): when exactly ONE side parses, the
-// parsable side ranks higher; only when BOTH fail does it fall back to a
-// byte compare of the raw strings. The old any-side-fails byte compare
-// disagreed with the server on every mixed pair.
+// CompareVersions uses semver precedence, ignoring build metadata.
+// A valid version sorts above an invalid one; two invalid versions compare
+// bytewise. Ordering matches the server's Compendium.Semver.compare/2.
 func CompareVersions(a, b string) int {
 	av, aok := parseSemver(a)
 	bv, bok := parseSemver(b)
@@ -428,11 +394,9 @@ func (p ParsedRef) HasTypePrefix() bool {
 	return p.Type != ""
 }
 
-// NameRef returns the name-level ref string (without version).
-// When the namespace is empty (bare name like "claude"), it defaults to "local",
-// and a shorthand type expands ("c" → "catalyst") so the output genuinely
-// matches canonical server format (e.g. "catalyst:local.claude") — it used to
-// emit the raw shorthand and rely on the server re-expanding it.
+// NameRef returns a name-level reference without a version.
+// An empty namespace defaults to "local" and type shorthands expand,
+// e.g. "c:claude" becomes "catalyst:local.claude".
 func (p ParsedRef) NameRef() string {
 	var b strings.Builder
 	if p.Type != "" {

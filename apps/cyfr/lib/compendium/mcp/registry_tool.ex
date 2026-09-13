@@ -43,8 +43,8 @@ defmodule Compendium.MCP.RegistryTool do
           # Bootstrap/spec reads stay open (they run before a session
           # exists per the cyfr.run spec); identity mutations mirror
           # RegistryTool's gate.
-          # The bootstrap a first sign-in still has ahead of it: a session
-          # exists but the claim gate is not passed — these serve it.
+          # A person's own registry standing: served to any live session,
+          # whether or not it has an athanor to work in.
           "probe" => %{kind: :execute, planes: [:external, :in_chain], auth: :signed_in},
           "claim_personal" => %{
             kind: :write,
@@ -487,7 +487,7 @@ defmodule Compendium.MCP.RegistryTool do
   # already typed is the caller's answer as-is; everything else — an
   # `OCI.Errors` struct above all — keeps the shared registry sentence.
   defp refuse(reason) do
-    if Emissary.MCP.ToolError.reason?(reason),
+    if Cyfr.Ops.Error.reason?(reason),
       do: {:error, reason},
       else: {:error, Shared.to_error_string(reason)}
   end

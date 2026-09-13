@@ -337,8 +337,7 @@ defmodule Sanctum.Cipher.RotationTest do
       v3_ct = seal_v3("legacy-plain", aad, "k1", @k1)
       _id = put_webhook_row("V3ROW", "ignored", nil, %{secret_encrypted: v3_ct})
 
-      # The v3 read path is retired: an unreadable envelope must surface,
-      # never be silently skipped past.
+      # Unreadable version-3 envelopes must cause a rotation error.
       assert {:error, {:webhooks, {:not_a_cipher_envelope, _col}, _sample}} =
                Rotation.reencrypt_all()
     end

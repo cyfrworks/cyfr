@@ -42,11 +42,12 @@ defmodule Opus.SecurityTest do
         authenticated: true
       )
 
-    # Register the test WASM in Compendium so string references resolve
+    # Plant the test WASM in a private seed so bootstrap can mint it.
+    Cyfr.Test.SeedBundle.isolate!()
     wasm_bytes = File.read!(@math_wasm_path)
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+      Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm_bytes, %{
         name: "test-math",
         version: "0.1.0",
         type: "reagent",
@@ -101,10 +102,8 @@ defmodule Opus.SecurityTest do
     end
 
     test "no component type inherits the host's stdout/stderr" do
-      # Inheriting them was an unbounded write from every guest straight into
-      # the operator's console and log aggregation, around `Opus.SecretMasker`,
-      # the emit rate limit and the emit size cap. `emit` is the channel that
-      # carries those bounds.
+      # Guest output must use emit, which applies masking, rate limits,
+      # and size bounds before reaching operator logs.
       opts = ComponentType.wasi_options(:catalyst)
 
       assert opts.inherit_stdout == false
@@ -420,7 +419,7 @@ defmodule Opus.SecurityTest do
         })
 
       assert {:consent_required, %{}} = msg
-      refute Emissary.MCP.ToolError.render(msg) =~ "Signature verification"
+      refute Cyfr.Ops.Error.render(msg) =~ "Signature verification"
     end
   end
 end

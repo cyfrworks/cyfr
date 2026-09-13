@@ -102,9 +102,7 @@ defmodule Sanctum.Authority.TransitionInvokeTest do
     end
   end
 
-  # ============================================================================
-  # Need rules (§2.7)
-  # ============================================================================
+  # Need rules
 
   describe "need rules" do
     test "omission is rejected when named needs are declared" do
@@ -141,17 +139,14 @@ defmodule Sanctum.Authority.TransitionInvokeTest do
     end
   end
 
-  # ============================================================================
-  # Self-invocation (D2)
-  # ============================================================================
+  # Self-invocation
 
   describe "self-invocation" do
     test "the same activation identity preserves cursor and resources" do
       auth = Fixtures.root!()
       self_digest = Fixtures.activation()[@formula]
 
-      # Needs are declared and omitted — D2 bypasses the need rules, or
-      # agents with named needs could never spawn sub-agents.
+      # Self-invocation permits omitted needs even when the manifest declares them.
       {:child, child} =
         Transition.step(
           auth,

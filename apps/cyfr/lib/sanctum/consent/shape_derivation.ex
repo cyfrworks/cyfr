@@ -5,12 +5,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @moduledoc """
   The one computation of a component's consent *shape* from live state.
 
-  Both sides of the §2.6 versionless comparison call this module: consent
-  time (bootstrap, and the plan verb) computes the shape it stores, and
-  the loader computes the live shape to compare against. One code path is
-  what makes "the release changed but the shape did not → allow and
-  record" checkable at all — two implementations would drift and either
-  re-consent every release (worst case) or falsely allow (unacceptable).
+  Derives the shape at consent time and at load time. The loader compares
+  these digests to decide whether a versionless release requires consent.
 
   The shape is manifest-sourced: it carries the declared needs, the
   flattened caps, the caps tools expanded against the live catalog, and
@@ -18,14 +14,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   `caps` blocks derives the empty ask — deny-all resources, no needs —
   exactly as if it declared empty blocks.
 
-  It also carries the activation closure's other releases
-  (`dependency_releases/3`) — the source's own is excluded. That is not a
-  manifest fact but a *world* fact, and it is here because the shape was
-  otherwise derived from ONE registry row: a versionless dependency could
-  be re-released with different code, the shape would match, and the
-  loader would run it under the grant frozen at consent time. Excluding
-  the source's own release is what keeps a versionless consent
-  versionless.
+  Includes releases from the activation closure via `dependency_releases/3`,
+  excluding the source’s own release. Dependency code changes alter the shape;
+  source releases remain versionless when consent is versionless.
 
   The canonical caps encoding is dotted flat keys (`"egress.domains"`,
   `"limits.rate_limit.requests"`, …) over the digest's existing flat caps
@@ -75,7 +66,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   defp live_shape_key(_ctx, _source_ref), do: nil
 
-  @doc "The `ShapeDigest.compute/1` input derived from live state."
+  @doc """
+  The `ShapeDigest.compute/1` input derived from live state. An agent
+  source's shape also carries its model target (`catalyst#model`): the
+  model an agent runs on is what it may do, so changing it re-asks.
+  """
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref) do
     with {:ok, row, needs, caps} <- manifest_row(ctx, source_ref) do
@@ -91,7 +86,41 @@ defmodule Sanctum.Consent.ShapeDerivation do
          tool_actions: expand_tools(caps.tools),
          slots: Enum.sort(Enum.map(needs, & &1.name)),
          dependency_releases: dependency_releases(ctx, row, source_ref)
-       }}
+       }
+       |> Cyfr.MapUtil.put_present(:model_target, model_target(row))
+       |> Cyfr.MapUtil.put_present(:tool_policy, tool_policy(row))}
+    end
+  end
+
+  defp model_target(row) do
+    manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+    agent = manifest["agent"] || %{}
+
+    case {manifest["type"], agent["catalyst"], agent["model"]} do
+      {"agent", catalyst, model}
+      when is_binary(catalyst) and catalyst != "" and is_binary(model) and model != "" ->
+        "#{catalyst}##{model}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp tool_policy(row) do
+    manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+
+    case get_in(manifest, ["agent", "policy"]) do
+      %{"auto" => auto, "ask" => ask} when is_list(auto) and is_list(ask) ->
+        %{auto: auto, ask: ask}
+
+      %{"auto" => auto} when is_list(auto) ->
+        %{auto: auto, ask: []}
+
+      %{"ask" => ask} when is_list(ask) ->
+        %{auto: [], ask: ask}
+
+      _ ->
+        nil
     end
   end
 
@@ -104,13 +133,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   ## Why the source is excluded, and why that keeps versionless working
 
-  The shape derived here used to come from ONE registry row: the source
-  ref's. So a dependency could be re-released with different code and the
-  shape did not move — `Sanctum.Consent.Loader.Decision` saw "activation
-  digest changed, shape matched" and answered `{:allow_record, …}`, which
-  records the new graph and runs the new code under the blob frozen at
-  consent time. New code, no re-consent, and the operator was never shown
-  the dependency's capabilities in the first place.
+  Include dependency releases in the shape so changed dependency code requires consent.
 
   Excluding the source's own release is what preserves the point of a
   versionless consent: re-publishing the source itself still moves the
@@ -173,14 +196,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   @doc false
-  def all_tool_actions do
-    # One provider roster (loaded-and-guarded) shared with the registry, so a
-    # shape derived here can only name actions the registry can serve.
-    for module <- Emissary.MCP.ToolRegistry.available_providers(),
-        tool <- module.tools(),
-        {action, _annotation} <- Emissary.MCP.ActionAnnotations.actions_of(tool),
-        do: "#{tool.name}.#{action}"
-  end
+  # The catalog's own roster, through the port consent reads it by, so a
+  # shape derived here can only name actions the catalog can serve.
+  def all_tool_actions, do: Sanctum.Catalog.tool_actions()
 
   # ---------------------------------------------------------------------------
   # Internal

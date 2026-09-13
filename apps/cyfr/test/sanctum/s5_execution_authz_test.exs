@@ -36,7 +36,7 @@ defmodule Sanctum.S5ExecutionAuthzTest do
     assert Context.authorize(ctx([:storage_read]), :storage_read, {:execution, @exec}) == :ok
   end
 
-  test "owner WITHOUT :storage_read is now refused (the S5 hardening)" do
+  test "an owner without :storage_read is refused" do
     assert {:error, _} = Context.authorize(ctx([:execute]), :storage_read, {:execution, @exec})
   end
 

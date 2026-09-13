@@ -6,7 +6,7 @@ defmodule PrismWeb.AquaApprovalCard do
   Inline approval card rendered in the AQUA chat thread.
 
   The agent ends a reply with a `ui.request_approval` block carrying a
-  `proposal: {tool, action, args}` payload. `Aqua.ConversationRunner`
+  `proposal: {tool, action, args}` payload. `Aqua.Approvals`
   stores the intent as an approval message and `PrismWeb.ConversationPaneLive`
   renders this component for it. On approve/decline the parent LiveView
   dispatches the member's decision to the runner.
@@ -326,7 +326,7 @@ defmodule PrismWeb.AquaApprovalCard do
     do: false
 
   defp standing_offered?(kind, standing, scope),
-    do: standing_offered(kind, Aqua.ApprovalScope.standing(standing), scope)
+    do: standing_offered(kind, Cyfr.Ops.Annotations.standing(standing), scope)
 
   defp standing_offered(_kind, false, _scope), do: false
   defp standing_offered(_kind, :conversation, :always), do: false

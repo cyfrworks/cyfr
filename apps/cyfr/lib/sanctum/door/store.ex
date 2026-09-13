@@ -102,7 +102,7 @@ defmodule Sanctum.Door.Store do
   defp names_platform_admin?("email", value), do: Sanctum.Door.platform_admin_email?(value)
 
   defp names_platform_admin?("user_id", value) do
-    case Sanctum.Tenancy.Users.get(value) do
+    case Sanctum.Tenancy.Users.get_by_identity(value) do
       {:ok, %{email: email}} -> Sanctum.Door.platform_admin_email?(email)
       _ -> false
     end

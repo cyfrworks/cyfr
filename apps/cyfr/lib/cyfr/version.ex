@@ -5,12 +5,7 @@ defmodule Cyfr.Version do
   @moduledoc """
   This build's version, read from the loaded application.
 
-  One reader, because the alternative was four. Modules used to carry
-  `Mix.Project.config()[:version] || "0.1.0"`, which is resolved at compile
-  time and falls back to a number no release has ever had — the same bug
-  `Emissary.MCP.Protocol` documents having already fixed once, announcing
-  0.1.0 from a 0.5.8 build. `:application.get_key/2` reads what is actually
-  running.
+  Reads the running application version through `:application.get_key/2`.
   """
 
   @doc """

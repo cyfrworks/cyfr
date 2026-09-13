@@ -49,13 +49,9 @@ defmodule Arca.ToolGrantStorage do
   end
 
   @doc false
-  # The scope's partial unique index, declared under BOTH names an adapter
-  # can report it by. Postgres reports the name the migration gave it —
-  # short on purpose, because the default for the conversation-scope key
-  # runs past the 63-byte identifier limit and would come back truncated.
-  # SQLite cannot name a violated index at all and reports the columns,
-  # from which `ecto_sqlite3` derives Ecto's default index name. One
-  # declaration would match one adapter and raise on the other.
+  # Declare both adapter names for each partial unique index. Postgres
+  # reports the explicit name, limited to 63 bytes; ecto_sqlite3 derives
+  # Ecto's default name from the violated columns.
   @spec changeset(map()) :: Ecto.Changeset.t()
   def changeset(row) when is_map(row) do
     scope = Map.fetch!(row, :scope)

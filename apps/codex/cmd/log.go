@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
@@ -60,7 +61,7 @@ var logListCmd = &cobra.Command{
 			toolArgs["request_id"] = v
 		}
 
-		result, err := client.CallTool(cmd.Context(), "mcp_log", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.McpLog, toolArgs)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -96,8 +97,8 @@ var logGetCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_log", map[string]any{
-			"action": "get",
+		result, err := client.CallTool(cmd.Context(), ops.McpLog, map[string]any{
+			"action": ops.McpLogGet,
 			"id":     args[0],
 		})
 		if err != nil {
@@ -115,8 +116,8 @@ var logCorrelateCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "mcp_log", map[string]any{
-			"action":     "correlate",
+		result, err := client.CallTool(cmd.Context(), ops.McpLog, map[string]any{
+			"action":     ops.McpLogCorrelate,
 			"request_id": args[0],
 		})
 		if err != nil {

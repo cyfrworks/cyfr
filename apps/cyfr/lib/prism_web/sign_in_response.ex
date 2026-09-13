@@ -5,24 +5,19 @@ defmodule PrismWeb.SignInResponse do
   @moduledoc """
   One transcription of the sign-in outcome to a browser response.
 
-  `Sanctum.SignIn.complete/3` answers five arms; three surfaces render
-  them — the Ueberauth callback, the device-flow ticket, and the
-  post-legal re-probe. Each used to keep its own case block, hand-synced
-  with the others. This module owns the one mapping, and the differences
-  that are real travel as options:
+  `Sanctum.SignIn.complete/3` always proceeds; three surfaces render it —
+  the Ueberauth callback, the device-flow ticket, and the post-legal
+  re-probe — and one more answer, a membership read that failed while
+  minting the session, is a page. This module owns the one mapping, and
+  the differences that are real travel as options:
 
     * `:session` — `{:mint, ctx}` (create the session and cookie it),
       `{:token, token}` (cookie an already-minted token — the device
       ticket), or `:existing` (the cookie session stands — post-legal).
-    * `:access_token` — stash the `_cyfr_pending_probe` cookie on
-      needs_legal / needs_claim; absent means no stash (post-legal
-      already holds the cookie).
+    * `:access_token` — keep the IdP token in the `_cyfr_pending_probe`
+      cookie for a person who still has a publisher namespace to claim;
+      absent retires any stash.
     * `:retry_path` — where the 503 page's "Try again" points.
-    * `:teardown` — `:drop` (default) clears the Plug session on
-      reauthenticate; `{:destroy_and_drop, token}` also retires the
-      Sanctum session row and the probe cookie.
-    * `:reauth_flash` — flash the reauthenticate reason (the callback
-      does; the post-legal path never did).
 
   Every outcome is a redirect or a page; the session token travels in
   the cookie and nowhere else.
@@ -30,19 +25,12 @@ defmodule PrismWeb.SignInResponse do
 
   import Plug.Conn
 
-  import Phoenix.Controller, only: [redirect: 2]
-
   require Logger
 
   @probe_cookie PrismWeb.PendingProbe.cookie_name()
   @session_key :sanctum_session_token
 
-  @type outcome ::
-          {:proceed, map()}
-          | {:needs_legal, String.t() | nil}
-          | {:needs_claim, String.t() | nil}
-          | {:reauthenticate, atom()}
-          | {:unavailable, atom()}
+  @type outcome :: {:proceed, map()} | {:unavailable, atom()}
 
   @doc """
   The Plug session key holding the Sanctum session token. This module is
@@ -56,57 +44,16 @@ defmodule PrismWeb.SignInResponse do
 
   def respond(conn, {:proceed, report}, opts) do
     established(conn, opts, fn conn ->
-      # A successful sign-in retires any stashed probe token — it was for
-      # the claim or the re-probe that just concluded.
       conn
-      |> delete_resp_cookie(@probe_cookie)
+      |> carry_or_retire_probe(opts)
       |> flash_report(report)
       |> PrismWeb.SafeRedirect.post_login()
     end)
   end
 
-  def respond(conn, {:needs_legal, _required_version}, opts) do
-    established(conn, opts, fn conn ->
-      conn
-      |> maybe_stash_probe(opts)
-      |> redirect(to: "/legal/accept")
-    end)
-  end
-
-  def respond(conn, {:needs_claim, suggested}, opts) do
-    established(conn, opts, fn conn ->
-      conn
-      |> maybe_stash_probe(opts)
-      |> put_session(:claim_suggested_username, suggested || "")
-      |> redirect(to: "/claim-namespace")
-    end)
-  end
-
-  def respond(conn, {:reauthenticate, reason}, opts) do
-    conn =
-      case Keyword.get(opts, :teardown, :drop) do
-        {:destroy_and_drop, token} ->
-          _ = Sanctum.Session.destroy(token)
-
-          conn
-          |> delete_resp_cookie(@probe_cookie)
-          |> safe_drop_session()
-
-        :drop ->
-          safe_drop_session(conn)
-      end
-
-    conn =
-      if Keyword.get(opts, :reauth_flash, false),
-        do: put_flash_if_available(conn, :error, reauth_flash_message(reason)),
-        else: conn
-
-    redirect(conn, to: "/login")
-  end
-
   def respond(conn, {:unavailable, reason}, opts) do
-    # Nothing was set up. A mint-path failure leaves no session behind; an
-    # existing session (post-legal) stands so the person can retry from it.
+    # A mint-path failure leaves no session behind; an existing session
+    # (post-legal) stands so the person can retry from it.
     conn =
       case Keyword.fetch!(opts, :session) do
         {:mint, _ctx} -> safe_drop_session(conn)
@@ -117,36 +64,15 @@ defmodule PrismWeb.SignInResponse do
     PrismWeb.MinimalPage.send_page(conn, 503, title, inner)
   end
 
-  @doc """
-  The registry-outage copy, per reason: `{title, message}`. The browser
-  owner of these sentences — the CLI's versions live beside the wire
-  adapter in `Sanctum.Auth.DeviceFlow`.
-  """
-  @spec unavailable_copy(atom()) :: {String.t(), String.t()}
-  def unavailable_copy(:no_access_token) do
-    {"Sign-in incomplete",
-     "Your identity provider returned no access token, so cyfr.run could not be asked " <>
-       "for your namespace. Nothing was set up. Sign in again."}
-  end
-
-  def unavailable_copy(:namespace_conflict) do
-    {"Namespace already in use here",
-     "cyfr.run names you by a namespace another identity on this server already holds. " <>
-       "Ask the operator to sort it out."}
-  end
-
-  def unavailable_copy(:membership_read) do
-    # A local read failed, not the registry: the catch-all's cyfr.run copy
-    # would send the person chasing an outage that is not there.
+  # The outage copy, per reason: `{title, message}`.
+  defp unavailable_copy(:membership_read) do
     {"Temporarily unavailable",
      "The server could not read memberships just now — a transient fault, " <>
        "not a refusal. Try again in a moment."}
   end
 
-  def unavailable_copy(_registry_unreachable) do
-    {"cyfr.run could not be reached",
-     "Your namespace on cyfr.run is your identity on every server, and this server " <>
-       "could not reach it to find or claim yours. Nothing was set up. Try again in a moment."}
+  defp unavailable_copy(_) do
+    {"Temporarily unavailable", "Signing in did not finish. Try again in a moment."}
   end
 
   @doc """
@@ -197,11 +123,7 @@ defmodule PrismWeb.SignInResponse do
           {:error, reason} ->
             Logger.error("[PrismWeb.SignInResponse] session create failed: #{inspect(reason)}")
 
-            # A page, not JSON. This module's whole contract is that every
-            # outcome of a browser sign-in is a redirect or a page, and this
-            # arm was dumping an error object into the person's window —
-            # in a third envelope shape besides, neither ApiError's nor the
-            # JSON-RPC one.
+            # Render browser sign-in failures as a page.
             PrismWeb.MinimalPage.send_page(
               conn,
               500,
@@ -219,10 +141,12 @@ defmodule PrismWeb.SignInResponse do
     end
   end
 
-  defp maybe_stash_probe(conn, opts) do
+  # The IdP token is kept only for a person who still has a publisher
+  # namespace to claim; any other sign-in retires a stale stash.
+  defp carry_or_retire_probe(conn, opts) do
     case Keyword.get(opts, :access_token) do
       token when is_binary(token) and token != "" -> stash_pending_probe(conn, token)
-      _ -> conn
+      _ -> delete_resp_cookie(conn, @probe_cookie)
     end
   end
 
@@ -286,6 +210,21 @@ defmodule PrismWeb.SignInResponse do
           "cyfr.run refused the sign-in token — you're signed in; sign in again before pushing."
         )
 
+      :legal_required ->
+        put_flash_if_available(
+          conn,
+          :info,
+          "cyfr.run has updated its policy — you're signed in; publishing will ask you to accept it."
+        )
+
+      :namespace_conflict ->
+        put_flash_if_available(
+          conn,
+          :error,
+          "cyfr.run names you by a namespace another identity on this server holds — " <>
+            "you're signed in; ask the operator to sort it out before publishing."
+        )
+
       _ ->
         conn
     end
@@ -293,13 +232,8 @@ defmodule PrismWeb.SignInResponse do
 
   defp flash_report(conn, _report), do: conn
 
-  defp reauth_flash_message(:idp_expired) do
-    "Your login session expired during credential setup. Please sign in again."
-  end
-
-  # A first-time person whom the registry could not place: nothing was set
-  # up and there is no session — the shared no-session shell and a way to
-  # try again.
+  # A sign-in that could not be finished: the shared no-session shell and
+  # a way to try again.
   defp unavailable_page(reason, retry_path) do
     {title, message} = unavailable_copy(reason)
     href = PrismWeb.MinimalPage.h(retry_path)

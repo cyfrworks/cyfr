@@ -5,12 +5,8 @@ defmodule Cyfr.UnexpectedMessage do
   @moduledoc """
   The one log line for a GenServer's unexpected-message catch-all.
 
-  The identical warning line was once spelled verbatim in every GenServer
-  across cyfr and opus (in two prefix styles besides). The
-  clause itself stays per-server — a catch-all must be that server's LAST
-  `handle_info/2` — but the sentence, its prefix shape and its inspect
-  bounds are owned here, so a mailbox flooded with large terms cannot
-  balloon a log line and the spelling cannot fork again.
+  Formats a bounded warning for unexpected GenServer messages. Each server
+  must keep its own final `handle_info/2` catch-all.
 
   ## Level
 
@@ -23,10 +19,8 @@ defmodule Cyfr.UnexpectedMessage do
   no clause for — the ones meant for its siblings. At `:warning` every
   such message would be an alarm about normal operation.
 
-  What the twenty-odd LiveViews did not get by rolling their own line was
-  the inspect bounds, and they are the processes that most needed them:
-  execution-event and conversation payloads are exactly the large terms an
-  unbounded `inspect/1` turns into an unbounded log line.
+  Bounds inspection of unexpected messages, including large execution
+  and conversation payloads.
   """
 
   require Logger

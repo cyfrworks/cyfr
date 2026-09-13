@@ -16,8 +16,7 @@ defmodule Opus.RateLimiterTest do
   setup do
     Arca.Cache.init()
 
-    # Start rate limiter manually since it's no longer in the supervision tree
-    # (rate limiting is enforced via Sanctum.MCP, not the local GenServer)
+    # Start the rate limiter for this test.
     case GenServer.whereis(Opus.RateLimiter) do
       nil -> {:ok, _} = Opus.RateLimiter.start_link([])
       _pid -> :ok

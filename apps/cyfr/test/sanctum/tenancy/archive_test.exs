@@ -96,7 +96,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert_receive {:notify, ^athanor_id, :athanor_changed, _}
   end
 
-  test "the last member leaving a group archives it the same way; Home is never archived" do
+  test "the last member leaving a group archives it the same way" do
     n = System.unique_integer([:positive])
     owner = person(n)
     {:ok, group} = Athanors.create_group(owner.id, "Leave #{n}")
@@ -108,19 +108,6 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
     assert_receive {:cancel, athanor_id, "system", :system, _}
     assert athanor_id == group.id
-
-    # Home closes the same way — keys revoked, work cancelled — and its
-    # successor is minted rather than the row reopened.
-    home = Athanors.home!()
-    home_key = key_in(home.id, owner.id)
-    {:ok, _} = Members.ensure(owner.id, scope: "athanor", athanor_id: home.id)
-    :ok = Members.remove_member(home, user_id: owner.id)
-
-    assert {:ok, %{status: "archived", home: true}} = Athanors.get(home.id)
-    assert {:error, :revoked} = Sanctum.ApiKey.validate(home_key, [])
-    assert {:error, :not_found} = Athanors.home()
-    assert {:ok, successor} = Athanors.ensure_home()
-    assert successor.id != home.id
   end
 
   test "denying a person archives their own athanor and the groups they were the last member of, closing both" do

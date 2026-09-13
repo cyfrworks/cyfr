@@ -70,10 +70,7 @@ defmodule Sanctum.ToolPattern do
         is_binary(pattern) and String.ends_with?(pattern, ".*") and valid?(pattern) ->
           Enum.filter(catalog, &String.starts_with?(&1, dot_prefix(pattern)))
 
-        # `valid?/1` on the exact branch too, so this surface and
-        # `matches?/2` give one answer: a stored invalid pattern (say a
-        # hostile external server literally naming a tool "read*") used to
-        # expand here while matches?/2 refused the identical pair.
+        # Validate exact patterns as well as globs, consistently with matches?/2.
         valid?(pattern) and pattern in catalog ->
           [pattern]
 

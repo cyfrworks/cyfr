@@ -154,8 +154,7 @@ defmodule Sanctum.Vault do
   accepting a different shape here would smuggle a binding change past
   re-consent.
 
-  A retired v1 pointer row cannot rotate — its payload no longer decodes
-  (`:legacy_pointer_retired`); recreate the entry with real material.
+  Version-1 pointer payloads return `:legacy_pointer_retired`; recreate them with credential material.
   """
   @spec rotate(Context.t(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
   def rotate(%Context{} = ctx, %{id: id, fields: fields, expected_payload_rev: expected} = params)

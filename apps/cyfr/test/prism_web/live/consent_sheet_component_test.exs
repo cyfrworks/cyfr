@@ -4,7 +4,7 @@
 defmodule PrismWeb.ConsentSheetComponentTest do
   @moduledoc """
   The consent sheet drives the plan → preview → commit walk through
-  `PrismWeb.MCPHelpers.call_tool/3`, whose dialect is `tool/action` — a
+  `PrismWeb.Ops.call_tool/3`, whose dialect is `tool/action` — a
   dot-spelled name silently misses the registry and every call fails with
   "Unknown tool". These tests render the component against the real
   registry so a dialect drift (or a retired verb) fails here instead of
@@ -44,7 +44,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   end
 
   test "every verb the sheet speaks is a registered profile action" do
-    {:ok, tool} = Emissary.MCP.ToolRegistry.get_tool("profile")
+    {:ok, tool} = Cyfr.Ops.Catalog.get_tool("profile")
 
     enum = get_in(tool, ["inputSchema", "properties", "action", "enum"]) || []
 

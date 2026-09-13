@@ -20,18 +20,9 @@ defmodule Sanctum.ComponentRef do
 
   ## `namespace` here, `publisher` in paths and rows
 
-  References and identity say `namespace`; the on-disk layout and the
-  components table say `publisher` — the SAME value under two names, one
-  per vocabulary, converted at the boundary. The bridge is
-  `Compendium.ComponentPath.normalize_publisher/1` /
-  `default_publisher/0` (which also collapse an absent value to `local`);
-  no rename is planned. The "~20 call sites" this note used to claim was off
-  by an order of magnitude: `publisher` appears on 426 lines across 53
-  modules in `lib/` alone, 627 counting the suites, plus 58 in the Go CLI
-  and the browser assets — and it is a column name, a path segment and a
-  wire field, so a rename is a migration and a protocol change, not an
-  edit. The understatement mattered because it invited exactly the
-  "shouldn't these just be one word?" review the real number answers.
+  References use `namespace`; storage paths and component rows use
+  `publisher` for the same value. `Compendium.ComponentPath.normalize_publisher/1`
+  and `default_publisher/0` normalize it, defaulting an absent value to `local`.
 
   ## Namespace shapes
 
@@ -73,6 +64,11 @@ defmodule Sanctum.ComponentRef do
 
   @valid_types ~w(catalyst reagent formula tincture)
   @type_shorthands %{"c" => "catalyst", "r" => "reagent", "f" => "formula", "t" => "tincture"}
+  # Consent source types that are not components: an agent ref
+  # (`agent:local.<name>`, `Compendium.AgentSource`) parses like a
+  # component ref and is a node in the same graphs, but it names no
+  # registry row and never executes.
+  @source_types ~w(agent)
 
   # Anchored \A…\z, never ^…$: PCRE `$` also matches just before a final
   # newline, so "alice\n" passed every one of these — and they are the
@@ -125,7 +121,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.parse("c:stripe.com.api:0.1.0")
       {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "stripe.com", name: "api", version: "0.1.0"}}
-
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
   def parse(ref) when is_binary(ref) do
@@ -160,7 +155,6 @@ defmodule Sanctum.ComponentRef do
       iex> ref = %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}
       iex> Sanctum.ComponentRef.to_string(ref)
       "catalyst:local.my-tool"
-
   """
   @spec to_string(t()) :: String.t()
   def to_string(%__MODULE__{type: type, namespace: ns, name: name, version: nil}) do
@@ -174,11 +168,7 @@ defmodule Sanctum.ComponentRef do
   @doc """
   Build a reference from its parts, without going through a struct.
 
-  Most callers holding a type, a namespace and a name spelled the grammar
-  themselves — a `"tincture:"` prefix glued to a publisher and a name
-  appeared twelve times, so
-  the one place that knows a ref is `type:namespace.name` (optionally
-  `:version`) was twelve places. This is that place.
+  Builds type:namespace.name references with an optional :version suffix.
 
       iex> Sanctum.ComponentRef.build("tincture", "acme", "docs")
       "tincture:acme.docs"
@@ -212,7 +202,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.normalize("local.my-tool:1.0.0")
       {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0 or c:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
-
   """
   @spec normalize(String.t()) :: {:ok, String.t()} | {:error, String.t()}
   def normalize(ref) when is_binary(ref) do
@@ -251,13 +240,15 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.normalize_flexible("local.my-tool:1.0.0")
       {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0 or c:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
-
   """
   @spec normalize_flexible(String.t()) :: {:ok, t()} | {:error, String.t()}
   def normalize_flexible(ref) when is_binary(ref) do
     case parse(ref) do
       {:ok, %__MODULE__{version: nil} = parsed} ->
-        with :ok <- validate_type(parsed.type),
+        # A name-level ref may name a source that is no component (an
+        # agent); a versioned one is a registry row and must be a
+        # component type.
+        with :ok <- validate_ref_type(parsed.type),
              :ok <- validate_namespace(parsed.namespace),
              :ok <- validate_name(parsed.name) do
           {:ok, parsed}
@@ -294,7 +285,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.normalize_or_name_ref("not valid")
       {:error, _}
-
   """
   @spec normalize_or_name_ref(String.t()) :: {:ok, String.t()} | {:error, String.t()}
   def normalize_or_name_ref(ref) when is_binary(ref) do
@@ -315,7 +305,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.pinned?(%Sanctum.ComponentRef{namespace: "local", name: "claude", version: nil})
       false
-
   """
   @spec pinned?(t()) :: boolean()
   def pinned?(%__MODULE__{version: nil}), do: false
@@ -334,7 +323,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.to_name_ref("catalyst:local.claude:0.1.0")
       {:ok, "catalyst:local.claude"}
-
   """
   @spec to_name_ref(t()) :: String.t()
   def to_name_ref(%__MODULE__{type: type, namespace: ns, name: name}) do
@@ -361,7 +349,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.validate("")
       {:error, "component ref cannot be empty"}
-
   """
   @spec validate(String.t()) :: :ok | {:error, String.t()}
   def validate(ref) when is_binary(ref) do
@@ -383,7 +370,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.validate_type("invalid")
       {:error, "invalid component type: invalid. Must be one of: catalyst, reagent, formula, tincture"}
-
   """
   @spec validate_type(String.t() | nil) :: :ok | {:error, String.t()}
   def validate_type(nil),
@@ -404,7 +390,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.valid_types()
       ["catalyst", "reagent", "formula", "tincture"]
-
   """
   @spec valid_types() :: [String.t()]
   def valid_types, do: @valid_types
@@ -417,7 +402,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.valid_type_atoms()
       [:catalyst, :reagent, :formula, :tincture]
-
   """
   @spec valid_type_atoms() :: [atom()]
   def valid_type_atoms, do: Enum.map(@valid_types, &String.to_atom/1)
@@ -431,7 +415,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.executable_types()
       ["catalyst", "reagent", "formula"]
-
   """
   @spec executable_types() :: [String.t()]
   def executable_types, do: @valid_types -- ["tincture"]
@@ -446,7 +429,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.expand_type_shorthand("catalyst")
       "catalyst"
-
   """
   @spec expand_type_shorthand(String.t()) :: String.t()
   def expand_type_shorthand(s), do: Map.get(@type_shorthands, s, s)
@@ -455,7 +437,20 @@ defmodule Sanctum.ComponentRef do
   Check if a string is a known type prefix (full name or shorthand).
   """
   @spec type_prefix?(String.t()) :: boolean()
-  def type_prefix?(s), do: s in @valid_types or Map.has_key?(@type_shorthands, s)
+  def type_prefix?(s),
+    do: s in @valid_types or s in @source_types or Map.has_key?(@type_shorthands, s)
+
+  @doc """
+  Source types a ref may carry beside the component types: parseable and
+  consentable, never registered or executed.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.source_types()
+      ["agent"]
+  """
+  @spec source_types() :: [String.t()]
+  def source_types, do: @source_types
 
   # ============================================================================
   # Private: Parsing Helpers
@@ -502,9 +497,7 @@ defmodule Sanctum.ComponentRef do
          "'latest' is not a version — omit the version segment instead " <>
            "(e.g., c:local.my-tool)"}
 
-      # A version segment that is present must be semver — parse/1 used to
-      # skip this entirely, so `build.compile` accepted any string here and
-      # ordering silently fell back to byte compare.
+      # A supplied version must be valid semver.
       is_binary(version) and not Regex.match?(@version_regex, version) ->
         {:error, "version must be valid semver (e.g., 1.0.0)"}
 
@@ -553,6 +546,9 @@ defmodule Sanctum.ComponentRef do
   # Field Validators (single source of truth for all services)
   # ============================================================================
 
+  defp validate_ref_type(type) when type in @source_types, do: :ok
+  defp validate_ref_type(type), do: validate_type(type)
+
   defp validate_parsed(%__MODULE__{type: type, namespace: ns, name: name, version: version}) do
     with :ok <- validate_type(type),
          :ok <- validate_namespace(ns),
@@ -587,7 +583,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.validate_namespace("@alice")
       {:error, "namespace must not contain '@' — personal slugs are bare (e.g. 'alice'); publishers require a dot (e.g. 'stripe.com')"}
-
   """
   @spec validate_namespace(String.t()) :: :ok | {:error, String.t()}
   def validate_namespace(ns) when is_binary(ns) do
@@ -719,7 +714,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.validate_publisher("stripe.com")
       :ok
-
   """
   @spec validate_publisher(String.t()) :: :ok | {:error, String.t()}
   def validate_publisher(publisher), do: validate_namespace(publisher)
@@ -737,7 +731,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.validate_name("MY_CAPS")
       {:error, "name must be lowercase alphanumeric with hyphens, cannot start/end with hyphen"}
-
   """
   @spec validate_name(term()) :: :ok | {:error, String.t()}
   def validate_name(name) when is_binary(name) do
@@ -788,7 +781,6 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.validate_version(nil)
       {:error, "version is required. Use an explicit semver version (e.g., 1.0.0)."}
-
   """
   @spec validate_version(term()) :: :ok | {:error, String.t()}
   def validate_version(nil) do

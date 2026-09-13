@@ -26,18 +26,18 @@ defmodule PrismWeb.AquaLive.Catalog do
   (`:read | :write | :execute | :destructive`) sourced from
   `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).
   An action without a kind annotation is not policy-manageable — the
-  policy plane (`Aqua.Actions.kind_for/2`) refuses it, so it is
+  policy plane (`Aqua.Kinds.kind_for/2`) refuses it, so it is
   logged and left off this catalogue rather than mislabeled `:write`.
   """
   def enumerate_tool_actions do
     mcp =
-      Emissary.MCP.ToolRegistry.list_tools()
+      Cyfr.Ops.Catalog.list_tools()
       |> Enum.map(fn t ->
         name = t["name"]
         schema = t["inputSchema"] || %{}
         props = schema["properties"] || %{}
         action_enum = get_in(props, ["action", "enum"]) || []
-        actions_meta = Emissary.MCP.ActionAnnotations.actions_of(t)
+        actions_meta = Cyfr.Ops.Annotations.actions_of(t)
         default_meta = actions_meta["_default"]
 
         actions =
@@ -71,7 +71,7 @@ defmodule PrismWeb.AquaLive.Catalog do
       end)
       |> Enum.reject(fn {_name, actions} -> actions == [] end)
 
-    virtual = Aqua.VirtualTools.list_for_panel()
+    virtual = Aqua.Hands.list_for_panel()
 
     # `native_search` is a bare-tool exclusivity gate — has no actions but
     # appears in the policy as a single boolean key.
@@ -81,7 +81,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   end
 
   defp reachable?(name, action) when is_binary(name),
-    do: Emissary.MCP.ToolRegistry.in_chain_reachable?(name, action)
+    do: Cyfr.Ops.Catalog.chain_reachable?(name, action)
 
   defp reachable?(_name, _action), do: false
 
@@ -135,22 +135,4 @@ defmodule PrismWeb.AquaLive.Catalog do
   end
 
   def decode_model_choice(_), do: :noop
-
-  @doc """
-  Catalysts return their list-models response verbatim — typically a list
-  of `%{"id" => ...}` objects, sometimes wrapped in a `{"data": [...]}`
-  envelope. Reduce to a plain list of model ids.
-  """
-  def normalize_provider_models(value) do
-    cond do
-      is_list(value) -> Enum.map(value, &model_id/1) |> Enum.reject(&is_nil/1)
-      is_map(value) and is_list(value["data"]) -> normalize_provider_models(value["data"])
-      true -> []
-    end
-  end
-
-  defp model_id(m) when is_binary(m), do: m
-  defp model_id(%{"id" => id}) when is_binary(id), do: id
-  defp model_id(%{id: id}) when is_binary(id), do: id
-  defp model_id(_), do: nil
 end

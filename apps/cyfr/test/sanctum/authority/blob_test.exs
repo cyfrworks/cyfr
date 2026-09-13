@@ -25,7 +25,7 @@ defmodule Sanctum.Authority.BlobTest do
     )
   end
 
-  # The model §3.3 example, completed with full limits.
+  # Authority graph fixture with full limits.
   defp golden do
     %{
       "canonical" => "jcs-1",
@@ -137,6 +137,27 @@ defmodule Sanctum.Authority.BlobTest do
   # ============================================================================
   # Lookup
   # ============================================================================
+
+  describe "entry_digest_conflicts/1" do
+    test "the same entry with two binding digests is listed" do
+      blob = parse!(golden())
+      assert Blob.entry_digest_conflicts(blob) == []
+
+      conflicted =
+        golden()
+        |> put_in(
+          ["nodes", @formula, "edges", "#{@catalyst}|dest", "vault"],
+          %{
+            "entry_id" => "vault-1",
+            "binding_digest" => "sha256:other",
+            "projection" => %{"fields" => ["url"]}
+          }
+        )
+        |> parse!()
+
+      assert Blob.entry_digest_conflicts(conflicted) == ["vault-1"]
+    end
+  end
 
   describe "lookup" do
     test "edge_key/2 canonical spelling" do

@@ -19,10 +19,14 @@ defmodule Compendium.Activation do
   outside the graph: a dynamically reached component holds no authority, so
   there is nothing for an activation to attest about it.
 
-  Resolution is **all or nothing**. A node whose release digest is missing
-  (a row published before release digests existed) or whose dependency
-  cannot be found makes the whole activation `:incomplete`, and nothing is
-  recorded — a partial graph would read as a complete attestation.
+  Resolution is **all or nothing** over what the manifest requires. A node
+  whose release digest is missing (a row published before release digests
+  existed) or whose required dependency cannot be found makes the whole
+  activation `:incomplete`, and nothing is recorded — a partial graph
+  would read as a complete attestation. A dependency the manifest marks
+  `optional` and that is not installed is simply absent from the graph:
+  the attestation covers what can run, and when the component arrives the
+  graph — and so the digest — changes with it.
   """
 
   alias Sanctum.ComponentRef
@@ -201,7 +205,9 @@ defmodule Compendium.Activation do
           end
 
         {:error, _} ->
-          {:halt, {:error, {:incomplete, :unresolvable_dependency}}}
+          if dep.optional == true,
+            do: {:cont, {:ok, acc}},
+            else: {:halt, {:error, {:incomplete, :unresolvable_dependency}}}
       end
     end)
   end

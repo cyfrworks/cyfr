@@ -166,7 +166,6 @@ defmodule Sanctum.Context do
 
       iex> Sanctum.Context.build(user_id: "user_1", permissions: [:execute], auth_method: :oidc, authenticated: true)
       %Sanctum.Context{user_id: "user_1", permissions: MapSet.new([:execute]), auth_method: :oidc, authenticated: true}
-
   """
   @spec build(keyword() | map()) :: t()
   def build(attrs) when is_list(attrs) do
@@ -175,9 +174,7 @@ defmodule Sanctum.Context do
 
   @valid_scopes Sanctum.Atoms.scope_atoms()
 
-  # Mirrors the `auth_method()` type. Guarded at the construction site so a
-  # typo or a removed value (e.g. the old `:local`) can't enter a Context and
-  # silently bypass auth_method-keyed logic.
+  # Validate auth_method against its declared vocabulary at context construction.
   @valid_auth_methods [:oidc, :api_key, :scheduled, :webhook, :tincture, :system, :session, nil]
 
   # Mirrors the `plane()` type, guarded for the same reason.
@@ -247,7 +244,7 @@ defmodule Sanctum.Context do
     # The athanor is taken as given. There is no sentinel to coerce into:
     # `""` is an invalid value, not a tenant, and is rejected here; `nil` is
     # the transient state before the caller's athanor is resolved (auth paths
-    # start there and `Sanctum.Tenancy.resolve_into/2` fills it) or a
+    # start there and `Sanctum.Tenancy.resolve_status/2` fills it) or a
     # platform context working in no athanor — the tenant gate refuses it
     # wherever an athanor is required.
     athanor_id =
@@ -315,7 +312,6 @@ defmodule Sanctum.Context do
       iex> ctx = Sanctum.Context.internal()
       iex> {ctx.auth_method, ctx.scope, ctx.user_id, ctx.athanor_id}
       {:system, :platform, "system", nil}
-
   """
   @spec internal(keyword()) :: t()
   def internal(opts \\ []) do
@@ -342,7 +338,8 @@ defmodule Sanctum.Context do
   @doc """
   Check if context has a specific permission.
 
-  The wildcard permission `:*` grants all permissions.
+  The wildcard permission `:*` grants all permissions; no sign-in path
+  mints it — a person holds the explicit `person_permissions/0`.
 
   This is the raw identity-membership predicate and deliberately ignores
   `plane` — in-chain authorization needs it as its identity conjunct
@@ -357,11 +354,14 @@ defmodule Sanctum.Context do
       true
       iex> Sanctum.Context.has_permission?(ctx, :any_permission)
       true
-
   """
   def has_permission?(%__MODULE__{permissions: perms}, permission) do
     MapSet.member?(perms, :*) or MapSet.member?(perms, permission)
   end
+
+  @doc "The permissions a signed-in person holds; see `Sanctum.Atoms.person_permissions/0`."
+  @spec person_permissions() :: [atom()]
+  defdelegate person_permissions(), to: Sanctum.Atoms
 
   @doc """
   One-way transition onto the guest plane, taken when a context is closed
@@ -376,70 +376,40 @@ defmodule Sanctum.Context do
   def enter_guest(%__MODULE__{} = ctx), do: %{ctx | plane: :guest}
 
   @doc """
-  Require permission, returning `{:error, message}` if missing.
+  The one permission gate, which takes the plane the CALL is on.
 
   Used by MCP tool handlers in `with` chains.
 
-  Fails closed on guest-plane contexts regardless of permissions — even a
-  `:*` wildcard: a context inside a WASM closure never authorizes an
-  external-plane call. In-chain operations are authorized by the current
-  `Sanctum.Authority`, with `has_permission?/2` as the identity conjunct.
+  An `:external` call (the default) never authorizes from inside a WASM
+  closure — a guest-planed context is refused regardless of permissions,
+  even a `:*` wildcard. An `:in_chain` call is authorized by the chain's
+  authority **and** the caller's identity: the authority conjunct is
+  applied at the dispatch chokepoint before any provider runs, so here
+  only the identity conjunct is checked, for a guest-planed context and an
+  external one alike.
 
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Context.require_permission(ctx, :execute)
       :ok
-
   """
-  @spec require_permission(t(), atom()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
-  def require_permission(%__MODULE__{plane: :guest}, permission) do
+  @spec require_permission(t(), atom(), :external | :in_chain) ::
+          :ok | {:error, Sanctum.Unauthorized.reason()}
+  def require_permission(ctx, permission, plane \\ :external)
+
+  def require_permission(%__MODULE__{plane: :guest}, permission, :external) do
     {:error, {:guest_plane, permission}}
   end
 
-  def require_permission(%__MODULE__{} = ctx, permission) do
+  def require_permission(%__MODULE__{} = ctx, permission, plane)
+      when plane in [:external, :in_chain] do
     if has_permission?(ctx, permission) do
       :ok
     else
       {:error, {:missing_permission, permission}}
     end
   end
-
-  @doc """
-  The identity half of the in-chain authorization conjunction.
-
-  An in-chain operation is authorized by the chain's authority **and** the
-  caller's identity; the authority conjunct is applied at the dispatch
-  chokepoint before any provider runs, so the provider's identity check
-  must not re-refuse the guest plane — that would make in-chain calls
-  unauthorizable by construction. This is the one sanctioned way for a
-  gate to serve a guest-planed context, and it never applies to
-  external-plane callers, who keep the fail-closed `require_permission/2`.
-  """
-  @spec require_identity_permission(t(), atom()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
-  def require_identity_permission(%__MODULE__{} = ctx, permission) do
-    if has_permission?(ctx, permission) do
-      :ok
-    else
-      {:error, {:missing_permission, permission}}
-    end
-  end
-
-  @doc """
-  Plane-aware permission gate — the one gate an MCP tool provider calls.
-
-  Guest-planed callers get the identity conjunct (`require_identity_permission/2`),
-  because the authority conjunct was already applied at the dispatch chokepoint;
-  external-plane callers keep the fail-closed `require_permission/2`. Providers
-  call this instead of hand-rolling the two-clause shim, so the rule lives in one
-  place and cannot drift between them.
-  """
-  @spec require_permission_for_plane(t(), atom()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
-  def require_permission_for_plane(%__MODULE__{plane: :guest} = ctx, permission),
-    do: require_identity_permission(ctx, permission)
-
-  def require_permission_for_plane(%__MODULE__{} = ctx, permission),
-    do: require_permission(ctx, permission)
 
   @doc """
   Enforce that a tenant-scoped operation has a resolved tenant.
@@ -516,14 +486,9 @@ defmodule Sanctum.Context do
   end
 
   @doc """
-  Narrow onto another athanor for a domain read or write on a tree the
-  caller can already name — the chokepoint for what used to be scattered
-  `%{ctx | athanor_id: …}` struct updates (a roster read of your own crew,
-  an agent resolved from its owner's tree, an editor write that follows
-  the agent home). Two raw swaps remain by design, each rostered with its
-  reason in `Cyfr.ContextSwapTest`: `Sanctum.MCP.AthanorTool.resolve/3`
-  opening an archived athanor for `get`/`unarchive` (which `focus/2`
-  rightly refuses), and `Sanctum.Tenancy`'s test-only resolver override.
+  Focuses the caller on another athanor for domain reads or writes after
+  checking membership and archive status. Archived-athanor management uses
+  `Sanctum.MCP.AthanorTool.resolve/3`, which permits get and unarchive.
 
   A user context goes through `focus/2` whole: membership or the audited
   operator open, and an archived athanor refused. A **system** context
@@ -614,7 +579,6 @@ defmodule Sanctum.Context do
       iex> record = %{user_id: "u1", athanor_id: "ath_1"}
       iex> Sanctum.Context.authorize(ctx, :storage_read, {:execution, record})
       :ok
-
   """
   @spec authorize(t(), atom(), term()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
   def authorize(%__MODULE__{} = ctx, action), do: authorize(ctx, action, nil)
@@ -636,7 +600,7 @@ defmodule Sanctum.Context do
     permission = action_to_permission(action)
 
     with :ok <- require_permission(ctx, permission),
-         :ok <- require_tenant_scope(ctx) do
+         :ok <- tenant_ok(ctx) do
       :ok
     else
       {:error, _} = err ->
@@ -684,17 +648,9 @@ defmodule Sanctum.Context do
     {:error, :untagged_tenant_resource}
   end
 
-  # Fallback: a resource shape that carries no tenant identity — `nil`, or an
-  # untagged value (a plain map, struct, id, …). The contract is explicit:
-  # `authorize/3` enforces permission + tenant *presence* here; a resource
-  # that DOES carry a tenant must be passed as `{:execution|:tenant,
-  # record}` so it is tenant-checked authoritatively above (a malformed
-  # tuple or an untagged athanor-bearing map fails closed in the clauses
-  # directly above, not here). The storage
-  # primitive (`Arca.QueryHelpers.where_tenant/2` / `Arca.Storage.tenant_segments/1`)
-  # remains a fail-closed *backstop* — it scopes every query by athanor and
-  # rejects an athanor-less tenant context — but it is no longer the control
-  # for any caller that passes a tenant-bearing record.
+  # For resources without tenant identity, enforce permission and tenant
+  # presence. Pass tenant-owned records as {:execution | :tenant, record}
+  # for ownership checks. Storage queries also enforce the context's athanor.
   defp do_authorize(%__MODULE__{} = ctx, action, _resource) do
     do_authorize(ctx, action, nil)
   end
@@ -717,20 +673,7 @@ defmodule Sanctum.Context do
     Sanctum.TenantPolicy.verify(ctx, record)
   end
 
-  # Tenant-scope gate for the resource-less / fallback authorize paths.
-  # Same chokepoint as `require_tenant!/1` (via `tenant_gate/1`); only the
-  # failure shape differs — `authorize/3` refuses with the vocabulary term.
-  defp require_tenant_scope(%__MODULE__{} = ctx) do
-    case tenant_gate(ctx) do
-      :ok -> :ok
-      {:error, _} -> {:error, :missing_tenant}
-    end
-  end
-
-  # Callers pass real permission atoms (the Sanctum.Atoms vocabulary), not
-  # action verbs — the verb-alias mapping (:read → :storage_read, :cancel →
-  # :execute, …) is retired, so a permission spelled here is the permission
-  # checked, with no second vocabulary to drift.
+  # Accept permission atoms from Sanctum.Atoms directly.
   defp action_to_permission(action) when is_atom(action), do: action
 
   # user_id and auth_method ride the rostered Logger metadata — the

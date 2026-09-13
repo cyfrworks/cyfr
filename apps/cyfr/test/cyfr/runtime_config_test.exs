@@ -9,6 +9,33 @@ defmodule Cyfr.RuntimeConfigTest do
   # Build a getenv reader over a plain map (blank/absent both read as nil-ish).
   defp env(map), do: fn key -> Map.get(map, key) end
 
+  describe "switch/3 — on or off, never a silent default" do
+    test "unset and blank take the default" do
+      assert {:ok, true} = RuntimeConfig.switch(env(%{}), "CYFR_BUILDS", true)
+
+      assert {:ok, false} =
+               RuntimeConfig.switch(env(%{"CYFR_BUILDS" => "  "}), "CYFR_BUILDS", false)
+    end
+
+    test "every spelling of on and off, any case" do
+      for on <- ~w(on ON true True yes 1) do
+        assert {:ok, true} = RuntimeConfig.switch(env(%{"K" => on}), "K", false)
+      end
+
+      for off <- ~w(off OFF false False no 0) do
+        assert {:ok, false} = RuntimeConfig.switch(env(%{"K" => off}), "K", true)
+      end
+    end
+
+    test "an unrecognised spelling is an error naming the key, not the default" do
+      assert {:error, message} =
+               RuntimeConfig.switch(env(%{"CYFR_BUILDS" => "disabled"}), "CYFR_BUILDS", true)
+
+      assert message =~ "CYFR_BUILDS"
+      assert message =~ "disabled"
+    end
+  end
+
   describe "resolve_auth_provider/1 — set-or-default, fail loud" do
     test "unset + no credentials => no auth (default)" do
       assert {:ok, nil} = RuntimeConfig.resolve_auth_provider(env(%{}))
@@ -163,6 +190,31 @@ defmodule Cyfr.RuntimeConfigTest do
       assert opts[:endpoint] == "http://minio:9000"
     end
 
+    test "CYFR_S3_PATH_STYLE is a switch: on in any spelling, off by default, a misspelling refuses" do
+      base = %{
+        "CYFR_STORAGE" => "s3",
+        "CYFR_S3_BUCKET" => "b",
+        "CYFR_S3_REGION" => "r",
+        "CYFR_S3_ACCESS_KEY_ID" => "ak",
+        "CYFR_S3_SECRET_ACCESS_KEY" => "sk"
+      }
+
+      for on <- ~w(on yes 1 TRUE) do
+        assert {:ok, {:s3, opts}} =
+                 RuntimeConfig.resolve_storage(env(Map.put(base, "CYFR_S3_PATH_STYLE", on)))
+
+        assert opts[:path_style] == true
+      end
+
+      assert {:ok, {:s3, opts}} = RuntimeConfig.resolve_storage(env(base))
+      assert opts[:path_style] == false
+
+      assert {:error, message} =
+               RuntimeConfig.resolve_storage(env(Map.put(base, "CYFR_S3_PATH_STYLE", "virtual")))
+
+      assert message =~ "CYFR_S3_PATH_STYLE"
+    end
+
     test "s3 omits absent optional keys" do
       assert {:ok, {:s3, opts}} =
                RuntimeConfig.resolve_storage(
@@ -249,6 +301,20 @@ defmodule Cyfr.RuntimeConfigTest do
 
       assert opts[:pool_size] == 10
       assert opts[:ssl] == true
+    end
+
+    test "CYFR_DB_SSL is a switch: on in any spelling, a misspelling refuses" do
+      url = %{"CYFR_DATABASE_URL" => "postgres://u:p@h:5432/db"}
+
+      for on <- ~w(on yes 1 TRUE) do
+        assert {:ok, opts} = RuntimeConfig.resolve_postgres(env(Map.put(url, "CYFR_DB_SSL", on)))
+        assert opts[:ssl] == true
+      end
+
+      assert {:error, message} =
+               RuntimeConfig.resolve_postgres(env(Map.put(url, "CYFR_DB_SSL", "enabled")))
+
+      assert message =~ "CYFR_DB_SSL"
     end
 
     # Set-or-default, never silent fallback: quietly serving 20 connections

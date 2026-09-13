@@ -37,7 +37,7 @@ defmodule PrismWeb.ChatLive do
   alias Phoenix.LiveView.JS
 
   alias Arca.ConversationStorage, as: Conversations
-  alias Aqua.ConversationRunner
+  alias Aqua.Runner
   alias Sanctum.Tenancy.Athanors
 
   @impl true
@@ -118,6 +118,15 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
+  # The row as it is now. Used after subscribing, so what the page renders
+  # is never older than the topic it is listening to.
+  defp reread(%{id: id} = athanor) do
+    case Athanors.get(id) do
+      {:ok, fresh} -> fresh
+      _ -> athanor
+    end
+  end
+
   defp open_estate(socket, focus, athanor, athanors, conversation_id) do
     ctx = socket.assigns.context
     conversations = topics(focus)
@@ -132,7 +141,10 @@ defmodule PrismWeb.ChatLive do
          |> assign(:loading?, false)
          |> subscribe_estate(athanor)
          |> assign(:focus, focus)
-         |> assign(:athanor, athanor)
+         # Re-read after subscribing, not before: a fill that completed
+         # between the two would otherwise leave the setup banner up until
+         # someone reloaded.
+         |> assign(:athanor, reread(athanor))
          |> assign(:athanor_route, Athanors.route_slug(athanor))
          |> assign(:athanor_label, estate_label(athanor, socket.assigns.mine, ctx))
          |> assign(:conversations, conversations)
@@ -233,7 +245,7 @@ defmodule PrismWeb.ChatLive do
   # to the person's own AQUA beside the page, by name and id only.
   defp select(socket, target) do
     socket = unsubscribe_current(socket)
-    if target, do: ConversationRunner.subscribe(target.id, target.athanor_id)
+    if target, do: Runner.subscribe(target.id, target.athanor_id)
 
     socket
     |> assign(:conversation, target)
@@ -264,7 +276,7 @@ defmodule PrismWeb.ChatLive do
   defp unsubscribe_current(
          %{assigns: %{conversation: %{id: id, athanor_id: athanor_id}}} = socket
        ) do
-    ConversationRunner.unsubscribe(id, athanor_id)
+    Runner.unsubscribe(id, athanor_id)
     socket
   end
 
@@ -554,7 +566,8 @@ defmodule PrismWeb.ChatLive do
     focus = socket.assigns.focus
 
     with true <- topic_here?(socket, id),
-         :ok <- Arca.TopicSubscriptionStorage.follow(focus, id, focus.user_id) do
+         {:ok, _} <-
+           PrismWeb.Ops.call_tool(focus, "conversation/follow", %{"conversation" => id}) do
       {:noreply, socket |> update(:followed, &MapSet.put(&1, id)) |> patch_row()}
     else
       false -> {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
@@ -566,7 +579,8 @@ defmodule PrismWeb.ChatLive do
     focus = socket.assigns.focus
 
     with true <- topic_here?(socket, id),
-         :ok <- Arca.TopicSubscriptionStorage.unfollow(focus, id, focus.user_id) do
+         {:ok, _} <-
+           PrismWeb.Ops.call_tool(focus, "conversation/unfollow", %{"conversation" => id}) do
       {:noreply, socket |> update(:followed, &MapSet.delete(&1, id)) |> patch_row()}
     else
       false -> {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
@@ -585,12 +599,9 @@ defmodule PrismWeb.ChatLive do
       not topic_here?(socket, id) ->
         {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
 
-      Aqua.ConversationRunner.turn_running?(focus, id) ->
-        {:noreply, put_flash(socket, :error, "Stop the running turn before deleting.")}
-
       true ->
-        case Conversations.delete(focus, id) do
-          :ok ->
+        case PrismWeb.Ops.call_tool(focus, "conversation/delete", %{"conversation" => id}) do
+          {:ok, _} ->
             current = socket.assigns.conversation && socket.assigns.conversation.id
 
             if current == id do
@@ -1079,7 +1090,6 @@ defmodule PrismWeb.ChatLive do
         </p>
         <p class="text-[10px] text-gray-600 mt-0.5">
           {Calendar.strftime(@conv.last_message_at || @conv.inserted_at, "%b %d %H:%M")}
-          <span :if={@conv.execution_id} class="ml-1 text-blue-400">● running</span>
         </p>
       </button>
       <button

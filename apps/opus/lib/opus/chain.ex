@@ -96,8 +96,27 @@ defmodule Opus.Chain do
   @spec run_child(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_child(%Authority{} = authority, reference, need, input, opts) do
+    opts = Opus.Chain.Charge.identify(opts)
+
     with {:ok, decision} <- step_invoke(authority, reference, need, opts) do
-      execute_child(decision, input, opts)
+      if Keyword.get(opts, :guest_fn) == :spawn do
+        # A spawn-shaped step charged the invoke budget; this process holds
+        # the slot for the call and the guard's :DOWN releases it if the
+        # process dies inside. The hold is a row too
+        # (`Arca.BudgetReservations`), released with the slot.
+        with :ok <- Opus.Chain.Charge.take(decision.authority, opts) do
+          Authority.guard_invoke(decision.authority)
+
+          try do
+            execute_child(decision, input, opts)
+          after
+            Authority.release_invoke(decision.authority)
+            Opus.Chain.Charge.give_back(decision.authority, opts)
+          end
+        end
+      else
+        execute_child(decision, input, opts)
+      end
     end
   end
 
@@ -295,11 +314,35 @@ defmodule Opus.Chain do
           :type,
           decision.component && Map.get(decision.component, "type")
         )
-        # Which edge authorized this hop, for the §4.5 audit line.
+        # Record the edge authorizing this hop for audit attribution.
         |> Arca.QueryHelpers.maybe_put(:dep_ref, decision.reference)
         |> Arca.QueryHelpers.maybe_put(:need, decision.need)
+        # Who invoked this child, for a formula's own roster and lineage.
+        |> Arca.QueryHelpers.maybe_put(:parent_reference, Keyword.get(opts, :parent_reference))
+        |> Arca.QueryHelpers.maybe_put(:retention_class, Keyword.get(opts, :retention_class))
+        |> Arca.QueryHelpers.maybe_put(:retained_input, Keyword.get(opts, :retained_input))
+        # The barriers admission performs for a loop-dispatched child: the
+        # hold row its charge names, and the step on its generation.
+        |> Arca.QueryHelpers.maybe_put(:charge, hold_of(decision.authority, opts))
+        |> Arca.QueryHelpers.maybe_put(:step, step_of(opts))
 
       Opus.Executor.run(ctx, decision.reference, input, exec_opts)
+    end
+  end
+
+  defp hold_of(%Authority{budget: budget}, opts) do
+    case Keyword.get(opts, :charge) do
+      %{id: id} -> %{reservation_id: budget.id, id: id}
+      _ -> nil
+    end
+  end
+
+  defp step_of(opts) do
+    with step_id when is_binary(step_id) <- Keyword.get(opts, :step_id),
+         %{generation: generation} <- Keyword.get(opts, :charge) do
+      %{id: step_id, generation: generation}
+    else
+      _ -> nil
     end
   end
 
@@ -341,10 +384,8 @@ defmodule Opus.Chain do
         {:error, _other} -> {:error, {:incomplete, :invalid_graph}}
       end
 
-    # The live shape lets a versionless consent survive a release whose
-    # shape did not change (§2.6 allow-and-record). Derivation failure
-    # leaves it nil, which the loader treats as unknown — fail closed to
-    # needs_consent, never fail open.
+    # An unchanged live shape permits versionless consent. Derivation failure
+    # leaves the shape unknown and requires fresh consent.
     opts =
       Keyword.put_new_lazy(opts, :live_shape_digest, fn ->
         case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do
@@ -357,7 +398,7 @@ defmodule Opus.Chain do
       ctx,
       profile,
       [live: live, source: source, shape_diff: shape_diff_fn(ctx, profile, source)] ++
-        Keyword.take(opts, [:ceiling, :live_shape_digest])
+        Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id])
     )
   end
 
@@ -380,7 +421,7 @@ defmodule Opus.Chain do
   runs under the same consented authority the conversation's executions
   do.
 
-  It is also the *first* step of a turn: `Aqua.Turn` resolves and pins the
+  It is also the *first* step of a turn: `Aqua.Loop` resolves and pins the
   profile here, composes the system prompt from what the authority
   actually grants, and only then calls `run_root/5` with `{:id, pinned}`.
   A prompt composed before the authority is known is a prompt that can
@@ -389,14 +430,30 @@ defmodule Opus.Chain do
   @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Authority.t()} | {:error, term()}
   def authority_for(%Context{} = ctx, profile_selector, reference, opts \\ []) do
+    with {:ok, %{authority: authority}} <-
+           authority_and_stamp_for(ctx, profile_selector, reference, opts) do
+      {:ok, authority}
+    end
+  end
+
+  @doc """
+  `authority_for/4` with what a root row records beside the authority:
+  the activation stamp the loader verified and the profile selected.
+  A turn root (`Opus.TurnRoot`) is admitted from this, so its row carries
+  the same activation a WASM root would.
+  """
+  @spec authority_and_stamp_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
+          {:ok, %{authority: Authority.t(), stamp: map() | nil, profile: map()}}
+          | {:error, term()}
+  def authority_and_stamp_for(%Context{} = ctx, profile_selector, reference, opts \\ []) do
     source = Keyword.get(opts, :consent_source, Source.impl())
 
     with {:ok, name_ref} <- name_level(reference),
          {:ok, candidates} <- source.profiles(ctx, name_ref),
          {:ok, profile} <- select_profile(ctx, candidates, profile_selector, opts),
          {:ok, _ref, _type, component} <- Opus.Executor.inspect_component(ctx, reference),
-         {:ok, authority, _stamp} <- load_authority(ctx, profile, component, source, opts) do
-      {:ok, authority}
+         {:ok, authority, stamp} <- load_authority(ctx, profile, component, source, opts) do
+      {:ok, %{authority: authority, stamp: stamp, profile: profile}}
     end
   end
 end

@@ -201,9 +201,7 @@ func TestCallTool_RPCError(t *testing.T) {
 	}
 }
 
-// A 404 means the server does not implement the method — not that a session
-// expired. There are no sessions, and reading it the old way told an
-// authenticated user to log in again whenever they hit a missing method.
+// A 404 denotes an unimplemented method and must not produce a login hint.
 func TestCallTool_UnknownMethodIsNotASessionProblem(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

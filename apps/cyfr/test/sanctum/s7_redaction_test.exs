@@ -3,8 +3,7 @@
 
 defmodule Sanctum.S7RedactionTest do
   @moduledoc """
-  Phase 2 S7: credential query params (`_t`, `_key`, `_session`) are redacted
-  before any log sink / error report can observe them (defense-in-depth).
+  Checks redaction of credential query parameters before logging or error reporting.
   """
   use ExUnit.Case, async: true
 

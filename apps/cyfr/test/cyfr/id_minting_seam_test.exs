@@ -10,11 +10,8 @@ defmodule Cyfr.IdMintingSeamTest do
   into a mint site; give the id its prefix instead, so every id in the
   system says what it names.
 
-  Scope is every app that mints rows — cyfr, opus and locus. It used to be
-  cyfr alone, and the one holdout the exemption hid was the execution id:
-  `"exec_#{Ecto.UUID.generate()}"`, random v4, in a system whose id module
-  documents `execution_id/0` as v7. `Cyfr.UUID7` itself is the generator's
-  home and the one file allowed to spell the raw call.
+  Scans cyfr, opus and locus for raw id generation. Only `Cyfr.UUID7`
+  may call the underlying UUID generator directly.
   """
   use ExUnit.Case, async: true
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -98,7 +99,7 @@ Default scopes per type (applied when --scope is omitted):
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "key", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Key, toolArgs)
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -114,8 +115,8 @@ var keyGetCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "key", map[string]any{
-			"action": "get",
+		result, err := client.CallTool(cmd.Context(), ops.Key, map[string]any{
+			"action": ops.KeyGet,
 			"name":   args[0],
 		})
 		if err != nil {
@@ -132,8 +133,8 @@ var keyListCmd = &cobra.Command{
 	Example: "  cyfr key list",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "key", map[string]any{
-			"action": "list",
+		result, err := client.CallTool(cmd.Context(), ops.Key, map[string]any{
+			"action": ops.KeyList,
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -163,8 +164,8 @@ var keyRevokeCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "key", map[string]any{
-			"action": "revoke",
+		result, err := client.CallTool(cmd.Context(), ops.Key, map[string]any{
+			"action": ops.KeyRevoke,
 			"name":   name,
 		})
 		if err != nil {
@@ -200,8 +201,8 @@ var keyRotateCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "key", map[string]any{
-			"action": "rotate",
+		result, err := client.CallTool(cmd.Context(), ops.Key, map[string]any{
+			"action": ops.KeyRotate,
 			"name":   name,
 		})
 		if err != nil {

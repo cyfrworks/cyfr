@@ -5,13 +5,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
   @moduledoc """
   `destroy/1` is the only verb that deletes a tenant's rows.
 
-  Before it existed nothing did. `purge_storage/1` reclaims the volume and
-  says out loud that "its rows are untouched"; `Cyfr.Retention` skips
-  archived athanors because "purging is the deliberate reclaim". Each
-  contract deferred to the other, so archive + purge dropped disk usage
-  and removed the athanor from the UI while every sealed vault payload,
-  webhook secret, OAuth ciphertext, execution, message and log stayed in
-  `cyfr.db` and in every backup taken afterwards.
+  Checks that destruction removes tenant rows and credentials as well as stored objects.
   """
   use ExUnit.Case, async: false
 
@@ -80,7 +74,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
         content: "something private"
       })
 
-    :ok = Arca.put(ctx, ["guest", "notes.txt"], "kept until destroy")
+    :ok = Arca.put(ctx, ["data", "notes.txt"], "kept until destroy")
 
     # The rest of the roster, written straight through the row plane. Going
     # via each domain API would need a component, a consent walk and a
@@ -164,11 +158,11 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
              "#{table} still holds rows for a destroyed athanor"
     end
 
-    refute Arca.exists?(ctx, ["guest", "notes.txt"])
+    refute Arca.exists?(ctx, ["data", "notes.txt"])
     assert {:ok, []} = Arca.list_recursive(ctx, [])
 
-    # The tombstone stands: Home succession reads it, and an audit trail
-    # that forgets an athanor existed cannot say what happened to it.
+    # The tombstone stands: an audit trail that forgets an athanor existed
+    # cannot say what happened to it.
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
   end
 
@@ -204,11 +198,8 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     # reopens a wiped shell.
     assert Sanctum.Tenancy.Users.personal_athanor?(personal.id)
 
-    # Archived in the DATABASE, not in a struct. `destroy/1` re-reads the
-    # row through `get/1`, so a struct whose status was edited in memory is
-    # discarded and the refusal comes back `:not_archived` — the personal
-    # branch never runs, and asserting `reason in [...]` passes on the
-    # wrong one.
+    # Archive the persisted row so destroy/1 reaches the personal-athanor
+    # check after rereading its status.
     {:ok, archived} = Athanors.archive(personal)
     assert archived.status == "archived"
 

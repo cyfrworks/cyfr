@@ -90,7 +90,6 @@ defmodule Sanctum.Session do
           user_id: String.t(),
           email: String.t() | nil,
           provider: String.t(),
-          permissions: [atom()],
           created_at: String.t(),
           expires_at: String.t()
         }
@@ -125,24 +124,14 @@ defmodule Sanctum.Session do
         hours -> DateTime.add(now, hours * 3600, :second)
       end
 
-    permissions_list = ctx.permissions |> MapSet.to_list() |> Enum.map(&to_string/1)
-
-    case Jason.encode(permissions_list) do
-      {:ok, permissions_json} ->
-        create_session_with_permissions(ctx, token, now, expires_at, permissions_json)
-
-      {:error, reason} ->
-        {:error, {:encode_failed, reason}}
-    end
-  end
-
-  defp create_session_with_permissions(%Context{} = ctx, token, now, expires_at, permissions_json) do
+    # A session carries no permission list: it is a person's, and what
+    # they may do is decided by their memberships, the estate's consents
+    # and the policy on every request — never by a bag frozen at sign-in.
     attrs = %{
       token_prefix: String.slice(token, 0, 8),
       user_id: ctx.user_id,
       email: ctx.email,
       provider: ctx.provider,
-      permissions: permissions_json,
       # A resolved context carries its athanor; a nil marks a not-yet-resolved
       # session (user with no membership) and is re-resolved on load. No
       # scope is persisted: every session works inside its athanor, and the
@@ -159,7 +148,6 @@ defmodule Sanctum.Session do
           user_id: ctx.user_id,
           email: ctx.email,
           provider: ctx.provider,
-          permissions: ctx.permissions |> MapSet.to_list() |> Enum.map(&to_string/1),
           created_at: DateTime.to_iso8601(now),
           expires_at: DateTime.to_iso8601(expires_at)
         }
@@ -429,26 +417,9 @@ defmodule Sanctum.Session do
   # One return shape — {:ok, ctx} | {:error, :namespace_unavailable} — so
   # the caller stops discriminating structurally on struct-vs-tuple.
   defp row_to_context(row, surface) do
-    permissions = row |> decode_permissions() |> Enum.map(&safe_to_atom/1)
-
-    case Sanctum.Namespace.lookup_status(row.user_id) do
-      :not_claimed ->
-        # Session valid, but the person's users row records no namespace yet
-        # (the claim is ahead of them) — keep the context unauthenticated so
-        # the claim gate forwards them before any tenant-scoped operation
-        # runs; the actions annotated `auth: :signed_in` still serve it.
-        # The session's athanor rides along: it is a fact of the sign-in, not
-        # of the claim, and tincture access (which is not tenant
-        # administration) is granted on it.
-        {:ok,
-         Context.build(
-           user_id: row.user_id,
-           email: row.email,
-           provider: row.provider,
-           athanor_id: row.athanor_id,
-           authenticated: false
-         )}
-
+    # A namespace is a publishing credential, not identity: a person
+    # without one is as signed in as anyone, with `namespace: nil`.
+    case namespace_of(row.user_id) do
       {:ok, ns} ->
         ctx =
           Context.build(
@@ -456,7 +427,10 @@ defmodule Sanctum.Session do
             email: row.email,
             provider: row.provider,
             namespace: ns,
-            permissions: permissions,
+            # A person holds every declared permission; the gates that
+            # matter are membership, consent and policy, applied on every
+            # request.
+            permissions: Context.person_permissions(),
             # The persisted athanor is a STARTING POINT, never trusted on its
             # own: revalidate/1 re-checks it against current memberships. A nil
             # means the session was never resolved (no membership at create
@@ -467,20 +441,28 @@ defmodule Sanctum.Session do
             auth_method: surface_auth_method(surface),
             authenticated: true
           )
-          # Re-validate the persisted athanor against the person's CURRENT
-          # standing so a denial, a revoked membership or an archived athanor
-          # takes effect immediately (no waiting for TTL). Keeps the selected
-          # athanor when still authorized; re-derives the platform capability.
-          |> Sanctum.Tenancy.revalidate()
 
-        {:ok, ctx}
+        # Re-validated against the person's CURRENT standing, so a denial,
+        # a revoked membership or an archived athanor takes effect at once;
+        # a store that cannot say is a 503, never yesterday's answer.
+        case Sanctum.Tenancy.revalidate(ctx) do
+          {:ok, revalidated} -> {:ok, revalidated}
+          {:error, :unavailable} -> {:error, :database_error}
+        end
 
       {:error, _reason} ->
-        # The users row could not be read — distinct from "not claimed".
+        # The users row could not be read — distinct from "no namespace".
         # Surface a retryable error so the caller returns 503 rather than
-        # silently downgrading a valid person to unauthenticated and wedging
-        # them at /claim-namespace (re-claim then 409s).
+        # signing a valid person in as someone with no publisher namespace.
         {:error, :namespace_unavailable}
+    end
+  end
+
+  defp namespace_of(user_id) do
+    case Sanctum.Namespace.lookup_status(user_id) do
+      {:ok, ns} -> {:ok, ns}
+      :not_claimed -> {:ok, nil}
+      {:error, _} = err -> err
     end
   end
 
@@ -488,14 +470,11 @@ defmodule Sanctum.Session do
   defp surface_auth_method(:tincture), do: :session
 
   defp row_to_external(row, token) do
-    permissions = decode_permissions(row)
-
     %{
       token: token,
       user_id: row.user_id,
       email: row.email,
       provider: row.provider,
-      permissions: permissions,
       created_at: Cyfr.Time.iso8601(row.inserted_at),
       expires_at: Cyfr.Time.iso8601(row.expires_at)
     }
@@ -503,24 +482,6 @@ defmodule Sanctum.Session do
 
   defp coerce_datetime(%DateTime{} = dt), do: dt
   defp coerce_datetime(_), do: nil
-
-  # One decoder for both readers, so the same corruption is observed the
-  # same way whichever surface reads the row first.
-  defp decode_permissions(row) do
-    case Cyfr.Json.decode(row.permissions || "[]") do
-      {:ok, list} when is_list(list) ->
-        list
-
-      _ ->
-        Logger.warning(
-          "[Sanctum.Session] Malformed permissions JSON for user #{row.user_id}, defaulting to empty"
-        )
-
-        []
-    end
-  end
-
-  defp safe_to_atom(value), do: Sanctum.Atoms.safe_to_permission_atom(value)
 
   @session_topic "sanctum:sessions"
 

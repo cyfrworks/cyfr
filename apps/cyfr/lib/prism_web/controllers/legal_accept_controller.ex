@@ -86,11 +86,8 @@ defmodule PrismWeb.LegalAcceptController do
          {:ok, _body} <-
            Client.accept_policies(provider, access_token, nil, version) do
       # Acceptance recorded server-side. Route to /auth/post-legal-accept
-      # so AuthController re-runs probe_and_store with the still-valid
-      # access_token (cookie not cleared) and dispatches to /claim-namespace
-      # or the dashboard based on the new probe result. This single
-      # post-accept landing handles both the probe-gated and claim-gated
-      # paths uniformly.
+      # so AuthController re-probes with the still-valid access_token
+      # (cookie not cleared) and lands the person back in the console.
       popped |> redirect(to: "/auth/post-legal-accept")
     else
       {:expired, conn} ->
@@ -137,10 +134,7 @@ defmodule PrismWeb.LegalAcceptController do
   # Helpers
   # ============================================================================
 
-  # One outbound call per policy used to run sequentially on every GET —
-  # 1+N round-trips to cyfr.run before the page painted. The bodies are
-  # immutable per policy_version, so they memoize on it; a cold read
-  # fetches them concurrently.
+  # Cache immutable policy bodies by policy_version; fetch cache misses concurrently.
   @bodies_ttl_ms :timer.minutes(10)
 
   defp fetch_all_bodies(version, policies) when is_list(policies) do
@@ -200,9 +194,9 @@ defmodule PrismWeb.LegalAcceptController do
   defp current_provider(conn, params), do: {:ok, PendingProbe.current_provider(conn, params)}
 
   defp accept_error_message(reason) do
-    # One renderer (ToolError.render covers the OCI struct and crafted
+    # One renderer (Cyfr.Ops.Error.render covers the OCI struct and crafted
     # binaries too); nil means internal and stays out of the page.
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       "The acceptance could not be recorded — try again."
   end
 

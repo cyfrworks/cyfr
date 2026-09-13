@@ -37,9 +37,7 @@ defmodule EmissaryWeb.AuthController do
   Ueberauth handles the redirect automatically based on the :provider param.
   """
   def request(conn, _params) do
-    # Ueberauth plug handles the redirect; this is the no-strategy branch.
-    # A browser pipeline answers in HTML — these arms used to dump JSON
-    # into the person's window.
+    # Render the no-strategy branch as HTML; Ueberauth handles configured redirects.
     PrismWeb.MinimalPage.send_page(
       conn,
       404,
@@ -115,9 +113,7 @@ defmodule EmissaryWeb.AuthController do
 
   defp apply_device_ticket(conn, %{session_token: token, outcome: outcome} = payload)
        when is_binary(token) do
-    # The one outcome→response mapping the callback uses — so the device
-    # path's proceed report flashes its warnings here too, instead of
-    # silently dropping them as the ticket's :next flag once did.
+    # Render the sign-in outcome and any warnings, including device flow.
     SignInResponse.respond(conn, outcome,
       session: {:token, token},
       access_token: payload[:access_token]
@@ -133,16 +129,15 @@ defmodule EmissaryWeb.AuthController do
   @doc """
   Handles the OAuth callback from the provider — the browser sign-in.
 
-  Door → what sign-in records → the one decision (`Sanctum.SignIn.complete/3`)
-  → a session and a redirect. Every outcome is a redirect or a page; the
-  session token travels in the cookie and nowhere else.
+  Door → what sign-in records → the registry courtesy
+  (`Sanctum.SignIn.complete/3`) → a session and a redirect. Every outcome
+  is a redirect or a page; the session token travels in the cookie and
+  nowhere else.
 
-  - proceed → session, cookie, `/`
-  - policy acceptance required → session, cookie, `/legal/accept`
-  - claim required → session (loads unauthenticated until the claim), cookie,
-    `/claim-namespace`
-  - IdP token refused → no session, back through `/login`
-  - a first-time person and no registry answer → no session, a page saying so
+  - admitted → session, cookie, `/` (the IdP token rides in the probe
+    cookie for ten minutes when a publisher namespace is still theirs to
+    claim)
+  - a membership read failed while minting → no session, a page saying so
   - refused at the door → 403 page, no session, no cyfr.run call
   """
   def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
@@ -151,29 +146,22 @@ defmodule EmissaryWeb.AuthController do
 
     with {:ok, ctx} <- authenticate_with_provider(auth),
          {:ok, ctx, user} <- admit(ctx, auth) do
-      case Sanctum.SignIn.complete(user, provider, access_token) do
-        {:proceed, user, report} ->
-          # The athanor may have been minted a moment ago: resolve again so
-          # the session names it. A failed read here answers 503 with no
-          # session — not a session whose tenant gate 403s every request.
-          case Sanctum.Tenancy.resolve_status(%{ctx | namespace: user.namespace}, force: true) do
-            {:ok, ctx} ->
-              SignInResponse.respond(conn, {:proceed, report}, session: {:mint, ctx})
+      {:proceed, user, report} = Sanctum.SignIn.complete(user, provider, access_token)
 
-            {:error, :unavailable} ->
-              SignInResponse.respond(conn, {:unavailable, :membership_read},
-                session: {:mint, ctx},
-                retry_path: "/login"
-              )
-          end
-
-        outcome ->
-          # The IdP token travels for the claim or the policy acceptance
-          # that still needs it; the responder stashes it only on those arms.
-          SignInResponse.respond(conn, outcome,
+      # The athanor may have been minted a moment ago: resolve again so the
+      # session names it. A failed read here answers 503 with no session —
+      # not a session whose tenant gate 403s every request.
+      case Sanctum.Tenancy.resolve_status(%{ctx | namespace: user.namespace}, force: true) do
+        {:ok, ctx} ->
+          SignInResponse.respond(conn, {:proceed, report},
             session: {:mint, ctx},
-            access_token: access_token,
-            reauth_flash: true
+            access_token: if(is_nil(user.namespace), do: access_token)
+          )
+
+        {:error, :unavailable} ->
+          SignInResponse.respond(conn, {:unavailable, :membership_read},
+            session: {:mint, ctx},
+            retry_path: "/login"
           )
       end
     else
@@ -233,11 +221,11 @@ defmodule EmissaryWeb.AuthController do
   @doc """
   Post-legal-accept landing handler. The person just submitted /legal/accept
   and the probe re-runs with the still-valid IdP access_token (stashed in
-  `_cyfr_pending_probe`): the same decision as the callback, from a session
+  `_cyfr_pending_probe`): the same courtesy as the callback, from a session
   that already exists.
 
   Closes the loop:
-    probe → 412 → /legal/accept → /auth/post-legal-accept → probe → ok
+    probe → policy required → /legal/accept → /auth/post-legal-accept → probe → ok
   """
   def post_legal_accept(conn, _params) do
     case PrismWeb.PendingProbe.pop(conn) do
@@ -261,26 +249,13 @@ defmodule EmissaryWeb.AuthController do
         with {:ok, peeked} <- Sanctum.Caller.peek(session_token),
              {:ok, user} <- Sanctum.Tenancy.Users.get(peeked.user_id) do
           provider = peeked.provider || "github"
+          {:proceed, user, report} = Sanctum.SignIn.complete(user, provider, access_token)
 
-          case Sanctum.SignIn.complete(user, provider, access_token) do
-            {:proceed, _user, report} ->
-              SignInResponse.respond(conn, {:proceed, report}, session: :existing)
-
-            {:reauthenticate, _reason} = outcome ->
-              SignInResponse.respond(conn, outcome,
-                session: :existing,
-                teardown: {:destroy_and_drop, session_token}
-              )
-
-            outcome ->
-              # needs_legal loops back to /legal/accept (a version bump
-              # between accept and re-probe); no token travels — the probe
-              # cookie already holds it.
-              SignInResponse.respond(conn, outcome,
-                session: :existing,
-                retry_path: "/auth/post-legal-accept"
-              )
-          end
+          # The token stays for the claim that may follow the acceptance.
+          SignInResponse.respond(conn, {:proceed, report},
+            session: :existing,
+            access_token: if(is_nil(user.namespace), do: access_token)
+          )
         else
           _ -> conn |> redirect(to: "/login")
         end
@@ -299,11 +274,7 @@ defmodule EmissaryWeb.AuthController do
   @doc """
   Logout - destroys the session.
 
-  The credential comes from `Authorization: Bearer` and nowhere else. It
-  used to be accepted from the request body too, which put a live session
-  token into access logs and `Referer` headers for the one request whose
-  whole purpose is retiring it — and `whoami`, next door, has always
-  required the header.
+  Accepts the credential only from the `Authorization: Bearer` header.
   """
   def logout(conn, _params) do
     token = get_bearer_token(conn)
@@ -384,15 +355,14 @@ defmodule EmissaryWeb.AuthController do
       name: screen_name(auth)
     }
 
+    # The provider's context names the person by their IdP identity key;
+    # from admission on they are named by their own id.
     with {:ok, verdict} <- Sanctum.Door.admit_identity(ctx.user_id, user_info),
          {:ok, user} <- Sanctum.SignIn.admitted(user_info, verdict) do
-      # No re-resolve here. An operator's first sign-in seats them in Home a
-      # moment before their own athanor exists, and an athanor pinned to the
-      # context now is the one every later resolve keeps — they would land in
-      # Home rather than their own chat. The proceed arm resolves once the
-      # mint has happened; the legal and claim arms mint a session with no
-      # athanor at all, which `Sanctum.Session.create/1` re-resolves on load.
-      {:ok, ctx, user}
+      # The context is renamed to the person's own id and nothing else: an
+      # athanor pinned here is the one every later resolve keeps, and the
+      # mint is what decides which. The callback resolves after it.
+      {:ok, %{ctx | user_id: user.id}, user}
     end
   end
 
@@ -448,6 +418,14 @@ defmodule EmissaryWeb.AuthController do
 
   defp friendly_error_message(:auth_provider_not_supported),
     do: "Authentication provider not supported"
+
+  # The server is at capacity: a real refusal with a cause the person can
+  # act on (wait, or ask the operator), not an unhandled term.
+  defp friendly_error_message({:limit_reached, :mint_per_hour, _cap}),
+    do: "This server is admitting new people slowly right now. Please try again shortly."
+
+  defp friendly_error_message({:limit_reached, _key, _cap}),
+    do: "This server is full and cannot make you an athanor. Ask its operator for room."
 
   defp friendly_error_message(:email_not_verified),
     do: "Your provider reported an unverified email. Please verify your email and try again."

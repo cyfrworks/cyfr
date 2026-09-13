@@ -6,11 +6,8 @@ defmodule PrismWeb.WebhooksLiveTest do
   The route is wired and gated, and the create form can express the
   replay-protection decision `Sanctum.Webhook.create/2` requires.
 
-  That second part is not incidental. `create/2` refuses a webhook naming
-  neither replay header unless the caller states `replay_protection`, and
-  the form had no control for it and did not send the key — so the console
-  could not create a webhook at all, while its own copy described leaving
-  the headers unset as merely risky.
+  The form must submit an explicit replay-protection choice when
+  neither replay header is configured.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -19,15 +16,21 @@ defmodule PrismWeb.WebhooksLiveTest do
 
   describe "GET /webhooks (unauthenticated)" do
     test "redirects to login", %{conn: conn} do
-      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/webhooks"))
+      assert {:error, {:redirect, %{to: "/login"}}} =
+               live(conn, athanor_path("/webhooks", "@nobody"))
     end
   end
 
   describe "the create form and the replay decision" do
     setup %{conn: conn} do
       user = test_user()
-      home = Sanctum.Tenancy.Athanors.home!()
-      ctx = %{Sanctum.TestContext.local() | athanor_id: home.id, user_id: user.user_id}
+      conn = log_in_user(conn, user)
+
+      ctx = %{
+        Sanctum.TestContext.local()
+        | athanor_id: seated_athanor().id,
+          user_id: user.user_id
+      }
 
       wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
@@ -42,7 +45,7 @@ defmodule PrismWeb.WebhooksLiveTest do
       :ok = Sanctum.Test.ConsentFixtures.start_source!()
       profile_id = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.hook-target")
 
-      {view, _html} = conn |> log_in_user(user) |> mount_athanor("/webhooks")
+      {view, _html} = mount_athanor(conn, "/webhooks")
       {:ok, view: view, profile_id: profile_id, ctx: ctx}
     end
 

@@ -70,7 +70,7 @@ defmodule Sanctum.Consent.Loader.DecisionTest do
   end
 
   describe "pinned drift" do
-    test "a local source re-pins instead of alarming (D7)" do
+    test "a local source updates its pinned activation" do
       assert :needs_consent_repin =
                Decision.evaluate(:pinned, @granted, live("sha256:new"), :match, true)
     end

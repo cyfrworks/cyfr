@@ -51,6 +51,11 @@ defmodule Cyfr.Retention do
 
   @kinds [
     Cyfr.Retention.Executions,
+    Cyfr.Retention.ExecutionsAge,
+    Cyfr.Retention.Payloads,
+    Cyfr.Retention.WebhookPayloads,
+    Cyfr.Retention.SchedulePayloads,
+    Cyfr.Retention.SystemPayloads,
     Cyfr.Retention.Builds,
     Cyfr.Retention.McpLogs,
     Cyfr.Retention.PolicyLogs,
@@ -60,6 +65,16 @@ defmodule Cyfr.Retention do
   @doc "The closed roster of retainable kinds — everything else derives from it."
   @spec kinds() :: [module()]
   def kinds, do: @kinds
+
+  @doc """
+  The class an execution's payloads are kept under when its caller names
+  none: a webhook's under `webhook`, the system's own under `system`,
+  everything else under `api`. A turn's own dispatches name `chat_step`.
+  """
+  @spec default_class(Context.t()) :: String.t()
+  def default_class(%Context{user_id: "webhook:" <> _}), do: "webhook"
+  def default_class(%Context{auth_method: :system}), do: "system"
+  def default_class(%Context{}), do: "api"
 
   @doc """
   Get retention settings for the context's athanor — one string key per

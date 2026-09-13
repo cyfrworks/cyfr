@@ -3,11 +3,11 @@
 
 defmodule Compendium.AquaTemplateTest do
   @moduledoc """
-  The shipped AQUA tree through the seed overlay: no copies at provision,
-  per-file shadowing (an edited role shadows only itself, an unedited one
-  tracks the operator's mount live), whole-skill copy-on-write, `reset/2`
-  reverting edited copies while keeping member work (`all: true` for the
-  exact shipped set), and `seed_check/0` failing loud on a v2 or empty
+  The shipped AQUA tree as the athanor's own: a fill copies it in, a
+  release that changes the seed changes nothing until a reset asks for it,
+  an edited copy is restored by `reset/2` while member work is kept
+  (`all: true` for the exact shipped set), a shipped skill is copied whole
+  and refuses deletion, and `seed_check/0` fails loud on a v2 or empty
   mount.
   """
 
@@ -77,22 +77,28 @@ defmodule Compendium.AquaTemplateTest do
     File.write!(Path.join(dir, "reference.md"), "extra #{marker}")
   end
 
-  test "the shipped tree reads through with zero copies", %{ctx: ctx} do
+  # What a fill does for the tree: every shipped unit copied in.
+  defp fill!(ctx), do: {:ok, _} = Arca.Overlay.materialize_shipped(ctx, "aqua")
+
+  test "a fill copies the shipped tree in; until then the athanor has no soul", %{ctx: ctx} do
     assert :ok = AquaTemplate.seed_check()
+    assert {:error, :not_found} = AquaAgent.get(ctx, "aqua")
+
+    fill!(ctx)
 
     assert {:ok, agents, []} = AquaAgent.list(ctx)
     assert Enum.map(agents, & &1.name) == ["aqua", "scribe"]
-
     assert {:ok, %{prompt: "soul prompt v1"}} = AquaAgent.get(ctx, "aqua")
 
-    # Complete through the facade, empty on disk.
-    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
+    # Real bytes of the athanor's own.
+    assert {:ok, %{files: 2}} = Arca.usage(ctx, ["aqua"])
   end
 
-  test "an edited agent shadows only itself; its neighbor tracks a live seed change", %{
+  test "a release's change to the seed is not pushed; a reset brings it in", %{
     ctx: ctx,
     template: template
   } do
+    fill!(ctx)
     {:ok, scribe} = AquaAgent.get(ctx, "scribe")
 
     :ok =
@@ -102,43 +108,59 @@ defmodule Compendium.AquaTemplateTest do
         AquaAgent.serialize(%{scribe | prompt: "ours"})
       )
 
-    # The operator's mount moves (a new release, a live edit): the unedited
-    # agent follows it, the edited one keeps the members' work.
+    # The operator's mount moves (a new release, a live edit): nothing in
+    # the athanor changes, edited or not.
     write_seed!(template, "v2")
 
-    assert {:ok, %{prompt: "soul prompt v2"}} = AquaAgent.get(ctx, "aqua")
+    assert {:ok, %{prompt: "soul prompt v1"}} = AquaAgent.get(ctx, "aqua")
     assert {:ok, %{prompt: "ours"}} = AquaAgent.get(ctx, "scribe")
 
-    # Deleting the edited copy reverts it to shipped.
-    assert :ok = Arca.delete(ctx, AquaPath.agent_file("scribe"))
+    # A reset restores every copy that differs from what NOW ships — the
+    # edited role and the soul the release changed alike.
+    assert {:ok, %{reverted: ["aqua/aqua.md", "aqua/roles/scribe.md"], kept: []}} =
+             AquaTemplate.reset(ctx)
+
     assert {:ok, %{prompt: "scribe prompt v2"}} = AquaAgent.get(ctx, "scribe")
+    assert {:ok, %{prompt: "soul prompt v2"}} = AquaAgent.get(ctx, "aqua")
   end
 
-  test "a shipped skill copy-on-writes whole, and refuses member deletes while unowned", %{
+  test "a shipped skill is copied whole and refuses deletion; a write inside it is an edit", %{
     ctx: ctx,
     template: template
   } do
     write_skill!(template, "pdf", "v1")
+    fill!(ctx)
 
     assert {:ok, binary} = Arca.get(ctx, AquaPath.skill_manifest("pdf"))
     assert binary =~ "skill instructions v1"
-
-    assert {:error, :bundled} = Arca.delete(ctx, AquaPath.skill_manifest("pdf"))
-
-    # A write inside the skill materializes the whole unit, sentinel last.
-    :ok = Arca.put(ctx, AquaPath.skill_dir("pdf") ++ ["notes.md"], "mine")
-    assert Arca.Adapters.Local.exists?(ctx, AquaPath.skill_manifest("pdf"))
     assert {:ok, "extra v1"} = Arca.get(ctx, AquaPath.skill_dir("pdf") ++ ["reference.md"])
+
+    assert {:error, :bundled} = Arca.delete_tree(ctx, AquaPath.skill_dir("pdf"))
+
+    :ok = Arca.put(ctx, AquaPath.skill_dir("pdf") ++ ["notes.md"], "mine")
+    assert Arca.Overlay.unit_status(ctx, AquaPath.skill_dir("pdf")) == {:ok, :shipped}
+    {:ok, files} = AquaTemplate.status(ctx)
+    assert %{state: :bundled_modified} = Enum.find(files, &(&1.path == "aqua/skills/pdf"))
   end
 
   test "status/1 tells shipped, modified, and own apart", %{ctx: ctx, template: template} do
     write_skill!(template, "pdf", "v1")
+    fill!(ctx)
 
     {:ok, scribe} = AquaAgent.get(ctx, "scribe")
-    :ok = Arca.put(ctx, AquaPath.agent_file("scribe"), AquaAgent.serialize(scribe))
+
+    :ok =
+      Arca.put(
+        ctx,
+        AquaPath.agent_file("scribe"),
+        AquaAgent.serialize(%{scribe | prompt: "ours"})
+      )
 
     :ok =
       Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
+
+    # A role the seed ships later is not the athanor's until pulled.
+    File.write!(Path.join([template, "roles", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
 
     assert {:ok,
             [
@@ -149,7 +171,11 @@ defmodule Compendium.AquaTemplateTest do
             ]} = AquaTemplate.status(ctx)
   end
 
-  test "reset reverts edited copies and KEEPS member-created agents", %{ctx: ctx} do
+  test "reset restores edited copies, pulls what ships, and KEEPS member-created agents", %{
+    ctx: ctx,
+    template: template
+  } do
+    fill!(ctx)
     {:ok, scribe} = AquaAgent.get(ctx, "scribe")
 
     :ok =
@@ -162,16 +188,23 @@ defmodule Compendium.AquaTemplateTest do
     :ok =
       Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
 
-    assert {:ok, %{reverted: ["aqua/roles/scribe.md"], kept: ["aqua/roles/mine.md"]}} =
-             AquaTemplate.reset(ctx)
+    File.write!(Path.join([template, "roles", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
+
+    assert {:ok,
+            %{
+              reverted: ["aqua/roles/later.md", "aqua/roles/scribe.md"],
+              kept: ["aqua/roles/mine.md"]
+            }} = AquaTemplate.reset(ctx)
 
     assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
+    assert {:ok, %{prompt: "later"}} = AquaAgent.get(ctx, "later")
     assert {:ok, _} = AquaAgent.get(ctx, "mine")
   end
 
   test "reset all: true produces exactly the shipped set — member-created agents go too", %{
     ctx: ctx
   } do
+    fill!(ctx)
     {:ok, scribe} = AquaAgent.get(ctx, "scribe")
 
     :ok =
@@ -189,13 +222,14 @@ defmodule Compendium.AquaTemplateTest do
 
     assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
     assert {:error, :not_found} = AquaAgent.get(ctx, "mine")
-    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
+    assert {:ok, %{files: 2}} = Arca.usage(ctx, ["aqua"])
   end
 
-  test "reset refuses before deleting anything when the install ships no template", %{
+  test "reset refuses before changing anything when the install ships no template", %{
     ctx: ctx,
     template: template
   } do
+    fill!(ctx)
     :ok = Arca.put(ctx, AquaPath.agent_file("mine"), "---\ntitle: Mine\n---\n\nmine\n")
 
     # The install loses its template: reset must refuse and leave the
@@ -207,6 +241,7 @@ defmodule Compendium.AquaTemplateTest do
     assert {:error, :template_missing} = AquaTemplate.reset(ctx)
     assert {:error, :template_missing} = AquaTemplate.reset(ctx, all: true)
     assert {:ok, _} = Arca.get(ctx, AquaPath.agent_file("mine"))
+    assert {:ok, _} = Arca.get(ctx, AquaPath.agent_file("scribe"))
   end
 
   test "seed_check/0 fails loud on broken install media", %{template: template} do

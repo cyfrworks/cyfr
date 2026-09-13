@@ -3,7 +3,7 @@
 
 defmodule EmissaryWeb.Plugs.ConfiguredUeberauthTest do
   @moduledoc """
-  Two things this plug has to get right, and both were once wrong.
+  Checks runtime provider configuration and request routing.
 
   **Drop unready strategies.** GitHub device-flow apps ship a client id and
   no secret. If that still registers Ueberauth's GitHub strategy, `GET
@@ -58,11 +58,7 @@ defmodule EmissaryWeb.Plugs.ConfiguredUeberauthTest do
   end
 
   test "a provider configured after compile is reachable through the router", %{conn: conn} do
-    # The regression: `providers:` is empty at compile time and filled in by
-    # config/runtime.exs at boot, so a plug that resolved its routes in
-    # `init/1` served the "provider is not configured" 404 to a server that
-    # had configured it. Asserting the redirect — not merely "not 500" —
-    # is what distinguishes a live strategy from a dropped one.
+    # Provider strategies configured at runtime must redirect to authorization successfully.
     configure_provider!()
 
     Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth,

@@ -245,12 +245,7 @@ defmodule Compendium.ForkTest do
   end
 
   describe "unparseable source manifest" do
-    # A fork's whole point is that the copy carries its own name and
-    # version. A manifest that will not parse cannot be given them, and
-    # copying it unchanged — as this used to — produces a component that
-    # still claims the identity it was forked FROM: same publisher, same
-    # name, same version, no forked_from. That reads as a successful fork
-    # and is not one.
+    # Reject malformed manifests; a fork must record its own identity and forked_from.
     test "refuses rather than copying the source's identity", %{ctx: ctx} do
       create_source_component("catalyst", "acme", "bad-manifest", "1.0.0")
 
@@ -351,10 +346,7 @@ defmodule Compendium.ForkTest do
     end
   end
 
-  # ============================================================================
-  # data.db included (cyfr no longer manages tincture state — data.db is a
-  # regular shipped asset, copied alongside index.html and the manifest)
-  # ============================================================================
+  # Copy data.db as a regular shipped asset.
 
   describe "data.db included" do
     test "copies data.db when forking a tincture", %{ctx: ctx} do

@@ -13,21 +13,24 @@ defmodule PrismWeb.RedirectLiveTest do
   alias Sanctum.Tenancy.Athanors
 
   setup %{conn: conn} do
-    home = Athanors.home!()
-    {:ok, conn: log_in_user(conn, test_user()), route: Athanors.route_slug(home)}
+    conn = log_in_user(conn, test_user())
+    route = Athanors.route_slug(seated_athanor())
+    # The route is a path segment going in and a query value coming out, so
+    # a person's leading `@` is percent-encoded in the redirect target.
+    {:ok, conn: conn, route: route, in_query: URI.encode_www_form(route)}
   end
 
   test "/a/<route> forwards to the chat with the estate named first and the query kept",
-       %{conn: conn, route: route} do
+       %{conn: conn, route: route, in_query: in_query} do
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/a/#{route}")
-    assert to == "/chat?a=#{route}"
+    assert to == "/chat?a=#{in_query}"
 
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/a/#{route}?c=x&foo=1")
-    assert to == "/chat?a=#{route}&c=x&foo=1"
+    assert to == "/chat?a=#{in_query}&c=x&foo=1"
 
     # The path names the estate; a stray `a` in the query does not.
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/a/#{route}?a=other&c=x")
-    assert to == "/chat?a=#{route}&c=x"
+    assert to == "/chat?a=#{in_query}&c=x"
   end
 
   test "/a/<route>/agents forwards to the estate's AQUA, query and all",

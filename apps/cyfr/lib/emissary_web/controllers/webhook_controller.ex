@@ -50,52 +50,54 @@ defmodule EmissaryWeb.WebhookController do
   )
 
   def invoke(conn, _params) do
-    webhook = conn.assigns[:webhook]
-
-    cond do
-      is_nil(webhook) ->
+    case conn.assigns[:webhook] do
+      nil ->
         # Defensive — verify plug should have halted before us.
         EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
 
-      not Sanctum.Tenancy.channel_active?(webhook.athanor_id, webhook.created_by) ->
-        # The athanor is archived or the creator was denied on this server —
-        # the stored row must not remain a standing execution channel. Same
-        # response shape as a disabled webhook so existence is not leaked.
-        Logger.warning(
-          "[WebhookInvoke] athanor #{webhook.athanor_id} or creator " <>
-            "#{inspect(webhook.created_by)} no longer active — refusing slug=#{webhook.slug}"
-        )
+      webhook ->
+        request_id = Cyfr.UUID7.request_id()
+        # Same key on the log lines as on the RequestLog row this run files.
+        Cyfr.LoggerContext.set_request_id(request_id)
 
-        EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+        case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
+          {:ok, ctx} ->
+            invoke_active(conn, ctx, webhook, conn.assigns[:raw_body], request_id)
 
-      true ->
-        invoke_active(conn, webhook, conn.assigns[:raw_body])
+          {:error, :not_standing} ->
+            # The athanor is archived or the creator was denied on this
+            # server — the stored row must not remain a standing execution
+            # channel. Same response shape as a disabled webhook so
+            # existence is not leaked.
+            Logger.warning(
+              "[WebhookInvoke] athanor #{webhook.athanor_id} or creator " <>
+                "#{inspect(webhook.created_by)} no longer active — refusing slug=#{webhook.slug}"
+            )
+
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+
+          {:error, :no_athanor} ->
+            # Webhook row with no resolved athanor — should never happen for
+            # a well-formed row, but fail closed to preserve isolation.
+            Logger.error(
+              "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved athanor — rejecting"
+            )
+
+            EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
+        end
     end
   end
 
-  defp invoke_active(conn, webhook, raw_body) do
-    request_id = Cyfr.UUID7.request_id()
-    # Same key on the log lines as on the RequestLog row this run files.
-    Cyfr.LoggerContext.set_request_id(request_id)
-    ctx = build_webhook_context(webhook, request_id)
+  defp invoke_active(conn, ctx, webhook, raw_body, request_id) do
     # This pipeline never runs Authenticate (the plug that stamps), so the
     # tenant metadata lands here — the roster exists so an aggregator can
     # filter by athanor, and webhook lines are exactly the ones that need it.
     Cyfr.LoggerContext.set_from_context(ctx)
 
-    with :ok <- Sanctum.Context.tenant_ok(ctx),
-         {:ok, template} <- Webhook.decode_input_template(webhook.input_template) do
-      input = build_input(template, conn, raw_body, webhook, request_id)
-      run_logged_invoke(conn, ctx, request_id, webhook, input)
-    else
-      {:error, :missing_tenant} ->
-        # Webhook row with no resolved athanor — should never happen for a
-        # well-formed row, but fail closed to preserve isolation.
-        Logger.error(
-          "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved athanor — rejecting"
-        )
-
-        EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
+    case Webhook.decode_input_template(webhook.input_template) do
+      {:ok, template} ->
+        input = build_input(template, conn, raw_body, webhook, request_id)
+        run_logged_invoke(conn, ctx, request_id, webhook, input)
 
       {:error, reason} ->
         Logger.error(
@@ -109,32 +111,6 @@ defmodule EmissaryWeb.WebhookController do
   # ============================================================================
   # Internal
   # ============================================================================
-
-  defp build_webhook_context(webhook, request_id) do
-    # namespace is identity-only (not path-bearing); resolve the owner's handle
-    # for attribution, nil if the webhook is orphaned. Storage is scoped by the
-    # webhook's athanor.
-    namespace =
-      case webhook.created_by do
-        user_id when is_binary(user_id) and user_id != "" -> Sanctum.Namespace.lookup(user_id)
-        _ -> nil
-      end
-
-    Sanctum.Context.build(
-      user_id: "webhook:#{webhook.slug}",
-      namespace: namespace,
-      permissions: [:execute],
-      athanor_id: webhook.athanor_id,
-      auth_method: :webhook,
-      # authenticated gates tool dispatch; anonymous gates credentials.
-      # A webhook context is not anonymous: the hook is operator-created
-      # and consented (profile_id is required at create), so its bound
-      # executions may read their vault material.
-      authenticated: true,
-      anonymous: false,
-      request_id: request_id
-    )
-  end
 
   defp build_input(template, conn, raw_body, webhook, request_id) do
     envelope = %{

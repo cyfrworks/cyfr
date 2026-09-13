@@ -8,11 +8,10 @@ defmodule Opus.BootstrapFirstRunTest do
   their consents from the caps blocks, and a needs-declaring component
   reads not-ready until a vault entry is bound through the walk.
 
-  The moonmoon69 catalysts arrive only via registry pull, so on a tree
-  without them AQUA and list-models register (a manifest's dependency
-  refs only have to parse) but their bootstrap legitimately skips as
-  unresolvable — asserted as the CI truth rather than worked around. The
-  full pulled-bundle first run is `Sanctum.Provisioning`'s closure pull.
+  The five model catalysts ship in the seed, so AQUA and list-models
+  bootstrap with their whole closure present, and a catalyst's need reads
+  not-ready until a key is bound through the walk. The full first run over
+  the bundle is `Sanctum.Provisioning`'s closure test.
   """
 
   use ExUnit.Case, async: false
@@ -22,19 +21,10 @@ defmodule Opus.BootstrapFirstRunTest do
   alias Sanctum.Consent.Source
 
   @seed_root Path.expand("../../../../seed", __DIR__)
-  @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.1"]
-  # The AQUA formula at its newest shipped version, found rather than
-  # pinned: a release bump must not leave this naming a directory that no
-  # longer ships.
-  @shipped_aqua [@seed_root, "components/formulas/local/aqua/*"]
-                |> Path.join()
-                |> Path.wildcard()
-                |> Enum.sort_by(fn path ->
-                  path |> Path.basename() |> String.split(".") |> Enum.map(&String.to_integer/1)
-                end)
-                |> List.last()
-                |> Path.relative_to(Path.join(@seed_root, "components"))
-  @pull_gated ["formulas/local/list-models/0.6.1", @shipped_aqua]
+  @models ~w(claude openai gemini grok openrouter)
+  @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.1"] ++
+             Enum.map(@models, &"catalysts/local/#{&1}/1.2.0")
+  @formulas ["formulas/local/list-models/0.6.2"]
 
   setup do
     Arca.Cache.init()
@@ -45,9 +35,7 @@ defmodule Opus.BootstrapFirstRunTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
-    # The REAL tracked bundle, served in place through the seed overlay —
-    # the production-true path: a real install copies nothing, the union
-    # answers and the scan mints rows.
+    # The REAL tracked bundle as the seed tree — what a fill copies from.
     original_seed_path = Application.get_env(:cyfr, :seed_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
 
@@ -73,11 +61,13 @@ defmodule Opus.BootstrapFirstRunTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # Register a tracked bundle version the way the auto-indexer does: the
-  # overlay union serves the seed bytes in place — nothing is copied.
+  # Copy a tracked bundle version in and register it, the way a fill does.
   defp stage_and_register(ctx, rel) do
     segments = ["components" | String.split(rel, "/")]
-    Compendium.Registry.register_from_arca(ctx, segments)
+
+    with :ok <- Arca.Overlay.pull_shipped(ctx, segments) do
+      Compendium.Registry.register_from_arca(ctx, segments)
+    end
   end
 
   test "the tracked bundle registers, bootstraps and loads from its caps blocks", %{ctx: ctx} do
@@ -85,21 +75,28 @@ defmodule Opus.BootstrapFirstRunTest do
       assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
 
-    # AQUA's and list-models' static deps are name-level moonmoon69 refs
-    # that arrive only via registry pull (the closure pull at provisioning
-    # on a real install). Registration only asks that the refs parse —
-    # the rows land — but with the deps absent their activation cannot
-    # resolve, so bootstrap mints nothing for them: the fail-closed CI truth.
-    for rel <- @pull_gated do
+    # The formula names the model catalysts as optional dependencies, and
+    # every one ships: its activation covers the whole bundle, and a
+    # server with no registry boots with all of it consented.
+    for rel <- @formulas do
       assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
 
-    {:ok, %{minted: minted} = outcome} = Bootstrap.run(ctx)
+    model_refs = Enum.map(@models, &"catalyst:local.#{&1}")
+
+    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert "catalyst:local.files" in minted
     assert "catalyst:local.http" in minted
-    refute "formula:local.aqua" in minted
-    refute "formula:local.list-models" in minted
-    assert Enum.any?(outcome.skipped, fn {ref, _reason} -> ref == "formula:local.aqua" end)
+    assert "formula:local.list-models" in minted
+    for ref <- model_refs, do: assert(ref in minted, "#{ref} not minted")
+
+    # list-models invokes its providers as children and asks for nothing
+    # else, so its activation is itself and the five providers.
+    {:ok, [list_models_profile]} = Source.DB.profiles(ctx, "formula:local.list-models")
+    {:ok, list_models_consent} = Source.DB.head_consent(ctx, list_models_profile.id)
+
+    assert Map.keys(list_models_consent.activation) |> Enum.sort() ==
+             Enum.sort(["formula:local.list-models" | model_refs])
 
     # Each minted consent loads through the production source, and the
     # blob's ingress edge carries the manifest's declared ask.
@@ -150,8 +147,10 @@ defmodule Opus.BootstrapFirstRunTest do
       }
     }
 
+    Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:cyfr, :seed_path))
+
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, wasm, %{
+      Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm, %{
         name: "llm",
         version: "1.1.0",
         type: "catalyst",

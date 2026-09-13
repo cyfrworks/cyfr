@@ -31,14 +31,12 @@ defmodule Sanctum.Auth.OIDC do
   This provider proves an identity for `EmissaryWeb.AuthController.callback/2`,
   which then asks the door (`Sanctum.Door.admit_identity/2`) and only on
   admission mints the session. The provider itself never creates one.
-
   """
 
   @behaviour Sanctum.Auth
 
   alias Sanctum.Auth.Identity
   alias Sanctum.Context
-  alias Sanctum.Session
 
   @impl true
   @doc """
@@ -59,7 +57,6 @@ defmodule Sanctum.Auth.OIDC do
       {:ok, ctx} = Sanctum.Auth.OIDC.authenticate(auth)
       ctx.user_id
       #=> "github|https://github.com|12345"
-
   """
   def authenticate(%{__struct__: Ueberauth.Auth} = auth) do
     provider = auth.provider
@@ -73,47 +70,28 @@ defmodule Sanctum.Auth.OIDC do
 
     case Sanctum.Auth.EmailVerification.verify(provider, email, extra) do
       :ok ->
-        user_id = Identity.user_id(provider, iss, to_string(auth.uid))
+        # Before the door the person is named by their IdP identity key;
+        # their own id, and their namespace, come with admission.
+        identity = Identity.key(provider, iss, to_string(auth.uid))
 
+        # Athanor-less: the athanor is resolved after the door, by the one
+        # recipe, once the person is named by their own id.
         ctx =
           Context.build(
-            user_id: user_id,
+            user_id: identity,
             email: email,
             provider: to_string(provider),
-            namespace: Sanctum.Namespace.lookup(user_id),
-            # Start athanor-less; resolve_status/2 fills the athanor from
-            # memberships — a failed read refuses as :unavailable instead of
-            # leaving the context athanor-less to 403 downstream.
+            namespace: nil,
             athanor_id: nil,
-            permissions: default_permissions()
+            permissions: Context.person_permissions()
           )
 
-        case Sanctum.Tenancy.resolve_status(ctx, force: true) do
-          {:ok, ctx} ->
-            Sanctum.Telemetry.auth_event(provider, :success)
-            {:ok, ctx}
-
-          {:error, :unavailable} = err ->
-            Sanctum.Telemetry.auth_event(provider, :failure, %{reason: :unavailable})
-            err
-        end
+        Sanctum.Telemetry.auth_event(provider, :success)
+        {:ok, ctx}
 
       {:error, reason} = err ->
         Sanctum.Telemetry.auth_event(provider, :failure, %{reason: reason})
         err
-    end
-  end
-
-  # Authenticate with session token
-  def authenticate(%{token: token}) when is_binary(token) do
-    case Session.load(token, surface: :console) do
-      {:ok, _ctx} = result ->
-        Sanctum.Telemetry.auth_event(:session, :success)
-        result
-
-      {:error, reason} = result ->
-        Sanctum.Telemetry.auth_event(:session, :failure, %{reason: reason})
-        result
     end
   end
 
@@ -124,38 +102,12 @@ defmodule Sanctum.Auth.OIDC do
 
   @impl true
   @doc """
-  Get current Context from Plug connection.
-
-  Looks for authentication in the following order:
-  1. Session token in conn.assigns[:session_token]
-  2. Authorization header with Bearer token
-
-  API keys are not a console credential: they authenticate only through
-  `EmissaryWeb.Plugs.Authenticate`, which resolves the client IP and
-  enforces the key's IP allowlist.
-
-  Returns nil if no valid authentication found.
+  This provider issues no bearer credential of its own: a session token or
+  an API key on a request is established by the one recipe
+  (`Sanctum.Caller.establish/2`) in `EmissaryWeb.Plugs.Authenticate`
+  before the provider is asked. Always `nil`.
   """
-  def current_user(conn) do
-    cond do
-      # Check session token in assigns
-      token = conn.assigns[:session_token] ->
-        case Session.load(token, surface: :console) do
-          {:ok, ctx} -> ctx
-          _ -> nil
-        end
-
-      # Check Authorization header
-      token = get_bearer_token(conn) ->
-        case Session.load(token, surface: :console) do
-          {:ok, ctx} -> ctx
-          _ -> nil
-        end
-
-      true ->
-        nil
-    end
-  end
+  def current_user(_conn), do: nil
 
   # ============================================================================
   # Private Helpers
@@ -177,17 +129,6 @@ defmodule Sanctum.Auth.OIDC do
       true ->
         nil
     end
-  end
-
-  defp get_bearer_token(conn), do: Sanctum.BearerToken.read(conn)
-
-  defp default_permissions do
-    # Anyone who passes the operator's configured OIDC provider is fully
-    # trusted, matching the OAuth/DeviceFlow providers — the console is a
-    # single-operator trust boundary, and consent has its own dedicated
-    # non-wildcard authorization path. (The previous [:execute, :read]
-    # granted :read, an atom nothing recognizes.)
-    [:*]
   end
 
   # Direct GitHub/Google OAuth strategies hardcode the provider's issuer.

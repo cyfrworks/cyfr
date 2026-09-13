@@ -22,10 +22,10 @@ defmodule Compendium.MCP do
   close to their implementation.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Emissary.MCP.ToolRegistry.
+  which is validated at runtime by Cyfr.Ops.Catalog.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   def service, do: "compendium"
 

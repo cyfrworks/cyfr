@@ -43,7 +43,7 @@ defmodule Sanctum.CidrTest do
       refute Cidr.ip_in_cidr?({192, 168, 1, 1}, "10.0.0.0/8")
     end
 
-    test "IPv6 membership — the case the old IPv4-only policy copy silently missed" do
+    test "checks IPv6 subnet membership" do
       assert Cidr.ip_in_cidr?("2001:db8::1", "2001:db8::/32")
       refute Cidr.ip_in_cidr?("2001:dead::1", "2001:db8::/32")
     end
@@ -105,7 +105,7 @@ defmodule Sanctum.CidrTest do
       refute Cidr.link_local?({10, 0, 0, 1})
     end
 
-    test "IPv6 fe80::/10 — the case the old policy link-local check omitted" do
+    test "recognizes IPv6 fe80::/10 as link-local" do
       assert Cidr.link_local?({0xFE80, 0, 0, 0, 0, 0, 0, 1})
       assert Cidr.link_local?({0xFEBF, 0, 0, 0, 0, 0, 0, 1})
       refute Cidr.link_local?({0xFEC0, 0, 0, 0, 0, 0, 0, 1})

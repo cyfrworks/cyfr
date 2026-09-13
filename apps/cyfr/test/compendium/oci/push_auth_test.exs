@@ -3,14 +3,9 @@
 
 defmodule Compendium.OCI.PushAuthTest do
   @moduledoc """
-  Regression guard: OCI requests must carry the caller's push token.
+  Verifies that OCI requests carry the caller's push token.
 
-  The `ctx` was once dropped between `OCI.Client.push` and the HTTP layer
-  (`Transport.request`'s `ctx` defaulted to `nil`), so every blob/manifest
-  upload went out anonymous and cyfr.run rejected the push with 401. These
-  wire tests pin the `Transport` chokepoint: with a credential in `ctx`, the
-  outbound request carries `Authorization: Bearer <push_token>`; with `nil`
-  ctx (anonymous catalog reads) it carries none.
+  Authenticated uploads carry the caller's bearer token; anonymous requests carry no credentials.
 
   `Transport.request/6` now takes `ctx` as a required first arg, so the
   compiler enforces every `Blob`/`Client` call site supplies it — these tests

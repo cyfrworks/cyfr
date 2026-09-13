@@ -3,8 +3,7 @@
 
 defmodule Sanctum.ToolServerDigest do
   @moduledoc """
-  The immutable configuration identity of an external MCP server —
-  what a consent's `tool_server` resource pins (§3.8).
+  External MCP configuration digest pinned by a consent tool_server resource.
 
   `JCS({url, enabled, header_templates, tool_patterns})` over the stored
   header **templates** (`vault:ENTRY` references and non-credential
@@ -86,11 +85,9 @@ defmodule Sanctum.ToolServerDigest do
   end
 
   @doc """
-  The D8 baseline: a digest over the descriptions and input schemas of
-  the tools matched by `patterns`, so later drift is detectable. Returns
-  `:unavailable` when any matched tool's schema falls outside the JCS
-  domain (upstream schemas are arbitrary JSON) — no baseline means no
-  drift checks, never a false one.
+  Digests descriptions and input schemas for tools matched by `patterns`.
+  Returns `:unavailable` if a matched schema is outside the JCS domain;
+  without a baseline, description drift cannot be checked.
   """
   @spec descriptions_digest([map()], [String.t()]) :: {:ok, String.t()} | :unavailable
   def descriptions_digest(tools, patterns) when is_list(tools) and is_list(patterns) do

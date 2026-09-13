@@ -5,13 +5,8 @@ defmodule Locus.BuilderClientTest do
   @moduledoc """
   What the app node accepts back from the builder container.
 
-  The in-process path (`Locus.Builder`) validates the bytes it produced and
-  derives the digest, size and exports from that validation. Over HTTP the
-  builder is a separate trust domain — its answer is input, and it was being
-  taken at its word: the digest and size as claimed, the WASM never validated,
-  `output_files` keys handed straight to `Path.split/1`, and two `decode64!`
-  calls plus a missing clause that turned a malformed body into a raise
-  instead of a refusal.
+  Treat the HTTP builder response as untrusted input. Validate WASM,
+  output paths, and base64, and derive size and digest from decoded bytes.
   """
   use ExUnit.Case, async: true
 

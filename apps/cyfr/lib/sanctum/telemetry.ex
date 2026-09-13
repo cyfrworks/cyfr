@@ -26,7 +26,6 @@ defmodule Sanctum.Telemetry do
         nil
       )
 
-
   ## Example Event Flow
 
       # Successful GitHub auth
@@ -36,7 +35,6 @@ defmodule Sanctum.Telemetry do
       # Failed auth with reason
       Sanctum.Telemetry.auth_event(:github, :failure, %{reason: :invalid_token})
       # => Emits [:cyfr, :sanctum, :auth] with %{provider: :github, outcome: :failure, reason: :invalid_token}
-
   """
 
   @auth_event [:cyfr, :sanctum, :auth]
@@ -58,7 +56,6 @@ defmodule Sanctum.Telemetry do
 
       # Failed auth with reason
       Sanctum.Telemetry.auth_event(:github, :failure, %{reason: :invalid_credentials})
-
   """
   @spec auth_event(atom(), :success | :failure, map()) :: :ok
   def auth_event(provider, outcome, metadata \\ %{}) when outcome in [:success, :failure] do
@@ -72,13 +69,9 @@ defmodule Sanctum.Telemetry do
   @doc """
   Emit a platform-context construction event.
 
-  Every `scope: :platform` context (system tasks / cron / bootstrap) is
-  audited here — there was previously no record of who constructs the
-  tenant-bypassing platform scope. `metadata.sanctioned` is `true` when built
-  through the single sanctioned path (`Sanctum.Context.internal/1` /
-  `Sanctum.system_context/0`). A `false` is emitted one line before
-  `Context.build/1` raises on the unsanctioned producer — observable by a
-  handler, never a supported steady state.
+  Audits every platform-context construction. `metadata.sanctioned` is true
+  for `Sanctum.Context.internal/1` and `Sanctum.system_context/0`; an
+  unauthorized `Context.build/1` emits false before raising.
 
   Emits `[:cyfr, :sanctum, :platform_context]`.
   """

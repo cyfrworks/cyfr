@@ -109,7 +109,7 @@ defmodule Arca.StorageAuthorizePathTest do
   test "an unknown first segment is refused, never minted as a new subtree", %{a: a} do
     assert {:error, :forbidden} = Arca.put(a, ["scratch", "hello.txt"], "hi")
     assert {:error, :forbidden} = Arca.get(a, ["scratch", "hello.txt"])
-    assert {:error, :forbidden} = Arca.list_recursive(a, ["data", "x"])
+    assert {:error, :forbidden} = Arca.list_recursive(a, ["guest", "x"])
     refute Arca.exists?(a, ["scratch", "hello.txt"])
   end
 
@@ -117,22 +117,22 @@ defmodule Arca.StorageAuthorizePathTest do
     # One spelling per object: the facade flattens before the gate, so the
     # Local adapter (which joins with the filesystem) and the S3 adapter
     # (which joins into a key) can never disagree.
-    assert :ok = Arca.put(a, ["guest/sub/dir", "f.txt"], "flat")
-    assert {:ok, "flat"} = Arca.get(a, ["guest", "sub", "dir", "f.txt"])
-    assert Arca.exists?(a, ["guest", "sub/dir/f.txt"])
+    assert :ok = Arca.put(a, ["data/sub/dir", "f.txt"], "flat")
+    assert {:ok, "flat"} = Arca.get(a, ["data", "sub", "dir", "f.txt"])
+    assert Arca.exists?(a, ["data", "sub/dir/f.txt"])
 
     # Split artifacts (trailing slashes) are dropped, not stored.
-    assert :ok = Arca.put(a, ["guest/", "t.txt"], "x")
-    assert {:ok, "x"} = Arca.get(a, ["guest", "t.txt"])
+    assert :ok = Arca.put(a, ["data/", "t.txt"], "x")
+    assert {:ok, "x"} = Arca.get(a, ["data", "t.txt"])
   end
 
   test "the in-flight temp suffix is a reserved name for writes", %{a: a} do
     # `.tmp.N` is the Local adapter's write marker — invisible to listings
     # and the usage walk, reaped by the sweeper. A caller-chosen tmp name
     # would be a hidden, uncounted object; the pattern means one thing.
-    assert {:error, :reserved_name} = Arca.put(a, ["guest", "blob.tmp.1"], "x")
-    assert {:error, :reserved_name} = Arca.append(a, ["guest", "log.tmp.99"], "x")
-    refute Arca.exists?(a, ["guest", "blob.tmp.1"])
+    assert {:error, :reserved_name} = Arca.put(a, ["data", "blob.tmp.1"], "x")
+    assert {:error, :reserved_name} = Arca.append(a, ["data", "log.tmp.99"], "x")
+    refute Arca.exists?(a, ["data", "blob.tmp.1"])
 
     # Reserved at ANY depth: a tmp-named directory would hide its whole
     # subtree from listings and the usage walk — an uncounted object the
@@ -140,16 +140,16 @@ defmodule Arca.StorageAuthorizePathTest do
     # paths, so this is also what stops a hostile tarball from planting
     # an invisible subtree.
     assert {:ok, usage_before} = Arca.usage(a, [])
-    assert {:error, :reserved_name} = Arca.put(a, ["guest", "x.tmp.1", "a.txt"], "x")
-    assert {:error, :reserved_name} = Arca.append(a, ["guest", "x.tmp.2", "log"], "x")
-    assert {:error, :reserved_name} = Arca.put(a, ["guest/x.tmp.3", "a.txt"], "x")
-    refute Arca.exists?(a, ["guest", "x.tmp.1", "a.txt"])
+    assert {:error, :reserved_name} = Arca.put(a, ["data", "x.tmp.1", "a.txt"], "x")
+    assert {:error, :reserved_name} = Arca.append(a, ["data", "x.tmp.2", "log"], "x")
+    assert {:error, :reserved_name} = Arca.put(a, ["data/x.tmp.3", "a.txt"], "x")
+    refute Arca.exists?(a, ["data", "x.tmp.1", "a.txt"])
     assert {:ok, ^usage_before} = Arca.usage(a, [])
 
     # Only the exact suffix is reserved.
-    assert :ok = Arca.put(a, ["guest", "blob.tmp"], "x")
-    assert :ok = Arca.put(a, ["guest", "tmp.1"], "x")
-    assert :ok = Arca.put(a, ["guest", "sub.tmp", "nested.txt"], "x")
+    assert :ok = Arca.put(a, ["data", "blob.tmp"], "x")
+    assert :ok = Arca.put(a, ["data", "tmp.1"], "x")
+    assert :ok = Arca.put(a, ["data", "sub.tmp", "nested.txt"], "x")
   end
 
   test "a context without an athanor cannot touch tenant storage at all" do
@@ -163,14 +163,14 @@ defmodule Arca.StorageAuthorizePathTest do
     end
 
     assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-      Arca.get(platform, ["guest", "x.txt"])
+      Arca.get(platform, ["data", "x.txt"])
     end
   end
 
   test "tenant-prefixed data paths are untouched by the pin", %{a: a, b: b} do
-    assert :ok = Arca.put(a, ["guest", "hello.txt"], "hi")
-    assert {:ok, "hi"} = Arca.get(a, ["guest", "hello.txt"])
+    assert :ok = Arca.put(a, ["data", "hello.txt"], "hi")
+    assert {:ok, "hi"} = Arca.get(a, ["data", "hello.txt"])
     # b's own tree simply lacks the file — it never sees a's.
-    assert {:error, :not_found} = Arca.get(b, ["guest", "hello.txt"])
+    assert {:error, :not_found} = Arca.get(b, ["data", "hello.txt"])
   end
 end

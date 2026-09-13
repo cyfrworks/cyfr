@@ -31,9 +31,7 @@ defmodule Emissary.MCP.ServerDiscoverTest do
     info = result["_meta"][Protocol.meta_server_info_key()]
     assert info["name"] == "CYFR"
 
-    # The version is read from the running application. It was hardcoded "0.1.0"
-    # in a 0.5.8 build — a wrong answer is worse than none, because a client has
-    # no way to tell it is wrong.
+    # Report the version from the running application.
     assert info["version"] == to_string(Application.spec(:cyfr, :vsn))
     refute Map.has_key?(result, "serverInfo")
   end
@@ -41,8 +39,7 @@ defmodule Emissary.MCP.ServerDiscoverTest do
   test "advertises the version the server actually announces", %{conn: conn} do
     body = json_response(discover(conn), 200)
 
-    # The advertised list and the response header must agree — a server that
-    # says one revision and validates another is the failure this replaces.
+    # The advertised protocol versions and response header must agree.
     assert Protocol.version() in body["result"]["supportedVersions"]
     assert [Protocol.version()] == get_resp_header(discover(conn), "mcp-protocol-version")
   end

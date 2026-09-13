@@ -5,6 +5,12 @@ package cyfr:catalyst@0.1.0;
 
 interface run {
     /// Execute the catalyst with JSON input, returning JSON output.
+    ///
+    /// The input is `{"operation": "...", "params": {...}}` and the output
+    /// `{"status": N, "data": ...}` or `{"status": N, "error": {"type",
+    /// "message"}}`. A manifest may declare `contracts` — named sets of
+    /// operations a host asks for by name; `model/chat@1` is `chat`,
+    /// `describe` and `models` (see component-guide.md, "Model catalysts").
     run: func(input: string) -> string;
 }
 

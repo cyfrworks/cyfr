@@ -133,7 +133,7 @@ defmodule Sanctum.MCP.AthanorTool do
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args)
       when is_binary(name) do
     # The row and the creator's seat only — the estate is filled at first
-    # need (`Sanctum.Provisioning.ensure_provisioned/1`), so creating a
+    # need (`Sanctum.Provisioning.start_provisioning/1`), so creating a
     # group never waits on a registry round trip.
     case Athanors.create_group(ctx.user_id, name, slug: Map.get(args, "slug")) do
       {:ok, athanor} ->
@@ -218,9 +218,6 @@ defmodule Sanctum.MCP.AthanorTool do
           Members.broadcast_change(ctx.user_id, archived.id, :athanor_changed)
           {:ok, render(archived)}
 
-        {:error, :home_cannot_be_archived} ->
-          {:error, {:invalid_argument, "Home is the server's group and cannot be archived"}}
-
         {:error, :person_athanor_cannot_be_archived} ->
           {:error, {:invalid_argument, "A person's own athanor is not archived here"}}
 
@@ -233,8 +230,8 @@ defmodule Sanctum.MCP.AthanorTool do
 
   # A person's own athanor is closed by the door (deny) and reopened by the
   # door (allow); restoring it here while its owner is still denied would
-  # reopen a furnace nobody may enter. A retired Home never reopens at all,
-  # and neither does a DM that ended — its husk holds one member.
+  # reopen a furnace nobody may enter. A DM that ended never reopens at
+  # all — its husk holds one member.
   def handle(%Context{} = ctx, %{"action" => "unarchive"} = args) do
     with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true),
          :ok <- owner_admitted(athanor) do
@@ -242,11 +239,6 @@ defmodule Sanctum.MCP.AthanorTool do
         {:ok, restored} ->
           broadcast_athanors_changed(ctx, restored)
           {:ok, render(restored)}
-
-        {:error, :home_is_final} ->
-          {:error,
-           {:invalid_argument,
-            "That Home is archived for the record; the server has already started a new one"}}
 
         {:error, :frozen_is_final} ->
           {:error,
@@ -283,16 +275,7 @@ defmodule Sanctum.MCP.AthanorTool do
         end
       end
     else
-      # The same refusal the dispatcher mints for a `scope: :platform` action,
-      # so the operator gate reads identically wherever it is applied.
-      #
-      # Note this is a different WIRE shape from the sentence it replaced:
-      # `Sanctum.Unauthorized` recognises the reason, so the router answers
-      # a JSON-RPC error (`insufficient_permissions`) rather than an
-      # `isError` content result. A client that branches on `result.isError`
-      # sees the refusal on the transport instead — which is the correct
-      # place for an authorization failure, and is why the gate was moved
-      # onto the shared vocabulary.
+      # Return the shared insufficient_permissions error for the operator gate.
       {:error, :platform_admin_required}
     end
   end
@@ -346,12 +329,18 @@ defmodule Sanctum.MCP.AthanorTool do
 
   # A seeding that failed (the registry was unreachable, a dependency not
   # public) is retried by any member — idempotent, so a provisioned athanor
-  # answers at once. The outcome is on the row either way.
+  # answers at once. The outcome is on the row either way. An attempt
+  # already running — a background fill, a seed sync, another member's
+  # retry — is reported as in progress, the same typed answer a turn gives
+  # while the estate is unfilled, never as a failure.
   def handle(%Context{} = ctx, %{"action" => "provision"} = args) do
     with {:ok, athanor, focused} <- resolve(ctx, args) do
       case Sanctum.Provisioning.provision(athanor, focused) do
         {:ok, provisioned} ->
           {:ok, render(provisioned)}
+
+        {:error, :provisioning_busy} ->
+          {:error, :not_provisioned}
 
         {:error, {:provisioning_failed, step, _detail}} ->
           {:error, "Provisioning failed at #{step} — the error is recorded on the athanor"}
@@ -487,7 +476,6 @@ defmodule Sanctum.MCP.AthanorTool do
       name: athanor.name,
       slug: athanor.slug,
       route: Athanors.route_slug(athanor),
-      home: athanor.home,
       status: athanor.status,
       member_count:
         case Members.count_by_athanor(athanor.id) do

@@ -69,13 +69,8 @@ defmodule PrismWeb.TopbarLive do
             if ui_mode == "dev", do: subscribe_indicators(ctx)
           end
 
-          # The dead render assigns only cheap defaults; every DB read,
-          # cache write and tool call waits for the connected mount — this
-          # LiveView renders on EVERY page, and the loads below (athanor
-          # list, door queue, the dev indicators with their registry
-          # health probe) used to run on the dead render AND again on
-          # connect, putting up to two 3s-timeout HTTP calls on the first
-          # byte of every page.
+          # Use cheap defaults for the disconnected render. Defer database reads,
+          # cache writes and tool calls to the connected mount.
           socket =
             socket
             |> assign(:context, ctx)

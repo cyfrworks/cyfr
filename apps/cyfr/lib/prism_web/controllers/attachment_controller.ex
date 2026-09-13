@@ -47,8 +47,7 @@ defmodule PrismWeb.AttachmentController do
         case PrismWeb.AuthHelpers.disposition(refusal) do
           :sign_in -> redirect(conn, to: PrismWeb.AuthHelpers.sign_in_path())
           :unavailable -> send_resp(conn, 503, "Try again shortly")
-          # A pre-claim session, or one with nowhere to work, has no
-          # attachments to see.
+          # A session with nowhere to work has no attachments to see.
           _ -> send_resp(conn, 404, "Not found")
         end
 

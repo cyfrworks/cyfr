@@ -3,56 +3,16 @@
 
 defmodule Sanctum.ProvisioningClosureTest do
   @moduledoc """
-  The success path of provisioning against the real tracked bundle: the
-  seed lands, the bundle's published dependencies (the five provider
-  catalysts `formula:local.aqua` needs) are pulled from an OCI registry
-  served here by a small Plug on Bandit (Bypass cannot route the `sha256:`
-  in blob paths), and a baseline consent is minted for AQUA — so the
-  minted athanor's AQUA is loadable, dependency closure present. The one
-  thing not run is a provider call; that is the manual smoke with a real key.
+  Provisioning against the real tracked bundle. Everything the bundle
+  depends on ships in the seed — the two hands and the five model
+  catalysts — so an athanor fills with no registry at all, AQUA is
+  consented with its whole closure present, and each model catalyst waits
+  only for a key. Both registry endpoints are pinned, because they are
+  separate settings and a pull dials the OCI one: `:registry_url` decides
+  whether a registry is configured at all, `:oci_registry_url` is what a
+  blob fetch resolves against.
   """
   use ExUnit.Case, async: false
-
-  # The registry: five fixture catalysts under `moonmoon69/catalysts/<name>`,
-  # each an OCI manifest naming a cyfr-manifest config blob and a wasm blob.
-  defmodule Registry do
-    @behaviour Plug
-
-    @impl true
-    def init(fixtures), do: fixtures
-
-    @impl true
-    def call(%Plug.Conn{request_path: path} = conn, fixtures) do
-      case Regex.run(~r{^/v2/(.+)/(tags/list|manifests/[^/]+|blobs/[^/]+)$}, path) do
-        [_, repo, "tags/list"] when is_map_key(fixtures, repo) ->
-          json(conn, 200, %{"name" => repo, "tags" => ["1.0.0"]})
-
-        [_, repo, "manifests/" <> tag]
-        when is_map_key(fixtures, repo) and tag in ["1.0.0", "latest"] ->
-          %{manifest: manifest, manifest_digest: digest} = fixtures[repo]
-
-          conn
-          |> Plug.Conn.put_resp_content_type(Compendium.OCI.Manifest.manifest_media_type())
-          |> Plug.Conn.put_resp_header("docker-content-digest", digest)
-          |> Plug.Conn.send_resp(200, manifest)
-
-        [_, repo, "blobs/" <> digest] when is_map_key(fixtures, repo) ->
-          case fixtures[repo].blobs[digest] do
-            nil -> json(conn, 404, %{"errors" => [%{"code" => "BLOB_UNKNOWN"}]})
-            bytes -> Plug.Conn.send_resp(conn, 200, bytes)
-          end
-
-        _ ->
-          json(conn, 404, %{"errors" => [%{"code" => "NAME_UNKNOWN", "message" => path}]})
-      end
-    end
-
-    defp json(conn, status, body) do
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(status, Jason.encode!(body))
-    end
-  end
 
   alias Sanctum.Consent.{Loader, Source}
   alias Sanctum.Provisioning
@@ -60,180 +20,87 @@ defmodule Sanctum.ProvisioningClosureTest do
 
   @repo_root Path.expand("../../../..", __DIR__)
   @bundle Path.join(@repo_root, "seed/components")
-  @wasm Path.join(@repo_root, "apps/cyfr/test/support/test_wasm/math.wasm")
   @providers ~w(claude openai gemini grok openrouter)
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    test_dir = Path.join(System.tmp_dir!(), "cyfr_closure_#{:rand.uniform(1_000_000)}")
+    test_dir = Path.join(System.tmp_dir!(), "cyfr_closure_#{System.unique_integer([:positive])}")
     seed_dir = Path.join(test_dir, "seed")
-    bundle_dir = Path.join(seed_dir, "components")
-    copy_bundle!(bundle_dir)
-    # Provisioning also copies the AQUA template out of the seed tree.
+    copy_bundle!(Path.join(seed_dir, "components"))
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    {:ok, server} = Bandit.start_link(plug: {Registry, fixtures()}, ip: {127, 0, 0, 1}, port: 0)
-    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-
-    prev = %{
-      base_path: Application.get_env(:cyfr, :base_path),
-      seed_path: Application.get_env(:cyfr, :seed_path),
-      oci: Application.get_env(:cyfr, :oci_registry_url),
-      registry: Application.get_env(:cyfr, :registry_url),
-      egress: Application.get_env(:cyfr, :private_egress_targets),
-      sigstore: Application.get_env(:cyfr, :sigstore)
-    }
-
+    keys = [:base_path, :seed_path, :oci_registry_url, :registry_url]
+    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :seed_path, seed_dir)
-    # `localhost:` is the one host the OCI reference layer maps to http.
-    Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
-    Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
-    Application.put_env(:cyfr, :private_egress_targets, ["127.0.0.1"])
-    # A cosign on PATH would try to verify; point it at nothing so it fails fast.
-    Application.put_env(:cyfr, :sigstore, verification: :keyed, key_path: "/nonexistent")
 
     on_exit(fn ->
-      for {key, value} <- [
-            base_path: prev.base_path,
-            seed_path: prev.seed_path,
-            oci_registry_url: prev.oci,
-            registry_url: prev.registry,
-            private_egress_targets: prev.egress,
-            sigstore: prev.sigstore
-          ] do
+      for {key, value} <- prev do
         if value,
           do: Application.put_env(:cyfr, key, value),
           else: Application.delete_env(:cyfr, key)
       end
 
       File.rm_rf!(test_dir)
-      Process.exit(server, :normal)
     end)
 
     :ok
   end
 
-  test "a group is provisioned from the real bundle with its closure pulled, and AQUA is loadable" do
-    n = System.unique_integer([:positive])
-    user_id = "github|https://github.com|closure-#{n}"
+  for {label, rest_host, oci_host} <- [
+        {"no registry is configured", "none", "none"},
+        {"the registry does not answer", "127.0.0.1:19", "127.0.0.1:19"}
+      ] do
+    test "the real bundle provisions from its seed alone when #{label}" do
+      Application.put_env(:cyfr, :registry_url, unquote(rest_host))
+      Application.put_env(:cyfr, :oci_registry_url, unquote(oci_host))
 
-    ctx =
-      Sanctum.Context.build(
-        user_id: user_id,
-        athanor_id: Sanctum.TestContext.athanor_id(),
-        permissions: [:*],
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      n = System.unique_integer([:positive])
 
-    # The mint is a bare row now; filling it is the first read of its
-    # bundle. `ensure_provisioned/1` is that hook, and the tools that read
-    # the bundle call it for real.
-    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Closure #{n}")
-    refute group.provisioned_at
+      ctx =
+        Sanctum.Context.build(
+          user_id: "github|https://github.com|offline-#{n}",
+          athanor_id: Sanctum.TestContext.athanor_id(),
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
-    in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
+      assert {:ok, group} = Athanors.create_group(ctx.user_id, "Offline #{n}")
+      in_group = %{ctx | athanor_id: group.id}
+      :ok = Provisioning.start_provisioning(in_group)
 
-    {:ok, group} = Athanors.get(group.id)
-    assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
+      {:ok, group} = Athanors.get(group.id)
 
-    # every provider catalyst the bundle depends on is now a row in the athanor
-    for name <- @providers do
-      assert {:ok, %{publisher: "moonmoon69"}} =
-               Compendium.Registry.get_latest(in_group, name, "moonmoon69", "catalyst"),
-             "catalyst:moonmoon69.#{name} was not pulled"
+      assert %DateTime{} = group.provisioned_at,
+             "the estate did not provision: #{inspect(Athanors.settings(group))}"
+
+      refute Map.has_key?(Athanors.settings(group), "provisioning_error")
+
+      # Every model catalyst is a row of the estate: shipped, never pulled.
+      for name <- @providers do
+        assert {:ok, %{publisher: "local"}} =
+                 Compendium.Registry.get_latest(in_group, name, "local", "catalyst"),
+               "catalyst:local.#{name} is not registered"
+      end
+
+      # The soul is consented and loads: its whole closure is the local seed.
+      assert {:ok, [_profile]} = Source.DB.profiles(in_group, "agent:local.aqua")
+
+      assert {:ok, %Sanctum.Authority{} = auth} =
+               Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua",
+                 consent_source: Source.DB
+               )
+
+      assert auth.cursor == {:bound, "agent:local.aqua"}
+
+      # A second provisioning is a no-op.
+      assert {:ok, %{provisioned_at: at}} = Provisioning.provision(group, in_group)
+      assert at == group.provisioned_at
     end
-
-    # and AQUA — the bundled formula — is consented and loads with the closure present
-    assert {:ok, [profile]} = Source.DB.profiles(in_group, "formula:local.aqua")
-    {:ok, aqua} = Compendium.Registry.get_latest(in_group, "aqua", "local", "formula")
-    assert {:ok, live} = Compendium.Activation.resolve_verified(in_group, aqua)
-
-    assert {:ok, %Sanctum.Authority{} = auth, _stamp} =
-             Loader.load_root(in_group, profile, source: Source.DB, live: {:ok, live})
-
-    assert auth.cursor == {:bound, "formula:local.aqua"}
-
-    # a second provisioning is a no-op
-    assert {:ok, %{provisioned_at: at}} = Provisioning.provision(group, in_group)
-    assert at == group.provisioned_at
-  end
-
-  test "sync_seeds heals a missing dep even when the scan registers nothing new" do
-    n = System.unique_integer([:positive])
-    user_id = "github|https://github.com|resync-#{n}"
-
-    ctx =
-      Sanctum.Context.build(
-        user_id: user_id,
-        athanor_id: Sanctum.TestContext.athanor_id(),
-        permissions: [:*],
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    assert {:ok, group} = Athanors.create_group(ctx.user_id, "Resync #{n}")
-    in_group = %{ctx | athanor_id: group.id}
-    :ok = Provisioning.ensure_provisioned(in_group)
-
-    # A transient registry outage at the previous sync leaves one dep of
-    # the closure unpulled — dropping its row is exactly that state.
-    {:ok, claude} = Compendium.Registry.get_latest(in_group, "claude", "moonmoon69", "catalyst")
-
-    :ok =
-      Arca.ComponentStorage.delete_component(
-        in_group,
-        "claude",
-        claude.version,
-        "moonmoon69",
-        nil
-      )
-
-    # The next boot registers no new bundle versions; the closure must
-    # still heal.
-    assert :ok = Provisioning.sync_seeds()
-
-    assert {:ok, %{publisher: "moonmoon69"}} =
-             Compendium.Registry.get_latest(in_group, "claude", "moonmoon69", "catalyst")
-  end
-
-  # ---- fixtures ---------------------------------------------------------------
-
-  # One fixture catalyst per provider: a cyfr manifest (the OCI config blob),
-  # a valid wasm (the content blob) and the OCI manifest that names both.
-  defp fixtures do
-    wasm = File.read!(@wasm)
-
-    Map.new(@providers, fn name ->
-      config =
-        Jason.encode!(%{
-          "name" => name,
-          "version" => "1.0.0",
-          "type" => "catalyst",
-          "publisher" => "moonmoon69",
-          "description" => "#{name} (fixture)",
-          "caps" => %{
-            "egress" => %{"domains" => ["api.#{name}.example"], "methods" => ["GET", "POST"]},
-            "limits" => %{"timeout" => "1m"}
-          }
-        })
-
-      {:ok, manifest_json, config_digest, wasm_digest} =
-        Compendium.OCI.Manifest.build(config, wasm, "catalyst")
-
-      {"moonmoon69/catalysts/#{name}",
-       %{
-         manifest: manifest_json,
-         manifest_digest: Compendium.OCI.Blob.compute_digest(manifest_json),
-         blobs: %{config_digest => config, wasm_digest => wasm}
-       }}
-    end)
   end
 
   # The tracked bundle, minus Rust build output that may sit beside a source tree.

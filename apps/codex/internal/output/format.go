@@ -63,9 +63,8 @@ func Success(msg string) {
 	fmt.Println(msg)
 }
 
-// Debugf writes a diagnostic line to stderr only when CYFR_DEBUG is set. Used to
-// make otherwise-silent fallbacks (offline MCP init, config-save failures)
-// observable without adding noise to normal runs.
+// Debugf writes diagnostics to stderr when CYFR_DEBUG is set,
+// including otherwise silent network and config-save failures.
 func Debugf(format string, args ...any) {
 	if os.Getenv("CYFR_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "[debug] "+format+"\n", args...)

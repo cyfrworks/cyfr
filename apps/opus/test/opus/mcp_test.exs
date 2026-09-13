@@ -39,11 +39,12 @@ defmodule Opus.MCPTest do
         authenticated: true
       )
 
-    # Register the test WASM in Compendium so string references resolve
+    # Plant the test WASM in a private seed so bootstrap can mint it.
+    Cyfr.Test.SeedBundle.isolate!()
     wasm_bytes = File.read!(@math_wasm_path)
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+      Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm_bytes, %{
         name: "test-math",
         version: "0.1.0",
         type: "reagent",
@@ -69,6 +70,27 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
+    test "an agent is never rooted from the wire: a turn starts through conversation.send alone",
+         %{ctx: ctx} do
+      for action <- ["run", "run_stream"] do
+        assert {:error, {:invalid_argument, message}} =
+                 MCP.handle("execution", ctx, %{
+                   "action" => action,
+                   "reference" => "agent:local.aqua",
+                   "input" => %{}
+                 })
+
+        assert message =~ "conversation.send"
+      end
+
+      assert {:error, {:invalid_argument, _}} =
+               Cyfr.Ops.Catalog.call_external("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => "agent:local.aqua",
+                 "input" => %{}
+               })
+    end
+
     test "returns 1 action-based tool" do
       tools = MCP.tools()
       assert length(tools) == 1
@@ -333,7 +355,7 @@ defmodule Opus.MCPTest do
         })
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
-      assert Emissary.MCP.ToolError.message(reason) =~ "not found"
+      assert Cyfr.Ops.Error.message(reason) =~ "not found"
     end
   end
 
@@ -355,7 +377,7 @@ defmodule Opus.MCPTest do
         })
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
-      assert Emissary.MCP.ToolError.message(reason) =~ "not found"
+      assert Cyfr.Ops.Error.message(reason) =~ "not found"
     end
 
     test "returns error for failed execution", %{ctx: ctx, ref: ref} do
@@ -409,7 +431,7 @@ defmodule Opus.MCPTest do
     test "the handler releases when reached; the operator gate is the annotation" do
       # Releasing every athanor's slots is a server-wide side effect. The
       # `scope: :platform` annotation admits platform admins alone at
-      # dispatch (`Emissary.MCP.ToolRegistry`); the handler itself does not
+      # dispatch (`Cyfr.Ops.Catalog`); the handler itself does not
       # re-check, so a direct call releases.
       admin_ctx = %{Sanctum.TestContext.local() | platform_admin: true}
 
@@ -421,13 +443,13 @@ defmodule Opus.MCPTest do
 
     test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
       assert {:error, :platform_admin_required} =
-               Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
+               Cyfr.Ops.Catalog.call_external("execution", ctx, %{
                  "action" => "force_release"
                })
 
       [tool] =
-        Emissary.MCP.ToolVisibility.filter_for_context(
-          Enum.filter(Emissary.MCP.ToolRegistry.list_tools(), &(&1["name"] == "execution")),
+        Cyfr.Ops.Visibility.filter_for_context(
+          Enum.filter(Cyfr.Ops.Catalog.list_tools(), &(&1["name"] == "execution")),
           ctx
         )
 
@@ -497,16 +519,16 @@ defmodule Opus.MCPTest do
 
     test "execution.status denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
       # Through the dispatcher — the :execute gate lives in the action
-      # annotation, enforced by ToolRegistry, not in the handler.
+      # annotation, enforced by the catalog, not in the handler.
       assert {:error, {:missing_permission, :execute}} =
-               Emissary.MCP.ToolRegistry.call_external("execution", no_execute_ctx, %{
+               Cyfr.Ops.Catalog.call_external("execution", no_execute_ctx, %{
                  "action" => "status"
                })
     end
 
     test "execution.cancel denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
       assert {:error, {:missing_permission, :execute}} =
-               Emissary.MCP.ToolRegistry.call_external("execution", no_execute_ctx, %{
+               Cyfr.Ops.Catalog.call_external("execution", no_execute_ctx, %{
                  "action" => "cancel",
                  "execution_id" => "exec_nonexistent"
                })
@@ -863,7 +885,7 @@ defmodule Opus.MCPTest do
       {:error, reason} = MCP.read(ctx, uri)
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
-      assert Emissary.MCP.ToolError.message(reason) =~ "not found"
+      assert Cyfr.Ops.Error.message(reason) =~ "not found"
     end
 
     test "parses execution ID correctly", %{ctx: ctx, ref: ref} do
@@ -918,7 +940,7 @@ defmodule Opus.MCPTest do
       {:error, reason} = MCP.read(ctx, uri)
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
-      assert Emissary.MCP.ToolError.message(reason) =~ "not found"
+      assert Cyfr.Ops.Error.message(reason) =~ "not found"
     end
 
     test "includes error in logs for failed execution", %{ctx: ctx} do
@@ -964,7 +986,7 @@ defmodule Opus.MCPTest do
   # Plain strings (the consent-tag wire forms included) pass through
   # unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

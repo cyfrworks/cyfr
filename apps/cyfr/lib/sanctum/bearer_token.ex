@@ -5,11 +5,7 @@ defmodule Sanctum.BearerToken do
   @moduledoc """
   The one read of `Authorization: Bearer` from a request.
 
-  Five auth surfaces used to carry their own copy, split between two
-  shapes — an exact single-header match and a first-header match — so
-  whether a duplicated authorization header authenticated depended on
-  which door it knocked on. One reader: the first authorization header,
-  a non-empty token, or nothing.
+  Reads the first Authorization header and returns a nonempty bearer token or nil.
   """
 
   @doc "The bearer token from the first authorization header, or `nil`."

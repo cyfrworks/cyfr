@@ -95,13 +95,9 @@ defmodule Cyfr.Network do
   end
 
   @doc """
-  Resolve, validate and PIN a URL for an outbound request — the ONE
-  implementation of the resolve→validate→pin sequence, for both outbound
-  planes: the host's own calls (OCI, cyfr.run, external MCP) and the WASM
-  guest's `cyfr:http` handlers, which pass their consent policy as a
-  function. The two planes used to carry separate copies of the DNS
-  ladder and the pinned-URL/Req-option construction — and the guest copy
-  silently inherited Req's auto-retry and auto-decode defaults.
+  Resolves, validates and pins a URL for outbound requests. Used by host
+  calls (OCI, registry and external MCP) and WASM HTTP handlers, which
+  supply a consent-policy function.
 
   Returns `{:ok, %{ip: String.t(), ip_tuple: tuple, uri: URI.t(),
   req_opts: keyword()}}` — `req_opts` carries the pinned URL and the full

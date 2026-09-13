@@ -16,7 +16,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   requires an `athanor_id`, and Compendium / TinctureRegistry
   lookups use the user's `Sanctum.Context`. The palette never calls
   platform-scope variants. Action invocation goes through
-  `Emissary.MCP.ToolRegistry.call/3` with the user's context — same authz
+  `Cyfr.Ops.Catalog.call/3` with the user's context — same authz
   path as a normal page interaction.
   """
 
@@ -197,7 +197,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     case call_tool(ctx, "component/list", %{"limit" => @max_recent}) do
       {:ok, %{components: list}} when is_list(list) ->
         Enum.map(list, fn comp ->
-          ref = comp[:reference] || ""
+          ref = comp[:component_ref] || ""
 
           %{
             kind: :component,

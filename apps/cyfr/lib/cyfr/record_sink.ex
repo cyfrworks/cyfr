@@ -5,15 +5,12 @@ defmodule Cyfr.RecordSink do
   @moduledoc """
   The write-behind for the hot path's bookkeeping rows.
 
-  Every tool call and every allowed policy check used to cost its own
-  round trip (and, on SQLite, its own fsync) in the request's process.
-  Now the request enqueues and moves on; this process writes the batch —
-  every 250 ms or every 200 items, whichever comes first — inside one
-  transaction. What goes through here is *bookkeeping*: an allowed
-  policy-log line, the completion of an MCP log row that was started
-  synchronously, a vault entry's `last_used_at`. Denials and starts stay
-  synchronous — a denial must be on disk before the refusal returns, and a
-  started row must exist before its completion is queued.
+  Batches bookkeeping writes every 250 ms or 200 items in one transaction:
+  allowed policy checks, MCP log completions and vault last-used timestamps.
+  Denials and a transport's or a chain's request starts remain synchronous;
+  their completion updates the row that exists. An in-process call's start
+  rides here too, with a close that carries the whole row: whichever lands
+  first, and whether the start was shed, one complete row results.
 
   `flush/0` drains synchronously (the retention scheduler runs it before a
   sweep; tests use it for ordering); `terminate/2` drains the buffered
@@ -48,6 +45,8 @@ defmodule Cyfr.RecordSink do
   @type item ::
           {:policy_log, map()}
           | {:mcp_log_update, Sanctum.Context.t(), String.t(), map()}
+          | {:mcp_log_started, map()}
+          | {:mcp_log_close, map(), map()}
           | {:vault_touch, String.t(), String.t()}
 
   def start_link(opts \\ []) do
@@ -169,6 +168,8 @@ defmodule Cyfr.RecordSink do
 
     Arca.Repo.transaction(fn ->
       write_policy_logs(Map.get(grouped, :policy_log, []))
+      write_mcp_starts(Map.get(grouped, :mcp_log_started, []))
+      write_mcp_closes(Map.get(grouped, :mcp_log_close, []))
       write_mcp_updates(Map.get(grouped, :mcp_log_update, []))
       write_vault_touches(Map.get(grouped, :vault_touch, []))
     end)
@@ -176,12 +177,9 @@ defmodule Cyfr.RecordSink do
       {:ok, _} ->
         :ok
 
-      # A rollback without a raise: on Postgres an inner failure aborts the
-      # transaction even when the write's own error was rescued, and the
-      # commit answers {:error, _}. Discarding that dropped the whole batch
-      # silently — no retry, no counter. Retry each row on its own
-      # transaction so one poisoned item cannot take the rest; a single row
-      # that still rolls back is counted as shed, not hidden.
+      # A rescued write error can still abort a Postgres transaction.
+      # Retry each row separately after a batch rollback and count
+      # persistent failures as shed records.
       {:error, reason} ->
         Logger.error("[Cyfr.RecordSink] batch rolled back: #{inspect(reason)}")
 
@@ -246,6 +244,33 @@ defmodule Cyfr.RecordSink do
 
     if rows != [], do: Arca.Repo.insert_all(Arca.PolicyLog, rows)
     :ok
+  end
+
+  # A start inserts only where no row exists, a close writes the whole row
+  # and replaces the fields it closes: order between the two, within a
+  # batch or across batches, changes nothing.
+  defp write_mcp_starts(items) do
+    Enum.each(items, fn {:mcp_log_started, row} ->
+      case Arca.McpLog.record_started(row) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[Cyfr.RecordSink] mcp log start failed: #{inspect(reason)}")
+      end
+    end)
+  end
+
+  defp write_mcp_closes(items) do
+    Enum.each(items, fn {:mcp_log_close, row, close} ->
+      case Arca.McpLog.record_close(row, close) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[Cyfr.RecordSink] mcp log close failed: #{inspect(reason)}")
+      end
+    end)
   end
 
   defp write_mcp_updates([]), do: :ok

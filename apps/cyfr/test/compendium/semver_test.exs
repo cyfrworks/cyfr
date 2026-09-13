@@ -3,11 +3,7 @@
 
 defmodule Compendium.SemverTest do
   @moduledoc """
-  The one version ordering: total, never raising, prerelease-aware —
-  and the conservative supersession predicate beside it. Before this
-  module existed there were five hand-rolled comparators with three
-  different unparsable-input behaviours, one of which raised on a
-  non-semver remote tag mid-render.
+  Checks total, prerelease-aware version ordering and conservative supersession.
   """
 
   use ExUnit.Case, async: true

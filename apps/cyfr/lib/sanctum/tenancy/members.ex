@@ -216,11 +216,12 @@ defmodule Sanctum.Tenancy.Members do
       when is_binary(user_id) do
     opts = [scope: "athanor", athanor_id: athanor_id, added_by: added_by]
 
-    # A membership names a person: an id nobody has signed in with, or one
-    # the door has since denied, is refused. (Unlike the email arm, a
-    # verified email is not required — a person admitted by a `user_id`
-    # door entry may have none.)
-    with {:ok, %User{status: "active"}} <- Users.get(user_id),
+    # A membership names a person — by their own id, or by an IdP identity
+    # key that names them. An id nobody has signed in with, or one the door
+    # has since denied, is refused. (Unlike the email arm, a verified email
+    # is not required — a person admitted by a `user_id` door entry may
+    # have none.)
+    with {:ok, %User{status: "active", id: user_id}} <- find_person(user_id),
          :ok <- Caps.check_counted(:max_members_per_group, fn -> count_seats(athanor_id) end),
          {:ok, _} <- ensure(user_id, opts) do
       broadcast_change(user_id, athanor.id, :joined)
@@ -273,12 +274,15 @@ defmodule Sanctum.Tenancy.Members do
 
   def add(_athanor, _target, _added_by), do: {:error, :athanor_archived}
 
-  # The door decided who may be here; what a member's invitation needs is
-  # that the provider did not *deny* the address. An issuer that never
-  # claims verification (many enterprise IdPs) must not make invitations
-  # impossible; one that says `false` still refuses.
+  # Seat by email only when the provider verifies it. Unknown verification
+  # creates an invitation pending a verified sign-in; explicit false refuses.
+  # Use user_id for providers that omit email verification.
   defp known_and_active?(%User{} = user),
-    do: user.email_verified != false and user.status == "active"
+    do: user.email_verified == true and user.status == "active"
+
+  defp find_person(id) do
+    if Sanctum.Auth.Identity.key?(id), do: Users.get_by_identity(id), else: Users.get(id)
+  end
 
   defp invite(athanor_id, email, added_by) do
     case find_invited(email, athanor_id) do
@@ -407,8 +411,7 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc """
   Remove a person from an athanor (or a pending invite by email). The last
-  active member leaving a group archives it — Home included, and Home never
-  comes back (`Sanctum.Tenancy.Athanors.ensure_home/0` mints its successor).
+  active member leaving a group archives it.
   The owner of a person's athanor is that athanor's one member and is never
   removed — deny at the door is the only way out of one's own furnace.
 
@@ -429,11 +432,7 @@ defmodule Sanctum.Tenancy.Members do
          :ok <- end_if_frozen(athanor),
          :ok <- Arca.TopicSubscriptionStorage.unfollow_all(athanor_id, user_id),
          {:ok, _} <- remove(row) do
-      # The established-context memo would otherwise serve the removed
-      # member their cached, athanor-focused context on the stateless
-      # surfaces for its TTL — the one revocation path the door's
-      # session-revoking siblings didn't already cover. The sessions
-      # themselves stay; the next request re-derives via revalidate/1.
+      # Invalidate cached contexts after membership removal; retain sessions for revalidation.
       Sanctum.Session.invalidate_memo_for_user(user_id)
       broadcast_change(user_id, athanor_id, :left)
       Sanctum.Notify.member_changed(athanor_id)
@@ -600,13 +599,12 @@ defmodule Sanctum.Tenancy.Members do
   Whether two people currently sit together in at least one ACTIVE estate.
 
   The DM reachability rule: a pair can be minted only with someone already
-  in a room with you. Home is not a directory (its members are the
-  operators), so this is what keeps `athanor.pair` from being one — a user
-  id you cannot see on any members list is a user id you cannot pair with,
-  and probing one answers exactly what probing an unknown one does. Home
-  is deliberately NOT excluded from the query: operators sit together in
-  Home and may DM each other through it — but a deployment that seats
-  ordinary users in Home has thereby made everyone mutually reachable.
+  in a room with you. This is what keeps `athanor.pair` from being a
+  directory — a user id you cannot see on any members list is a user id you
+  cannot pair with, and probing one answers exactly what probing an unknown
+  one does. No estate is shared server-wide, so two people who belong to no
+  group together cannot reach each other at all; operators are no exception
+  and add each other to a group to talk.
 
   Active memberships in active athanors only: an invitation is not a seat,
   and an archived room is not a room. Fails toward "no", like `solo?/1` —
@@ -637,12 +635,8 @@ defmodule Sanctum.Tenancy.Members do
   @doc """
   Whether exactly one human is in this estate.
 
-  The one derivation of "is there anybody else here?", which two questions
-  turn on: whether a message addresses the agent without naming it, and
-  whether the turn's task prefixes each line with who said it. Both used to
-  read stored state — an `answer_mode` setting and the athanor's `kind` —
-  which said nothing true once an agent could belong to a person rather
-  than an estate.
+  Returns whether the athanor has a single human member. Used for implicit
+  agent addressing and speaker prefixes in turn tasks.
 
   Active memberships only: an `invited` row is a seat nobody is sitting in.
   Fails toward "several", so an unanswerable count costs an `@` rather than

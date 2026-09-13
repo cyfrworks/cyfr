@@ -14,7 +14,7 @@ description: "Find or build the component a task needs — installed first, then
 2. If a matching component is installed but needs setup: `request_setup(component_ref: "...")`
 3. If not installed: `component(action: "search", query: "...")` — results include a `component_ref` field
 4. If found: `component(action: "pull", reference: "<component_ref from search>")` then `request_setup(component_ref: "<component_ref>")`
-5. If nothing found in the registry: put on the Builder role — `aqua_builder(task: "...")` — to scaffold a new component; the Builder handles setup and verification before handing back
+5. If nothing found in the registry: put on the Builder role — `builder(task: "...")` — to scaffold a new component; the Builder handles setup and verification before handing back
 
 ### Component Types
 

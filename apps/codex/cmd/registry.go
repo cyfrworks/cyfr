@@ -1,37 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package cmd — cyfr.run namespace + push-token management subcommands.
-//
-// This file is the client side of the MCP `registry` tool. Each cobra
-// command delegates to an action on that tool (defined on the server in
-// apps/cyfr/lib/compendium/mcp.ex); no authentication is performed
-// locally — the server resolves the caller's bearer from CredentialStore
-// based on Context.user_id.
-//
-// The existing `registry` cobra root lives in cmd/component.go (alongside
-// `registry discover`). This file ADDS subcommands under the same root:
-//
-//	cyfr registry whoami
-//	cyfr registry probe
-//	cyfr registry get-namespace <slug>
-//	cyfr registry publisher claim <domain>
-//	cyfr registry publisher verify <domain>
-//	cyfr registry tokens list   <namespace>
-//	cyfr registry tokens issue  <namespace> [--label TEXT]
-//	cyfr registry tokens revoke <namespace> <token_id>
-//	cyfr registry members list   <namespace>
-//	cyfr registry members add    <namespace> <target-personal-slug> [--role admin|member]
-//	cyfr registry members update <namespace> <target-personal-slug> [--role admin|member]
-//	cyfr registry members remove <namespace> <target-personal-slug>
-//
-// `registry login` (pre-refactor Basic-auth-over-OCI) is intentionally gone.
-// Push credentials are per-user opaque tokens provisioned by `cyfr login`.
+// Registry namespace and push-token management commands.
+// Each command delegates to the MCP registry tool. The server resolves
+// credentials for the authenticated user; cyfr login provisions push tokens.
 package cmd
 
 import (
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
@@ -88,7 +66,7 @@ Alias for the registry half of ` + "`cyfr whoami`" + ` — use this form when
 you only want the registry state.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{"action": "whoami"})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{"action": ops.RegistryWhoami})
 		if err != nil {
 			return handleToolError(err, "Registry whoami failed")
 		}
@@ -159,8 +137,8 @@ it. Works without a push token.`,
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action": "get_namespace",
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action": ops.RegistryGetNamespace,
 			"slug":   slug,
 		})
 		if err != nil {
@@ -198,8 +176,8 @@ the record is live.`,
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action": "claim_publisher",
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action": ops.RegistryClaimPublisher,
 			"slug":   slug,
 		})
 		if err != nil {
@@ -228,8 +206,8 @@ user's CredentialStore so ` + "`cyfr push`" + ` can use it immediately.`,
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action": "verify_publisher",
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action": ops.RegistryVerifyPublisher,
 			"slug":   slug,
 		})
 		if err != nil {
@@ -263,8 +241,8 @@ var registryTokensListCmd = &cobra.Command{
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action": "tokens_list",
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action": ops.RegistryTokensList,
 			"slug":   slug,
 		})
 		if err != nil {
@@ -299,7 +277,7 @@ per-device or per-CI tokens — each token can be revoked independently via
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", args2)
+		result, err := client.CallTool(cmd.Context(), ops.Registry, args2)
 		if err != nil {
 			return handleToolError(err, "tokens issue failed")
 		}
@@ -325,8 +303,8 @@ members of the namespace.`,
 		tokenID := args[1]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action":   "tokens_revoke",
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action":   ops.RegistryTokensRevoke,
 			"slug":     slug,
 			"token_id": tokenID,
 		})
@@ -367,8 +345,8 @@ var registryMembersListCmd = &cobra.Command{
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action": "members_list",
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action": ops.RegistryMembersList,
 			"slug":   slug,
 		})
 		if err != nil {
@@ -400,8 +378,8 @@ var registryMembersAddCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action":               "members_add",
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action":               ops.RegistryMembersAdd,
 			"slug":                 slug,
 			"target_personal_slug": target,
 			"role":                 role,
@@ -438,8 +416,8 @@ member first.`,
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action":               "members_update",
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action":               ops.RegistryMembersUpdate,
 			"slug":                 slug,
 			"target_personal_slug": target,
 			"role":                 role,
@@ -469,8 +447,8 @@ the last admin returns 409 ` + "`sole_admin`" + `.`,
 		target := args[1]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action":               "members_remove",
+		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action":               ops.RegistryMembersRemove,
 			"slug":                 slug,
 			"target_personal_slug": target,
 		})

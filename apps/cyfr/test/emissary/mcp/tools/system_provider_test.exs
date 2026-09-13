@@ -92,6 +92,43 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
   end
 
+  describe "registry health" do
+    # The probe is off in the suite (it is a DNS and TLS round trip); these
+    # turn it on against the closed loopback port the suite configures as
+    # the registry, so the answer is immediate and never leaves this machine.
+    setup do
+      previous = Application.get_env(:cyfr, :registry_health_probe)
+      Arca.Cache.invalidate(:registry_health)
+
+      on_exit(fn ->
+        Application.put_env(:cyfr, :registry_health_probe, previous)
+        Arca.Cache.invalidate(:registry_health)
+      end)
+
+      :ok
+    end
+
+    test "a configured registry that does not answer is unreachable, within the probe's timeout" do
+      Application.put_env(:cyfr, :registry_health_probe, true)
+      started = System.monotonic_time(:millisecond)
+
+      {:ok, result} =
+        SystemProvider.handle("system", Sanctum.TestContext.local(), %{"action" => "status"})
+
+      assert result.services.registry == "unreachable"
+      assert System.monotonic_time(:millisecond) - started < 5_000
+    end
+
+    test "with the probe off the answer is unknown, never a guess" do
+      Application.put_env(:cyfr, :registry_health_probe, false)
+
+      {:ok, result} =
+        SystemProvider.handle("system", Sanctum.TestContext.local(), %{"action" => "status"})
+
+      assert result.services.registry == "unknown"
+    end
+  end
+
   describe "handle/3 - status action with scope 'all'" do
     test "returns ok or degraded status" do
       ctx = Sanctum.TestContext.local()
@@ -225,7 +262,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
       tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
       assert tool.input_schema["properties"]["scope"]["enum"] ==
-               ["all"] ++ Emissary.MCP.Services.service_names() ++ ["registry"]
+               ["all"] ++ Cyfr.Ops.Services.service_names() ++ ["registry"]
     end
 
     test "invalid scope returns error" do
@@ -268,8 +305,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "http://unreachable.invalid/webhook"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
   end
@@ -285,8 +321,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "http://169.254.169.254/latest/meta-data/"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
 
@@ -300,8 +335,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "http://10.0.0.1/internal"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
 
@@ -315,8 +349,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "http://127.0.0.1/admin"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
 
@@ -330,8 +363,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "target" => "file:///etc/passwd"
         })
 
-      # A failed or blocked delivery is a failed tool call now — the old
-      # {:ok, delivered: false} rendered as a success.
+      # Failed or blocked delivery must return a failed tool call.
       assert is_binary(message)
     end
   end

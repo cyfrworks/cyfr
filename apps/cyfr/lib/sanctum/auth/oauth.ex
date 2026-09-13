@@ -35,7 +35,6 @@ defmodule Sanctum.Auth.OAuth do
 
   alias Sanctum.Auth.Identity
   alias Sanctum.Context
-  alias Sanctum.Session
   alias Sanctum.Telemetry
 
   @supported_providers [:github, :google]
@@ -44,24 +43,20 @@ defmodule Sanctum.Auth.OAuth do
   def authenticate(%{provider: provider} = params) when provider in @supported_providers do
     ctx_attrs = fn user_info ->
       [
-        user_id: Identity.builtin_user_id(provider, user_info.id),
+        # The IdP identity key: the person's own id comes with admission,
+        # and the athanor with it, by the one recipe.
+        user_id: Identity.builtin_key(provider, user_info.id),
         email: user_info.email,
         provider: to_string(provider),
-        # Start athanor-less; resolve_status/2 fills the athanor from
-        # memberships — and distinguishes a read that FAILED from a person
-        # who belongs nowhere, so a DB blip refuses as :unavailable instead
-        # of a permanent-sounding 403.
         athanor_id: nil,
-        permissions: [:*]
+        permissions: Context.person_permissions()
       ]
     end
 
     with :ok <- check_provider_configured(provider),
-         {:ok, user_info} <- extract_user_info(params),
-         {:ok, ctx} <-
-           Sanctum.Tenancy.resolve_status(Context.build(ctx_attrs.(user_info)), force: true) do
+         {:ok, user_info} <- extract_user_info(params) do
       Telemetry.auth_event(provider, :success, %{email: user_info.email})
-      {:ok, ctx}
+      {:ok, Context.build(ctx_attrs.(user_info))}
     else
       {:error, reason} = error ->
         Telemetry.auth_event(provider, :failure, %{reason: reason})
@@ -74,36 +69,19 @@ defmodule Sanctum.Auth.OAuth do
     {:error, {:unsupported_provider, provider}}
   end
 
-  def authenticate(%{token: token}) when is_binary(token) do
-    case Session.load(token, surface: :console) do
-      {:ok, ctx} ->
-        Telemetry.auth_event(:session, :success, %{user_id: ctx.user_id})
-        {:ok, ctx}
-
-      {:error, reason} ->
-        Telemetry.auth_event(:session, :failure, %{reason: reason})
-        {:error, reason}
-    end
-  end
-
   def authenticate(_params) do
     Telemetry.auth_event(:oauth, :failure, %{reason: :invalid_params})
     {:error, :invalid_params}
   end
 
   @impl true
-  def current_user(conn) do
-    case get_session_token(conn) do
-      nil ->
-        nil
-
-      token ->
-        case Session.load(token, surface: :console) do
-          {:ok, ctx} -> ctx
-          {:error, _} -> nil
-        end
-    end
-  end
+  @doc """
+  This provider issues no bearer credential of its own: a session token or
+  an API key on a request is established by the one recipe
+  (`Sanctum.Caller.establish/2`) in `EmissaryWeb.Plugs.Authenticate`
+  before the provider is asked. Always `nil`.
+  """
+  def current_user(_conn), do: nil
 
   # ============================================================================
   # Internal
@@ -185,10 +163,6 @@ defmodule Sanctum.Auth.OAuth do
 
   defp extract_user_info(_), do: {:error, :invalid_auth_data}
 
-  # `Authorization: Bearer` and nothing else. The cookie fallback that used
-  # to sit here read `"cyfr_session_token"`, a key nothing has ever written —
-  # every writer and reader uses `:sanctum_session_token` — so it always
-  # returned nil. Restoring it under the real key would hand `POST /mcp`,
-  # which carries no CSRF protection, an ambient browser credential.
-  defp get_session_token(conn), do: Sanctum.BearerToken.read(conn)
+  # Accept Authorization: Bearer only. This endpoint has no CSRF
+  # protection and must not authenticate using ambient browser cookies.
 end

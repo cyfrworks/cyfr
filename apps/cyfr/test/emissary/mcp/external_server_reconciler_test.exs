@@ -73,9 +73,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
   end
 
   test "a rename restarts the server still spelling the OLD name", %{ctx: ctx} do
-    # The reconciler used to match only the row's current name — the
-    # post-rename one — so the name-LOSING server kept dispensing its
-    # cached credential until an unrelated restart.
+    # A rename must reconcile servers using both the previous and current credential name.
     {:ok, entry} =
       Vault.create(ctx, %{
         name: "prod-token",

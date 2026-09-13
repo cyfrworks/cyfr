@@ -61,7 +61,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
       }) do
     # Dispatch enforces auth + :storage_read; the tenant residual keeps an
     # athanor-less context out of the profile store.
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       ref = Sanctum.ComponentRef.build("tincture", publisher, name)
 
       case Source.impl().profiles(ctx, ref) do
@@ -103,7 +103,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("tincture_visibility", action_enum())}
+    {:error, Cyfr.Ops.Provider.invalid_action("tincture_visibility", action_enum())}
   end
 
   # The finished public URL, so no client composes the route shape itself.
@@ -122,9 +122,5 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
     end
   end
 
-  defp tenant_gate(ctx) do
-    Context.tenant_ok(ctx)
-  end
-
-  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
+  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
 end

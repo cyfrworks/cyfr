@@ -80,7 +80,7 @@ defmodule PrismWeb.ReportComponent do
           "details" => details
         }
 
-        case PrismWeb.MCPHelpers.call_tool(socket.assigns.ctx, "registry", args) do
+        case PrismWeb.Ops.call_tool(socket.assigns.ctx, "registry", args) do
           {:ok, _body} ->
             send(self(), {:report_component, :submitted})
             {:noreply, assign(socket, open: false, submitting: false, error: nil)}
@@ -89,7 +89,7 @@ defmodule PrismWeb.ReportComponent do
             {:noreply,
              assign(socket,
                submitting: false,
-               error: PrismWeb.MCPHelpers.error_message(reason)
+               error: PrismWeb.Ops.error_message(reason)
              )}
         end
     end

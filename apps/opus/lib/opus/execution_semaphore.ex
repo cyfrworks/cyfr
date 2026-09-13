@@ -39,15 +39,10 @@ defmodule Opus.ExecutionSemaphore do
   refused, so a flock of same-minute schedules can never turn the next
   message in the chat into a refusal.
 
-  What this bounds, precisely, is an athanor's **roots**. Children are exempt
-  from the per-tenant count on purpose — a chain that could not get a child
-  slot would wait while holding its own root slot, which is a deadlock rather
-  than a limit — so an athanor's real footprint reaches `per_tenant ×
-  depth_cap` (`max_tenant_footprint/1`). With the shipped 128 / 16 / 8 that is
-  128: the whole node. The claim this section used to make — "it can exhaust
-  its own slots, never the node's" — was false for a tenant running deep
-  chains. `init/1` warns when the configured ratio allows it; the lever is to
-  lower `per_tenant` or raise the global pool, never to cap children.
+  The per-tenant limit counts roots; child executions are exempt to avoid
+  waiting for a child slot while holding a root slot. A tenant can therefore
+  occupy up to `per_tenant * depth_cap` slots. `init/1` warns if this can
+  exhaust the global pool; lower the per-tenant cap or enlarge the pool.
 
   ## Configuration
 
@@ -66,19 +61,12 @@ defmodule Opus.ExecutionSemaphore do
 
   ## Unreaped kills
 
-  Wasmex exposes no epoch interruption, so a timeout-killed execution's
-  component call keeps spinning on a detached native thread until node
-  restart (`Opus.SharedEngine` says why at length). The kill releases the
-  BEAM-side slot — which, uncorrected, lets one athanor cycle its full
-  per-tenant cap of killed executions indefinitely and accumulate spinning
-  cores. The executor therefore notes every timeout kill here
-  (`note_unreaped/0`), and a tenant with too many recent unreaped kills is
-  refused new root/background slots with `{:error, :tenant_unreaped_limit}`.
-  Entries decay after #{div(10 * 60 * 1000, 60_000)} minutes — there is no
-  completion signal to decrement on (the thread's JoinHandle is dropped), so
-  decay is what keeps a run of benign timeouts from locking a tenant out
-  forever. A real preemption fix is upstream (wasmex epoch support), or
-  recycling the process that holds the wedged native thread.
+  Wasmex has no epoch interruption: a timeout kill may leave native work
+  running after the BEAM-side slot is released. `note_unreaped/0` records
+  these kills, and excessive recent kills refuse new root/background slots
+  with `{:error, :tenant_unreaped_limit}`. Entries expire after
+  #{div(10 * 60 * 1000, 60_000)} minutes; native completion is not observable,
+  so expiry does not confirm that the work has stopped.
   """
 
   use GenServer
@@ -221,14 +209,23 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @doc """
-  Note that the calling holder's execution was timeout-killed with its
-  native thread unreaped (see the moduledoc). Called by the executor
-  BEFORE its `release/0`, from the same process, so the holder entry —
-  and with it the tenant — is still present when this arrives.
+  Note that execution `execution_id` of `tenant`'s was killed with its
+  native thread unreaped (see the moduledoc): a timeout, or a cancel.
+  Synchronous, and charged to the tenant by name rather than looked up
+  from the caller's slot: the caller need not be the holder (a cancel runs
+  in the canceller's process), and the note is acknowledged before the
+  kill it precedes, so no ordering between this and the holder's release —
+  or its `:DOWN` — can lose it. A nil tenant charges nobody.
+  `{:error, :unavailable}` means the semaphore did not answer and the kill
+  goes uncharged; the caller records that by execution.
   """
-  @spec note_unreaped() :: :ok
-  def note_unreaped do
-    GenServer.cast(__MODULE__, {:unreaped, self()})
+  @spec note_unreaped(String.t() | nil, String.t() | nil) :: :ok | {:error, :unavailable}
+  def note_unreaped(nil, _execution_id), do: :ok
+
+  def note_unreaped(tenant, execution_id) when is_binary(tenant) do
+    GenServer.call(__MODULE__, {:unreaped, tenant, execution_id})
+  catch
+    :exit, _ -> {:error, :unavailable}
   end
 
   @doc """
@@ -246,11 +243,7 @@ defmodule Opus.ExecutionSemaphore do
     try do
       GenServer.call(__MODULE__, :status)
     catch
-      # Same keys as the live reply, so a reader can narrow or render this
-      # without asking whether the semaphore answered. The one that mattered
-      # was `:tenants`: `Opus.MCP` reads `status.tenants` to show a member
-      # their own athanor's count, and its absence here was a KeyError at
-      # exactly the moment this clause exists to survive.
+      # Keep the same reply keys, including per-tenant counts, when unavailable.
       :exit, _reason ->
         %{
           max: 0,
@@ -272,7 +265,22 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @doc """
+  Clear one athanor's unreaped-kill penalty: the operator has dealt with
+  the spinning threads at the node level, and the athanor may run roots
+  again before the window decays. A force-release does not do this.
+  """
+  @spec forgive_unreaped(String.t()) :: :ok | {:error, :semaphore_unavailable}
+  def forgive_unreaped(tenant) when is_binary(tenant) do
+    try do
+      GenServer.call(__MODULE__, {:forgive_unreaped, tenant})
+    catch
+      :exit, _ -> {:error, :semaphore_unavailable}
+    end
+  end
+
+  @doc """
   Emergency recovery: force-release all held slots and clear the queue.
+  The unreaped-kill penalty box stays (`forgive_unreaped/1`).
   """
   @spec force_release_all() :: :ok | {:error, :semaphore_unavailable}
   def force_release_all do
@@ -443,10 +451,8 @@ defmodule Opus.ExecutionSemaphore do
        | count: 0,
          monitors: %{},
          tenant_roots: %{},
-         # The operator's recovery gesture also clears the penalty box —
-         # the point of force_release is a fresh start, and the spinning
-         # threads it cannot stop are theirs to handle at the node level.
-         tenant_unreaped: %{},
+         # The penalty box stays: the spinning threads a force-release
+         # cannot stop are still charged to the tenants that left them.
          waiters: %{root: :queue.new(), child: :queue.new(), background: :queue.new()},
          waiter_monitors: %{},
          background_waiters: %{}
@@ -454,33 +460,29 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @impl true
-  def handle_cast({:release, pid}, state) do
-    {:noreply, do_release(state, pid)}
+  def handle_call({:forgive_unreaped, tenant}, _from, state) do
+    {:reply, :ok, %{state | tenant_unreaped: Map.delete(state.tenant_unreaped, tenant)}}
   end
 
-  # Casts from one process arrive in order, so the holder entry (and its
-  # tenant) is still in `monitors` when this lands ahead of the release.
+  def handle_call({:unreaped, tenant, execution_id}, _from, state) when is_binary(tenant) do
+    expiry = System.monotonic_time(:millisecond) + @unreaped_ttl_ms
+
+    entries = [expiry | prune_unreaped(Map.get(state.tenant_unreaped, tenant, []))]
+
+    Logger.warning(
+      "[Opus.ExecutionSemaphore] Unreaped kill of #{inspect(execution_id)} noted for tenant " <>
+        "#{inspect(tenant)} (#{length(entries)}/#{state.unreaped_max} " <>
+        "in the decay window)"
+    )
+
+    Opus.Telemetry.unreaped_kill(tenant, execution_id, length(entries))
+
+    {:reply, :ok, %{state | tenant_unreaped: Map.put(state.tenant_unreaped, tenant, entries)}}
+  end
+
   @impl true
-  def handle_cast({:unreaped, pid}, state) do
-    case Map.get(state.monitors, pid) do
-      {_ref, _acquired_at, tenant, _class} when not is_nil(tenant) ->
-        expiry = System.monotonic_time(:millisecond) + @unreaped_ttl_ms
-
-        entries = [expiry | prune_unreaped(Map.get(state.tenant_unreaped, tenant, []))]
-
-        Logger.warning(
-          "[Opus.ExecutionSemaphore] Unreaped timeout kill noted for tenant " <>
-            "#{inspect(tenant)} (#{length(entries)}/#{state.unreaped_max} " <>
-            "in the decay window)"
-        )
-
-        Opus.Telemetry.unreaped_kill(tenant, length(entries))
-
-        {:noreply, %{state | tenant_unreaped: Map.put(state.tenant_unreaped, tenant, entries)}}
-
-      _ ->
-        {:noreply, state}
-    end
+  def handle_cast({:release, pid}, state) do
+    {:noreply, do_release(state, pid)}
   end
 
   # A caller that timed out of `acquire/3` dequeues itself. If the hand-off

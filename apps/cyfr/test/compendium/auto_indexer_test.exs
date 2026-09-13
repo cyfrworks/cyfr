@@ -208,7 +208,7 @@ defmodule Compendium.AutoIndexerTest do
       assert result.total == 0
     end
 
-    test "indexes the seed bundle through the overlay union, and prune keeps its rows", %{
+    test "indexes the shipped bundle once copied in, and prune keeps its rows", %{
       ctx: ctx,
       test_dir: test_dir
     } do
@@ -228,15 +228,18 @@ defmodule Compendium.AutoIndexerTest do
 
       File.write!(Path.join(bundle_dir, "catalyst.wasm"), @valid_wasm)
 
-      # No bytes in the athanor's tree — the walk sees the bundle through
-      # the union and mints its row anyway.
+      # Nothing in the athanor's tree yet: the walk sees only what the
+      # athanor holds, so the shipped bundle registers once it is copied in.
+      {:ok, %{registered: 0}} = AutoIndexer.scan(ctx: ctx)
+
+      {:ok, [_unit]} = Arca.Overlay.materialize_shipped(ctx, "components")
       {:ok, result} = AutoIndexer.scan(ctx: ctx)
       assert result.registered == 1
 
       assert {:ok, %{name: "bundled"}} =
                Arca.ComponentStorage.get_component(ctx, "bundled", "0.1.0")
 
-      refute File.exists?(
+      assert File.exists?(
                Arca.Adapters.Local.build_path(
                  ctx,
                  ["components", "catalysts", "local", "bundled", "0.1.0", "catalyst.wasm"]
@@ -292,8 +295,7 @@ defmodule Compendium.AutoIndexerTest do
           else: Application.delete_env(:cyfr, :storage_adapter)
       end)
 
-      # An unreadable tree is an outage, never an empty roster — the scan
-      # that used to read it as empty pruned every filesystem row.
+      # An unreadable tree is an outage and must not trigger registry pruning.
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert {:error, {:discovery_failed, :injected_outage}} = AutoIndexer.scan(ctx: ctx)

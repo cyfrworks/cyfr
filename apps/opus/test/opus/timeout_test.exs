@@ -27,11 +27,12 @@ defmodule Opus.TimeoutTest do
 
     ctx = Sanctum.TestContext.local()
 
-    # Register the test WASM in Compendium
+    # Plant the test WASM in a private seed so bootstrap can mint it.
+    Cyfr.Test.SeedBundle.isolate!()
     wasm_bytes = File.read!(@math_wasm_path)
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+      Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm_bytes, %{
         name: "test-math",
         version: "0.1.0",
         type: "reagent",

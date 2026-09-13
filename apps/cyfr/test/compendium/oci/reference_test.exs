@@ -58,7 +58,7 @@ defmodule Compendium.OCI.ReferenceTest do
 
     test "parses reference with no explicit registry" do
       assert {:ok, ref} = Reference.parse("cyfr/reagents/data-processor:1.0.0")
-      assert ref.registry == "registry.cyfr.run"
+      assert ref.registry == Compendium.RegistryHost.canonical_host()
       assert ref.repository == "cyfr/reagents/data-processor"
       assert ref.tag == "1.0.0"
       assert ref.default_registry == true
@@ -66,7 +66,7 @@ defmodule Compendium.OCI.ReferenceTest do
 
     test "single-segment reference defaults registry" do
       assert {:ok, ref} = Reference.parse("myrepo")
-      assert ref.registry == "registry.cyfr.run"
+      assert ref.registry == Compendium.RegistryHost.canonical_host()
       assert ref.repository == "myrepo"
       assert ref.default_registry == true
     end

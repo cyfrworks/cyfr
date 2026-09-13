@@ -5,22 +5,15 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"os"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
 )
 
-// whoamiCmd composes output from two MCP actions post auth-refactor:
-//
-//   - `session.whoami` — local cyfr identity (user_id, email, provider).
-//   - `registry.whoami` — cyfr.run identity (authenticated, personal_namespace,
-//     memberships). Lives under the Compendium registry tool because the
-//     auth sliver (Sanctum) is intentionally Compendium-free.
-//
-// Failures on the registry call are soft — they print a warning but don't
-// abort, so users who are logged in to cyfr locally but have no push tokens
-// (e.g. first login before probe) still see their local identity.
+// whoamiCmd displays local session identity and registry namespace memberships.
+// Registry failures produce a warning while preserving the local identity output.
 var whoamiCmd = &cobra.Command{
 	Use:     "whoami",
 	Short:   "Show current identity",
@@ -38,15 +31,15 @@ fails.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		session, sessionErr := client.CallTool(cmd.Context(), "session", map[string]any{
-			"action": "whoami",
+		session, sessionErr := client.CallTool(cmd.Context(), ops.Session, map[string]any{
+			"action": ops.SessionWhoami,
 		})
 		if sessionErr != nil {
 			return handleToolError(sessionErr)
 		}
 
-		registry, registryErr := client.CallTool(cmd.Context(), "registry", map[string]any{
-			"action": "whoami",
+		registry, registryErr := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
+			"action": ops.RegistryWhoami,
 		})
 		// Don't abort on registry errors — the local identity is still useful.
 

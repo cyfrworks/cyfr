@@ -606,12 +606,8 @@ defmodule Opus.FormulaHandlerTest do
       spawn_result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
       task_id = Jason.decode!(spawn_result)["task_id"]
 
-      # Poll until the task leaves `pending` rather than sleeping past it.
-      # `completed` or `error` — math.wasm is a core module, so which one is
-      # not this test's business; that poll STOPS saying pending, and says
-      # so about the right task, is. Admitting "pending" in the assertion
-      # too made it a list of the whole status vocabulary, which no
-      # behaviour could fail.
+      # Poll until the named task leaves pending. This fixture may complete
+      # or error; either terminal result verifies task-status progress.
       wait_until(
         fn -> Jason.decode!(poll_fn.(task_id))["status"] != "pending" end,
         5_000,
@@ -840,7 +836,8 @@ defmodule Opus.FormulaHandlerTest do
       parsed = Jason.decode!(result)
 
       assert parsed["ok"] == true
-      assert parsed["sequence"] == 1
+      # No durable event yet: the delta rides prefix 0.
+      assert parsed["sequence"] == "0.1"
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -861,9 +858,9 @@ defmodule Opus.FormulaHandlerTest do
       r2 = Jason.decode!(emit_fn.(Jason.encode!(%{"kind" => "text_delta", "content" => "hi"})))
       r3 = Jason.decode!(emit_fn.(Jason.encode!(%{"kind" => "tool_use", "tool" => "read"})))
 
-      assert r1["sequence"] == 1
-      assert r2["sequence"] == 2
-      assert r3["sequence"] == 3
+      assert r1["sequence"] == "0.1"
+      assert r2["sequence"] == "0.2"
+      assert r3["sequence"] == "0.3"
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -911,7 +908,7 @@ defmodule Opus.FormulaHandlerTest do
       assert_receive {:execution_event, event}, 2000
       assert event.type == "emit"
       assert event.execution_id == execution_id
-      assert event.sequence == 1
+      assert event.sequence == "0.1"
       assert event.data["kind"] == "turn_start"
       assert event.data["turn"] == 1
 
@@ -968,16 +965,16 @@ defmodule Opus.FormulaHandlerTest do
       # Flush pending buffer writes before reading
       Opus.ExecutionEventBuffer.flush(execution_id)
 
-      # Replay all events (since sequence 0)
-      events = Opus.ExecutionEventBuffer.since(execution_id, 0, ctx.athanor_id)
+      # Replay everything from the start
+      events = Opus.ExecutionEventBuffer.since(execution_id, {0, 0}, ctx.athanor_id)
       assert length(events) == 3
-      assert Enum.map(events, & &1.sequence) == [1, 2, 3]
+      assert Enum.map(events, & &1.sequence) == ["0.1", "0.2", "0.3"]
       assert Enum.map(events, & &1.data["kind"]) == ["turn_start", "text_delta", "tool_use"]
 
-      # Replay only events after sequence 1
-      events_after_1 = Opus.ExecutionEventBuffer.since(execution_id, 1, ctx.athanor_id)
+      # Replay only the deltas after 0.1
+      events_after_1 = Opus.ExecutionEventBuffer.since(execution_id, {0, 1}, ctx.athanor_id)
       assert length(events_after_1) == 2
-      assert Enum.map(events_after_1, & &1.sequence) == [2, 3]
+      assert Enum.map(events_after_1, & &1.sequence) == ["0.2", "0.3"]
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -1010,7 +1007,7 @@ defmodule Opus.FormulaHandlerTest do
 
       assert_receive {:formula_emit, metadata, measurements}, 2000
       assert metadata.execution_id == execution_id
-      assert measurements.sequence == 1
+      assert measurements.sequence == "0.1"
 
       :telemetry.detach("test-formula-emit")
       FormulaHandler.cleanup_registry(tracker_pid)
@@ -1058,69 +1055,30 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # ExecutionEventBuffer terminal events
+  # ExecutionEventBuffer durable events
   # ============================================================================
 
-  describe "ExecutionEventBuffer terminal events" do
-    test "push_terminal delivers complete event via PubSub", %{ctx: ctx} do
+  describe "ExecutionEventBuffer durable events" do
+    test "a published lifecycle row reaches subscribers with its number", %{ctx: ctx} do
       execution_id = "exec_terminal_#{:rand.uniform(100_000)}"
 
       Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
 
-      Opus.ExecutionEventBuffer.push_terminal(
-        execution_id,
-        "complete",
-        %{status: "completed", duration_ms: 1234},
-        999_999_999,
-        ctx
-      )
+      :ok =
+        Opus.ExecutionEventBuffer.publish(execution_id, ctx, "execution.completed", 7, %{
+          "status" => "completed",
+          "duration_ms" => 1234
+        })
 
       assert_receive {:execution_event, event}, 2000
-      assert event.type == "complete"
+      assert event.type == "execution.completed"
       assert event.execution_id == execution_id
-      assert event.sequence == 999_999_999
-      assert event.data.status == "completed"
-      assert event.data.duration_ms == 1234
+      assert event.sequence == "7"
+      assert event.durable == 7
+      assert event.data["status"] == "completed"
+      assert event.data["duration_ms"] == 1234
 
       Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
-    end
-
-    test "push_terminal delivers error event via PubSub", %{ctx: ctx} do
-      execution_id = "exec_terminal_err_#{:rand.uniform(100_000)}"
-
-      Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
-
-      Opus.ExecutionEventBuffer.push_terminal(
-        execution_id,
-        "error",
-        %{error: "Execution timeout after 5000ms"},
-        999_999_999,
-        ctx
-      )
-
-      assert_receive {:execution_event, event}, 2000
-      assert event.type == "error"
-      assert event.data.error == "Execution timeout after 5000ms"
-
-      Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
-    end
-
-    test "terminal events are buffered for replay", %{ctx: ctx} do
-      execution_id = "exec_terminal_buf_#{:rand.uniform(100_000)}"
-
-      Opus.ExecutionEventBuffer.push_terminal(
-        execution_id,
-        "complete",
-        %{status: "completed"},
-        999_999_999,
-        ctx
-      )
-
-      Opus.ExecutionEventBuffer.flush(execution_id)
-
-      events = Opus.ExecutionEventBuffer.since(execution_id, 0, ctx.athanor_id)
-      assert length(events) == 1
-      assert hd(events).type == "complete"
     end
   end
 

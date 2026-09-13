@@ -64,16 +64,18 @@ defmodule Sanctum.SessionTest do
       assert session1.token != session2.token
     end
 
-    test "preserves permissions", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+    test "carries no permission bag: a person's session holds every permission", %{ctx: ctx} do
+      {:ok, session} = Session.create(%{ctx | permissions: MapSet.new([:read])})
+      refute Map.has_key?(session, :permissions)
 
-      assert "execute" in session.permissions or :execute in session.permissions
-      assert "read" in session.permissions or :read in session.permissions
+      assert {:ok, %{permissions: permissions}} = Session.load(session.token, surface: :console)
+      assert MapSet.equal?(permissions, MapSet.new(Sanctum.Context.person_permissions()))
+      refute MapSet.member?(permissions, :*)
     end
   end
 
   describe "load/1" do
-    test "returns context for valid session (unclaimed namespace stays unauthenticated)",
+    test "returns context for a valid session; no publisher namespace is still signed in",
          %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
       {:ok, retrieved_ctx} = Session.load(session.token, surface: :console)
@@ -81,10 +83,9 @@ defmodule Sanctum.SessionTest do
       assert retrieved_ctx.user_id == "user_123"
       assert retrieved_ctx.email == "test@example.com"
       assert retrieved_ctx.provider == "github"
-      # Test fixture user has no claimed personal namespace, so the session
-      # row reconstructs to authenticated: false. RequirePersonalNamespace
-      # plug then forwards them to /claim-namespace.
-      assert retrieved_ctx.authenticated == false
+      # The fixture person has no namespace: a publishing credential, not
+      # identity, so the session is as authenticated as anyone's.
+      assert retrieved_ctx.authenticated == true
       assert retrieved_ctx.namespace == nil
     end
 
@@ -101,6 +102,7 @@ defmodule Sanctum.SessionTest do
         })
 
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(row, "sess#{n}")
+      user_id = row.id
 
       ctx =
         Sanctum.Context.build(

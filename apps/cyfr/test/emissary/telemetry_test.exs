@@ -16,8 +16,7 @@ defmodule Emissary.TelemetryTest do
   end
 
   describe "telemetry metrics definition" do
-    # The session counter is deliberately absent: it measured a protocol
-    # session's lifecycle, and there is no longer one to measure.
+    # No protocol-session lifecycle counter is exposed.
     test "no metric is declared without an emitter behind it" do
       names = Enum.map(EmissaryWeb.Telemetry.metrics(), & &1.name)
 

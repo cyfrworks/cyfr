@@ -45,6 +45,9 @@ services:
       - CYFR_TRUSTED_PROXY_HOPS=${CYFR_TRUSTED_PROXY_HOPS:-1}
       # The private hosts outbound calls may reach; the bridge is one.
       - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-mcp-bridge}
+    networks:
+      - default
+      - builder
     restart: unless-stopped
     # The endpoints drain connections for up to 30s on shutdown; compose's
     # default 10s grace would SIGKILL mid-drain.
@@ -64,14 +67,9 @@ services:
     # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
     # port and the probed path have one author.
 
-  # Toolchain builds isolated from the app image: cargo/npm run here, not
-  # in cyfr's container. Opt in with
-  #   docker compose --profile builder up -d
-  # and set CYFR_BUILDER_URL=http://builder:4100 in .env plus the shared
-  # CYFR_BUILDER_TOKEN in BOTH .env and .env.builder. The builder reads
-  # only .env.builder — the blast-radius container must not be handed the
-  # app's secrets (key base, DB URL, OAuth) alongside the one it needs.
-  #                                                     [profile: builder]
+  # Optional builder: `docker compose --profile builder up -d`.
+  # Set CYFR_BUILDER_URL=http://builder:4100 and CYFR_BUILDER_TOKEN in .env.
+  # Compose forwards the token; put builder-only overrides in .env.builder.
   builder:
     container_name: cyfr-builder
     build:
@@ -86,6 +84,14 @@ services:
     environment:
       - CYFR_BUILDER_LISTEN=true
       - CYFR_BUILDER_TOKEN=${CYFR_BUILDER_TOKEN:-}
+    # Only cyfr can reach the builder: it sits on its own network, which
+    # cyfr also joins; the bridge and caddy never see port 4100. The
+    # network is not `internal` — cargo and npm need crates.io and the
+    # registry — so the isolation is who is attached, not egress. This is
+    # the container's only network, so listening on every interface is
+    # listening on it (CYFR_BUILDER_BIND is for a builder outside compose).
+    networks:
+      - builder
     # No /data mount, read-only root: the builder holds no tenant state —
     # sources arrive in the request, artifacts leave in the response, and
     # the only writable surface is its own build scratch.
@@ -115,21 +121,11 @@ services:
       target: mcp-bridge
     expose:
       - "8001"
-    # node is PID 1 in this image (the entrypoint `exec`s it), and the
-    # children are `sh -c npx …` — so when an intermediate sh or npx exits,
-    # its still-running descendants reparent to node, which reaps only what
-    # it spawned itself. Those orphans became permanent zombies, one per
-    # restart_backend and per failed download, until the container hit its
-    # PID limit. Docker's own init is the reaper, and forwards signals.
+    # Use Docker init to reap orphaned descendants and forward signals to Node.
     init: true
-    # The bridge's other knobs (MCP_BRIDGE_ALLOW_INSECURE, _DATA,
-    # _RPC_TIMEOUT_MS, _INIT_TIMEOUT_MS, _MAX_IN_FLIGHT, _MAX_BACKENDS) and
-    # CYFR_LOG_FORMAT are documented in .env.example but had no way in:
-    # this service passed exactly one variable and read no env file, so the
-    # documented ALLOW_INSECURE escape hatch and the JSON logging the
-    # bridge implements for this compose stack were both dead.
+    # Read bridge-only settings from .env.bridge; forward MCP_BRIDGE_TOKEN from .env below.
     env_file:
-      - path: .env
+      - path: .env.bridge
         required: false
     environment:
       # /mcp requires `Authorization: Bearer <token>`. `cyfr init` generates
@@ -203,6 +199,11 @@ services:
       resources:
         limits:
           memory: 256M
+
+networks:
+  default: {}
+  # cyfr <-> builder only (see the builder service).
+  builder: {}
 
 volumes:
   caddy_data:

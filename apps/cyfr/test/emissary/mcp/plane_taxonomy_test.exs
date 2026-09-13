@@ -56,15 +56,13 @@ defmodule Emissary.MCP.PlaneTaxonomyTest.Probes do
 end
 
 defmodule Emissary.MCP.PlaneTaxonomyTest do
-  # The model §6 "Plane taxonomy" gate, both arms: every registered action
-  # is annotated, and the agent's virtual tools — which never reach the tool
-  # registry and so are invisible to its audit — are covered too.
+  # Require annotations on registered actions and agent virtual tools.
   use ExUnit.Case, async: true
 
   alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
-  alias Emissary.MCP.ToolRegistry
-  alias Aqua.VirtualTools, as: AquaVirtualTools
+  alias Cyfr.Ops.Catalog
+  alias Aqua.Hands
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
   # The root suite loads all eight; assert the count so a standalone run
@@ -94,7 +92,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   describe "registered tools" do
     test "the audit passes" do
-      assert ToolRegistry.audit_action_kinds() == :ok
+      assert Catalog.audit_action_kinds() == :ok
     end
 
     test "every action declares a kind and at least one valid plane" do
@@ -103,7 +101,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
         assert is_atom(kind) and not is_nil(kind), "#{tool}.#{verb} has no kind"
         assert planes != [], "#{tool}.#{verb} has no plane"
 
-        assert Enum.all?(planes, &(&1 in ToolRegistry.valid_planes())),
+        assert Enum.all?(planes, &(&1 in Catalog.valid_planes())),
                "#{tool}.#{verb} has an invalid plane: #{inspect(planes)}"
       end
     end
@@ -120,7 +118,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
             {Probes.InvalidStanding, :invalid_standing},
             {Probes.Unannotated, :missing_annotation}
           ] do
-        assert {:error, [%{reason: ^reason}]} = ToolRegistry.audit_action_kinds([probe]),
+        assert {:error, [%{reason: ^reason}]} = Catalog.audit_action_kinds([probe]),
                "#{inspect(probe)} was not reported as #{reason}"
       end
     end
@@ -133,7 +131,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
       served =
         MapSet.new(
-          for tool_def <- ToolRegistry.list_tools(),
+          for tool_def <- Catalog.list_tools(),
               verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
               do: {tool_def["name"], verb}
         )
@@ -195,11 +193,11 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   describe "agent virtual tools" do
     test "the second audit arm passes" do
-      assert AquaVirtualTools.audit_planes() == :ok
+      assert Hands.audit_planes() == :ok
     end
 
     test "every virtual action is in-chain only" do
-      for {tool, %{actions: actions}} <- AquaVirtualTools.catalog(),
+      for {tool, %{actions: actions}} <- Hands.catalog(),
           {action, %{planes: planes}} <- actions do
         assert planes == [:in_chain], "#{tool}.#{action} claims #{inspect(planes)}"
       end
@@ -208,7 +206,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
     test "virtual tools are not registered tools" do
       registered = annotated_actions() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
 
-      for tool <- Map.keys(AquaVirtualTools.catalog()) do
+      for tool <- Map.keys(Hands.catalog()) do
         refute MapSet.member?(registered, tool),
                "#{tool} is both a virtual tool and a registered tool — one taxonomy would hide the other"
       end
@@ -228,8 +226,8 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       # The wiring backstop still holds alongside the per-call gate: the
       # router rejects any name the registered-tool cache does not hold,
       # and proxied `server:tool` names are never cached.
-      assert {:error, :not_found} = ToolRegistry.get_tool("someserver:sometool")
-      refute Enum.any?(ToolRegistry.list_tools(), &String.contains?(&1["name"], ":"))
+      assert {:error, :not_found} = Catalog.get_tool("someserver:sometool")
+      refute Enum.any?(Catalog.list_tools(), &String.contains?(&1["name"], ":"))
     end
 
     # The bucket default is also enforced at dispatch, not left to the
@@ -242,4 +240,15 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # ============================================================================
   # Helpers
   # ============================================================================
+
+  # The formula host intercepts exactly the execution actions the catalog
+  # annotates `host: :intercepted` — it asks, it does not keep a list.
+  @tag :requires_opus_modules
+  test "the host's intercept set is the catalog's annotation" do
+    assert Opus.Host.host_intercepted?("execution", "run")
+    assert Opus.Host.host_intercepted?("execution", "run_stream")
+    refute Opus.Host.host_intercepted?("execution", "cancel")
+    refute Opus.Host.host_intercepted?("execution", "list")
+    refute Opus.Host.host_intercepted?("system", "status")
+  end
 end

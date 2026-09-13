@@ -15,12 +15,7 @@ defmodule SanctumTest do
     end
   end
 
-  # A1 regression: build_tincture_context/2 must supply a non-blank namespace.
-  # Before the fix it called Context.build/1 with authenticated: true and no
-  # :namespace at default (athanor) scope, which Context.build/1 rejects with
-  # ArgumentError — breaking EVERY tincture invocation (both the /t controller
-  # and the Prism shell). It must NOT be "fixed" by switching to scope:
-  # :platform, since platform scope bypasses tenant isolation.
+  # Tincture contexts must have a nonblank namespace and remain tenant-scoped.
   describe "build_tincture_context/2" do
     @tincture %{publisher: "alice", name: "widget"}
 

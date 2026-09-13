@@ -5,7 +5,7 @@ defmodule Arca.Storage do
   @moduledoc """
   Behaviour for storage adapters.
 
-  All paths are lists of segments, e.g. `["guest", "notes.txt"]`.
+  All paths are lists of segments, e.g. `["data", "notes.txt"]`.
   The adapter handles joining to the actual storage location.
 
   ## Single seam policy
@@ -27,6 +27,7 @@ defmodule Arca.Storage do
   | B | Pre-Arca bootstrap | Code runs before `Arca.Repo` / config is up; chicken-and-egg. | `Cyfr.Application.ensure_db_directory!`, `verify_db_writable!` |
   | C | Compile-time embedded resources | Module attribute `@external_resource` — not runtime I/O. | `@sdk_source`, `@component_guide`, `@wit_files_*` |
   | D | Local-only sandbox / OS toolchain / user-import boundary | Tar extraction tmp dirs, cargo build sandbox, user-supplied filesystem paths during publish. After validation, content rejoins Arca. | `Compendium.Registry.extract_and_store_tincture`, `Locus.Builder` |
+  | E | Repo-local code generation | The output is a source file under version control, never an athanor's tree; there is no tenant, adapter or context in reach. | `Mix.Tasks.Ops.Gen.Cli` |
 
   Any code that doesn't fit one of these groups must use `Arca` (which dispatches
   to the configured adapter via `Application.get_env(:cyfr, :storage_adapter, ...)`).
@@ -51,10 +52,11 @@ defmodule Arca.Storage do
     `components/` → `Compendium.ComponentPath`; `aqua/` →
     `Compendium.AquaPath`; `conversations/` →
     `Arca.ConversationStorage.blob_root/1` (the conversation domain's one
-    module owns both planes' spellings); `guest/` — the WASM guest's
-    `data/` scope — has none by design (the guest names its own paths;
-    `guest_scopes/0` is the map, applied by `Opus.StorageHandler` at the
-    guest boundary, so a `data/` grant can never see a host scope). The
+    module owns both planes' spellings); `data/` — what components
+    store — has none by design (the guest names its own paths inside it;
+    `guest_scopes/0` says which roots a guest may name at all, applied by
+    `Opus.StorageHandler` at the guest boundary, so a `data/` grant can
+    never see a host scope). The
     global roots keep their literal at their single consumer, with a
     roster-membership witness in that consumer's test.
   - **Anything else** → refused (`authorize_path/2`): an unknown first
@@ -65,9 +67,8 @@ defmodule Arca.Storage do
   `physical_segments/2` is the single translation from this logical
   vocabulary to the stored layout; every adapter joins its output under one
   storage root, so publishing in one athanor never overwrites another's
-  blobs and members of an athanor share its storage. A new athanor sees
-  the bundled baseline through the seed overlay (`Arca.Overlay`) — no
-  copy is made until it writes.
+  blobs and members of an athanor share its storage. A new athanor is
+  provisioned with its own copy of the shipped baseline (`Arca.Overlay`).
 
   ## Storage Structure
 
@@ -85,17 +86,18 @@ defmodule Arca.Storage do
           ├── components/{type}s/{publisher}/{name}/{version}/
           ├── aqua/                      # the athanor's AQUA agent definitions
           ├── conversations/             # chat attachment blobs
-          ├── guest/                     # guest (WASM) files — the guest's `data/` scope
-          └── meta/                      # tenant-reserved: overlay origin marks, system-written
+          ├── payloads/                  # retained execution bodies — tenant-reserved, system-written
+          └── data/                      # what components store — the guest's `data/` scope
 
   Per-athanor settings (retention policy included) are rows — the
   `athanors.settings` document — never blobs; the tree holds only content.
 
   The seed media every athanor is provisioned from is not stored state —
-  every root is read in place as a same-named subdirectory of the one seed
-  tree (`:seed_path`, the repo's `seed/` on a checkout, `/app/seed` in
-  Docker): the component bundle at `seed/components` (baked into the image)
-  and the AQUA template at `seed/aqua` (the operator-editable mount).
+  each root is a same-named subdirectory of the one seed tree
+  (`:seed_path`, the repo's `seed/` on a checkout, `/app/seed` in Docker),
+  copied into the athanor at provisioning and on a pull: the component
+  bundle at `seed/components` (baked into the image) and the AQUA template
+  at `seed/aqua` (the operator-editable mount).
 
   ## The volume vs. the seed tree
 
@@ -104,10 +106,11 @@ defmodule Arca.Storage do
   - everything under `:base_path` is **mutable state**: volume-mounted,
     backed up, gitignored (CI asserts it), owned by athanors or the server.
   - everything under `:seed_path` is **install media**: git-tracked or
-    image-baked, read in place, read-only at this facade and at every
-    adapter. A new image ships a new bundle precisely because the volume
-    does not hold it; the operator's AQUA overlay (`./aqua` →
-    `/app/seed/aqua` in compose) is operator input, not athanor state.
+    image-baked, read-only at this facade and at every adapter. A new
+    image ships a new default; what an athanor holds is its own copy,
+    offered the newer version and never changed under it. The operator's
+    AQUA mount (`./aqua` → `/app/seed/aqua` in compose) is operator input,
+    not athanor state.
 
   At-rest encryption of the volume or bucket is the operator's concern
   (disk/volume encryption, S3 default SSE) — the blob plane holds content
@@ -138,8 +141,8 @@ defmodule Arca.Storage do
   Every athanor on a server shares one storage root (filesystem path or
   object-store bucket prefix); isolation comes from the athanor segment.
 
-  `Sanctum.Context.user_id` (e.g. `"github|https://github.com|123"`,
-  `"oidcc|<iss>|<sub>"`, `"webhook:<slug>"`) and `namespace` are identity
+  `Sanctum.Context.user_id` (a person's `usr_…`, or a synthetic principal
+  such as `"webhook:<slug>"`) and `namespace` are identity
   fields (attribution, display, tincture tokens) — they are *not* path
   primitives. Only `athanor_id` shapes the on-disk layout, so members of an
   athanor share its storage.
@@ -151,11 +154,10 @@ defmodule Arca.Storage do
       ctx = Sanctum.TestContext.local()
 
       # Tenant-scoped (auto-prefixed with {athanor_id}/)
-      Arca.put(ctx, ["guest", "notes.txt"], content)
+      Arca.put(ctx, ["data", "notes.txt"], content)
 
       # Global (no tenant prefix)
       Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
-
   """
 
   alias Sanctum.Context
@@ -183,36 +185,43 @@ defmodule Arca.Storage do
            | term()}
 
   # The one layout table: every root this layer knows, one row each —
-  # `{root, class, guest-facing name, seed relationship}`. The rosters
-  # below (`tenant_roots/0`, `global_prefixes/0`, `guest_scopes/0`,
-  # `seed_roots/0`, `overlay_roots/0`, `reserved_roots/0`) are derived
-  # views of this table, so a new kind of state is a new row — never a
-  # fourth list to keep in step, and a typo cannot desynchronize one
-  # roster from the others.
+  # `{root, class, guest-facing name, seed relationship, console tier}`.
+  # The rosters below (`tenant_roots/0`, `global_prefixes/0`,
+  # `guest_scopes/0`, `seed_roots/0`, `overlay_roots/0`,
+  # `reserved_roots/0`, `console_folders/0`) are derived views of this
+  # table, so a new kind of state is a new row — never another list to
+  # keep in step, and a typo cannot desynchronize one roster from the
+  # others.
   #
   # - class: `:tenant` roots live under `athanors/{athanor_id}/`;
   #   `:tenant_reserved` roots live there too but only the server's own
   #   machinery may mutate them (`Arca.Overlay`'s internal-write scope or
   #   an `auth_method: :system` context — the `meta/` origin marks);
   #   `:global` roots stay at the storage root.
-  # - guest name: what a WASM guest calls the root (`nil` = host-only,
-  #   invisible at the guest boundary). `guest/` is the one renamed scope —
-  #   the guest says `data/` — so a `data/` grant is a physical SIBLING of
-  #   the host scopes, never their parent.
+  # - guest name: what a WASM guest may call the root (`nil` = host-only,
+  #   invisible at the guest boundary). A guest scope is a physical
+  #   SIBLING of the host scopes, never their parent, so a `data/` grant
+  #   can never see them.
   # - seed: how the root relates to the seed tree (`seed/{root}`) — one
-  #   model: `:overlay` is a read-through union with copy-on-write
-  #   (`Arca.Overlay`): the athanor's tree shadows the seed tree per
-  #   shadow unit, a write materializes the shadowed unit first, and a
-  #   release only ever changes what an UNmaterialized unit reads through
-  #   to, adding new units beside materialized ones — the unit granularity
-  #   IS the upgrade granularity (aqua's file units upgrade per file,
-  #   automatically; component version directories arrive additively).
+  #   model: `:overlay` names a root whose shipped default lives there
+  #   (`Arca.Overlay`): the athanor's tree holds its own copy of every
+  #   shipped unit, taken at provisioning or by a pull, marked by origin
+  #   and marked again on edit; a release changes nothing the athanor
+  #   holds — a newer shipped unit reads as available until pulled. The
+  #   unit granularity IS the copy and upgrade granularity (an aqua file,
+  #   a component version directory).
   #   The unit shapes themselves are the domain's: each overlaid root
   #   names an `Arca.Storage.UnitLocator` in the `:overlay_locators`
   #   config (`Compendium.ComponentPath`, `Compendium.AquaPath`), and
   #   `locate/1` below is the one lookup. `nil` — no seed counterpart.
   #   A future overlaid root is one row here plus one locator module
   #   (and, if its media has validity rules, a provisioning seed-check).
+  # - console tier: how the Files page and the `file` tool show the root
+  #   to a person (`Cyfr.Files`). `:open` is theirs to fill and clear;
+  #   `:shaped` holds units a grammar shapes — files are edited in
+  #   place, units are made and removed by the domain's own verbs;
+  #   `:read` is shown and downloaded here, managed on its own page;
+  #   `:system` is the server's own and is not shown at all.
   #
   # The volume holds more than Arca paths: `cyfr.db` (+ WAL/SHM) and the
   # `mcp-bridge/` sidecar state live inside `:base_path`, and Caddy keeps
@@ -220,25 +229,22 @@ defmodule Arca.Storage do
   # Arca addresses tenant and global blobs; everything else on the volume
   # is another program's file.
   @layout [
-    {"aqua", :tenant, nil, :overlay},
-    {"components", :tenant, "components", :overlay},
-    {"conversations", :tenant, nil, nil},
-    # What somebody kept out of a conversation, as opposed to the
-    # transcript it was kept from. A tape is a record of what was said and
-    # can be erased; a note survives that erasure — which is the whole
-    # reason it is a separate root rather than a compaction of
-    # `conversations/`.
-    #
-    # Host-only (`nil` guest name), deliberately. A note lands in the
-    # estate in focus and nowhere else, and it lands because a person kept
-    # it or approved keeping it — never because a guest wrote to a path. A
-    # guest scope would make notes something an agent writes to itself;
-    # host-only makes them something someone chose to keep.
-    {"notes", :tenant, nil, nil},
-    {"guest", :tenant, "data", nil},
-    {"meta", :tenant_reserved, nil, nil},
-    {"cache", :global, nil, nil},
-    {"system", :global, nil, nil}
+    {"aqua", :tenant, nil, :overlay, :shaped},
+    {"components", :tenant, "components", :overlay, :shaped},
+    {"conversations", :tenant, nil, nil, :read},
+    # Host-only notes belong to the athanor in focus and survive conversation
+    # deletion. Guests have no direct storage scope for this root.
+    {"notes", :tenant, nil, nil, :read},
+    # An execution's retained input and result bytes, referenced by an
+    # `execution_payloads` row. Host-only: what a component was given and
+    # what it answered is the estate's record, never a path a guest
+    # writes — and reserved, so only the payload store's own writes
+    # (`Arca.ExecutionPayloads`, under the internal-write scope) change
+    # bytes a row names by digest.
+    {"payloads", :tenant_reserved, nil, nil, :system},
+    {"data", :tenant, "data", nil, :open},
+    {"cache", :global, nil, nil, :system},
+    {"system", :global, nil, nil, :system}
   ]
 
   @doc """
@@ -268,7 +274,7 @@ defmodule Arca.Storage do
   path, served through the seed overlay like `components/`: the shipped
   template shows through until a file is edited.
   """
-  @global_prefixes for {root, :global, _guest, _seed} <- @layout, do: root
+  @global_prefixes for {root, :global, _guest, _seed, _tier} <- @layout, do: root
 
   def global_prefixes, do: @global_prefixes
 
@@ -276,7 +282,7 @@ defmodule Arca.Storage do
   # these subtrees; an unknown first segment is refused, never silently
   # minted as a new subtree. A new kind of tenant state is a new row in
   # `@layout`.
-  @tenant_roots for {root, class, _guest, _seed} <- @layout,
+  @tenant_roots for {root, class, _guest, _seed, _tier} <- @layout,
                     class in [:tenant, :tenant_reserved],
                     do: root
 
@@ -290,12 +296,11 @@ defmodule Arca.Storage do
   @spec tenant_roots() :: [String.t()]
   def tenant_roots, do: @tenant_roots
 
-  # Tenant roots only the server's own machinery may mutate. `meta/`
-  # holds the overlay's origin marks — the facts `unit_status/2` trusts
-  # to tell a copy of shipped media from the athanor's own work — so a
-  # member-level write there could forge a mark and turn "reset" into
-  # deleting member work. Reads stay ordinary tenant reads.
-  @reserved_roots for {root, :tenant_reserved, _guest, _seed} <- @layout, do: root
+  # Tenant roots only the server's own machinery may mutate: `payloads/`
+  # holds bytes an `execution_payloads` row names by digest, so a
+  # member-level write there could put other bytes behind a recorded
+  # digest. Reads stay ordinary tenant reads.
+  @reserved_roots for {root, :tenant_reserved, _guest, _seed, _tier} <- @layout, do: root
 
   @doc """
   The reserved tenant roots: subtrees of the athanor's tree that only the
@@ -307,24 +312,61 @@ defmodule Arca.Storage do
   @spec reserved_roots() :: [String.t()]
   def reserved_roots, do: @reserved_roots
 
-  # The guest (WASM) storage vocabulary and the physical tenant scope each
-  # guest scope stores under. The guest contract says `data/`; the host
-  # stores that scope under `guest/`, a physical sibling of the host
-  # scopes (aqua/, conversations/) so a `data/` grant can never see them.
+  # The guest (WASM) storage vocabulary: the roots a guest may name, each
+  # mapped to the tenant scope it stores under — the athanor's root of the
+  # same name, a physical sibling of the host scopes (aqua/,
+  # conversations/) so a `data/` grant can never see them.
   @guest_scopes Map.new(
-                  for {root, _class, guest, _seed} <- @layout, guest != nil, do: {guest, root}
+                  for {root, _class, guest, _seed, _tier} <- @layout,
+                      guest != nil,
+                      do: {guest, root}
                 )
 
   @doc """
   The guest storage scopes: what a WASM guest may name in a path, mapped
-  to the physical tenant scope each one stores under. `Opus.StorageHandler`
-  applies this at the guest boundary (requests come in speaking `data/`,
-  responses keep speaking it); keeping the map here means the layout —
-  including the one vocabulary difference between guest and host — is
-  written down in a single module.
+  to the tenant scope each one stores under. `Opus.StorageHandler`
+  applies this at the guest boundary; keeping the map here means the
+  roots a guest may reach are written down in the one layout table.
   """
   @spec guest_scopes() :: %{String.t() => String.t()}
   def guest_scopes, do: @guest_scopes
+
+  # What a person sees of the tree: the roots of the open, shaped and read
+  # tiers, by name; the system tier is not a folder at all.
+  @tier_order [:open, :shaped, :read]
+  @console_folders for tier <- @tier_order,
+                       {root, class, _guest, _seed, ^tier} <- @layout,
+                       class in [:tenant, :tenant_reserved],
+                       do: %{name: root, root: root, tier: tier}
+
+  @console_scopes Map.new(@console_folders, &{&1.name, &1.root})
+  @tiers Map.new(@layout, fn {root, _class, _guest, _seed, tier} -> {root, tier} end)
+
+  @typedoc """
+  How a root is shown to a person: `:open` (theirs to fill and clear),
+  `:shaped` (units a grammar shapes, edited in place), `:read` (shown and
+  downloaded, managed on its own page), `:system` (not shown).
+  """
+  @type tier :: :open | :shaped | :read | :system
+
+  @doc """
+  The folders the Files page and the `file` tool show, in tier order:
+  each with its console `name`, its physical `root` and its `tier`. The
+  system tier is absent by construction.
+  """
+  @spec console_folders() :: [%{name: String.t(), root: String.t(), tier: tier()}]
+  def console_folders, do: @console_folders
+
+  @doc """
+  The console's folder vocabulary mapped to the tenant root each folder
+  stores under — `%{"data" => "data", "components" => "components", …}`.
+  """
+  @spec console_scopes() :: %{String.t() => String.t()}
+  def console_scopes, do: @console_scopes
+
+  @doc "The console tier of a root; `nil` for a name the layout does not know."
+  @spec tier(String.t()) :: tier() | nil
+  def tier(root) when is_binary(root), do: Map.get(@tiers, root)
 
   @doc """
   Whether `name` is spelled like an in-flight atomic write (`<file>.tmp.<n>`,
@@ -353,16 +395,9 @@ defmodule Arca.Storage do
   def classify([]), do: :tenant
   def classify(_), do: :invalid
 
-  # Seed media: install media read in place from local disk, never tenant
-  # state and never adapter-stored. Every root is a subdirectory of the one
-  # seed tree (`:seed_path`), named after its logical root — the rows of
-  # `@layout` whose seed column is set.
-  # Derived by the SAME filter as @overlay_roots below, deliberately: the
-  # seed column's whole domain is `:overlay | nil`, so "has a seed
-  # counterpart" and "is overlaid" are one fact — two filters (`!= nil` vs
-  # `== :overlay`) were the one place the derived rosters could silently
-  # diverge if the column ever grew a value.
-  @seed_roots for {root, _class, _guest, :overlay} <- @layout, do: root
+  # Seed roots are local subdirectories of :seed_path. They use the same
+  # :overlay layout filter as overlay_roots/0.
+  @seed_roots for {root, _class, _guest, :overlay, _tier} <- @layout, do: root
 
   @doc """
   The seed-media roots: the logical `["seed", root | rest]` prefixes, each a
@@ -385,7 +420,6 @@ defmodule Arca.Storage do
 
       iex> Arca.Storage.seed_prefix("components")
       ["seed", "components"]
-
   """
   @spec seed_prefix(String.t()) :: path()
   def seed_prefix(root) when root in @seed_roots, do: ["seed", root]
@@ -399,19 +433,18 @@ defmodule Arca.Storage do
 
       iex> Arca.Storage.seed_logical(["seed", "aqua", "aqua.md"])
       ["aqua", "aqua.md"]
-
   """
   @spec seed_logical(path()) :: path()
   def seed_logical(["seed" | rest]), do: rest
 
   # The overlay roots, from the layout table. Their unit shapes live with
   # the domain locators (`locate/1`).
-  @overlay_roots for {root, _class, _guest, :overlay} <- @layout, do: root
+  @overlay_roots for {root, _class, _guest, :overlay, _tier} <- @layout, do: root
 
   @doc """
-  The seed-overlaid roots: `Arca.Overlay` resolves reads through the seed
-  tree below these roots and materializes a shadowed unit on first write.
-  How each root's units are shaped is its locator's answer — `locate/1`.
+  The seeded roots: the ones whose shipped default lives in the seed tree
+  and is copied into the athanor unit by unit (`Arca.Overlay`). How each
+  root's units are shaped is its locator's answer — `locate/1`.
   """
   @spec overlay_roots() :: [String.t()]
   def overlay_roots, do: @overlay_roots
@@ -474,8 +507,8 @@ defmodule Arca.Storage do
   Locate `path` against the overlay's unit grammar: the one lookup from a
   logical path to its shadow unit and shape, answered by the root's
   installed `Arca.Storage.UnitLocator` (pure — no I/O, so batch walks
-  can classify every leaf without a probe). A non-overlaid root — `meta/`,
-  `guest/`, the empty path — is `:not_overlaid`. The wiring is asserted
+  can classify every leaf without a probe). A non-overlaid root — `data/`,
+  `notes/`, the empty path — is `:not_overlaid`. The wiring is asserted
   and cached by `install_locators!/0` at boot; the lazy fallback here
   covers `--no-start` scripts.
   """
@@ -507,7 +540,6 @@ defmodule Arca.Storage do
 
       iex> Arca.Storage.valid_guest_path?("aqua/agent.json")
       false
-
   """
   @spec valid_guest_path?(String.t()) :: boolean()
   def valid_guest_path?(""), do: true
@@ -633,7 +665,7 @@ defmodule Arca.Storage do
   nothing cross-tenant to refuse here: a context physically cannot name
   another athanor's tree. What this gate refuses is (a) the server's own
   reserved vocabularies for non-system contexts — the seed media `seed/…`
-  (read in place from the seed tree) and the global roots `cache/` (OCI
+  (the shipped defaults) and the global roots `cache/` (OCI
   blobs) and `system/` (health probes) — and (b) any first segment outside
   the closed rosters, for everyone: an unknown root is a typo or an
   invented subtree, never storage. `Arca` runs this before dispatching to
@@ -675,12 +707,11 @@ defmodule Arca.Storage do
 
   ## Examples
 
-      iex> Arca.Storage.validate_path!(["guest", "notes.txt"])
+      iex> Arca.Storage.validate_path!(["data", "notes.txt"])
       :ok
 
-      iex> Arca.Storage.validate_path!(["guest", "..", "..", "etc", "passwd"])
+      iex> Arca.Storage.validate_path!(["data", "..", "..", "etc", "passwd"])
       ** (ArgumentError) Path traversal rejected: segment \"..\" is not allowed
-
   """
   defdelegate validate_path!(segments), to: Cyfr.PathSafety, as: :validate_segments!
 
@@ -739,7 +770,8 @@ defmodule Arca.Storage do
   @callback list_recursive(Context.t(), path()) :: {:ok, [path()]} | error()
 
   @doc """
-  Recursive file count and byte total under a prefix.
+  Recursive file count and byte total at and under a path: a directory's
+  whole subtree, or one file's own size.
 
   Quota enforcement reads this — it must reflect every leaf in the subtree,
   not just the top level, or a nested write evades the ceiling.
@@ -747,6 +779,15 @@ defmodule Arca.Storage do
   """
   @callback usage(Context.t(), path()) ::
               {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | error()
+
+  @doc """
+  Make a directory exist at `path`, holding nothing. A filesystem creates
+  it (parents included) so the tree a person browses shows every folder
+  from the first day; an object store has no directories and answers
+  `:ok` without a request — a folder there exists when a key sits under
+  it. Idempotent.
+  """
+  @callback ensure_dir(Context.t(), path()) :: :ok | error()
 
   @doc """
   Read a whole subtree through any adapter, as `{relative_path, binary}`

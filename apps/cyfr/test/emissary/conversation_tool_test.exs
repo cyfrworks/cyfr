@@ -9,7 +9,7 @@ defmodule Emissary.MCP.ConversationToolTest do
 
   alias Arca.ConversationStorage, as: Conversations
   alias Emissary.MCP.ConversationTool, as: Tool
-  alias Emissary.MCP.{ToolRegistry, ToolVisibility}
+  alias Cyfr.Ops.{Catalog, Visibility}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -21,6 +21,69 @@ defmodule Emissary.MCP.ConversationToolTest do
   end
 
   defp call(ctx, args), do: Tool.handle("conversation", ctx, args)
+
+  # A card as the loop opens it: a turn with its root, the model step, the
+  # call, and the approval on the tape; the intent is the card's.
+  defp card!(ctx, conv, intent) do
+    alias Aqua.Tape
+    proposal = intent["proposal"]
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, conv.id, %{
+        message: %{author: ctx.user_id, content: "@aqua do a thing"},
+        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+      })
+
+    {:ok, %{execution: execution, attempt: attempt}} =
+      Arca.Execution.admit(
+        %{
+          id: "exec_tool_#{System.unique_integer([:positive])}",
+          reference: "agent:local.aqua",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "agent",
+          kind: "turn",
+          turn_id: turn.id
+        },
+        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4}
+      )
+
+    {:ok, turn} =
+      Tape.start_turn(ctx, turn, %{
+        root_execution_id: execution.id,
+        attempt: attempt.attempt,
+        profile_id: "prof_x",
+        consent_id: "consent_x"
+      })
+
+    {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
+
+    {:ok, %{calls: [%{step: step}]}} =
+      Tape.record_response(ctx, turn, model_step, %{
+        text: nil,
+        tool_calls: [
+          %{
+            tool_call_id: "c1",
+            name: "#{proposal["tool"]}.#{proposal["action"]}",
+            tool: proposal["tool"],
+            action: proposal["action"],
+            arguments: proposal["args"] || %{},
+            kind: intent["action_kind"]
+          }
+        ]
+      })
+
+    {:ok, %{card: card}} =
+      Tape.open_approval(ctx, turn, step, %{
+        proposal_digest: Aqua.Loop.Policy.proposal_digest(proposal),
+        card: %{
+          content: intent["title"],
+          payload: %{"intent" => Map.put(intent, "tool_call_id", "c1")}
+        }
+      })
+
+    card
+  end
 
   describe "gates" do
     # The surface gate is the `consent: :interactive` declaration on every
@@ -37,7 +100,7 @@ defmodule Emissary.MCP.ConversationToolTest do
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
       assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               ToolRegistry.call_external("conversation", star, %{
+               Catalog.call_external("conversation", star, %{
                  "action" => "events",
                  "conversation" => conv.id
                })
@@ -45,7 +108,7 @@ defmodule Emissary.MCP.ConversationToolTest do
       scoped = %{ctx | auth_method: :api_key, api_key_type: :application}
 
       assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               ToolRegistry.call_external("conversation", scoped, %{
+               Catalog.call_external("conversation", scoped, %{
                  "action" => "send",
                  "conversation" => conv.id,
                  "message" => "hi"
@@ -57,10 +120,10 @@ defmodule Emissary.MCP.ConversationToolTest do
       # is not offered a door it cannot open.
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
-      shown = ToolVisibility.filter_for_context(ToolRegistry.list_tools(), star)
+      shown = Visibility.filter_for_context(Catalog.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "conversation"))
 
-      shown_oidc = ToolVisibility.filter_for_context(ToolRegistry.list_tools(), ctx)
+      shown_oidc = Visibility.filter_for_context(Catalog.list_tools(), ctx)
       assert Enum.any?(shown_oidc, &(&1["name"] == "conversation"))
     end
 
@@ -74,7 +137,7 @@ defmodule Emissary.MCP.ConversationToolTest do
       guest = Sanctum.Context.enter_guest(ctx)
 
       assert {:error, {:guest_plane_call, "conversation"}} =
-               ToolRegistry.call_external("conversation", guest, %{
+               Catalog.call_external("conversation", guest, %{
                  "action" => "events",
                  "conversation" => conv.id
                })
@@ -83,7 +146,7 @@ defmodule Emissary.MCP.ConversationToolTest do
     test "every action is external-plane only and interactive-only" do
       actions = Tool.definition().annotations.actions
 
-      assert map_size(actions) == 10
+      assert map_size(actions) == 16
 
       for {name, spec} <- actions do
         assert spec.planes == [:external], "#{name} is reachable in-chain"
@@ -102,10 +165,10 @@ defmodule Emissary.MCP.ConversationToolTest do
       # the SSOT and the tool renders it as a typed refusal.
       long = String.duplicate("é", 20_000)
 
-      assert {:error, {:invalid_argument, msg}} =
+      assert {:error, :message_too_long} =
                call(ctx, %{"action" => "send", "conversation" => conv.id, "message" => long})
 
-      assert msg =~ "32 KiB"
+      assert Cyfr.Ops.Error.message(:message_too_long) =~ "32 KiB"
     end
   end
 
@@ -202,18 +265,7 @@ defmodule Emissary.MCP.ConversationToolTest do
           athanor_id: ctx.athanor_id
         )
 
-      card = fn intent ->
-        {:ok, apr} =
-          Conversations.append(ctx, conv.id, %{
-            author: Arca.Schemas.Message.agent_author(),
-            kind: "approval",
-            status: "pending",
-            content: "Do a thing",
-            payload: %{"orchestrator" => "aqua", "intent" => intent}
-          })
-
-        apr
-      end
+      card = fn intent -> card!(ctx, conv, intent) end
 
       destructive =
         card.(%{
@@ -407,6 +459,148 @@ defmodule Emissary.MCP.ConversationToolTest do
                })
 
       assert msg =~ "your own lines"
+    end
+  end
+
+  describe "the send envelope and the thread's own verbs" do
+    setup %{ctx: ctx} do
+      # Two members: a bare line is people talking, so a send here writes
+      # a row and starts nothing.
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure("usr_other_#{System.unique_integer([:positive])}",
+          scope: "athanor",
+          athanor_id: ctx.athanor_id
+        )
+
+      :ok
+    end
+
+    test "get answers the thread with its live state", %{ctx: ctx, conv: conv} do
+      assert {:ok, %{id: id, running: false, queued: 0, pending_approvals: []}} =
+               call(ctx, %{"action" => "get", "conversation" => conv.id})
+
+      assert id == conv.id
+
+      assert {:error, {:not_found, "conversation", "conv_nothing"}} =
+               call(ctx, %{"action" => "get", "conversation" => "conv_nothing"})
+    end
+
+    test "files attach under a pre-minted id, and the send names them", %{ctx: ctx, conv: conv} do
+      message_id = Cyfr.UUID7.generate_id("msg")
+
+      assert {:ok, %{message_id: ^message_id, attachments: [ref]}} =
+               call(ctx, %{
+                 "action" => "attach",
+                 "conversation" => conv.id,
+                 "message_id" => message_id,
+                 "files" => [
+                   %{
+                     "filename" => "note.txt",
+                     "media_type" => "text/plain",
+                     "data" => Base.encode64("hi")
+                   }
+                 ]
+               })
+
+      assert {:error, {:invalid_argument, _}} =
+               call(ctx, %{
+                 "action" => "attach",
+                 "conversation" => conv.id,
+                 "message_id" => message_id,
+                 "files" => [%{"filename" => "x", "media_type" => "text/plain", "data" => "%%%"}]
+               })
+
+      assert {:ok, %{accepted: true, message_id: ^message_id, replayed: false, running: false}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "conversation" => conv.id,
+                 "message" => "here is a file",
+                 "id" => message_id,
+                 "attachments" => [ref],
+                 "client_id" => "c-1"
+               })
+
+      {:ok, row} = Conversations.get_message(ctx, message_id)
+      assert Conversations.payload(row)["attachments"] == [ref]
+
+      assert {:ok, %{messages: [%{id: ^message_id}], cursor: cursor}} =
+               call(ctx, %{"action" => "messages", "conversation" => conv.id})
+
+      assert is_integer(cursor)
+    end
+
+    test "a room beside the thread is read for the send and never stored", %{ctx: ctx, conv: conv} do
+      {:ok, room} = Conversations.create(ctx, %{title: "the room"})
+      {:ok, _} = Conversations.append(ctx, room.id, %{author: ctx.user_id, content: "room talk"})
+
+      assert {:ok, %{accepted: true, message_id: id}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "conversation" => conv.id,
+                 "message" => "about the room",
+                 "room" => %{
+                   "athanor_id" => ctx.athanor_id,
+                   "conversation_id" => room.id,
+                   "title" => "the room"
+                 }
+               })
+
+      {:ok, row} = Conversations.get_message(ctx, id)
+      assert row.content == "about the room"
+      refute inspect(Conversations.payload(row)) =~ "room talk"
+
+      # A room the sender cannot read leaves the send as it is.
+      assert {:ok, %{accepted: true}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "conversation" => conv.id,
+                 "message" => "still sent",
+                 "room" => %{"athanor_id" => "ath_elsewhere", "conversation_id" => "conv_x"}
+               })
+    end
+
+    test "delete removes the thread whole", %{ctx: ctx, conv: conv} do
+      {:ok, _} = Conversations.append(ctx, conv.id, %{author: ctx.user_id, content: "bye"})
+
+      assert {:ok, %{deleted: true}} =
+               call(ctx, %{"action" => "delete", "conversation" => conv.id})
+
+      assert {:error, {:not_found, "conversation", _}} =
+               call(ctx, %{"action" => "get", "conversation" => conv.id})
+
+      assert {:error, {:not_found, "conversation", _}} =
+               call(ctx, %{"action" => "delete", "conversation" => conv.id})
+    end
+
+    test "revoke_grant withdraws a standing answer for the agent it was given for", %{
+      ctx: ctx,
+      conv: conv
+    } do
+      {:ok, _} =
+        Aqua.ToolGrants.put(ctx, %{
+          scope: "conversation",
+          effect: "allow",
+          conversation_id: conv.id,
+          agent_name: "aqua",
+          tool: "notes",
+          action: "keep"
+        })
+
+      assert {:ok, [_]} = Aqua.ToolGrants.for_conversation(ctx, conv.id, "aqua")
+
+      assert {:ok, %{revoked: true}} =
+               call(ctx, %{
+                 "action" => "revoke_grant",
+                 "conversation" => conv.id,
+                 "agent_name" => "aqua",
+                 "tool" => "notes",
+                 "tool_action" => "keep"
+               })
+
+      assert {:ok, []} = Aqua.ToolGrants.for_conversation(ctx, conv.id, "aqua")
     end
   end
 end

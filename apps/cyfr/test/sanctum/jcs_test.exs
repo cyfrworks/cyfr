@@ -61,9 +61,7 @@ defmodule Sanctum.JCSTest do
       assert {:error, {:invalid_value, [], :unsupported_type}} = JCS.encode(~D[2026-08-07])
       assert {:error, {:invalid_value, [], :unsupported_type}} = JCS.encode(<<0xFF, 0xFE>>)
 
-      # A KEY with the same invalid bytes used to sail through: the sort
-      # key degraded to an error tuple and the raw bytes were emitted —
-      # non-canonical output under {:ok, _}, in the consent-digest class.
+      # Reject invalid UTF-8 map keys instead of returning noncanonical JSON.
       assert {:error, {:invalid_value, [], :unsupported_type}} =
                JCS.encode(%{<<0xFF, 0xFE>> => "x"})
 
@@ -196,9 +194,7 @@ defmodule Sanctum.JCSTest do
     end
   end
 
-  # ============================================================================
-  # The Phase 1 resolved-policy fixture, as a real-world vector
-  # ============================================================================
+  # Resolved-policy canonicalization fixture
 
   test "the resolved-policy golden fixture canonicalizes and is stable" do
     fixture =

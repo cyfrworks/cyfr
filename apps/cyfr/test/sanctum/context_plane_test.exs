@@ -5,12 +5,8 @@ defmodule Sanctum.ContextPlaneTest do
 
   alias Sanctum.Context
 
-  # The D1 plane split, Context half: a context that has entered a guest
-  # closure can never authorize an external-plane call — even with the :*
-  # wildcard, which short-circuits every permission check. Every builder
-  # defaults to :external; the guest plane is stamped one-way by
-  # enter_guest/1 (Opus.Executor before a guest run, the conversation runner
-  # before an approved in-chain call).
+  # Guest contexts cannot authorize external-plane operations, including
+  # with wildcard permissions. enter_guest/1 only transitions into the guest plane.
 
   describe "defaults" do
     test "every construction path starts on the external plane" do
@@ -77,23 +73,23 @@ defmodule Sanctum.ContextPlaneTest do
     end
   end
 
-  describe "require_permission_for_plane/2 (the gate providers call)" do
+  describe "require_permission/3 on an in-chain call (the gate providers call)" do
     test "external plane fails closed, exactly like require_permission/2" do
       external = Context.build(%{user_id: "u", permissions: [:execute]})
-      assert :ok = Context.require_permission_for_plane(external, :execute)
+      assert :ok = Context.require_permission(external, :execute, :in_chain)
 
       assert {:error, {:missing_permission, :admin}} =
-               Context.require_permission_for_plane(external, :admin)
+               Context.require_permission(external, :admin, :in_chain)
     end
 
     test "guest plane uses the identity conjunct, not the plane refusal" do
       guest = Context.enter_guest(Context.build(%{user_id: "u", permissions: [:execute]}))
       # Allowed when identity carries the permission (authority conjunct is
       # applied upstream at the dispatch chokepoint)...
-      assert :ok = Context.require_permission_for_plane(guest, :execute)
+      assert :ok = Context.require_permission(guest, :execute, :in_chain)
       # ...and refused when it does not — but never with the guest-plane error.
       assert {:error, {:missing_permission, :admin}} =
-               Context.require_permission_for_plane(guest, :admin)
+               Context.require_permission(guest, :admin, :in_chain)
     end
   end
 end

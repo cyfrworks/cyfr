@@ -28,11 +28,7 @@ defmodule Sanctum.Webhook do
 
   require Logger
 
-  # The header a sender puts the HMAC in when it does not name one. Read by
-  # webhook creation, the console's form, and the controller's redaction of
-  # the echoed request — three places that each used to spell it out, one of
-  # them the redaction fallback, where a drifted copy leaks the signature
-  # back to the caller.
+  # Default HMAC header shared by webhook creation, the console and request redaction.
   @default_signature_header "x-cyfr-signature"
 
   @doc false
@@ -68,16 +64,9 @@ defmodule Sanctum.Webhook do
   `%{}`), `signature_header` (default `x-cyfr-signature`), `description`,
   `rate_limit`.
 
-  Replay protection is a REQUIRED decision, not a default. Name a
-  `timestamp_header`, an `idempotency_key_header`, or pass
-  `replay_protection: "none"` to state that this webhook accepts replays.
-  Neither header can be defaulted on — the sender decides which headers it
-  emits, and naming one it does not send would reject every real delivery
-  — but "off" was reached by omission, and an HMAC over a raw body stays
-  valid forever, so a delivery captured from a proxy log or mirrored
-  traffic re-fires the bound component as often as it is replayed. This
-  used to be a `Logger.warning` emitted AFTER the row was committed, which
-  could inform but never refuse.
+  Replay protection must be explicit: set `timestamp_header` or
+  `idempotency_key_header`, or use `replay_protection: "none"` to accept
+  replays. Configured headers must be supplied by the sender.
   """
   @spec create(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def create(%Context{} = ctx, %{name: name, target_ref: target_ref} = opts)
@@ -146,17 +135,8 @@ defmodule Sanctum.Webhook do
     end
   end
 
-  # The decision, taken BEFORE the row exists.
-  #
-  # This was a warning logged after `create_webhook/1` had already
-  # committed — it could describe the exposure but never refuse it, so a
-  # webhook that faces the internet with no replay protection was the
-  # default outcome of not thinking about it. Now not thinking about it is
-  # the one thing that fails.
-  #
-  # `"none"` remains entirely legal: plenty of senders emit neither header,
-  # and an internal webhook behind a trusted network may not care. It just
-  # has to be said.
+  # Require an explicit idempotency mode before creating the webhook.
+  # The caller may choose "none" for senders without an idempotency header.
   defp check_replay_decision(opts) do
     named_header? =
       present?(Map.get(opts, :timestamp_header)) or
@@ -361,26 +341,8 @@ defmodule Sanctum.Webhook do
   defp do_verify(_secret_encrypted, _aad, _raw_body, _received, _timestamp),
     do: {:error, :malformed_signature}
 
-  # Decrypt the stored secret via `Sanctum.Cipher`. Any decrypt failure
-  # (wrong tenant AAD, corrupt ciphertext, key mismatch) is an authentication
-  # failure, not an internal error — normalize to :signature_mismatch so the
-  # signature plug responds 401 and the {:error, atom()} contract holds (the
-  # cipher may return a tuple reason).
-  # A cipher failure is OURS, not the sender's.
-  #
-  # This used to answer `:signature_mismatch`, which the plug renders as
-  # 401 "Signature verification failed" — so a keyring rotated without
-  # re-sealing, or a restored backup carrying the wrong key, told every
-  # sender their signature was wrong while the server simply could not
-  # read its own secret. Two very different incidents, one message, and
-  # the one that needs an operator looked like the one that needs the
-  # sender. (`VerifyWebhookSignature` still carried a
-  # `{:decryption_failed, _}` arm for exactly this, matching a shape that
-  # by then could never arrive.)
-  #
-  # Still an error, so the rotation grace window still retries with the
-  # previous secret: a secret this key cannot read is precisely the case
-  # the previous one may cover.
+  # Return stored-secret decryption failures separately from signature
+  # mismatches. The rotation grace path may retry with the previous secret.
   defp decrypt_secret(secret_encrypted, aad) do
     case Sanctum.Cipher.decrypt(secret_encrypted, aad) do
       {:ok, secret} -> {:ok, secret}

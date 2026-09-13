@@ -6,12 +6,8 @@ defmodule PrismWeb.PendingProbe do
   The `_cyfr_pending_probe` cookie and the current-provider read, shared by
   the claim-namespace and legal-accept controllers.
 
-  `EmissaryWeb.AuthController.maybe_stash_pending_probe/3` writes the
-  cookie with `encrypt: true`; fetching it `signed:` fails verification
-  and reads as nil — the fetch here is the one that matches the write.
-  The two controllers used to carry near-identical copies whose no-cookie
-  arms disagreed (one always answered `:expired`, the other told a
-  never-signed-in person apart), and each hardcoded the provider list.
+  Reads the encrypted cookie written by
+  `EmissaryWeb.AuthController.maybe_stash_pending_probe/3` using `encrypt: true`.
   """
 
   import Plug.Conn

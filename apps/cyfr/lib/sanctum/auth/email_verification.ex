@@ -84,16 +84,8 @@ defmodule Sanctum.Auth.EmailVerification do
     end
   end
 
-  # Ueberauth's OAuth strategies stash the provider's raw userinfo under
-  # `raw_info.user`. `ueberauth_oidcc` does not: it builds a
-  # `%UeberauthOidcc.RawInfo{opts, claims, userinfo, introspection}` with no
-  # `:user` key, so a generic-OIDC sign-in read as `:unknown` however loudly
-  # the issuer spoke — the `false` arm above was unreachable and the door's
-  # exact-email entry (which admits only on `true`) could never match.
-  #
-  # The userinfo response wins over the id token when both speak: it is the
-  # fresher of the two, and an issuer that re-asserts the address there is
-  # answering about it directly.
+  # Read OAuth userinfo from raw_info.user and OIDC verification from
+  # its RawInfo fields. Userinfo takes precedence over id-token claims.
   defp email_verified_claim(%{raw_info: %{userinfo: %{"email_verified" => v}}}), do: v
   defp email_verified_claim(%{raw_info: %{claims: %{"email_verified" => v}}}), do: v
   defp email_verified_claim(%{raw_info: %{user: %{"email_verified" => v}}}), do: v

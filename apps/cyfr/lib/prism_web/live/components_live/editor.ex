@@ -14,7 +14,7 @@ defmodule PrismWeb.ComponentsLive.Editor do
   def format_push_error({:error, msg}) when is_binary(msg),
     do: "Push failed: #{msg}"
 
-  def format_push_error(reason), do: "Push failed: " <> PrismWeb.MCPHelpers.error_message(reason)
+  def format_push_error(reason), do: "Push failed: " <> PrismWeb.Ops.error_message(reason)
 
   def type_sort_order("catalyst"), do: 0
   def type_sort_order("reagent"), do: 1

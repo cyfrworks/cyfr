@@ -20,35 +20,17 @@ defmodule Sanctum.Consent.CommitDigest do
   id alone would let a rebinding — the same entry pointed at a different
   account or different endpoints — inherit an existing consent silently.
 
-  ## `blob_digest` is what makes this closed
+  ## Policy blob
 
-  Every other field here is a decision *re-expressed*. `blob_digest` is the
-  hash of the resolved policy blob itself — the exact bytes
-  `Sanctum.Authority` will enforce — so the digest is a promise about what
-  runs **by construction** rather than by keeping this list in step with
-  the blob builder.
+  `blob_digest` hashes the resolved policy bytes enforced by `Sanctum.Authority`.
 
-  It is required, and this list is `only_keys`-closed, because the failure
-  it prevents happened twice in opposite directions. `limits` was once
-  threaded in from the decisions and never reached the blob, so a tightened
-  number was signed and then ignored. `durable_storage` was the mirror
-  image: never in this list, but read at `Commit.publish_edge/4` to decide
-  whether every edge's storage actions are filtered to read-only — so the
-  same plan token, proof and commit digest could be replayed with the flag
-  flipped and ship `write`/`delete` on a **public** profile to anonymous
-  callers. Neither is possible while the bytes themselves are hashed here.
+  Requires `blob_digest` and rejects keys outside the declared input set.
 
-  ## `label` is here because the blob cannot carry it
+  ## Target profile
 
-  `blob_digest` covers what a consent *grants*; `label` decides which
-  profile the grant lands on — `(athanor_id, source_ref, label, kind)` is
-  the profiles' active identity index. Two owner profiles on one
-  `source_ref` under different labels whose blobs are byte-identical
-  therefore produced the same digest, and on a first consent
-  `Plan.locate_profile/4` answers `{:ok, nil, 0}` for both, so the proof's
-  `profile_id` and `expected_revision` bindings matched too. A proof minted
-  for `"prod"` could be spent on `"staging"`. Capability-identical, so
-  nothing widened — but the operator's profile was not where they left it.
+  `label` binds the grant to its target profile identity,
+  `(athanor_id, source_ref, label, kind)`. Identical policy blobs under
+  different labels must have different commit digests.
 
   `scope` needs no entry: `ShapeDigest` carries it, and `shape_digest` is
   the first field here.
@@ -71,6 +53,14 @@ defmodule Sanctum.Consent.CommitDigest do
           required(:tool_patterns) => [String.t()]
         }
 
+  @type selection :: %{
+          required(:from) => String.t(),
+          required(:dep) => String.t(),
+          required(:label) => String.t(),
+          required(:binding_digest) => String.t(),
+          optional(:fields) => [String.t()]
+        }
+
   @type commit :: %{
           required(:shape_digest) => String.t(),
           required(:blob_digest) => String.t(),
@@ -78,6 +68,7 @@ defmodule Sanctum.Consent.CommitDigest do
           required(:kind) => :owner | :public,
           required(:invoke_mode) => :open_inert | :edge_only,
           optional(:bindings) => [binding()],
+          optional(:selections) => [selection()],
           optional(:tool_servers) => [tool_server_grant()],
           optional(:override) => boolean()
         }
@@ -98,7 +89,6 @@ defmodule Sanctum.Consent.CommitDigest do
       ...> })
       iex> String.starts_with?(digest, "sha256:")
       true
-
   """
   @spec compute(commit()) :: {:ok, String.t()} | {:error, error()}
   def compute(commit) when is_map(commit) do
@@ -123,7 +113,7 @@ defmodule Sanctum.Consent.CommitDigest do
     with :ok <-
            Normalize.only_keys(
              commit,
-             ~w(shape_digest blob_digest label kind invoke_mode bindings tool_servers override)a,
+             ~w(shape_digest blob_digest label kind invoke_mode bindings selections tool_servers override)a,
              tag
            ),
          {:ok, shape_digest} <- Normalize.required_string(commit, :shape_digest, tag),
@@ -134,6 +124,7 @@ defmodule Sanctum.Consent.CommitDigest do
            Normalize.enum(commit, :invoke_mode, [:open_inert, :edge_only], tag),
          :ok <- check_public_is_contained(kind, invoke_mode),
          {:ok, bindings} <- bindings(commit),
+         {:ok, selections} <- selections(commit),
          {:ok, tool_servers} <- tool_servers(commit),
          {:ok, override} <- override(commit) do
       {:ok,
@@ -144,6 +135,7 @@ defmodule Sanctum.Consent.CommitDigest do
          "kind" => Atom.to_string(kind),
          "invoke_mode" => Atom.to_string(invoke_mode),
          "bindings" => bindings,
+         "selections" => selections,
          "tool_servers" => tool_servers,
          "override" => override
        }}
@@ -203,6 +195,67 @@ defmodule Sanctum.Consent.CommitDigest do
 
   defp normalize_binding(other) do
     {:error, {:invalid_commit, :bindings, "each binding must be a map, got: #{inspect(other)}"}}
+  end
+
+  # One edge, one selected profile: the digest covers which labelled
+  # profile of which dependency lends its entry to which lender, at which
+  # binding digest, narrowed to which fields.
+  defp selections(commit) do
+    tag = :invalid_commit
+
+    case Map.get(commit, :selections, []) do
+      list when is_list(list) ->
+        list
+        |> Enum.reduce_while({:ok, []}, fn selection, {:ok, acc} ->
+          case normalize_selection(selection) do
+            {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+            error -> {:halt, error}
+          end
+        end)
+        |> case do
+          {:ok, selections} -> ensure_one_selection_per_edge(selections)
+          error -> error
+        end
+
+      other ->
+        {:error, {tag, :selections, "must be a list, got: #{inspect(other)}"}}
+    end
+  end
+
+  defp normalize_selection(selection) when is_map(selection) do
+    tag = :invalid_commit
+
+    with :ok <- Normalize.only_keys(selection, ~w(from dep label binding_digest fields)a, tag),
+         {:ok, from} <- Normalize.required_string(selection, :from, tag),
+         {:ok, dep} <- Normalize.required_string(selection, :dep, tag),
+         {:ok, label} <- Normalize.required_string(selection, :label, tag),
+         {:ok, binding_digest} <- Normalize.required_string(selection, :binding_digest, tag),
+         {:ok, fields} <- Normalize.string_set(selection, :fields, tag) do
+      {:ok,
+       %{
+         "from" => from,
+         "dep" => dep,
+         "label" => label,
+         "binding_digest" => binding_digest,
+         "fields" => fields
+       }}
+    end
+  end
+
+  defp normalize_selection(other) do
+    {:error,
+     {:invalid_commit, :selections, "each selection must be a map, got: #{inspect(other)}"}}
+  end
+
+  defp ensure_one_selection_per_edge(selections) do
+    sorted = Enum.sort_by(selections, &{&1["from"], &1["dep"]})
+    edges = Enum.map(sorted, &{&1["from"], &1["dep"]})
+
+    if length(Enum.uniq(edges)) == length(edges) do
+      {:ok, sorted}
+    else
+      {:error, {:invalid_commit, :selections, "each from/dep edge may be selected exactly once"}}
+    end
   end
 
   # One need, one credential. Two bindings for the same need would make the

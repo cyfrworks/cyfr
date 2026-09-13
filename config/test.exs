@@ -34,17 +34,14 @@ config :cyfr, :tincture_rate_limit_max, 1_000_000
 # in a suite. Surfaces render its "unknown" answer.
 config :cyfr, :registry_health_probe, false
 
-# And the same for the REST host: the discard port refuses immediately, so
-# a surface that reads cyfr.run takes its error path deterministically
-# instead of depending on what this machine's DNS does with a real name —
-# a captive portal that answers everything and a laptop with no network
-# gave different results before. Two suites already set this by hand for
-# their own pages; the default belonged here.
-#
-# `:oci_registry_url` deliberately stays at its shipped default: the
-# registry-host allowlist is what `Compendium.OCI.Client` and the component
-# tool enforce, and their suites pin the refusal against the real host.
+# Both registry endpoints point at a closed loopback port: a registry is
+# configured, so the "registry does not answer" paths run, and no test can
+# reach a registry off this machine. `:registry_url` decides whether a
+# registry is configured at all and where its REST API is; `:oci_registry_url`
+# is what a pull resolves against. A test that needs the public host name
+# sets it locally and asserts through `Compendium.RegistryHost.canonical_host/0`.
 config :cyfr, :registry_url, "127.0.0.1:19"
+config :cyfr, :oci_registry_url, "127.0.0.1:19"
 
 # Configure Arca for tests (use sandboxed pool). The adapter is selected at
 # build time in config.exs from CYFR_DATABASE; the per-adapter opts must
@@ -74,13 +71,7 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
       queue_target: 500,
       queue_interval: 5_000,
       journal_mode: :wal,
-      # WAL gives concurrent readers but still one writer, and the suite runs
-      # up to 20 async cases against one file — so a fixture doing a wide
-      # upsert can genuinely queue behind others for a while. At 5s that
-      # surfaced as an occasional `Database busy` in whichever test lost the
-      # race, which reads exactly like a real failure and is not one. The
-      # wait only happens when contended, so a green run pays nothing for
-      # the larger budget.
+      # Allow SQLite writers to wait for contention between concurrent test fixtures.
       busy_timeout: 20_000
 
   :postgres ->
@@ -108,6 +99,10 @@ config :cyfr, private_egress_targets: ["localhost", "127.0.0.1/8", "::1"]
 # the override. See Sanctum.Tenancy "Test overrides".
 config :cyfr, allow_tenancy_resolver_override: true
 
+# One app's tests run without the sibling apps' providers; the catalog
+# boots leniently here and refuses to elsewhere.
+config :cyfr, tool_providers_lenient: true
+
 # Don't run the background retention sweeper in the test supervision tree —
 # its periodic DB cleanup conflicts with the Ecto sandbox connection lifecycle.
 # Retention logic is exercised directly in Cyfr.RetentionTest / scheduler unit tests.
@@ -118,13 +113,13 @@ config :cyfr, retention_scheduler_enabled: false
 # starts it explicitly.
 config :cyfr, external_server_reconciler_enabled: false
 
-# Same reason, sharper teeth: the cron scheduler is lent a test's sandbox
-# connection and then outlives it, so the connection dies mid-query and
-# the NEXT test fails. cron_scheduler_test.exs starts it itself.
+# Start the cron scheduler only within its tests so its database work
+# stays within the owning test's sandbox lifetime.
 config :cyfr, cron_scheduler_enabled: false
 
-# Boot-time Home provisioning writes rows before any test's sandbox
-# checkout — provisioning is exercised directly by its own tests.
+# The boot task writes rows (the operator reconcile, the seed sync) before
+# any test's sandbox checkout — both are exercised directly by their own
+# tests.
 config :cyfr, provisioning_boot_enabled: false
 
 # Likewise the conversation-runner boot recovery reads the repo before any
@@ -142,6 +137,14 @@ config :cyfr, provisioning_inline: true
 # querying on a 60s timer) and the same sandbox hazard; its own suite
 # exercises sweep logic directly.
 config :cyfr, execution_sweeper_enabled: false
+
+# The control-plane claim is the same shape again (a permanent GenServer
+# renewing a DB lease); `Cyfr.ControlPlane.Claim` is exercised directly.
+config :cyfr, control_plane_claim_enabled: false
+
+# The keyring fingerprint check reads and writes a server row at boot,
+# outside any sandbox; `Cyfr.KeyringFingerprint` is exercised directly.
+config :cyfr, keyring_fingerprint_check_enabled: false
 
 # Default storage roots for tests (individual tests may override), two
 # throwaway SIBLING roots — the topology dev and prod use ("two trees, two

@@ -5,13 +5,9 @@ defmodule Locus.HostSurfaceTest do
   @moduledoc """
   What locus reaches for in cyfr, written down.
 
-  `apps/locus/mix.exs` declares `{:cyfr, runtime: false}` — the builder
-  release loads cyfr for its pure modules and never starts it. That is a
-  real isolation property, and it was held by a comment: nothing checked
-  which cyfr modules locus actually names, and `Locus.MCP` names several
-  that need cyfr *running* (`Arca.put`, `Cyfr.RateLimiter.check`,
-  `Compendium.AutoIndexer.scan`). The convention was that the MCP module
-  never runs in the builder; a convention is not a guard.
+  Checks the builder release’s runtime isolation. It loads cyfr with
+  runtime: false; its standalone path may use only pure cyfr modules.
+  Locus.MCP runs in the server and has separate dependencies.
 
   Opus, Arca and Compendium each have a rostered surface for the same
   reason. This is the one that was missing.
@@ -50,6 +46,11 @@ defmodule Locus.HostSurfaceTest do
     # The builder client's outbound HTTP, classified separately from the
     # pinned OCI path because it talks to an operator-configured sibling.
     "Cyfr.Network",
+    # The operation catalog: an in-chain tool call is dispatched through it.
+    "Cyfr.Ops",
+    # Whether this server builds at all (`CYFR_BUILDS`): an application-env
+    # read, answered by a loaded cyfr as well as a started one.
+    "Cyfr.RuntimeConfig",
 
     # ——— Product plane: `Locus.MCP` only, and needs a STARTED cyfr ———
     # These are why the builder release must never route MCP traffic: each

@@ -51,7 +51,11 @@ defmodule Compendium.Component do
             result
           end
 
-        {:ok, maybe_enrich_with_dependencies(ctx, component, result)}
+        if ref.type == Compendium.AgentSource.type() do
+          {:ok, result}
+        else
+          {:ok, maybe_enrich_with_dependencies(ctx, component, result)}
+        end
 
       {:error, reason} ->
         {:error, reason}

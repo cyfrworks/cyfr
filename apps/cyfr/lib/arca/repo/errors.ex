@@ -22,7 +22,6 @@ defmodule Arca.Repo.Errors do
       rescue
         e in Arca.Repo.Errors.db_errors() ->
           handle_db_error(e)
-
   """
   defmacro db_errors do
     errors =
@@ -58,12 +57,9 @@ defmodule Arca.Repo.Errors do
   Like `with_db_rescue/2`, but answers `default` instead of
   `{:error, :database_error}` when the store cannot answer.
 
-  A default-returner is a DELIBERATE fail-open: the caller has decided
-  that, during an outage, this read may answer as if nothing were there
-  (an empty roster, a zero count, a not-found). That decision must be
-  justified where it is made — every call site carries a one-line comment
-  saying why the default is safe there. Reads that decide anything
-  (admission, caps, archival) must use `with_db_rescue/2` and refuse.
+  Default-returning reads may produce an empty result during an outage.
+  Document the effect of that fallback at the call site. Reads governing
+  admission, caps, or archival must use `with_db_rescue/2` and refuse.
   """
   @spec with_db_rescue(String.t(), default, (-> result)) :: result | default
         when result: term(), default: term()

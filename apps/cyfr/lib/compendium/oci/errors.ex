@@ -21,6 +21,7 @@ defmodule Compendium.OCI.Errors do
           | :policy_acceptance_required
           | :policy_version_mismatch
           | :taken_down
+          | :registry_host_mismatch
 
   @type t :: %__MODULE__{
           reason: error_reason(),
@@ -193,6 +194,30 @@ defmodule Compendium.OCI.Errors do
   @spec api_connection_error(term()) :: t()
   def api_connection_error(reason) do
     connection_error("cyfr.run", reason)
+  end
+
+  @doc "The refusal every registry client answers when no registry is configured."
+  @spec unconfigured() :: t()
+  def unconfigured do
+    %__MODULE__{
+      reason: :registry_unconfigured,
+      message: "No registry is configured on this server (CYFR_REGISTRY_URL=none)",
+      registry: Compendium.RegistryHost.none(),
+      status: nil,
+      detail: nil
+    }
+  end
+
+  @doc "The refusal for an OCI host other than this deployment's canonical one."
+  @spec host_not_canonical(String.t(), String.t()) :: t()
+  def host_not_canonical(host, canonical) when is_binary(host) and is_binary(canonical) do
+    %__MODULE__{
+      reason: :registry_host_mismatch,
+      message: "This deployment only supports #{canonical}, got: #{host}.",
+      registry: host,
+      status: nil,
+      detail: nil
+    }
   end
 
   @doc """

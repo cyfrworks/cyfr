@@ -732,7 +732,7 @@ defmodule Compendium.Registry.Client do
   end
 
   # Decoded registry JSON is string-keyed; every in-process consumer of a
-  # tool result speaks atoms (`PrismWeb.MCPHelpers`' stated contract). The
+  # tool result speaks atoms (`PrismWeb.Ops`' stated contract). The
   # wire is unaffected — JSON encodes both spellings identically — so this
   # decode boundary is where the two dialects meet: known keys become the
   # atoms consumers read, unknown remote additions stay strings and are

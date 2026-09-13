@@ -207,11 +207,7 @@ defmodule Sanctum.ApiKeyTest do
       assert {:error, :revoked} = ApiKey.validate(active.api_key)
     end
 
-    # A3: revocation must take effect on the IMMEDIATELY following request.
-    # validate/1 reads the live DB row (no cache today); this test warms a
-    # successful validation first so that if a key-hash cache is ever added,
-    # this fails unless the cache is invalidated on revoke — a regression
-    # guard against silently reintroducing a stale-auth window.
+    # Warm validation before revocation; the immediately following request must reject the key.
     test "a validated key fails on the very next request after revoke", %{ctx: ctx} do
       {:ok, created} = ApiKey.create(ctx, %{name: "warm-then-revoke", scope: []})
 
@@ -505,11 +501,7 @@ defmodule Sanctum.ApiKeyTest do
       refute ApiKey.ip_allowed?("2001:db9::1", allowlist)
     end
 
-    # S15: an out-of-range / malformed prefix must fail CLOSED. Before the
-    # parse_cidr bound it flowed into bsl(1, bit_size - prefix), collapsing
-    # the mask toward 0 and matching ANY IP (silent fail-open / allowlist
-    # widening). Every malformed entry must match NOTHING — not even the
-    # network address itself.
+    # Malformed or out-of-range CIDR prefixes must match no address, including the network address.
     test "malformed CIDR fails closed (no fail-open / allowlist widening)" do
       for bad <- [
             "192.168.1.0/99",
@@ -554,6 +546,8 @@ defmodule Sanctum.ApiKeyTest do
   describe "a key is a standing channel of its athanor" do
     test "it stops when the athanor is archived, and when its creator is denied", %{ctx: ctx} do
       n = System.unique_integer([:positive])
+      # The creator is a person this server knows, named by their own id.
+      {ctx, creator} = Sanctum.TestContext.person!(ctx, %{email: "keys#{n}@example.com"})
       {:ok, group} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Keys #{n}")
       in_group = %{ctx | athanor_id: group.id}
       {:ok, %{api_key: key}} = ApiKey.create(in_group, %{name: "chan-#{n}"})
@@ -576,15 +570,7 @@ defmodule Sanctum.ApiKeyTest do
       assert {:ok, _} = ApiKey.validate(key, [])
 
       # the creator being denied on this server does
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: ctx.user_id,
-          provider: "github",
-          email: "keys#{n}@example.com",
-          verified: true
-        })
-
-      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
+      {:ok, _} = Sanctum.Tenancy.Users.deny(creator)
       assert {:error, :revoked} = ApiKey.validate(key, [])
     end
   end

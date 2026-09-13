@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.ClaimNamespaceControllerTest do
   @moduledoc """
-  Tests for the personal-namespace claim gate.
+  Tests for the publisher-namespace claim page.
 
   Happy-path POST `/submit` requires a mocked `Registry.Client.claim_personal_namespace/4`
   response which the repo has no infrastructure for; those cases are deliberately
@@ -39,27 +39,46 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       assert body =~ "Claim your cyfr.run namespace"
       assert body =~ "name=\"_csrf_token\""
 
-      # Unanchored on purpose: the HTML `pattern` attribute anchors
-      # implicitly, and cannot parse the `\A`/`\z` the server-side regex
-      # now uses (PCRE's `$` matches before a trailing newline, so the
-      # validator had to stop spelling it `^..$`). Same source either way —
-      # `Sanctum.ComponentRefTest` pins the two to one string.
+      # HTML pattern attributes anchor implicitly and require the
+      # unanchored grammar without server-side \A/\z escapes.
       assert body =~ "pattern=\"[a-z0-9]+(-[a-z0-9]+)*\""
     end
 
-    test "pre-fills the username input from :claim_suggested_username in session",
-         %{conn: conn} do
+    test "suggests a slug from the signed-in person's screen name", %{conn: conn} do
+      n = System.unique_integer([:positive])
+      user_id = "github|https://github.com|claim-#{n}"
+
+      {:ok, %{id: person_id}} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: user_id,
+          provider: "github",
+          email: "claim#{n}@example.com",
+          verified: true,
+          name: "Alice Smith"
+        })
+
+      {:ok, session} =
+        Sanctum.Session.create(
+          Sanctum.Context.build(
+            user_id: person_id,
+            email: "claim#{n}@example.com",
+            provider: "github",
+            permissions: [:*],
+            auth_method: :oidc,
+            authenticated: true
+          )
+        )
+
       conn =
         conn
-        |> init_test_session(%{})
-        |> put_session(:claim_suggested_username, "alice-smith")
+        |> init_test_session(%{PrismWeb.SignInResponse.session_key() => session.token})
         |> get(~p"/claim-namespace/")
 
       body = response(conn, 200)
       assert body =~ ~s(value="alice-smith")
     end
 
-    test "renders empty value when no suggested username in session", %{conn: conn} do
+    test "renders an empty value for an anonymous request", %{conn: conn} do
       conn = get(conn, ~p"/claim-namespace/")
       body = response(conn, 200)
       assert body =~ ~s(value="")
@@ -221,13 +240,13 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       {:ok, bypass: bypass}
     end
 
-    # A person past the door but ahead of the claim: a users row without a
-    # namespace, and a session that loads unauthenticated.
+    # A signed-in person with no publisher namespace yet: a users row
+    # without one, and an ordinary session.
     defp unclaimed_person do
       n = System.unique_integer([:positive])
       user_id = "github|https://github.com|claim-#{n}"
 
-      {:ok, _} =
+      {:ok, %{id: person_id}} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
           id: user_id,
           provider: "github",
@@ -237,14 +256,14 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
 
       ctx =
         Sanctum.Context.build(
-          user_id: user_id,
+          user_id: person_id,
           email: "claim#{n}@example.com",
           provider: "github",
           permissions: [:*]
         )
 
       {:ok, session} = Sanctum.Session.create(ctx)
-      {user_id, session.token, "claimed#{n}"}
+      {person_id, session.token, "claimed#{n}"}
     end
 
     defp submit(username, session_token) do
@@ -275,7 +294,9 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
         |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => slug, "token" => "cyfr_pt_new"}))
       end)
 
-      assert {:ok, %{authenticated: false}} = Sanctum.Session.load(token, surface: :console)
+      assert {:ok, %{authenticated: true, namespace: nil}} =
+               Sanctum.Session.load(token, surface: :console)
+
       conn = submit(slug, token)
       assert redirected_to(conn) == "/"
 

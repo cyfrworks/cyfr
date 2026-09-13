@@ -297,12 +297,7 @@ defmodule Opus.ExecutionSemaphoreTest do
     end
 
     test "the half-cap holds when someone else's freed slot is handed to a schedule" do
-      # Admission stopped background at half the athanor's cap, but the
-      # hand-off picked the next background waiter under the FULL cap. So a
-      # slot released by ANOTHER athanor was handed to a queue of schedules
-      # already sitting at their ceiling, walking them up to `tenant_max` one
-      # release at a time — and the member's next turn met :tenant_limit
-      # anyway, which is the outcome the half-cap exists to prevent.
+      # Queue hand-off must enforce the same background cap as initial admission.
       {:ok, pid} = GenServer.start(ExecutionSemaphore, {64, 4}, name: :test_handoff_sem)
       parent = self()
 
@@ -826,16 +821,16 @@ defmodule Opus.ExecutionSemaphoreTest do
   end
 
   describe "unreaped-kill accounting" do
-    test "a tenant past the unreaped threshold is refused; children, other tenants and recovery are not" do
+    test "a tenant past the unreaped threshold is refused; children and other tenants are not, and a force-release keeps the penalty" do
       tenant = "ath_unreaped_#{System.unique_integer([:positive])}"
       threshold = max(2, div(ExecutionSemaphore.status().tenant_max, 2))
 
       for _ <- 1..threshold do
         Task.async(fn ->
           :ok = ExecutionSemaphore.acquire(5_000, :root, tenant)
-          # Ordered before the release cast from this same process, so the
-          # holder entry still names the tenant when it lands.
-          ExecutionSemaphore.note_unreaped()
+          # Acknowledged before the release: the note names the tenant, so
+          # the order of the release and its :DOWN cannot lose it.
+          :ok = ExecutionSemaphore.note_unreaped(tenant, "exec_probe")
           ExecutionSemaphore.release()
         end)
         |> Task.await()
@@ -859,15 +854,30 @@ defmodule Opus.ExecutionSemaphoreTest do
       assert :ok = ExecutionSemaphore.acquire(1_000, :child, tenant)
       ExecutionSemaphore.release()
 
-      # The operator's recovery gesture clears the penalty box too.
+      # The operator's recovery gesture frees the slots, not the penalty:
+      # the spinning threads it cannot stop are still the tenant's.
       ExecutionSemaphore.force_release_all()
-      assert :ok = ExecutionSemaphore.acquire(1_000, :root, tenant)
-      ExecutionSemaphore.release()
+      assert {:error, :tenant_unreaped_limit} = ExecutionSemaphore.acquire(1_000, :root, tenant)
     end
 
-    test "note_unreaped from a non-holder is a no-op" do
+    test "a cancel's note charges the tenant without the canceller holding a slot" do
+      # The cancel path runs in the canceller's process, never the holder's.
+      # Named by tenant, N cancels of a spinning guest trip the penalty box
+      # exactly as N timeouts do.
+      tenant = "ath_cancelled_#{System.unique_integer([:positive])}"
+      threshold = max(2, div(ExecutionSemaphore.status().tenant_max, 2))
+
+      for _ <- 1..threshold, do: :ok = ExecutionSemaphore.note_unreaped(tenant, "exec_probe")
+
+      assert {:error, :tenant_unreaped_limit} =
+               ExecutionSemaphore.acquire(1_000, :root, tenant)
+
+      ExecutionSemaphore.force_release_all()
+    end
+
+    test "a note with no tenant charges nobody" do
       before = ExecutionSemaphore.status().unreaped
-      ExecutionSemaphore.note_unreaped()
+      assert :ok = ExecutionSemaphore.note_unreaped(nil, nil)
       assert ExecutionSemaphore.status().unreaped == before
     end
   end

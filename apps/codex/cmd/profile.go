@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -43,8 +44,8 @@ var profileListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), "profile", map[string]any{
-			"action": "list",
+		result, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
+			"action": ops.ProfileList,
 			"ref":    args[0],
 		})
 		if err != nil {
@@ -88,8 +89,8 @@ var profileRevokeCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), "profile", map[string]any{
-			"action":     "revoke",
+		result, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
+			"action":     ops.ProfileRevoke,
 			"profile_id": args[0],
 		})
 		if err != nil {
@@ -118,8 +119,8 @@ var profileGrantCmd = &cobra.Command{
 		client := newClient()
 		ref := args[0]
 
-		plan, err := client.CallTool(cmd.Context(), "profile", map[string]any{
-			"action": "plan",
+		plan, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
+			"action": ops.ProfilePlan,
 			"ref":    ref,
 		})
 		if err != nil {
@@ -136,8 +137,8 @@ var profileGrantCmd = &cobra.Command{
 
 		decisions := map[string]any{"ref": ref, "bindings": bindings}
 
-		preview, err := client.CallTool(cmd.Context(), "profile", map[string]any{
-			"action":    "preview",
+		preview, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
+			"action":    ops.ProfilePreview,
 			"decisions": decisions,
 		})
 		if err != nil {
@@ -154,8 +155,8 @@ var profileGrantCmd = &cobra.Command{
 			}
 		}
 
-		result, err := client.CallTool(cmd.Context(), "profile", map[string]any{
-			"action":                    "commit",
+		result, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
+			"action":                    ops.ProfileCommit,
 			"decisions":                 decisions,
 			"plan_token":                plan["plan_token"],
 			"proof":                     preview["proof"],

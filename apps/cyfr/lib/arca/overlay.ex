@@ -3,17 +3,18 @@
 
 defmodule Arca.Overlay do
   @moduledoc """
-  Seed overlay for the roots the layout table marks `:overlay` — today
-  `components/` and `aqua/`: the athanor's own tree is the upper layer,
-  the seed tree the lower, and every reader sees their union.
+  The seeded roots the layout table marks `:overlay` — `components/` and
+  `aqua/` — as the athanor's own tree, filled from the seed tree, the
+  shipped default.
 
   An ADAPTER DECORATOR, not a facade layer: this module implements the
-  `Arca.Storage` behaviour, wrapping the configured tenant adapter and the
-  Local-pinned seed side. `Arca` dispatches every non-seed path here; a
-  path outside the overlaid roots delegates to the configured adapter
-  verbatim, so the facade knows nothing about the union — it keeps
-  authorization, normalization, the write gates and usage accounting, and
-  the overlay keeps the overlay.
+  `Arca.Storage` behaviour, wrapping the configured tenant adapter. Every
+  read answers from the athanor's tree alone; the seed tree — install
+  media, read-only, on local disk — is where shipped units are copied
+  FROM: at provisioning (`materialize_shipped/2`), and when a person
+  pulls a shipped version or restores a unit to what ships
+  (`pull_shipped/2`). A release that ships newer versions changes nothing
+  in an estate; the newer units read as `:available` until pulled.
 
   ## Shadow units — the domain's grammar, not a depth
 
@@ -25,20 +26,12 @@ defmodule Arca.Overlay do
   exists — so nothing here ever probes the tree to learn what kind of
   unit a path belongs to.
 
-  An athanor's *completed* copy of a unit fully shadows its seed
-  counterpart; an uncompleted one reads through to the seed — which stays
-  read-only, on local disk, exactly as install media. A write inside an
-  unmaterialized seed unit materializes the whole unit into the athanor
-  first (copy-on-write, build droppings excluded, the storage cap
-  consulted for the materialization bytes), then lands. Deleting an
-  unmaterialized bundle path is refused as `{:error, :bundled}`.
-
   ## The sentinel — crash-safe unit commits
 
   "Completed" is a fact the tree itself records: every valid directory
   unit carries its sentinel file, and `commit_unit/4` — the one way a
   unit lands, for scaffold, fork, the tincture store, publish, OCI pull
-  and seed materialization alike — writes it LAST. A crash or failure
+  and the shipped copy alike — writes it LAST. A crash or failure
   mid-commit leaves the unit without its sentinel, so it keeps reading
   as incomplete, and an error return rolls the partial back; the next
   commit replaces whatever remains wholesale. No hidden marker file: the
@@ -46,47 +39,32 @@ defmodule Arca.Overlay do
   unit is atomic by construction — a single put — and counts as
   completed when the tenant file exists.
 
-  Provisioning therefore copies nothing: a new athanor's overlaid scopes
-  are empty on disk and complete through the facade, and the storage cap
-  measures only what the athanor actually owns (`usage/2` is deliberately
-  tenant-only).
+  ## Whose unit it is
 
-  ## Origin marks — whose work is a complete unit
+  A unit the seed ships at the same path is a shipped copy, whatever its
+  bytes: `unit_status/2` answers `:shipped` for a complete one the
+  athanor holds and `:available` for one it lacks. A complete unit the
+  seed does not ship is the athanor's own (`:own`). Whether a copy has
+  been edited is a byte question — `diff_unit/2` — asked by the surfaces
+  that show it, never recorded.
 
-  Completeness alone cannot say who a complete unit belongs to: a
-  copy-on-write of a shipped unit and a unit the athanor created itself
-  that a LATER release also ships at the same path are byte-for-byte
-  alike. The overlay therefore marks each unit it materializes with one
-  object under the reserved `meta/origin/` prefix — one mark per unit, a
-  single put to record and a single delete to clear, so concurrent
-  materializations can never lose each other's marks and there is no
-  index file to corrupt. `unit_status/2` answers `:materialized` only for
-  a marked unit; an unmarked complete copy over a seed counterpart is
-  `:own_shadowing` — the athanor's own work hiding a shipped counterpart,
-  which reset refuses to touch. Marks are advisory, consulted only while
-  a unit is complete with a seed counterpart, so a stale or missing mark
-  fails toward the athanor owning its bytes — never toward destroying
-  them. Deletes clear marks in this decorator itself: a unit delete
-  removes the unit's mark, a wider `delete_tree` inside an overlaid root
-  removes every mark beneath it, and the whole-tree purge takes `meta/`
-  with everything else.
+  ## Deletes
 
-  `meta/` is a reserved tenant root (`Arca.Storage.reserved_roots/0`):
-  only this module's internal-write scope or an `auth_method: :system`
-  context may mutate it, so a member-level write can never forge a mark
-  and turn "reset to shipped" into deleting member work.
+  A shipped copy is restored, never deleted: `delete/2` and
+  `delete_tree/2` at a shipped unit refuse as `{:error, :bundled}`, and
+  `drop_unit/2` says the same. A delete inside a shipped copy is an
+  edit. The athanor's own units delete plainly.
 
   ## The internal-write scope
 
-  Materialization writes back through the `Arca` facade — so every copied
-  byte passes the same usage accounting as any other write — inside
-  `with_internal_writes/1`, a lexical, process-local scope that exempts
-  exactly those writes from copy-on-write and from the `:bundled` delete
-  refusal (its rollback deletes a partial, sentinel-less copy — the shape
-  refused for everyone else). The exemption cannot be reached by
+  Shipped copies and unit commits write back through the `Arca` facade —
+  so every copied byte passes the same usage accounting as any other
+  write — inside `with_internal_writes/1`, a lexical, process-local scope
+  that exempts exactly those writes from the `:bundled` refusal, the
+  above-unit tree-delete refusal and the reserved-root gate
+  (`Arca.Storage.reserved_roots/0`). The exemption cannot be reached by
   constructing any context shape; the internal context's
-  `user_id: "_overlay"` is attribution only. Every other writer, system
-  contexts included, copy-on-writes like any caller.
+  `user_id: "_overlay"` is attribution only.
   """
 
   @behaviour Arca.Storage
@@ -95,35 +73,27 @@ defmodule Arca.Overlay do
 
   alias Sanctum.Context
 
-  # One origin mark per materialized unit, at `meta/origin/{unit...}` —
-  # under the reserved, non-overlaid root the layout table names (derived,
-  # not re-spelled; the destructure asserts the layout still has exactly
-  # one tenant-reserved root): invisible to every union merge and diff,
-  # honestly counted by the cap, mutable only by the internal-write scope.
-  [reserved_root] = Arca.Storage.reserved_roots()
-  @origin_root [reserved_root, "origin"]
-
   @internal_writes_key {__MODULE__, :internal_writes}
 
   @typedoc """
-  What one shadow unit holds, as the union serves it: `:seed` (reads come
-  from the bundle), `:materialized` (the athanor's marked copy of a
-  shipped unit shadows it), `:own` (the athanor's content, no seed
-  counterpart), `:own_shadowing` (the athanor's own work hiding a shipped
-  counterpart at the same path), `:absent` (neither side).
+  What one shadow unit holds: `:available` (the seed ships it, the athanor
+  holds no complete copy — pull it), `:shipped` (the athanor's complete
+  copy of a unit the seed ships), `:own` (the athanor's content, no seed
+  counterpart), `:absent` (neither side).
   """
-  @type unit_status :: :seed | :materialized | :own | :own_shadowing | :absent
+  @type unit_status :: :available | :shipped | :own | :absent
 
   # ---------------------------------------------------------------------------
   # The internal-write scope
   # ---------------------------------------------------------------------------
 
   @doc """
-  Run `fun` with this process exempt from copy-on-write, the `:bundled`
-  delete refusal, and the reserved-`meta/` write gate — the
-  materializer's own scope, lexical and process-local (`try/after`), so
-  no context shape can carry the exemption. Per-process by design: work
-  handed to another process does not inherit it and refuses loudly.
+  Run `fun` with this process exempt from the `:bundled` delete refusal,
+  the above-unit tree-delete refusal and the reserved-root write gate —
+  the shipped copy's and the unit commit's own scope, lexical and
+  process-local (`try/after`), so no context shape can carry the
+  exemption. Per-process by design: work handed to another process does
+  not inherit it and refuses loudly.
   """
   @spec with_internal_writes((-> result)) :: result when result: term()
   def with_internal_writes(fun) when is_function(fun, 0) do
@@ -141,38 +111,17 @@ defmodule Arca.Overlay do
   def internal_writes?, do: Process.get(@internal_writes_key, false)
 
   # ---------------------------------------------------------------------------
-  # Arca.Storage callbacks — reads union, writes copy-on-write.
+  # Arca.Storage callbacks — reads answer from the athanor's tree alone;
+  # writes ride the unit lock.
   # ---------------------------------------------------------------------------
 
   @impl true
-  def get(%Context{} = ctx, path) do
-    if seed_shadows_tenant?(ctx, path) do
-      # An incomplete copy of a shipped unit: the listing plane already
-      # serves the seed here, so the read plane must too, or a subtree read
-      # splices tenant bytes into seed file names.
-      seed_get(path)
-    else
-      case tenant().get(ctx, path) do
-        {:error, :not_found} = miss ->
-          if fall_through?(ctx, path) do
-            case seed_get(path) do
-              {:ok, _content} = hit -> hit
-              {:error, _} -> miss
-            end
-          else
-            miss
-          end
-
-        other ->
-          other
-      end
-    end
-  end
+  def get(%Context{} = ctx, path), do: tenant().get(ctx, path)
 
   @impl true
   def put(%Context{} = ctx, path, content) do
     with_unit_lock(ctx, path, fn ->
-      with :ok <- prepare_write(ctx, path) do
+      with :ok <- writable(path) do
         tenant().put(ctx, path, content)
       end
     end)
@@ -181,7 +130,7 @@ defmodule Arca.Overlay do
   @impl true
   def append(%Context{} = ctx, path, content) do
     with_unit_lock(ctx, path, fn ->
-      with :ok <- prepare_write(ctx, path) do
+      with :ok <- writable(path) do
         tenant().append(ctx, path, content)
       end
     end)
@@ -189,49 +138,25 @@ defmodule Arca.Overlay do
 
   @impl true
   def delete(%Context{} = ctx, path) do
-    with_unit_lock(ctx, path, fn -> do_delete(ctx, path) end)
-  end
-
-  defp do_delete(%Context{} = ctx, path) do
-    with :ok <- deletable(ctx, path),
-         :ok <- tenant().delete(ctx, path) do
-      # A single-object delete can only retire a file-shaped unit; a file
-      # inside a directory unit leaves the copy standing (modified).
-      case Arca.Storage.locate(path) do
-        {:file, unit} when unit == path -> clear_origin(ctx, unit)
-        _inside_or_outside -> :ok
-      end
-    end
+    with_unit_lock(ctx, path, fn ->
+      with :ok <- deletable(path), do: tenant().delete(ctx, path)
+    end)
   end
 
   @impl true
   def delete_tree(%Context{} = ctx, path) do
-    with_unit_lock(ctx, path, fn -> do_delete_tree(ctx, path) end)
+    with_unit_lock(ctx, path, fn ->
+      with :ok <- tree_deletable(ctx, path),
+           :ok <- deletable(path) do
+        tenant().delete_tree(ctx, path)
+      end
+    end)
   end
 
-  defp do_delete_tree(%Context{} = ctx, path) do
-    with :ok <- tree_deletable(ctx, path),
-         :ok <- deletable(ctx, path),
-         :ok <- tenant().delete_tree(ctx, path) do
-      clear_origin_after_delete_tree(ctx, path)
-    end
-  end
-
-  # A tree delete ABOVE units — `aqua/`, `aqua/roles`, a component's name
-  # dir — rides no lock: the decorator locks one unit, and covering a tree
-  # would mean locking every unit beneath it in an order two processes
-  # could invert. So it is admitted only while the athanor holds no unit
-  # beneath the path — nothing a lock would cover: an empty name dir the
-  # registry tidies, a stray non-unit file — and refused as
-  # `{:error, :above_unit}` once a unit stands there. A caller clearing a
-  # populated subtree walks its units and drops them one at a time under
-  # each unit's own lock (`Compendium.AquaTemplate.reset/2`); the old
-  # wholesale form could land inside a concurrent commit and leave a unit
-  # reading complete while holding little more than its sentinel. The
-  # listing and the delete are still two steps — a unit landing between
-  # them is the same sub-second window the registry's empty-dir tidy
-  # already accepts. Only the internal-write scope keeps the wholesale
-  # form (its origin-mark sweep beneath a cleared root).
+  # Tree deletion above units is allowed only when no tenant units exist
+  # beneath the path; otherwise it returns `{:error, :above_unit}`.
+  # Clear populated subtrees one unit at a time under each unit's lock.
+  # The empty-tree check and deletion are not atomic with a new unit commit.
   defp tree_deletable(%Context{} = ctx, path) do
     if not internal_writes?() and Arca.Storage.locate(path) == :above_unit do
       case tenant().list_recursive(ctx, path) do
@@ -247,108 +172,39 @@ defmodule Arca.Overlay do
   end
 
   @impl true
-  def exists?(%Context{} = ctx, path) do
-    if seed_shadows_tenant?(ctx, path) do
-      seed_exists?(path)
-    else
-      tenant().exists?(ctx, path) or
-        (fall_through?(ctx, path) and seed_exists?(path))
-    end
-  end
+  def exists?(%Context{} = ctx, path), do: tenant().exists?(ctx, path)
 
-  # Deliberately NOT unioned: the union costs the athanor nothing until it
-  # materializes — the storage cap measures only what it owns.
   @impl true
   def usage(%Context{} = ctx, path), do: tenant().usage(ctx, path)
 
   @impl true
-  def serve_to_conn(conn, %Context{} = ctx, path, opts) do
-    if seed_shadows_tenant?(ctx, path) do
-      Arca.Adapters.Local.serve_to_conn(conn, seed_ctx(), seed(path), opts)
-    else
-      case tenant().serve_to_conn(conn, ctx, path, opts) do
-        {:error, :not_found} = miss ->
-          if fall_through?(ctx, path) do
-            case Arca.Adapters.Local.serve_to_conn(conn, seed_ctx(), seed(path), opts) do
-              {:ok, _conn} = served -> served
-              {:error, _} -> miss
-            end
-          else
-            miss
-          end
-
-        other ->
-          other
-      end
-    end
-  end
-
-  # At or below the shadow unit the two layers never mix — a completed
-  # copy answers alone, an unmaterialized seed unit reads through, and a
-  # tenant-only unit answers its own content; above it, names union (the
-  # athanor's kind wins a collision).
-  @impl true
-  def list_typed(%Context{} = ctx, path) do
-    tenant_result = tenant().list_typed(ctx, path)
-
-    case Arca.Storage.locate(path) do
-      :not_overlaid ->
-        tenant_result
-
-      :above_unit ->
-        # A union answer needs both sides to have answered: absence is
-        # already `{:ok, []}` on either side, so an error here is an
-        # outage — answering the other side alone would be a plausible
-        # listing that silently omits real entries.
-        with {:ok, tenant_entries} <- tenant_result,
-             {:ok, seed_entries} <- seed_list_typed(path) do
-          names = MapSet.new(tenant_entries, fn {name, _kind} -> name end)
-
-          merged =
-            tenant_entries ++ Enum.reject(seed_entries, &MapSet.member?(names, elem(&1, 0)))
-
-          {:ok, merged}
-        end
-
-      loc ->
-        at_unit_result(ctx, loc, tenant_result, fn -> seed_list_typed(path) end)
-    end
-  end
+  def ensure_dir(%Context{} = ctx, path), do: tenant().ensure_dir(ctx, path)
 
   @impl true
-  def list_recursive(%Context{} = ctx, path) do
-    tenant_result = tenant().list_recursive(ctx, path)
+  def serve_to_conn(conn, %Context{} = ctx, path, opts),
+    do: tenant().serve_to_conn(conn, ctx, path, opts)
 
-    case Arca.Storage.locate(path) do
-      :not_overlaid ->
-        tenant_result
+  @impl true
+  def list_typed(%Context{} = ctx, path), do: tenant().list_typed(ctx, path)
 
-      :above_unit ->
-        with {:ok, tenant_leaves} <- tenant_result,
-             {:ok, seed_leaves} <- seed_list_recursive(path) do
-          {:ok, Enum.uniq(merge_above_unit(ctx, tenant_leaves, seed_leaves, & &1))}
-        end
-
-      loc ->
-        at_unit_result(ctx, loc, tenant_result, fn -> seed_list_recursive(path) end)
-    end
-  end
+  @impl true
+  def list_recursive(%Context{} = ctx, path), do: tenant().list_recursive(ctx, path)
 
   # No read_subtree here: the facade's shared algorithm
   # (`Arca.Storage.read_subtree_via/4`) runs over this module's
-  # `list_recursive/2` + `get/2`, so the union emerges compositionally.
+  # `list_recursive/2` + `get/2`.
 
   # ---------------------------------------------------------------------------
-  # Unit status — the public questions the union can answer about itself.
+  # Unit status — the public questions the tree can answer about itself.
   # `Compendium.Provenance` and the status/reset surfaces consume these.
   # ---------------------------------------------------------------------------
 
   @doc """
-  What one shadow unit holds, as the union serves it — see
-  `t:unit_status/0`. A path below a unit is answered for its unit; a path
-  above any unit (or outside the overlaid roots) is `{:ok, :absent}`.
-  A tenant-adapter outage answers `{:error, term}` — a status surface
-  must not misreport the athanor's own units as shipped.
+  What one shadow unit holds — see `t:unit_status/0`. A path below a unit
+  is answered for its unit; a path above any unit (or outside the seeded
+  roots) is `{:ok, :absent}`. A tenant-adapter outage answers
+  `{:error, term}` — a status surface must not misreport the athanor's
+  own units as shipped.
   """
   @spec unit_status(Context.t(), Arca.Storage.path()) ::
           {:ok, unit_status()} | {:error, term()}
@@ -361,38 +217,18 @@ defmodule Arca.Overlay do
         # The same classification the batch form applies over its walked
         # leaf sets — the parity test in overlay_test pins the two
         # together.
-        seed? = seed_unit_present?(loc)
-
         with {:ok, state} <- tenant_unit_state(ctx, loc) do
-          status =
-            cond do
-              state == :complete ->
-                cond do
-                  not seed? -> :own
-                  origin_mark?(ctx, unit_of(loc)) -> :materialized
-                  true -> :own_shadowing
-                end
-
-              seed? ->
-                :seed
-
-              state == :partial ->
-                :own
-
-              true ->
-                :absent
-            end
-
-          {:ok, status}
+          {:ok, classify(state, seed_unit_present?(loc))}
         end
     end
   end
 
   @doc """
-  Every unit under an overlaid root, mapped to its status — the batch form
-  of `unit_status/2`: three listings total (tenant, seed, origin marks),
-  no per-unit probes — classifying a leaf is a pure locator call.
-  `:absent` units are, by definition, not in the map. A tenant listing
+  Every unit under a seeded root, mapped to its status — the batch form
+  of `unit_status/2`: two listings total (tenant and seed), no per-unit
+  probes — classifying a leaf is a pure locator call. `:absent` units
+  are, by definition, not in the map; `:available` ones are, so a caller
+  can see what the seed ships that the athanor lacks. A tenant listing
   outage answers `{:error, term}`, never a seed-only map.
   """
   @spec unit_statuses(Context.t(), String.t()) ::
@@ -401,8 +237,6 @@ defmodule Arca.Overlay do
     if root in Arca.Storage.overlay_roots() do
       with {:ok, tenant_leaves} <- tenant().list_recursive(ctx, [root]),
            {:ok, seed_leaves} <- seed_list_recursive([root]) do
-        marks = origin_marks(ctx)
-
         seed_locs = MapSet.new(for leaf <- seed_leaves, loc = leaf_loc(leaf), do: loc)
 
         tenant_by_loc =
@@ -414,25 +248,16 @@ defmodule Arca.Overlay do
 
         statuses =
           Map.new(all_locs, fn loc ->
-            unit = unit_of(loc)
+            leaves = Map.get(tenant_by_loc, loc, [])
 
-            status =
+            state =
               cond do
-                completed_in_leaves?(loc, Map.get(tenant_by_loc, loc, [])) ->
-                  cond do
-                    not MapSet.member?(seed_locs, loc) -> :own
-                    MapSet.member?(marks, unit) -> :materialized
-                    true -> :own_shadowing
-                  end
-
-                MapSet.member?(seed_locs, loc) ->
-                  :seed
-
-                true ->
-                  :own
+                completed_in_leaves?(loc, leaves) -> :complete
+                leaves != [] -> :partial
+                true -> :empty
               end
 
-            {unit, status}
+            {unit_of(loc), classify(state, MapSet.member?(seed_locs, loc))}
           end)
 
         {:ok, statuses}
@@ -442,13 +267,22 @@ defmodule Arca.Overlay do
     end
   end
 
+  # One classification for both status forms: what the athanor holds,
+  # and whether the seed ships the unit. A release that stopped shipping
+  # a unit leaves the copy as the athanor's own to keep.
+  defp classify(:complete, true), do: :shipped
+  defp classify(:complete, false), do: :own
+  defp classify(_incomplete, true), do: :available
+  defp classify(:partial, false), do: :own
+  defp classify(:empty, false), do: :absent
+
   @doc """
-  How a unit's tenant copy differs from its seed counterpart, as relative
-  paths: `added` (tenant-only), `removed` (seed-only), `changed` (both,
-  bytes differ). The seed side is filtered by the same droppings exclusion
-  materialization uses, so a pristine copy diffs empty. A file unit diffs
-  as the single relative path `[]`. Memory-bounded to one unit — the same
-  bound as materialization.
+  How a unit's copy differs from its seed counterpart, as relative paths:
+  `added` (tenant-only), `removed` (seed-only), `changed` (both, bytes
+  differ). The seed side is filtered by the same droppings exclusion the
+  shipped copy uses, so an unedited copy diffs empty. A file unit diffs
+  as the single relative path `[]`. Memory-bounded to one unit — the
+  same bound as a copy.
   """
   @spec diff_unit(Context.t(), Arca.Storage.path()) ::
           {:ok,
@@ -481,52 +315,134 @@ defmodule Arca.Overlay do
     end
   end
 
+  @doc """
+  Whether the athanor's unit differs from what ships — `diff_unit/2` read
+  as one boolean. A unit the seed does not ship differs by everything the
+  athanor holds there.
+  """
+  @spec edited?(Context.t(), Arca.Storage.path()) :: {:ok, boolean()} | {:error, term()}
+  def edited?(%Context{} = ctx, path) do
+    with {:ok, %{added: added, removed: removed, changed: changed}} <- diff_unit(ctx, path) do
+      {:ok, added != [] or removed != [] or changed != []}
+    end
+  end
+
   # ---------------------------------------------------------------------------
-  # The revert verbs — the three product meanings of "make it go away",
-  # so no product tool re-derives deletion policy from status atoms.
+  # The seed as the shipped default: what it ships, and copying it in.
   # ---------------------------------------------------------------------------
 
   @doc """
-  Revert a materialized copy so the shipped unit shows through again —
-  what `component.reset` and `aqua.reset` mean. Only a `:materialized`
-  unit reverts: the athanor's own work refuses as `{:error, :not_a_copy}`
-  (`:own` and `:own_shadowing` alike — reset never destroys member work),
-  an unmaterialized shipped unit as `{:error, :bundled}` (already
-  pristine), nothing at all as `{:error, :not_found}`.
+  Every unit the seed ships under a seeded root, as unit paths — what
+  provisioning copies and a release offers. Install media that cannot be
+  listed is a fault, never an empty bundle.
   """
-  @spec revert_copy(Context.t(), Arca.Storage.path()) ::
-          :ok | {:error, :not_a_copy | :bundled | :not_found | :not_overlaid | term()}
-  def revert_copy(%Context{} = ctx, path) do
-    case Arca.Storage.locate(path) do
-      loc when loc in [:not_overlaid, :above_unit] ->
-        {:error, :not_overlaid}
+  @spec shipped_units(String.t()) :: {:ok, [Arca.Storage.path()]}
+  def shipped_units(root) when is_binary(root) do
+    if root in Arca.Storage.overlay_roots() do
+      with {:ok, seed_leaves} <- seed_list_recursive([root]) do
+        units =
+          for leaf <- seed_leaves, loc = leaf_loc(leaf), uniq: true, do: unit_of(loc)
 
-      loc ->
-        case unit_status(ctx, path) do
-          {:ok, :materialized} -> delete_unit_locked(ctx, loc)
-          {:ok, own} when own in [:own, :own_shadowing] -> {:error, :not_a_copy}
-          {:ok, :seed} -> {:error, :bundled}
-          {:ok, :absent} -> {:error, :not_found}
-          {:error, _} = error -> error
-        end
+        {:ok, Enum.sort(units)}
+      end
+    else
+      {:ok, []}
     end
   end
 
   @doc """
-  Delete one unit the athanor holds — a materialized copy or its own
-  work, explicitly (`aqua.delete`, `reset all: true`). Where a seed
-  counterpart exists it shows through afterwards, and the answer SAYS so:
-  `{:ok, :revealed_shipped}` when the delete just uncovered a shipped
-  unit (a surface that stays silent makes shipped units look deletable),
-  `{:ok, :deleted}` when the athanor's own work is simply gone — the
-  same disposition vocabulary `Compendium.Registry.delete/4` speaks. An
-  unmaterialized shipped unit refuses as `{:error, :bundled}` (there is
-  nothing of the athanor's to delete), nothing at all as
-  `{:error, :not_found}`.
+  Copy one shipped unit into the athanor, whole — the seed's bytes,
+  droppings excluded, the sentinel last — replacing whatever stands at
+  the path. What provisioning does for every shipped unit, what a pull of
+  a shipped version does for one, and what a restore does over an edited
+  copy. Shipped media is not capped: an estate must always be able to
+  hold what the server ships.
+
+  A unit the seed does not ship refuses as `{:error, :not_shipped}`; a
+  path that is not a unit as `{:error, :not_a_unit}`.
+  """
+  @spec pull_shipped(Context.t(), Arca.Storage.path()) ::
+          :ok | {:error, :not_shipped | :not_a_unit | :not_overlaid | term()}
+  def pull_shipped(%Context{} = ctx, unit) do
+    case Arca.Storage.locate(unit) do
+      loc when loc in [:not_overlaid, :above_unit] ->
+        {:error, :not_overlaid}
+
+      loc ->
+        cond do
+          unit_of(loc) != unit -> {:error, :not_a_unit}
+          not seed_unit_present?(loc) -> {:error, :not_shipped}
+          true -> do_pull_shipped(ctx, loc)
+        end
+    end
+  end
+
+  defp do_pull_shipped(ctx, {:dir, unit, sentinel}) do
+    seed_dir = seed(unit)
+
+    with :ok <- seed_sentinel_present(seed_dir, sentinel),
+         {:ok, _written} <-
+           with_unit_lock_at(ctx, unit, fn ->
+             do_commit_dir_unit(
+               ctx,
+               unit,
+               sentinel,
+               {:tree, seed_dir, exclude: &excluded?/1},
+               :exempt,
+               nil
+             )
+           end) do
+      Logger.info("[Arca.Overlay] copied shipped #{Enum.join(unit, "/")} for #{ctx.athanor_id}")
+      :ok
+    end
+  end
+
+  # A file unit lands as one put — atomic by construction.
+  defp do_pull_shipped(ctx, {:file, unit}) do
+    with {:ok, bytes} <- seed_get(unit),
+         :ok <- Arca.put(ctx, unit, bytes, cap: :exempt) do
+      Logger.info("[Arca.Overlay] copied shipped #{Enum.join(unit, "/")} for #{ctx.athanor_id}")
+      :ok
+    end
+  end
+
+  @doc """
+  Copy every shipped unit under `root` the athanor does not hold — the
+  `:available` ones — leaving what it holds alone, edited or not. What
+  fills a fresh estate at provisioning and what heals an estate whose
+  tree lost a copy. Answers the units copied; stops at the first unit
+  that cannot be copied.
+  """
+  @spec materialize_shipped(Context.t(), String.t()) ::
+          {:ok, [Arca.Storage.path()]} | {:error, term()}
+  def materialize_shipped(%Context{} = ctx, root) when is_binary(root) do
+    with {:ok, statuses} <- unit_statuses(ctx, root) do
+      statuses
+      |> Enum.filter(fn {_unit, status} -> status == :available end)
+      |> Enum.map(fn {unit, _status} -> unit end)
+      |> Enum.sort()
+      |> Enum.reduce_while({:ok, []}, fn unit, {:ok, copied} ->
+        case pull_shipped(ctx, unit) do
+          :ok -> {:cont, {:ok, [unit | copied]}}
+          {:error, reason} -> {:halt, {:error, {:materialize_failed, unit, reason}}}
+        end
+      end)
+      |> case do
+        {:ok, copied} -> {:ok, Enum.reverse(copied)}
+        error -> error
+      end
+    end
+  end
+
+  @doc """
+  Delete one unit the athanor made itself, explicitly (`aqua.delete`,
+  `reset all: true`): `{:ok, :deleted}` for its own work. A shipped copy,
+  edited or not, refuses as `{:error, :bundled}` — it is restored, never
+  deleted — and a unit the athanor does not hold as `{:error, :not_found}`.
+  The same disposition vocabulary `Compendium.Registry.delete/4` speaks.
   """
   @spec drop_unit(Context.t(), Arca.Storage.path()) ::
-          {:ok, :deleted | :revealed_shipped}
-          | {:error, :bundled | :not_found | :not_overlaid | term()}
+          {:ok, :deleted} | {:error, :bundled | :not_found | :not_overlaid | term()}
   def drop_unit(%Context{} = ctx, path) do
     case Arca.Storage.locate(path) do
       loc when loc in [:not_overlaid, :above_unit] ->
@@ -534,64 +450,11 @@ defmodule Arca.Overlay do
 
       loc ->
         case unit_status(ctx, path) do
-          {:ok, :seed} ->
-            {:error, :bundled}
-
-          {:ok, :absent} ->
-            {:error, :not_found}
-
-          {:ok, status} when status in [:materialized, :own, :own_shadowing] ->
-            with :ok <- delete_unit_locked(ctx, loc) do
-              if status == :own, do: {:ok, :deleted}, else: {:ok, :revealed_shipped}
-            end
-
-          {:error, _} = error ->
-            error
+          {:ok, :own} -> with :ok <- delete_unit_locked(ctx, loc), do: {:ok, :deleted}
+          {:ok, :shipped} -> {:error, :bundled}
+          {:ok, _available_or_absent} -> {:error, :not_found}
+          {:error, _} = error -> error
         end
-    end
-  end
-
-  @doc """
-  Collapse a pristine copy: delete the tenant unit iff it is
-  `:materialized` and `diff_unit/2` is empty — boot maintenance, so a
-  byte-identical copy goes back to tracking the release. `:kept` when the
-  copy has real edits or the unit is the athanor's own work, `:absent`
-  when there is nothing materialized to collapse.
-  """
-  @spec collapse_unit(Context.t(), Arca.Storage.path()) ::
-          :collapsed | :kept | :absent | {:error, term()}
-  def collapse_unit(%Context{} = ctx, path) do
-    case unit_status(ctx, path) do
-      {:ok, :materialized} ->
-        loc = Arca.Storage.locate(path)
-
-        # Emptiness check and clear ride ONE lock hold: a write landing
-        # between the diff and the delete must not be destroyed as part
-        # of a "pristine" collapse.
-        with_unit_lock_at(ctx, unit_of(loc), fn ->
-          case diff_unit(ctx, unit_of(loc)) do
-            {:ok, %{added: [], removed: [], changed: []}} ->
-              case delete_unit(ctx, loc) do
-                :ok -> :collapsed
-                {:error, _} = error -> error
-              end
-
-            {:ok, _diff} ->
-              :kept
-
-            {:error, _} = error ->
-              error
-          end
-        end)
-
-      {:ok, own} when own in [:own, :own_shadowing] ->
-        :kept
-
-      {:ok, _seed_or_absent} ->
-        :absent
-
-      {:error, _} = error ->
-        error
     end
   end
 
@@ -613,12 +476,11 @@ defmodule Arca.Overlay do
 
   @doc """
   Land one whole unit: refuse-or-replace, write the non-sentinel files,
-  sentinel LAST, origin mark only for the seed materializer — and on any
-  error, delete the partial. Every ingress that lays a unit (scaffold,
-  fork, the tincture store, publish, OCI pull, seed materialization)
-  commits through here, so sentinel-last, rollback, cap policy and
-  usage accounting are one implementation, not a discipline each caller
-  re-spells.
+  sentinel LAST — and on any error, delete the partial. Every ingress
+  that lays a unit (scaffold, fork, the tincture store, publish, OCI
+  pull, the shipped copy) commits through here, so sentinel-last,
+  rollback, cap policy and usage accounting are one implementation, not
+  a discipline each caller re-spells.
 
   Options:
 
@@ -630,22 +492,17 @@ defmodule Arca.Overlay do
       authoritative config blob). A dir-unit commit with sentinel bytes
       from neither place refuses as `{:error, :missing_sentinel}` before
       any write.
-    * `origin: :seed` — stamp the origin mark after the sentinel: the
-      materializer's option, nobody else's (`:none` default).
-    * `if_absent: true` — create, never replace: the union is asked for
-      the unit INSIDE its lock, and one already there — shipped, or the
-      athanor's own — refuses as `{:error, :exists}` before any write. A
-      probe outside the lock (`exists?`, then commit) is a check-then-act
-      race: two creators of one name could both pass it, and the second
-      would silently replace the first.
+    * `if_absent: true` — create, never replace: the athanor's tree is
+      asked for the unit INSIDE its lock, and a complete unit already
+      there refuses as `{:error, :exists}` before any write. A probe
+      outside the lock (`exists?`, then commit) is a check-then-act race:
+      two creators of one name could both pass it, and the second would
+      silently replace the first.
 
-  A file unit commits as one plain facade put — atomic by construction,
-  the file CoW mark untouched — and refuses `sentinel:`/`origin:`. A
-  dir-unit commit over existing tenant content replaces it whole (stale
-  files from a prior partial or an overwritten pull do not survive). A
-  commit over an unmaterialized seed-backed unit writes plainly and
-  classifies `:own_shadowing` — copying the seed first would only
-  manufacture stale files under fully-specified new content.
+  A file unit commits as one plain facade put — atomic by construction —
+  and refuses `sentinel:`. A dir-unit commit over existing tenant content
+  replaces it whole (stale files from a prior partial or an overwritten
+  pull do not survive).
 
   Returns the written relatives in write order, sentinel last.
   """
@@ -653,16 +510,15 @@ defmodule Arca.Overlay do
           {:ok, [Arca.Storage.path()]} | {:error, term()}
   def commit_unit(%Context{} = ctx, unit, source, opts) do
     cap = Keyword.fetch!(opts, :cap)
-    origin = Keyword.get(opts, :origin, :none)
     override = Keyword.get(opts, :sentinel)
     if_absent? = Keyword.get(opts, :if_absent, false)
 
     case Arca.Storage.locate(unit) do
       {:file, ^unit} ->
-        commit_file_unit(ctx, unit, source, cap, origin, override, if_absent?)
+        commit_file_unit(ctx, unit, source, cap, override, if_absent?)
 
       {:dir, ^unit, sentinel} ->
-        commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override, if_absent?)
+        commit_dir_unit(ctx, unit, sentinel, source, cap, override, if_absent?)
 
       other ->
         raise ArgumentError,
@@ -672,12 +528,12 @@ defmodule Arca.Overlay do
 
   @doc """
   One locked read-modify-write at a path inside a unit. `fun` receives
-  the bytes the union serves at `path` and answers `{:ok, bytes}` to write
-  them — a plain facade put, so copy-on-write and the storage cap apply as
-  for any write — or `{:error, reason}` to write nothing and answer that.
-  The read and the write ride one hold of the unit's lock, so of two
-  concurrent updates the second reads what the first wrote instead of
-  overwriting it. `{:error, :not_found}` when nothing is at `path`,
+  the bytes at `path` and answers `{:ok, bytes}` to write them — a plain
+  facade put, so the storage cap applies as for any write — or
+  `{:error, reason}` to write nothing and answer that. The read and the
+  write ride one hold of the unit's lock, so of two concurrent updates
+  the second reads what the first wrote instead of overwriting it.
+  `{:error, :not_found}` when nothing is at `path`,
   `{:error, :not_overlaid}` for a path no unit covers — there is no lock
   to hold there, and this must not promise one.
   """
@@ -704,9 +560,8 @@ defmodule Arca.Overlay do
   end
 
   # A file unit's completing write IS the caller's one atomic put: no
-  # sentinel, no rollback (failure leaves the previous bytes), and the
-  # plain facade path so the file CoW mark-then-put applies untouched.
-  defp commit_file_unit(ctx, unit, {:files, [{[], content}]}, cap, :none, nil, if_absent?) do
+  # sentinel, no rollback (failure leaves the previous bytes).
+  defp commit_file_unit(ctx, unit, {:files, [{[], content}]}, cap, nil, if_absent?) do
     # `cap: :exempt` on the put because the commit's own required policy
     # was just applied above — the caller stated it, and the one check is
     # this commit's, not the write gate's.
@@ -717,10 +572,10 @@ defmodule Arca.Overlay do
     end
   end
 
-  defp commit_file_unit(_ctx, unit, _source, _cap, _origin, _override, _if_absent?) do
+  defp commit_file_unit(_ctx, unit, _source, _cap, _override, _if_absent?) do
     raise ArgumentError,
           "a file unit (#{Enum.join(unit, "/")}) commits as {:files, [{[], bytes}]} " <>
-            "with no sentinel:/origin: — the put is the commit"
+            "with no sentinel: — the put is the commit"
   end
 
   # The presence probe and the put ride one hold of the unit's lock; the
@@ -737,22 +592,22 @@ defmodule Arca.Overlay do
   # these interleaving means the second one deletes the first one's files —
   # including files a caller has already been told were written. Nothing
   # inside a single commit can detect that; they simply must not overlap.
-  defp commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override, if_absent?) do
+  defp commit_dir_unit(ctx, unit, sentinel, source, cap, override, if_absent?) do
     with_unit_lock_at(ctx, unit, fn ->
       with :ok <- refuse_present(ctx, {:dir, unit, sentinel}, if_absent?) do
-        do_commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override)
+        do_commit_dir_unit(ctx, unit, sentinel, source, cap, override)
       end
     end)
   end
 
-  # `if_absent:` — a unit is present when the union serves it: a completed
-  # tenant copy, or a shipped counterpart the athanor has not shadowed. A
-  # partial copy (a crashed commit: no sentinel, no seed) is not — the
-  # commit replaces it whole, as any commit would.
+  # `if_absent:` — a unit is present when the athanor holds a completed
+  # copy. A partial (a crashed commit: no sentinel) is not — the commit
+  # replaces it whole, as any commit would. What the seed ships is not
+  # the athanor's until pulled, so it never counts as present here.
   defp refuse_present(_ctx, _loc, false), do: :ok
 
   defp refuse_present(ctx, loc, true) do
-    if completed?(ctx, loc) or seed_unit_present?(loc), do: {:error, :exists}, else: :ok
+    if completed?(ctx, loc), do: {:error, :exists}, else: :ok
   end
 
   # The lock is per athanor and per unit: two athanors publishing the same
@@ -763,33 +618,13 @@ defmodule Arca.Overlay do
   # The unit lock, taken by the mutating callbacks themselves
   # ---------------------------------------------------------------------------
 
-  # Every write, append and delete at or inside a unit runs under that
-  # unit's lock. It did not before: only `commit_unit/4`, `materialize/2`
-  # and the two revert paths took it, so a plain `Arca.delete_tree` on a
-  # component version dir (`Compendium.Registry`'s publish rollback and its
-  # cleanup) could interleave with another member's commit and leave a unit
-  # reading COMPLETE while holding only its manifest — the exact scenario
-  # `do_commit_dir_unit/7` says the lock exists to prevent. A `put` was
-  # worse: `prepare_write/2` materialized under the lock and RELEASED it
-  # before the caller's `tenant().put`, so the write could land inside a
-  # unit someone else had clean-slated in between, with `:ok` already
-  # returned.
+  # Serialize writes, appends and deletes under the containing unit's lock.
   #
-  # `Arca.Overlay.UnitLock` is deliberately NOT reentrant — it logs an
-  # error and can only time out. The commit path writes every file of a
-  # unit through the public `Arca.put`, so taking the lock in the callback
-  # would make `clean_slate/2` queue behind its own holder for 30s. Hence
-  # this process-local register: a nested write into a unit this process
-  # already holds passes straight through, and the outer acquisition is
-  # what serialises against other processes.
+  # UnitLock is not reentrant. Track locks held by this process so nested
+  # Arca writes reuse the outer acquisition.
   #
-  # Scope is one unit. A `delete_tree` ABOVE units (the empty-parent tidy)
-  # takes no lock and cannot: covering it would mean locking every unit
-  # beneath, in an order two processes could invert — so `tree_deletable/2`
-  # admits one only while no unit stands beneath it. Callers that need to
-  # clear a whole subtree walk its units and drop them one at a time
-  # instead — `Compendium.AquaTemplate.reset/2` with `all: true` is the
-  # one that used to delete the root wholesale.
+  # Deletes above units are allowed only when no units remain beneath them.
+  # To clear a subtree, drop each unit under its own lock first.
   @held_units_key {__MODULE__, :held_unit_locks}
 
   defp with_unit_lock(%Context{} = ctx, path, fun) do
@@ -819,7 +654,7 @@ defmodule Arca.Overlay do
     end
   end
 
-  defp do_commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override) do
+  defp do_commit_dir_unit(ctx, unit, sentinel, source, cap, override) do
     internal = internal_ctx(ctx)
 
     with {:ok, sentinel_content} <- sentinel_bytes(internal, sentinel, source, override),
@@ -831,8 +666,7 @@ defmodule Arca.Overlay do
                # The completion mark: the sentinel lands last, so a crash
                # anywhere above leaves the unit reading as incomplete and
                # the rollback (or the next commit) clears the remains.
-               :ok <- Arca.put(internal, unit ++ [sentinel], sentinel_content),
-               :ok <- maybe_record_origin(internal, unit, origin) do
+               :ok <- Arca.put(internal, unit ++ [sentinel], sentinel_content) do
             {:ok, written ++ [[sentinel]]}
           end
         end)
@@ -915,16 +749,6 @@ defmodule Arca.Overlay do
     )
   end
 
-  # The dir-unit order — sentinel, THEN mark — is the opposite of the
-  # file-unit CoW's mark-then-put, and deliberately so: here the commit
-  # controls the "after", so the mark lands only once completeness is
-  # durable ("marked ⇒ completed copy" holds by construction), the crash
-  # window between the two degrades to :own_shadowing (bytes kept), and a
-  # failed mark write still fails the commit into its rollback. Do not
-  # unify the two orders.
-  defp maybe_record_origin(_internal, _unit, :none), do: :ok
-  defp maybe_record_origin(internal, unit, :seed), do: record_origin(internal, unit)
-
   # An internal context focused on the caller's athanor, writing back
   # THROUGH the facade so every committed byte passes the facade's usage
   # accounting like any other write. The user_id is attribution only —
@@ -934,83 +758,41 @@ defmodule Arca.Overlay do
   end
 
   # ---------------------------------------------------------------------------
-  # Copy-on-write and the delete refusal
+  # Write shapes, and the delete refusal
   # ---------------------------------------------------------------------------
 
-  # A write inside an unmaterialized seed directory unit materializes the
-  # whole unit first (droppings excluded, the storage cap asked about the
-  # materialization bytes, the sentinel copied last). A write AT a file
-  # unit that shadows a seed file for the first time records its origin
-  # mark — BEFORE the put, the opposite order from the dir-unit commit's
-  # sentinel-then-mark, and deliberately so: a file unit's completion
-  # event is the caller's own atomic put, which the overlay has no
-  # "after" hook on — a mark that failed to land after the put would
-  # never be retried and the copy would read as member work forever.
-  # Mark-first is self-healing: a crash in between leaves a mark without
-  # a completed file, which every reader ignores (fails toward :seed),
-  # and the completing retry re-marks idempotently. Each order puts the
-  # mark on the side of its completion event the overlay controls; both
-  # fail toward the athanor keeping its bytes. Do not unify them. Only
-  # the internal-write scope is exempt — that is what keeps the copy from
-  # recursing.
-  defp prepare_write(%Context{} = ctx, path) do
+  # A put or append must land inside a unit, or outside the units
+  # altogether: below a file unit there is no interior to write into, and
+  # a put exactly at a directory unit would drop a file where the unit's
+  # tree belongs.
+  defp writable(path) do
+    case Arca.Storage.locate(path) do
+      loc when loc in [:not_overlaid, :above_unit] -> :ok
+      {:file, unit} when unit != path -> {:error, :invalid_path}
+      {:dir, unit, _sentinel} when unit == path -> {:error, :invalid_path}
+      _inside_a_dir_unit_or_at_a_file_unit -> :ok
+    end
+  end
+
+  # Refuse deleting a shipped unit whole: `{:error, :bundled}` for a
+  # delete AT a unit the seed ships. A file inside a directory unit
+  # deletes as an edit; the athanor's own unit deletes normally. Only the
+  # internal-write scope is exempt (its rollback and its replace delete
+  # what it lays).
+  defp deletable(path) do
     if internal_writes?() do
       :ok
     else
       case Arca.Storage.locate(path) do
-        loc when loc in [:not_overlaid, :above_unit] ->
-          :ok
-
-        {:file, unit} when unit == path ->
-          loc = {:file, unit}
-
-          if seed_unit_present?(loc) and not completed?(ctx, loc) do
-            record_origin(ctx, unit)
-          else
-            :ok
-          end
-
-        {:file, _unit} ->
-          # Below a file unit: a file has no interior to write into.
-          {:error, :invalid_path}
-
-        {:dir, unit, _sentinel} when unit == path ->
-          # A put exactly at a directory unit would drop a file where the
-          # unit's tree belongs.
-          {:error, :invalid_path}
-
-        {:dir, _unit, _sentinel} = loc ->
-          cond do
-            completed?(ctx, loc) -> :ok
-            not seed_unit_present?(loc) -> :ok
-            true -> materialize(ctx, loc)
-          end
+        {:file, unit} = loc when unit == path -> refuse_shipped(loc)
+        {:dir, unit, _sentinel} = loc when unit == path -> refuse_shipped(loc)
+        _inside_above_or_outside -> :ok
       end
     end
   end
 
-  # Refuse deleting what the athanor does not own: `{:error, :bundled}`
-  # for an unmaterialized seed path at or below its shadow unit. A
-  # completed copy (or the athanor's own unit) deletes normally — and any
-  # bundle shows through again. Only the internal-write scope is exempt
-  # (its rollback deletes a partial, sentinel-less copy — exactly the
-  # shape this refuses for everyone else).
-  defp deletable(%Context{} = ctx, path) do
-    if internal_writes?() do
-      :ok
-    else
-      case Arca.Storage.locate(path) do
-        loc when loc in [:not_overlaid, :above_unit] ->
-          :ok
-
-        loc ->
-          if not completed?(ctx, loc) and seed_unit_present?(loc) do
-            {:error, :bundled}
-          else
-            :ok
-          end
-      end
-    end
+  defp refuse_shipped(loc) do
+    if seed_unit_present?(loc), do: {:error, :bundled}, else: :ok
   end
 
   # ---------------------------------------------------------------------------
@@ -1043,117 +825,12 @@ defmodule Arca.Overlay do
     end
   end
 
-  # A leaf read falls through when the path could live in a seed unit the
-  # athanor has not completed. Above-unit paths have no unit to shadow —
-  # they fall through unconditionally.
-  defp fall_through?(ctx, path) do
-    case Arca.Storage.locate(path) do
-      :not_overlaid -> false
-      :above_unit -> true
-      loc -> not completed?(ctx, loc)
-    end
-  end
-
-  # Whether the SEED side owns this path, so the athanor's own bytes at it
-  # must not be served.
-  #
-  # The read plane and the listing plane disagreed about a half-written
-  # copy of a shipped unit. `at_unit_result/4` is seed-first for one (an
-  # incomplete copy reads through, so listings show the seed's leaves)
-  # while `get/2` was tenant-first unconditionally (any tenant hit
-  # answered). Since `read_subtree/2` is `list_recursive/2` composed with
-  # `get/2`, a half-materialized unit came back as the SEED's file names
-  # carrying TENANT bytes — a tree that exists on neither layer.
-  #
-  # Deciding it once is the fix. The rule is `at_unit_result/4`'s: a
-  # completed copy answers alone, an incomplete copy under a seed unit
-  # reads through to the seed, and a tenant-only partial (a crashed
-  # `commit_unit/4` with no shipped counterpart) still answers its own
-  # content — there is nothing else to serve, and hiding it would make a
-  # failed commit's remains invisible to the repair paths that must see
-  # them (`unit_status/2`, `diff_unit/2`, `drop_unit/2`).
-  defp seed_shadows_tenant?(ctx, path) do
-    case Arca.Storage.locate(path) do
-      loc when loc in [:not_overlaid, :above_unit] ->
-        false
-
-      loc ->
-        not completed?(ctx, loc) and seed_unit_present?(loc)
-    end
-  end
-
-  # The above-unit merge the leaf walks share: seed items are shadowed
-  # where their unit holds a completed tenant copy, partial tenant copies
-  # under a seed unit stay hidden, everything else unions.
-  defp merge_above_unit(ctx, tenant_items, seed_items, full_path_fun) do
-    classes = classify_tenant_units(ctx, Enum.map(tenant_items, full_path_fun))
-
-    class_of = fn item ->
-      case leaf_loc(full_path_fun.(item)) do
-        nil -> nil
-        loc -> classes[loc]
-      end
-    end
-
-    fresh = Enum.reject(seed_items, &(class_of.(&1) == :completed))
-    kept = Enum.reject(tenant_items, &(class_of.(&1) == :hidden))
-    kept ++ fresh
-  end
-
-  # Classify each distinct tenant unit once, for the above-unit merges:
-  # `:completed` (a complete copy — shadows the seed's leaves; whether it
-  # is a marked copy or the athanor's own shadowing work, the tenant side
-  # answers), `:hidden` (an uncompleted copy under a seed unit — the union
-  # serves the seed, so the tenant's partial leaves must not surface or
-  # double-list), `:own` (tenant-only — no seed counterpart, answers
-  # as-is).
-  defp classify_tenant_units(ctx, tenant_paths) do
-    tenant_paths
-    |> Enum.map(&leaf_loc/1)
-    |> Enum.reject(&is_nil/1)
-    |> MapSet.new()
-    |> Map.new(fn loc ->
-      class =
-        cond do
-          completed?(ctx, loc) -> :completed
-          seed_unit_present?(loc) -> :hidden
-          true -> :own
-        end
-
-      {loc, class}
-    end)
-  end
-
-  # The at-or-below-unit answer, shared by the listing merges: a completed
-  # copy answers alone, an unmaterialized seed unit reads through, and a
-  # tenant-only unit answers its own content. A tenant adapter fault
-  # propagates before any probe — `:enotdir` is a real answer (a file
-  # where the unit's tree belongs), everything else is an outage the seed
-  # side must not paper over.
-  defp at_unit_result(ctx, loc, tenant_result, seed_fun) do
-    case tenant_result do
-      {:error, reason} when reason != :enotdir ->
-        tenant_result
-
-      _answered ->
-        cond do
-          completed?(ctx, loc) -> tenant_result
-          seed_unit_present?(loc) -> seed_fun.()
-          true -> tenant_result
-        end
-    end
-  end
-
-  # The shadow test: is the athanor's copy of the unit COMPLETE? A
+  # The completeness test: is the athanor's copy of the unit COMPLETE? A
   # directory copy is complete when it holds its sentinel file; a file
-  # unit when the tenant file exists. Asked of the tenant adapter
-  # directly, on purpose — the union answering here would make every seed
-  # unit look materialized. `exists?/2` is total by the adapter contract,
-  # so these probes cannot carry an outage: they serve only the write
-  # gates and leaf fall-through, whose failure directions are safe (a
-  # refused delete, a materialization that fails typed, a read the
-  # adapter just answered). Status surfaces ask `tenant_unit_state/2`
-  # instead — the error-carrying form.
+  # unit when the tenant file exists. `exists?/2` is total by the adapter
+  # contract, so these probes cannot carry an outage: they serve the
+  # write gates, whose failure directions are safe. Status surfaces ask
+  # `tenant_unit_state/2` instead — the error-carrying form.
   defp completed?(ctx, {:file, unit}), do: tenant().exists?(ctx, unit)
 
   defp completed?(ctx, {:dir, unit, sentinel}),
@@ -1161,9 +838,9 @@ defmodule Arca.Overlay do
 
   # The status-surface probe: what the athanor's own tree holds at the
   # unit, with the error channel the total `exists?/2` probes cannot
-  # carry — a status answer must not misreport a materialized unit as
-  # `:seed` during an adapter outage. `:enotdir` is a real answer (a file
-  # where a tree belongs): content, but never a complete copy.
+  # carry — a status answer must not misreport a copy as `:available`
+  # during an adapter outage. `:enotdir` is a real answer (a file where a
+  # tree belongs): content, but never a complete copy.
   defp tenant_unit_state(ctx, {:file, unit}) do
     parent = Enum.drop(unit, -1)
     name = List.last(unit)
@@ -1199,61 +876,13 @@ defmodule Arca.Overlay do
 
   # Whether the seed ships the unit — shaped as the grammar declares it,
   # so a stray seed file where a directory unit belongs reads as absent
-  # (broken install media never materializes anyway).
+  # (broken install media is never copied anyway).
   defp seed_unit_present?({:file, unit}), do: seed_exists?(unit)
 
   defp seed_unit_present?({:dir, unit, _sentinel}) do
     case seed_list_typed(unit) do
       {:ok, [_ | _]} -> true
       _ -> false
-    end
-  end
-
-  # The seed materializer is a commit_unit caller like every other
-  # ingress: tree source from the seed side, droppings excluded, the cap
-  # asked about the dragged-in bytes, origin marked. The commit owns
-  # sentinel-last, wholesale replace and rollback.
-  defp materialize(ctx, {:dir, unit_dir, sentinel} = loc) do
-    seed_dir = seed(unit_dir)
-
-    # Under the same lock the commit takes, and re-asking the question that
-    # sent us here. `prepare_write/2` saw an unmaterialized unit, but a
-    # concurrent writer may have materialized it and written a file since —
-    # and materializing again would clear that file on the way to copying a
-    # seed the athanor already has. Whoever loses this race has nothing left
-    # to do.
-    with_unit_lock_at(ctx, unit_dir, fn ->
-      if completed?(ctx, loc) do
-        :ok
-      else
-        do_materialize(ctx, unit_dir, sentinel, seed_dir)
-      end
-    end)
-  end
-
-  defp do_materialize(ctx, unit_dir, sentinel, seed_dir) do
-    with :ok <- seed_sentinel_present(seed_dir, sentinel),
-         {:ok, bytes} <- seed_unit_bytes(seed_dir),
-         {:ok, _written} <-
-           do_commit_dir_unit(
-             ctx,
-             unit_dir,
-             sentinel,
-             {:tree, seed_dir, exclude: &excluded?/1},
-             {:checked, bytes},
-             :seed,
-             nil
-           ) do
-      Logger.info("[Arca.Overlay] materialized #{Enum.join(unit_dir, "/")} for #{ctx.athanor_id}")
-
-      :ok
-    else
-      # The cap refusals keep their facade shapes; everything else wears
-      # the materializer's documented vocabulary.
-      {:error, {:limit_reached, _, _}} = cap -> cap
-      {:error, :storage_unverifiable} = unverifiable -> unverifiable
-      {:error, {:materialize_failed, _}} = wrapped -> wrapped
-      {:error, reason} -> {:error, {:materialize_failed, reason}}
     end
   end
 
@@ -1288,139 +917,13 @@ defmodule Arca.Overlay do
     end
   end
 
-  # The write that triggers materialization is capped by its ingress; the
-  # materialization bytes it drags in must not slip past the same cap.
-  # The walk counts droppings the copy then excludes — an over-count in
-  # the safe direction; CI keeps the seed free of droppings so it stays
-  # theoretical.
-  defp seed_unit_bytes(seed_dir) do
-    case Arca.Adapters.Local.usage(seed_ctx(), seed_dir) do
-      {:ok, %{bytes: bytes}} -> {:ok, bytes}
-      {:error, reason} -> {:error, {:materialize_failed, {:seed_usage, reason}}}
-    end
-  end
-
-  # Through the facade, so accounting applies as for any caller; this
-  # decorator's own delete callbacks clear the unit's origin mark.
+  # Through the facade, so accounting applies as for any caller.
   defp delete_unit(ctx, {:file, unit}), do: Arca.delete(ctx, unit)
   defp delete_unit(ctx, {:dir, unit, _sentinel}), do: Arca.delete_tree(ctx, unit)
 
-  # The whole-unit clear rides the same per-unit lock as the commit. A
-  # drop interleaving a commit's clear-then-write once deleted files the
-  # commit had already written, then let the commit land its sentinel —
-  # a unit that read COMPLETE while holding little more than the sentinel.
+  # Serialize whole-unit deletion with commits using the same unit lock.
   defp delete_unit_locked(ctx, loc) do
     with_unit_lock_at(ctx, unit_of(loc), fn -> delete_unit(ctx, loc) end)
-  end
-
-  # ---------------------------------------------------------------------------
-  # Origin marks
-  # ---------------------------------------------------------------------------
-
-  defp origin_mark_path(unit), do: @origin_root ++ unit
-
-  defp origin_mark?(ctx, unit), do: tenant().exists?(ctx, origin_mark_path(unit))
-
-  # The batch read: one listing, each leaf a marked unit. An unreadable
-  # listing degrades every marked unit to :own_shadowing — visible, and
-  # the direction that never destroys the athanor's bytes.
-  defp origin_marks(ctx) do
-    case tenant().list_recursive(ctx, @origin_root) do
-      {:ok, mark_leaves} ->
-        MapSet.new(mark_leaves, &Enum.drop(&1, length(@origin_root)))
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Arca.Overlay] origin marks unreadable for #{ctx.athanor_id}: #{inspect(reason)}"
-        )
-
-        MapSet.new()
-    end
-  end
-
-  # One put records a mark, one delete clears it — no read-modify-write,
-  # so concurrent materializations never lose each other's marks. Both
-  # ride the internal-write scope: `meta/` is reserved, and the caller's
-  # own context stays the author for accounting and audit.
-  defp record_origin(ctx, unit) do
-    result =
-      with_internal_writes(fn ->
-        Arca.put(ctx, origin_mark_path(unit), ~s({"origin":"seed"}))
-      end)
-
-    case result do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error(
-          "[Arca.Overlay] origin mark write failed for #{ctx.athanor_id} " <>
-            "at #{Enum.join(unit, "/")}: #{inspect(reason)}"
-        )
-
-        {:error, {:origin_mark, reason}}
-    end
-  end
-
-  # Clearing is best-effort against a delete that already succeeded: a
-  # failure is loud (a stale mark could later misclassify the athanor's
-  # own work as a copy) but does not un-delete anything.
-  defp clear_origin(ctx, unit) do
-    result =
-      with_internal_writes(fn ->
-        case Arca.delete(ctx, origin_mark_path(unit)) do
-          :ok -> :ok
-          {:error, :not_found} -> :ok
-          {:error, _} = error -> error
-        end
-      end)
-
-    case result do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error(
-          "[Arca.Overlay] origin mark clear failed for #{ctx.athanor_id} " <>
-            "at #{Enum.join(unit, "/")}: #{inspect(reason)} — " <>
-            "a stale mark remains until the unit is next deleted"
-        )
-
-        :ok
-    end
-  end
-
-  # After a delete_tree: a unit-level delete retires that unit's mark; a
-  # wider delete inside an overlaid root retires every mark beneath it.
-  # Non-overlaid paths (the whole-tree purge included — `meta/` goes with
-  # the tree) have no marks to clear.
-  defp clear_origin_after_delete_tree(ctx, path) do
-    case Arca.Storage.locate(path) do
-      {:file, unit} when unit == path ->
-        clear_origin(ctx, unit)
-
-      {:dir, unit, _sentinel} when unit == path ->
-        clear_origin(ctx, unit)
-
-      :above_unit ->
-        with_internal_writes(fn ->
-          case Arca.delete_tree(ctx, @origin_root ++ path) do
-            :ok ->
-              :ok
-
-            {:error, reason} ->
-              Logger.error(
-                "[Arca.Overlay] origin mark sweep failed for #{ctx.athanor_id} " <>
-                  "under #{Enum.join(path, "/")}: #{inspect(reason)}"
-              )
-
-              :ok
-          end
-        end)
-
-      _inside_unit_or_not_overlaid ->
-        :ok
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1480,7 +983,7 @@ defmodule Arca.Overlay do
 
   # Total in practice (Local answers {:ok, []} for a missing tree), but
   # the adapter tuple propagates — install media that cannot be listed is
-  # a fault, not an empty union.
+  # a fault, not an empty bundle.
   defp seed_list_recursive(path) do
     with {:ok, leaves} <- Arca.Adapters.Local.list_recursive(seed_ctx(), seed(path)) do
       {:ok, Enum.map(leaves, &Arca.Storage.seed_logical/1)}

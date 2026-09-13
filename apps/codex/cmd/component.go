@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cyfr/codex/internal/mcp"
+	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
 	"github.com/cyfr/codex/internal/ref"
@@ -27,10 +28,8 @@ func init() {
 	rootCmd.AddCommand(pushCmd)
 	rootCmd.AddCommand(registryCmd)
 	registryCmd.AddCommand(registryDiscoverCmd)
-	// Note: `registry login` (interactive username/password prompt) was removed.
-	// Push credentials for cyfr.run are now per-user opaque push tokens,
-	// provisioned automatically by `cyfr login` (device-flow) via the
-	// /v1/identity/probe handoff.
+	// cyfr.run push tokens are provisioned by `cyfr login` through
+	// /v1/identity/probe.
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
 	newCmd.Flags().String("template", "", "Scaffold template (tincture only: react)")
 	rootCmd.AddCommand(newCmd)
@@ -55,8 +54,8 @@ var searchCmd = &cobra.Command{
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
-			"action": "search",
+		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
+			"action": ops.ComponentSearch,
 			"query":  strings.Join(args, " "),
 		})
 		if err != nil {
@@ -157,7 +156,6 @@ var searchCmd = &cobra.Command{
 					continue
 				}
 				name := strVal(comp, "name")
-				// See the namespace_slug comment above — same rationale.
 				publisher := strVal(comp, "namespace_slug")
 				if publisher == "" {
 					publisher = strVal(comp, "publisher")
@@ -226,7 +224,7 @@ var inspectCmd = &cobra.Command{
 		if includeReadme, _ := cmd.Flags().GetBool("readme"); includeReadme {
 			callArgs["include_readme"] = true
 		}
-		result, err := client.CallTool(cmd.Context(), "component", callArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Component, callArgs)
 		if err != nil {
 			return handleToolError(err, "Inspect failed")
 		}
@@ -264,8 +262,8 @@ var pullCmd = &cobra.Command{
 		}
 		progressID := randomHex(8)
 
-		result, err := client.CallToolWithProgress(cmd.Context(), "component", map[string]any{
-			"action":      "pull",
+		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, map[string]any{
+			"action":      ops.ComponentPull,
 			"reference":   normalized,
 			"progress_id": progressID,
 		}, progressPrinter())
@@ -314,7 +312,7 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		if registry, _ := cmd.Flags().GetString("registry"); registry != "" {
 			toolArgs["registry"] = registry
 		}
-		result, err := client.CallToolWithProgress(cmd.Context(), "component", toolArgs, progressPrinter())
+		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, toolArgs, progressPrinter())
 		if err != nil {
 			return handleToolError(err, "Push failed")
 		}
@@ -353,7 +351,7 @@ Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeSc
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "component", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Component, toolArgs)
 		if err != nil {
 			return handleToolError(err, "Scaffold failed")
 		}
@@ -416,7 +414,7 @@ Copies source code, manifest, and compiled artifact. Requires source code
 			toolArgs["version"] = version
 		}
 
-		result, err := client.CallTool(cmd.Context(), "component", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Component, toolArgs)
 		if err != nil {
 			return handleToolError(err, "Fork failed")
 		}
@@ -475,8 +473,8 @@ token for the component's namespace (i.e. you are the publisher).`,
 		}
 		reason, _ := cmd.Flags().GetString("reason")
 
-		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
-			"action":    "deprecate",
+		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
+			"action":    ops.ComponentDeprecate,
 			"reference": normalized,
 			"reason":    reason,
 		})
@@ -518,8 +516,8 @@ token for the component's namespace.`,
 		}
 		reason, _ := cmd.Flags().GetString("reason")
 
-		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
-			"action":    "yank",
+		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
+			"action":    ops.ComponentYank,
 			"reference": normalized,
 			"reason":    reason,
 		})
@@ -555,8 +553,8 @@ var registryDiscoverCmd = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
-			"action":   "discover",
+		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
+			"action":   ops.ComponentDiscover,
 			"registry": args[0],
 		})
 		if err != nil {
@@ -565,12 +563,6 @@ var registryDiscoverCmd = &cobra.Command{
 		return renderResult(result)
 	},
 }
-
-// `registry login <registry>` removed post auth-refactor. cyfr.run push
-// credentials are now per-user opaque push tokens (`cyfr_pt_*`), provisioned
-// automatically after `cyfr login` via the device-flow probe handoff.
-// Namespace management (publisher claim/verify, tokens, members) lives under
-// `cyfr registry ...` subcommands defined in cmd/registry.go.
 
 // printDependencyInfo displays auto-pulled dependencies and warnings after a pull.
 func printDependencyInfo(result map[string]any) {
@@ -599,9 +591,8 @@ func printDependencyInfo(result map[string]any) {
 	}
 }
 
-// printInspectDependencies displays dependency information when inspecting a component.
-// Prefers resolved dependency data (top-level fields from inspect enrichment),
-// falls back to raw manifest data for backward compatibility.
+// printInspectDependencies displays a component's dependencies.
+// Uses resolved inspect fields when available, otherwise the raw manifest.
 func printInspectDependencies(result map[string]any) {
 	// Check for resolved dependency fields (enriched inspect response)
 	if deps, ok := result["dependencies"]; ok {
@@ -758,15 +749,10 @@ func resolveAllVersions(_ *mcp.Client, s string) []string {
 	return []string{parsed.NameRef()}
 }
 
-// resolveComponentRef resolves a component reference, auto-resolving the
-// version when it's missing. If the ref already contains an explicit version,
-// returns it as-is. If the version is omitted:
-//   - Non-interactive mode: passes the version-less ref through to the server
-//     for auto-resolution (the server resolves to latest)
-//   - Interactive mode: fetches installed versions and asks for confirmation
-//
-// Refs containing '@' are passed through unchanged — see resolveAllVersions
-// for the rationale.
+// resolveComponentRef fills in an omitted component version.
+// Explicit versions pass through unchanged. Non-interactive mode leaves
+// resolution to the server; interactive mode uses the latest installed
+// version, falling back to server resolution when none is installed.
 func resolveComponentRef(ctx context.Context, client *mcp.Client, s string) (string, error) {
 	parsed := ref.ParseRef(s)
 	if parsed.HasVersion {

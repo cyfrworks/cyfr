@@ -33,7 +33,7 @@ defmodule Aqua.PolicyTest do
   test "a role's delegation glob and the search gate pass" do
     assert :ok =
              Policy.check_authored(
-               %{"aqua_builder.*" => "auto", "native_search" => "auto"},
+               %{"builder.*" => "auto", "native_search" => "auto"},
                AquaAgent.soul_type()
              )
   end

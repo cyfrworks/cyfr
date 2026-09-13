@@ -17,10 +17,17 @@ defmodule Sanctum.Consent.Plan do
   exposes the single ingress slot, spelled `"@ingress"` in decisions —
   the edge the bound credential rides. The blob edge-key grammar reserves
   `@`-prefixed names, so a future manifest need can never collide.
+
+  A dependency edge of the closure whose target declares a credential
+  need is a `dependency_needs` row: who lends, what it needs, and which
+  of its own owner profiles bind an entry — the candidates a `selections`
+  decision picks from, so that edge runs the dependency with the key
+  bound on that profile rather than a copy of its own.
   """
 
   alias Arca.Schemas.Profile
   alias Sanctum.Consent.Authz
+  alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.Proof
   alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
@@ -38,6 +45,7 @@ defmodule Sanctum.Consent.Plan do
           profile_id: String.t() | nil,
           source_ref: String.t(),
           needs: [map()],
+          dependency_needs: [map()],
           caps: map(),
           limits: map(),
           candidates: [map()],
@@ -73,10 +81,11 @@ defmodule Sanctum.Consent.Plan do
          profile_id: profile_id,
          source_ref: source_ref,
          needs: needs,
+         dependency_needs: dependency_needs(ctx, component, source_ref),
          caps: resources,
          limits: limits,
          candidates: candidates,
-         tool_server_candidates: Emissary.MCP.ExternalProvider.consent_candidates(ctx),
+         tool_server_candidates: Sanctum.Catalog.tool_server_candidates(ctx),
          warnings: need_warnings(needs, candidates),
          defaults: %{scope: :versionless, kind: kind, label: label, invoke_mode: :open_inert}
        }}
@@ -176,6 +185,104 @@ defmodule Sanctum.Consent.Plan do
   defp candidates(ctx) do
     with {:ok, entries} <- Sanctum.Vault.list(ctx) do
       {:ok, Enum.filter(entries, &(&1.status == "active"))}
+    end
+  end
+
+  # The closure's dependency edges whose target declares a credential
+  # need, each with the owner profiles of that target that bind one —
+  # what a selection may name. A closure that cannot be resolved offers
+  # none; the commit refuses a selection it cannot place anyway.
+  defp dependency_needs(ctx, component, _source_ref) do
+    case Compendium.Activation.resolve(ctx, component) do
+      {:ok, %{graph: graph}} ->
+        graph
+        |> Map.keys()
+        |> Enum.sort()
+        |> Enum.flat_map(fn from ->
+          case node_manifest(ctx, from) do
+            {:ok, manifest} ->
+              manifest
+              |> BlobBuilder.dep_edges(graph, from)
+              |> Enum.sort()
+              |> Enum.flat_map(&dependency_rows(ctx, from, &1))
+
+            _ ->
+              []
+          end
+        end)
+
+      _unresolvable ->
+        []
+    end
+  end
+
+  defp node_manifest(ctx, node_key) do
+    with {:ok, ref} <- Sanctum.ComponentRef.parse(node_key),
+         {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
+      {:ok, Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
+    end
+  end
+
+  defp dependency_rows(ctx, from, dep) do
+    case ShapeDerivation.manifest_blocks(ctx, dep) do
+      {:ok, needs, _caps} when is_list(needs) ->
+        case Enum.filter(needs, &(&1.kind in ~w(api_key oauth bundle))) do
+          [] ->
+            []
+
+          credential_needs ->
+            [
+              %{
+                from: from,
+                dep: dep,
+                needs:
+                  Enum.map(credential_needs, fn need ->
+                    %{
+                      need: need.name,
+                      type: "#{need.kind}:#{need.qualifier}",
+                      reason: need.reason,
+                      required: need.required,
+                      fields: need.fields
+                    }
+                  end),
+                candidates: lender_candidates(ctx, dep)
+              }
+            ]
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  # The dependency's active owner profiles whose head binds a usable entry.
+  defp lender_candidates(ctx, dep) do
+    case Source.impl().profiles(ctx, dep) do
+      {:ok, profiles} ->
+        for %{kind: :owner, status: :active} = profile <- profiles,
+            {:ok, head} <- [Source.impl().head_consent(ctx, profile.id)],
+            {:ok, blob} <- [Sanctum.Authority.Blob.parse(head.resolved_policy)],
+            {:ok, ingress} <- [Sanctum.Authority.Blob.ingress(blob, dep)],
+            Sanctum.Authority.Blob.bound_vault?(ingress.vault),
+            {:ok, entry} <-
+              [
+                Sanctum.VaultReader.usable(
+                  ctx.athanor_id,
+                  ingress.vault.entry_id,
+                  ingress.vault.binding_digest
+                )
+              ] do
+          %{
+            profile_id: profile.id,
+            label: profile.label,
+            entry_id: entry.id,
+            entry_name: entry.name,
+            fields: (ingress.vault.projection && ingress.vault.projection.fields) || []
+          }
+        end
+
+      _ ->
+        []
     end
   end
 

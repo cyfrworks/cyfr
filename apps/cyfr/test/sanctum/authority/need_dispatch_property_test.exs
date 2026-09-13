@@ -9,18 +9,15 @@ defmodule Sanctum.Authority.NeedDispatchPropertyTest do
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
-  # §6 "Need dispatch": undeclared or ambiguous needs are rejected,
-  # omission is rejected whenever named needs are declared, and each
-  # declared need dispatches to exactly its own edge.
+  # Reject undeclared or ambiguous needs and omissions when needs are declared; match each need to its edge.
 
-  property "the §2.7 rules hold on any generated graph" do
+  property "need dispatch rules hold on any generated graph" do
     check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 50) do
       auth = Gen.rooted({graph, meta})
       {:ok, source} = Authority.current_node(auth)
       declared = Map.get(meta.declared_needs, source, [])
       targets = Gen.outgoing(meta)[source] || []
-      # Not the source: a self-target with a matching activation digest
-      # would (correctly) take the D2 path before the need rules.
+      # Use a non-self target so need validation is exercised.
       any_target = Enum.find(meta.nodes, &(&1 != source))
 
       if declared == [] do

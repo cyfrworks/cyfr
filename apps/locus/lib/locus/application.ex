@@ -6,11 +6,7 @@ defmodule Locus.Application do
   Locus's own supervision tree: the build-slot limiter and the task pool
   builds run on.
 
-  A component build is `cargo component build` or npm+Vite — minutes, not
-  milliseconds — so builds get their own pool rather than riding the MCP
-  request pool. These children used to be grafted onto cyfr's tree behind
-  a `Code.ensure_loaded?` guard; the app that owns the processes now
-  supervises them.
+  Supervises dedicated build workers for cargo-component and npm/Vite jobs.
   """
 
   use Application
@@ -28,13 +24,32 @@ defmodule Locus.Application do
 
   # The builder container's HTTP face — only when this node IS the builder
   # (the `builder` release sets CYFR_BUILDER_LISTEN=true). The app image
-  # never listens on this port.
+  # never listens on this port. In compose the container sits on the
+  # builder network alone, so every interface is that network; elsewhere
+  # `CYFR_BUILDER_BIND` names the one address to listen on.
   defp builder_endpoint do
     if Application.get_env(:cyfr, :builder_listen, false) do
       port = Application.get_env(:cyfr, :builder_port, 4100)
-      [{Bandit, plug: Locus.BuilderService, port: port, ip: {0, 0, 0, 0}}]
+      ip = bind_address!(Application.get_env(:cyfr, :builder_bind, "0.0.0.0"))
+      [{Bandit, plug: Locus.BuilderService, port: port, ip: ip}]
     else
       []
+    end
+  end
+
+  @doc """
+  The IP address the builder listens on, from its dotted or colon
+  spelling; an address that does not parse refuses the boot rather than
+  listening somewhere else.
+  """
+  @spec bind_address!(String.t()) :: :inet.ip_address()
+  def bind_address!(text) when is_binary(text) do
+    case :inet.parse_address(String.to_charlist(text)) do
+      {:ok, address} ->
+        address
+
+      {:error, _} ->
+        raise "CYFR_BUILDER_BIND=#{inspect(text)} is not an IP address; the builder refuses to boot"
     end
   end
 end

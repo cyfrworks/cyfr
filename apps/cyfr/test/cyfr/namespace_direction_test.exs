@@ -5,20 +5,11 @@ defmodule Cyfr.NamespaceDirectionTest do
   @moduledoc """
   Which way the dependency arrows point between the umbrella's apps.
 
-  `:opus` is the WASM engine and `:locus` the build toolchain; both depend
-  on `:cyfr`, and `Cyfr.Execution` is the behaviour that keeps cyfr from
-  depending on them back. What that leaves open is *where inside cyfr* they
-  reach, and two answers were wrong in a way nothing caught: the engine took
-  its PubSub topic names from `Prism`, the LiveView console, and every
-  persistence path in the system took its id generator from `Emissary`, the
-  MCP and HTTP surface. Neither is a compile-time cycle, so neither broke
-  anything — the arrows just pointed at the wrong things, and the "a worker
-  on another node would implement this surface" story quietly stopped being
-  true.
+  Checks that Opus and Locus depend on CYFR domain interfaces rather than web or console modules.
 
   The rule this pins is narrow and checkable: an engine does not depend on
   a user interface. `Emissary` is deliberately NOT on the forbidden list —
-  opus implements `Emissary.MCP.ToolProvider` and dispatches in-chain tool
+  opus implements `Cyfr.Ops.Provider` and dispatches in-chain tool
   calls through the registry, which is a real contract with the transport,
   honestly declared.
   """
@@ -47,9 +38,8 @@ defmodule Cyfr.NamespaceDirectionTest do
   # The HTTP surface. Emissary (the MCP contract) is fair game for the
   # engine APPS — but EmissaryWeb (endpoint, router, plugs) is the web
   # layer, and an engine that names it has taken the browser surface as a
-  # dependency. Scoped to apps/opus and apps/locus only: inside cyfr,
-  # Sanctum and Aqua legitimately name it today (the tincture token's
-  # asset sibling, the router introspection Aqua.Actions documents).
+  # dependency. Scoped to apps/opus and apps/locus only; inside cyfr the
+  # domain namespaces are held to the written-down roster below.
   @engine_apps ["apps/opus/lib", "apps/locus/lib"]
   @forbidden_web_from_engine_apps ~r/\bEmissaryWeb\.[A-Z]/
 
@@ -118,11 +108,9 @@ defmodule Cyfr.NamespaceDirectionTest do
   # argued, rather than accruing quietly the way these two did.
   @domain_dirs ["apps/cyfr/lib/sanctum", "apps/cyfr/lib/aqua", "apps/cyfr/lib/compendium"]
 
-  @domain_web_calls [
-    # `Aqua.Actions` validates an agent's navigation intents against the
-    # console's real route table, so a link it emits cannot 404.
-    {"apps/cyfr/lib/aqua/actions.ex", "EmissaryWeb.Router"}
-  ]
+  # Empty: the assistant's navigation intents name a page by shape, and
+  # `PrismWeb.Nav.page?/1` maps them to the route table on the web side.
+  @domain_web_calls []
 
   # `{rel, module}` for every live domain→web reach, with its line.
   defp domain_web_reaches do
@@ -155,12 +143,7 @@ defmodule Cyfr.NamespaceDirectionTest do
            """
   end
 
-  # The inverse the siblings already assert (`Cyfr.EmissarySurfaceTest`,
-  # `Compendium.ReverseSurfaceTest`, `Opus.HostSurfaceTest`) and this one did
-  # not. An exemption whose call is gone stops describing the tree and starts
-  # holding the door open for it: the `oauth_grant.ex → EmissaryWeb.Endpoint`
-  # row outlived its call by a refactor to `Cyfr.RuntimeConfig.origin/0`,
-  # and nothing here noticed.
+  # Reject exemptions that no longer correspond to a dependency.
   test "every domain→web exemption still names a live reach" do
     reached = MapSet.new(domain_web_reaches(), fn {pair, _n} -> pair end)
 

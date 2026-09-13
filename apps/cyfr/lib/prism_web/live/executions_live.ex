@@ -365,10 +365,7 @@ defmodule PrismWeb.ExecutionsLive do
   defp type_class("formula"), do: "bg-emerald-900/30 text-emerald-300"
   defp type_class(_), do: "bg-gray-800 text-gray-400"
 
-  # `DisplayHelpers.truncate/2`, not a fourth hand-rolled copy: guarding on
-  # `byte_size` and slicing with `String.slice` mixes units, so multibyte
-  # text got through longer than the cap. The one call site defaults a
-  # missing id to "-" before calling, so there is no nil to answer for.
+  # Truncate using the shared character-count helper; missing ids use "-".
   defp short(s), do: truncate(s, 14)
 
   defp running_count(executions) do

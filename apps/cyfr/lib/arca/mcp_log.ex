@@ -103,6 +103,35 @@ defmodule Arca.McpLog do
   end
 
   @doc """
+  Inserts a started row only if none exists: the write-behind may land the
+  call's close first, and a close carries the whole row.
+  """
+  def record_started(attrs) do
+    Arca.Repo.Errors.with_db_rescue("McpLog.record_started", fn ->
+      attrs
+      |> create_changeset()
+      |> Arca.Repo.insert(on_conflict: :nothing, conflict_target: :id)
+    end)
+  end
+
+  @doc """
+  Closes a call whose started row may or may not have landed: the whole
+  row is written, and an existing row takes the close's fields.
+  """
+  def record_close(started, close) when is_map(started) and is_map(close) do
+    Arca.Repo.Errors.with_db_rescue("McpLog.record_close", fn ->
+      started
+      |> Map.merge(close)
+      |> create_changeset()
+      |> Arca.Repo.insert(
+        on_conflict:
+          {:replace, [:status, :duration_ms, :routed_to, :error_code, :output, :error]},
+        conflict_target: :id
+      )
+    end)
+  end
+
+  @doc """
   Updates an existing MCP log entry (e.g., on completion or failure).
 
   Uses tenant-scoped lookup when a context is provided.
@@ -245,8 +274,6 @@ defmodule Arca.McpLog do
       query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
       query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
 
-      # One aggregate pass, not three — the same filter used to run as
-      # three separate queries.
       row =
         query
         |> select([l], %{

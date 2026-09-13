@@ -368,53 +368,130 @@ defmodule Arca.ExecutionTest do
     end
   end
 
-  describe "list_stale_running/2 and renew_lease/2" do
-    defp running!(lease_until) do
+  describe "list_stale_running/2 over attempts" do
+    defp running!(lease_until, opts \\ []) do
       id = "exec_lease_#{System.unique_integer([:positive])}"
 
-      {:ok, _} =
-        Execution.record_start(%{
-          id: id,
-          reference: "catalyst:local.test:1.0.0",
-          user_id: "user_test",
-          athanor_id: @athanor,
-          started_at: DateTime.utc_now(),
-          status: "running",
-          component_type: "catalyst",
+      {:ok, %{attempt: attempt}} =
+        Execution.admit(
+          %{
+            id: id,
+            reference: "catalyst:local.test:1.0.0",
+            user_id: "user_test",
+            athanor_id: @athanor,
+            component_type: "catalyst"
+          },
+          attempt: Keyword.get(opts, :attempt),
           runner_id: "node@test",
           lease_until: lease_until
-        })
+        )
 
-      id
+      {id, attempt.attempt}
     end
 
-    test "returns running executions whose lease has lapsed" do
-      id = running!(DateTime.add(DateTime.utc_now(), -60, :second))
-      stale_ids = Execution.list_stale_running(DateTime.utc_now()) |> Enum.map(& &1.id)
-      assert id in stale_ids
+    test "returns running executions whose lease has lapsed, with the attempt beside the row" do
+      {id, attempt} = running!(DateTime.add(DateTime.utc_now(), -60, :second))
+      [stale] = Enum.filter(Execution.list_stale_running(DateTime.utc_now()), &(&1.id == id))
+      assert stale.attempt == attempt
+      assert stale.runner_id == "node@test"
+      assert %DateTime{} = stale.lease_until
     end
 
     test "leaves a running execution whose lease still holds" do
-      id = running!(DateTime.add(DateTime.utc_now(), 120, :second))
+      {id, _} = running!(DateTime.add(DateTime.utc_now(), 120, :second))
       stale_ids = Execution.list_stale_running(DateTime.utc_now()) |> Enum.map(& &1.id)
       refute id in stale_ids
     end
 
+    test "the sweep is fenced on what it observed: a renewal in between wins" do
+      lapsed = DateTime.add(DateTime.utc_now(), -60, :second)
+      {id, live} = running!(lapsed, attempt: "att_live")
+
+      [observed] = Enum.filter(Execution.list_stale_running(DateTime.utc_now()), &(&1.id == id))
+      assert observed.attempt == live
+
+      renewed_until = DateTime.add(DateTime.utc_now(), 180, :second)
+      assert {:ok, ^renewed_until, false} = Arca.ExecutionAttempts.renew(live, renewed_until)
+
+      assert {0, _} =
+               Execution.mark_failed_if_running(
+                 id,
+                 %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},
+                 attempt: observed.attempt,
+                 lease_until: observed.lease_until
+               )
+
+      # A stale attempt can neither renew nor finish the row…
+      assert :lost = Arca.ExecutionAttempts.renew("att_stale", renewed_until)
+
+      assert {:error, :not_running} =
+               Execution.record_end(
+                 Sanctum.TestContext.local(),
+                 id,
+                 "completed",
+                 %{completed_at: DateTime.utc_now(), duration_ms: 1},
+                 "att_stale"
+               )
+
+      # …and the live one still can, closing its attempt with the row.
+      assert {:ok, _} =
+               Execution.record_end(
+                 Sanctum.TestContext.local(),
+                 id,
+                 "completed",
+                 %{completed_at: DateTime.utc_now(), duration_ms: 1},
+                 live
+               )
+
+      assert %{state: "completed", outcome: "ok"} = Arca.ExecutionAttempts.get(@athanor, live)
+    end
+
     test "a renewed lease takes an execution out of the sweep" do
-      id = running!(DateTime.add(DateTime.utc_now(), -60, :second))
-      assert 1 = Execution.renew_lease(id, DateTime.add(DateTime.utc_now(), 180, :second))
+      {id, attempt} = running!(DateTime.add(DateTime.utc_now(), -60, :second))
+
+      assert {:ok, _, false} =
+               Arca.ExecutionAttempts.renew(
+                 attempt,
+                 DateTime.add(DateTime.utc_now(), 180, :second)
+               )
+
       stale_ids = Execution.list_stale_running(DateTime.utc_now()) |> Enum.map(& &1.id)
       refute id in stale_ids
 
       # A finished execution is not renewed.
       {:ok, _} =
-        Execution.record_complete(Sanctum.TestContext.local(), id, %{
-          completed_at: DateTime.utc_now(),
-          duration_ms: 1,
-          status: "completed"
-        })
+        Execution.record_end(
+          Sanctum.TestContext.local(),
+          id,
+          "completed",
+          %{completed_at: DateTime.utc_now(), duration_ms: 1},
+          nil
+        )
 
-      assert 0 = Execution.renew_lease(id, DateTime.add(DateTime.utc_now(), 180, :second))
+      assert :lost =
+               Arca.ExecutionAttempts.renew(
+                 attempt,
+                 DateTime.add(DateTime.utc_now(), 180, :second)
+               )
+    end
+
+    test "a sweep fails the lapsed attempt's row and retires the attempt" do
+      lapsed = DateTime.add(DateTime.utc_now(), -60, :second)
+      {id, attempt} = running!(lapsed)
+      [observed] = Enum.filter(Execution.list_stale_running(DateTime.utc_now()), &(&1.id == id))
+
+      assert {1, _} =
+               Execution.mark_failed_if_running(
+                 id,
+                 %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},
+                 attempt: observed.attempt,
+                 lease_until: observed.lease_until
+               )
+
+      assert %{state: "lapsed", outcome: "uncertain"} =
+               Arca.ExecutionAttempts.get(@athanor, attempt)
+
+      assert Arca.Repo.get!(Execution, id).status == "failed"
     end
 
     test "respects limit parameter" do

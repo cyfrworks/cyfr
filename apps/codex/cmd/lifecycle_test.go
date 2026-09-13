@@ -60,10 +60,8 @@ func TestRenderEnvFile(t *testing.T) {
 	}
 }
 
-// The fixture-based test above proves the substitution rules; this one proves
-// them against the .env.example that actually ships. A key the renderer is
-// supposed to set but the template spells differently is exactly the bug that
-// once left MCP_BRIDGE_TOKEN empty on every fresh install.
+// Verify substitution against the shipped .env.example, including
+// every key the renderer must populate.
 func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
 	if err != nil {

@@ -15,13 +15,15 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   data retention policies (get, set, cleanup).
 
   The `arca://files/{path}` resource is read-only (MCP resources have no
-  write operation) and deliberately un-scoped within the athanor:
-  `:storage_read` means the athanor's WHOLE tree — every scope in
-  `Arca.Storage.tenant_roots/0`, attachment blobs included. The athanor is
-  its members' own machine; the boundaries that matter are tenant and
-  platform, not intra-athanor compartments. Conversation transcripts are
-  rows, never reachable here, and an unknown first segment is a typed
-  refusal at the Arca gate.
+  write operation). A person — a session, or a key holding `:admin` —
+  reads the athanor's whole tree, every scope in
+  `Arca.Storage.tenant_roots/0`, attachment blobs included: the athanor is
+  its members' own machine. A narrower credential, a key scoped to
+  `:storage_read` alone, reaches `conversations/` and `data/` — what a
+  conversation attached and what an agent could have written — and never
+  the estate's components, its assistant tree or its notes. Conversation
+  transcripts are rows, never reachable here, and an unknown first
+  segment is a typed refusal at the Arca gate.
 
   ## Retention Tool
 
@@ -43,10 +45,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   calls here.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Emissary.MCP.ToolRegistry.
+  which is validated at runtime by Cyfr.Ops.Catalog.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   def service, do: "arca"
 
@@ -80,9 +82,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         uriTemplate: "arca://files/{path}",
         name: "Arca Files",
         description:
-          "Read any file in the athanor's storage by path (" <>
+          "Read a file in the athanor's storage by path. A person reads every root (" <>
             Enum.map_join(Arca.Storage.tenant_roots(), ", ", &(&1 <> "/")) <>
-            ") — :storage_read spans the whole tree",
+            "); a key scoped to :storage_read reaches conversations/ and data/",
         mimeType: Cyfr.MediaType.binary()
       }
     ]
@@ -92,9 +94,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   Read a resource by URI.
   """
   def read(%Context{authenticated: false}, "arca://files/" <> _path) do
-    # Typed, so the router renders the one auth prose AND answers with the
-    # auth_required code — the bare string used to ride out mislabeled as
-    # resource_not_found.
+    # Preserve the typed auth_required error for the wire renderer.
     {:error, :unauthenticated}
   end
 
@@ -108,9 +108,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     segments = String.split(path, "/") |> Enum.reject(&(&1 == ""))
 
     with :ok <- Context.require_permission(ctx, :storage_read),
-         :ok <- tenant_gate(ctx),
+         :ok <- Context.tenant_ok(ctx),
          :ok <- storage_ctx_gate(ctx),
-         :ok <- validate_segments(segments) do
+         :ok <- validate_segments(segments),
+         :ok <- within_reach(ctx, segments) do
       case Arca.get(ctx, segments) do
         {:ok, content} ->
           {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
@@ -132,8 +133,59 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     {:error, "Unknown resource URI: #{uri}"}
   end
 
+  # What `:storage_read` opens through this resource: the whole tree for a
+  # person (`:admin` — a session holds every permission), and for a
+  # narrower key only the roots an agent or a conversation could have
+  # filled.
+  @key_reach ["conversations", "data"]
+
+  defp within_reach(ctx, [root | _]) do
+    if Context.has_permission?(ctx, :admin) or root in @key_reach,
+      do: :ok,
+      else: {:error, {:invalid_argument, "Forbidden path: #{root}"}}
+  end
+
+  defp within_reach(_ctx, []), do: :ok
+
   # `tenant_gate/1` exempts platform scope; blob reads are tenant-relative,
   # so a platform context must still carry the athanor whose files it reads.
+  defp payload_attempt(%Context{plane: :guest} = ctx, id, args) do
+    attempt = args["attempt"]
+
+    cond do
+      args["parent_execution_id"] != id ->
+        {:error,
+         {:invalid_argument,
+          "in-chain, record.payload answers the calling execution's own payload"}}
+
+      not is_binary(attempt) ->
+        {:error, {:invalid_argument, "in-chain, record.payload needs the caller's attempt"}}
+
+      true ->
+        case Arca.Execution.get_tenant(ctx, id) do
+          %{current_attempt: ^attempt} ->
+            {:ok, attempt}
+
+          %{} ->
+            {:error, {:invalid_argument, "the attempt is no longer the execution's current one"}}
+
+          nil ->
+            {:error, {:not_found, "Execution", id}}
+
+          {:error, _} ->
+            {:error, {:unavailable, "Storage"}}
+        end
+    end
+  end
+
+  defp payload_attempt(_ctx, _id, args) do
+    case args["attempt"] do
+      attempt when is_binary(attempt) and attempt != "" -> {:ok, attempt}
+      nil -> {:ok, nil}
+      _ -> {:error, {:invalid_argument, "attempt must be a string"}}
+    end
+  end
+
   defp storage_ctx_gate(ctx) do
     if Arca.Storage.athanor_ready?(ctx),
       do: :ok,
@@ -158,7 +210,14 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           destructiveHint: false,
           actions: %{
             "get" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "list" => %{kind: :read, planes: [:external], permission: :storage_read}
+            "list" => %{kind: :read, planes: [:external], permission: :storage_read},
+            # In-chain, an execution reads its own payload alone, for the
+            # attempt the host stamped on its lineage.
+            "payload" => %{
+              kind: :read,
+              planes: [:external, :in_chain],
+              permission: :storage_read
+            }
           }
         },
         input_schema: %{
@@ -166,12 +225,22 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["get", "list"],
+              "enum" => ["get", "list", "payload"],
               "description" => "Action to perform"
             },
             "id" => %{
               "type" => "string",
               "description" => "Execution ID"
+            },
+            "kind" => %{
+              "type" => "string",
+              "enum" => ["input", "result"],
+              "description" => "payload only: which retained payload (default result)"
+            },
+            "attempt" => %{
+              "type" => "string",
+              "description" =>
+                "payload only: the attempt whose payload to answer (default: the execution's current attempt)"
             },
             "user_id" => %{
               "type" => "string",
@@ -330,7 +399,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("record", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       case Arca.Execution.get_tenant(ctx, id) do
         nil ->
           {:error, {:not_found, "Execution", id}}
@@ -357,8 +426,53 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     {:error, {:invalid_argument, "Missing required argument: id"}}
   end
 
+  # A retained payload: the bytes an execution was given or answered,
+  # for a member of the athanor that ran it — or, in-chain, for the
+  # execution itself: the host-stamped lineage must name it as the
+  # caller and the stamped attempt must be its current one.
+  def handle("record", ctx, %{"action" => "payload", "id" => id} = args) do
+    kind = Map.get(args, "kind", "result")
+
+    with :ok <- Context.tenant_ok(ctx),
+         :ok <- storage_ctx_gate(ctx),
+         true <-
+           kind in ["input", "result"] ||
+             {:error, {:invalid_argument, "kind must be input or result"}},
+         {:ok, attempt} <- payload_attempt(ctx, id, args) do
+      case Arca.ExecutionPayloads.get(ctx, id, kind, attempt: attempt) do
+        {:ok, row, bytes} ->
+          {:ok,
+           %{
+             execution_id: id,
+             kind: kind,
+             digest: row.digest,
+             bytes: row.bytes,
+             retention_class: row.retention_class,
+             content: Base.encode64(bytes),
+             mimeType: Cyfr.MediaType.binary()
+           }}
+
+        {:error, :not_found} ->
+          {:error, {:not_found, "Payload", "#{id}/#{kind}"}}
+
+        {:error, :payload_corrupt} ->
+          {:error, {:corrupt, "Payload #{id}/#{kind}"}}
+
+        {:error, :database_error} ->
+          {:error, {:unavailable, "Storage"}}
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  def handle("record", _ctx, %{"action" => "payload"}) do
+    {:error, {:invalid_argument, "Missing required argument: id"}}
+  end
+
   def handle("record", ctx, %{"action" => "list"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -381,7 +495,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("record", _ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("record", action_enum("record"))}
+    {:error, Cyfr.Ops.Provider.invalid_action("record", action_enum("record"))}
   end
 
   # ============================================================================
@@ -389,7 +503,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("mcp_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       case Arca.McpLog.get_tenant(ctx, id) do
         nil ->
           {:error, {:not_found, "MCP log", id}}
@@ -412,7 +526,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -434,7 +548,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", %Context{} = ctx, %{"action" => "correlate", "request_id" => request_id}) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       mcp_logs =
         case Arca.McpLog.list(request_id: request_id, limit: 100, athanor_id: ctx.athanor_id) do
           {:ok, rows} -> Enum.map(rows, &mcp_log_to_map/1)
@@ -483,7 +597,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # queries.
   def handle("mcp_log", %Context{} = ctx, %{"action" => "fan_outs", "request_ids" => ids})
       when is_list(ids) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       ids = Enum.filter(ids, &is_binary/1)
 
       # `count_by_request/2` refuses rather than defaulting, so an outage
@@ -504,7 +618,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", ctx, %{"action" => "stats"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       since_hours = args["since_hours"] || 1
 
       since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
@@ -533,7 +647,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", _ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("mcp_log", action_enum("mcp_log"))}
+    {:error, Cyfr.Ops.Provider.invalid_action("mcp_log", action_enum("mcp_log"))}
   end
 
   # ============================================================================
@@ -541,7 +655,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       record =
         Arca.PolicyLog.get_tenant(ctx, id) || Arca.PolicyLog.get_by_request_id_tenant(ctx, id)
 
@@ -560,7 +674,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("policy_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -582,7 +696,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         "action" => "correlate",
         "request_id" => request_id
       }) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       opts =
         [
           request_id: request_id,
@@ -605,7 +719,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("policy_log", _ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("policy_log", action_enum("policy_log"))}
+    {:error, Cyfr.Ops.Provider.invalid_action("policy_log", action_enum("policy_log"))}
   end
 
   # ============================================================================
@@ -613,7 +727,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("retention", %Context{} = ctx, %{"action" => "get"}) do
-    with :ok <- tenant_gate(ctx),
+    with :ok <- Context.tenant_ok(ctx),
          {:ok, settings} <- Cyfr.Retention.get_settings(ctx) do
       {:ok, %{action: "get", settings: settings}}
     else
@@ -628,7 +742,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   def handle("retention", %Context{} = ctx, %{"action" => "set", "settings" => settings})
       when is_map(settings) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       case Cyfr.Retention.set_settings(ctx, settings) do
         :ok ->
           {:ok, new_settings} = Cyfr.Retention.get_settings(ctx)
@@ -653,7 +767,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("retention", %Context{} = ctx, %{"action" => "cleanup"} = args) do
-    with :ok <- tenant_gate(ctx) do
+    with :ok <- Context.tenant_ok(ctx) do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
 
@@ -686,7 +800,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("retention", _ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("retention", action_enum("retention"))}
+    {:error, Cyfr.Ops.Provider.invalid_action("retention", action_enum("retention"))}
   end
 
   def handle(tool, _ctx, _args) do
@@ -790,10 +904,6 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       :keep -> "Newest records kept per athanor"
       :days -> "Days of records kept per athanor"
     end
-  end
-
-  defp tenant_gate(ctx) do
-    Context.tenant_ok(ctx)
   end
 
   defp action_enum(tool) do

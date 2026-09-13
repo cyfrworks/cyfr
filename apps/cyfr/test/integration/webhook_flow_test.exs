@@ -144,12 +144,8 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     assert first_response["status"] == "accepted"
     await_invoke_stop(first_response["request_id"])
 
-    # This fixture's execution FAILS, and a failed delivery is one the
-    # sender is entitled to retry — so the claim was released and the
-    # repeat is accepted, not deduped. That is the whole point of the
-    # claim following the work: the response said `accepted` when the task
-    # merely spawned, so a claim released on the response could never be
-    # released for something that failed after it.
+    # Failed async execution releases the claim, so the sender’s retry
+    # must be accepted.
     {:ok, hook_row} = Arca.WebhookStorage.get_by_slug(slug)
 
     retry_after_failure =

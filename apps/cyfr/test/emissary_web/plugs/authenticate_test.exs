@@ -98,15 +98,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
     end
   end
 
-  # These used to assert a session lifecycle: a valid `Mcp-Session-Id` loaded a
-  # stored session, an unknown one returned 404, a stale one was let through for
-  # `initialize`, and hydration from SQLite refreshed the row's expiry.
-  #
-  # None of that exists. The protocol has no session, so the header authenticates
-  # nothing and the server must ignore it. What replaces those tests is the
-  # property that now has to hold: whatever the header says, it changes nothing —
-  # which is strictly stronger, because the old behaviour still fed the value
-  # into a lookup before rejecting it.
+  # The Mcp-Session-Id header must not authenticate or change the resolved caller.
   describe "call/2 — the retired session header" do
     test "a request with no credential still gets a context", %{conn: conn} do
       conn = Authenticate.call(conn, [])
@@ -153,7 +145,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
     end
   end
 
-  # The same credential the header used to carry, in the place it belongs.
+  # Authenticate session tokens through the Authorization header.
   describe "call/2 — a session token as a bearer credential" do
     test "authenticates and resolves the stored context", %{conn: conn} do
       user_id = "test|https://test.example|hydrate_user"
@@ -180,8 +172,10 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
       # A restored session is re-validated against current memberships.
       Sanctum.TestContext.athanor!()
-      {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: "ath_test")
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "athanor", athanor_id: "ath_test")
 
+      # From admission on the person is named by their own id.
+      ctx = %{ctx | user_id: user.id}
       {:ok, session} = Sanctum.Session.create(ctx)
 
       conn =
@@ -190,19 +184,13 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         |> Authenticate.call([])
 
       refute conn.halted
-      assert conn.assigns[:context].user_id == user_id
+      assert conn.assigns[:context].user_id == user.id
       assert conn.assigns[:auth_method] == :session_token
 
       Sanctum.Session.destroy(session.token)
     end
 
-    # A presented-but-dead credential used to fall through to the anonymous
-    # surface, which reads to the caller as "your request worked" rather than
-    # "your token is gone".
-    #
-    # The refusal is deliberately last: an auth provider may accept bearer
-    # tokens of its own, so an unrecognised one is only invalid once nothing
-    # else has claimed it. With no provider configured, nothing can.
+    # Reject unrecognized credentials after configured providers have had a chance to resolve them.
     test "an unclaimed bearer is refused once nothing else can claim it", %{conn: conn} do
       original = Application.get_env(:cyfr, :auth_provider)
       Application.delete_env(:cyfr, :auth_provider)
@@ -341,12 +329,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       assert MapSet.member?(ctx.permissions, :admin)
     end
 
-    # This used to assert the opposite — that a bad token yielded an
-    # unauthenticated context and the request continued onto the public surface.
-    # That is a fail-open: a caller whose token was revoked got a 200 for
-    # whatever happens to be public instead of being told the credential is dead,
-    # and the difference between "not signed in" and "no longer signed in" was
-    # invisible to them.
+    # Invalid credentials must be rejected rather than continuing as an anonymous caller.
     test "an invalid Bearer token is refused rather than downgraded", %{conn: conn} do
       conn =
         conn
@@ -444,9 +427,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       assert body["error"]["message"] =~ "Invalid API key"
     end
 
-    # RFC 9110 §15.5.2: a 401 MUST carry at least one challenge. Every rejection
-    # from this endpoint used to be a bare 401, which leaves a client with
-    # nothing to act on and no way to tell "wrong credential" from "wrong shape".
+    # Every HTTP 401 must include an authentication challenge (RFC 9110).
     test "every 401 carries a WWW-Authenticate challenge", %{conn: conn} do
       for authorization <- [
             "Bearer cyfr_pk_invalid123456789012345678",
@@ -483,6 +464,13 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       # Stateless auth: the credential travels on the request itself, so no
       # server-side MCP session is created and nothing is cached.
       ctx = Sanctum.TestContext.local()
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id,
+          scope: "athanor",
+          athanor_id: ctx.athanor_id
+        )
+
       {:ok, session} = Sanctum.Session.create(ctx)
 
       conn =
@@ -493,8 +481,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       refute conn.halted
       assert conn.assigns[:auth_method] == :session_token
       assert conn.assigns[:context].user_id == ctx.user_id
-      # `authenticated` additionally depends on the user having claimed a
-      # personal namespace, which is a separate gate from bearer auth.
+      assert conn.assigns[:context].authenticated
     end
 
     test "a destroyed session token stops authenticating immediately", %{conn: conn} do

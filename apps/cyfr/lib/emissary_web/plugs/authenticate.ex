@@ -21,11 +21,8 @@ defmodule EmissaryWeb.Plugs.Authenticate do
 
   ## Options
 
-  - `:errors` — the module that renders a rejection, defaulting to
-    `EmissaryWeb.MCPError`. `EmissaryWeb.ApiError` is the plain-HTTP
-    counterpart. This is the only thing that differs between the MCP endpoint
-    and an ordinary authenticated route, which is why it is a parameter rather
-    than a second copy of the credential logic.
+  - `:errors` — rejection renderer, defaulting to `EmissaryWeb.MCPError`.
+    Use `EmissaryWeb.ApiError` for ordinary authenticated HTTP routes.
 
   This plug carries no protocol knowledge. The MCP endpoint's own conformance
   rules — the per-request `_meta`, the mirrored headers — live in
@@ -76,8 +73,8 @@ defmodule EmissaryWeb.Plugs.Authenticate do
             # their token is dead, which is indistinguishable from success.
             #
             # `user_id: nil` is the discriminator: a provider bearer that DID
-            # identify someone who is merely pre-claim or door-denied yields
-            # an unauthenticated context WITH identity fields, and
+            # identify someone who is door-denied yields an unauthenticated
+            # context WITH identity fields, and
             # `context_from_session/1` documents that shape as forwarded, not
             # halted — the same person's session token already forwards it.
             error_response(conn, :invalid_bearer, errors)
@@ -91,6 +88,11 @@ defmodule EmissaryWeb.Plugs.Authenticate do
       {:error, :missing_tenant} ->
         # API key valid but the owner has no resolved tenant/membership.
         missing_tenant_error_response(conn, errors)
+
+      {:error, :auth_provider_error} ->
+        # The key store could not answer: a 503, never a 401 — the
+        # credential was not judged.
+        auth_provider_error_response(conn, errors)
 
       {:error, reason} ->
         # API key provided but invalid
@@ -181,16 +183,12 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   end
 
   # `Sanctum.Caller` owns the establish recipe; this surface's mapping: a
-  # pre-claim or door-denied context is forwarded rather than halted — it
-  # reaches only the anonymous surface, and the claim flow downstream
-  # needs its fields.
+  # door-denied context is forwarded rather than halted — it reaches only
+  # the anonymous surface, which needs its fields to say who was refused.
   defp context_from_session(%Context{} = ctx) do
     case Sanctum.Caller.establish_context(ctx) do
       {:ok, established} ->
         established
-
-      {:error, {:claim_pending, pre_claim}} ->
-        pre_claim
 
       {:error, {:denied, denied}} ->
         denied
@@ -249,10 +247,6 @@ defmodule EmissaryWeb.Plugs.Authenticate do
       {:ok, ctx} ->
         {:ok, stamp_token_hash(ctx, token), :session_token}
 
-      {:error, {:claim_pending, pre_claim}} ->
-        # Forwarded to the claim flow downstream, not tenant-gated here.
-        {:ok, stamp_token_hash(pre_claim, token), :session_token}
-
       {:error, {:denied, denied}} ->
         # No standing at the door: only the anonymous surface answers.
         {:ok, stamp_token_hash(denied, token), :session_token}
@@ -288,35 +282,17 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   # creator's membership; revocation is the control. An athanor-less key is
   # rejected by the tenant gate (the same gate context_from_session/1
   # applies).
+  # The one recipe establishes the key; this surface maps its refusals to
+  # the wire. An archived athanor or a denied creator answers exactly like
+  # a revoked key, so nothing about either leaks.
   defp validate_api_key(conn, key) do
-    client_ip = Sanctum.ClientIp.resolve(conn)
-
-    case Sanctum.ApiKey.validate(key, client_ip: client_ip) do
-      {:ok, metadata} ->
-        ctx = Sanctum.ApiKey.context_from_metadata(metadata)
-
-        case Context.tenant_ok(ctx) do
-          :ok -> {:ok, ctx}
-          {:error, :missing_tenant} -> {:error, :missing_tenant}
-        end
-
-      {:error, :invalid_key} ->
-        {:error, :invalid_api_key}
-
-      {:error, :revoked} ->
-        {:error, :api_key_revoked}
-
-      # The athanor is archived or the creator is denied on this server —
-      # answered exactly like a revoked key, so nothing about either leaks.
-      {:error, :channel_closed} ->
-        {:error, :api_key_revoked}
-
-      {:error, :ip_not_allowed} ->
-        {:error, :ip_not_allowed}
-
-      {:error, reason} ->
-        Logger.warning("[Authenticate] API key validation failed: #{inspect(reason)}")
-        {:error, :api_key_validation_failed}
+    case Sanctum.Caller.establish({:api_key, key}, client_ip: Sanctum.ClientIp.resolve(conn)) do
+      {:ok, ctx} -> {:ok, ctx}
+      {:error, :no_athanor} -> {:error, :missing_tenant}
+      {:error, :invalid_credential} -> {:error, :invalid_api_key}
+      {:error, :revoked} -> {:error, :api_key_revoked}
+      {:error, :ip_not_allowed} -> {:error, :ip_not_allowed}
+      {:error, :unavailable} -> {:error, :auth_provider_error}
     end
   end
 
@@ -337,7 +313,4 @@ defmodule EmissaryWeb.Plugs.Authenticate do
 
   defp error_response(conn, :ip_not_allowed, errors),
     do: errors.halt(conn, 403, :insufficient_permissions, "Request IP not in API key allowlist")
-
-  defp error_response(conn, _reason, errors),
-    do: errors.halt(conn, 401, :auth_invalid, "API key validation failed")
 end

@@ -41,7 +41,7 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
 
   # `budget` names the root-keyed invoke budget by identity (id + cap); the
   # counter behind it is node-local. The struct is plain data end to end.
-  test "the Authority struct is exactly the model §3.6 field list" do
+  test "the Authority struct has exactly the supported fields" do
     frozen = [
       :activation,
       :budget,
@@ -168,7 +168,7 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
            }
   end
 
-  test "the golden blob roots and dispatches as the model §3.11 worked example" do
+  test "the golden blob roots and dispatches with the expected authority" do
     {:ok, blob} = @golden_path |> File.read!() |> Blob.parse()
 
     {:ok, auth} =

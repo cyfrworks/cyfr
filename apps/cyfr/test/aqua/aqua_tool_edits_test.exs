@@ -31,6 +31,7 @@ defmodule Aqua.AquaToolEditsTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = Sanctum.TestContext.local()
+    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{"cloneable" => true}} = call(ctx, %{"action" => "create", "name" => "scout"})
     %{ctx: ctx}
   end
@@ -44,6 +45,44 @@ defmodule Aqua.AquaToolEditsTest do
 
   test "a new role is one the soul may clone into, from the same act", %{ctx: ctx} do
     assert policy(ctx, AquaPath.soul_name())[AquaAgent.clone_glob("scout")] == "auto"
+  end
+
+  # The derived index follows every write to the tree: a created role has a
+  # row with its two digests, an edit moves them, a delete removes the row.
+  test "the agent index follows the tree", %{ctx: ctx} do
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    assert %{kind: "role", disabled: false} = scout = Enum.find(rows, &(&1.name == "scout"))
+    assert String.starts_with?(scout.revision_digest, "sha256:")
+    assert scout.capability_digest =~ "sha256:"
+
+    assert {:ok, _} =
+             call(ctx, %{
+               "action" => "update",
+               "name" => "scout",
+               "tool_policy_patch" => %{"files.read" => "auto"}
+             })
+
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    edited = Enum.find(rows, &(&1.name == "scout"))
+    refute edited.revision_digest == scout.revision_digest
+    refute edited.capability_digest == scout.capability_digest
+
+    assert {:ok, _} = call(ctx, %{"action" => "delete", "name" => "scout"})
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    refute Enum.any?(rows, &(&1.name == "scout"))
+  end
+
+  # A reset reverts the tree to what ships, and the index follows: a role a
+  # member created does not outlive its file as a row.
+  test "the agent index follows a reset", %{ctx: ctx} do
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    assert Enum.any?(rows, &(&1.name == "scout"))
+
+    assert {:ok, %{"reset" => true}} = call(ctx, %{"action" => "reset", "all" => true})
+
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    refute Enum.any?(rows, &(&1.name == "scout"))
+    assert Enum.any?(rows, &(&1.name == AquaPath.soul_name()))
   end
 
   test "two members toggling different keys keep both", %{ctx: ctx} do

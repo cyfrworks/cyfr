@@ -246,11 +246,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   # ---------------------------------------------------------------------------
 
   defp fetch_pending(state) do
-    # Single-use: consumed atomically — a replayed or concurrent callback
-    # with the same state finds nothing. (A read-then-delete here was the
-    # race `Sanctum.Consent.Proof.Memory`'s moduledoc names as its
-    # counter-example: two concurrent callbacks both read the pending
-    # record before either deleted it.)
+    # Consume state atomically so replayed or concurrent callbacks fail.
     case Arca.Cache.take({:vault_oauth_pending, state}) do
       {:ok, pending} -> {:ok, pending}
       :miss -> {:error, :unknown_state}
@@ -535,16 +531,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   @doc """
   The `redirect_uri` this deployment registers with a provider.
 
-  The origin comes from `Cyfr.RuntimeConfig.origin/0`: `CYFR_PUBLIC_URL`
-  when set — the address this instance is reachable at from outside,
-  scheme included — else a dev default RuntimeConfig derives from the
-  endpoint's config DATA. The auth domain used to call
-  `EmissaryWeb.Endpoint.url()` here itself, which was wrong twice over:
-  that URL carries no scheme (so it answered `http://…` even on the TLS
-  profile), and it was the auth domain reaching into the web layer for a
-  deployment fact — the reach `Sanctum.TinctureAuth` already refuses for
-  key material. The docstring said so and kept the call; now the fact
-  lives where deployment facts live.
+  Uses `Cyfr.RuntimeConfig.origin/0`: `CYFR_PUBLIC_URL` when configured,
+  otherwise the development origin derived from endpoint configuration.
   """
   @spec redirect_uri() :: String.t()
   def redirect_uri do

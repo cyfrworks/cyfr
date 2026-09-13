@@ -65,11 +65,7 @@ defmodule Arca.ConsentStorageTest do
       profile = profile!(athanor, "prof_no_digest")
       attrs = consent_attrs(athanor, profile.id, 1) |> Map.delete(:blob_digest)
 
-      # The column is nullable at the database level — SQLite cannot ALTER
-      # a column to NOT NULL, and this repo ships both backends from one
-      # migration set. So the writer is the gate: a revision with no
-      # `blob_digest` is unverifiable forever after, and `Consent.Loader`
-      # would refuse to load it. Fail at the write, loudly.
+      # Reject a missing blob_digest at the writer before inserting an unverifiable revision.
       assert_raise KeyError, fn ->
         ConsentStorage.insert_revision(attrs, [], nil)
       end
@@ -201,11 +197,7 @@ defmodule Arca.ConsentStorageTest do
   end
 
   describe "the 20260901 backfill" do
-    # CI migrates an EMPTY database, so the backfill branch has no
-    # coverage there at all. What it has to guarantee is that re-hashing a
-    # stored `resolved_policy` reproduces exactly the digest a writer would
-    # have stored — the migration inlines the spelling deliberately (frozen
-    # history), so the two can drift with nothing noticing.
+    # Verify that migration backfill hashing matches the digest produced by consent writers.
     test "the inlined spelling matches Cyfr.Digest for arbitrary stored policies" do
       for policy <- ["{}", ~s({"canonical":"jcs-1","nodes":{}}), String.duplicate("x", 5_000)] do
         inlined = "sha256:" <> Base.encode16(:crypto.hash(:sha256, policy), case: :lower)

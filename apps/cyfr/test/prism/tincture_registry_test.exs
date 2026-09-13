@@ -146,11 +146,7 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
-    # A prerelease is older than its release. The split-on-"." key this
-    # replaced parsed "0-rc1" as 0, making the two versions compare EQUAL —
-    # and `Enum.max_by/2` keeps the first of equals, so which one the
-    # tincture router served depended on the order the storage walk returned
-    # them in.
+    # A release must sort after its prereleases regardless of storage listing order.
     test "a prerelease never outranks its release" do
       for version <- ["1.0.0-rc1", "1.0.0"] do
         dir = fixture_dir("ath_test", "local", "test-pre", version)
@@ -216,11 +212,7 @@ defmodule Prism.TinctureRegistryTest do
   end
 
   describe "reload_athanor/2" do
-    # Registering a tincture is one athanor's act. It used to rescan the
-    # whole roster inside a single handle_call on the global singleton, so
-    # every other athanor's write queued behind an O(athanors × tinctures)
-    # walk. The scoped reload has to pick up that athanor's change without
-    # touching — or needing to read — anyone else's rows.
+    # An athanor-scoped reload must pick up its changes without reading other athanors.
     test "picks up one athanor's change and leaves the others alone" do
       {:ok, other} =
         Sanctum.Tenancy.Athanors.create(%{

@@ -29,19 +29,23 @@ defmodule Sanctum.SignInTest do
   test "an admitted person gets a users row, refreshed on every sign-in" do
     i = info(1)
     assert {:ok, user} = SignIn.admitted(i, :allowed)
-    assert user.id == i.id
+    # The person's id is this server's; the identity that signed in names it.
+    assert Arca.Schemas.User.person_id?(user.id)
+    assert {:ok, %{id: same}} = Users.get_by_identity(i.id)
+    assert same == user.id
     assert user.email == "user1@example.com"
     assert user.display_name == "User 1"
     assert user.email_verified
     first = user.first_seen_at
 
     assert {:ok, again} = SignIn.admitted(%{i | name: "Renamed"}, :allowed)
+    assert again.id == user.id
     assert again.first_seen_at == first
     assert again.display_name == "Renamed"
     assert DateTime.compare(again.last_seen_at, first) in [:gt, :eq]
   end
 
-  test "an operator gets the platform row and a seat in Home, minted once and audited once" do
+  test "an operator gets the platform row, minted once and audited once" do
     handler = "signin-test-#{System.unique_integer([:positive])}"
     parent = self()
 
@@ -55,29 +59,29 @@ defmodule Sanctum.SignInTest do
     on_exit(fn -> :telemetry.detach(handler) end)
 
     i = info(2)
-    assert {:ok, _} = SignIn.admitted(i, :admin)
+    assert {:ok, user} = SignIn.admitted(i, :admin)
     assert_receive {:bootstrap, %{user_id: uid}}
-    assert uid == i.id
+    assert uid == user.id
 
-    rows = rows!(Members.list_by_user(i.id))
+    rows = rows!(Members.list_by_user(user.id))
     assert Enum.any?(rows, &(&1.scope == "platform"))
-    home = Athanors.home!()
-    assert Enum.any?(rows, &(&1.scope == "athanor" and &1.athanor_id == home.id))
 
     assert {:ok, _} = SignIn.admitted(i, :admin)
     refute_receive {:bootstrap, _}
-    assert length(rows!(Members.list_by_user(i.id))) == 2
+    # the platform row and the seat in their own athanor, and nothing else:
+    # no estate is shared server-wide for an operator to be seated in
+    assert length(rows!(Members.list_by_user(user.id))) == 2
   end
 
   test "an email dropped from the operator list loses the platform row on the next sign-in" do
     i = info(3)
-    assert {:ok, _} = SignIn.admitted(i, :admin)
-    assert Enum.any?(rows!(Members.list_by_user(i.id)), &(&1.scope == "platform"))
+    assert {:ok, user} = SignIn.admitted(i, :admin)
+    assert Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "platform"))
 
     assert {:ok, _} = SignIn.admitted(i, :allowed)
-    refute Enum.any?(rows!(Members.list_by_user(i.id)), &(&1.scope == "platform"))
-    # the Home seat is an ordinary membership and stays
-    assert Enum.any?(rows!(Members.list_by_user(i.id)), &(&1.scope == "athanor"))
+    refute Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "platform"))
+    # their own athanor is theirs whatever the operator list says
+    assert Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "athanor"))
   end
 
   test "invited rows for the person's verified email activate on first sign-in" do
@@ -88,9 +92,9 @@ defmodule Sanctum.SignInTest do
              Enum.filter(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
 
     i = info(4)
-    assert {:ok, _} = SignIn.admitted(i, :allowed)
+    assert {:ok, user} = SignIn.admitted(i, :allowed)
 
-    assert Members.member?(i.id, group.id)
+    assert Members.member?(user.id, group.id)
     refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
   end
 
@@ -104,9 +108,9 @@ defmodule Sanctum.SignInTest do
       {:ok, group} = Athanors.create_group("github|https://github.com|creator2", "Team #{n}")
       {:ok, :invited} = Members.add(group, [email: "user#{n}@example.com"], "creator2")
 
-      assert {:ok, _} = SignIn.admitted(info(n, %{verified: claim}), :allowed)
+      assert {:ok, user} = SignIn.admitted(info(n, %{verified: claim}), :allowed)
 
-      refute Members.member?(info(n).id, group.id)
+      refute Members.member?(user.id, group.id)
       assert Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
     end
 
@@ -116,36 +120,38 @@ defmodule Sanctum.SignInTest do
     assert {:ok, %{email_verified: true}} =
              SignIn.admitted(info(11, %{verified: true}), :allowed)
 
-    assert Members.member?(info(11).id, group.id)
+    assert {:ok, %{id: proved}} = Users.get_by_identity(info(11).id)
+    assert Members.member?(proved, group.id)
     refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
   end
 
-  test "record_namespace/2 lands the claim on the users row, mints the athanor, and refuses a slug another identity holds" do
+  test "record_namespace/2 lands the claim on the users row and refuses a slug another identity holds" do
     i = info(6)
-    assert {:ok, _} = SignIn.admitted(i, :allowed)
+    assert {:ok, %{id: uid, personal_athanor_id: pid}} = SignIn.admitted(i, :allowed)
 
-    assert {:ok, user} = SignIn.record_namespace(i.id, "user6ns")
+    assert {:ok, user} = SignIn.record_namespace(uid, "user6ns")
     assert user.namespace == "user6ns"
     assert {:ok, %{id: id}} = Users.get_by_namespace("user6ns")
-    assert id == i.id
-    assert {:ok, %{kind: "person"}} = Athanors.get_by_slug("person", "user6ns")
-    assert Sanctum.Namespace.lookup(i.id) == "user6ns"
+    assert id == uid
+    # the athanor was theirs since admission; the claim does not re-address it
+    assert {:ok, %{personal_athanor_id: ^pid}} = Users.get(uid)
+    assert {:ok, %{kind: "person"}} = Athanors.get(pid)
+    assert Sanctum.Namespace.lookup(uid) == "user6ns"
 
     # Idempotent; a different slug from the registry keeps the recorded one.
-    assert {:ok, %{namespace: "user6ns"}} = SignIn.record_namespace(i.id, "user6ns")
-    assert {:ok, %{namespace: "user6ns"}} = SignIn.record_namespace(i.id, "user6other")
+    assert {:ok, %{namespace: "user6ns"}} = SignIn.record_namespace(uid, "user6ns")
+    assert {:ok, %{namespace: "user6ns"}} = SignIn.record_namespace(uid, "user6other")
 
-    # Another identity cannot take it, and a malformed slug is refused.
+    # Another person cannot take it, and a malformed slug is refused.
     j = info(7)
-    assert {:ok, _} = SignIn.admitted(j, :allowed)
+    assert {:ok, %{id: jid}} = SignIn.admitted(j, :allowed)
 
     assert {:error, :namespace_owned_by_another_identity} =
-             SignIn.record_namespace(j.id, "user6ns")
+             SignIn.record_namespace(jid, "user6ns")
 
-    assert {:error, :invalid_slug} = SignIn.record_namespace(j.id, "Not A Slug")
+    assert {:error, :invalid_slug} = SignIn.record_namespace(jid, "Not A Slug")
 
-    assert {:error, :not_found} =
-             SignIn.record_namespace("github|https://github.com|ghost", "ghost")
+    assert {:error, :not_found} = SignIn.record_namespace("usr_ghost", "ghost")
   end
 
   test "`*` on the door admits a stranger who then gets their own athanor — no platform bit, no group" do
@@ -156,12 +162,10 @@ defmodule Sanctum.SignInTest do
     assert {:ok, verdict} = Sanctum.Door.admit(i.id, i.email, true)
     assert verdict == :allowed
 
-    assert {:ok, _} = SignIn.admitted(i, verdict)
-    assert {:ok, user} = SignIn.record_namespace(i.id, "stranger#{n}")
+    assert {:ok, %{id: uid, personal_athanor_id: pid}} = SignIn.admitted(i, verdict)
+    assert {:ok, user} = SignIn.record_namespace(uid, "stranger#{n}")
 
-    assert {:ok, %{kind: "person", owner_user_id: owner}} =
-             Athanors.get_by_slug("person", "stranger#{n}")
-
+    assert {:ok, %{kind: "person", owner_user_id: owner}} = Athanors.get(pid)
     assert owner == user.id
 
     rows = rows!(Members.list_by_user(user.id))

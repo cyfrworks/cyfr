@@ -5,14 +5,10 @@ defmodule Emissary.MCP.ConversationTool do
   @moduledoc """
   Chat on the wire: the `conversation` tool.
 
-  AQUA is the agent runtime, and Prism is a client of it — the first one,
-  not the boundary. Until this existed there were twelve MCP tools and none
-  of them was chat, so a headless caller could start an *execution* but
-  could not talk to an agent: no addressing, no queue, no history window,
-  no approvals. The harness owned all of that and only a LiveView could
-  reach it.
+  Exposes AQUA conversation addressing, queuing, history and approvals to
+  MCP clients through the conversation runner.
 
-  Every turn-shaped action here **wraps `Aqua.ConversationRunner`** — there
+  Every turn-shaped action here **wraps `Aqua.Runner`** — there
   is no second implementation of a turn, and no path that starts one
   without the runner's gates. The rest wrap the domain verbs the console
   itself uses: `create`/`list` are `Arca.ConversationStorage` (how a
@@ -24,21 +20,17 @@ defmodule Emissary.MCP.ConversationTool do
   `Emissary.MCP.Tools.RecordsProvider` does: the tool surface is the
   transport's, and it calls *into* a domain. `Aqua.ToolSeamTest` keeps the
   arrow pointing this way — the assistant reaches MCP only through
-  `Aqua.MCPHelpers`, never by owning a provider.
+  `Aqua.Ops`, never by owning a provider.
 
-  ## Why this is not `execution.run_stream`
+  ## Starting turns
 
-  A client must not start a turn by running the agent formula directly.
-  That path re-roots the target's own consented authority, which is right
-  for launching an app and wrong for a chat turn: the turn's profile is
-  pinned once, at its start, and an approval later in the turn roots that
-  same pin. Going around the runner would produce a turn nothing had
-  pinned. (The harness still uses `run_stream` internally — that path is
-  not being removed, it is just not a client's door.)
+  Start chat turns through the runner so the turn pins a profile and later
+  approvals use that same authority. Direct execution of the agent formula
+  does not establish this conversation state.
 
   ## Two gates, on different axes
 
-    * **Plane.** `Emissary.MCP.ToolRegistry.call_external/4` refuses a
+    * **Plane.** `Cyfr.Ops.Catalog.call_external/4` refuses a
       `:guest` context outright, and these actions declare
       `planes: [:external]` so they never appear in-chain. A running agent
       cannot read or post into conversations — including other people's in
@@ -62,13 +54,13 @@ defmodule Emissary.MCP.ConversationTool do
   pending until somebody answers it through `approve` or `decline`.
   """
 
-  @behaviour Emissary.MCP.ToolProvider
+  @behaviour Cyfr.Ops.Provider
 
   # The most lines one `aloud` may carry: each one copies bytes into the
   # target estate, so a call moves a slice, never a thread.
   @aloud_max 50
 
-  alias Aqua.ConversationRunner
+  alias Aqua.{Approvals, Runner, Tape}
   alias Sanctum.Context
 
   @impl true
@@ -90,9 +82,9 @@ defmodule Emissary.MCP.ConversationTool do
           "turn; with more than one, a send starts a turn only when it names one — " <>
           "@aqua for the estate's assistant, or @<role> for one of its roles. An " <>
           "unaddressed send is people talking: it " <>
-          "persists and starts nothing (the result says running: false). The wire " <>
-          "send takes text only — no attachments, no model or agent argument; address " <>
-          "by mention — and threads are deleted from the console, not from here. " <>
+          "persists and starts nothing (the result says running: false). A send may " <>
+          "carry a pre-minted id with files attached under it, a model, an agent, the " <>
+          "sender's own client id, and the room open beside the thread. " <>
           "Wraps the same runner and the same verbs the console drives, with the " <>
           "same gates — this is not a second way to run an agent.",
       annotations: %{
@@ -105,14 +97,20 @@ defmodule Emissary.MCP.ConversationTool do
           # speak, decide, or read as them — never a standing credential.
           "create" => %{kind: :write, planes: [:external], consent: :interactive},
           "list" => %{kind: :read, planes: [:external], consent: :interactive},
+          "get" => %{kind: :read, planes: [:external], consent: :interactive},
+          "messages" => %{kind: :read, planes: [:external], consent: :interactive},
           "send" => %{kind: :write, planes: [:external], consent: :interactive},
+          "attach" => %{kind: :write, planes: [:external], consent: :interactive},
           "stop" => %{kind: :write, planes: [:external], consent: :interactive},
           "approve" => %{kind: :write, planes: [:external], consent: :interactive},
           "decline" => %{kind: :write, planes: [:external], consent: :interactive},
+          "revoke_grant" => %{kind: :write, planes: [:external], consent: :interactive},
+          "restart_for_consent" => %{kind: :write, planes: [:external], consent: :interactive},
           "events" => %{kind: :read, planes: [:external], consent: :interactive},
           "follow" => %{kind: :write, planes: [:external], consent: :interactive},
           "unfollow" => %{kind: :write, planes: [:external], consent: :interactive},
-          "aloud" => %{kind: :write, planes: [:external], consent: :interactive}
+          "aloud" => %{kind: :write, planes: [:external], consent: :interactive},
+          "delete" => %{kind: :destructive, planes: [:external], consent: :interactive}
         }
       },
       input_schema: %{
@@ -123,14 +121,20 @@ defmodule Emissary.MCP.ConversationTool do
             "enum" => [
               "create",
               "list",
+              "get",
+              "messages",
               "send",
+              "attach",
               "stop",
               "approve",
               "decline",
+              "revoke_grant",
+              "restart_for_consent",
               "events",
               "follow",
               "unfollow",
-              "aloud"
+              "aloud",
+              "delete"
             ]
           },
           "conversation" => %{
@@ -148,7 +152,57 @@ defmodule Emissary.MCP.ConversationTool do
           },
           "message_id" => %{
             "type" => "string",
-            "description" => "approve/decline: the approval card"
+            "description" =>
+              "approve/decline: the approval card; attach: the message the files belong to"
+          },
+          "id" => %{
+            "type" => "string",
+            "description" =>
+              "send: a pre-minted message id (mint one, attach the files under it, then send)"
+          },
+          "client_id" => %{
+            "type" => "string",
+            "description" =>
+              "send: the sender's own id for this send, so a retry answers the same message"
+          },
+          "attachments" => %{
+            "type" => "array",
+            "items" => %{"type" => "object"},
+            "description" => "send: the refs `attach` answered for this message id"
+          },
+          "agent" => %{
+            "type" => "string",
+            "description" => "send: the agent to address when the text names none"
+          },
+          "model" => %{
+            "type" => "string",
+            "description" => "send: a model override for this turn"
+          },
+          "room" => %{
+            "type" => "object",
+            "description" =>
+              "send: the room the sender has open beside this thread " <>
+                "(athanor_id, conversation_id, title, estate); its newest lines are read " <>
+                "for this one turn, never stored"
+          },
+          "files" => %{
+            "type" => "array",
+            "items" => %{"type" => "object"},
+            "description" => "attach: the files as {filename, media_type, data} with base64 data"
+          },
+          "agent_name" => %{
+            "type" => "string",
+            "description" => "revoke_grant: the agent the standing answer was given for"
+          },
+          "tool" => %{"type" => "string", "description" => "revoke_grant: the tool"},
+          "tool_action" => %{"type" => "string", "description" => "revoke_grant: the action"},
+          "profile_id" => %{
+            "type" => "string",
+            "description" => "restart_for_consent: the profile the consent was granted on"
+          },
+          "revision" => %{
+            "type" => "string",
+            "description" => "restart_for_consent: the consent revision granted"
           },
           "message_ids" => %{
             "type" => "array",
@@ -234,30 +288,131 @@ defmodule Emissary.MCP.ConversationTool do
   defp dispatch(_ctx, _args),
     do: {:error, {:invalid_argument, "conversation requires an 'action' and a 'conversation'"}}
 
+  # The whole send envelope: the text, a pre-minted id and the refs
+  # attached under it, the agent and model, the sender's client id, and
+  # the room beside the thread — read here, server-side, into the text
+  # the turn reads beside the task and never stored.
   defp act("send", ctx, id, args) do
-    case args["message"] do
-      text when is_binary(text) and text != "" ->
-        case ConversationRunner.send_message(ctx, id, text) do
-          :ok -> {:ok, waiting(ctx, id)}
+    text = args["message"]
+    attachments = args["attachments"] || []
+
+    cond do
+      not is_binary(text) or (String.trim(text) == "" and attachments == []) ->
+        {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
+
+      not is_list(attachments) or not Enum.all?(attachments, &is_map/1) ->
+        {:error, {:invalid_argument, "send takes 'attachments' as the refs attach answered"}}
+
+      not (is_nil(args["room"]) or is_map(args["room"])) ->
+        {:error, {:invalid_argument, "send takes 'room' as an object"}}
+
+      true ->
+        message_id =
+          case args["id"] do
+            mid when is_binary(mid) and mid != "" -> mid
+            _ -> Cyfr.UUID7.generate_id("msg")
+          end
+
+        opts =
+          [id: message_id, attachments: attachments]
+          |> put_opt(:client_id, args["client_id"])
+          |> put_opt(:model, args["model"])
+          |> put_opt(:orchestrator, args["agent"])
+          |> put_opt(:room, args["room"])
+
+        case Runner.send_message(ctx, id, text, opts) do
+          {:ok, accepted} -> {:ok, Map.merge(accepted, waiting(ctx, id))}
           {:error, reason} -> {:error, refusal(reason, id)}
         end
+    end
+  end
 
-      _ ->
-        {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
+  defp act("get", ctx, id, _args) do
+    with {:ok, conv} <- Arca.ConversationStorage.get(ctx, id) do
+      {:ok, Map.merge(render_conversation(conv), waiting(ctx, id))}
+    else
+      {:error, reason} -> {:error, refusal(reason, id)}
+    end
+  end
+
+  defp act("messages", ctx, id, args), do: act("events", ctx, id, args)
+
+  # The files a message carries are written under its id before the
+  # send names them, so the bytes are the sender's own write.
+  defp act("attach", ctx, id, %{"message_id" => message_id, "files" => files})
+       when is_binary(message_id) and is_list(files) do
+    with {:ok, _conv} <- Arca.ConversationStorage.get(ctx, id),
+         {:ok, decoded} <- decode_files(files),
+         {:ok, refs} <- Aqua.Attachments.store(ctx, id, message_id, decoded) do
+      {:ok, %{message_id: message_id, attachments: refs}}
+    else
+      {:error, :not_found} -> {:error, {:not_found, "conversation", id}}
+      {:error, {:invalid_argument, _} = reason} -> {:error, reason}
+      {:error, reason} -> {:error, {:invalid_argument, "attach refused: #{inspect(reason)}"}}
+    end
+  end
+
+  defp act("attach", _ctx, _id, _args),
+    do: {:error, {:invalid_argument, "attach requires 'message_id' and 'files'"}}
+
+  defp act("revoke_grant", ctx, id, %{
+         "agent_name" => agent,
+         "tool" => tool,
+         "tool_action" => action
+       })
+       when is_binary(agent) and is_binary(tool) and is_binary(action) do
+    case Runner.revoke_grant(ctx, id, agent, tool, action) do
+      :ok -> {:ok, %{revoked: true, agent: agent, tool: tool, action: action}}
+      {:error, reason} -> {:error, refusal(reason, id)}
+    end
+  end
+
+  defp act("revoke_grant", _ctx, _id, _args),
+    do:
+      {:error,
+       {:invalid_argument, "revoke_grant requires 'agent_name', 'tool' and 'tool_action'"}}
+
+  defp act("restart_for_consent", ctx, id, args) do
+    result = %{profile_id: args["profile_id"], revision: args["revision"]}
+
+    case Runner.restart_for_consent(ctx, id, result) do
+      :ok -> {:ok, %{restart_prompted: true}}
+      {:error, reason} -> {:error, refusal(reason, id)}
+    end
+  end
+
+  # A thread is deleted whole — its rows, its blobs, what followed it —
+  # and never under a running turn.
+  defp act("delete", ctx, id, _args) do
+    cond do
+      Runner.turn_running?(ctx, id) ->
+        {:error, {:conflict, "a turn is running in this conversation — stop it first"}}
+
+      true ->
+        case Arca.ConversationStorage.delete(ctx, id) do
+          :ok -> {:ok, %{deleted: true, conversation: id}}
+          {:error, :not_found} -> {:error, {:not_found, "conversation", id}}
+          {:error, reason} -> {:error, refusal(reason, id)}
+        end
     end
   end
 
   defp act("stop", ctx, id, _args) do
-    case ConversationRunner.stop_turn(ctx, id) do
+    case Runner.stop_turn(ctx, id) do
       :ok -> {:ok, %{stopped: true}}
       {:error, reason} -> {:error, refusal(reason, id)}
     end
   end
 
+  # A card is decided by the message it was shown as; the decision is
+  # `Aqua.Approvals`' — the same door the `approval` tool opens.
   defp act("approve", ctx, id, %{"message_id" => message_id} = args) when is_binary(message_id) do
     with {:ok, scope} <- approve_scope(args["scope"]),
-         :ok <- ConversationRunner.approve(ctx, id, message_id, scope) do
-      {:ok, %{decided: "approved", message_id: message_id, scope: scope}}
+         {:ok, approval} <- card_approval(ctx, id, message_id),
+         {:ok, outcome} <-
+           Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: scope}) do
+      {:ok,
+       Map.merge(outcome, %{decided: outcome.decision, message_id: message_id, scope: scope})}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
     end
@@ -268,8 +423,15 @@ defmodule Emissary.MCP.ConversationTool do
 
   defp act("decline", ctx, id, %{"message_id" => message_id} = args) when is_binary(message_id) do
     with {:ok, scope} <- decline_scope(args["scope"]),
-         :ok <- ConversationRunner.decline(ctx, id, message_id, args["reason"] || "", scope) do
-      {:ok, %{decided: "declined", message_id: message_id, scope: scope}}
+         {:ok, approval} <- card_approval(ctx, id, message_id),
+         {:ok, outcome} <-
+           Approvals.resolve(ctx, approval.id, %{
+             decision: :declined,
+             scope: scope,
+             reason: String.slice(args["reason"] || "", 0, 80)
+           }) do
+      {:ok,
+       Map.merge(outcome, %{decided: outcome.decision, message_id: message_id, scope: scope})}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
     end
@@ -392,6 +554,40 @@ defmodule Emissary.MCP.ConversationTool do
   # Internal
   # ---------------------------------------------------------------------------
 
+  # The card's approval, pinned to this conversation: a member cannot
+  # drive one thread's door to settle another thread's card.
+  defp card_approval(ctx, conversation_id, message_id) do
+    case Tape.approval_by_message(ctx, message_id) do
+      {:ok, %{conversation_id: ^conversation_id} = approval} -> {:ok, approval}
+      {:ok, _elsewhere} -> {:error, {:not_found, "approval", message_id}}
+      {:error, :not_found} -> {:error, {:not_found, "approval", message_id}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp put_opt(opts, _key, nil), do: opts
+  defp put_opt(opts, _key, ""), do: opts
+  defp put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp decode_files(files) do
+    Enum.reduce_while(files, {:ok, []}, fn
+      %{"filename" => name, "media_type" => media, "data" => data}, {:ok, acc}
+      when is_binary(name) and is_binary(media) and is_binary(data) ->
+        case Base.decode64(data) do
+          {:ok, bytes} ->
+            {:cont,
+             {:ok, acc ++ [%{"filename" => name, "media_type" => media, "bytes" => bytes}]}}
+
+          :error ->
+            {:halt, {:error, {:invalid_argument, "attach: '#{name}' is not base64"}}}
+        end
+
+      _, _ ->
+        {:halt,
+         {:error, {:invalid_argument, "attach: each file needs filename, media_type and data"}}}
+    end)
+  end
+
   # What a client is told after speaking. A pending card is REPORTED, never
   # decided: a caller that cannot render one has not thereby been given
   # permission to answer it. The message is already accepted by the time
@@ -400,7 +596,7 @@ defmodule Emissary.MCP.ConversationTool do
   # reads can return error tuples, and either would crash the handler.
   defp waiting(ctx, id) do
     live =
-      case ConversationRunner.state(id, ctx.athanor_id) do
+      case Runner.state(id, ctx.athanor_id) do
         %{} = state -> state
         _ -> %{}
       end
@@ -441,27 +637,12 @@ defmodule Emissary.MCP.ConversationTool do
   # collapses to a generic "the tool call failed". A reason already in the
   # vocabulary passes through untouched.
   defp refusal(reason, id) do
-    if Emissary.MCP.ToolError.reason?(reason), do: reason, else: translate(reason, id)
+    if Cyfr.Ops.Error.reason?(reason), do: reason, else: translate(reason, id)
   end
 
   defp translate(:not_found, id), do: {:not_found, "conversation", id}
 
-  defp translate(:archived, _id),
-    do: {:invalid_argument, "this conversation's estate is archived — nothing runs in it"}
-
-  defp translate(:not_member, _id),
-    do: {:invalid_argument, "only a member of the estate can act in its conversations"}
-
-  defp translate(:busy, _id),
-    do: {:invalid_argument, "the turn queue is full — send again after the current turn"}
-
-  defp translate(:no_orchestrator, _id),
-    do: {:invalid_argument, "this estate has no assistant to address — reset its AQUA tree"}
-
   defp translate(:empty, _id), do: {:invalid_argument, "send requires a non-empty 'message'"}
-
-  defp translate(:message_too_long, _id),
-    do: {:invalid_argument, "the message is longer than the 32 KiB bound"}
 
   defp translate(:unavailable, _id), do: {:unavailable, "Conversations"}
   defp translate(:database_error, _id), do: {:unavailable, "Storage"}
@@ -481,7 +662,6 @@ defmodule Emissary.MCP.ConversationTool do
       id: conv.id,
       title: conv.title,
       created_by: conv.created_by,
-      running: is_binary(conv.execution_id),
       last_message_at: conv.last_message_at,
       at: conv.inserted_at
     }

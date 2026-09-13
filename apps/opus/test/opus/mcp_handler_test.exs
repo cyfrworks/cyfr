@@ -3,11 +3,10 @@
 
 defmodule Opus.FormulaHandlerMcpTest do
   @moduledoc """
-  Tests for FormulaHandler's MCP dispatch functionality.
-  (Previously McpHandler tests — now absorbed by FormulaHandler)
+  Tests FormulaHandler MCP dispatch.
 
   Every dispatch runs under a chain authority: non-execution tools go
-  through `ToolRegistry.call_in_chain/5`, where the grant is the consented
+  through `Cyfr.Ops.Catalog.call_in_chain/5`, where the grant is the consented
   edge's tool list — exact `tool.action` entries, deny-by-default.
   """
   use ExUnit.Case, async: false
@@ -29,9 +28,9 @@ defmodule Opus.FormulaHandlerMcpTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_dir)
 
-    # Ensure ToolRegistry has providers loaded for dispatch tests
-    if Process.whereis(Emissary.MCP.ToolRegistry) do
-      Emissary.MCP.ToolRegistry.refresh()
+    # Ensure the catalog has providers loaded for dispatch tests
+    if Process.whereis(Cyfr.Ops.Catalog) do
+      Cyfr.Ops.Catalog.refresh()
     end
 
     ctx = Sanctum.TestContext.local()
@@ -225,10 +224,10 @@ defmodule Opus.FormulaHandlerMcpTest do
   end
 
   # ============================================================================
-  # Dispatch via ToolRegistry
+  # Dispatch via the catalog
   # ============================================================================
 
-  describe "execute/3 - dispatch via ToolRegistry" do
+  describe "execute/3 - dispatch via the catalog" do
     test "webhook.list routes to the provider, whose identity conjunct still refuses", %{
       ctx: ctx,
       execution_id: eid
@@ -246,7 +245,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       assert decoded["error"]["message"] =~ "storage_read"
     end
 
-    test "routes execution.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
+    test "routes execution.list through the catalog", %{ctx: ctx, execution_id: eid} do
       request = Jason.encode!(%{"tool" => "execution", "action" => "list", "args" => %{}})
       result = execute(request, ctx, eid, authority(tools: ["execution.list"]))
       decoded = Jason.decode!(result)
@@ -255,7 +254,7 @@ defmodule Opus.FormulaHandlerMcpTest do
     end
 
     @tag :requires_locus
-    test "routes build.toolchains through ToolRegistry", %{ctx: ctx, execution_id: eid} do
+    test "routes build.toolchains through the catalog", %{ctx: ctx, execution_id: eid} do
       request = Jason.encode!(%{"tool" => "build", "action" => "toolchains", "args" => %{}})
       result = execute(request, ctx, eid, authority(tools: ["build.toolchains"]))
       decoded = Jason.decode!(result)
@@ -264,7 +263,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       assert is_map(decoded["output"]["toolchains"])
     end
 
-    test "routes aqua.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
+    test "routes aqua.list through the catalog", %{ctx: ctx, execution_id: eid} do
       request = Jason.encode!(%{"tool" => "aqua", "action" => "list", "args" => %{}})
       result = execute(request, ctx, eid, authority(tools: ["aqua.list"]))
       decoded = Jason.decode!(result)
@@ -272,7 +271,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       assert decoded["status"] == "completed"
     end
 
-    test "routes tools.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
+    test "routes tools.list through the catalog", %{ctx: ctx, execution_id: eid} do
       request = Jason.encode!(%{"tool" => "tools", "action" => "list", "args" => %{}})
       result = execute(request, ctx, eid, authority(tools: ["tools.list"]))
       decoded = Jason.decode!(result)
@@ -316,6 +315,25 @@ defmodule Opus.FormulaHandlerMcpTest do
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
+    end
+  end
+
+  # ============================================================================
+  # Host interception
+  # ============================================================================
+
+  describe "host interception" do
+    test "the host has an arm for exactly the execution actions the catalog intercepts" do
+      execution = Enum.find(Opus.MCP.tools(), &(&1.name == "execution"))
+      actions = execution |> Cyfr.Ops.Annotations.actions_of() |> Map.keys()
+
+      assert Enum.any?(actions, &Cyfr.Ops.Annotations.host_intercepted?(execution, &1))
+
+      for action <- actions do
+        assert match?({:ok, _}, FormulaHandler.child_runner(action)) ==
+                 Cyfr.Ops.Annotations.host_intercepted?(execution, action),
+               "execution.#{action}: the host's arm and the catalog's annotation disagree"
+      end
     end
   end
 end

@@ -58,7 +58,6 @@ defmodule Compendium.OCI.Reference do
         digest: nil,
         default_registry: false
       }}
-
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
   def parse(ref) when is_binary(ref) do
@@ -81,7 +80,6 @@ defmodule Compendium.OCI.Reference do
       iex> ref = %Compendium.OCI.Reference{registry: "registry.cyfr.run", repository: "alice/catalysts/claude", tag: "0.1.0"}
       iex> Compendium.OCI.Reference.to_string(ref)
       "registry.cyfr.run/alice/catalysts/claude:0.1.0"
-
   """
   @spec to_string(t()) :: String.t()
   def to_string(%__MODULE__{registry: reg, repository: repo, tag: nil, digest: digest})
@@ -107,7 +105,6 @@ defmodule Compendium.OCI.Reference do
         repository: "alice/catalysts/claude",
         tag: "0.1.0"
       }}
-
   """
   @spec from_component_ref(Sanctum.ComponentRef.t(), String.t()) ::
           {:ok, t()} | {:error, String.t()}
@@ -133,7 +130,6 @@ defmodule Compendium.OCI.Reference do
       iex> ref = %Compendium.OCI.Reference{registry: "registry.cyfr.run", repository: "alice/catalysts/claude", tag: "0.1.0"}
       iex> Compendium.OCI.Reference.to_component_ref(ref)
       {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "alice", name: "claude", version: "0.1.0"}}
-
   """
   @spec to_component_ref(t()) :: {:ok, Sanctum.ComponentRef.t()} | {:error, String.t()}
   def to_component_ref(%__MODULE__{repository: repo, tag: tag, digest: digest}) do
@@ -185,11 +181,8 @@ defmodule Compendium.OCI.Reference do
   # Private
   # ============================================================================
 
-  # OCI distribution grammar for the two segments this parser used to take
-  # on faith. Both flow into registry URL paths (`/v2/…/manifests/<ref>`)
-  # and cache filenames, so the parser is where a `/`, `?` or any other
-  # injection-shaped byte is refused — not the layers downstream that
-  # happen to block some of them.
+  # Validate OCI segments before they enter registry URLs or cache paths.
+  # Reject separators and query delimiters outside the distribution grammar.
   @tag_pattern ~r/^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/
   @digest_pattern ~r/^sha256:[0-9a-f]{64}$/
 
@@ -227,12 +220,8 @@ defmodule Compendium.OCI.Reference do
   @doc """
   Whether a string is a well-formed OCI digest (`sha256:` + 64 lowercase hex).
 
-  The grammar lives here because a digest is a path segment: it is
-  interpolated into `/v2/…/blobs/<digest>` and into cache filenames. A
-  reference's own digest was checked at parse; the digests inside a *manifest*
-  were not, so a hostile or compromised registry could put `..`, `?` or `#` in
-  a layer descriptor and steer the blob GET elsewhere on its own host.
-  `Compendium.OCI.Manifest.parse/1` checks every descriptor through this.
+  Digests must be safe path segments for blob requests and cache files.
+  `Compendium.OCI.Manifest.parse/1` validates every descriptor here.
   """
   @spec valid_digest?(term()) :: boolean()
   def valid_digest?(digest) when is_binary(digest), do: Regex.match?(@digest_pattern, digest)

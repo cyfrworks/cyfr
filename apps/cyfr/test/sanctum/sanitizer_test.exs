@@ -65,15 +65,7 @@ defmodule Sanctum.SanitizerTest do
     end
   end
 
-  # These asserted `@derive {Inspect, except: [:sanctum_token]}` on
-  # `Emissary.MCP.Request` (then `Session`), which held a live bearer credential in a `:public`
-  # ETS table and so could reach a log through any crash report that stringified
-  # it. That struct no longer stores a credential at all — the protocol session
-  # it belonged to is gone — so the derive went with the field.
-  #
-  # The general risk did not go anywhere, so the guarantee is restated against
-  # what actually defends it now: a credential-bearing struct buried in an error
-  # term must not survive sanitizing, however deeply it is nested.
+  # Sanitization must redact credentials in nested structs and error tuples.
   describe "credentials nested in error terms" do
     test "a struct's credential is redacted inside an error tuple" do
       term = {:error, %{session: %Credentialed{id: "sess_abc", sanctum_token: "cyfr_live_token"}}}

@@ -13,6 +13,8 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
 
     * 404 — slug not found OR webhook is disabled. (Same response in both
       cases — no enumeration leakage.)
+    * 503 — the webhook store could not answer. Never a 404, which would
+      read as "no such hook" to a sender that retries on 5xx only.
     * 401 — signature header missing, malformed, or mismatched.
     * 500 — defensive: raw body wasn't captured (body_reader didn't run) or
       secret decryption failed. Should never happen in practice.
@@ -41,6 +43,10 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
       :not_found ->
         emit_telemetry(slug, nil, :not_found_or_disabled)
         deny_404(conn)
+
+      :unavailable ->
+        emit_telemetry(slug, nil, :store_unavailable)
+        deny_503(conn)
     end
   end
 
@@ -62,7 +68,8 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
     case conn.assigns[:webhook_lookup] do
       {:ok, %{enabled: true} = webhook} -> {:ok, webhook}
       {:ok, _disabled} -> :not_found
-      {:error, _} -> :not_found
+      {:error, :not_found} -> :not_found
+      {:error, _} -> :unavailable
       nil -> fresh_lookup(slug)
     end
   end
@@ -72,7 +79,7 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
       {:ok, %{enabled: true} = webhook} -> {:ok, webhook}
       {:ok, _disabled} -> :not_found
       {:error, :not_found} -> :not_found
-      {:error, _} -> :not_found
+      {:error, _} -> :unavailable
     end
   end
 
@@ -164,6 +171,12 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
 
   defp deny_404(conn) do
     EmissaryWeb.ApiError.halt(conn, 404, :not_found, "Not found")
+  end
+
+  defp deny_503(conn) do
+    conn
+    |> put_resp_header("retry-after", "5")
+    |> EmissaryWeb.ApiError.halt(503, :unavailable, "Webhook store unavailable")
   end
 
   defp deny_401(conn) do

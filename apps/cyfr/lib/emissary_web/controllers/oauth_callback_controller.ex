@@ -51,7 +51,7 @@ defmodule EmissaryWeb.OAuthCallbackController do
 
   defp fmt_reason(reason) do
     # The rule every other surface applies (`Emissary.MCP.Router`,
-    # `PrismWeb.MCPHelpers`): an unrecognized term is internal — an exit
+    # `PrismWeb.Ops`): an unrecognized term is internal — an exit
     # tuple, a changeset — and is logged, never reflected into the page.
     Logger.warning("[OAuthCallback] grant completion failed: #{inspect(reason)}")
     "the authorization could not be completed"

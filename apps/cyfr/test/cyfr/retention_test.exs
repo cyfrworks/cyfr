@@ -239,9 +239,7 @@ defmodule Cyfr.RetentionTest do
     end
 
     test "a running execution is never stale, whatever its age", %{ctx: ctx} do
-      # Retention used to delete running rows past the keep window: the
-      # runner's record_complete then answered :not_found, the lease
-      # sweeper went blind, and the cancel cascade lost its children.
+      # Retain running executions regardless of age so completion and cancellation remain possible.
       create_execution_with_timestamp(ctx, "exec_live", "2025-01-01T10:00:00Z", "running")
 
       for i <- 2..5 do
@@ -280,11 +278,7 @@ defmodule Cyfr.RetentionTest do
     end
 
     test "a build still running is never pruned", %{ctx: ctx} do
-      # A "started" build past the keep window used to be deleted; its
-      # record_finished/record_registration then answered :not_found.
-      # Timestamps are relative so the row is BOTH outside the keep window
-      # (four newer builds rank above it) and inside the grace window, which
-      # is the only combination that exercises the status guard.
+      # Keep the started build outside the retention rank but inside the grace window to exercise the status guard.
       now = DateTime.utc_now()
       :ok = Cyfr.BuildRecords.record_started(ctx, "build_live", "reagent:local.test:0.1.0")
       pin_started_at("build_live", DateTime.add(now, -5, :minute))
@@ -386,7 +380,14 @@ defmodule Cyfr.RetentionTest do
         })
 
       ctx = Sanctum.internal_context(user_id: "system", athanor_id: athanor.id, scope: :athanor)
-      :ok = Retention.set_settings(ctx, %{"executions" => 2, "builds" => 2})
+      # The fixtures are dated 2025; the age bound is pushed out so this
+      # test exercises the count bound alone.
+      :ok =
+        Retention.set_settings(ctx, %{
+          "executions" => 2,
+          "builds" => 2,
+          "execution_days" => 10_000
+        })
 
       # Two different users in the SAME athanor: retention keeps N per
       # athanor, members are interchangeable.

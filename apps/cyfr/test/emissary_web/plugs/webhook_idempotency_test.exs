@@ -135,11 +135,7 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotencyTest do
   end
 
   describe "a claim staked for a delivery that failed" do
-    # The row is written before the controller runs — that is what makes two
-    # concurrent deliveries of one key resolve to a single execution. But a
-    # failed delivery used to keep the claim, so the sender's retry (the whole
-    # reason it sends an idempotency key) got `{"status": "duplicate"}` while
-    # the target had never run once.
+    # Claim before dispatch to serialize duplicate deliveries; release failed claims for retry.
 
     defp send_status(conn, status) do
       conn

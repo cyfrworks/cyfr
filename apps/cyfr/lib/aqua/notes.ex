@@ -5,12 +5,8 @@ defmodule Aqua.Notes do
   @moduledoc """
   What somebody chose to keep out of a conversation.
 
-  A tape is a record of what was said in a room — shared, erasable, and
-  nobody's memory. A note is what was kept from it, and it survives the
-  tape being erased, exactly as your notes survive the whiteboard. That is
-  why `notes/` is its own storage root rather than a compaction of
-  `conversations/`, and why retention on a thread can be honest: erase the
-  whiteboard, everyone keeps their notes.
+  Notes use their own storage root and survive deletion or retention
+  cleanup of the conversations they came from.
 
   ## One pile, two temperatures
 
@@ -77,7 +73,7 @@ defmodule Aqua.Notes do
           execution: String.t() | nil
         }
   @typedoc """
-  What a call can refuse with — `Emissary.MCP.ToolError`'s vocabulary, so
+  What a call can refuse with — `Cyfr.Ops.Error`'s vocabulary, so
   every surface renders it as a sentence. A storage fault is folded in at
   this boundary (`storage_refusal/1`): the adapter's term goes to the log, the wire
   gets the one word every storage-backed tool answers with, and the

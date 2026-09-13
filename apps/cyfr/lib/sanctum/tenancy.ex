@@ -5,12 +5,13 @@ defmodule Sanctum.Tenancy do
   @moduledoc """
   Tenant resolution from memberships.
 
-  `resolve_into/2` is the single chokepoint every auth path flows through to
-  attach the caller's athanor and capabilities to their Context. It reads
-  the user's membership rows: an athanor row grants that athanor; a platform
-  row makes the caller a platform admin (`platform_admin: true`), which is a
-  capability the context carries, never a wider scope — every request works
-  inside one athanor.
+  `resolve_status/2` is the single chokepoint the one establish recipe
+  (`Sanctum.Caller`) flows through to attach the caller's athanor and
+  capabilities to their Context. It reads the user's membership rows: an
+  athanor row grants that athanor; a platform row makes the caller a
+  platform admin (`platform_admin: true`), which is a capability the
+  context carries, never a wider scope — every request works inside one
+  athanor.
 
   There is no deployment "mode". A fresh install with no auth configured never
   reaches here (requests run as the unauthenticated public context). With
@@ -35,36 +36,20 @@ defmodule Sanctum.Tenancy do
   Merge the caller's athanor and capabilities into the context.
 
   Without `force: true`, no-ops when the context already carries an
-  `athanor_id` (the per-request safety-net usage in plugs: the stored value
-  was resolved at session-create time and re-querying every request is
-  wasteful). Auth paths that produce a Context *before* membership has been
-  resolved — `Sanctum.Auth.OAuth`, `Sanctum.Auth.DeviceFlow`,
-  `Sanctum.Auth.OIDC` — pass `force: true`.
+  `athanor_id` (the stored value was resolved at session-create time and
+  re-querying every request is wasteful). The sign-in paths, which mint a
+  session for a Context that has just been admitted, pass `force: true`.
 
   The athanor chosen is, in order: the one the context already names when a
-  membership still grants it, the person's own athanor, the first athanor
-  a membership grants, and for a platform admin with none of those, Home.
-  Resolution failure logs and returns the context unchanged — a context with
-  no resolved athanor is rejected downstream by the tenant gate
-  (`Sanctum.Context.tenant_ok/1`).
-  """
-  @spec resolve_into(Context.t(), keyword()) :: Context.t()
-  def resolve_into(ctx, opts \\ []) do
-    ctx |> resolve_status(opts) |> unwrap(ctx)
-  end
+  membership still grants it, the person's own athanor, and the first
+  athanor a membership grants. A person with none of those has no working
+  athanor, operator or not.
 
-  @doc """
-  `resolve_into/2`, but distinguishes a membership read that FAILED from a
-  person who genuinely belongs to no athanor.
-
-  Both leave the context athanor-less, and the tenant gate refuses both —
-  so a database blip rendered as `403 "User has no athanor. Contact your
-  administrator."`, a permanent-sounding answer to a transient fault, and
-  the person is told to ask an operator about something no operator can
-  fix. `Sanctum.Caller` has `:unavailable` in its refusal vocabulary for
-  exactly this, and `PrismWeb.AuthHelpers.disposition/1` already says a
-  transient read must never read as signed-out; this is the read that
-  could not say so.
+  A membership read that FAILED is `{:error, :unavailable}`, distinct from
+  a person who genuinely belongs to no athanor (`{:ok, ctx}` with no
+  athanor, which the tenant gate refuses): a database blip must never read
+  as "you belong nowhere, contact your administrator" — a permanent-
+  sounding answer to a transient fault no operator can see.
   """
   @spec resolve_status(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, :unavailable}
   def resolve_status(ctx, opts \\ [])
@@ -75,11 +60,6 @@ defmodule Sanctum.Tenancy do
   end
 
   def resolve_status(%Context{} = ctx, _opts), do: do_resolve(ctx)
-
-  # The Context-returning contract most callers want: a failed read leaves
-  # the context as it was, and the tenant gate downstream still refuses it.
-  defp unwrap({:ok, ctx}, _fallback), do: ctx
-  defp unwrap({:error, :unavailable}, fallback), do: fallback
 
   @doc """
   The athanors the context may work in — the rows behind the caller's own
@@ -162,8 +142,8 @@ defmodule Sanctum.Tenancy do
   # The candidates in order of preference, then one read for their rows so
   # an archived athanor is skipped: the athanor the context already names
   # (when a membership still grants it, or the caller is a platform admin who
-  # opened it deliberately), the person's own, the first membership grants,
-  # and — for a platform admin with none of those — Home.
+  # opened it deliberately), the person's own, and the first a membership
+  # grants.
   defp working_athanor(%Context{} = ctx, memberships, admin?, user) do
     named? = is_binary(ctx.athanor_id) and ctx.athanor_id != ""
     granted? = named? and membership_grants?(memberships, ctx.athanor_id)
@@ -198,16 +178,8 @@ defmodule Sanctum.Tenancy do
     active = candidates |> Athanors.list_by_ids() |> Enum.filter(&(&1.status == "active"))
 
     case Enum.find(candidates, fn id -> Enum.any?(active, &(&1.id == id)) end) do
-      nil -> if admin?, do: home_id(), else: nil
+      nil -> nil
       id -> id
-    end
-  end
-
-  # A missing Home is an install defect; a request must not 500 on it.
-  defp home_id do
-    case Athanors.home() do
-      {:ok, home} -> home.id
-      _ -> nil
     end
   end
 
@@ -235,39 +207,110 @@ defmodule Sanctum.Tenancy do
   request (both indexed). It trades those for immediate revocation instead
   of waiting out the session TTL.
 
-  Failing safe: on a transient read error the context is returned unchanged
-  rather than locking the user out or silently re-resolving.
+  A store that cannot answer is `{:error, :unavailable}`, never the
+  context as it was: every caller is a credential path, and a context kept
+  unchanged would outlive a denial or a removal the store could not
+  report. The caller answers 503 and the client's own retry asks again.
   """
-  @spec revalidate(Context.t()) :: Context.t()
+  @spec revalidate(Context.t()) :: {:ok, Context.t()} | {:error, :unavailable}
   def revalidate(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
     case user_row(user_id) do
       {:ok, %{status: "denied"}} ->
-        %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}
+        {:ok, %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}}
 
       {:ok, user} ->
         case Members.list_by_user(user_id) do
-          {:ok, memberships} -> apply_membership(ctx, memberships, user)
-          {:error, _} -> ctx
+          {:ok, memberships} -> {:ok, apply_membership(ctx, memberships, user)}
+          {:error, reason} -> unavailable("memberships", user_id, reason)
         end
 
-      {:error, _} ->
-        ctx
+      {:error, reason} ->
+        unavailable("user", user_id, reason)
     end
   end
 
-  def revalidate(%Context{} = ctx), do: ctx
+  def revalidate(%Context{} = ctx), do: {:ok, ctx}
 
   @doc """
-  Whether a standing channel (a webhook, a cron schedule, an API key) may
-  still fire: its athanor is active and its creator has not been denied on
+  The context a recovered turn continues under: the person-shaped
+  context the sender's sign-in would carry (`auth_method: :oidc`, the
+  person's full permission vocabulary), rebuilt from the turn's rows when
+  the sender's own context is gone. Unlike `revalidate/1`, it refuses
+  instead of degrading: `:denied` when the `users` row is denied or
+  missing (read first — a denial marks the user before memberships are
+  swept, so a surviving membership proves nothing), `:not_member` when
+  the person is not seated in the turn's own athanor, `:archived` when
+  the estate is not active, `:unavailable` when the store cannot answer.
+  """
+  @spec continuation(String.t(), String.t()) ::
+          {:ok, Context.t()} | {:error, :denied | :not_member | :archived | :unavailable}
+  def continuation(user_id, athanor_id)
+      when is_binary(user_id) and user_id != "" and is_binary(athanor_id) and athanor_id != "" do
+    case Users.get(user_id) do
+      {:ok, %{status: "denied"}} ->
+        {:error, :denied}
+
+      {:ok, _user} ->
+        cond do
+          not Members.member?(user_id, athanor_id) -> {:error, :not_member}
+          not Athanors.active?(athanor_id) -> {:error, :archived}
+          true -> {:ok, continuation_context(user_id, athanor_id)}
+        end
+
+      {:error, :not_found} ->
+        {:error, :denied}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Sanctum.Tenancy] user read failed while continuing a turn for user=#{user_id}: " <>
+            "#{inspect(reason)} — refusing"
+        )
+
+        {:error, :unavailable}
+    end
+  end
+
+  # The one site that builds a person's continuation context.
+  defp continuation_context(user_id, athanor_id) do
+    Context.build(
+      user_id: user_id,
+      athanor_id: athanor_id,
+      permissions: Sanctum.Atoms.person_permissions(),
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
+  end
+
+  defp unavailable(what, user_id, reason) do
+    Logger.warning(
+      "[Sanctum.Tenancy] #{what} read failed during revalidation for user=#{user_id}: " <>
+        "#{inspect(reason)} — refusing"
+    )
+
+    {:error, :unavailable}
+  end
+
+  @doc """
+  Whether a standing channel (a webhook, an API key, a tincture token) may
+  still act: its athanor is active and its creator has not been denied on
   this server.
 
   Channels are athanor-owned: a creator who merely leaves the group leaves
-  the channel running for the members who remain. `created_by` may be nil or
-  a synthetic principal (`webhook:<slug>`, `_seed`, `system`) — those are
-  never denied. On a transient read error the check FAILS OPEN (active),
-  matching `revalidate/1`'s posture — a DB blip must not silently kill every
-  schedule; the read is retried on the next firing.
+  the channel running for the members who remain. `created_by` is nil or
+  one of the server's synthetic principals (`system`, `_seed`,
+  `webhook:<slug>`) for a channel nobody signed in to create — those are
+  never denied. Any other id names a person, and that row is read: a
+  denied person's channels stop, whether the row carries an id minted
+  here (`usr_…`) or the IdP composite a server upgraded in place still
+  holds. A minted id with no row is refused — rows are never deleted, so
+  such an id was never a person. An id of any other shape with no row (a
+  fixture, an imported row) was never a signed-in person here, and the
+  channel is the athanor's regardless.
+
+  Every caller is a credential path — a webhook, an API key, a tincture
+  token, a schedule about to fire — so a store that cannot answer FAILS
+  CLOSED: the firing is refused and the sender's own retry asks again.
   """
   @spec channel_active?(String.t() | nil, String.t() | nil) :: boolean()
   def channel_active?(athanor_id, created_by) do
@@ -285,33 +328,56 @@ defmodule Sanctum.Tenancy do
       {:error, reason} ->
         Logger.warning(
           "[Sanctum.Tenancy] athanor read failed during channel re-check for " <>
-            "athanor=#{athanor_id}: #{inspect(reason)} — allowing this firing"
+            "athanor=#{athanor_id}: #{inspect(reason)} — refusing this firing"
         )
 
-        true
+        false
     end
   end
 
   defp athanor_active?(_), do: false
 
-  defp creator_not_denied?(user_id) when is_binary(user_id) and user_id != "" do
-    case Users.get(user_id) do
-      {:ok, %{status: "denied"}} -> false
-      _ -> true
+  # The server's synthetic principals are never people, so they are never
+  # denied. Every other id is read as a person's — the shape of the id
+  # decides nothing, or a denied person whose row predates minted ids
+  # would keep every channel they created.
+  @synthetic_principals ["system", "_seed"]
+
+  defp creator_not_denied?(user_id) when is_binary(user_id) do
+    if synthetic_principal?(user_id) do
+      true
+    else
+      case Users.get(user_id) do
+        {:ok, %{status: "denied"}} ->
+          false
+
+        {:ok, _} ->
+          true
+
+        {:error, :not_found} ->
+          not Arca.Schemas.User.person_id?(user_id)
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Sanctum.Tenancy] creator read failed during channel re-check for " <>
+              "user=#{user_id}: #{inspect(reason)} — refusing this firing"
+          )
+
+          false
+      end
     end
   end
 
   defp creator_not_denied?(_), do: true
 
+  defp synthetic_principal?(id),
+    do: id in @synthetic_principals or String.starts_with?(id, "webhook:")
+
   @doc """
   Whether this person holds the operator capability — an ACTIVE platform
   membership row.
 
-  The one derivation: callers used to re-spell it (dropping the status
-  check, which only held because `Members.list_by_user/1` happens to
-  filter active) and each copy could silently widen the moment that query
-  changed. A failed read answers `false` — a capability check fails
-  closed.
+  Returns false on a failed membership read; capability checks fail closed.
   """
   @spec platform_admin?(String.t() | [map()]) :: boolean()
   def platform_admin?(user_id) when is_binary(user_id) do

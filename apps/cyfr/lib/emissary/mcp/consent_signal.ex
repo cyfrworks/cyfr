@@ -3,17 +3,11 @@
 
 defmodule Emissary.MCP.ConsentSignal do
   @moduledoc """
-  The §4.3 consent vocabulary on the MCP wire: four remediation signals a
-  client BRANCHES on, promoted to protocol-level errors with a code and a
-  structured `data` payload.
+  Maps four consent remediation signals to JSON-RPC errors with distinct
+  codes and structured data that clients can branch on.
 
-  They used to travel as `"tag: {json}"` strings inside `isError` text —
-  JSON smuggled through prose, parsed back out by the Go CLI and pinned by
-  string-grep drift tests. Now each tag has its own JSON-RPC code
-  (`Emissary.MCP.Message`'s -335xx band), a short human sentence, and the
-  payload rides in `error.data` as `{"tag": …, "payload": …}` — the CLI
-  and the console read structure, and a plain MCP client still sees a
-  sentence that names the fix.
+  Each signal includes a -335xx code, a human-readable sentence and
+  `error.data` shaped as `{"tag": ..., "payload": ...}`.
 
   The GUEST wire is not this: in-chain formula children keep the
   remediation object shape `Opus.Remediation` owns (component-guide

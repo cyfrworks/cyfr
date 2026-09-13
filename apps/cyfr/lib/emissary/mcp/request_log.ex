@@ -9,10 +9,7 @@ defmodule Emissary.MCP.RequestLog do
   received, and each tool the running component reached from inside the
   sandbox. `id` is the call, `request_id` is the ingress request they share.
 
-  In-chain calls used to be invisible here. The row's primary key was the
-  request id, so a second row could not be written under it, and the dispatcher
-  skipped logging whenever the context already carried one — which an in-chain
-  call always does, having inherited it through the guest closure.
+  In-chain calls have their own log rows and share the root request id.
 
   Routes all persistent storage through `Arca.McpLog`. The start of a call
   is written synchronously (the row must exist); its completion or failure
@@ -72,21 +69,25 @@ defmodule Emissary.MCP.RequestLog do
 
   def log_started(%Context{} = ctx, call_id, data)
       when is_binary(call_id) and is_map(data) do
-    case Arca.McpLog.record(%{
-           id: call_id,
-           request_id: ctx.request_id,
-           user_id: ctx.user_id || "system",
-           athanor_id: ctx.athanor_id,
-           timestamp: DateTime.utc_now(),
-           tool: data[:tool] || data["tool"],
-           action: data[:action] || data["action"],
-           method: data[:method] || data["method"],
-           status: "pending",
-           input: encode_json(sanitize_input(data[:input] || data["input"] || %{}))
-         }) do
+    case Arca.McpLog.record(started_row(ctx, call_id, data)) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp started_row(%Context{} = ctx, call_id, data) do
+    %{
+      id: call_id,
+      request_id: ctx.request_id,
+      user_id: ctx.user_id || "system",
+      athanor_id: ctx.athanor_id,
+      timestamp: DateTime.utc_now(),
+      tool: data[:tool] || data["tool"],
+      action: data[:action] || data["action"],
+      method: data[:method] || data["method"],
+      status: "pending",
+      input: encode_json(sanitize_input(data[:input] || data["input"] || %{}))
+    }
   end
 
   @doc """
@@ -154,7 +155,8 @@ defmodule Emissary.MCP.RequestLog do
   already-formatted error string in place of the sanitized `inspect`.
   Returns `result`. With `log?` false, runs `fun` and only returns.
   """
-  @spec around(boolean(), Context.t(), String.t() | nil, map(), (-> {result, map()})) :: result
+  @spec around(false | true | :behind, Context.t(), String.t() | nil, map(), (-> {result, map()})) ::
+          result
         when result: {:ok, term()} | {:error, term()}
   def around(log?, ctx, call_id, started, fun)
 
@@ -162,6 +164,53 @@ defmodule Emissary.MCP.RequestLog do
     {result, _meta} = fun.()
     result
   end
+
+  # The row's start rides the write-behind as well as its close: an
+  # in-process call is its own root and nothing reads its row before it
+  # ends. The close carries the whole row, so a start that was shed, or
+  # lands late, leaves one complete row either way.
+  def around(:behind, %Context{athanor_id: athanor_id} = ctx, call_id, started, fun)
+      when is_binary(athanor_id) and is_binary(call_id) do
+    row = started_row(ctx, call_id, started)
+    safe_enqueue({:mcp_log_started, row})
+    start_time = System.monotonic_time()
+    {result, meta} = fun.()
+
+    duration_ms =
+      System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+
+    close =
+      case result do
+        {:ok, output} ->
+          put_routed(
+            %{
+              status: "success",
+              duration_ms: duration_ms,
+              output: encode_json(sanitize_output(output))
+            },
+            meta
+          )
+
+        {:error, reason} ->
+          error_text = Map.get(meta, :error_text) || inspect(sanitize_input(reason))
+
+          put_routed(
+            %{
+              status: "error",
+              error_code: Map.get(meta, :code, -32_603),
+              duration_ms: duration_ms,
+              error: error_text
+            },
+            meta
+          )
+      end
+
+    safe_enqueue({:mcp_log_close, row, close})
+    result
+  end
+
+  def around(:behind, ctx, call_id, started, fun),
+    do: around(true, ctx, call_id, started, fun)
 
   def around(true, %Context{} = ctx, call_id, started, fun) do
     safe_log_started(ctx, call_id, started)
@@ -195,6 +244,23 @@ defmodule Emissary.MCP.RequestLog do
     result
   end
 
+  # The write-behind never fails the call either: inline (the test env)
+  # it writes in the caller, and a caller with no connection of its own
+  # loses the row, as it would have under the synchronous start.
+  #
+  # A store that goes away does not raise, it exits — `DBConnection` exits
+  # the caller when its connection dies, and under the test sandbox that
+  # happens whenever the owning process finishes first. `rescue` alone left
+  # that exit to travel into the call this is supposed to never fail.
+  defp safe_enqueue(item) do
+    Cyfr.RecordSink.enqueue(item)
+  rescue
+    e -> Logger.warning("[RequestLog] log row not queued: #{Exception.message(e)}")
+  catch
+    :exit, reason ->
+      Logger.warning("[RequestLog] log row not queued: store exited #{inspect(reason)}")
+  end
+
   defp put_routed(data, %{routed_to: routed}) when not is_nil(routed),
     do: Map.put(data, :routed_to, routed)
 
@@ -219,6 +285,12 @@ defmodule Emissary.MCP.RequestLog do
     e ->
       Logger.error("[RequestLog] log_started raised for #{call_id}: #{Exception.message(e)}")
       :ok
+  catch
+    # "Always returns :ok" has to cover an exit too: a store whose
+    # connection dies exits its caller rather than raising.
+    :exit, reason ->
+      Logger.error("[RequestLog] log_started exited for #{call_id}: #{inspect(reason)}")
+      :ok
   end
 
   @doc """
@@ -231,6 +303,12 @@ defmodule Emissary.MCP.RequestLog do
     e ->
       Logger.error("[RequestLog] log_completed raised for #{call_id}: #{Exception.message(e)}")
       :ok
+  catch
+    # "Always returns :ok" has to cover an exit too: a store whose
+    # connection dies exits its caller rather than raising.
+    :exit, reason ->
+      Logger.error("[RequestLog] log_completed exited for #{call_id}: #{inspect(reason)}")
+      :ok
   end
 
   @doc """
@@ -242,6 +320,12 @@ defmodule Emissary.MCP.RequestLog do
   rescue
     e ->
       Logger.error("[RequestLog] log_failed raised for #{call_id}: #{Exception.message(e)}")
+      :ok
+  catch
+    # "Always returns :ok" has to cover an exit too: a store whose
+    # connection dies exits its caller rather than raising.
+    :exit, reason ->
+      Logger.error("[RequestLog] log_failed exited for #{call_id}: #{inspect(reason)}")
       :ok
   end
 

@@ -21,7 +21,7 @@ defmodule Compendium.AquaAgentTest do
         disabled: false,
         catalyst_ref: "catalyst:moonmoon69.claude",
         model: "claude-sonnet-4-6",
-        tool_policy: %{"files.read" => "auto", "aqua_web.*" => "auto", "native_search" => "ask"},
+        tool_policy: %{"files.read" => "auto", "web.*" => "auto", "native_search" => "ask"},
         prompt: "You are the scribe.\n\n## Style\n\n- terse"
       },
       overrides
@@ -76,10 +76,10 @@ defmodule Compendium.AquaAgentTest do
   defp with_policy(yaml), do: "---\ntool_policy:\n#{yaml}---\n\nprompt\n"
 
   test "the policy grammar parses: ask/auto over tool.action, tool.* and native_search" do
-    file = with_policy("  files.read: auto\n  aqua_web.*: ask\n  native_search: auto\n")
+    file = with_policy("  files.read: auto\n  web.*: ask\n  native_search: auto\n")
 
     assert {:ok, %{tool_policy: policy}} = AquaAgent.parse("x", file)
-    assert policy == %{"files.read" => "auto", "aqua_web.*" => "ask", "native_search" => "auto"}
+    assert policy == %{"files.read" => "auto", "web.*" => "ask", "native_search" => "auto"}
 
     # An absent policy is the empty allowlist; an empty one parses too.
     assert {:ok, %{tool_policy: %{}}} = AquaAgent.parse("x", "---\ntitle: X\n---\n\nprompt\n")
@@ -110,5 +110,38 @@ defmodule Compendium.AquaAgentTest do
 
     assert {:error, {:tool_policy_invalid_key, 1}} = AquaAgent.check_tool_policy(%{1 => "auto"})
     assert {:error, :tool_policy_not_a_map} = AquaAgent.check_tool_policy("auto")
+  end
+
+  # The security-relevant subset: what an agent is and may do, never what
+  # it says. Two agents that differ only in prose share a capability.
+  test "to_manifest/1 projects the capability and nothing of the prose" do
+    role = %{
+      name: "scout",
+      title: "Scout",
+      description: "Looks around",
+      disabled: false,
+      catalyst_ref: "catalyst:moonmoon69.claude",
+      model: "claude-sonnet-4-6",
+      tool_policy: %{"files.read" => "auto"},
+      prompt: "You look around."
+    }
+
+    manifest = AquaAgent.to_manifest(role)
+    assert manifest["name"] == "scout"
+    assert manifest["type"] == AquaAgent.role_type()
+    assert manifest["catalyst_ref"] == "catalyst:moonmoon69.claude"
+    assert manifest["tool_policy"] == %{"files.read" => "auto"}
+    refute Map.has_key?(manifest, "prompt")
+    refute Map.has_key?(manifest, "title")
+
+    {:ok, digest} = AquaAgent.capability_digest(role)
+
+    {:ok, same} =
+      AquaAgent.capability_digest(%{role | prompt: "Something else.", title: "Renamed"})
+
+    assert digest == same
+
+    {:ok, other} = AquaAgent.capability_digest(%{role | tool_policy: %{"files.read" => "ask"}})
+    refute digest == other
   end
 end

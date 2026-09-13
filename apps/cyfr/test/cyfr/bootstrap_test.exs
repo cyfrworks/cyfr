@@ -3,8 +3,8 @@
 
 defmodule Cyfr.BootstrapTest do
   @moduledoc """
-  What boot puts right: the server always has an active Home, and the
-  operators are the ones `CYFR_PLATFORM_ADMIN_EMAILS` names.
+  What boot puts right: the operators are the ones
+  `CYFR_PLATFORM_ADMIN_EMAILS` names.
 
   A sign-in reconciles a platform row against that list, but only for
   someone the door still admits — drop an operator from the env list *and*
@@ -13,7 +13,7 @@ defmodule Cyfr.BootstrapTest do
   """
   use ExUnit.Case, async: false
 
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Members, Users}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -74,38 +74,9 @@ defmodule Cyfr.BootstrapTest do
     assert {:error, _} = Sanctum.Session.load(session.token, surface: :console)
   end
 
-  test "boot mints a Home when the last one was retired by its final member" do
-    home = Athanors.home!()
-
-    n = System.unique_integer([:positive])
-
-    {:ok, user} =
-      Users.upsert_from_provider(%{
-        id: "github|https://github.com|home-#{n}",
-        provider: "github",
-        email: "home#{n}@example.com",
-        verified: true
-      })
-
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: home.id)
-    :ok = Members.remove_member(home, user_id: user.id)
-    assert {:error, :not_found} = Athanors.home()
-
-    Application.put_env(:cyfr, :platform_admin_emails, [])
-    :ok = Cyfr.Bootstrap.run()
-
-    assert {:ok, successor} = Athanors.home()
-    assert successor.id != home.id
-    assert successor.slug == "home"
-    assert {:ok, %{status: "archived", home: true}} = Athanors.get(home.id)
-  end
-
   describe "the boot child gates the web tier" do
-    # It is the last child of the infra tier under a `:rest_for_one` root, so
-    # this child returning is what holds `EmissaryWeb.Endpoint` back. As a
-    # `Task` it returned the instant the process spawned, and the endpoint
-    # began answering while Home was still being seeded and before a
-    # de-listed operator's sessions had been revoked.
+    # Synchronous initialization must finish before the web tier starts
+    # accepting requests.
 
     test "start_link does its work before returning, and leaves nothing behind" do
       me = self()
@@ -123,9 +94,7 @@ defmodule Cyfr.BootstrapTest do
     end
 
     test "a raise inside the boot work does not take the server down with it" do
-      # The old temporary Task crashed loudly and the app kept serving. Now
-      # that this runs inside a supervisor's start, a bug must not turn
-      # "Home was not seeded" into "the server does not boot".
+      # A bootstrap failure must not prevent the server from starting.
       Application.put_env(:cyfr, :platform_admin_emails, :not_a_list)
 
       assert :ignore = Cyfr.Bootstrap.start_link([])

@@ -76,14 +76,8 @@ defmodule Opus.OAuthHandler do
   # Internal
   # ============================================================================
 
-  # This import had no rate limit at all, so a guest loop drove one vault
-  # unseal — and a possible provider token refresh — per call, for as long as
-  # the execution ran. It meters under its own `"oauth:"` bucket rather than
-  # sharing the egress one, so a component that legitimately fetches a token
-  # and then makes many HTTP calls is not throttled by its own success.
-  #
-  # A dead limiter fails CLOSED, matching the executor and the egress gate: an
-  # unmetered dispense is the condition this exists to prevent.
+  # Meter token requests under their own oauth: bucket, independently
+  # of HTTP egress. Refuse dispensing when the limiter is unavailable.
   defp check_dispense_rate(%Context{} = ctx, component_ref, %Sanctum.Limits{} = limits) do
     case Opus.RateLimiter.check(ctx.athanor_id, "oauth:" <> component_ref, %{
            rate_limit: limits.rate_limit
@@ -107,12 +101,9 @@ defmodule Opus.OAuthHandler do
   # direct caller, not a consented run).
   defp check_dispense_rate(_ctx, _component_ref, _limits), do: :ok
 
-  # The WIT declares `result<string, string>`, so both arms must be strings
-  # and neither may raise: a fault here takes the Wasmex process and the guest
-  # gets an opaque failure instead of the `err(…)` it was promised. The
-  # resolver answers in the vault reader's typed vocabulary (atoms and
-  # tuples), so it is rendered here — by shape, never by `inspect`, which
-  # would put the payload it refused into guest hands.
+  # WIT result<string, string> requires strings in both arms. Render typed
+  # vault errors by shape without inspecting potentially sensitive payloads.
+  # Neither arm may raise into the guest.
   defp get_access_token(provider, resolver, component_ref, execution_id) do
     provider = bound_provider(provider)
     start_time = System.monotonic_time(:millisecond)

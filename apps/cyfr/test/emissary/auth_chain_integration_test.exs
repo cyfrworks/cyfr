@@ -26,14 +26,7 @@ defmodule Emissary.AuthChainIntegrationTest do
     # Sanctum.Namespace.lookup/1 resolves ctx.user_id back to the testns slug
     # when the API-key validation path rebuilds the Context (otherwise
     # namespace would be nil and any tenant-scoped storage call would raise).
-    {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: ctx.user_id,
-        provider: "local",
-        email: "testns@example.com",
-        verified: true
-      })
-
+    {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "testns@example.com"})
     {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
 
     # Create an app key with only execute scope (no storage_read)

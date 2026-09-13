@@ -7,16 +7,11 @@ defmodule Arca.Adapters.ContractTest do
   body per case, so an invariant cannot be added to one adapter's suite and
   forgotten in the other's.
 
-  The adapters disagreed on several answers before this file existed: a
-  path that is a file answered `{:error, :enotdir}` on one and `{:ok, []}`
-  on the other; `exists?` counted directories on one; a missing-key delete
-  was a silent `:ok`; a console-written directory marker (`foo/`) was a
-  zero-byte file in one walk and nothing in the other. Every case here is
-  a question both adapters must answer identically. (`list/2` no longer
-  appears here: the behaviour dropped the callback — names are derived from
-  `list_typed/2` in the `Arca` facade, one walk, nothing to diverge.)
+  Checks shared Local and S3 behavior for object reads, existence, deletion,
+  typed listings and path validation. Names-only listings derive from
+  `list_typed/2` in the Arca facade.
 
-  The shared fixture tree under `guest/`: `a.txt` = "a", `b.txt` = "b",
+  The shared fixture tree under `data/`: `a.txt` = "a", `b.txt` = "b",
   `sub/c.txt` = "c" (and, on S3, a `marker/` directory-marker object).
   """
 
@@ -30,23 +25,20 @@ defmodule Arca.Adapters.ContractTest do
   # ---------------------------------------------------------------------------
 
   defp contract_put_get_roundtrip(adapter, ctx) do
-    assert :ok = adapter.put(ctx, ["guest", "rt.txt"], "round-trip")
-    assert {:ok, "round-trip"} = adapter.get(ctx, ["guest", "rt.txt"])
+    assert :ok = adapter.put(ctx, ["data", "rt.txt"], "round-trip")
+    assert {:ok, "round-trip"} = adapter.get(ctx, ["data", "rt.txt"])
   end
 
-  # Both adapters create on first append and concatenate on the next. The
-  # ceilings diverge by design — S3's read-modify-write refuses past
-  # `:object_too_large` while Local's O_APPEND is unbounded — and each
-  # adapter's own suite asserts its side; concurrency semantics diverge the
-  # same way (last-writer-wins on S3) and are likewise not a shared case.
+  # Both adapters create on first append and concatenate subsequent data.
+  # Their separate suites cover size limits and concurrency semantics.
   defp contract_append_roundtrip(adapter, ctx) do
-    assert :ok = adapter.append(ctx, ["guest", "log.jsonl"], "one\n")
-    assert :ok = adapter.append(ctx, ["guest", "log.jsonl"], "two\n")
-    assert {:ok, "one\ntwo\n"} = adapter.get(ctx, ["guest", "log.jsonl"])
+    assert :ok = adapter.append(ctx, ["data", "log.jsonl"], "one\n")
+    assert :ok = adapter.append(ctx, ["data", "log.jsonl"], "two\n")
+    assert {:ok, "one\ntwo\n"} = adapter.get(ctx, ["data", "log.jsonl"])
   end
 
   defp contract_dir_vs_file(adapter, ctx, extra_dirs) do
-    assert {:ok, entries} = adapter.list_typed(ctx, ["guest"])
+    assert {:ok, entries} = adapter.list_typed(ctx, ["data"])
 
     expected =
       Enum.sort([{"a.txt", :file}, {"b.txt", :file}, {"sub", :dir}] ++ extra_dirs)
@@ -55,61 +47,60 @@ defmodule Arca.Adapters.ContractTest do
   end
 
   defp contract_file_is_not_a_directory(adapter, ctx) do
-    assert {:error, :enotdir} = adapter.list_typed(ctx, ["guest", "a.txt"])
+    assert {:error, :enotdir} = adapter.list_typed(ctx, ["data", "a.txt"])
   end
 
-  # A directory is not a readable object: S3 has no key there and answers
-  # :not_found — Local used to leak a raw :eisdir for the same question.
+  # Both adapters return :not_found when reading a directory as an object.
   defp contract_get_directory_is_not_found(adapter, ctx) do
-    assert {:error, :not_found} = adapter.get(ctx, ["guest", "sub"])
+    assert {:error, :not_found} = adapter.get(ctx, ["data", "sub"])
   end
 
   defp contract_serve_missing_and_directory_not_found(adapter, ctx) do
     conn = Plug.Test.conn(:get, "/")
-    assert {:error, :not_found} = adapter.serve_to_conn(conn, ctx, ["guest", "missing.txt"], [])
-    assert {:error, :not_found} = adapter.serve_to_conn(conn, ctx, ["guest", "sub"], [])
+    assert {:error, :not_found} = adapter.serve_to_conn(conn, ctx, ["data", "missing.txt"], [])
+    assert {:error, :not_found} = adapter.serve_to_conn(conn, ctx, ["data", "sub"], [])
   end
 
   defp contract_empty_listing(adapter, ctx) do
-    assert {:ok, []} = adapter.list_typed(ctx, ["guest", "nothing-here"])
+    assert {:ok, []} = adapter.list_typed(ctx, ["data", "nothing-here"])
   end
 
   defp contract_exists_files_only(adapter, ctx) do
-    assert adapter.exists?(ctx, ["guest", "a.txt"])
-    refute adapter.exists?(ctx, ["guest"])
-    refute adapter.exists?(ctx, ["guest", "missing.txt"])
+    assert adapter.exists?(ctx, ["data", "a.txt"])
+    refute adapter.exists?(ctx, ["data"])
+    refute adapter.exists?(ctx, ["data", "missing.txt"])
   end
 
   defp contract_delete(adapter, ctx) do
-    assert {:error, :not_found} = adapter.delete(ctx, ["guest", "missing.txt"])
-    assert :ok = adapter.delete(ctx, ["guest", "a.txt"])
+    assert {:error, :not_found} = adapter.delete(ctx, ["data", "missing.txt"])
+    assert :ok = adapter.delete(ctx, ["data", "a.txt"])
   end
 
   defp contract_delete_tree_object_at_path(adapter, ctx) do
-    assert :ok = adapter.delete_tree(ctx, ["guest", "a.txt"])
+    assert :ok = adapter.delete_tree(ctx, ["data", "a.txt"])
   end
 
   # Tree deletion is idempotent — "make this subtree not exist" already
   # holds for a missing tree. `:not_found` is delete/2's answer for a
   # missing single object, never delete_tree/2's.
   defp contract_delete_tree_missing_is_ok(adapter, ctx) do
-    assert :ok = adapter.delete_tree(ctx, ["guest", "nothing-here"])
+    assert :ok = adapter.delete_tree(ctx, ["data", "nothing-here"])
   end
 
   defp contract_list_recursive(adapter, ctx) do
-    assert {:ok, leaves} = adapter.list_recursive(ctx, ["guest"])
+    assert {:ok, leaves} = adapter.list_recursive(ctx, ["data"])
 
     assert Enum.sort(leaves) == [
-             ["guest", "a.txt"],
-             ["guest", "b.txt"],
-             ["guest", "sub", "c.txt"]
+             ["data", "a.txt"],
+             ["data", "b.txt"],
+             ["data", "sub", "c.txt"]
            ]
   end
 
   defp contract_usage(adapter, ctx) do
     # Three files, one byte each — a directory marker is not a file and a
     # directory has no bytes, on either adapter.
-    assert {:ok, %{files: 3, bytes: 3}} = adapter.usage(ctx, ["guest"])
+    assert {:ok, %{files: 3, bytes: 3}} = adapter.usage(ctx, ["data"])
   end
 
   # read_subtree is no adapter callback — one shared algorithm over
@@ -117,7 +108,7 @@ defmodule Arca.Adapters.ContractTest do
   # adapter anyway: the shared code must answer identically over each
   # adapter's listing and read semantics, file-path contract included.
   defp contract_read_subtree(adapter, ctx) do
-    assert {:ok, pairs} = Arca.Storage.read_subtree_via(adapter, ctx, ["guest"])
+    assert {:ok, pairs} = Arca.Storage.read_subtree_via(adapter, ctx, ["data"])
 
     assert Enum.sort(pairs) == [
              {["a.txt"], "a"},
@@ -126,23 +117,20 @@ defmodule Arca.Adapters.ContractTest do
            ]
 
     # A file is not a subtree; a missing prefix is honestly empty.
-    assert {:error, :enotdir} = Arca.Storage.read_subtree_via(adapter, ctx, ["guest", "a.txt"])
-    assert {:ok, []} = Arca.Storage.read_subtree_via(adapter, ctx, ["guest", "nope"])
+    assert {:error, :enotdir} = Arca.Storage.read_subtree_via(adapter, ctx, ["data", "a.txt"])
+    assert {:ok, []} = Arca.Storage.read_subtree_via(adapter, ctx, ["data", "nope"])
   end
 
-  # A 300-byte name used to store fine on S3 (1024-byte keys) and
-  # `:enametoolong` on Local — exactly the divergence this file exists to
-  # prevent. Both adapters now refuse it identically at validation, before
-  # any I/O.
+  # Both adapters reject overlong names during validation, before I/O.
   defp contract_overlong_segment_refused(adapter, ctx) do
     long = String.duplicate("a", 300)
 
     assert_raise ArgumentError, ~r/segment longer than 240 bytes/, fn ->
-      adapter.put(ctx, ["guest", long], "x")
+      adapter.put(ctx, ["data", long], "x")
     end
 
     assert_raise ArgumentError, ~r/segment longer than 240 bytes/, fn ->
-      adapter.get(ctx, ["guest", long])
+      adapter.get(ctx, ["data", long])
     end
   end
 
@@ -164,11 +152,11 @@ defmodule Arca.Adapters.ContractTest do
   # the same denylist on every adapter.
   defp contract_traversal_refused(adapter, ctx) do
     assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->
-      adapter.get(ctx, ["guest", "..", "escape.txt"])
+      adapter.get(ctx, ["data", "..", "escape.txt"])
     end
 
     assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->
-      adapter.put(ctx, ["guest", "..", "escape.txt"], "x")
+      adapter.put(ctx, ["data", "..", "escape.txt"], "x")
     end
   end
 
@@ -193,9 +181,9 @@ defmodule Arca.Adapters.ContractTest do
       end)
 
       ctx = Sanctum.TestContext.local()
-      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
-      :ok = Local.put(ctx, ["guest", "b.txt"], "b")
-      :ok = Local.put(ctx, ["guest", "sub", "c.txt"], "c")
+      :ok = Local.put(ctx, ["data", "a.txt"], "a")
+      :ok = Local.put(ctx, ["data", "b.txt"], "b")
+      :ok = Local.put(ctx, ["data", "sub", "c.txt"], "c")
 
       {:ok, ctx: ctx}
     end
@@ -232,12 +220,12 @@ defmodule Arca.Adapters.ContractTest do
 
     test "delete/2: a missing file is :not_found, a deleted file is gone", %{ctx: ctx} do
       contract_delete(Local, ctx)
-      refute Local.exists?(ctx, ["guest", "a.txt"])
+      refute Local.exists?(ctx, ["data", "a.txt"])
     end
 
     test "delete_tree/2 removes an object at the tree's own path", %{ctx: ctx} do
       contract_delete_tree_object_at_path(Local, ctx)
-      refute Local.exists?(ctx, ["guest", "a.txt"])
+      refute Local.exists?(ctx, ["data", "a.txt"])
     end
 
     test("delete_tree/2 on a missing tree is :ok", %{ctx: ctx},
@@ -275,7 +263,7 @@ defmodule Arca.Adapters.ContractTest do
 
   describe "Arca.Overlay (decorator)" do
     # The overlay implements the same behaviour it wraps; on paths outside
-    # its overlaid roots (the whole `guest/` scope this suite uses) it must
+    # its overlaid roots (the whole `data/` scope this suite uses) it must
     # be a pure pass-through — every contract answer identical to the inner
     # adapter's. The union semantics themselves are pinned in overlay_test.
     setup do
@@ -303,9 +291,9 @@ defmodule Arca.Adapters.ContractTest do
       end)
 
       ctx = Sanctum.TestContext.local()
-      :ok = Arca.Overlay.put(ctx, ["guest", "a.txt"], "a")
-      :ok = Arca.Overlay.put(ctx, ["guest", "b.txt"], "b")
-      :ok = Arca.Overlay.put(ctx, ["guest", "sub", "c.txt"], "c")
+      :ok = Arca.Overlay.put(ctx, ["data", "a.txt"], "a")
+      :ok = Arca.Overlay.put(ctx, ["data", "b.txt"], "b")
+      :ok = Arca.Overlay.put(ctx, ["data", "sub", "c.txt"], "c")
 
       {:ok, ctx: ctx}
     end
@@ -399,10 +387,10 @@ defmodule Arca.Adapters.ContractTest do
       <?xml version="1.0" encoding="UTF-8"?>
       <ListBucketResult>
         <IsTruncated>false</IsTruncated>
-        <Contents><Key>athanors/ath_test/guest/a.txt</Key><Size>1</Size></Contents>
-        <Contents><Key>athanors/ath_test/guest/b.txt</Key><Size>1</Size></Contents>
-        <Contents><Key>athanors/ath_test/guest/sub/c.txt</Key><Size>1</Size></Contents>
-        <Contents><Key>athanors/ath_test/guest/marker/</Key><Size>0</Size></Contents>
+        <Contents><Key>athanors/ath_test/data/a.txt</Key><Size>1</Size></Contents>
+        <Contents><Key>athanors/ath_test/data/b.txt</Key><Size>1</Size></Contents>
+        <Contents><Key>athanors/ath_test/data/sub/c.txt</Key><Size>1</Size></Contents>
+        <Contents><Key>athanors/ath_test/data/marker/</Key><Size>0</Size></Contents>
       </ListBucketResult>
       """
 
@@ -419,9 +407,9 @@ defmodule Arca.Adapters.ContractTest do
           {Agent,
            fn ->
              %{
-               "/test-bucket/athanors/ath_test/guest/a.txt" => "a",
-               "/test-bucket/athanors/ath_test/guest/b.txt" => "b",
-               "/test-bucket/athanors/ath_test/guest/sub/c.txt" => "c"
+               "/test-bucket/athanors/ath_test/data/a.txt" => "a",
+               "/test-bucket/athanors/ath_test/data/b.txt" => "b",
+               "/test-bucket/athanors/ath_test/data/sub/c.txt" => "c"
              }
            end}
         )
@@ -431,7 +419,7 @@ defmodule Arca.Adapters.ContractTest do
 
         cond do
           # A listing under the tree prefix.
-          conn.method == "GET" and prefix == "athanors/ath_test/guest/" ->
+          conn.method == "GET" and prefix == "athanors/ath_test/data/" ->
             Plug.Conn.send_resp(conn, 200, listing)
 
           # Any other listing is empty.
@@ -526,7 +514,7 @@ defmodule Arca.Adapters.ContractTest do
       # Some consoles write an empty object at `foo/` to make a folder appear.
       # It lists as a directory, and the walks (list_recursive/usage/
       # read_subtree, asserted above) never report it as content.
-      {:ok, entries} = S3.list_typed(ctx, ["guest"])
+      {:ok, entries} = S3.list_typed(ctx, ["data"])
       assert Enum.filter(entries, &(elem(&1, 0) == "marker")) == [{"marker", :dir}]
     end
 

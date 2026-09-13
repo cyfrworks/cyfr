@@ -54,11 +54,11 @@ func Update(version string) error {
 const aquaSoul = "aqua/aqua.md"
 
 var shippedRoles = map[string]bool{
-	"aqua_artisan":  true,
-	"aqua_builder":  true,
-	"aqua_explorer": true,
-	"aqua_planner":  true,
-	"aqua_web":      true,
+	"artisan":  true,
+	"builder":  true,
+	"explorer": true,
+	"planner":  true,
+	"web":      true,
 }
 
 var shippedScrolls = map[string]bool{

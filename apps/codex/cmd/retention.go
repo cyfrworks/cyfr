@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"errors"
+	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/spf13/cobra"
 )
@@ -36,8 +37,8 @@ var retentionShowCmd = &cobra.Command{
 	Example: "  cyfr retention show",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "retention", map[string]any{
-			"action": "get",
+		result, err := client.CallTool(cmd.Context(), ops.Retention, map[string]any{
+			"action": ops.RetentionGet,
 		})
 		if err != nil {
 			return handleToolError(err)
@@ -69,8 +70,8 @@ var retentionSetCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), "retention", map[string]any{
-			"action":   "set",
+		result, err := client.CallTool(cmd.Context(), ops.Retention, map[string]any{
+			"action":   ops.RetentionSet,
 			"settings": settings,
 		})
 		if err != nil {
@@ -102,7 +103,7 @@ var retentionCleanupCmd = &cobra.Command{
 			toolArgs["dry_run"] = true
 		}
 
-		result, err := client.CallTool(cmd.Context(), "retention", toolArgs)
+		result, err := client.CallTool(cmd.Context(), ops.Retention, toolArgs)
 		if err != nil {
 			return handleToolError(err)
 		}

@@ -325,6 +325,19 @@ defmodule Sanctum.ComponentRefTest do
       assert ComponentRef.type_prefix?("f")
     end
 
+    test "an agent ref parses as a source that is no component type" do
+      assert ComponentRef.type_prefix?("agent")
+      assert ComponentRef.source_types() == ["agent"]
+
+      assert {:ok, %ComponentRef{type: "agent", namespace: "local", name: "aqua", version: nil}} =
+               ComponentRef.parse("agent:local.aqua")
+
+      assert ComponentRef.to_name_ref("agent:local.artisan") == {:ok, "agent:local.artisan"}
+      refute "agent" in ComponentRef.valid_types()
+      refute "agent" in ComponentRef.executable_types()
+      assert {:error, _} = ComponentRef.validate_type("agent")
+    end
+
     test "type_prefix? rejects non-types" do
       refute ComponentRef.type_prefix?("local")
       refute ComponentRef.type_prefix?("my-tool")
@@ -747,8 +760,7 @@ defmodule Sanctum.ComponentRefTest do
     end
 
     test "version-first-colon does not leak — publisher.name:version parses correctly" do
-      # Regression against an earlier bug where first-colon split mangled
-      # the version. Last-colon split fixes it.
+      # Split on the last colon to preserve the version segment.
       assert {:ok, %ComponentRef{version: "0.1.0-beta.1"}} =
                ComponentRef.parse("c:stripe.com.api:0.1.0-beta.1")
     end

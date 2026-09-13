@@ -5,20 +5,9 @@ defmodule Aqua.Prompt do
   @moduledoc """
   The whole system prompt for one turn, composed in one place.
 
-  It used to be four contributions concatenated at the call site —
-  `Aqua.AgentConfig.build_system_prompt/2`, `Aqua.Actions.system_prelude/1`,
-  a group prelude in `Aqua.Turn`, and the tool surface injected separately
-  into the formula input. Nothing owned the result, so nothing could check
-  it against what the turn may actually do.
+  The runtime prompt describes only capabilities granted by the pinned authority.
 
-  That is not a tidiness complaint. The runtime section announced
-  `data/ for user storage, components/ for installed components` from the
-  storage layout — the same sentence for every turn, whether or not the
-  consent edge granted a single path. A model told it has files will try to
-  read them, fail, and improvise around the failure; the honest prompt is
-  the one derived from the authority the turn is actually rooted at.
-
-  ## What it takes, and why each
+  ## Inputs
 
     * `agent` — the resolved orchestrator: its authored prompt (under
       `"prompt"`, read with the roster the turn already holds; absent, it
@@ -26,14 +15,10 @@ defmodule Aqua.Prompt do
     * `authority` — what the consent edge grants. The only source for what
       the prompt may claim the agent can reach.
 
-  The sections are ordered by how often they change, so the longest
-  possible prefix is the same bytes turn after turn: the authored prompt,
-  what the authority grants, the tool prelude, the scroll index and the
-  estate's notes (its pinned page and a bounded index of what is filed,
-  read through `Aqua.Notes` under the focus — the room's pile in a room,
-  the person's own in their own athanor; sorted, free of timestamps).
-  Only then the clock, which changes by the minute, and last the room the
-  person has open beside the thread, which changes with every send.
+  Orders stable sections before the clock to preserve a reusable prompt
+  prefix: authored prompt, granted capabilities, tool prelude, scroll index
+  and athanor notes. Room excerpts are supplied separately as transient user
+  context through `transient/1`.
   """
 
   require Logger
@@ -63,7 +48,7 @@ defmodule Aqua.Prompt do
       base(ctx, agent),
       "\n\n---\n\n## Runtime Context\n\n",
       file_paths(authority),
-      Aqua.Actions.system_prelude(tool_policy),
+      Aqua.Prelude.system_prelude(tool_policy),
       several_people(Keyword.get(opts, :several_people?, false)),
       scrolls(ctx),
       notes(ctx),
@@ -77,10 +62,9 @@ defmodule Aqua.Prompt do
   for THIS call only — or `nil` when there is none.
 
   It is other people's words, so it is never part of the system prompt:
-  the turn places it as a transient part of the task's user turn
-  (`Aqua.Turn.build_input/4`), and the guest takes it back out before the
-  history is returned, so no row, no later turn and no compaction ever
-  carries it.
+  the loop places it as a transient block on one request's last user
+  message and records it as excluded (`Aqua.Loop.Turn`), so no row, no
+  later turn and no compaction ever carries it.
   """
   @spec transient(String.t() | nil) :: String.t() | nil
   def transient(text) when is_binary(text) and text != "" do
@@ -121,10 +105,8 @@ defmodule Aqua.Prompt do
     ]
   end
 
-  # Only the scopes this authority actually grants. The scope NAMES are
-  # still the layout's (`Arca.Storage.guest_scopes/0`), so a renamed scope
-  # moves the prompt with it; what changed is that a turn granted nothing
-  # is no longer told it has everything.
+  # Describe only granted scopes, using the names from
+  # Arca.Storage.guest_scopes/0. An unresolved authority grants none.
   defp file_paths(authority) do
     case granted_paths(authority) do
       [] ->

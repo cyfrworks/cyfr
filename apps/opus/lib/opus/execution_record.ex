@@ -45,29 +45,43 @@ defmodule Opus.ExecutionRecord do
 
   alias Sanctum.Context
 
+  @typedoc """
+  A decoded JSON value. The `input`, `output` and `host_policy` columns hold
+  whatever the execution produced, and a component's result is not required
+  to be an object.
+  """
+  @type json :: map() | list() | String.t() | number() | boolean() | nil
+
   @type t :: %__MODULE__{
           id: String.t(),
           request_id: String.t() | nil,
           user_id: String.t(),
           athanor_id: String.t() | nil,
-          reference: String.t(),
+          reference: String.t() | nil,
           resolved_from: String.t() | nil,
-          component_type: Opus.ComponentType.t(),
+          component_type: Opus.ComponentType.t() | :agent,
           component_digest: String.t() | nil,
-          input: map(),
-          output: map() | nil,
-          status: :running | :completed | :failed | :cancelled,
-          started_at: DateTime.t(),
+          input: json(),
+          output: json(),
+          status: :running | :paused | :completed | :failed | :cancelled | :unknown,
+          started_at: DateTime.t() | nil,
           completed_at: DateTime.t() | nil,
           duration_ms: non_neg_integer() | nil,
           error: String.t() | nil,
-          host_policy: map() | nil,
+          host_policy: json(),
           parent_execution_id: String.t() | nil,
           root_execution_id: String.t() | nil,
           resolver_digest: String.t() | nil,
           activation_digest: String.t() | nil,
           activation_graph: String.t() | nil,
-          profile_id: String.t() | nil
+          profile_id: String.t() | nil,
+          attempt: String.t() | nil,
+          kind: String.t() | nil,
+          turn_id: String.t() | nil,
+          schedule_id: String.t() | nil,
+          reservation: map() | nil,
+          retention_class: String.t() | nil,
+          retained_input: map() | nil
         }
 
   defstruct [
@@ -92,7 +106,25 @@ defmodule Opus.ExecutionRecord do
     :resolver_digest,
     :activation_digest,
     :activation_graph,
-    :profile_id
+    :profile_id,
+    # The attempt that owns the row (`Arca.ExecutionAttempts`): minted with
+    # the record, opened at admission, named by every later write.
+    :attempt,
+    # What the row is (`component | turn | tool_call`) and the turn it
+    # belongs to; a turn root is admitted by `Opus.TurnRoot`.
+    :kind,
+    :turn_id,
+    # The schedule this root runs for (`Cyfr.Schedules`); nil otherwise.
+    :schedule_id,
+    # A root's invocation reservation, `%{budget_id, cap}`, minted at
+    # admission; nil for a child.
+    :reservation,
+    # The class the execution's retained payloads are swept under
+    # (`Cyfr.Retention.Payloads` and its siblings): `api`, `webhook`,
+    # `schedule`, `system`, or `chat_step` for a turn's own dispatches.
+    # Not a column — the payload rows carry it.
+    :retention_class,
+    :retained_input
   ]
 
   @doc """
@@ -105,6 +137,12 @@ defmodule Opus.ExecutionRecord do
   - `:parent_execution_id` - Parent formula execution ID for sub-invocations.
   - `:root_execution_id` - The chain's root execution ID. A root stamps
     itself, so every row in a chain carries the same value.
+  - `:retained_input` - The map kept as the input payload in place of
+    `input`, when the sent input carries transient content; the row's
+    hash and envelope still describe `input`
+  - `:retention_class` - The class the execution's payloads are kept
+    under; derived from the caller when absent (`webhook` for a webhook
+    identity, `system` for the server's own context, else `api`).
   """
   @spec new(Context.t(), String.t(), map(), keyword()) :: t()
   def new(%Context{} = ctx, reference, input, opts \\ []) do
@@ -138,9 +176,18 @@ defmodule Opus.ExecutionRecord do
       # Which consent rooted this run. `Opus.Chain.run_root/5` resolves the
       # profile before anything executes and passes its id here, so the row
       # records the authority rather than leaving it to be re-derived.
-      profile_id: Keyword.get(opts, :profile_id)
+      profile_id: Keyword.get(opts, :profile_id),
+      attempt: Arca.ExecutionAttempts.generate_id(),
+      kind: Keyword.get(opts, :kind, "component"),
+      turn_id: Keyword.get(opts, :turn_id),
+      schedule_id: Keyword.get(opts, :schedule_id),
+      reservation: Keyword.get(opts, :reservation),
+      retention_class: Keyword.get(opts, :retention_class) || default_retention_class(ctx),
+      retained_input: Keyword.get(opts, :retained_input)
     }
   end
+
+  defp default_retention_class(%Context{} = ctx), do: Cyfr.Retention.default_class(ctx)
 
   @doc "Mark execution as completed with output."
   @spec complete(t(), map()) :: t()
@@ -173,7 +220,9 @@ defmodule Opus.ExecutionRecord do
   end
 
   @doc """
-  Cancel a running execution.
+  Cancel a running execution. `opts[:restart_required]` — a consent
+  payload — rides the `execution.cancelled` event, so a surface can say
+  "approved — re-run to continue" instead of "cancelled".
 
   Only running executions can be cancelled. Returns:
   - `{:ok, record}` - Successfully cancelled
@@ -182,14 +231,16 @@ defmodule Opus.ExecutionRecord do
   """
   @spec cancel(Context.t(), String.t()) ::
           {:ok, t()} | {:error, :not_found | :not_cancellable | term()}
-  def cancel(%Context{} = ctx, id) do
+  def cancel(ctx, id, opts \\ [])
+
+  def cancel(%Context{} = ctx, id, opts) do
     case get(ctx, id) do
       {:ok, %{status: :running} = record} ->
         # `get/2` authorized the READ; cancelling is a mutation and takes the
         # :execute permission — every ingress funnels through here, so a
         # viewer credential cannot kill executions.
         case Context.authorize(ctx, :execute, {:execution, Map.from_struct(record)}) do
-          :ok -> do_cancel(record)
+          :ok -> do_cancel(record, cancel_data(opts))
           {:error, _} = error -> error
         end
 
@@ -201,7 +252,14 @@ defmodule Opus.ExecutionRecord do
     end
   end
 
-  defp do_cancel(record) do
+  defp cancel_data(opts) do
+    case Keyword.get(opts, :restart_required) do
+      payload when is_map(payload) -> %{"restart_required" => payload}
+      _ -> %{}
+    end
+  end
+
+  defp do_cancel(record, event_data) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
 
@@ -212,7 +270,7 @@ defmodule Opus.ExecutionRecord do
         duration_ms: duration_ms
     }
 
-    case write_failed(cancelled_record) do
+    case write_failed(cancelled_record, event_data) do
       :ok ->
         {:ok, cancelled_record}
 
@@ -232,82 +290,186 @@ defmodule Opus.ExecutionRecord do
   # ============================================================================
 
   @doc """
-  Write execution start record BEFORE execution begins.
+  Admit the execution BEFORE it begins: the row, its first attempt and,
+  for a root carrying a reservation, its budget row, in one transaction
+  (`Arca.Execution.admit/2`). `opts` carry the admission barriers a
+  loop-dispatched child passes through (`:charge`, `:step`) and a
+  scheduled run's `:occurrence_id`.
 
-  This must be called before starting WASM execution to ensure crash resilience.
+  The row keeps an input envelope — the reference, digest, sizes,
+  top-level keys and attachment digests — and the input itself is the
+  payload store's, staged first and committed by the admission
+  transaction under the record's retention class — the retained form
+  when the record carries one, else the input as sent: an input that
+  cannot be kept is `{:error, {:payload_not_retained, reason}}` and
+  nothing is admitted.
   """
-  @spec write_started(t()) :: :ok | {:error, term()}
-  def write_started(%__MODULE__{} = record) do
-    case Arca.Execution.record_start(%{
-           id: record.id,
-           request_id: record.request_id,
-           reference: encode_reference(record.reference),
-           input_hash: nil,
-           user_id: record.user_id,
-           athanor_id: record.athanor_id,
-           component_type: to_string(record.component_type),
-           component_digest: record.component_digest,
-           started_at: record.started_at,
-           status: "running",
-           input: encode_json(record.input || %{}),
-           host_policy: encode_json(record.host_policy),
-           parent_execution_id: record.parent_execution_id,
-           root_execution_id: record.root_execution_id,
-           resolver_digest: record.resolver_digest,
-           activation_digest: record.activation_digest,
-           activation_graph: record.activation_graph,
-           profile_id: record.profile_id,
-           runner_id: runner_id(),
-           lease_until: lease_until()
-         }) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
+  @spec write_started(t(), keyword()) :: :ok | {:error, term()}
+  def write_started(%__MODULE__{} = record, opts \\ []) do
+    ctx = record_to_ctx(record)
+
+    case stage(ctx, record, "input", encode_json(record.retained_input || record.input || %{})) do
+      {:ok, staged} ->
+        case admit(record, opts, [staged]) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            _ = Arca.ExecutionPayloads.discard(staged)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, {:payload_not_retained, reason}}
     end
   end
 
-  # The lease a running row holds. Refreshed while the execution runs
-  # (`Opus.Executor`); a row whose lease lapsed belongs to a runner that
-  # stopped renewing — the sweeper fails it.
-  @lease_seconds 180
+  defp admit(%__MODULE__{} = record, opts, payloads) do
+    case Arca.Execution.admit(
+           %{
+             id: record.id,
+             request_id: record.request_id,
+             reference: encode_reference(record.reference),
+             input_hash: Arca.Execution.hash_input(record.input),
+             user_id: record.user_id,
+             athanor_id: record.athanor_id,
+             component_type: to_string(record.component_type),
+             component_digest: record.component_digest,
+             started_at: record.started_at,
+             status: "running",
+             input: encode_json(input_envelope(record)),
+             host_policy: encode_json(record.host_policy),
+             parent_execution_id: record.parent_execution_id,
+             root_execution_id: record.root_execution_id,
+             resolver_digest: record.resolver_digest,
+             activation_digest: record.activation_digest,
+             activation_graph: record.activation_graph,
+             profile_id: record.profile_id,
+             kind: record.kind || "component",
+             turn_id: record.turn_id,
+             schedule_id: record.schedule_id
+           },
+           Keyword.merge(
+             [
+               attempt: record.attempt,
+               runner_id: runner_id(),
+               reservation: record.reservation,
+               payloads: payloads
+             ],
+             Keyword.take(opts, [:charge, :step, :occurrence_id])
+           )
+         ) do
+      {:ok, %{execution: execution}} ->
+        publish(record, "execution.started", execution.event_seq, %{
+          "attempt" => record.attempt,
+          "reference" => encode_reference(record.reference)
+        })
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The lifecycle row committed; its subscribers hear of it now, in the
+  # order the rows were numbered.
+  defp publish(%__MODULE__{} = record, type, seq, data) when is_integer(seq) do
+    _ = Opus.ExecutionEventBuffer.publish(record.id, record, type, seq, data)
+    :ok
+  end
+
+  defp publish(_record, _type, _seq, _data), do: :ok
+
+  defp stage(ctx, %__MODULE__{} = record, kind, bytes),
+    do: Arca.ExecutionPayloads.stage(ctx, record.id, kind, bytes, record.retention_class)
 
   @doc "How long one lease renewal is good for."
-  def lease_seconds, do: @lease_seconds
+  def lease_seconds, do: Arca.ExecutionAttempts.lease_seconds()
 
-  @doc "This runner's name on an execution row."
-  def runner_id, do: Atom.to_string(node())
+  @doc """
+  Returns the application boot id stored as the execution’s runner id.
+  Each restart has a different id.
+  """
+  @spec runner_id() :: String.t()
+  def runner_id, do: Cyfr.Boot.id()
 
   @doc "A fresh lease expiry from now."
-  def lease_until, do: DateTime.add(DateTime.utc_now(), @lease_seconds, :second)
+  def lease_until, do: Arca.ExecutionAttempts.lease_until()
 
-  @doc "Renew the lease of a running execution."
-  @spec renew_lease(String.t()) :: :ok
-  def renew_lease(execution_id) when is_binary(execution_id) do
-    Arca.Execution.renew_lease(execution_id, lease_until())
-    :ok
+  @doc """
+  Renew the lease this attempt holds on its running execution.
+
+  `{:ok, until}` is the new expiry the attempt now carries;
+  `{:cancel_requested, until}` the same with a cancel asked of it, which
+  the runner honours at once. `:lost` means the store answered and the
+  attempt no longer owns its execution — it finished, paused, lapsed, or
+  a successor took the row — and the runner stops authorized work at
+  once. `:unavailable` means the store could not answer; the runner keeps
+  working only while the lease it last held still holds.
+  """
+  @spec renew_lease(String.t(), String.t() | nil) ::
+          {:ok, DateTime.t()} | {:cancel_requested, DateTime.t()} | :lost | :unavailable
+  def renew_lease(_execution_id, nil), do: :lost
+
+  def renew_lease(execution_id, attempt) when is_binary(execution_id) and is_binary(attempt) do
+    case Arca.ExecutionAttempts.renew(attempt, lease_until()) do
+      {:ok, until, false} -> {:ok, until}
+      {:ok, until, true} -> {:cancel_requested, until}
+      :lost -> :lost
+      :unavailable -> :unavailable
+    end
   rescue
     e ->
       Logger.warning(
         "[ExecutionRecord] lease renewal failed for #{execution_id}: #{Exception.message(e)}"
       )
 
-      :ok
+      :unavailable
   end
 
   @doc """
-  Write execution completion record AFTER successful execution.
+  Close the row as completed. The row keeps an envelope of the output
+  (`persisted_output/1`); the output itself is staged as the result
+  payload and committed by the same transaction that closes the attempt.
+  A result that cannot be kept closes the attempt `result_lost` and the
+  row failed — durably, so nothing retries an effect that already
+  happened — and answers `{:error, {:result_lost, reason}}`.
   """
   @spec write_completed(t()) :: :ok | {:error, term()}
   def write_completed(%__MODULE__{status: :completed} = record) do
     ctx = record_to_ctx(record)
 
-    case Arca.Execution.record_complete(ctx, record.id, %{
-           completed_at: record.completed_at,
-           duration_ms: record.duration_ms,
-           status: "completed",
-           output: encode_json(record.output)
-         }) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
+    close = %{
+      completed_at: record.completed_at,
+      duration_ms: record.duration_ms,
+      output: encode_json(persisted_output(record))
+    }
+
+    case stage_result(ctx, record) do
+      {:ok, staged} ->
+        case Arca.Execution.record_end(
+               ctx,
+               record.id,
+               "completed",
+               Map.put(close, :payloads, List.wrap(staged)),
+               record.attempt
+             ) do
+          {:ok, execution} ->
+            publish(record, "execution.completed", execution.event_seq, %{
+              "status" => "completed",
+              "duration_ms" => record.duration_ms
+            })
+
+          {:error, {:payload_not_retained, reason}} ->
+            if staged, do: Arca.ExecutionPayloads.discard(staged)
+            result_lost(ctx, record, reason)
+
+          {:error, reason} ->
+            if staged, do: Arca.ExecutionPayloads.discard(staged)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        result_lost(ctx, record, reason)
     end
   end
 
@@ -315,25 +477,81 @@ defmodule Opus.ExecutionRecord do
     {:error, "Cannot write completed record for status: #{status}"}
   end
 
+  defp stage_result(_ctx, %__MODULE__{output: nil}), do: {:ok, nil}
+
+  defp stage_result(ctx, %__MODULE__{} = record),
+    do: stage(ctx, record, "result", encode_json(record.output))
+
+  defp result_lost(ctx, %__MODULE__{} = record, reason) do
+    Logger.error(
+      "[Opus.ExecutionRecord] result of #{record.id} not retained: #{inspect(reason)}; " <>
+        "the attempt closes result_lost"
+    )
+
+    case Arca.Execution.record_end(
+           ctx,
+           record.id,
+           "failed",
+           %{
+             completed_at: record.completed_at,
+             duration_ms: record.duration_ms,
+             error_message: "result not retained",
+             outcome: "result_lost"
+           },
+           record.attempt
+         ) do
+      {:ok, execution} ->
+        publish(record, "execution.result_lost", execution.event_seq, %{
+          "status" => "failed",
+          "error" => "result not retained",
+          "duration_ms" => record.duration_ms
+        })
+
+      _ ->
+        :ok
+    end
+
+    {:error, {:result_lost, reason}}
+  end
+
   @doc """
-  Write execution failure record AFTER failed or cancelled execution.
+  Close the row as failed or cancelled, and publish the lifecycle event
+  with `event_data` merged into what it carries (a cancel that asks for
+  a restart says so there).
   """
-  @spec write_failed(t()) :: :ok | {:error, term()}
-  def write_failed(%__MODULE__{status: status} = record) when status in [:failed, :cancelled] do
+  @spec write_failed(t(), map()) :: :ok | {:error, term()}
+  def write_failed(record, event_data \\ %{})
+
+  def write_failed(%__MODULE__{status: status} = record, event_data)
+      when status in [:failed, :cancelled] and is_map(event_data) do
     ctx = record_to_ctx(record)
 
-    case Arca.Execution.record_complete(ctx, record.id, %{
-           completed_at: record.completed_at,
-           duration_ms: record.duration_ms,
-           status: Atom.to_string(status),
-           error_message: record.error
-         }) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
+    case Arca.Execution.record_end(
+           ctx,
+           record.id,
+           Atom.to_string(status),
+           %{
+             completed_at: record.completed_at,
+             duration_ms: record.duration_ms,
+             error_message: record.error,
+             event: event_data
+           },
+           record.attempt
+         ) do
+      {:ok, execution} ->
+        data =
+          %{"status" => Atom.to_string(status), "error" => record.error}
+          |> Map.reject(fn {_k, v} -> is_nil(v) end)
+          |> Map.merge(event_data)
+
+        publish(record, "execution." <> Atom.to_string(status), execution.event_seq, data)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  def write_failed(%__MODULE__{status: status}) do
+  def write_failed(%__MODULE__{status: status}, _event_data) do
     {:error, "Cannot write failed record for status: #{status}"}
   end
 
@@ -357,7 +575,7 @@ defmodule Opus.ExecutionRecord do
         result = execution_to_map(record)
 
         case Context.authorize(ctx, :storage_read, {:execution, result}) do
-          :ok -> {:ok, from_mcp_result(result)}
+          :ok -> {:ok, hydrate_output(ctx, from_mcp_result(result))}
           {:error, _} -> {:error, :not_found}
         end
     end
@@ -396,6 +614,7 @@ defmodule Opus.ExecutionRecord do
   # Private - Struct Conversion
   # ===========================================================================
 
+  @spec from_mcp_result(map()) :: t()
   defp from_mcp_result(result) when is_map(result) do
     %__MODULE__{
       id: result.id,
@@ -420,7 +639,10 @@ defmodule Opus.ExecutionRecord do
       # The canonically-encoded graph string, exactly as stamped — never
       # decoded and re-encoded, which could break its canonical form.
       activation_graph: result[:activation_graph],
-      profile_id: result[:profile_id]
+      profile_id: result[:profile_id],
+      attempt: result[:current_attempt],
+      kind: result[:kind],
+      turn_id: result[:turn_id]
     }
   end
 
@@ -448,6 +670,7 @@ defmodule Opus.ExecutionRecord do
 
   defp parse_status(nil), do: :running
   defp parse_status("running"), do: :running
+  defp parse_status("paused"), do: :paused
   defp parse_status("completed"), do: :completed
   defp parse_status("failed"), do: :failed
   defp parse_status("cancelled"), do: :cancelled
@@ -479,11 +702,7 @@ defmodule Opus.ExecutionRecord do
   @doc """
   Generate a unique execution ID.
 
-  Through `Cyfr.UUID7` like every other id in the system. It was the one
-  holdout on `Ecto.UUID.generate/0` — random v4, so execution ids neither
-  sorted by time nor inserted in index order, which is the property v7 was
-  chosen for and which execution records, queried by time more than
-  anything else, want most.
+  Uses `Cyfr.UUID7` for time-ordered execution identifiers.
   """
   @spec generate_id() :: String.t()
   def generate_id, do: Cyfr.UUID7.execution_id()
@@ -497,13 +716,86 @@ defmodule Opus.ExecutionRecord do
 
   defp encode_json(value), do: Cyfr.Json.safe_encode(value)
 
+  # What the row keeps of the input: enough to say what ran and to tell
+  # two inputs apart, nothing of what they said.
+  defp input_envelope(%__MODULE__{} = record) do
+    input = record.input || %{}
+    encoded = Jason.encode!(input)
+
+    %{
+      "envelope" => "v1",
+      "reference" => encode_reference(record.reference),
+      "input_hash" => Arca.Execution.hash_input(input),
+      "bytes" => byte_size(encoded),
+      "keys" => input |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
+    }
+    |> put_attachment_digests(input)
+  end
+
+  defp put_attachment_digests(envelope, %{"attachments" => attachments})
+       when is_list(attachments) do
+    digests =
+      for %{} = attachment <- attachments do
+        data = attachment["data"] || attachment[:data] || ""
+
+        %{
+          "filename" => attachment["filename"] || attachment[:filename],
+          "media_type" => attachment["media_type"] || attachment[:media_type],
+          "bytes" => byte_size(data),
+          "digest" => Cyfr.Digest.sha256(data)
+        }
+      end
+
+    Map.put(envelope, "attachments", digests)
+  end
+
+  defp put_attachment_digests(envelope, _input), do: envelope
+
+  # The row keeps an envelope of every output — its digest, its size and
+  # the usage a planner reads — and the payload store keeps the bytes,
+  # under the execution's retention class, for as long as retention does.
+  defp persisted_output(%__MODULE__{output: nil}), do: nil
+
+  defp persisted_output(%__MODULE__{output: output}) do
+    encoded = encode_json(output)
+
+    %{
+      "envelope" => "v1",
+      "output_hash" => Cyfr.Digest.sha256(encoded),
+      "bytes" => byte_size(encoded),
+      "usage" => usage_of(output)
+    }
+  end
+
+  # A read joins the retained bytes back onto the envelope the row keeps;
+  # once retention has swept them, the envelope alone answers.
+  @spec hydrate_output(Context.t(), t()) :: t()
+  defp hydrate_output(
+         ctx,
+         %__MODULE__{output: %{"envelope" => "v1", "output_hash" => _}} = record
+       ) do
+    with {:ok, _row, bytes} <-
+           Arca.ExecutionPayloads.get(ctx, record.id, "result", attempt: record.attempt),
+         {:ok, output} <- Jason.decode(bytes) do
+      %{record | output: output}
+    else
+      _ -> record
+    end
+  end
+
+  defp hydrate_output(_ctx, record), do: record
+
+  defp usage_of(%{"usage" => usage}), do: usage
+  defp usage_of(%{usage: usage}), do: usage
+  defp usage_of(_), do: nil
+
   # The row's shape has one owner: the Ecto schema. The read map carries
   # every schema column except the lease mechanics, which belong to the
   # write path and the sweeper alone — `write_started` stamps them fresh
   # and nothing read back through here may act on them. A new column
   # flows into the map on its own; only `from_mcp_result/1` (the parser
   # layer) needs a decision about it.
-  @row_only_fields [:runner_id, :lease_until]
+  @row_only_fields [:event_seq]
 
   defp execution_to_map(record) when is_struct(record) or is_map(record) do
     Map.new(Arca.Execution.__schema__(:fields) -- @row_only_fields, fn field ->
@@ -512,6 +804,8 @@ defmodule Opus.ExecutionRecord do
   end
 
   defp parse_component_type(nil), do: :reagent
+  # A turn root: the agent is a consent source, not an executable type.
+  defp parse_component_type("agent"), do: :agent
 
   defp parse_component_type(type_str) when is_binary(type_str) do
     case Opus.ComponentType.parse(type_str) do

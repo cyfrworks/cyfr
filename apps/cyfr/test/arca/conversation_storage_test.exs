@@ -76,7 +76,7 @@ defmodule Arca.ConversationStorageTest do
     assert conv.last_message_at
   end
 
-  test "payload and history round-trip as JSON", %{ctx: ctx} do
+  test "a payload round-trips as JSON", %{ctx: ctx} do
     {:ok, conv} = Conversations.create(ctx)
 
     {:ok, msg} =
@@ -86,11 +86,6 @@ defmodule Arca.ConversationStorageTest do
       })
 
     assert Conversations.payload(msg) == %{"intent" => %{"title" => "t"}}
-
-    {:ok, conv} =
-      Conversations.update(ctx, conv.id, %{history: [%{"role" => "user", "content" => "hi"}]})
-
-    assert Conversations.history(conv) == [%{"role" => "user", "content" => "hi"}]
   end
 
   test "an approval is decided once — the second click sees already_resolved", %{
@@ -242,7 +237,7 @@ defmodule Arca.ConversationStorageTest do
     assert {:ok, %{title: "what's the plan?"}} = Conversations.get(ctx, conv.id)
   end
 
-  test "retention drops stale idle conversations and keeps a running one", %{ctx: ctx} do
+  test "retention drops stale idle conversations and keeps one holding an open turn", %{ctx: ctx} do
     {:ok, stale} = Conversations.create(ctx)
     {:ok, running} = Conversations.create(ctx)
     {:ok, fresh} = Conversations.create(ctx)
@@ -252,7 +247,12 @@ defmodule Arca.ConversationStorageTest do
     {:ok, _} = Conversations.update(ctx, stale.id, %{last_message_at: old})
 
     {:ok, _} =
-      Conversations.update(ctx, running.id, %{last_message_at: old, execution_id: "exec_1"})
+      Arca.TurnStorage.accept_message(ctx, running.id, %{
+        message: %{author: ctx.user_id, content: "@aqua go"},
+        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+      })
+
+    {:ok, _} = Conversations.update(ctx, running.id, %{last_message_at: old})
 
     # a blob under the stale conversation goes with it
     :ok = Arca.put(ctx, Conversations.blob_root(stale.id) ++ ["msg_1", "note.txt"], "bytes")
@@ -263,6 +263,5 @@ defmodule Arca.ConversationStorageTest do
 
     ids = Conversations.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
     assert ids == Enum.sort([running.id, fresh.id])
-    assert [running.id] == Enum.map(Conversations.with_running_turn(), & &1.id)
   end
 end

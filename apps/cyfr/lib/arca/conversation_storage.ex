@@ -4,7 +4,7 @@
 defmodule Arca.ConversationStorage do
   @moduledoc """
   Persistence for the athanor's conversations and their messages — the
-  durable record every member reads (`Aqua.ConversationRunner` writes it,
+  durable record every member reads (`Aqua.Tape` writes it,
   `PrismWeb.ConversationPaneLive` shows it).
 
   A conversation belongs to the athanor of the context that opened it;
@@ -120,8 +120,8 @@ defmodule Arca.ConversationStorage do
   defp subscribe_creator(_ctx, _conv), do: :ok
 
   @doc """
-  Update a conversation's title, history, running execution, orchestrator
-  or turn cursor.
+  Update a conversation's title, orchestrator, turn cursor or last
+  activity.
   """
   @spec update(Context.t(), String.t(), map()) ::
           {:ok, Conversation.t()} | {:error, :not_found | :database_error | Ecto.Changeset.t()}
@@ -130,15 +130,7 @@ defmodule Arca.ConversationStorage do
       with {:ok, conv} <- get(ctx, id) do
         attrs =
           attrs
-          |> Map.take([
-            :title,
-            :history,
-            :execution_id,
-            :orchestrator,
-            :turn_seq,
-            :last_message_at
-          ])
-          |> encode_history()
+          |> Map.take([:title, :orchestrator, :turn_seq, :last_message_at])
 
         conv |> Conversation.changeset(attrs) |> Repo.update()
       end
@@ -162,16 +154,9 @@ defmodule Arca.ConversationStorage do
   defp do_delete(ctx, id) do
     with {:ok, conv} <- get(ctx, id),
          :ok <- delete_blobs(ctx, conv.id) do
-      # arca:unscoped-ok the rows are scoped transitively — `get(ctx, id)`
-      # above already proved this conversation is the caller's athanor's,
-      # and a message, a follow, or a conversation-scope grant belongs to
-      # exactly one conversation.
-      #
-      # Messages cascade through the FK; delete them explicitly as well so
-      # SQLite files opened without foreign_keys=ON cannot leave orphans.
-      # Follows and this thread's grants go with the thread — until the
-      # athanor's own destroy they had nothing else to reclaim them, so a
-      # deleted topic left rows behind that named it forever.
+      # arca:unscoped-ok get(ctx, id) above establishes conversation ownership.
+      # Delete its messages, follows, and grants. Explicit message deletion
+      # also covers SQLite connections without foreign_keys=ON.
       Repo.transaction(fn ->
         Repo.delete_all(from(m in Message, where: m.conversation_id == ^conv.id))
         delete_conversation_satellites([conv.id])
@@ -256,21 +241,6 @@ defmodule Arca.ConversationStorage do
       {:error, reason} -> {:error, {:storage_delete_failed, reason}}
     end
   end
-
-  @doc "The provider-shape history stored on a conversation, decoded (`[]` when none)."
-  @spec history(Conversation.t()) :: [map()]
-  def history(%Conversation{history: nil}), do: []
-
-  def history(%Conversation{history: json}) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, list} when is_list(list) -> list
-      _ -> []
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Messages
-  # ---------------------------------------------------------------------------
 
   @doc """
   The messages of a conversation, oldest first. `after_seq:` / `upto_seq:`
@@ -389,6 +359,73 @@ defmodule Arca.ConversationStorage do
     end)
   end
 
+  @doc """
+  Insert one message inside the caller's transaction, at the next `seq`,
+  raising on a store error so the caller's transaction rolls back. The
+  `(conversation_id, seq)` race surfaces as `Ecto.InvalidChangesetError`
+  carrying a `:unique` constraint on `:conversation_id`; a caller that
+  owns the transaction retries the whole transaction on it
+  (`Arca.TurnStorage.with_seq_retry/1`). Titles the conversation from its
+  first user text and bumps `last_message_at` as `append/3` does.
+  """
+  @spec insert_message!(Context.t(), Conversation.t(), map()) :: Message.t()
+  # arca:db-raise-ok inside the caller's transaction
+  def insert_message!(%Context{} = ctx, %Conversation{} = conv, attrs) when is_map(attrs) do
+    now = DateTime.utc_now()
+
+    seq =
+      Repo.one(
+        from(m in Message,
+          where: m.conversation_id == ^conv.id and m.athanor_id == ^ctx.athanor_id,
+          select: coalesce(max(m.seq), 0)
+        )
+      ) + 1
+
+    msg =
+      Repo.insert!(
+        Message.changeset(%Message{}, %{
+          id: attrs[:id] || Cyfr.UUID7.generate_id("msg"),
+          conversation_id: conv.id,
+          athanor_id: ctx.athanor_id,
+          seq: seq,
+          author: attrs[:author],
+          kind: attrs[:kind] || "text",
+          content: attrs[:content] || "",
+          payload: encode_json(attrs[:payload]),
+          status: attrs[:status],
+          execution_id: attrs[:execution_id],
+          turn_id: attrs[:turn_id],
+          approval_id: attrs[:approval_id],
+          client_id: attrs[:client_id],
+          inserted_at: now
+        })
+      )
+
+    conv
+    |> Conversation.changeset(%{last_message_at: now, title: title_after(conv, msg)})
+    |> Repo.update!()
+
+    msg
+  end
+
+  @doc "The message a sender accepted under `client_id` in this conversation, if any."
+  @spec get_by_client_id(Context.t(), String.t(), String.t()) ::
+          {:ok, Message.t()} | {:error, :not_found | :database_error}
+  def get_by_client_id(%Context{} = ctx, conversation_id, client_id)
+      when is_binary(conversation_id) and is_binary(client_id) do
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.get_by_client_id", fn ->
+      case Repo.one(
+             from(m in Message,
+               where: m.conversation_id == ^conversation_id and m.athanor_id == ^ctx.athanor_id,
+               where: m.client_id == ^client_id
+             )
+           ) do
+        nil -> {:error, :not_found}
+        msg -> {:ok, msg}
+      end
+    end)
+  end
+
   defp do_append(_ctx, _conv, _attrs, 0), do: {:error, :seq_conflict}
 
   defp do_append(ctx, conv, attrs, retries) do
@@ -416,6 +453,9 @@ defmodule Arca.ConversationStorage do
             payload: encode_json(attrs[:payload]),
             status: attrs[:status],
             execution_id: attrs[:execution_id],
+            turn_id: attrs[:turn_id],
+            approval_id: attrs[:approval_id],
+            client_id: attrs[:client_id],
             inserted_at: now
           })
 
@@ -555,21 +595,6 @@ defmodule Arca.ConversationStorage do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Conversations that were mid-turn when the server last stopped: rows with an
-  `execution_id`. Unscoped by design — the runner supervisor walks every
-  athanor at boot and reconciles each inside its own context.
-  """
-  @spec with_running_turn() :: [Conversation.t()]
-  def with_running_turn do
-    # Fail-open default: boot recovery over an unreadable store recovers nothing now; the next boot retries.
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.with_running_turn", [], fn ->
-      # arca:unscoped-ok boot recovery walks every athanor's mid-turn rows;
-      # each conversation is then reconciled inside its own athanor's context.
-      Repo.all(from(c in Conversation, where: not is_nil(c.execution_id)))
-    end)
-  end
-
-  @doc """
   Delete the athanor's conversations whose last activity is older than
   `cutoff` — messages and attachment blobs included. The context is the
   athanor's (retention walks each with an internal context).
@@ -627,10 +652,18 @@ defmodule Arca.ConversationStorage do
 
   # The retention window both verbs speak, scoped the one way this module
   # scopes: the athanor's conversations whose last activity is older than
-  # `cutoff`, a conversation with a running turn never among them.
+  # `cutoff`, a conversation holding an open turn never among them.
   defp stale_before(ctx, cutoff) do
+    athanor_id = Context.athanor!(ctx)
+
+    open =
+      from(t in Arca.Schemas.Turn,
+        where: t.athanor_id == ^athanor_id and t.status in ^Arca.TurnStorage.open_statuses(),
+        select: t.conversation_id
+      )
+
     from(c in Conversation,
-      where: is_nil(c.execution_id) and coalesce(c.last_message_at, c.inserted_at) < ^cutoff
+      where: c.id not in subquery(open) and coalesce(c.last_message_at, c.inserted_at) < ^cutoff
     )
     |> QueryHelpers.where_tenant(ctx)
   end
@@ -651,11 +684,6 @@ defmodule Arca.ConversationStorage do
   # ---------------------------------------------------------------------------
   # JSON
   # ---------------------------------------------------------------------------
-
-  defp encode_history(%{history: history} = attrs) when is_list(history),
-    do: %{attrs | history: Jason.encode!(history)}
-
-  defp encode_history(attrs), do: attrs
 
   defp encode_json(nil), do: nil
   defp encode_json(value) when is_binary(value), do: value

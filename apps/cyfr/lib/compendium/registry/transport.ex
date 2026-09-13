@@ -72,12 +72,17 @@ defmodule Compendium.Registry.Transport do
   @spec request(atom(), String.t(), [{String.t(), String.t()}], binary() | nil, keyword()) ::
           response()
   def request(method, url, headers, body, opts \\ []) do
-    limits = %{
-      receive_timeout: Keyword.get(opts, :receive_timeout, @receive_timeout),
-      max_attempts: if(Keyword.get(opts, :retry, true), do: @max_retries, else: 1)
-    }
+    if Compendium.RegistryHost.configured?() do
+      limits = %{
+        receive_timeout: Keyword.get(opts, :receive_timeout, @receive_timeout),
+        max_attempts: if(Keyword.get(opts, :retry, true), do: @max_retries, else: 1)
+      }
 
-    do_request(method, url, headers, body, 0, limits)
+      do_request(method, url, headers, body, 0, limits)
+    else
+      # The one seam every REST call crosses: no registry, no dial.
+      {:error, Errors.unconfigured()}
+    end
   end
 
   # A backstop on the only recursion in this module: `retry_or_give_up/10`

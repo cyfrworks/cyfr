@@ -24,9 +24,10 @@ defmodule Sanctum.ContextTest do
       assert ctx.scope == :athanor
     end
 
-    test "grants wildcard permissions" do
+    test "holds every declared permission, never the wildcard" do
       ctx = Sanctum.TestContext.local()
-      assert MapSet.member?(ctx.permissions, :*)
+      assert MapSet.equal?(ctx.permissions, MapSet.new(Context.person_permissions()))
+      refute MapSet.member?(ctx.permissions, :*)
     end
 
     test "is authenticated" do
@@ -131,11 +132,18 @@ defmodule Sanctum.ContextTest do
   end
 
   describe "has_permission?/2" do
-    test "returns true for any permission with wildcard" do
-      ctx = Sanctum.TestContext.local()
+    test "returns true for any permission with the wildcard an admin key may hold" do
+      ctx = Context.build(user_id: "usr_admin_key", permissions: [:*], authenticated: true)
       assert Context.has_permission?(ctx, :execute)
       assert Context.has_permission?(ctx, :publish)
       assert Context.has_permission?(ctx, :any_random_permission)
+    end
+
+    test "a person answers only for declared permissions" do
+      ctx = Sanctum.TestContext.local()
+      assert Context.has_permission?(ctx, :execute)
+      assert Context.has_permission?(ctx, :admin)
+      refute Context.has_permission?(ctx, :any_random_permission)
     end
 
     test "returns true for specific permission when granted" do
@@ -368,7 +376,7 @@ defmodule Sanctum.ContextTest do
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
-    test "a Home context passes the tenant check against a Home record" do
+    test "a context passes the tenant check against a record of its own athanor" do
       ctx =
         Context.build(
           user_id: "u1",
@@ -411,9 +419,7 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      # Passing a tenant-bearing record untagged used to fall through to
-      # the permission + tenant-presence path, silently skipping the
-      # per-record athanor check the record calls for.
+      # Reject untagged tenant-owned records instead of skipping ownership checks.
       record = %{athanor_id: "ath_other", user_id: "u1"}
       assert {:error, :untagged_tenant_resource} = Context.authorize(ctx, :storage_read, record)
 
@@ -541,8 +547,7 @@ defmodule Sanctum.ContextTest do
     end
 
     test "allows authenticated non-platform context with nil namespace (identity-only)" do
-      # namespace is no longer required — it is a pure identity field, not a
-      # storage primitive. A user who hasn't claimed a cyfr.run slug is valid.
+      # A context without a claimed namespace remains valid for tenant storage.
       ctx = Context.build(user_id: "u1", scope: :athanor, authenticated: true)
       assert ctx.namespace == nil
       assert ctx.authenticated
@@ -553,7 +558,7 @@ defmodule Sanctum.ContextTest do
       assert ctx.authenticated
     end
 
-    test "allows nil namespace when authenticated: false (pre-claim transient state)" do
+    test "allows nil namespace when authenticated: false (a denied session's shape)" do
       ctx = Context.build(user_id: "u1", scope: :athanor, authenticated: false)
       assert ctx.namespace == nil
       refute ctx.authenticated
@@ -589,7 +594,7 @@ defmodule Sanctum.ContextTest do
           provider: "local",
           namespace: "testns",
           athanor_id: Sanctum.TestContext.athanor_id(),
-          permissions: [:*],
+          permissions: Context.person_permissions(),
           scope: :athanor,
           auth_method: :oidc,
           authenticated: true

@@ -6,11 +6,10 @@ defmodule Arca.Schemas.Conversation do
   Ecto schema for the `conversations` table (backs `Arca.ConversationStorage`).
 
   A conversation is the athanor's: every member reads the same thread and
-  any member may send the next message. `history` is the provider-shape
-  transcript the AQUA formula hands back at the end of a turn and takes as
-  input on the next, stored as JSON text — one snapshot per turn.
-  `execution_id` names the execution running the current turn, or is
-  `nil` when the conversation is idle.
+  any member may send the next message. Its transcript is its messages;
+  its turns are their own rows (`Arca.TurnStorage`). `orchestrator` is
+  the agent the last turn addressed, `turn_seq` the cursor of the last
+  human row a turn took up.
   """
 
   use Ecto.Schema
@@ -24,8 +23,6 @@ defmodule Arca.Schemas.Conversation do
     field :athanor_id, :string
     field :title, :string, default: "New conversation"
     field :created_by, :string
-    field :history, :string
-    field :execution_id, :string
     field :orchestrator, :string
     field :turn_seq, :integer, default: 0
     field :last_message_at, :utc_datetime_usec
@@ -37,8 +34,6 @@ defmodule Arca.Schemas.Conversation do
     :athanor_id,
     :title,
     :created_by,
-    :history,
-    :execution_id,
     :orchestrator,
     :turn_seq,
     :last_message_at

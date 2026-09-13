@@ -4,8 +4,8 @@
 defmodule Arca.SchemaBaselineTest do
   @moduledoc """
   Pins the shape the baseline migration produces on the active adapter: the
-  athanor is the only tenant column, there is no org/project anywhere, and
-  exactly one Home athanor is seeded.
+  athanor is the only tenant column, and there is no org or project
+  anywhere.
   """
 
   use ExUnit.Case, async: false
@@ -82,18 +82,6 @@ defmodule Arca.SchemaBaselineTest do
     refute fossil in Enum.map(columns("api_keys"), & &1.name)
     refute fossil in Enum.map(columns("webhooks"), & &1.name)
     refute "system" in Enum.map(columns("vault_entries"), & &1.name)
-  end
-
-  test "exactly one Home athanor is seeded, with a generated id and slug home" do
-    # `home = TRUE` compares a real boolean on both adapters — a flag stored as
-    # the text 'true' (what a typeless insert produces on SQLite) would not
-    # match, and neither would the partial unique index protecting it.
-    %{rows: rows} =
-      Arca.Repo.query!("SELECT id, kind, slug, status FROM athanors WHERE home = TRUE")
-
-    assert [[id, "group", "home", "active"]] = rows
-    assert String.starts_with?(id, "ath_")
-    assert {:ok, %{slug: "home", home: true}} = Sanctum.Tenancy.Athanors.home()
   end
 
   # --------------------------------------------------------------------------

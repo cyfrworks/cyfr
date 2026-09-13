@@ -23,16 +23,8 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// progressPrinter returns a handler that prints progress phases to stderr.
-//
-// Progress arrives on the response stream of the call that produced it, so
-// there is nothing to open, nothing to close, and no id to match against: every
-// notification the handler sees belongs to this request. The idField/idValue
-// filtering the previous implementation needed existed only because a single
-// shared stream carried every caller's progress at once.
-//
-// stderr rather than stdout: the command's actual result goes to stdout and is
-// routinely piped into jq.
+// progressPrinter prints progress phases for this request to stderr.
+// The command result uses stdout.
 func progressPrinter() mcp.ProgressFunc {
 	return func(params map[string]any) {
 		phase, _ := params["phase"].(string)

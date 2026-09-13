@@ -197,7 +197,7 @@ defmodule Aqua.Aloud do
              payload: payload
            }) do
         {:ok, appended} ->
-          Aqua.ConversationRunner.announce(appended)
+          Aqua.Runner.announce(appended)
           {:ok, appended}
 
         {:error, _} = err ->

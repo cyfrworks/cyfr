@@ -5,13 +5,8 @@ defmodule Sanctum.Authority.BudgetGuard do
   @moduledoc """
   Makes an invoke-budget slot survive its holder's death.
 
-  A charged slot used to be released only by a `try/after` inside the
-  holding task — and the runtime's cancel and await-timeout paths kill
-  those tasks with an untrappable `:brutal_kill`, so the `after` never
-  ran: the root's budget shrank permanently (one cancelled child could
-  exhaust a ZeroAuthority root's whole budget) and the counter row could
-  never return to zero, leaking one ETS row per affected root for the
-  node's lifetime.
+  Monitor slot owners so cancellation or an untrappable task exit releases
+  the root's budget even when the task cannot run cleanup.
 
   This process owns both release paths instead. A holder registers itself
   after the charge (`guard/2`); the slot comes back either when the holder
@@ -20,12 +15,9 @@ defmodule Sanctum.Authority.BudgetGuard do
   pattern is `Emissary.MCP.ExternalServer`'s in-flight monitor, applied
   to the budget.
 
-  A release with no guard registered (a spawner's error arm, before the
-  task existed) releases directly. If this process is *gone*, both verbs
-  degrade to the old behaviour — the explicit release still runs, only the
-  death compensation is lost — so the guard can never make the budget
-  stricter than the charge, only tighter against leaks. A call that merely
-  *times out* is a different case and is handled as such: see `release/2`.
+  Without a registered guard, release directly. If the guard process is
+  unavailable, explicit releases still run but death monitoring is absent.
+  A call timeout follows the separate handling in `release/2`.
   """
 
   use GenServer

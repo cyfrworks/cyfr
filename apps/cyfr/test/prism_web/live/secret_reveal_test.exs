@@ -5,12 +5,8 @@ defmodule PrismWeb.SecretRevealTest do
   @moduledoc """
   The one-time reveal cards, and letting go of what they showed.
 
-  A minted API key and a webhook secret are shown once, in plaintext, from
-  socket assigns — and nothing ever cleared them. `Phoenix.LiveView.Socket`
-  derives Inspect with `:assigns` in its `only:` list, so the value stayed in
-  the process state (and so in any crash report) and in the DOM for the rest
-  of the session. The webhook one was cleared only by the unrelated "edit"
-  event. Both cards can be dismissed now.
+  Checks that dismissing a revealed API key or webhook secret removes
+  its plaintext from socket assigns and the DOM.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -35,8 +31,8 @@ defmodule PrismWeb.SecretRevealTest do
 
   test "a webhook secret is dismissible too", %{conn: conn} do
     user = test_user()
-    home = Sanctum.Tenancy.Athanors.home!()
-    ctx = %{Sanctum.TestContext.local() | athanor_id: home.id, user_id: user.user_id}
+    conn = log_in_user(conn, user)
+    ctx = %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user.user_id}
     name = "reveal-hook-#{System.unique_integer([:positive])}"
 
     wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
@@ -61,7 +57,7 @@ defmodule PrismWeb.SecretRevealTest do
         profile_id: profile_id
       })
 
-    {view, _html} = conn |> log_in_user(user) |> mount_athanor("/webhooks")
+    {view, _html} = mount_athanor(conn, "/webhooks")
 
     # Rotating reveals the new secret the same way creating does.
     render_click(view, "rotate", %{"id" => name})

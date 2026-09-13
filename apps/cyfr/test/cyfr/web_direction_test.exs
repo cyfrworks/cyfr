@@ -8,10 +8,8 @@ defmodule Cyfr.WebDirectionTest do
   on_mount hooks is the composition root's job); `prism_web` — the console
   — must not name `emissary_web` back.
 
-  `Cyfr.NamespaceDirectionTest` deliberately scopes the two web namespaces
-  out, so this crossing had no guard and carried five back-edges:
-  `SafeRedirect` (now a prism_web module — its only callers were console
-  flows) and the tincture rate-limit knobs (now `Cyfr.RuntimeConfig`).
+  Checks dependencies between the two web namespaces, which are
+  excluded from Cyfr.NamespaceDirectionTest.
 
   Two deliberate exceptions, and the second is the wider one. Building the
   public URL for a copy-link reads a global fact off `EmissaryWeb.Endpoint`
@@ -21,10 +19,7 @@ defmodule Cyfr.WebDirectionTest do
   `use PrismWeb, :live_view` into every console LiveView, which makes it the
   widest crossing here.
 
-  This file's glob used to be `prism_web/**/*.ex`, which never matches the
-  sibling root module `prism_web.ex` — so the three-name reach lived in the
-  one file the guard could not see, and the paragraph above used to claim
-  there was exactly one.
+  Include the sibling prism_web.ex root module as well as the prism_web directory.
   """
 
   use ExUnit.Case, async: true

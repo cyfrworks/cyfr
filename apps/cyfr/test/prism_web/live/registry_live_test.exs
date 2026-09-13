@@ -7,12 +7,8 @@ defmodule PrismWeb.RegistryLiveTest do
   fail for reasons that have nothing to do with the person: a provider
   blip, a dropped connection, a timeout.
 
-  Every other end of that poll — expired, denied — put the panel back on
-  its form. The error arm did not: it wrote the message and left the state
-  at `:waiting`. Nothing reschedules the poll from there, and `start-appeal`
-  deliberately refuses to run while a flow is out (a second click would
-  mint a second code and orphan the first), so the panel was wedged until
-  the page was reloaded — losing the argument the person had typed.
+  A failed appeal poll must return to the form and preserve typed
+  input so the person can retry.
 
   `LoginLive` handles the identical case correctly, which is what made this
   worth pinning on both sides: the message AND the state it leaves behind.

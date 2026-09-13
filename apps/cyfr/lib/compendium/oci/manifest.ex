@@ -22,10 +22,7 @@ defmodule Compendium.OCI.Manifest do
   @readme_media_type "application/vnd.cyfr.readme.v1+markdown"
   @source_media_type "application/vnd.cyfr.source.v1.tar+gzip"
 
-  # Derived from the one type roster (`Sanctum.ComponentRef.valid_types/0`)
-  # rather than hand-listed — this was the only kind roster in the tree
-  # spelled independently, and a fifth type would have pushed to the
-  # registry tagged as a reagent through the old silent fallback.
+  # Derive OCI media types from Sanctum.ComponentRef.valid_types/0.
   @type_media_types Map.new(Sanctum.ComponentRef.valid_types(), fn
                       "tincture" -> {"tincture", "application/vnd.cyfr.tincture.v1.tar+gzip"}
                       type -> {type, "application/vnd.cyfr.#{type}.v1+wasm"}
@@ -46,9 +43,7 @@ defmodule Compendium.OCI.Manifest do
   @doc """
   Get the content layer media type for a component type.
 
-  An unknown type raises — every sibling roster fails closed on an
-  unknown value, and the old silent reagent fallback would have pushed a
-  new kind to the registry under the wrong tag.
+  Raises for an unknown component type.
   """
   @spec wasm_media_type(String.t()) :: String.t()
   def wasm_media_type(component_type) do
@@ -159,14 +154,8 @@ defmodule Compendium.OCI.Manifest do
         annotations = manifest["annotations"] || %{}
         artifact_type = manifest["artifactType"]
 
-        # Every descriptor digest is checked against the same grammar a
-        # *reference's* digest has always been held to. These strings are
-        # interpolated straight into `/v2/…/blobs/<digest>` and into cache
-        # path segments, so a registry that answered with `../` or a `?` in a
-        # layer digest could steer the fetch elsewhere on its own host. The
-        # post-download hash comparison stops content substitution, but only
-        # after the request has been made, and `PathSafety` refuses the cache
-        # write by raising rather than by a typed refusal.
+        # Validate descriptor digests before using them in request paths
+        # or cache filenames.
         with :ok <- validate_descriptor_digests(config, layers) do
           {:ok,
            %{

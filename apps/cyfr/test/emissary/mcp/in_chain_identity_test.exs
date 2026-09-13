@@ -13,7 +13,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
   # gate that still needs the identity-conjunct branch.
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.ToolRegistry
+  alias Cyfr.Ops.Catalog
   alias Sanctum.Authority
   alias Sanctum.Authority.Blob
   alias Sanctum.Context
@@ -94,7 +94,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     refusals =
       for {tool, action} <- pairs,
-          result = ToolRegistry.call_in_chain(tool, ctx, %{"action" => action}, auth),
+          result = Catalog.call_in_chain(tool, ctx, %{"action" => action}, auth),
           match?({:error, msg} when is_binary(msg), result),
           {:error, msg} = result,
           msg =~ @plane_refusal,
@@ -106,13 +106,9 @@ defmodule Emissary.MCP.InChainIdentityTest do
   end
 
   test "tincture_visibility.get reaches its handler from a chain" do
-    # Regression: the handler used to gate through Context.authorize, whose
-    # permission arm refuses the guest plane unconditionally — an in-chain
-    # annotation the gate contradicted. With the gate central (guest arm =
-    # identity conjunct) and the handler keeping only the tenant residual,
-    # a chain-granted read must get past the plane. Passing full args
-    # matters: the arg-matching clauses sit in front of the residual, so an
-    # action-only probe would prove nothing about it.
+    # A chain-granted read must pass the central identity gate and the
+    # handler's tenant check. Supply complete arguments to exercise the
+    # handler clause used by real requests.
     auth = granting_authority([{"tincture_visibility", "get"}])
 
     ctx =
@@ -127,7 +123,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     args = %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"}
 
-    case ToolRegistry.call_in_chain("tincture_visibility", ctx, args, auth) do
+    case Catalog.call_in_chain("tincture_visibility", ctx, args, auth) do
       {:ok, _result} ->
         :ok
 
@@ -147,7 +143,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, {:guest_plane_call, "component"}} =
-             ToolRegistry.call_external("component", ctx, %{"action" => "list"})
+             Catalog.call_external("component", ctx, %{"action" => "list"})
   end
 
   test "call_in_chain denies an action the authority does not grant" do
@@ -163,7 +159,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, msg} =
-             ToolRegistry.call_in_chain("component", ctx, %{"action" => "search"}, auth)
+             Catalog.call_in_chain("component", ctx, %{"action" => "search"}, auth)
 
     assert msg =~ "Denied by chain authority"
   end
@@ -183,7 +179,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, msg} =
-             ToolRegistry.call_in_chain(
+             Catalog.call_in_chain(
                "execution",
                ctx,
                %{"action" => "force_release"},
@@ -222,7 +218,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     for {tool, action} <- verbs do
       assert {:error, msg} =
-               ToolRegistry.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth)
+               Catalog.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth)
 
       assert msg =~ "not reachable from a running chain", "#{tool}.#{action}: #{msg}"
     end
@@ -241,7 +237,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, msg} =
-             ToolRegistry.call_in_chain("github:create_issue", ctx, %{}, auth)
+             Catalog.call_in_chain("github:create_issue", ctx, %{}, auth)
 
     assert msg =~ "Denied by chain authority"
   end

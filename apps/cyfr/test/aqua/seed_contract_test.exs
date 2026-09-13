@@ -3,39 +3,35 @@
 
 defmodule Aqua.SeedContractTest do
   @moduledoc """
-  The shipped seed, the shipped manifest and the registry agree about what
-  a chat may call.
+  The shipped seed, the agents' manifests and the registry agree about
+  what a chat may call.
 
   Three lists describe one surface. The soul and each role name what the
-  model may call (`tool_policy`); the formula's manifest names what the
-  consent edge grants (`caps.tools`), which the chain authority checks by
-  exact membership; the registry names what a running chain can reach at
-  all (`planes`). A key on the first list and not the second is "Denied
-  by chain authority" on the click; a name on the second the registry
-  cannot serve is dropped silently by `expand_tools/1`, so the consent
-  sheet a person signs is shorter than the manifest claims. This pins the
-  three to each other.
+  model may call (`tool_policy`); each agent's manifest names what the
+  consent edge grants (`caps.tools`, derived from that policy by
+  `Compendium.AgentSource`), which the chain authority checks by exact
+  membership; the registry names what a running chain can reach at all
+  (`planes`). A key on the first list and not the second is "Denied by
+  chain authority" on the click; a name on the second the registry cannot
+  serve is dropped silently by `expand_tools/1`, so the consent sheet a
+  person signs is shorter than the manifest claims. This pins the three
+  to each other.
 
-  Virtual tools (`files`, `storage`, `http`, `request_setup`) and the
-  `native_search` gate live inside the formula and are not MCP actions —
-  they must not appear in caps, and are not checked here. Role globs
-  (`aqua_builder.*`) are delegation targets the formula resolves itself.
+  Hands (`files`, `storage`, `http`, `request_setup`) and the
+  `native_search` gate are the loop's own and not MCP actions — they must
+  not appear in caps, and are not checked here. Role globs (`builder.*`)
+  are clone edges the loop resolves itself.
   """
   use ExUnit.Case, async: true
 
-  alias Aqua.VirtualTools, as: AquaVirtualTools
-  alias Emissary.MCP.ToolRegistry
+  alias Aqua.Hands
+  alias Cyfr.Ops.Catalog
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
-  @formulas Path.expand("../../../../seed/components/formulas/local/aqua", __DIR__)
 
   # The `execution.*` and `schedule.*` entries come from Opus' providers;
   # an app-scoped run has no Opus modules and cannot expand them.
   @moduletag :requires_opus_modules
-
-  test "the seed ships one formula version" do
-    assert [_one] = Path.wildcard(Path.join(@formulas, "*/cyfr-manifest.json"))
-  end
 
   test "every action the seed may call is granted by the manifest and reachable in-chain" do
     granted = MapSet.new(granted())
@@ -60,26 +56,15 @@ defmodule Aqua.SeedContractTest do
     refused =
       for key <- granted,
           {tool, action} = split(key),
-          ToolRegistry.in_chain_refused?(tool, action),
+          not Catalog.chain_reachable?(tool, action),
           do: key
 
     assert refused == [], "caps grant actions a chain cannot reach: #{inspect(refused)}"
   end
 
-  # The guest itself calls these through the registry, before any policy
-  # is consulted — `tools.list` at startup to learn the catalog it filters
-  # (`discover_mcp_tools`), `component.setup_plan` from
-  # `dispatch_request_setup` to check a component exists before it opens
-  # the setup form; the model is never offered them, so no shipped policy
-  # needs to name them. The guest's `execution.run` of a wrapped catalyst is
-  # NOT a registry call: the formula host intercepts it and runs the child
-  # on the consent edge, so `execution.run` is in caps only because the
-  # soul's policy holds it.
-  @guest_calls ~w(tools.list component.setup_plan)
-
-  test "the manifest grants nothing the seed does not ask for" do
+  test "the manifests grant nothing the seed does not ask for" do
     asked = seed_keys() |> Enum.map(&elem(&1, 1)) |> MapSet.new()
-    unasked = caps() |> Kernel.--(@guest_calls) |> Enum.reject(&MapSet.member?(asked, &1))
+    unasked = Enum.reject(caps(), &MapSet.member?(asked, &1))
     assert unasked == [], "caps grant actions no shipped file names: #{inspect(unasked)}"
   end
 
@@ -101,12 +86,12 @@ defmodule Aqua.SeedContractTest do
   test "nothing shipped is automatic where the kind ceiling says it asks" do
     # Kind always wins: a destructive or external action is never `auto`
     # on any agent — the soul asks for it, and a role never holds it.
-    # `Aqua.Actions.auto_permitted?/2` is the one rule every door reads.
+    # `Aqua.Kinds.auto_permitted?/2` is the one rule every door reads.
     automatic =
       for {name, key, "auto"} <- seed_policy(),
           {tool, action} <- exact(key),
-          Aqua.Actions.kind_for(tool, action) != nil,
-          not Aqua.Actions.auto_permitted?(tool, action),
+          Aqua.Kinds.kind_for(tool, action) != nil,
+          not Aqua.Kinds.auto_permitted?(tool, action),
           do: "#{name}: #{key}"
 
     assert automatic == [], Enum.join(automatic, "\n")
@@ -115,7 +100,7 @@ defmodule Aqua.SeedContractTest do
       for {name, key, _mode} <- seed_policy(),
           name != Compendium.AquaPath.soul_name(),
           {tool, action} <- exact(key),
-          Aqua.Actions.kind_for(tool, action) in [:destructive, :external],
+          Aqua.Kinds.kind_for(tool, action) in [:destructive, :external],
           do: "#{name}: #{key}"
 
     assert destructive_on_roles == [], Enum.join(destructive_on_roles, "\n")
@@ -125,7 +110,7 @@ defmodule Aqua.SeedContractTest do
     asking =
       for {name, key, mode} <- seed_policy(),
           {tool, action} <- exact(key),
-          AquaVirtualTools.auto_only?(tool, action),
+          Hands.auto_only?(tool, action),
           mode != "auto",
           do: "#{name}: #{key}"
 
@@ -197,7 +182,7 @@ defmodule Aqua.SeedContractTest do
 
     [
       if(not MapSet.member?(granted, key), do: "is not in the manifest caps"),
-      if(ToolRegistry.in_chain_refused?(tool, action), do: "is not reachable from a chain")
+      if(Catalog.in_chain_refused?(tool, action), do: "is not reachable from a chain")
     ]
     |> Enum.reject(&is_nil/1)
   end
@@ -206,20 +191,22 @@ defmodule Aqua.SeedContractTest do
     caps() |> Sanctum.Consent.ShapeDerivation.expand_tools()
   end
 
+  # What every shipped agent's manifest grants, as one list: each agent's
+  # `caps.tools` is derived from its own policy over the roster it clones
+  # into.
   defp caps do
-    [path] = Path.wildcard(Path.join(@formulas, "*/cyfr-manifest.json"))
-    manifest = path |> File.read!() |> Jason.decode!()
-    Compendium.Manifest.Caps.from_manifest(manifest).tools
+    agents = seed_agents()
+    roster = MapSet.new(agents, & &1.name)
+
+    agents
+    |> Enum.flat_map(fn agent ->
+      Compendium.Manifest.Caps.from_manifest(Compendium.AgentSource.manifest(agent, roster)).tools
+    end)
+    |> Enum.uniq()
+    |> Enum.reject(fn key -> key |> split() |> elem(0) |> Hands.hand?() end)
   end
 
-  # Every `tool.action` key a shipped file holds that names an MCP action:
-  # not a glob, not the search gate, not a tool the formula serves itself.
-  defp seed_keys do
-    for {name, key, _mode} <- seed_policy(), mcp_action?(key), do: {name, key}
-  end
-
-  # Every policy entry of every shipped file, with its mode.
-  defp seed_policy do
+  defp seed_agents do
     roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
 
     files =
@@ -232,8 +219,18 @@ defmodule Aqua.SeedContractTest do
     for path <- files,
         name = Path.basename(path, ".md"),
         {:ok, agent} = Compendium.AquaAgent.parse(name, File.read!(path)),
-        {key, mode} <- agent.tool_policy,
-        do: {name, key, mode}
+        do: agent
+  end
+
+  # Every `tool.action` key a shipped file holds that names an MCP action:
+  # not a glob, not the search gate, not a tool the formula serves itself.
+  defp seed_keys do
+    for {name, key, _mode} <- seed_policy(), mcp_action?(key), do: {name, key}
+  end
+
+  # Every policy entry of every shipped file, with its mode.
+  defp seed_policy do
+    for agent <- seed_agents(), {key, mode} <- agent.tool_policy, do: {agent.name, key, mode}
   end
 
   defp exact(key) do
@@ -266,7 +263,7 @@ defmodule Aqua.SeedContractTest do
   defp mcp_action?(key) do
     case String.split(key, ".", parts: 2) do
       [_tool, "*"] -> false
-      [tool, _action] -> not AquaVirtualTools.virtual_tool?(tool)
+      [tool, _action] -> not Hands.hand?(tool)
       _ -> false
     end
   end

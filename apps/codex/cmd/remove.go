@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -58,8 +59,8 @@ var removeCmd = &cobra.Command{
 			}
 		}
 
-		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
-			"action":    "delete",
+		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
+			"action":    ops.ComponentDelete,
 			"reference": normalized,
 		})
 		if err != nil {

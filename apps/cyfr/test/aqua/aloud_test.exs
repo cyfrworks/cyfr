@@ -145,10 +145,15 @@ defmodule Aqua.AloudTest do
     private: private,
     shared: shared
   } do
-    # The user's row must name the personal athanor for "own" to hold.
-    {:ok, _} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: ctx.user_id, provider: "local"})
-    {:ok, u} = Sanctum.Tenancy.Users.get(ctx.user_id)
+    # The user's row must name the personal athanor for "own" to hold, and
+    # the person — now named by their own id — must be seated in both rooms.
+    {ctx, u} = Sanctum.TestContext.person!(ctx)
     {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, ctx.athanor_id)
+
+    for athanor_id <- [ctx.athanor_id, shared.athanor_id] do
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: athanor_id)
+    end
 
     {:ok, answer} =
       Conversations.append(ctx, private.id, %{author: "aqua", kind: "text", content: "Try BA117."})

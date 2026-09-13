@@ -10,23 +10,24 @@ defmodule Cyfr.RuntimeEnvReadingTest do
   checked is the shape of the reads — and the shape is the whole invariant:
   a variable that is present but empty must read as unset.
 
-  Dotenvy's plain types disagree. `:integer` answers 0 for `""` and
-  `:boolean` answers false, so a blank line in `.env` — what copying
-  `.env.example` leaves behind — becomes a decision the operator never
-  made: `CYFR_SESSION_TTL_HOURS=` meant "sessions never expire",
-  `CYFR_MCP_RATE_LIMIT_MAX=` meant "refuse every MCP request",
-  `CYFR_AUTO_MIGRATE=` meant "never migrate". The `?` variants answer nil,
-  which is what the `env_str` / `env_int` / `env_bool` helpers are built on.
+  Blank environment values must use configured defaults. Optional
+  Dotenvy types return nil for blanks; env_str, env_int, and env_bool
+  apply the corresponding default.
 
-  Reading a flag as a string and testing it for truthiness is the same
-  class of bug with a sharper edge: `"false"` is truthy in Elixir, so
-  `CYFR_BEHIND_PROXY=false` once turned X-Forwarded-For trust on for the
-  one deployment with no proxy in front of it.
+  Boolean settings must be parsed as booleans; the string "false"
+  is truthy in Elixir.
   """
 
   use ExUnit.Case, async: true
 
   @runtime_exs Path.expand("../../../../config/runtime.exs", __DIR__)
+  @runtime_config_ex Path.expand("../../lib/cyfr/runtime_config.ex", __DIR__)
+
+  # A switch compared as a string reads `on` as off and a typo as the
+  # default; every boolean setting goes through the strict parser, which
+  # refuses an unrecognised spelling at boot.
+  @env_read ~r/\b(env_str|getenv)\.\(|\benv!\(/
+  @string_compared_switch ~r/(==|!=)\s*"(true|false|on|off|yes|no|1|0)"|\bin \["(true|false|on|off|yes|no|1|0)"/
 
   defp source, do: File.read!(@runtime_exs)
 
@@ -64,7 +65,19 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
     assert src =~ "env_str = fn key, default -> env!(key, :string?, nil) || default end"
     assert src =~ "env_int = fn key, default -> env!(key, :integer?, nil) || default end"
-    assert src =~ "case env!(key, :boolean?, nil) do"
+    assert src =~ "case Cyfr.RuntimeConfig.switch(getenv, key, default) do"
+  end
+
+  test "no switch is read by comparing its string" do
+    offenders =
+      for path <- [@runtime_exs, @runtime_config_ex],
+          {line, n} <- path |> File.read!() |> Cyfr.Test.CodeLines.code_lines(),
+          Regex.match?(@env_read, line) and Regex.match?(@string_compared_switch, line),
+          do: "#{Path.basename(path)}:#{n}: #{String.trim(line)}"
+
+    assert offenders == [],
+           "switches read by string comparison instead of the strict parser:\n" <>
+             Enum.join(offenders, "\n")
   end
 
   test "CYFR_BEHIND_PROXY is read as a boolean, once" do

@@ -207,7 +207,7 @@ defmodule Locus.MCPTest do
   # it — a reason it cannot render is itself a failure. Plain strings pass
   # through unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

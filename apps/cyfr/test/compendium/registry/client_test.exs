@@ -153,7 +153,7 @@ defmodule Compendium.Registry.ClientTest do
             "registry" => "ghcr.io"
           })
 
-        assert err_msg(msg) =~ "only supports registry.cyfr.run"
+        assert err_msg(msg) =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       end
     end
 
@@ -194,14 +194,7 @@ defmodule Compendium.Registry.ClientTest do
     end
   end
 
-  # ============================================================================
-  # Post-auth-refactor endpoints — error paths
-  #
-  # These tests mirror the existing error-path philosophy (set :registry_url to
-  # an unreachable host; assert %Errors{} shape). Happy-path HTTP responses
-  # aren't covered here — the repo has no Finch mocking infrastructure and
-  # adding one is out of scope; integration coverage lands with codex work.
-  # ============================================================================
+  # Registry endpoint error paths against an unreachable host.
 
   describe "probe_identity/3 - error handling" do
     test "returns %Errors{} when cyfr.run is unreachable" do
@@ -966,7 +959,7 @@ defmodule Compendium.Registry.ClientTest do
         result =
           MCP.handle("component", ctx, %{
             "action" => "pull",
-            "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
+            "reference" => "#{Compendium.RegistryHost.canonical_host()}/cyfr/reagents/test:1.0.0"
           })
 
         # Network error expected — we're just verifying the code path exists
@@ -992,7 +985,7 @@ defmodule Compendium.Registry.ClientTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Emissary.MCP.ToolError.render(reason) ||
+    Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

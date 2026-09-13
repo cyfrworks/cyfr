@@ -193,8 +193,7 @@ func withMeta(params any, progressToken string) map[string]any {
 		"io.modelcontextprotocol/protocolVersion": protocolVersion,
 		"io.modelcontextprotocol/clientInfo": map[string]any{
 			"name": "cyfr",
-			// The ldflags-injected build version — a hardcoded literal here
-			// once announced 0.1.0 from every build.
+			// Announce the build version injected through ldflags.
 			"version": version.Version,
 		},
 		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
@@ -325,11 +324,9 @@ func (c *Client) doRequest(ctx context.Context, req JSONRPCRequest) (*JSONRPCRes
 	return c.doRequestOnce(ctx, req, "", nil)
 }
 
-// ConsentError is a §4.3 consent signal from the server — a protocol-level
-// error in the -33501..-33504 band whose remediation payload rides in
-// error.data as {"tag": ..., "payload": {...}}. Commands recover it with
-// errors.As and render it via formatConsentError; the payload used to be
-// JSON smuggled inside the message text and grepped back out.
+// ConsentError is a protocol error in the -33501..-33504 range.
+// Its error.data contains {"tag": ..., "payload": {...}}. Commands recover
+// it with errors.As and render it via formatConsentError.
 type ConsentError struct {
 	Tag     string
 	Message string
@@ -356,11 +353,7 @@ func consentError(e *JSONRPCError) *ConsentError {
 	return &ConsentError{Tag: tag, Message: e.Message, Payload: payload}
 }
 
-// rpcError maps a JSON-RPC error object to a Go error, preserving the
-// sentinel identity the auth code carries: `errors.Is(err, ErrAuthRequired)`
-// must hold wherever -33001 arrived — a 4xx envelope or a 200 body alike.
-// The old `fmt.Errorf("%s", …)` wrappers erased it, so the login hint only
-// worked by the coincidence that auth errors happened to ride a 401.
+// rpcError preserves typed error identity for JSON-RPC errors regardless of HTTP status.
 func rpcError(e *JSONRPCError) error {
 	if e.Code == -33001 {
 		return fmt.Errorf("%w: %s", ErrAuthRequired, e.Message)
@@ -435,12 +428,7 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 			return nil, fmt.Errorf("read response: %w", err)
 		}
 
-		// A 404 used to be read as "the session expired" — that was the previous
-		// transport, where the server forgot a session and answered 404. This
-		// revision has no sessions and gives 404 a different meaning entirely:
-		// an unimplemented method, carrying -32601. Keeping the old heuristic
-		// told a perfectly authenticated user to run `cyfr login` whenever they
-		// hit a method the server does not have.
+		// HTTP 404 with -32601 denotes an unimplemented method.
 		var errResp JSONRPCResponse
 		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil {
 			return nil, withRequestID(rpcError(errResp.Error), requestID)
@@ -448,14 +436,9 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 		return nil, fmt.Errorf("HTTP %d (request id %s): %s", httpResp.StatusCode, requestID, string(respBody))
 	}
 
-	// The server answers a progress-opted request with an SSE stream: the
-	// notifications it produced while working, then the response. Both shapes are
-	// valid for the same request, so the content type decides how to read it.
-	// The stream is read INCREMENTALLY — the server moved the work into a task
-	// specifically so notifications would not arrive in one burst, and
-	// buffering the whole body here used to replay every progress line after
-	// the work had already finished (while holding an unbounded buffer against
-	// a stream the server may keep open for its full window).
+	// Progress responses use SSE; ordinary responses use JSON.
+	// Read SSE incrementally to display progress while the request runs
+	// and avoid buffering the entire stream.
 	if strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream") {
 		return streamResponse(httpResp.Body, onProgress)
 	}

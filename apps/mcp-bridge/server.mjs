@@ -47,11 +47,7 @@ const PORT = Number(process.env.MCP_BRIDGE_PORT || 8001);
 const AUTH_TOKEN = process.env.MCP_BRIDGE_TOKEN || "";
 const PERSIST = process.env.MCP_BRIDGE_DATA || "/data/backends.json";
 
-// Structured logs on the same switch the Elixir side honors
-// (CYFR_LOG_FORMAT=json → Cyfr.JsonFormatter): the bridge runs in the
-// same compose stack, and an aggregator that parses one service's lines
-// as JSON must not fall back to prose for its sidecar. Text mode keeps
-// the exact console output this file always had.
+// CYFR_LOG_FORMAT=json enables structured logs; otherwise use text logs.
 if (process.env.CYFR_LOG_FORMAT === "json") {
   const jsonLine = (level, args) => {
     const message = args
@@ -67,24 +63,10 @@ if (process.env.CYFR_LOG_FORMAT === "json") {
   console.error = (...args) => jsonLine("error", args);
 }
 
-// The bridge speaks two protocols, in two directions, and they are not the
-// same revision.
-//
-// Inbound (/mcp, where cyfr is the client) is the current one: stateless, no
-// handshake, per-request metadata. The bridge ships inside cyfr's own compose
-// stack, so leaving it on a retired revision meant every default install
-// exercised cyfr's legacy-peer fallback against a first-party component.
+// Inbound /mcp uses the current stateless protocol with per-request metadata.
 const PROTOCOL_VERSION = "2026-07-28";
 
-// Outbound (stdio, where the bridge is the client of an npx child) stays on the
-// handshake. Those children are third-party packages on their own release
-// cadence; `initialize` is what they answer to, and that is a genuine interop
-// concern rather than a leftover.
-//
-// One legacy revision, not two: this used to be 2024-11-05 while cyfr's own
-// outbound fallback offered 2025-03-26, so "the legacy version" meant two
-// different dates depending on which hop you asked. A drift test binds this
-// literal to Emissary.MCP.ExternalServer's.
+// Outbound stdio uses the shared fallback protocol revision and initializes child servers.
 const CHILD_PROTOCOL_VERSION = "2025-03-26";
 
 // Ceiling on one child stdout frame (a single line). RPC_TIMEOUT_MS bounds
@@ -188,20 +170,55 @@ const ADMIN_TOOLS = [
 // Stdio MCP client (one per child)
 // ============================================================================
 
+// Children inherit only toolchain, home, locale, proxy, CA and npm settings.
+// Additional variables come from each backend's env block. Never expose the
+// bridge admin bearer or data path to a backend. This allowlist reduces what
+// a backend is exposed to; it does not isolate backends from each other or
+// from the bridge: children share the bridge's user and filesystem until
+// each backend runs as a user or container of its own.
+const CHILD_ENV_INHERITED = new Set([
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "SHELL",
+  "USER",
+  "LOGNAME",
+  "NODE_ENV",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+]);
+const CHILD_ENV_NEVER = ["MCP_BRIDGE_TOKEN", "MCP_BRIDGE_DATA", "MCP_BRIDGE_ALLOW_INSECURE"];
+
+function childEnvironment(env) {
+  const inherited = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (CHILD_ENV_INHERITED.has(name) || name.startsWith("npm_config_")) inherited[name] = value;
+  }
+  const childEnv = { ...inherited, ...(env || {}) };
+  for (const name of CHILD_ENV_NEVER) delete childEnv[name];
+  return childEnv;
+}
+
 function spawnBackend(name, command, env) {
   validateBackendName(name);
 
-  // Children never see the bridge's own admin bearer: any npx backend that
-  // inherited it could re-enter /mcp as an administrator. Nor its own
-  // configuration — MCP_BRIDGE_DATA points at the 0600 backends.json the
-  // child's uid owns, so passing it through handed every backend the
-  // third-party API keys in every OTHER backend's `env` block, which is
-  // exactly what that file mode is for. Everything else passes through
-  // (PATH, HOME, npm caches).
-  const childEnv = { ...process.env, ...(env || {}) };
-  delete childEnv.MCP_BRIDGE_TOKEN;
-  delete childEnv.MCP_BRIDGE_DATA;
-  delete childEnv.MCP_BRIDGE_ALLOW_INSECURE;
+  const childEnv = childEnvironment(env);
 
   const proc = spawn("sh", ["-c", command], {
     env: childEnv,
@@ -299,12 +316,8 @@ function spawnBackend(name, command, env) {
     process.stderr.write(`[${name}] ${chunk}`);
   });
 
-  // Every child stream needs its own 'error' listener. A stream error with
-  // no listener is re-thrown as an uncaughtException, and this file's
-  // handler answers that with process.exit(1) — so one EPIPE on a dying
-  // child's stdin killed the bridge and every OTHER backend with it. The
-  // window is real: stdin closes an event-loop turn or more before the
-  // 'exit' event flips `status` to "crashed", and `rpc()` guards on status.
+  // Handle errors on every child stream. A closed stdin can raise EPIPE
+  // before the child’s exit event changes its status.
   for (const [label, stream] of [
     ["stdin", proc.stdin],
     ["stdout", proc.stdout],
@@ -345,12 +358,7 @@ function failPending(backend, err) {
   backend.pending.clear();
 }
 
-// The one place anything is written to a child. Every caller used to have
-// its own `proc.stdin.write` in a try/catch, which cannot see the failure
-// that actually matters: a write to a closed pipe reports EPIPE
-// ASYNCHRONOUSLY on the stream, and `spawnBackend` registers no 'error'
-// listener — so it surfaced as an uncaughtException and took the whole
-// bridge (every other backend with it) down via process.exit(1).
+// Centralize child writes so both synchronous failures and asynchronous pipe errors are handled.
 function writeFrame(backend, msg) {
   try {
     backend.proc.stdin.write(JSON.stringify(msg) + "\n");
@@ -647,15 +655,8 @@ function wrapError(message) {
 // ============================================================================
 
 const app = express();
-// Sized to match cyfr's own MCP body cap (EmissaryWeb.Endpoint: 28 MB, which
-// is the 20 MB attachment cap both chat UIs enforce, base64-expanded). At
-// 10 MB the bridge rejected attachments cyfr itself accepts, so the same
-// request succeeded or 413'd depending on whether it went through the bridge.
-// `type: () => true` so a body with the wrong Content-Type still parses —
-// and, when it is not JSON, reaches the SyntaxError branch of the error
-// middleware below. Registered without it, express left `req.body` as `{}`
-// for a text/plain POST, which then read as a notification and answered
-// 202 for what was a malformed request.
+// Match the server’s 28 MB body limit, including base64-encoded attachments.
+// Parse all content types so malformed bodies reach JSON-RPC error handling.
 app.use(express.json({ limit: "28mb", type: () => true }));
 
 // Constant-time bearer check. Returns true when no token is configured
@@ -676,9 +677,7 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, backends: backends.size });
 });
 
-// GET and DELETE were the previous transport's standalone notification stream
-// and session termination. Neither exists now. 405 says the endpoint is right
-// and the verb is not; a 404 would send an older client looking elsewhere.
+// GET and DELETE are unsupported and return 405.
 app.all("/mcp", (req, res, next) => {
   if (req.method === "POST" || req.method === "OPTIONS") return next();
   res.set("mcp-protocol-version", PROTOCOL_VERSION);
@@ -695,10 +694,7 @@ app.post("/mcp", async (req, res) => {
   res.set("x-request-id", requestId);
 
   if (!authorized(req)) {
-    // RFC 9110 §15.5.2: a 401 MUST carry a challenge. The body is JSON-RPC
-    // shaped like every other refusal this file emits (`rpcError` siblings
-    // above) — a bare `{"error":"unauthorized"}` string made cyfr's era
-    // heuristic misread an auth failure as a pre-2026 protocol peer.
+    // Return a JSON-RPC error and a WWW-Authenticate challenge for HTTP 401 (RFC 9110).
     res.set("www-authenticate", "Bearer");
     const id =
       req.body && typeof req.body === "object" && !Array.isArray(req.body)
@@ -714,13 +710,8 @@ app.post("/mcp", async (req, res) => {
     return rpcError(res, 400, null, -32600, "Expected a single JSON-RPC message");
   }
 
-  // Notifications carry NO id and get 202 with no body. This revision
-  // defines no header requirements for them, so they skip the checks below.
-  //
-  // An explicit `"id": null` is a request, not a notification — JSON-RPC
-  // permits it, and answering 202 left such a caller waiting on a result
-  // that was never coming, bounded only by its own timeout. `rpcError`
-  // already echoes `id ?? null`.
+  // Notifications omit id and receive an empty 202 response.
+  // An explicit null id is a request and must receive a JSON-RPC response.
   if (msg.id === undefined) {
     return res.status(202).end();
   }
@@ -762,11 +753,8 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
-// express.json's own failures (a malformed body, an over-limit one) surface
-// as thrown errors that would otherwise render express's default HTML page —
-// the one refusal on this port that wasn't JSON-RPC shaped, the same class
-// of bug the unshaped 401 once caused in cyfr's era heuristic. Registered
-// after the routes, as express error middleware must be.
+// Render JSON parser failures as JSON-RPC errors. Express error middleware
+// must be registered after the routes.
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
 
@@ -909,14 +897,8 @@ async function handleRpc(msg) {
       try {
         return await dispatchToolCall(name, args || {});
       } catch (err) {
-        // Surface tool-level failures as a successful JSON-RPC result with
-        // isError=true so the upstream MCP client (cyfr) reports it to the
-        // caller without treating the whole RPC as a protocol error.
-        //
-        // Only a REFUSAL is client-safe. Anything else reaching here is an
-        // internal fault whose message can carry filesystem paths, spawn
-        // arguments or upstream stderr — the same boundary the outer
-        // handler states, which this arm used to bypass by catching first.
+        // Return tool refusals with isError=true. Only Refusal messages are safe
+        // for clients; other errors may contain internal paths, arguments or stderr.
         if (err instanceof RpcRefusal) return wrapError(err.message);
 
         console.error(`[tools/call ${name}] internal error: ${err?.stack || err}`);
@@ -961,11 +943,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 (async () => {
-  // The refusal comes first, before any persisted command is read or run.
-  // It used to sit after the revival loop, so an operator locking down a
-  // compromised bridge by removing its token still executed every command
-  // the attacker had persisted — and process.exit does not kill children
-  // already spawned with piped stdio, so those outlived the refusal.
+  // Validate the admin token before reading or starting persisted backend commands.
   if (!AUTH_TOKEN) {
     // add_backend spawns arbitrary `sh -c`, so an unauthenticated /mcp is
     // remote code execution for anyone who can reach the port. Refuse to

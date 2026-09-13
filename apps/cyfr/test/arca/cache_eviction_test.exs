@@ -37,14 +37,7 @@ defmodule Arca.CacheEvictionTest do
       for tag <- [:old, :mid, :new], do: Arca.Cache.invalidate({:bytes_test, tag})
     end)
 
-    # The byte budget is global and this table is shared with every test that
-    # ran before this one. A leftover binary evicts in expiry order alongside
-    # these three, so the arithmetic below is only exact on an empty table:
-    # ~400 bytes of foreign blob outliving :new is enough to evict :new too,
-    # and the survivor assertion fails for a reason that has nothing to do
-    # with this test. The cache is pure — a miss re-reads — so clearing is
-    # safe, and it is what makes the outcome deterministic rather than
-    # dependent on which tests ran first.
+    # Clear the shared cache so unrelated entries cannot affect eviction order.
     table = Arca.Cache.table_name()
 
     for {key, value, _expires_at} <- :ets.tab2list(table), is_binary(value) do
@@ -77,6 +70,15 @@ defmodule Arca.CacheEvictionTest do
       for i <- 1..4,
           do: Arca.Cache.invalidate(Arca.Cache.Keys.compiled_component("sha256:ref#{i}"))
     end)
+
+    # Clear the shared cache's compiled entries first. The cap is enforced
+    # over every compiled entry in the table at once, so one left behind by
+    # earlier work raises the excess and evicts an entry this test keeps.
+    table = Arca.Cache.table_name()
+
+    for {{:compiled_component, _digest} = key, _value, _expires_at} <- :ets.tab2list(table) do
+      :ets.delete(table, key)
+    end
 
     for i <- 1..4 do
       Arca.Cache.put(

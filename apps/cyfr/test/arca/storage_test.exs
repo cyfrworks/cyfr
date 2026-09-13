@@ -46,7 +46,7 @@ defmodule Arca.StorageTest do
       end
 
       assert_raise ArgumentError, ~r/empty segments/, fn ->
-        Storage.validate_path!(["guest", "", "file.txt"])
+        Storage.validate_path!(["data", "", "file.txt"])
       end
 
       assert_raise ArgumentError, ~r/encoded dot segments/, fn ->
@@ -73,16 +73,16 @@ defmodule Arca.StorageTest do
 
       # The one spelling: the Local sweep walks the same root this mapping
       # writes under, via tenant_physical_root/0 — never a second literal.
-      assert hd(Storage.physical_segments(ath_ctx(), ["guest"])) ==
+      assert hd(Storage.physical_segments(ath_ctx(), ["data"])) ==
                Storage.tenant_physical_root()
     end
 
     test "the guest scope is a sibling of the host scopes" do
-      # Opus.StorageHandler maps the guest contract's `data/` to `guest/` at
-      # the boundary, so a `data/` grant physically cannot reach aqua/,
-      # conversations/ or any other host scope — they are siblings, not children.
-      assert Storage.physical_segments(ath_ctx(), ["guest", "notes.txt"]) ==
-               ["athanors", "ath_x", "guest", "notes.txt"]
+      # The guest's `data/` is the athanor's `data/` root, so a `data/`
+      # grant physically cannot reach aqua/, conversations/ or any other
+      # host scope — they are siblings, not children.
+      assert Storage.physical_segments(ath_ctx(), ["data", "notes.txt"]) ==
+               ["athanors", "ath_x", "data", "notes.txt"]
 
       assert Storage.physical_segments(ath_ctx(), ["aqua", "agent.json"]) ==
                ["athanors", "ath_x", "aqua", "agent.json"]
@@ -231,7 +231,7 @@ defmodule Arca.StorageTest do
     test "tenant-prefixed paths are not gated here; the global roots are the server's" do
       ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
       assert {:error, :forbidden} = Storage.authorize_path(ctx, ["config", "retention.json"])
-      assert :ok = Storage.authorize_path(ctx, ["guest", "notes.txt"])
+      assert :ok = Storage.authorize_path(ctx, ["data", "notes.txt"])
       assert {:error, :forbidden} = Storage.authorize_path(ctx, ["cache", "oci", "x"])
       assert {:error, :forbidden} = Storage.authorize_path(ctx, ["system", "health"])
       assert :ok = Storage.authorize_path(Sanctum.system_context(), ["cache", "oci", "x"])
@@ -241,7 +241,7 @@ defmodule Arca.StorageTest do
     test "an unknown first segment is refused for every context" do
       ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
       assert {:error, :forbidden} = Storage.authorize_path(ctx, ["scratch", "hello.txt"])
-      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["data", "x.txt"])
+      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["guest", "x.txt"])
       assert {:error, :forbidden} = Storage.authorize_path(Sanctum.system_context(), ["scratch"])
     end
   end
@@ -249,7 +249,7 @@ defmodule Arca.StorageTest do
   describe "classify/1 and tenant_roots/0" do
     test "the tenant roster is closed, and every scope classifies" do
       assert Storage.tenant_roots() ==
-               ~w(aqua components conversations notes guest meta)
+               ~w(aqua components conversations notes payloads data)
 
       for root <- Storage.tenant_roots() do
         assert Storage.classify([root, "x"]) == :tenant
@@ -260,7 +260,7 @@ defmodule Arca.StorageTest do
       assert Storage.classify(["cache", "oci"]) == :global
       assert Storage.classify(["system", "health"]) == :global
       assert Storage.classify(["scratch", "x"]) == :invalid
-      assert Storage.classify(["data", "x"]) == :invalid
+      assert Storage.classify(["guest", "x"]) == :invalid
     end
 
     test "physical_segments refuses an unknown root instead of minting a subtree" do
@@ -270,7 +270,7 @@ defmodule Arca.StorageTest do
     end
 
     test "the guest scope map names only tenant scopes" do
-      assert Storage.guest_scopes() == %{"data" => "guest", "components" => "components"}
+      assert Storage.guest_scopes() == %{"data" => "data", "components" => "components"}
 
       for {_guest, physical} <- Storage.guest_scopes() do
         assert physical in Storage.tenant_roots()
@@ -283,13 +283,37 @@ defmodule Arca.StorageTest do
       # Every roster is derived from @layout; these pin the derived values
       # so an edited row cannot silently reshape a roster.
       assert Enum.sort(Storage.tenant_roots()) ==
-               ~w(aqua components conversations guest meta notes)
+               ~w(aqua components conversations data notes payloads)
 
       assert Enum.sort(Storage.global_prefixes()) == ~w(cache system)
       assert Enum.sort(Storage.seed_roots()) == ~w(aqua components)
       assert Enum.sort(Storage.overlay_roots()) == ~w(aqua components)
-      assert Storage.reserved_roots() == ~w(meta)
-      assert Storage.guest_scopes() == %{"data" => "guest", "components" => "components"}
+      assert Storage.reserved_roots() == ~w(payloads)
+      assert Storage.guest_scopes() == %{"data" => "data", "components" => "components"}
+
+      # The console tier: what a person sees of the tree, system absent.
+      assert Storage.console_folders() == [
+               %{name: "data", root: "data", tier: :open},
+               %{name: "aqua", root: "aqua", tier: :shaped},
+               %{name: "components", root: "components", tier: :shaped},
+               %{name: "conversations", root: "conversations", tier: :read},
+               %{name: "notes", root: "notes", tier: :read}
+             ]
+
+      assert Storage.console_scopes() == %{
+               "data" => "data",
+               "aqua" => "aqua",
+               "components" => "components",
+               "conversations" => "conversations",
+               "notes" => "notes"
+             }
+
+      assert Storage.tier("payloads") == :system
+      assert Storage.tier("cache") == :system
+      assert Storage.tier("data") == :open
+      assert Storage.tier("guest") == nil
+      assert Storage.tier("nope") == nil
+      assert Enum.all?(Storage.console_folders(), &(&1.root in Storage.tenant_roots()))
 
       # The classes partition: no root is both tenant and global; every
       # seed root, overlay root and guest-scope target is a tenant root;
@@ -309,8 +333,8 @@ defmodule Arca.StorageTest do
     end
 
     test "locate/1 routes through the configured locator, and only there" do
-      assert Storage.locate(["guest", "x"]) == :not_overlaid
-      assert Storage.locate(["meta", "origin", "x"]) == :not_overlaid
+      assert Storage.locate(["data", "x"]) == :not_overlaid
+      assert Storage.locate(["payloads", "sha256", "x"]) == :not_overlaid
       assert Storage.locate([]) == :not_overlaid
       assert Storage.locate(["components"]) == :above_unit
       assert Storage.locate(["aqua"]) == :above_unit
@@ -325,7 +349,7 @@ defmodule Arca.StorageTest do
         assert Storage.classify(Storage.seed_prefix(root) ++ ["x"]) == :seed
       end
 
-      assert_raise FunctionClauseError, fn -> Storage.seed_prefix("guest") end
+      assert_raise FunctionClauseError, fn -> Storage.seed_prefix("data") end
       assert_raise FunctionClauseError, fn -> Storage.seed_prefix("nope") end
     end
 
@@ -348,25 +372,25 @@ defmodule Arca.StorageTest do
     test "a traversal segment under a legal root answers false, never raises" do
       ctx = Sanctum.TestContext.local()
 
-      refute Arca.exists?(ctx, ["guest", "..", "aqua"])
-      refute Arca.exists?(ctx, ["guest", ".."])
+      refute Arca.exists?(ctx, ["data", "..", "aqua"])
+      refute Arca.exists?(ctx, ["data", ".."])
       refute Arca.exists?(ctx, ["nope", "x"])
-      refute Arca.exists?(ctx, ["guest", String.duplicate("a", 500)])
+      refute Arca.exists?(ctx, ["data", String.duplicate("a", 500)])
 
       # Every other facade entry keeps failing loud on the same input.
-      assert_raise ArgumentError, fn -> Arca.get(ctx, ["guest", "..", "aqua"]) end
+      assert_raise ArgumentError, fn -> Arca.get(ctx, ["data", "..", "aqua"]) end
     end
 
     test "an athanor-less context answers false for a tenant path, never raises" do
       ctx = Sanctum.Context.internal()
 
-      refute Arca.exists?(ctx, ["guest", "x"])
+      refute Arca.exists?(ctx, ["data", "x"])
       refute Arca.exists?(ctx, ["components"])
 
       # Every other facade entry keeps failing loud on the same context —
       # reaching one without an athanor is host-side programmer error.
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        Arca.get(ctx, ["guest", "x"])
+        Arca.get(ctx, ["data", "x"])
       end
     end
   end
@@ -379,9 +403,9 @@ defmodule Arca.StorageTest do
       ctx = Sanctum.TestContext.local()
 
       assert {:error, :invalid_path} = Arca.put(ctx, [], "x")
-      assert {:error, :invalid_path} = Arca.put(ctx, ["guest"], "x")
-      assert {:error, :invalid_path} = Arca.append(ctx, ["guest"], "x")
-      assert {:error, :invalid_path} = Arca.delete(ctx, ["guest"])
+      assert {:error, :invalid_path} = Arca.put(ctx, ["data"], "x")
+      assert {:error, :invalid_path} = Arca.append(ctx, ["data"], "x")
+      assert {:error, :invalid_path} = Arca.delete(ctx, ["data"])
 
       # Globals are covered by the same gate.
       assert {:error, :invalid_path} = Arca.put(Sanctum.Context.internal(), ["cache"], "x")
@@ -390,17 +414,17 @@ defmodule Arca.StorageTest do
     test "a multi-level string segment counts as its real depth" do
       ctx = Sanctum.TestContext.local()
 
-      # `"guest/…"` normalizes to two segments before the gate runs, so the
+      # `"data/…"` normalizes to two segments before the gate runs, so the
       # gate cannot regress to counting pre-split shapes.
-      assert :ok = Arca.put(ctx, ["guest/depth_gate_pin.txt"], "x")
-      assert :ok = Arca.delete(ctx, ["guest/depth_gate_pin.txt"])
+      assert :ok = Arca.put(ctx, ["data/depth_gate_pin.txt"], "x")
+      assert :ok = Arca.delete(ctx, ["data/depth_gate_pin.txt"])
     end
 
     test "delete_tree keeps working on the whole tree and on a scope" do
       ctx = Sanctum.TestContext.local()
 
-      assert :ok = Arca.put(ctx, ["guest", "depth_gate_tree", "a.txt"], "x")
-      assert :ok = Arca.delete_tree(ctx, ["guest", "depth_gate_tree"])
+      assert :ok = Arca.put(ctx, ["data", "depth_gate_tree", "a.txt"], "x")
+      assert :ok = Arca.delete_tree(ctx, ["data", "depth_gate_tree"])
     end
   end
 
@@ -422,8 +446,8 @@ defmodule Arca.StorageTest do
       # answer as an error tuple — never kill the caller.
       ctx = Context.build(user_id: "u", athanor_id: "ath_x", authenticated: true)
 
-      assert {:error, {:subtree_read_failed, ["guest", "sub", "stuck.txt"], :timeout}} =
-               Storage.read_subtree_via(HangingAdapter, ctx, ["guest", "sub"], timeout: 50)
+      assert {:error, {:subtree_read_failed, ["data", "sub", "stuck.txt"], :timeout}} =
+               Storage.read_subtree_via(HangingAdapter, ctx, ["data", "sub"], timeout: 50)
     end
   end
 end

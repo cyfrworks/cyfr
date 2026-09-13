@@ -7,12 +7,9 @@ package cyfr:oauth@0.1.0;
 /// The host handles the full OAuth lifecycle (authorization, token exchange,
 /// refresh). WASM components only receive short-lived access tokens.
 interface token {
-    /// Get a valid access token for the named OAuth provider.
-    /// The provider is granted through the consented vault edge (declare the
-    /// role under the manifest's needs/caps blocks; the retired oauth block
-    /// is refused at registration).
+    /// Get an access token through the consented vault edge for the named provider.
+    /// Declare its role in the manifest needs/caps blocks.
     /// Returns ok(access_token) or err(error_message).
-    /// Error "authorization_required" means the user must complete the OAuth
-    /// consent flow before this provider can be used.
+    /// An authorization_required error requires completing the OAuth consent flow.
     get-access-token: func(provider: string) -> result<string, string>;
 }

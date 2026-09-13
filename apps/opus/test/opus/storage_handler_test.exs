@@ -154,7 +154,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       # Write file via Arca directly
-      :ok = Arca.put(ctx, ["guest", "test.txt"], "hello world")
+      :ok = Arca.put(ctx, ["data", "test.txt"], "hello world")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -209,7 +209,7 @@ defmodule Opus.StorageHandlerTest do
       assert decoded["path"] == "data/test.txt"
 
       # Verify via Arca
-      {:ok, stored} = Arca.get(ctx, ["guest", "test.txt"])
+      {:ok, stored} = Arca.get(ctx, ["data", "test.txt"])
       assert stored == "hello world"
     end
 
@@ -263,8 +263,8 @@ defmodule Opus.StorageHandlerTest do
         )
 
       # Write some files
-      :ok = Arca.put(ctx, ["guest", "a.txt"], "aaa")
-      :ok = Arca.put(ctx, ["guest", "b.txt"], "bbb")
+      :ok = Arca.put(ctx, ["data", "a.txt"], "aaa")
+      :ok = Arca.put(ctx, ["data", "b.txt"], "bbb")
 
       request = Jason.encode!(%{"action" => "list", "path" => "data"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -282,8 +282,8 @@ defmodule Opus.StorageHandlerTest do
         )
 
       # Write a file and a nested file (which creates the subdirectory)
-      :ok = Arca.put(ctx, ["guest", "file.txt"], "content")
-      :ok = Arca.put(ctx, ["guest", "subdir", "nested.txt"], "nested")
+      :ok = Arca.put(ctx, ["data", "file.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "subdir", "nested.txt"], "nested")
 
       request = Jason.encode!(%{"action" => "list", "path" => "data"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -314,7 +314,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["guest", "to-delete.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "to-delete.txt"], "content")
 
       request = Jason.encode!(%{"action" => "delete", "path" => "data/to-delete.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -324,7 +324,7 @@ defmodule Opus.StorageHandlerTest do
       assert decoded["deleted"] == true
 
       # Verify deleted
-      assert {:error, :not_found} = Arca.get(ctx, ["guest", "to-delete.txt"])
+      assert {:error, :not_found} = Arca.get(ctx, ["data", "to-delete.txt"])
     end
   end
 
@@ -340,7 +340,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["guest", "exists.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "exists.txt"], "content")
 
       request = Jason.encode!(%{"action" => "exists", "path" => "data/exists.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -493,7 +493,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -597,7 +597,7 @@ defmodule Opus.StorageHandlerTest do
         nil
       )
 
-      :ok = Arca.put(ctx, ["guest", "telemetry-test.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "telemetry-test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/telemetry-test.txt"})
       _result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -643,7 +643,7 @@ defmodule Opus.StorageHandlerTest do
     test "denies action not in allowed_actions", %{ctx: ctx, component_ref: ref} do
       edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "list", "exists"])
 
-      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       request =
         Jason.encode!(%{
@@ -662,7 +662,7 @@ defmodule Opus.StorageHandlerTest do
     test "allows action in allowed_actions", %{ctx: ctx, component_ref: ref} do
       edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "list", "exists"])
 
-      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -674,7 +674,7 @@ defmodule Opus.StorageHandlerTest do
     test "denies all actions when default (empty list)", %{ctx: ctx, component_ref: ref} do
       edge = EdgeFixtures.edge(paths: ["data/"])
 
-      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -690,7 +690,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       # Read
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
@@ -717,7 +717,7 @@ defmodule Opus.StorageHandlerTest do
     test "denies delete when only read allowed", %{ctx: ctx, component_ref: ref} do
       edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read"])
 
-      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "delete", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -858,7 +858,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "append", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["guest", "log.txt"], "line1\n")
+      :ok = Arca.put(ctx, ["data", "log.txt"], "line1\n")
 
       request =
         Jason.encode!(%{
@@ -875,7 +875,7 @@ defmodule Opus.StorageHandlerTest do
       assert decoded["size"] == 6
 
       # Verify content was appended
-      {:ok, content} = Arca.get(ctx, ["guest", "log.txt"])
+      {:ok, content} = Arca.get(ctx, ["data", "log.txt"])
       assert content == "line1\nline2\n"
     end
 
@@ -1018,7 +1018,7 @@ defmodule Opus.StorageHandlerTest do
       ctx: ctx,
       component_ref: ref
     } do
-      :ok = Arca.put(ctx, ["guest", "big.txt"], String.duplicate("y", 64))
+      :ok = Arca.put(ctx, ["data", "big.txt"], String.duplicate("y", 64))
 
       request = ~s({"action": "read", "path": "data/big.txt"})
 
@@ -1029,12 +1029,7 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "the raw envelope is bounded before it is parsed", %{ctx: ctx, component_ref: ref} do
-      # `max_request_size` bounds the DECODED payload and is checked after
-      # parsing, which is right — but nothing bounded the string itself, so
-      # the guest's linear memory (64 MiB by default) was the only limit on
-      # what one call could make the host `Jason.decode/1`, times the
-      # concurrency cap. The envelope ceiling is deliberately generous: a
-      # payload at the consented ceiling always fits.
+      # Reject oversized encoded envelopes before JSON parsing; valid payloads within the consent limit must fit.
       huge =
         ~s({"action": "write", "path": "data/x.txt", "content": "#{String.duplicate("A", 200_000)}"})
 
@@ -1072,8 +1067,7 @@ defmodule Opus.StorageHandlerTest do
     } do
       quota = %{max_bytes: 100, max_files: 50}
 
-      # 60 bytes deep in a subdirectory — the old top-level listing counted
-      # this as zero.
+      # Count nested files toward the storage quota.
       assert %{"written" => true} = quota_write(ctx, ref, "data/nested/deep/a.txt", 60, quota)
 
       # 60 more would cross 100; the recursive usage must see the first file.
@@ -1099,8 +1093,8 @@ defmodule Opus.StorageHandlerTest do
       # The first check primes the counters; the write itself bumps them.
       assert %{"written" => true} = quota_write(ctx, ref, "data/a.txt", 4, quota)
 
-      bytes_key = Arca.Cache.Keys.scope_usage_bytes(ctx.athanor_id, "guest")
-      files_key = Arca.Cache.Keys.scope_usage_files(ctx.athanor_id, "guest")
+      bytes_key = Arca.Cache.Keys.scope_usage_bytes(ctx.athanor_id, "data")
+      files_key = Arca.Cache.Keys.scope_usage_files(ctx.athanor_id, "data")
       assert {:ok, 4} = Arca.Cache.get(bytes_key)
       assert {:ok, 1} = Arca.Cache.get(files_key)
 
@@ -1210,8 +1204,8 @@ defmodule Opus.StorageHandlerTest do
     } do
       # Prime the cached counters at the ceiling rather than writing 100k
       # files; the gate reads exactly these.
-      Arca.Cache.put(Arca.Cache.Keys.scope_usage_files(ctx.athanor_id, "guest"), 100_000, 60_000)
-      Arca.Cache.put(Arca.Cache.Keys.scope_usage_bytes(ctx.athanor_id, "guest"), 1_000, 60_000)
+      Arca.Cache.put(Arca.Cache.Keys.scope_usage_files(ctx.athanor_id, "data"), 100_000, 60_000)
+      Arca.Cache.put(Arca.Cache.Keys.scope_usage_bytes(ctx.athanor_id, "data"), 1_000, 60_000)
 
       edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write"])
 
@@ -1252,7 +1246,10 @@ defmodule Opus.StorageHandlerTest do
       :ok
     end
 
-    test "a guest reads an unmaterialized bundle file", %{ctx: ctx, component_ref: ref} do
+    test "a guest reads a shipped bundle file the athanor holds", %{ctx: ctx, component_ref: ref} do
+      :ok =
+        Arca.Overlay.pull_shipped(ctx, ["components", "catalysts", "local", "bundled", "1.0.0"])
+
       edge = EdgeFixtures.edge(paths: ["components/"], actions: ["read", "list", "exists"])
 
       request =
@@ -1279,10 +1276,12 @@ defmodule Opus.StorageHandlerTest do
       assert list["files"] == ["1.0.0/"]
     end
 
-    test "a guest write materializes the version dir, then lands", %{
+    test "a guest write into a shipped copy lands as an edit", %{
       ctx: ctx,
       component_ref: ref
     } do
+      unit = ["components", "catalysts", "local", "bundled", "1.0.0"]
+      :ok = Arca.Overlay.pull_shipped(ctx, unit)
       edge = EdgeFixtures.edge(paths: ["components/"], actions: ["read", "write"])
 
       request =
@@ -1295,22 +1294,12 @@ defmodule Opus.StorageHandlerTest do
       decoded = Jason.decode!(StorageHandler.execute(request, edge, nil, ctx, ref))
       assert decoded["written"] == true
 
-      # The edit shadows the bundle, and the sibling file came along — the
-      # copy is the athanor's own now.
-      assert {:ok, ~s({"seeded":false})} =
-               Arca.get(ctx, [
-                 "components",
-                 "catalysts",
-                 "local",
-                 "bundled",
-                 "1.0.0",
-                 "config.json"
-               ])
-
-      assert Arca.Adapters.Local.exists?(
-               ctx,
-               ["components", "catalysts", "local", "bundled", "1.0.0", "cyfr-manifest.json"]
-             )
+      # The copy is the athanor's, edited: the shipped sibling stays and
+      # the unit still reads shipped, with the edit in its diff.
+      assert {:ok, ~s({"seeded":false})} = Arca.get(ctx, unit ++ ["config.json"])
+      assert Arca.Adapters.Local.exists?(ctx, unit ++ ["cyfr-manifest.json"])
+      assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :shipped}
+      assert {:ok, true} = Arca.Overlay.edited?(ctx, unit)
     end
 
     test "a guest mutation above the unit grammar is refused; data/ is untouched", %{

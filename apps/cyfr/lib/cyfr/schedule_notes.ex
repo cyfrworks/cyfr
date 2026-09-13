@@ -4,13 +4,13 @@
 defmodule Cyfr.ScheduleNotes do
   @moduledoc """
   A schedule that asked to keep what it did. `keep_outcome: true` in a
-  schedule's metadata (`Opus.CronMCP`) files every completed run's output
+  schedule's metadata (`Cyfr.Schedules.Provider`) files every completed run's output
   as a note in the schedule's estate (`Aqua.Notes`) — named by the
   metadata's `note_name`, else by the schedule's id — with the schedule
   and the execution as provenance, capped so one run cannot fill a
   ledger. Each run replaces the note before it.
 
-  A telemetry consumer of `[:cyfr, :opus, :schedule, :completed]`,
+  A telemetry consumer of `[:cyfr, :schedules, :completed]`,
   attached at boot. The write runs under the server's own context
   refocused on the schedule's athanor — the estate the run itself ran
   in — and an archived athanor's schedule writes nothing. The handler
@@ -22,7 +22,7 @@ defmodule Cyfr.ScheduleNotes do
 
   alias Sanctum.Context
 
-  @event [:cyfr, :opus, :schedule, :completed]
+  @event [:cyfr, :schedules, :completed]
   @handler_id "notes-schedule-completed"
   @max_bytes 64 * 1024
   @marker "\n\n[cut — the outcome was longer than 64 KiB]"

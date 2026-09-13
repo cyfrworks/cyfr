@@ -4,16 +4,12 @@
 defmodule EmissaryWeb.Router do
   use EmissaryWeb, :router
 
-  # ==========================================================================
-  # Pipelines — every auth posture in one place, above the scopes that
-  # compose them. Reading a route's posture used to require scanning the
-  # whole file (`RouteAuthInventoryTest` exists because it did).
-  # ==========================================================================
+  # Pipelines define authentication and transport rules for the scopes below.
 
-  # The browser pipeline serves the Prism LiveViews and the auth pages. The
-  # claim gate plug answers HTTP GETs; LiveView mounts are gated again in
-  # `PrismWeb.LiveAuth`, because the LiveView socket is handled by the
-  # endpoint before the router and never passes through here.
+  # The browser pipeline serves the Prism LiveViews and the auth pages.
+  # LiveView mounts are gated in `PrismWeb.LiveAuth`, because the LiveView
+  # socket is handled by the endpoint before the router and never passes
+  # through here.
   pipeline :browser do
     # First: a headless node serves none of this (CYFR_HEADLESS).
     plug EmissaryWeb.Plugs.Headless
@@ -24,7 +20,6 @@ defmodule EmissaryWeb.Router do
     plug :protect_from_forgery
     plug :put_secure_browser_headers
     plug EmissaryWeb.Plugs.BrowserCSP
-    plug EmissaryWeb.Plugs.RequirePersonalNamespace
   end
 
   pipeline :api do
@@ -43,9 +38,8 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
-  # The MCP endpoint. POST is the only verb this revision defines for it; the
-  # `GET`/`DELETE` routes exist solely to answer 405 to clients written against
-  # the previous transport, and a preflight must not suggest otherwise.
+  # MCP accepts POST only. GET and DELETE return 405; preflight must
+  # advertise only the supported method.
   pipeline :mcp do
     plug :accepts, ["json", "event-stream"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
@@ -57,16 +51,8 @@ defmodule EmissaryWeb.Router do
     plug EmissaryWeb.Plugs.MCPRequestMetadata
   end
 
-  # Authenticated HTTP that is not MCP. `/api/executions/:id/events` used to
-  # ride the `:mcp` pipeline "so the session plug establishes the caller's
-  # context" — which worked, but handed an SSE endpoint the whole protocol:
-  # a rejected request answered in JSON-RPC with a null id, the per-request
-  # `_meta` rules applied to it (passing only because a GET has no body to
-  # carry an id), it spent the MCP rate-limit budget, and `GET` had to stay
-  # allowed on a POST-only protocol to accommodate it.
-  #
-  # It needs exactly one thing from that pipeline — a resolved context — and
-  # that is the one plug here that it shares.
+  # Authenticated HTTP routes use the shared context resolver with API
+  # error rendering and a separate rate-limit bucket.
   pipeline :authenticated_api do
     plug :accepts, ["json", "event-stream"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
@@ -85,7 +71,7 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
-  # Submit path on the claim gate: defends against username enumeration
+  # Submit path on the claim page: defends against username enumeration
   # (cyfr.run's 409 distinguishes SLUG_TAKEN / ALREADY_CLAIMED) and
   # claim-spam DOS.
   pipeline :claim_submit_throttle do
@@ -124,11 +110,8 @@ defmodule EmissaryWeb.Router do
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
   end
 
-  # A device ticket is 32 random bytes and browser-bound, so guessing one is
-  # not a takeover path — but `apply_device_ticket` CONSUMES the ticket it
-  # looks up, so an unmetered guesser can burn other people's pending
-  # tickets, and this was the one pre-session auth route with no budget at
-  # all while every sibling had one.
+  # Meter ticket adoption before authentication. Looking up a ticket
+  # consumes it, so attempts need their own request budget.
   pipeline :device_complete_throttle do
     plug EmissaryWeb.Plugs.AuthRateLimit,
       bucket: :device_complete,
@@ -281,9 +264,9 @@ defmodule EmissaryWeb.Router do
     end
   end
 
-  # Personal-namespace claim gate (web flow).
-  # Hit automatically by AuthController when post-login probe returns no
-  # personal namespace; blocks dashboard access until the user claims a slug.
+  # The publisher-namespace claim (web flow): a person who wants to publish
+  # to cyfr.run claims their namespace here, whenever they choose. Signing
+  # in never depends on it.
   scope "/claim-namespace", PrismWeb do
     pipe_through :browser
 
@@ -297,10 +280,9 @@ defmodule EmissaryWeb.Router do
     end
   end
 
-  # Policy-acceptance gate (R1.11 / cyfr.run §3.12). Hit when cyfr.run
-  # returns 412 POLICY_ACCEPTANCE_REQUIRED on a claim attempt, or
-  # proactively from the post-login flow. Renders the bundled policies
-  # for read + clickwrap, then POSTs to cyfr.run /v1/legal/accept.
+  # Policy acceptance: renders bundled policies and posts acceptance to
+  # cyfr.run /v1/legal/accept. Used after a 412 POLICY_ACCEPTANCE_REQUIRED
+  # response or during post-login setup.
   scope "/legal/accept", PrismWeb do
     pipe_through [:browser, :legal_accept_throttle]
 
@@ -382,9 +364,10 @@ defmodule EmissaryWeb.Router do
     pipe_through [:attachment, :attachment_throttle]
 
     get "/attachments/:message_id/:filename", AttachmentController, :show
+    get "/files/download/*path", FileController, :show
   end
 
-  # "open Home" is a link. `PrismWeb.Focus` resolves the segment and narrows
+  # Opening an estate is a link. `PrismWeb.Focus` resolves the segment and narrows
   # the context (`Sanctum.Context.focus/2`) before the page mounts.
   scope "/", PrismWeb do
     pipe_through :browser
@@ -403,11 +386,11 @@ defmodule EmissaryWeb.Router do
       live "/chat", ChatLive, :index
 
       scope "/a/:athanor" do
-        # An athanor's chat used to live here; it forwards to the chat zone
-        # with the estate named.
+        # Forward to /chat with the athanor selected.
         live "/", ChatRedirectLive, :index
-        # The estate's AQUA; the old name forwards.
+        # AQUA page and agents-path redirect.
         live "/aqua", AquaLive, :index
+        live "/files", FilesLive, :index
         live "/agents", AquaRedirectLive, :index
         # /activities: unified activities feed (mcp_log + execution fan-out).
         live "/activities", ActivitiesLive, :index

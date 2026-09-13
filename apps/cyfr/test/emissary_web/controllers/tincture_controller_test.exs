@@ -290,8 +290,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
 
     test "an API key in the query string does not authenticate", %{conn: conn, api_key: key} do
-      # A credential in a URL lands in history, Referer and every proxy log, so
-      # the query path is no longer accepted at all — even for a valid key.
+      # Account credentials must be rejected in query parameters, even when valid.
       conn = get(conn, "/t/test/local/auth-dash?_key=#{key}")
       assert conn.status == 404
     end

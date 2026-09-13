@@ -34,17 +34,14 @@ defmodule Emissary.MCP.RouterTest do
 
       assert {:ok, result} = Router.dispatch(ctx, msg)
 
-      # `resources/subscribe` was replaced by `subscriptions/listen`; advertising
-      # the retired capability would have clients waiting for updates that this
-      # server has no way to send.
+      # Advertise subscriptions/listen support without the unsupported resources/subscribe capability.
       refute Map.has_key?(result["capabilities"]["resources"], "subscribe")
       assert is_map(result["capabilities"]["extensions"])
     end
   end
 
   describe "dispatch/2 with ping" do
-    # Removed in 2026-07-28. Answering it would misreport which revision this
-    # server speaks, so the rejection is the conformant behaviour.
+    # Reject unsupported methods for the current protocol revision.
     test "is not a method this revision has", %{context: ctx} do
       msg = %Message{
         type: :request,
@@ -59,7 +56,7 @@ defmodule Emissary.MCP.RouterTest do
   end
 
   describe "dispatch/2 with tools/list" do
-    test "delegates to ToolRegistry and returns tools list", %{context: ctx} do
+    test "delegates to the catalog and returns tools list", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 3,
@@ -73,7 +70,7 @@ defmodule Emissary.MCP.RouterTest do
   end
 
   describe "dispatch/2 with tools/call" do
-    test "delegates to ToolRegistry for valid tool", %{context: ctx} do
+    test "delegates to the catalog for valid tool", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 4,
@@ -119,9 +116,7 @@ defmodule Emissary.MCP.RouterTest do
     end
 
     test "returns invalid_params for non-object arguments", %{context: ctx} do
-      # Regression: the dispatcher reads `arguments["action"]`, and Access raises
-      # on a list — this used to escape as an uncaught ArgumentError (HTTP 500)
-      # rather than a JSON-RPC -32602.
+      # Reject non-map arguments as invalid_params before action lookup.
       for bad_arguments <- [[1, 2, 3], "a string", 42] do
         msg = %Message{
           type: :request,
@@ -213,10 +208,7 @@ defmodule Emissary.MCP.RouterTest do
       assert message =~ "No provider found"
     end
 
-    # A missing or non-string uri is a malformed request, and must be
-    # refused as one. ResourceRegistry.read/2 is guarded `when is_binary`,
-    # so these used to raise out of the request process and render as a 500
-    # through ErrorJSON — the shape ErrorRenderer reserves for genuine bugs.
+    # Reject missing or non-string resource URIs as invalid_params.
     for {label, params} <- [
           {"no params at all", %{}},
           {"a null uri", %{"uri" => nil}},

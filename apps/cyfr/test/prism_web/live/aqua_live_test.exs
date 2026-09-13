@@ -17,7 +17,9 @@ defmodule PrismWeb.AquaLiveTest do
     Application.put_env(:cyfr, :base_path, test_path)
 
     on_exit(fn ->
-      File.rm_rf!(test_path)
+      # A turn the test left finishing may still write under the path; the
+      # runners are stopped after this callback, so the removal tolerates it.
+      File.rm_rf(test_path)
 
       if original,
         do: Application.put_env(:cyfr, :base_path, original),
@@ -63,7 +65,7 @@ defmodule PrismWeb.AquaLiveTest do
         "content" => "# Tom"
       })
 
-    assert {:ok, %{files: 0}} = Arca.usage(group_ctx, ["aqua"])
+    refute Arca.exists?(group_ctx, Compendium.AquaPath.agent_file("tom"))
 
     # The group's page: no closet picker, no personal role.
     {_view, html} = mount_athanor(conn, "/aqua", group)
@@ -84,16 +86,66 @@ defmodule PrismWeb.AquaLiveTest do
     })
 
     assert {:ok, %{"title" => "My Tom"}} = get_agent(mine_ctx, "tom")
-    assert {:ok, %{files: 0}} = Arca.usage(group_ctx, ["aqua"])
+    refute Arca.exists?(group_ctx, Compendium.AquaPath.agent_file("tom"))
+  end
+
+  # Point the soul at `ref`, and put it back afterwards: the agent files live
+  # in the suite's shared tree, so a write left behind is the next test's
+  # starting state.
+  defp soul_names_catalyst!(ctx, ref) do
+    {:ok, soul} = Aqua.AgentConfig.agent(ctx, "aqua")
+    was = soul["catalyst_ref"] || ""
+
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "catalyst_ref" => ref
+      })
+
+    on_exit(fn ->
+      Aqua.AgentConfig.call_aqua(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "catalyst_ref" => was
+      })
+    end)
+
+    :ok
+  end
+
+  defp soul_names_missing_catalyst!(ctx),
+    do: soul_names_catalyst!(ctx, "catalyst:moonmoon69.claude")
+
+  # Minimal valid WASM with a `run` export — enough to publish a row, which
+  # is what a pull that lands leaves behind.
+  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+  # The page talks to its sections with `send_update`; a test that is about
+  # a section's own state says so the same way.
+  defp send_update_agents(view, assigns) do
+    :sys.replace_state(view.pid, & &1)
+
+    Phoenix.LiveView.send_update(
+      view.pid,
+      PrismWeb.AquaLive.AgentsComponent,
+      Keyword.put(Enum.to_list(assigns), :id, "aqua-agents")
+    )
+
+    render(view)
   end
 
   describe "the estate's page" do
     setup %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      home = Sanctum.Tenancy.Athanors.home!()
-      ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: home.id}
-      {:ok, conn: conn, ctx: ctx}
+      estate = seated_athanor()
+      ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
+      {:ok, conn: conn, ctx: ctx, estate: estate}
     end
 
     test "the soul offers no Delete; a shipped role is disabled and enabled from its card",
@@ -104,26 +156,33 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-card-aqua button[phx-click=editor_set_disabled]")
 
       # Shipped and unedited: no Delete, a Disable.
-      assert has_element?(view, "#aqua-card-aqua_planner", "shipped")
-      refute has_element?(view, "#aqua-card-aqua_planner button[phx-click=editor_delete]")
+      assert has_element?(view, "#aqua-card-planner", "shipped")
+      refute has_element?(view, "#aqua-card-planner button[phx-click=editor_delete]")
 
       view
-      |> element("#aqua-card-aqua_planner button[phx-click=editor_set_disabled]", "Disable")
+      |> element("#aqua-card-planner button[phx-click=editor_set_disabled]", "Disable")
       |> render_click()
 
-      assert {:ok, %{"disabled" => true}} = get_agent(ctx, "aqua_planner")
+      assert {:ok, %{"disabled" => true}} = get_agent(ctx, "planner")
 
       # Still on the page — `list` drops it, the page does not — as
-      # disabled, edited, and with the way back.
-      assert has_element?(view, "#aqua-card-aqua_planner", "disabled")
-      assert has_element?(view, "#aqua-card-aqua_planner", "edited")
-      assert has_element?(view, "#aqua-card-aqua_planner button", "Revert to shipped")
+      # disabled, edited, and with the way back. The write answers before
+      # the section re-reads, so the card is awaited.
+      settled(fn -> has_element?(view, "#aqua-card-planner", "disabled") end, "the disabled card")
+      assert has_element?(view, "#aqua-card-planner", "disabled")
+      assert has_element?(view, "#aqua-card-planner", "edited")
+
+      assert has_element?(
+               view,
+               "#aqua-card-planner button[phx-click=editor_revert]",
+               "Revert to shipped"
+             )
 
       view
-      |> element("#aqua-card-aqua_planner button[phx-click=editor_set_disabled]", "Enable")
+      |> element("#aqua-card-planner button[phx-click=editor_set_disabled]", "Enable")
       |> render_click()
 
-      assert {:ok, %{"disabled" => false}} = get_agent(ctx, "aqua_planner")
+      assert {:ok, %{"disabled" => false}} = get_agent(ctx, "planner")
     end
 
     test "restoring the shipped files reverts an edited soul and keeps what the estate made",
@@ -161,24 +220,25 @@ defmodule PrismWeb.AquaLiveTest do
       view |> element("#aqua-restore button[phx-click=restore_all]") |> render_click()
 
       assert {:error, _} = get_agent(ctx, "scout")
+      settled(fn -> not has_element?(view, "#aqua-card-scout") end, "the scout card to go")
       refute has_element?(view, "#aqua-card-scout")
       assert has_element?(view, "#aqua-restore-result", "aqua/roles/scout.md")
     end
 
     test "a new role starts with a role's hands, and the soul is given leave to clone into it",
          %{conn: conn, ctx: ctx} do
-      {:ok, %{"tool_policy" => planner_policy}} = get_agent(ctx, "aqua_planner")
+      {:ok, %{"tool_policy" => planner_policy}} = get_agent(ctx, "planner")
       assert map_size(planner_policy) > 0
 
       {view, html} = mount_athanor(conn, "/aqua")
 
       # The most restrictive role is the default start.
-      assert html =~ ~s(<option value="aqua_planner" selected)
+      assert html =~ ~s(<option value="planner" selected)
 
       view
       |> form("form[phx-submit=editor_create_role]", %{
         "name" => "scout",
-        "start_from" => "aqua_planner"
+        "start_from" => "planner"
       })
       |> render_submit()
 
@@ -187,6 +247,11 @@ defmodule PrismWeb.AquaLiveTest do
       assert render(view) =~ "the soul may now clone into it"
 
       # The soul card shows the leave, and the toggle takes it back.
+      settled(
+        fn -> has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]") end,
+        "the clone strip to show scout"
+      )
+
       assert has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]")
 
       view
@@ -195,6 +260,14 @@ defmodule PrismWeb.AquaLiveTest do
 
       {:ok, %{"tool_policy" => soul_policy}} = get_agent(ctx, "aqua")
       refute Map.has_key?(soul_policy, "scout.*")
+
+      settled(
+        fn ->
+          not has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]")
+        end,
+        "the clone strip to drop scout"
+      )
+
       refute has_element?(view, "#aqua-clone-strip input[phx-value-role=scout][checked]")
 
       # A role the roster does not hold cannot be named.
@@ -206,9 +279,12 @@ defmodule PrismWeb.AquaLiveTest do
                "Unknown role: nobody"
     end
 
-    test "About us is pinned from the page and is what the soul reads", %{conn: conn, ctx: ctx} do
+    test "the pinned page is written from the page and is what the soul reads",
+         %{conn: conn, ctx: ctx} do
+      # The estate here is the person's own, so its one pinned page is
+      # `about-you`; a shared estate's is `about-us`.
       {view, html} = mount_athanor(conn, "/aqua")
-      assert html =~ "About us"
+      assert html =~ "About you"
       assert html =~ "Nothing pinned yet."
 
       view |> with_target("#aqua-notes-section") |> render_click("about_edit", %{})
@@ -218,10 +294,10 @@ defmodule PrismWeb.AquaLiveTest do
       |> render_submit()
 
       assert render(view) =~ "We ship on Fridays."
-      assert {:ok, %{name: "about-us", content: "We ship on Fridays."}} = Aqua.Notes.pinned(ctx)
+      assert {:ok, %{name: "about-you", content: "We ship on Fridays."}} = Aqua.Notes.pinned(ctx)
 
       # The pinned page is not a note in the drawer.
-      refute has_element?(view, "#aqua-notes button[phx-value-name=about-us]")
+      refute has_element?(view, "#aqua-notes button[phx-value-name=about-you]")
     end
 
     test "the pinned editor counts bytes, and the tool's refusal over the cap is the flash",
@@ -302,8 +378,8 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-scrolls[open]")
       assert html =~ shipped["name"]
 
-      # A shipped, unedited scroll offers no Delete; edited, it offers the
-      # way back — and takes it.
+      # A shipped, unedited scroll offers no removal verb; edited, it
+      # offers the way back — and takes it.
       view
       |> with_target("#aqua-scrolls-section")
       |> render_click("skill_open", %{
@@ -312,6 +388,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       assert has_element?(view, "#aqua-scroll-open", "shipped")
       refute has_element?(view, "#aqua-scroll-open button[phx-click=skill_delete]")
+      refute has_element?(view, "#aqua-scroll-open button[phx-click=skill_revert]")
 
       view
       |> with_target("#aqua-scrolls-section")
@@ -333,13 +410,13 @@ defmodule PrismWeb.AquaLiveTest do
 
       assert has_element?(
                view,
-               "#aqua-scroll-open button[phx-click=skill_delete]",
+               "#aqua-scroll-open button[phx-click=skill_revert]",
                "Revert to shipped"
              )
 
       view
       |> with_target("#aqua-scrolls-section")
-      |> render_click("skill_delete", %{
+      |> render_click("skill_revert", %{
         "name" => shipped["name"]
       })
 
@@ -434,11 +511,120 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "form[phx-submit=editor_create_role]")
     end
 
+    test "a catalyst the estate does not hold is offered an Install, which refuses without a registry",
+         %{conn: conn, ctx: ctx} do
+      # The soul names a model catalyst nothing here holds: the page says so
+      # and offers to fetch it, rather than leaving a dead end.
+      :ok = soul_names_missing_catalyst!(ctx)
+
+      previous = Application.get_env(:cyfr, :registry_url)
+      Application.put_env(:cyfr, :registry_url, Compendium.RegistryHost.none())
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:cyfr, :registry_url, previous),
+          else: Application.delete_env(:cyfr, :registry_url)
+      end)
+
+      {view, html} = mount_athanor(conn, "/aqua")
+      assert html =~ "not installed here yet"
+      assert has_element?(view, "button[phx-click=install_catalyst]")
+
+      # With no registry the refusal is the outcome, and it never became a
+      # request: `Compendium.Pull` asks before it resolves a tag.
+      assert {:error, %Compendium.OCI.Errors{reason: :registry_unconfigured}} =
+               Compendium.Pull.oci_reference_for("catalyst:moonmoon69.claude")
+
+      view
+      |> element("button[phx-click=install_catalyst]")
+      |> render_click()
+
+      html = render(view)
+      assert html =~ "Could not install"
+
+      # The button comes back: a refused fetch must not leave the page
+      # showing "Installing…" with nothing to click.
+      refute html =~ "Installing…"
+      assert has_element?(view, "button[phx-click=install_catalyst]:not([disabled])")
+    end
+
+    test "an install that lands leaves the model asking for a key, not asking to be installed",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.newmodel"
+      :ok = soul_names_catalyst!(ctx, ref)
+
+      {view, html} = mount_athanor(conn, "/aqua")
+      assert html =~ "not installed here yet"
+
+      # What a pull that succeeds leaves behind: the row, with a required
+      # need and no consent bound to it yet.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "newmodel",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "api_key" => %{
+                  "type" => "api_key:newmodel.test",
+                  "reason" => "to call the model with your key",
+                  "fields" => ["NEWMODEL_API_KEY"],
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      send(view.pid, {:catalyst_installed, ref, {:ok, %{}}})
+
+      html = settled_render(view)
+      assert html =~ "Installed #{ref}."
+      refute html =~ "not installed here yet"
+      assert html =~ "the model has no key yet"
+      refute has_element?(view, "button[phx-click=install_catalyst]")
+
+      # And the way on is live: the sheet opens on the release that landed.
+      view
+      |> element("button[phx-click=open_consent]", "Connect a model")
+      |> render_click()
+
+      html = render(view)
+      assert html =~ "#{ref}:0.1.0"
+      assert html =~ "to call the model with your key"
+    end
+
+    test "an unrelated reload does not re-enable Install while its fetch is running",
+         %{conn: conn, ctx: ctx} do
+      :ok = soul_names_missing_catalyst!(ctx)
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      # The section is told an install started, then reloaded for an
+      # unrelated reason. A button re-enabled here invites a second
+      # download of the same component.
+      send_update_agents(view, installing: "catalyst:moonmoon69.claude")
+      send_update_agents(view, load: true)
+
+      assert has_element?(view, "button[phx-click=install_catalyst][disabled]")
+
+      # The install that ends is the one named, and only then.
+      send_update_agents(view, installed: "catalyst:someone.else")
+      assert has_element?(view, "button[phx-click=install_catalyst][disabled]")
+
+      send_update_agents(view, installed: "catalyst:moonmoon69.claude")
+      assert has_element?(view, "button[phx-click=install_catalyst]:not([disabled])")
+    end
+
     test "a key bound from the page drops the kept catalogue, so the picker is read again",
          %{conn: conn, ctx: ctx} do
-      home = Sanctum.Tenancy.Athanors.home!()
-      :ok = PrismWeb.ModelCatalog.remember(home.id, %{"models" => %{"kept" => ["kept-model-1"]}})
-      on_exit(fn -> PrismWeb.ModelCatalog.forget(home.id) end)
+      estate = seated_athanor()
+
+      :ok =
+        PrismWeb.ModelCatalog.remember(estate.id, %{"models" => %{"kept" => ["kept-model-1"]}})
+
+      on_exit(fn -> PrismWeb.ModelCatalog.forget(estate.id) end)
 
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "kept-model-1"
@@ -446,9 +632,10 @@ defmodule PrismWeb.AquaLiveTest do
       send(view.pid, {:consent_granted, "catalyst:local.http:1.1.0", %{}})
       assert render(view) =~ "Model connected."
 
-      # The kept entry is gone: a load from here finds no hit to hand back.
+      # The kept entry is gone: a load from here finds no hit to hand back,
+      # whatever a fresh run answers.
       PrismWeb.ModelCatalog.load(ctx)
-      refute_received {:list_models_result, {:ok, _}}
+      refute_received {:list_models_result, {:ok, %{"models" => %{"kept" => _}}}}
     end
 
     test "the prompt editor is a dialog with a sibling backdrop and an Escape of its own",
@@ -482,11 +669,11 @@ defmodule PrismWeb.AquaLiveTest do
       view
       |> with_target("#aqua-agents")
       |> render_click("editor_toggle_capability", %{
-        "name" => "aqua_web",
+        "name" => "web",
         "key" => "files.write"
       })
 
-      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "aqua_web")
+      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "web")
 
       view
       |> with_target("#aqua-agents")
@@ -502,12 +689,12 @@ defmodule PrismWeb.AquaLiveTest do
         view
         |> with_target("#aqua-agents")
         |> render_click("editor_toggle_capability", %{
-          "name" => "aqua_web",
+          "name" => "web",
           "key" => "files.delete"
         })
 
       assert html =~ "no card to raise"
-      assert {:ok, %{"tool_policy" => policy}} = get_agent(ctx, "aqua_web")
+      assert {:ok, %{"tool_policy" => policy}} = get_agent(ctx, "web")
       refute Map.has_key?(policy, "files.delete")
 
       html =
@@ -527,13 +714,13 @@ defmodule PrismWeb.AquaLiveTest do
         view
         |> with_target("#aqua-agents")
         |> render_click("editor_set_capability_mode", %{
-          "name" => "aqua_web",
+          "name" => "web",
           "key" => "files.write",
           "mode" => "ask"
         })
 
       assert html =~ "no card to raise"
-      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "aqua_web")
+      assert {:ok, %{"tool_policy" => %{"files.write" => "auto"}}} = get_agent(ctx, "web")
     end
 
     test "a shipped role's policy round-trips through untick and tick unchanged", %{
@@ -541,27 +728,27 @@ defmodule PrismWeb.AquaLiveTest do
       ctx: ctx
     } do
       {view, _html} = mount_athanor(conn, "/aqua")
-      {:ok, %{"tool_policy" => shipped}} = get_agent(ctx, "aqua_builder")
+      {:ok, %{"tool_policy" => shipped}} = get_agent(ctx, "builder")
       assert shipped["files.write"] == "auto"
 
       view
       |> with_target("#aqua-agents")
       |> render_click("editor_toggle_capability", %{
-        "name" => "aqua_builder",
+        "name" => "builder",
         "key" => "files.write"
       })
 
-      assert {:ok, %{"tool_policy" => without}} = get_agent(ctx, "aqua_builder")
+      assert {:ok, %{"tool_policy" => without}} = get_agent(ctx, "builder")
       refute Map.has_key?(without, "files.write")
 
       view
       |> with_target("#aqua-agents")
       |> render_click("editor_toggle_capability", %{
-        "name" => "aqua_builder",
+        "name" => "builder",
         "key" => "files.write"
       })
 
-      assert {:ok, %{"tool_policy" => ^shipped}} = get_agent(ctx, "aqua_builder")
+      assert {:ok, %{"tool_policy" => ^shipped}} = get_agent(ctx, "builder")
     end
 
     test "the matrix tells the truth: a role's hands run in the role, and it is offered no destructive row",
@@ -616,4 +803,8 @@ defmodule PrismWeb.AquaLiveTest do
       assert after_toggle["vault.get"] == "ask"
     end
   end
+
+  # A section re-reads itself on a message the write sends after it
+  # answers, so a card's new state is awaited rather than read at once.
+  defp settled(fun, label), do: Cyfr.Test.Wait.wait_until(fun, 2_000, label)
 end

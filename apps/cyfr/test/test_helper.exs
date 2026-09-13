@@ -1,25 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# The cyfr↔opus execution flow (tagged `:requires_opus`) is the product's core
-# path and ships as one BEAM. Exclude those tests only when opus is not part of
-# the loaded application set — i.e. when this suite is run scoped to apps/cyfr
-# alone. An umbrella-root run (local or CI) has opus loaded and includes them.
-#
-# `:requires_opus_modules` is the weaker requirement: the test only calls into
-# opus MODULES (tool providers) without needing the running app — e.g. the
-# tool-classification and consent-shape tests that enumerate every provider's
-# actions. Those run whenever the opus code is loadable (a fresh umbrella
-# compile leaves it loaded) and are excluded when it isn't (a cached
-# app-scoped run), instead of crashing on an UndefinedFunctionError.
-# `:s3_integration` needs a live MinIO — the `s3-minio` CI job (and a local
-# `mix test --only s3_integration`) opts in; ordinary runs skip it.
-# `:requires_local_docs` is the same shape for a file that is deliberately
-# NOT in the repo: `CLAUDE.md` is gitignored (it is the operator's own
-# agent contract), so a fresh checkout — every CI run — does not have it.
-# The guard that binds its storage tree to the layout SSOT is therefore a
-# LOCAL check by design. It used to be an unguarded `File.read!`, which
-# meant CI could not be green on a clean clone.
+# Include :requires_opus tests when the Opus application is loaded.
+# :requires_opus_modules needs only loadable Opus code.
+# :s3_integration requires MinIO and runs only when explicitly selected.
+# :requires_local_docs runs only when the gitignored CLAUDE.md exists.
 excludes =
   [:s3_integration] ++
     Enum.concat(

@@ -13,10 +13,7 @@ defmodule Cyfr.OtelTenantHandlerTest do
   end
 
   describe "the subscribed events" do
-    # The handler once hooked the :start pair, which Phoenix emits BEFORE
-    # the pipeline runs — `assigns[:context]` was always nil there, so no
-    # tenant attribute was ever written and no test noticed. Pin the
-    # post-pipeline :stop pair so that regression cannot come back.
+    # Use post-pipeline :stop events so the resolved context is available.
     test "are the post-pipeline :stop events" do
       root = Path.expand("../../../..", __DIR__)
       source = File.read!(Path.join(root, "apps/cyfr/lib/cyfr/otel_tenant_handler.ex"))

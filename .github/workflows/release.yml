@@ -12,9 +12,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # Same reason as docker.yml: tags do not match the Test workflow's push
-  # filter, so a release could be cut from a commit no CI run had gone green
-  # on. The artifacts this job signs are the ones people install.
+  # Require tests on the tagged commit before building release artifacts.
   verify:
     if: github.repository == 'cyfrworks/cyfr'
     uses: ./.github/workflows/test.yml
@@ -94,10 +92,9 @@ jobs:
           git -C "$workdir" config user.name  "github-actions[bot]"
           git -C "$workdir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Install the new cask, drop the legacy root formula, and ensure the
-          # formula->cask migration map exists so `brew upgrade` moves existing
-          # formula installs onto the cask. `git add -A` runs BEFORE the
-          # idempotency check so brand-new untracked files are detected.
+          # Install the cask, remove the root formula, and register the formula-to-cask
+          # migration for existing Homebrew installs. Stage files before checking for
+          # changes so new files are included.
           stage() {
             mkdir -p "$workdir/Casks"
             cp "$CASK_SRC" "$workdir/Casks/cyfr.rb"

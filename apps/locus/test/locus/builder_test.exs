@@ -63,8 +63,7 @@ defmodule Locus.BuilderTest do
     end
 
     test "rejects a source key that traverses out of the build directory" do
-      # Path.join neutralizes a leading `/` on the key; `..` is the live
-      # escape — a key like this used to land the write outside the tmp dir.
+      # Reject parent traversal before writing build input files.
       sources = %{
         "src/lib.rs" => "pub fn hello() {}",
         "../../../../tmp/escape.rs" => "pwned"

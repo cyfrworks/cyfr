@@ -81,11 +81,7 @@ defmodule Cyfr.RetentionScheduler do
     ]
   end
 
-  # `Sanctum.Session.cleanup/0` existed with no caller outside its own tests,
-  # so expired rows accumulated for the life of the deployment. Nothing was
-  # *unsafe* about that — every read filters on `expires_at > now`, so an
-  # expired row never authenticated anyone — but the table only grew, and the
-  # sweep it needed had no index until the one added alongside this.
+  # Sweep expired sessions; authentication reads independently enforce expiry.
   defp sweep_expired_sessions do
     case Sanctum.Session.cleanup() do
       {:ok, 0} ->

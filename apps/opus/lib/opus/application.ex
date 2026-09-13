@@ -10,20 +10,9 @@ defmodule Opus.Application do
 
   @impl true
   def start(_type, _args) do
-    # The engine is named in config (`config :cyfr, :execution_impl`), not
-    # registered here: a boot-time put_env left a window where the endpoint
-    # answered requests before this application started. This module owns
-    # readiness only.
+    # The execution implementation is configured before boot; this application manages readiness.
     children = [
-      # NOTE: catalyst host-function HTTP (cyfr:http/fetch + /stream) no longer
-      # uses a dedicated Finch pool. To pin the connection to the SSRF-validated
-      # IP while preserving the original hostname for TLS SNI, the handlers pass
-      # Req `connect_options: [hostname: ..., protocols: [:http1]]`, which is
-      # mutually exclusive with a named Finch pool — Req manages per-host pools.
-      # Guest HTTP concurrency is bounded by the execution semaphore and the
-      # per-component rate limiter, not by a global pool size.
-      #
-      # Sliding window rate limiter for policy enforcement
+      # Sliding-window rate limiter for policy enforcement.
       Opus.RateLimiter,
       # Shared Wasmex engine for compile-once/instantiate-many
       Opus.SharedEngine,
@@ -68,10 +57,8 @@ defmodule Opus.Application do
            ]},
         type: :supervisor
       },
-      # Supervised fire-and-forget tasks (run_stream, cron execution spawns)
+      # Supervised fire-and-forget tasks (run_stream)
       Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000),
-      # Cron scheduler for recurring component executions
-      Opus.CronScheduler,
       # Periodic sweep to mark stale "running" executions as failed (replaces one-shot startup sweep)
       Opus.ExecutionSweeper,
       # Owns the :protected ETS table of OAuth tokens dispensed to guests (for

@@ -66,8 +66,7 @@ defmodule Compendium.Scaffold do
       rel_files =
         Enum.map(files, fn {path, content} -> {Enum.drop(path, length(base_path)), content} end)
 
-      # Scaffolds stay cap-exempt — the enforcement roster in
-      # `Sanctum.Tenancy.Caps` is unchanged by the commit migration.
+      # Scaffolds are exempt from Sanctum.Tenancy.Caps.
       case Arca.Overlay.commit_unit(ctx, base_path, {:files, rel_files}, cap: :exempt) do
         {:ok, written} ->
           reference = local_ref(type, name, version)
@@ -120,9 +119,7 @@ defmodule Compendium.Scaffold do
       {:error,
        "Invalid component type: '#{type}'. Must be: reagent, catalyst, formula, or tincture"}
 
-  # The one version grammar — `Sanctum.ComponentRef.validate_version/1`,
-  # which every other ingress (registry, fork, path) already uses. Scaffold
-  # once carried its own `Version.parse` spelling, the sole outlier.
+  # Use the shared component version grammar.
   defp validate_version(version) when is_binary(version) do
     case Sanctum.ComponentRef.validate_version(version) do
       :ok -> :ok
@@ -132,29 +129,32 @@ defmodule Compendium.Scaffold do
 
   defp validate_version(_), do: {:error, "Missing required argument: version"}
 
+  # A version the server ships is never scaffolded over, held by the
+  # athanor or not: the seed is the default for that name and version. A
+  # seed-catalog outage refuses loudly rather than falling through to the
+  # generic "already exists" and sending someone deleting what a release
+  # ships.
   defp check_not_exists(ctx, name, type, version) do
     path =
       component_base_path(name, type, version) ++ [Compendium.ComponentPath.manifest_name()]
 
-    if Arca.exists?(ctx, path) do
-      # The name exists in the union — a seed-catalog outage must refuse
-      # loudly here, not fall through to the generic "already exists" and
-      # send someone deleting what a release ships.
-      case Compendium.Provenance.shipped_versions(type, name) do
-        {:ok, shipped} ->
-          if version in shipped do
+    case Compendium.Provenance.shipped_versions(type, name) do
+      {:ok, shipped} ->
+        cond do
+          version in shipped ->
             {:error,
-             "#{local_ref(type, name, version)} is bundled with the server — edit it in place " <>
-               "(your athanor gets its own copy on first write), or scaffold a new version or name"}
-          else
-            {:error, "Component already exists: #{local_ref(type, name, version)}"}
-          end
+             "#{local_ref(type, name, version)} is bundled with the server — edit your copy " <>
+               "in place, or scaffold a new version or name"}
 
-        {:error, reason} ->
-          {:error, "Cannot scaffold right now — seed media unreadable: #{inspect(reason)}"}
-      end
-    else
-      :ok
+          Arca.exists?(ctx, path) ->
+            {:error, "Component already exists: #{local_ref(type, name, version)}"}
+
+          true ->
+            :ok
+        end
+
+      {:error, reason} ->
+        {:error, "Cannot scaffold right now — seed media unreadable: #{inspect(reason)}"}
     end
   end
 

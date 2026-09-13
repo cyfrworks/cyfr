@@ -31,15 +31,6 @@ defmodule PrismWeb.SettingsLiveTest do
 
   test "the mode preference is written to the person's row", %{conn: conn} do
     person = test_user()
-
-    {:ok, _} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: person.user_id,
-        provider: "github",
-        email: person.email,
-        verified: true
-      })
-
     {view, _} = conn |> log_in_user(person) |> mount_athanor("/settings")
 
     view |> element("button[phx-click=set_mode][phx-value-mode=lite]") |> render_click()

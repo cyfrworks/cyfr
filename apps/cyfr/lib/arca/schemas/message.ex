@@ -19,8 +19,10 @@ defmodule Arca.Schemas.Message do
   @primary_key {:id, :string, autogenerate: false}
 
   @type t :: %__MODULE__{}
-  @kinds ~w(text approval error system)
-  @statuses ~w(pending running approved declined error)
+  # `tool_call`, `tool_result`, `compaction` and `turn_aborted` are the
+  # rows the loop that will own a turn writes; nothing writes them yet.
+  @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted)
+  @statuses ~w(pending running approved declined error expired)
   @agent_author "aqua"
   @system_author "system"
 
@@ -58,6 +60,9 @@ defmodule Arca.Schemas.Message do
     field :resolution, :string
     field :execution_id, :string
     field :inserted_at, :utc_datetime_usec
+    field :turn_id, :string
+    field :approval_id, :string
+    field :client_id, :string
   end
 
   @fields [
@@ -74,7 +79,10 @@ defmodule Arca.Schemas.Message do
     :resolved_at,
     :resolution,
     :execution_id,
-    :inserted_at
+    :inserted_at,
+    :turn_id,
+    :approval_id,
+    :client_id
   ]
 
   def changeset(row, attrs) do
@@ -84,5 +92,9 @@ defmodule Arca.Schemas.Message do
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:status, @statuses)
     |> unique_constraint([:conversation_id, :seq])
+    |> unique_constraint([:conversation_id, :client_id])
+    # The primary key, under the name each adapter reports it by.
+    |> unique_constraint(:id, name: :messages_pkey)
+    |> unique_constraint(:id, name: :messages_id_index)
   end
 end
