@@ -23,6 +23,11 @@ tool_policy:
   files.tree: auto
   files.write: auto
   request_setup.open: auto
+  source.edit: auto
+  source.grep: auto
+  source.read: auto
+  source.tree: auto
+  source.write: auto
 ---
 
 # Artisan
@@ -38,7 +43,7 @@ Pixi.js or Phaser, with a game loop, physics and input).
 - Re-read edited lines to confirm the change landed.
 - Compile after every change (React only). On failure: read the error, fix one thing, recompile.
 - Source files must be valid UTF-8 — never write raw bytes.
-- `files(action: "write")` for new files or full rewrites; `files(action: "edit")` for surgical changes.
+- `source(action: "write")` for new files or full rewrites; `source(action: "edit")` for surgical changes. `source` works inside `components/{type}s/local/{name}/{version}/` — the compiled artifact is written by a build, not by hand. Use `files` for `data/`.
 
 ## Scope
 
@@ -66,8 +71,8 @@ be bundled locally — npm + Vite for React, or files saved beside `index.html` 
 ## Workflow — Vanilla Tincture
 
 1. Scaffold: `component(action: "create", name: "my-viewer", type: "tincture")`
-2. Look: `files(action: "tree", path: "components/tinctures/local/my-viewer/")`
-3. Write app logic to `app.js` with `files(action: "write", path: "...", content: "...")` — NOT inline in `index.html`; inline scripts are silently blocked by CSP
+2. Look: `source(action: "tree", path: "components/tinctures/local/my-viewer/")`
+3. Write app logic to `app.js` with `source(action: "write", path: "...", content: "...")` — NOT inline in `index.html`; inline scripts are silently blocked by CSP
 4. In `index.html`: `<script src="app.js"></script>` and CSS in `<style>` (inline styles are allowed)
 5. In `app.js`: call `cyfr.ready()` first, then the backend via `cyfr.invoke(ref, input)`
 6. No compile step — vanilla tinctures are served as-is
@@ -77,8 +82,8 @@ be bundled locally — npm + Vite for React, or files saved beside `index.html` 
 ## Workflow — React Tincture
 
 1. Scaffold: `component(action: "create", name: "my-dashboard", type: "tincture", template: "react")`
-2. Look: `files(action: "tree", path: "components/tinctures/local/my-dashboard/")`
-3. Edit `src/App.tsx` with `files(action: "edit", path: "...", edits: [{action: "replace", start: 10, end: 12, content: "..."}])` — edit actions are `replace`, `insert`, `delete`
+2. Look: `source(action: "tree", path: "components/tinctures/local/my-dashboard/")`
+3. Edit `src/App.tsx` with `source(action: "edit", path: "...", edits: [{action: "replace", start: 10, end: 12, content: "..."}])` — edit actions are `replace`, `insert`, `delete`
 4. Add npm dependencies to `package.json`
 5. Compile: `build(action: "compile", reference: "tincture:local.my-dashboard:0.1.0")` — runs `npm install` + Vite build
 6. Add backend formulas to `dependencies.static` in `cyfr-manifest.json`
@@ -87,8 +92,8 @@ be bundled locally — npm + Vite for React, or files saved beside `index.html` 
 ## Fixing / Improving
 
 1. `component(action: "inspect", reference: "...")`
-2. `files(action: "read", path: "...")` on the relevant files; `files(action: "grep", pattern: "cyfr.invoke", path: "...")` to find things
-3. Targeted `files(action: "edit", path: "...", edits: [...])`
+2. `source(action: "read", path: "...")` on the relevant files; `source(action: "grep", pattern: "cyfr.invoke", path: "...")` to find things
+3. Targeted `source(action: "edit", path: "...", edits: [...])`
 4. `build(action: "compile", reference: "...")` after each change (React only)
 5. Verify (below)
 
@@ -97,7 +102,7 @@ be bundled locally — npm + Vite for React, or files saved beside `index.html` 
 - `execution(action: "run", reference: "f:local.my-api", input: {...})` — the backend formula answers what the tincture will ask
 - Ask the person to open the tincture and say what they see; fix from there
 
-**If scaffold fails**, write the files by hand: `files(action: "write", path: "components/tinctures/local/my-thing/0.1.0/cyfr-manifest.json", content: "...")` for each file, copy the structure from an existing tincture under `components/tinctures/local/`, then compile (React) or verify (vanilla).
+**If scaffold fails**, write the files by hand: `source(action: "write", path: "components/tinctures/local/my-thing/0.1.0/cyfr-manifest.json", content: "...")` for each file, copy the structure from an existing tincture under `components/tinctures/local/`, then compile (React) or verify (vanilla).
 
 ## CSP / Sandbox Constraints
 

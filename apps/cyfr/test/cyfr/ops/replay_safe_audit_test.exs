@@ -65,7 +65,12 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
              "component.list",
              "notes.list",
              "notes.read",
-             "notes.search"
+             "notes.search",
+             # A component's own source, read: re-reading it after an unknown
+             # outcome tells the model what is there now, and changes nothing.
+             "source.grep",
+             "source.read",
+             "source.tree"
            ]
 
     assert Catalog.replay_safe_actions([Carrier]) == ["carrier.peek", "carrier.poke"]

@@ -32,6 +32,10 @@ config :cyfr,
     Emissary.MCP.NotesTool,
     # The athanor's files as the Files page shows them, one tier per folder.
     Emissary.MCP.FileTool,
+    # A component's own source, for the agent authoring it — host-side and
+    # scoped, because the files catalyst's grant is `data/` and widening it
+    # would widen it for every agent.
+    Compendium.MCP.SourceTool,
     # Domain services
     Opus.MCP,
     Cyfr.Schedules.Provider,
