@@ -95,6 +95,21 @@ defmodule Aqua.LoopTest do
     assert is_integer(Aqua.Loop.catalyst_request_cap(spec))
   end
 
+  describe "summary_text/1" do
+    test "a summary with words is committed" do
+      assert {:ok, "what was said"} = Aqua.Loop.summary_text("what was said")
+    end
+
+    test "a reply carrying no text is refused, so the boundary does not advance" do
+      # `summarize/5` filters the reply to text blocks and joins them, so a
+      # reply of only tool calls — or of no content at all — arrives here as
+      # "". Committing it would render an empty summary in place of every row
+      # before `first_kept_seq`.
+      assert {:error, :empty_summary} = Aqua.Loop.summary_text("")
+      assert {:error, :empty_summary} = Aqua.Loop.summary_text("   \n\t ")
+    end
+  end
+
   describe "group/1" do
     test "a write between reads runs alone, and the reads on either side do not join it" do
       read1 = item("files", %{"action" => "read", "path" => "a"})

@@ -1489,6 +1489,7 @@ defmodule Aqua.Loop do
            |> List.wrap()
            |> Enum.filter(&(&1["type"] == "text"))
            |> Enum.map_join("", & &1["text"]),
+         {:ok, summary} <- summary_text(summary),
          {:ok, _} <-
            Tape.record_response(guest(state), state.turn, step, %{
              text: nil,
@@ -1562,6 +1563,23 @@ defmodule Aqua.Loop do
 
   # A compaction that did not land leaves the rows as they were; the
   # model step it opened stays counted.
+  @doc """
+  The summary a compaction may commit, or `:empty_summary`.
+
+  A compaction row commits its boundary seqs, so the projection drops every
+  row before `first_kept_seq` and renders the summary in their place. An empty
+  summary would drop them behind nothing. Any reply carrying no text block
+  produces one — not only a reply that is all tool calls.
+
+  Public because the branch is unobservable end-to-end: reaching it needs a
+  transcript past the compaction threshold and a model that answers it without
+  text, and a skipped compaction looks exactly like a request that fit.
+  """
+  @spec summary_text(String.t()) :: {:ok, String.t()} | {:error, :empty_summary}
+  def summary_text(summary) when is_binary(summary) do
+    if String.trim(summary) == "", do: {:error, :empty_summary}, else: {:ok, summary}
+  end
+
   defp skip_compaction(%State{} = state, rows, reason) do
     Logger.warning("[Aqua.Loop] compaction skipped for turn #{state.turn.id}: #{inspect(reason)}")
     {:ok, state, rows}
