@@ -516,8 +516,6 @@ defmodule Aqua.Hands do
   defp component_source_path?(path) when is_binary(path),
     do: path == @components_root or String.starts_with?(path, @components_prefix)
 
-  defp component_source_path?(_), do: false
-
   defp storage_path?(path) when is_binary(path),
     do: path == @storage_root or String.starts_with?(path, @storage_prefix)
 

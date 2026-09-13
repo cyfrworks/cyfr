@@ -157,8 +157,6 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  defp installed_minted(_bootstrap, _pulled), do: :ok
-
   defp same_component?(a, b) do
     with {:ok, a_name} <- Sanctum.ComponentRef.to_name_ref(a),
          {:ok, b_name} <- Sanctum.ComponentRef.to_name_ref(b) do
