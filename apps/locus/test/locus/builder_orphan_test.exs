@@ -19,12 +19,16 @@ defmodule Locus.BuilderOrphanTest do
       {port, os_pid} = spawn_sleeper()
       port_ref = Port.monitor(port)
 
-      Builder.kill_os_process(os_pid)
+      outcome = Builder.kill_os_process(os_pid)
 
-      # Called straight from the test, not from a watcher. If this passes
-      # where the watcher's cases fail, the cleanup works and the watcher
-      # never reaches it.
-      await_port_down(port_ref, port, os_pid, "kill_os_process/1 did not kill it")
+      # Called straight from the test, not from a watcher, and reporting
+      # exactly what the kills answered it.
+      await_port_down(
+        port_ref,
+        port,
+        os_pid,
+        "kill_os_process/1 did not kill it; it saw #{inspect(outcome)}"
+      )
     end
   end
 

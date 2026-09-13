@@ -757,7 +757,7 @@ defmodule Locus.Builder do
   @doc false
   # Public alongside `watch_for_orphans/3`, so a test can tell a cleanup
   # that does not work from a watcher that never called it.
-  def kill_os_process(nil), do: :ok
+  def kill_os_process(nil), do: {:killed, []}
 
   def kill_os_process(os_pid) do
     # Under `setsid --wait` the new session belongs to setsid's child, not
@@ -774,8 +774,8 @@ defmodule Locus.Builder do
     # may have leaked, and that must not be silent — this is the one
     # zombie-process risk in the tree.
     case System.cmd("kill", ["-9", "-#{os_pid}"], stderr_to_stdout: true) do
-      {_, 0} ->
-        :ok
+      {_, 0} = group ->
+        {:killed, group: group}
 
       {out, code} ->
         {direct_out, direct_code} =
@@ -793,12 +793,12 @@ defmodule Locus.Builder do
           )
         end
 
-        :ok
+        {:killed, group: {out, code}, direct: {direct_out, direct_code}}
     end
   rescue
     e ->
       Logger.warning("[Locus.Builder] Failed to kill OS process #{os_pid}: #{inspect(e)}")
-      :ok
+      {:error, Exception.message(e)}
   end
 
   # setsid's own child, the process that leads the build's session. `pgrep`
