@@ -112,9 +112,15 @@ defmodule Locus.BuilderOrphanTest do
   end
 
   defp os_state(os_pid) do
-    "#{ps(os_pid)}; pgid #{pgid(os_pid)}; " <>
-      "group kill now #{inspect(kill(["-9", "-#{os_pid}"]))}; " <>
-      "direct kill now #{inspect(kill(["-9", "#{os_pid}"]))}"
+    before = "#{ps(os_pid)}; pgid #{pgid(os_pid)}"
+    group = inspect(kill(["-9", "-#{os_pid}"]))
+    direct = inspect(kill(["-9", "#{os_pid}"]))
+    Process.sleep(200)
+
+    # Whether a kill that reports success actually ends the process. If it
+    # is still there afterwards, the signal is reaching something other than
+    # what `ps` is describing.
+    "#{before}; group kill #{group}; direct kill #{direct}; then #{ps(os_pid)}"
   end
 
   defp ps(os_pid) do
