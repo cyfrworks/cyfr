@@ -938,7 +938,46 @@ defmodule Aqua.Loop do
   # runs nothing. An outcome that cannot be known is not closed here: it
   # is reported, and the loop stops the turn on it.
   @doc false
-  def run_one(%State{} = state, %{step: step, call: {:ok, %Call{} = call}}) do
+  def run_one(%State{} = state, %{step: step, call: {:ok, %Call{} = call}} = item) do
+    case still_granted(state, item, call) do
+      :ok -> dispatch_one(state, step, call)
+      {:denied, message} -> settle_denied(state, step, call, message)
+    end
+  end
+
+  # The grants a member holds are their live decision; the loop decides from
+  # a snapshot `Turn.build/3` took. Revoking "allow in this conversation"
+  # writes the rows and refreshes the runner, and reaches no loop already
+  # running — so the window between a response landing and its calls
+  # dispatching, and the window while an earlier call of the same response
+  # runs, both belonged to a grant that had gone. Every call asks again as
+  # it dispatches. The check can only withdraw an `auto`: a card the person
+  # answered is their decision about this exact call, and a standing grant's
+  # withdrawal does not retract it.
+  defp still_granted(_state, %{approved?: true}, _call), do: :ok
+
+  defp still_granted(%State{} = state, _item, %Call{} = call) do
+    case Turn.current_policy(state.spec) do
+      {:ok, policy} ->
+        if Policy.auto?(call, policy),
+          do: :ok,
+          else: {:denied, "#{call.tool}.#{call.action} is no longer allowed in this conversation"}
+
+      # A store that cannot answer whether the grant still stands is not a
+      # grant. Fail closed, the way every other standing question does.
+      {:error, _reason} ->
+        {:denied, "#{call.tool}.#{call.action} could not be checked against the agent's grants"}
+    end
+  end
+
+  defp settle_denied(%State{} = state, step, %Call{} = call, message) do
+    case close(state, step, call, {:error, {:denied, message}}) do
+      {:ok, _closed} -> :ok
+      other -> {:uncertain, step, describe({:result_lost, other})}
+    end
+  end
+
+  defp dispatch_one(%State{} = state, step, %Call{} = call) do
     case Tape.mark_dispatched(guest(state), state.turn, step) do
       {:ok, step} ->
         case normalise(execute(state, step, call)) do

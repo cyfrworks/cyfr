@@ -338,6 +338,42 @@ defmodule Aqua.LoopTest do
     assert roots() == before
   end
 
+  test "a grant withdrawn while the model answers does not run the call it used to allow",
+       %{ctx: ctx, conv: conv} do
+    grant = %{
+      scope: "conversation",
+      conversation_id: conv.id,
+      agent_name: "aqua",
+      tool: "notes",
+      action: "keep"
+    }
+
+    {:ok, _} = Aqua.ToolGrants.put(ctx, Map.put(grant, :effect, "allow"))
+
+    turn = accept!(ctx, conv, "@aqua keep a note")
+
+    script!([
+      {:probe, self()},
+      calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}]),
+      reply("understood")
+    ])
+
+    task = run(ctx, turn)
+
+    # The turn's policy was snapshotted at `Turn.build/3` with the grant in
+    # it. Withdrawing it now reaches no loop already running — the call must
+    # ask again as it dispatches.
+    assert_receive {:scripted_probe, worker, _}, 10_000
+    :ok = Aqua.ToolGrants.revoke(ctx, grant)
+    send(worker, :continue)
+
+    assert :completed = Task.await(task, 60_000)
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert %{dispatch_state: "closed", outcome: outcome} = Enum.find(steps, &(&1.kind == "tool"))
+    refute outcome == "ok"
+  end
+
   test "a steer that arrived while the turn waited skips the approved step and reaches the model",
        %{
          ctx: ctx,
