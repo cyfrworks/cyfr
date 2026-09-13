@@ -47,7 +47,7 @@ defmodule Aqua.HandsTest do
 
     assert {:ok,
             [%{tool: "storage", action: "write", args: %{"key" => "k", "value" => %{"a" => 1}}}]} =
-             Hands.canonical("catalyst:local.files:0.5.1", %{
+             Hands.canonical("catalyst:local.files:0.5.2", %{
                "action" => "write_text",
                "path" => "data/storage/k.json",
                "content" => ~s({"a": 1})
@@ -65,9 +65,9 @@ defmodule Aqua.HandsTest do
   end
 
   test "references are judged at name level, and only a hand's catalyst is a hand" do
-    assert Hands.name_level("catalyst:local.files:0.5.1") == "catalyst:local.files"
+    assert Hands.name_level("catalyst:local.files:0.5.2") == "catalyst:local.files"
     assert Hands.name_level("catalyst:local.files") == "catalyst:local.files"
-    assert Hands.hand_catalyst?("catalyst:local.files:0.5.1")
+    assert Hands.hand_catalyst?("catalyst:local.files:0.5.2")
     refute Hands.hand_catalyst?("formula:local.other")
     assert {:error, :not_virtual} = Hands.canonical("formula:local.other", %{})
   end

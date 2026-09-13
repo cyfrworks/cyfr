@@ -1,6 +1,6 @@
 {
   "name": "files",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "catalyst",
   "publisher": "local",
   "description": "File storage operations catalyst with enhanced actions: plain-text read/write, line-numbered reads, structured edits, append, glob search, content grep, and directory tree rendering.",

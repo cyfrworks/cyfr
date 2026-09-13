@@ -229,7 +229,7 @@ defmodule Aqua.Hands do
 
   @doc """
   A component reference at name level — `type:ns.name`, the version (and
-  anything after it) dropped — so `catalyst:local.files:0.5.1` and
+  anything after it) dropped — so `catalyst:local.files:0.5.2` and
   `catalyst:local.files` are the same catalyst here as they are for the
   chain.
   """

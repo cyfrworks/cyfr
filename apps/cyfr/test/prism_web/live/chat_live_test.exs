@@ -708,9 +708,9 @@ defmodule PrismWeb.ChatLiveTest do
 
     # "Connect a model" is the lite path to a key: the consent sheet for the
     # orchestrator's catalyst, from this page.
-    render_click(view, "open_consent", %{"ref" => "catalyst:local.http:1.1.0"})
+    render_click(view, "open_consent", %{"ref" => "catalyst:local.http:1.1.2"})
     assert has_element?(view, ".consent-sheet")
-    send(view.pid, {:consent_sheet_closed, "catalyst:local.http:1.1.0"})
+    send(view.pid, {:consent_sheet_closed, "catalyst:local.http:1.1.2"})
     refute has_element?(view, ".consent-sheet")
   end
 

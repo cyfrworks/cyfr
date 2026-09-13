@@ -893,7 +893,7 @@ defmodule PrismWeb.ComponentsLive do
     version = comp_field(comp, :version)
 
     # The one ref constructor. The hand-built ref here once DROPPED the
-    # `local` namespace ("catalyst:files:0.5.1"), which the parser rightly
+    # `local` namespace ("catalyst:files:0.5.2"), which the parser rightly
     # refuses — so every action on a merged remote-search row without a
     # stored ref failed.
     if is_binary(type) and is_binary(name) do

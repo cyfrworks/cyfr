@@ -156,6 +156,33 @@ jobs:
           for stamp in seed/components/*/local/*/*/src/build.stamp; do
             scripts/build-seed-guest.sh "$(dirname "$(dirname "$stamp")")" --check
           done
+      # The loop above only visits directories that already carry a stamp, so
+      # a guest shipped without one was never bound to its source at all —
+      # which is how `http` and `files` drifted to a crate version naming a
+      # release they are not. Both facts are checked for every guest here.
+      - name: Every seed guest carries a stamp, and its crate version is its own
+        run: |
+          set -uo pipefail
+          bad=""
+          for manifest in seed/components/*/local/*/*/cyfr-manifest.json; do
+            vdir="$(dirname "$manifest")"
+            # A guest is a directory with Rust sources; tinctures have none.
+            [ -f "$vdir/src/Cargo.toml" ] || continue
+            version="$(basename "$vdir")"
+            if [ ! -f "$vdir/src/build.stamp" ]; then
+              bad="$bad"$'\n'"$vdir: no src/build.stamp"
+            fi
+            crate="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$vdir/src/Cargo.toml" | head -1)"
+            if [ "$crate" != "$version" ]; then
+              bad="$bad"$'\n'"$vdir: Cargo.toml says $crate"
+            fi
+          done
+          bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
+          if [ -n "$bad" ]; then
+            echo "::error::seed guests must carry a build stamp and a crate version equal to their directory"
+            echo "$bad"
+            exit 1
+          fi
       - name: Install dependencies
         run: mix deps.get
       - name: Compile with warnings as errors

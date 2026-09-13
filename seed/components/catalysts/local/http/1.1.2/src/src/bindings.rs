@@ -17,7 +17,8 @@ pub mod cyfr {
             #[allow(unused_unsafe, clippy::all)]
             /// Execute an HTTP request. JSON format:
             /// Request: {"method": "GET", "url": "...", "headers": {...}, "body": "..."}
-            /// Response: {"status": 200, "headers": {...}, "body": "..."} or {"error": "..."}
+            /// Response: {"status": 200, "headers": {...}, "body": "..."} or
+            /// {"error": {"type": "...", "message": "..."}}
             pub fn request(json_request: &str) -> _rt::String {
                 unsafe {
                     #[cfg_attr(target_pointer_width = "64", repr(align(8)))]

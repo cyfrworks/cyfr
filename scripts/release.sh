@@ -43,14 +43,31 @@ fi
 # earlier release shipped silently repatch every athanor. New bytes mean a
 # NEW version directory. Retiring a WHOLE version directory is allowed.
 # This mirrors the CI seed-guards job, which only sees pull requests.
+#
+# Every query runs with --no-renames. Rename detection reports a rename under
+# its DESTINATION path, so shipping a new version by copying the last one read
+# as "files removed from the version that still ships" and refused the release
+# this guard exists to allow. It also hid an in-place edit whenever git paired
+# the file with a deletion elsewhere: that pair is R, which the modified-file
+# query does not select.
 LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 if [ -n "$LAST_TAG" ]; then
-  SEED_BAD="$(git diff --name-only --diff-filter=M "$LAST_TAG"..HEAD -- 'seed/components/' || true)"
+  SEED_BAD="$(git diff --no-renames --name-only --diff-filter=M "$LAST_TAG"..HEAD -- 'seed/components/' || true)"
+  # A deletion inside a version directory that still ships is a mutation too;
+  # retiring the WHOLE directory is a release decision and passes.
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
     if [ -d "$vdir" ]; then SEED_BAD="$SEED_BAD"$'\n'"$f"; fi
-  done <<< "$(git diff --name-only --diff-filter=DR "$LAST_TAG"..HEAD -- 'seed/components/' || true)"
+  done <<< "$(git diff --no-renames --name-only --diff-filter=D "$LAST_TAG"..HEAD -- 'seed/components/' || true)"
+  # Adding a file to a version directory that already shipped mutates it.
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
+    if git rev-parse --verify --quiet "$LAST_TAG:$vdir" >/dev/null 2>&1; then
+      SEED_BAD="$SEED_BAD"$'\n'"$f"
+    fi
+  done <<< "$(git diff --no-renames --name-only --diff-filter=A "$LAST_TAG"..HEAD -- 'seed/components/' || true)"
   SEED_BAD="$(printf '%s\n' "$SEED_BAD" | sed '/^$/d')"
   if [ -n "$SEED_BAD" ]; then
     echo "Error: files changed inside seed/components version directories shipped by $LAST_TAG:"
