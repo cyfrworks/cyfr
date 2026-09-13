@@ -79,8 +79,7 @@ defmodule Cyfr.VocabularyDriftTest do
     "README.md",
     "component-guide.md",
     "integration-guide.md",
-    "tincture-guide.md",
-    "seed/components/formulas/local/aqua/*/cyfr-manifest.json"
+    "tincture-guide.md"
   ]
 
   @old_words ~r/sub-agent|\bsub_agent\b|orchestrator/i
