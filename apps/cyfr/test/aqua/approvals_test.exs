@@ -257,6 +257,34 @@ defmodule Aqua.ApprovalsTest do
     assert {:ok, 0} = Approvals.expire_due(ctx)
   end
 
+  test "an expired card closes its step denied and leaves the model an answer", %{
+    ctx: ctx,
+    conv: conv,
+    pins: pins
+  } do
+    turn = started!(ctx, conv, pins)
+    past = DateTime.add(DateTime.utc_now(), -60, :second)
+    %{approval: approval, step: step} = card!(ctx, turn, @keep, expires_at: past)
+
+    assert {:ok, 1} = Approvals.expire_due(ctx)
+
+    # The step is closed, not left open: a card nobody decided must not
+    # leave the call waiting for an answer that is never coming.
+    assert {:ok, %{outcome: "denied", dispatch_state: "closed"}} = Tape.step(ctx, step.id)
+
+    # And the model is told, in the row it reads as the call's result, that
+    # the action did not run — the denial it observes instead of waiting.
+    rows = Tape.latest_messages(ctx, conv.id, 50)
+    result = Enum.find(rows, &(&1.kind == "tool_result" and payload_of(&1)["step_id"] == step.id))
+
+    assert result, "the expired call left no result for the model to read"
+    assert result.content =~ "expired"
+  end
+
+  defp payload_of(%{payload: payload}) when is_map(payload), do: payload
+  defp payload_of(%{payload: json}) when is_binary(json), do: Jason.decode!(json)
+  defp payload_of(_), do: %{}
+
   test "a turn whose consent or agent moved is failed, never resumed", %{
     ctx: ctx,
     conv: conv,
