@@ -98,6 +98,12 @@ defmodule Locus.BuilderOrphanTest do
   end
 
   defp os_state(os_pid) do
+    "#{ps(os_pid)}; pgid #{pgid(os_pid)}; " <>
+      "group kill now #{inspect(kill(["-9", "-#{os_pid}"]))}; " <>
+      "direct kill now #{inspect(kill(["-9", "#{os_pid}"]))}"
+  end
+
+  defp ps(os_pid) do
     case System.cmd("ps", ["-o", "pid=,stat=,comm=", "-p", "#{os_pid}"], stderr_to_stdout: true) do
       {"", _} -> "pid #{os_pid} is gone"
       {out, 0} -> String.trim(out)
@@ -105,6 +111,24 @@ defmodule Locus.BuilderOrphanTest do
     end
   rescue
     e -> "ps unavailable: #{Exception.message(e)}"
+  end
+
+  defp pgid(os_pid) do
+    case System.cmd("ps", ["-o", "pgid=", "-p", "#{os_pid}"], stderr_to_stdout: true) do
+      {out, 0} -> String.trim(out)
+      _ -> "unknown"
+    end
+  rescue
+    _ -> "unknown"
+  end
+
+  # Whether killing works at all from here, and how. The builder's own
+  # attempt logs nothing on the paths it believes succeeded, so repeating it
+  # is the only way to see what the OS answered.
+  defp kill(args) do
+    System.cmd("kill", args, stderr_to_stdout: true)
+  rescue
+    e -> "kill unavailable: #{Exception.message(e)}"
   end
 
   defp close(port, os_pid) do
