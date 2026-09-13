@@ -53,6 +53,11 @@ defmodule Aqua.Loop do
       since: nil,
       active_ms: 0,
       observed: nil,
+      # The highest seq the measured request carried, so rows appended since
+      # can be counted. A bare token count says nothing about which rows it
+      # was a count of.
+      observed_seq: 0,
+      sent_upto: 0,
       clone?: false,
       excerpt_sent?: false,
       # A call's outcome is unknown: only replay-safe reads run from here.
@@ -344,6 +349,7 @@ defmodule Aqua.Loop do
          {:ok, step, planned} <- open_model_step(planned, "chat") do
       excerpt = if planned.excerpt_sent?, do: nil, else: planned.spec.excerpt
       request = request(planned, rows, excerpt, first?)
+      planned = %{planned | sent_upto: highest_seq(rows)}
 
       if excerpt do
         _ =
@@ -595,7 +601,12 @@ defmodule Aqua.Loop do
     output = usage["output_tokens"] || 0
     totals = %{input: state.usage.input + input, output: state.usage.output + output}
     announce(state, {:usage, totals})
-    %{state | usage: totals, observed: if(input > 0, do: input, else: state.observed)}
+
+    if input > 0 do
+      %{state | usage: totals, observed: input, observed_seq: state.sent_upto}
+    else
+      %{state | usage: totals}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1386,10 +1397,20 @@ defmodule Aqua.Loop do
   # ---------------------------------------------------------------------------
 
   defp compact(%State{spec: spec} = state, rows) do
+    # Size the request the way the executor will: it encodes the input and
+    # refuses it past the consented cap of the node being entered, which for
+    # a model call is the catalyst, not the agent. Without this the turn
+    # fails at admission on a request compaction could have made fit.
+    excerpt = if state.excerpt_sent?, do: nil, else: spec.excerpt
+    probe = request(state, rows, excerpt, state.steps == 0)
+
     case Planner.plan(rows,
            capabilities: spec.capabilities,
            max_tokens: Request.max_tokens(spec.capabilities),
-           observed_tokens: state.observed
+           observed_tokens: state.observed,
+           new_bytes: appended_bytes(rows, state.observed_seq),
+           request_bytes: encoded_size(probe),
+           max_request_size: catalyst_request_cap(spec)
          ) do
       :fit ->
         {:ok, state, rows}
@@ -1449,6 +1470,39 @@ defmodule Aqua.Loop do
     else
       {:error, :superseded} -> {:error, :superseded}
       other -> skip_compaction(state, rows, other)
+    end
+  end
+
+  defp highest_seq([]), do: 0
+  defp highest_seq(rows), do: rows |> Enum.map(& &1.seq) |> Enum.max()
+
+  # What has arrived since the response whose token count we are reusing —
+  # a steer, a tool result, a clone's summary. Counting the estimate alone
+  # would price the request as it stood one round ago.
+  defp appended_bytes(rows, since) do
+    rows
+    |> Enum.filter(&(&1.seq > since))
+    |> Enum.map(fn row ->
+      byte_size(row.content || "") +
+        byte_size(if(is_binary(row.payload), do: row.payload, else: ""))
+    end)
+    |> Enum.sum()
+  end
+
+  # nil rather than a guess when the request cannot be encoded: the byte
+  # trigger then stands down and the token estimate decides, which is what
+  # happened before this measurement existed.
+  defp encoded_size(request) do
+    case Jason.encode(request) do
+      {:ok, json} -> byte_size(json)
+      {:error, _} -> nil
+    end
+  end
+
+  defp catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do
+    case Sanctum.Authority.node_limits(authority, catalyst) do
+      {:ok, %Sanctum.Limits{max_request_size: cap}} -> cap
+      {:error, :unknown_node} -> nil
     end
   end
 
