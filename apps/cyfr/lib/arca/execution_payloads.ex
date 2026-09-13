@@ -250,20 +250,62 @@ defmodule Arca.ExecutionPayloads do
   end
 
   defp delete_bytes(ctx, rows) do
+    athanor_id = Context.athanor!(ctx)
+    expiring = MapSet.new(rows, & &1.id)
+
     Enum.split_with(rows, fn row ->
-      case delete_object(ctx, String.split(row.blob_ref, "/")) do
-        :ok ->
+      case shared_with_surviving_row?(athanor_id, row.blob_ref, expiring) do
+        {:ok, true} ->
+          # An object is named by execution, kind and digest, so two attempts
+          # that produced the same bytes share one. A row that has not
+          # expired still points at it; taking the bytes would leave that row
+          # answering :not_found. The row goes, the object stays.
           true
 
-        {:error, reason} ->
+        {:ok, false} ->
+          delete_only_reference(ctx, row)
+
+        :unknown ->
           Logger.warning(
-            "[Arca.ExecutionPayloads] payload #{row.id} of #{row.execution_id} not deleted " <>
-              "(#{inspect(reason)}); its row stays for the next sweep"
+            "[Arca.ExecutionPayloads] payload #{row.id} of #{row.execution_id} left alone: " <>
+              "cannot tell whether another row still names its bytes"
           )
 
           false
       end
     end)
+  end
+
+  defp delete_only_reference(ctx, row) do
+    case delete_object(ctx, String.split(row.blob_ref, "/")) do
+      :ok ->
+        true
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Arca.ExecutionPayloads] payload #{row.id} of #{row.execution_id} not deleted " <>
+            "(#{inspect(reason)}); its row stays for the next sweep"
+        )
+
+        false
+    end
+  end
+
+  # Whether a row outside this sweep still names the same bytes.
+  defp shared_with_surviving_row?(athanor_id, blob_ref, expiring) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.shared", fn ->
+      {:ok,
+       Arca.Repo.all(
+         from(p in ExecutionPayload,
+           where: p.athanor_id == ^athanor_id and p.blob_ref == ^blob_ref,
+           select: p.id
+         )
+       )}
+    end)
+    |> case do
+      {:ok, ids} -> {:ok, Enum.any?(ids, &(not MapSet.member?(expiring, &1)))}
+      _ -> :unknown
+    end
   end
 
   defp delete_object(ctx, segments) do

@@ -175,6 +175,18 @@ defmodule Aqua.TapeTest do
     assert {:error, :superseded} = Tape.record_model_intent(guest, turn, %{})
     refute_receive {:conversation, _, _}, 50
 
+    # The rows a turn owns but no step produced change what the next request
+    # reads, so a superseded runner must not be able to add one either.
+    assert {:error, :superseded} =
+             Tape.append_compaction(guest, turn, %{
+               summary: "from a runner that no longer owns this turn",
+               first_kept_seq: 1,
+               summarized_through_seq: 0
+             })
+
+    assert {:error, :superseded} = Tape.append_aborted(guest, turn, "stopped")
+    refute_receive {:conversation, _, _}, 50
+
     assert {:ok, finished} = Tape.finish(ctx, superseded, "cancelled", %{error: "stopped"})
     assert finished.status == "cancelled"
     assert_receive {:conversation, _, {:turn_finished}}

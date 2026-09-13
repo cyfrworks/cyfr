@@ -18,6 +18,12 @@ defmodule Aqua.Loop.PlannerTest do
 
   @caps %{context_window: 100_000, max_output_tokens: 8_192}
 
+  defp paired(seq, kind, content, step, call_id) do
+    row = row(seq, kind, content, step)
+    payload = Jason.decode!(row.payload || "{}") |> Map.put("tool_call_id", call_id)
+    %{row | payload: Jason.encode!(payload)}
+  end
+
   defp row(seq, kind, content, step \\ nil) do
     %Message{
       id: "msg_#{seq}",
@@ -45,6 +51,22 @@ defmodule Aqua.Loop.PlannerTest do
     ]
 
     assert %{first_kept_seq: 4} = Planner.boundary(rows, 2_000)
+  end
+
+  test "a card between a call and its answer does not let the boundary part them" do
+    big = String.duplicate("x", 40_000)
+
+    # What a call needing approval writes: the card lands between the call
+    # and the result, and carries no step id of its own.
+    rows = [
+      paired(1, "tool_call", big, "s1", "call_1"),
+      row(2, "approval", "may I?"),
+      paired(3, "tool_result", "ok", "s1_call", "call_1"),
+      row(4, "text", "done", "s2")
+    ]
+
+    # Keeping only the newest would drop the call and keep its answer.
+    assert %{first_kept_seq: 1} = Planner.boundary(rows, 2_000)
   end
 
   test "a compacted transcript is measured by what the model reads, not the whole of it" do
@@ -99,10 +121,9 @@ defmodule Aqua.Loop.PlannerTest do
   test "the boundary never parts a tool call from its results" do
     big = String.duplicate("x", 40_000)
 
-    # A result carries its own CALL step's id, not the model step's — which
-    # is what `TurnStorage` writes. Giving both the same id, as this fixture
-    # once did, describes a transcript the product never produces and hid
-    # the boundary falling between a call and its answer.
+    # A result carries its own CALL step's id, not the model step's, which
+    # is what `TurnStorage` writes. Giving both the same id describes a
+    # transcript the product never produces.
     rows = [
       row(1, "text", "ask"),
       row(2, "text", "reply", "s1"),

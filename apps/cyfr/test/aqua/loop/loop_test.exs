@@ -95,6 +95,40 @@ defmodule Aqua.LoopTest do
     assert is_integer(Aqua.Loop.catalyst_request_cap(spec))
   end
 
+  describe "group/1" do
+    test "a write between reads runs alone, and the reads on either side do not join it" do
+      read1 = item("files", %{"action" => "read", "path" => "a"})
+      write = item("files", %{"action" => "write", "path" => "b", "content" => "x"})
+      read2 = item("files", %{"action" => "read", "path" => "c"})
+
+      assert [{:concurrent, [^read1]}, {:exclusive, ^write}, {:concurrent, [^read2]}] =
+               Aqua.Loop.group([read1, write, read2])
+    end
+
+    test "consecutive reads share a group and consecutive writes do not" do
+      r1 = item("files", %{"action" => "read", "path" => "a"})
+      r2 = item("files", %{"action" => "read", "path" => "b"})
+      w1 = item("files", %{"action" => "write", "path" => "c", "content" => "x"})
+      w2 = item("files", %{"action" => "write", "path" => "d", "content" => "y"})
+
+      assert [{:concurrent, [^r1, ^r2]}, {:exclusive, ^w1}, {:exclusive, ^w2}] =
+               Aqua.Loop.group([r1, r2, w1, w2])
+    end
+
+    test "a write last, and a write first, each stand alone" do
+      read = item("files", %{"action" => "read", "path" => "a"})
+      write = item("files", %{"action" => "write", "path" => "b", "content" => "x"})
+
+      assert [{:concurrent, [^read]}, {:exclusive, ^write}] = Aqua.Loop.group([read, write])
+      assert [{:exclusive, ^write}, {:concurrent, [^read]}] = Aqua.Loop.group([write, read])
+    end
+  end
+
+  defp item(name, args) do
+    {:ok, call} = Aqua.Loop.Binding.resolve(name, args)
+    %{step: %{kind: "tool"}, call: {:ok, call}}
+  end
+
   defp accept!(ctx, conv, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, conv.id, %{

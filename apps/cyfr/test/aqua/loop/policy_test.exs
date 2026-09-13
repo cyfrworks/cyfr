@@ -102,6 +102,29 @@ defmodule Aqua.Loop.PolicyTest do
     refute MapSet.member?(touched, "formula:local.other")
   end
 
+  test "a launch of what the same batch writes to needs a card, whatever has closed" do
+    launch =
+      resolve!("execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"})
+
+    consented = fn ref -> String.starts_with?(ref, "formula:local.demo") end
+
+    # Nothing has closed yet, which is the state every call in one model
+    # response is decided in.
+    assert :auto = Policy.decide(launch, @policy, consented?: consented, touched: MapSet.new())
+
+    # The same response also proposes writing to it.
+    writes =
+      Policy.touched_refs([
+        %{
+          "tool" => "files",
+          "action" => "write",
+          "arguments" => %{"path" => "components/formulas/local/demo/1.0.0/src/lib.rs"}
+        }
+      ])
+
+    assert :ask = Policy.decide(launch, @policy, consented?: consented, touched: writes)
+  end
+
   test "reads overlap; everything else runs alone" do
     assert :concurrent = Policy.overlap(resolve!("files", %{"action" => "read"}))
     assert :concurrent = Policy.overlap(resolve!("notes", %{"action" => "read"}))

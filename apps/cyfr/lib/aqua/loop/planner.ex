@@ -115,7 +115,53 @@ defmodule Aqua.Loop.Planner do
       end)
 
     first = kept |> List.first() |> List.first()
-    %{first_kept_seq: first.seq, summarized_through_seq: first.seq - 1}
+    kept_seq = with_answered_calls(rows, first.seq)
+    %{first_kept_seq: kept_seq, summarized_through_seq: kept_seq - 1}
+  end
+
+  # Grouping keeps a result beside the call it answers, but only while they
+  # are adjacent: an approval card or an aborted mark writes a row between
+  # them, and the boundary could then land on that row and summarize away a
+  # call whose result it keeps. Providers reject a `tool_result` with no
+  # `tool_call`, and nothing repairs that direction.
+  #
+  # So the boundary is pulled back to include any call whose answer is kept.
+  # Pulling back can bring in further results whose calls are older still,
+  # hence the repeat; it only ever moves earlier, so it settles.
+  defp with_answered_calls(rows, first) do
+    calls =
+      for row <- rows, row.kind == "tool_call", id = call_id(row), id != nil, into: %{} do
+        {id, row.seq}
+      end
+
+    orphaned =
+      for row <- rows,
+          row.seq >= first,
+          row.kind == "tool_result",
+          id = call_id(row),
+          seq = Map.get(calls, id),
+          seq != nil and seq < first,
+          do: seq
+
+    case orphaned do
+      [] -> first
+      seqs -> with_answered_calls(rows, Enum.min(seqs))
+    end
+  end
+
+  defp call_id(%Message{payload: payload}) do
+    case payload do
+      %{"tool_call_id" => id} when is_binary(id) -> id
+      json when is_binary(json) -> decoded_call_id(json)
+      _ -> nil
+    end
+  end
+
+  defp decoded_call_id(json) do
+    case Jason.decode(json) do
+      {:ok, %{"tool_call_id" => id}} when is_binary(id) -> id
+      _ -> nil
+    end
   end
 
   @doc """
