@@ -10,57 +10,40 @@ defmodule Arca.Repo.Migrations.Baseline do
   a row that forgets its athanor must fail, never default into somebody's.
   It carries no foreign key TO `athanors` on purpose — an athanor is
   archived, never deleted, so nothing needs the constraint and every fixture
-  is spared a parent row. Two tables do name it inside a COMPOSITE key, which
-  is a different thing: `consents.profile_id` and
-  `consent_vault_refs.vault_entry_id` are `references(…, with: [athanor_id:
-  :athanor_id])`, so a consent cannot point at another athanor's profile or
-  vault entry. Those constrain the pair, never the athanor itself.
+  is spared a parent row. Several tables do name it inside a COMPOSITE key,
+  which is a different thing: a child references its parent by
+  `(id, athanor_id)`, so nothing can point across estates. Those constrain
+  the pair, never the athanor itself. A 3+-column composite foreign key
+  silently truncates on SQLite, so every composite is a two-column pair and
+  its parent carries a unique `(id, athanor_id)` index created first.
 
-  There is deliberately no `down/0`. A baseline's inverse is an empty
-  database, which `mix ecto.drop` already expresses.
+  The two nullable `athanor_id` columns are `memberships` (a platform
+  assignment has no athanor) and `sessions` (a session exists before its
+  athanor is resolved). `server_meta`, `registry_tokens` and
+  `external_identities` are not athanor-scoped.
+
+  This file is the schema's single source: a change edits it, and
+  `Arca.SchemaFingerprint` refuses a database built from a different
+  version of it. There is deliberately no `down/0` and no upgrade path; a
+  baseline's inverse is an empty database, which `mix ecto.drop` expresses.
   """
 
   use Ecto.Migration
 
   def up do
-    refuse_pre_baseline!()
     tenancy()
     identity()
+    server()
     components()
-    executions_and_logs()
+    agents()
+    executions()
+    logs()
     vault_and_consent()
     registrations()
+    schedules()
     conversations()
-  end
-
-  # Refuse applying the baseline to a database containing an incompatible tenant schema.
-  defp refuse_pre_baseline! do
-    tables = existing_tables()
-
-    if "memberships" in tables and "athanors" not in tables do
-      db = repo().config()[:database] || "the database"
-
-      raise """
-      [Arca] #{db} was created before the current baseline schema.
-
-      There is no upgrade path. Delete the database (the SQLite file and any
-      -wal/-shm siblings, or DROP DATABASE on Postgres) and restart so it
-      can be created fresh.
-      """
-    end
-  end
-
-  defp existing_tables do
-    sql =
-      case repo().__adapter__() do
-        Ecto.Adapters.SQLite3 ->
-          "SELECT name FROM sqlite_master WHERE type = 'table'"
-
-        _ ->
-          "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-      end
-
-    repo().query!(sql).rows |> List.flatten()
+    turns()
+    record_fingerprint()
   end
 
   # ==========================================================================
@@ -79,37 +62,42 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :created_by, :string, null: false
       add :settings, :text
       add :provisioned_at, :utc_datetime_usec
+      # open | frozen: a two-person athanor's members are fixed at creation.
+      add :roster, :string, null: false, default: "open"
+      # SHA-256 over the JSON-encoded sorted member ids of a frozen pair.
+      add :pair_key, :string
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
 
     create unique_index(:athanors, [:kind, :slug])
 
-    # One personal athanor per person. Default index name on purpose: SQLite
-    # reports a violation by column, and ecto_sqlite3 derives the constraint
-    # name from it, so only the derived name matches the changeset on both
-    # adapters.
+    # One personal athanor per person, and one active pair per key. Default
+    # index names on purpose: SQLite reports a violation by column, and
+    # ecto_sqlite3 derives the constraint name from it, so only the derived
+    # name matches the changeset on both adapters.
     create unique_index(:athanors, [:owner_user_id], where: "kind = 'person'")
+
+    create unique_index(:athanors, [:pair_key],
+             where: "pair_key IS NOT NULL AND status = 'active'"
+           )
 
     create index(:athanors, [:status])
 
-    # The people this server knows: one row per IdP identity, written on the
-    # first admitted sign-in. `id` is the provider composite the rest of the
-    # system calls user_id. Log tables keep writing user_id without a foreign
-    # key here — synthetic principals (webhook:<slug>, _seed, system) are
-    # not people. `email` is not unique: one person may sign in through two
-    # configured providers and be two identities.
+    # The people this server knows: one row per person, keyed by a minted
+    # `usr_…` id. How an identity provider names them is an
+    # `external_identities` row. Log tables keep writing user_id without a
+    # foreign key here — synthetic principals are not people. `email` is not
+    # unique.
     create table(:users, primary_key: false) do
       add :id, :string, primary_key: true
       add :email, :string
       # Tri-state on purpose: true when the provider proved the address,
-      # false when it said the opposite, NULL when it said nothing (many
-      # enterprise OIDC issuers never emit the claim). Only an explicit
-      # false refuses an invitation.
+      # false when it said the opposite, NULL when it said nothing.
       add :email_verified, :boolean
       add :provider, :string, null: false
       add :display_name, :string
-      # Durable copy of the cyfr.run personal namespace once it is known.
+      # The cyfr.run publisher namespace, once linked. Not identity.
       add :namespace, :string
       add :personal_athanor_id, :string
       add :status, :string, null: false, default: "active"
@@ -127,8 +115,24 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:users, [:personal_athanor_id], where: "personal_athanor_id IS NOT NULL")
 
+    # How an identity provider names a person, keyed by the IdP composite
+    # `<provider>|<issuer>|<subject>`. One person may be named by several.
+    create table(:external_identities, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
+      add :key, :string, null: false
+      add :provider, :string, null: false
+      add :issuer, :string, null: false
+      add :subject, :string, null: false
+      add :first_seen_at, :utc_datetime_usec, null: false
+      add :last_seen_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:external_identities, [:key])
+    create index(:external_identities, [:user_id])
+
     # The door: who may sign in to this server. Entries name an email, an
-    # IdP subject (user_id), or the wildcard `*`; a deny wins over everything.
+    # IdP subject, or the wildcard `*`; a deny wins over everything.
     # `requested` rows are allow entries a member asked for by inviting an
     # email the door does not know — they take effect when a platform admin
     # resolves them.
@@ -184,6 +188,9 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp identity do
+    # A session is a person's: what they may do is decided by their
+    # memberships, the estate's consents and the policy, never by a list
+    # frozen at sign-in.
     create table(:sessions, primary_key: false) do
       add :id, :string, primary_key: true
       add :token_hash, :binary, null: false
@@ -191,12 +198,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :user_id, :string, null: false
       add :email, :string
       add :provider, :string, null: false
-      add :permissions, :text, null: false, default: "[]"
       add :expires_at, :utc_datetime_usec, null: false
       # The athanor the session works in. Nullable: a session exists from
-      # sign-in on, before the person's own athanor is resolved. Sessions
-      # carry no scope: every request runs inside its athanor, and being a
-      # platform admin is a membership fact re-read on each request.
+      # sign-in on, before the person's own athanor is resolved.
       add :athanor_id, :string
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
@@ -204,6 +208,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:sessions, [:token_hash])
     create index(:sessions, [:user_id])
+    create index(:sessions, [:expires_at])
 
     create table(:api_keys, primary_key: false) do
       add :id, :string, primary_key: true
@@ -224,6 +229,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create unique_index(:api_keys, [:key_hash])
+    create index(:api_keys, [:athanor_id])
 
     # Partial: a revoked key's name is immediately reusable.
     create unique_index(:api_keys, [:athanor_id, :name],
@@ -247,7 +253,21 @@ defmodule Arca.Repo.Migrations.Baseline do
   end
 
   # ==========================================================================
-  # Components
+  # Server-wide facts
+  # ==========================================================================
+
+  # Keyed by name: the schema and keyring fingerprints and the control-plane
+  # owner. Shared by every node using this database.
+  defp server do
+    create table(:server_meta, primary_key: false) do
+      add :key, :string, primary_key: true
+      add :value, :string, null: false
+      add :updated_at, :utc_datetime_usec, null: false
+    end
+  end
+
+  # ==========================================================================
+  # Components and builds
   # ==========================================================================
 
   defp components do
@@ -284,13 +304,66 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:components, [:digest])
 
     create unique_index(:components, [:athanor_id, :publisher, :name, :version, :component_type])
+
+    # Build status as rows; the artifacts are blobs under the athanor's
+    # components/ tree.
+    create table(:build_records, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :user_id, :string, null: false
+      add :reference, :string, null: false
+      add :status, :string, null: false, default: "started"
+      add :started_at, :utc_datetime_usec, null: false
+      add :finished_at, :utc_datetime_usec
+      add :error, :text
+      add :result, :text
+    end
+
+    create index(:build_records, [:athanor_id, :started_at])
   end
 
   # ==========================================================================
-  # Executions and audit logs
+  # Agents
   # ==========================================================================
 
-  defp executions_and_logs do
+  defp agents do
+    # The estate's agents as rows: an index of the `aqua/` tree, one row per
+    # soul or role, carrying the digest of the file's bytes (its revision)
+    # and of its security-relevant subset (its capability).
+    create table(:agents, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :name, :string, null: false
+      # soul | role
+      add :kind, :string, null: false
+      add :revision_digest, :string, null: false
+      add :capability_digest, :string, null: false
+      add :catalyst_ref, :string
+      add :disabled, :boolean, null: false, default: false
+      add :synced_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:agents, [:athanor_id, :name])
+
+    # Every agent file revision the index has seen, by the digest of its
+    # bytes: content-addressed and immutable, so a turn that pinned a
+    # revision can retrieve it after the tree moved on.
+    create table(:agent_revisions, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :digest, :string, null: false
+      add :bytes, :binary, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:agent_revisions, [:athanor_id, :digest])
+  end
+
+  # ==========================================================================
+  # Executions, attempts, events, payloads and budgets
+  # ==========================================================================
+
+  defp executions do
     create table(:executions, primary_key: false) do
       add :id, :string, primary_key: true
       add :reference, :string, null: false
@@ -312,24 +385,169 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :athanor_id, :string, null: false
       add :activation_digest, :string
       add :activation_graph, :text
-      # The node running it and how long its lease holds; a running row whose
-      # lease has lapsed is a crashed runner's, whichever node it was on.
-      add :runner_id, :string
-      add :lease_until, :utc_datetime_usec
       add :root_execution_id, :string
+      # The profile pinned for a root execution, so approvals reuse its authority.
+      add :profile_id, :string
+      # The turn an execution belongs to, and the schedule that fired it.
+      add :turn_id, :string
+      add :schedule_id, :string
+      # component | turn | tool_call
+      add :kind, :string, null: false, default: "component"
+      # The attempt that currently owns the row (`execution_attempts`).
+      add :current_attempt, :string
+      # The durable event counter, allocated in the writer's transaction.
+      add :event_seq, :integer, null: false, default: 0
     end
 
+    create unique_index(:executions, [:id, :athanor_id])
     create index(:executions, [:started_at])
     create index(:executions, [:user_id])
     create index(:executions, [:status])
     create index(:executions, [:request_id])
     create index(:executions, [:parent_execution_id])
     create index(:executions, [:root_execution_id])
+    create index(:executions, [:turn_id])
+    create index(:executions, [:schedule_id])
     create index(:executions, [:athanor_id])
+    create index(:executions, [:athanor_id, :started_at])
     create index(:executions, [:athanor_id, :user_id, :started_at])
     create index(:executions, [:athanor_id, :status, :started_at])
-    create index(:executions, [:status, :lease_until])
+    create index(:executions, [:athanor_id, :profile_id, :started_at])
+    create index(:executions, [:athanor_id, :kind, :status])
 
+    # The fence: one row per attempt at an execution.
+    create table(:execution_attempts, primary_key: false) do
+      add :attempt, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :execution_id,
+          references(:executions,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      add :fence, :integer, null: false
+      add :runner_id, :string, null: false
+      add :lease_until, :utc_datetime_usec, null: false
+      # running | paused | completed | failed | cancelled | lapsed
+      add :state, :string, null: false
+      # ok | error | result_lost | cancelled | uncertain
+      add :outcome, :string
+      add :cancel_requested_at, :utc_datetime_usec
+      add :started_at, :utc_datetime_usec, null: false
+      add :running_since, :utc_datetime_usec
+      add :ended_at, :utc_datetime_usec
+    end
+
+    create unique_index(:execution_attempts, [:execution_id, :fence])
+    create index(:execution_attempts, [:athanor_id, :state, :lease_until])
+
+    # Lifecycle and step outcomes, numbered from `executions.event_seq`.
+    create table(:execution_events, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :execution_id,
+          references(:executions,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      add :turn_id, :string
+      add :step_id, :string
+      add :seq, :integer, null: false
+      add :type, :string, null: false
+      add :data, :text
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:execution_events, [:execution_id, :seq])
+    create index(:execution_events, [:athanor_id, :turn_id])
+
+    # An execution's retained input or result, as a reference: the digest
+    # and size of the bytes, where they live under the athanor's `payloads/`
+    # root, the attempt that produced them and the retention class that
+    # decides how long. Bytes are removed before their rows permit the
+    # execution's deletion.
+    create table(:execution_payloads, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :execution_id,
+          references(:executions,
+            type: :string,
+            on_delete: :nothing,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      # input | result
+      add :kind, :string, null: false
+      add :attempt, :string
+      add :digest, :string, null: false
+      add :bytes, :integer, null: false
+      add :blob_ref, :string, null: false
+      add :retention_class, :string, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:execution_payloads, [:execution_id, :kind, :attempt])
+    create index(:execution_payloads, [:athanor_id, :retention_class, :inserted_at])
+
+    create table(:budget_reservations, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :root_execution_id,
+          references(:executions,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      add :kind, :string, null: false, default: "invoke"
+      add :cap, :integer, null: false
+      add :charged, :integer, null: false, default: 0
+      add :inserted_at, :utc_datetime_usec, null: false
+      add :released_at, :utc_datetime_usec
+    end
+
+    create index(:budget_reservations, [:athanor_id, :root_execution_id])
+
+    create table(:budget_charges, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :reservation_id,
+          references(:budget_reservations, type: :string, on_delete: :delete_all),
+          null: false
+
+      add :attempt, :string, null: false
+      add :generation, :integer, null: false, default: 0
+      add :holder_execution_id, :string
+      add :n, :integer, null: false
+      add :runner_id, :string, null: false
+      add :admit_by, :utc_datetime_usec
+      add :admitted_at, :utc_datetime_usec
+      add :holder_deadline, :utc_datetime_usec
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:budget_charges, [:reservation_id, :id])
+    create index(:budget_charges, [:athanor_id, :attempt])
+    create index(:budget_charges, [:athanor_id, :holder_execution_id])
+  end
+
+  # ==========================================================================
+  # Audit logs
+  # ==========================================================================
+
+  defp logs do
     create table(:mcp_logs, primary_key: false) do
       add :id, :string, primary_key: true
       add :user_id, :string
@@ -383,6 +601,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:policy_logs, [:user_id])
     create index(:policy_logs, [:timestamp])
     create index(:policy_logs, [:athanor_id])
+    create index(:policy_logs, [:athanor_id, :timestamp])
     create index(:policy_logs, [:consent_id])
   end
 
@@ -413,9 +632,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    # The parent side of the two-column composite foreign keys below: a
-    # 3+-column composite FK silently truncates on SQLite, so referencing
-    # tables carry (athanor_id, <fk>) pairs and this index must exist first.
     create unique_index(:vault_entries, [:athanor_id, :id])
 
     create unique_index(:vault_entries, [:athanor_id, :name],
@@ -460,6 +676,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :shape_digest, :string, null: false
       add :commit_digest, :string, null: false
       add :resolved_policy, :binary, null: false
+      # The digest of `resolved_policy`'s bytes, verified on every load.
+      add :blob_digest, :string, null: false
       add :activation, :binary, null: false
       add :granted_by, :string, null: false
       add :granted_via, :string, null: false
@@ -510,6 +728,47 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create unique_index(:oauth_provider_credentials, [:athanor_id, :provider])
+
+    # Athanor-scoped tool decisions, kept apart from authored agent policy:
+    # effective policy is the declared permissions plus allows, minus denies.
+    # An agent-scope grant applies across conversations; a conversation-scope
+    # grant only to the named one. Each scope has its own unique index,
+    # because agent rows carry no conversation id and a nullable composite
+    # key would permit duplicates; effect is not in either key, so flipping
+    # allow/deny updates one row.
+    create table(:tool_grants, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :scope, :string, null: false
+      add :effect, :string, null: false
+      add :conversation_id, :string
+      add :agent_name, :string, null: false
+      add :tool, :string, null: false
+      add :action, :string, null: false
+      add :granted_by, :string
+      add :granted_at, :utc_datetime_usec, null: false
+    end
+
+    # Named short on purpose: Ecto's default name for the conversation-scope
+    # key is 73 bytes and Postgres truncates at 63, so the changeset could
+    # never match what the database reports. SQLite reports a violation by
+    # column, so `Arca.ToolGrantStorage` declares the constraint under both
+    # spellings.
+    create unique_index(
+             :tool_grants,
+             [:conversation_id, :agent_name, :tool, :action],
+             where: "scope = 'conversation'",
+             name: :tool_grants_conversation_scope_index
+           )
+
+    create unique_index(
+             :tool_grants,
+             [:athanor_id, :agent_name, :tool, :action],
+             where: "scope = 'agent'",
+             name: :tool_grants_agent_scope_index
+           )
+
+    create index(:tool_grants, [:athanor_id, :agent_name])
   end
 
   # ==========================================================================
@@ -557,6 +816,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:webhooks, [:slug])
     create unique_index(:webhooks, [:athanor_id, :name])
 
+    # A claimed or succeeded delivery holds its idempotency claim; a failed
+    # one can be reclaimed by a retry.
     create table(:webhook_deliveries, primary_key: false) do
       add :id, :string, primary_key: true
 
@@ -566,11 +827,22 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :idempotency_key, :string, null: false
       add :first_seen_at, :utc_datetime_usec, null: false
+      # claimed | succeeded | failed
+      add :status, :string, null: false, default: "claimed"
+      add :settled_at, :utc_datetime_usec
     end
 
     create unique_index(:webhook_deliveries, [:webhook_id, :idempotency_key])
     create index(:webhook_deliveries, [:first_seen_at])
+    # Which claims never settled — how a stuck delivery is found.
+    create index(:webhook_deliveries, [:status, :first_seen_at])
+  end
 
+  # ==========================================================================
+  # Schedules
+  # ==========================================================================
+
+  defp schedules do
     create table(:cron_schedules, primary_key: false) do
       add :id, :string, primary_key: true
       # Attribution: who created the schedule. The athanor owns it.
@@ -589,14 +861,14 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :resolved_reference, :string
       add :athanor_id, :string, null: false
       add :profile_id, :string, null: false
-      # One node fires a schedule at a time: the claim is taken by
-      # compare-and-set and lapses on its own if the claimant dies.
-      add :claimed_by, :string
-      add :claim_expires_at, :utc_datetime_usec
+      # forbid | allow: whether a due occurrence may be claimed while another
+      # of the same schedule is still open.
+      add :concurrency, :string, null: false, default: "forbid"
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
 
+    create unique_index(:cron_schedules, [:id, :athanor_id])
     create index(:cron_schedules, [:status])
     create index(:cron_schedules, [:next_run_at])
     create index(:cron_schedules, [:athanor_id])
@@ -605,6 +877,34 @@ defmodule Arca.Repo.Migrations.Baseline do
              where: "status != 'deleted'",
              name: :cron_schedules_athanor_name_active
            )
+
+    # An occurrence of a schedule is a row of its own: claimed by one node
+    # (the cursor moves in the same write), started by the execution's
+    # admission, ended with the run.
+    create table(:schedule_occurrences, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :schedule_id,
+          references(:cron_schedules,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      add :scheduled_for, :utc_datetime_usec, null: false
+      # claimed | started | completed | failed | uncertain
+      add :state, :string, null: false
+      add :execution_id, :string
+      add :attempts, :integer, null: false, default: 0
+      add :claimed_by, :string
+      add :claimed_at, :utc_datetime_usec, null: false
+      add :ended_at, :utc_datetime_usec
+    end
+
+    create unique_index(:schedule_occurrences, [:schedule_id, :scheduled_for])
+    create index(:schedule_occurrences, [:athanor_id, :state])
   end
 
   # ==========================================================================
@@ -620,24 +920,17 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :title, :string, null: false, default: "New conversation"
       # Attribution: the person who opened it. The athanor owns it.
       add :created_by, :string, null: false
-      # Provider-shape history the AQUA formula returns at the end of a turn
-      # and takes back on the next — JSON text, one snapshot per turn.
-      add :history, :text
-      # Execution running this conversation's current turn, or NULL.
-      add :execution_id, :string
-      # The orchestrator the current/last turn ran as; a recovered turn
-      # reads its policy from it.
+      # The agent the last turn addressed.
       add :orchestrator, :string
-      # `seq` of the last human message a turn has taken up: the next turn's
-      # task is every human row after it.
+      # `seq` of the last human message a turn has taken up.
       add :turn_seq, :integer, null: false, default: 0
       add :last_message_at, :utc_datetime_usec
 
       timestamps(type: :utc_datetime_usec)
     end
 
+    create unique_index(:conversations, [:id, :athanor_id])
     create index(:conversations, [:athanor_id, :last_message_at])
-    create index(:conversations, [:athanor_id, :execution_id])
 
     create table(:messages, primary_key: false) do
       add :id, :string, primary_key: true
@@ -649,14 +942,14 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :athanor_id, :string, null: false
       # Position in the thread; assigned by the runner, dense per conversation.
       add :seq, :integer, null: false
-      # Who wrote it: a user id, "aqua", or "system".
+      # Who wrote it: a user id, an agent, or "system".
       add :author, :string, null: false
-      # text | approval | error | system
+      # text | approval | error | system | tool_call | tool_result |
+      # compaction | turn_aborted
       add :kind, :string, null: false, default: "text"
       add :content, :text, null: false, default: ""
-      # Kind-specific JSON: an approval's intent + proposal, a text message's
-      # attachment refs (`%{"attachments" => [%{filename, media_type, size,
-      # path}]}`, bytes under
+      # Kind-specific JSON: an approval's intent and proposal, a text
+      # message's attachment refs (bytes under
       # data/athanors/{athanor_id}/conversations/{conv}/{msg}/), an error's
       # source.
       add :payload, :text
@@ -667,11 +960,188 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Approvals: the decision's reason/result summary/scope, JSON.
       add :resolution, :text
       add :execution_id, :string
+      add :turn_id, :string
+      add :approval_id, :string
+      # The sender's retry identity.
+      add :client_id, :string
       add :inserted_at, :utc_datetime_usec, null: false
     end
 
     create unique_index(:messages, [:conversation_id, :seq])
+    create unique_index(:messages, [:conversation_id, :client_id], where: "client_id IS NOT NULL")
     create index(:messages, [:athanor_id, :inserted_at])
+    create index(:messages, [:athanor_id, :turn_id])
     create index(:messages, [:conversation_id, :status])
+
+    # Follows for each member's sidebar: display only; membership still
+    # decides access.
+    create table(:topic_subscriptions, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :conversation_id, :string, null: false
+      add :user_id, :string, null: false
+      add :joined_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:topic_subscriptions, [:conversation_id, :user_id])
+    create index(:topic_subscriptions, [:athanor_id, :user_id])
+  end
+
+  # ==========================================================================
+  # Turns
+  # ==========================================================================
+
+  # `turns` own accepted work and its state; `turn_steps` own orchestration
+  # state and reference content by message and execution id, never
+  # duplicating it; `approvals` own a decision, which the corresponding
+  # message row references. Columns naming an execution or a turn beyond
+  # the composite parents are plain strings: the tenant seam holds every
+  # query to `athanor_id`.
+  defp turns do
+    create table(:turns, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :conversation_id,
+          references(:conversations,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      add :orchestrator, :string
+      add :requested_by, :string
+      add :status, :string, null: false
+      add :error, :text
+      add :accepted_at, :utc_datetime_usec, null: false
+      add :ended_at, :utc_datetime_usec
+      add :parent_turn_id, :string
+      add :message_id, :string
+      add :root_execution_id, :string
+      add :attempt, :string
+      add :runner_id, :string
+      add :fence, :string, null: false, default: ""
+      add :recovery_attempts, :integer, null: false, default: 0
+      add :profile_id, :string
+      add :consent_id, :string
+      add :agent_revision_digest, :string
+      add :agent_capability_digest, :string
+      add :budget_id, :string
+      add :model, :string
+      add :options, :text
+      # The consumption boundary: the transcript a turn reads.
+      add :window_upto_seq, :integer
+      add :active_ms, :integer, null: false, default: 0
+      add :paused_at, :utc_datetime_usec
+      # approval | launch
+      add :paused_reason, :string
+      add :launch_step_id, :string
+    end
+
+    create unique_index(:turns, [:id, :athanor_id])
+    create index(:turns, [:athanor_id, :conversation_id, :accepted_at])
+    create index(:turns, [:athanor_id, :status])
+    create index(:turns, [:athanor_id, :parent_turn_id])
+    create unique_index(:turns, [:conversation_id, :message_id], where: "message_id IS NOT NULL")
+
+    create unique_index(:turns, [:root_execution_id],
+             where: "root_execution_id IS NOT NULL AND parent_turn_id IS NULL"
+           )
+
+    create table(:turn_steps, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :turn_id,
+          references(:turns,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      add :seq, :integer, null: false
+      # model | tool | approval | clone
+      add :kind, :string, null: false
+      add :idempotency_key, :string
+      add :tool, :string
+      add :action, :string
+      # proposed | dispatched | closed | uncertain
+      add :dispatch_state, :string, null: false, default: "proposed"
+      add :message_id, :string
+      add :result_message_id, :string
+      add :execution_id, :string
+      add :child_execution_id, :string
+      add :approval_id, :string
+      add :authority_digest, :string
+      add :proposal_digest, :string
+      add :request_digest, :string
+      add :usage, :text
+      add :excluded, :text
+      # nil | replay_safe
+      add :recovery, :string
+      add :generation, :integer, null: false, default: 0
+      add :cancel_requested_at, :utc_datetime_usec
+      # ok | error | denied | skipped
+      add :outcome, :string
+      add :error, :text
+      add :started_at, :utc_datetime_usec
+      add :ended_at, :utc_datetime_usec
+    end
+
+    create unique_index(:turn_steps, [:turn_id, :seq])
+    create unique_index(:turn_steps, [:id, :athanor_id])
+    create index(:turn_steps, [:athanor_id, :turn_id])
+    create index(:turn_steps, [:athanor_id, :dispatch_state])
+
+    create table(:approvals, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :turn_id,
+          references(:turns,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      add :conversation_id, :string
+      add :step_id, :string
+      add :message_id, :string
+      # pending | approved | declined | expired | error
+      add :status, :string, null: false
+      add :scope, :string
+      add :proposal_digest, :string, null: false
+      # continue | launch | denied | expired
+      add :resolution_kind, :string
+      add :launch_execution_id, :string
+      add :decided_by, :string
+      add :decided_at, :utc_datetime_usec
+      add :expires_at, :utc_datetime_usec
+      add :resolution, :text
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:approvals, [:id, :athanor_id])
+    create index(:approvals, [:athanor_id, :status])
+    create index(:approvals, [:athanor_id, :turn_id])
+    create index(:approvals, [:athanor_id, :conversation_id, :status])
+    create index(:approvals, [:athanor_id, :status, :expires_at])
+  end
+
+  # The schema this database was built from, recorded by the migration that
+  # built it (`Arca.SchemaFingerprint`).
+  defp record_fingerprint do
+    flush()
+
+    repo().insert_all(Arca.Schemas.ServerMeta, [
+      %{
+        key: Arca.SchemaFingerprint.key(),
+        value: Arca.SchemaFingerprint.current(),
+        updated_at: DateTime.utc_now()
+      }
+    ])
   end
 end

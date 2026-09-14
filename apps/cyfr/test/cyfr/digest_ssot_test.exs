@@ -16,12 +16,6 @@ defmodule Cyfr.DigestSSOTTest do
   # apps/cyfr/test/cyfr -> umbrella root
   @umbrella_root Path.expand("../../../..", __DIR__)
 
-  # Scan migrations and exempt their inline hashing by name. Migration
-  # output must remain stable when application helpers change.
-  @frozen_history [
-    "apps/cyfr/priv/repo/migrations/20260901000000_consents_blob_digest.exs"
-  ]
-
   # Construction = concatenating the prefix onto a computed value. Pattern
   # matches (`"sha256:" <> hex` in a function head) and prose are consumers
   # of the spelling, not producers, and stay allowed.
@@ -38,27 +32,12 @@ defmodule Cyfr.DigestSSOTTest do
       Path.wildcard(Path.join(@umbrella_root, "apps/cyfr/priv/repo/migrations/*.exs"))
   end
 
-  test "every frozen-history exemption still exists and still inlines a digest" do
-    for rel <- @frozen_history do
-      path = Path.join(@umbrella_root, rel)
-
-      assert File.exists?(path),
-             "#{rel} is exempted from the digest SSOT and no longer exists — drop the entry"
-
-      source = Cyfr.Test.SourceTree.read(path)
-
-      assert Regex.match?(@construction, source) or Regex.match?(@bare_hex, source),
-             "#{rel} no longer inlines a digest — drop the exemption rather than leaving it"
-    end
-  end
-
   test ~s(the "sha256:" spelling is constructed only in Cyfr.Digest) do
     offenders =
       scanned()
       |> Enum.filter(fn path -> Regex.match?(@construction, Cyfr.Test.SourceTree.read(path)) end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
       |> Enum.reject(&(&1 == "apps/cyfr/lib/cyfr/digest.ex"))
-      |> Enum.reject(&(&1 in @frozen_history))
 
     assert offenders == [],
            "digest spelling constructed outside Cyfr.Digest: #{inspect(offenders)}"
@@ -70,7 +49,6 @@ defmodule Cyfr.DigestSSOTTest do
       |> Enum.filter(fn path -> Regex.match?(@bare_hex, Cyfr.Test.SourceTree.read(path)) end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
       |> Enum.reject(&(&1 == "apps/cyfr/lib/cyfr/digest.ex"))
-      |> Enum.reject(&(&1 in @frozen_history))
 
     assert offenders == [],
            "bare-hex digest spelling constructed outside Cyfr.Digest: #{inspect(offenders)}"

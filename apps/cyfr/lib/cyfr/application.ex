@@ -282,6 +282,9 @@ defmodule Cyfr.Application do
       {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 1))
       Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
       configure_database()
+      # Refuse a database built from a different schema before anything
+      # reads it as this release's.
+      Arca.SchemaFingerprint.verify!()
       # Verify the tenant-table roster against the migrated schema.
       # Refuse boot if an athanor-scoped table would escape tenant deletion.
       Arca.TenantTables.verify_roster!()
