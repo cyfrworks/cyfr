@@ -37,14 +37,14 @@ defmodule Cyfr.RetentionScheduler do
 
   @impl true
   def handle_continue(:first_run, state) do
-    run_cleanup()
+    _ = Cyfr.ControlPlane.when_owner(&run_cleanup/0)
     schedule(state.interval)
     {:noreply, state}
   end
 
   @impl true
   def handle_info(:run_cleanup, state) do
-    run_cleanup()
+    _ = Cyfr.ControlPlane.when_owner(&run_cleanup/0)
     schedule(state.interval)
     {:noreply, state}
   end

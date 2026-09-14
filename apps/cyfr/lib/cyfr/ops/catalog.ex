@@ -954,16 +954,15 @@ defmodule Cyfr.Ops.Catalog do
 
   @doc """
   Audit every internal tool provider for complete per-action annotations.
-  For each tool, checks that every value in
-  `input_schema.properties.action.enum` has a matching key in
-  `annotations.actions` carrying both a non-nil `kind` and a non-empty
-  `planes` list of valid planes.
+  For each tool, every verb in `input_schema.properties.action.enum` and
+  every verb `annotations.actions` declares must carry a valid annotation:
+  a `kind`, a non-empty list of valid `planes`, and valid values for the
+  optional keys, `recovery: :replay_safe` on a read only.
 
   The taxonomy is only as good as its coverage: an unannotated action has
   no risk class and no reachability, so it cannot be reasoned about at
-  either gate. A CI test asserts this returns `:ok` — the boot-time call is
-  advisory (and rescued) precisely so a taxonomy bug cannot take the
-  registry down.
+  either gate. The catalog runs this at boot and refuses to start on any
+  finding.
 
   Skips `Emissary.MCP.ExternalProvider` (its `mcp_servers` definition is
   audited; the upstream-tool proxy is exempt — those are classified as
@@ -997,7 +996,7 @@ defmodule Cyfr.Ops.Catalog do
     # the registry load would break on, not tolerate it.
     actions_meta = Annotations.declared_actions(tool)
 
-    Enum.flat_map(enum, fn verb ->
+    Enum.flat_map(Enum.uniq(enum ++ Map.keys(actions_meta)), fn verb ->
       case audit_action(Map.get(actions_meta, verb)) do
         :ok -> []
         {:error, reason} -> [%{provider: module, tool: tool.name, action: verb, reason: reason}]
@@ -1060,7 +1059,7 @@ defmodule Cyfr.Ops.Catalog do
         tool
         |> Annotations.declared_actions()
         |> Enum.filter(fn {_verb, annotation} ->
-          Map.get(annotation, :recovery) == :replay_safe
+          Annotations.recovery_of(annotation) == :replay_safe
         end)
         |> Enum.map(fn {verb, _} -> "#{tool.name}.#{verb}" end)
       end)
@@ -1104,41 +1103,22 @@ defmodule Cyfr.Ops.Catalog do
         end
     end
 
-    # Load all configured providers into Arca.Cache
-    load_providers()
-    schedule_refresh()
-    # Defer provider auditing to handle_continue and log failures without stopping the catalog.
-    {:ok, %{}, {:continue, :audit_action_kinds}}
-  end
-
-  @impl true
-  def handle_continue(:audit_action_kinds, state) do
-    log_action_kinds_audit()
-    {:noreply, state}
-  end
-
-  # Run the action-kind audit and log any missing :kind annotations. The
-  # audit never raises from this hook — drift is surfaced through logs (or,
-  # for tests, by calling `audit_action_kinds/0` directly and asserting on
-  # the result). Wrapped in try/rescue so a malformed tool definition can't
-  # bring down the catalog.
-  defp log_action_kinds_audit do
+    # An action the gates cannot classify is a boot failure, like a
+    # provider that cannot load.
     case audit_action_kinds() do
       :ok ->
         :ok
 
-      {:error, missing} ->
-        lines = Enum.map(missing, &"  - #{&1.tool}.#{&1.action} (#{inspect(&1.provider)})")
+      {:error, findings} ->
+        lines = Enum.map(findings, &"  - #{&1.tool}.#{&1.action}: #{&1.reason}")
 
-        Logger.warning(
-          "[Cyfr.Ops.Catalog] MCP tool actions missing :kind annotation:\n" <>
-            Enum.join(lines, "\n")
-        )
+        raise "tool annotations failed the catalog audit; refusing to boot:\n" <>
+                Enum.join(lines, "\n")
     end
-  rescue
-    e ->
-      Logger.error("[Cyfr.Ops.Catalog] action-kinds audit crashed: #{Exception.message(e)}")
-      :ok
+
+    load_providers()
+    schedule_refresh()
+    {:ok, %{}}
   end
 
   @impl true

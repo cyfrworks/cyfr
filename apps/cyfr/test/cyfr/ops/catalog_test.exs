@@ -34,6 +34,27 @@ defmodule Cyfr.Ops.CatalogTest.BlockingProvider do
   end
 end
 
+defmodule Cyfr.Ops.CatalogTest.ReplaySafeWrite do
+  @moduledoc false
+  # A write annotated replay-safe: the audit's refusal, as a provider.
+  def service, do: "poker"
+
+  def tools do
+    [
+      %{
+        name: "poker",
+        description: "a write",
+        annotations: %{
+          actions: %{"poke" => %{kind: :write, planes: [:in_chain], recovery: :replay_safe}}
+        },
+        input_schema: %{"properties" => %{"action" => %{"enum" => ["poke"]}}}
+      }
+    ]
+  end
+
+  def handle(_name, _ctx, _args), do: {:ok, %{}}
+end
+
 defmodule Cyfr.Ops.CatalogTest do
   @moduledoc """
   Tests for the MCP tool registry.
@@ -752,7 +773,21 @@ defmodule Cyfr.Ops.CatalogTest do
       end
 
       Application.put_env(:cyfr, :tool_providers_lenient, true)
-      assert {:ok, %{}, {:continue, :audit_action_kinds}} = Catalog.init([])
+      assert {:ok, %{}} = Catalog.init([])
+    end
+
+    test "an action the audit refuses refuses the boot", %{original: original} do
+      Application.put_env(
+        :cyfr,
+        :tool_providers,
+        original ++ [Cyfr.Ops.CatalogTest.ReplaySafeWrite]
+      )
+
+      assert_raise RuntimeError,
+                   ~r/failed the catalog audit.*poker\.poke: invalid_recovery/s,
+                   fn ->
+                     Catalog.init([])
+                   end
     end
   end
 end

@@ -145,7 +145,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
   end
 
   test "the panel opens onto You beside the room, and a send lands in You with the room read into the turn",
-       %{conn: conn, mine: mine, room: room, me: me, in_room: in_room, thread: thread} do
+       %{conn: conn, room: room, me: me, in_room: in_room, thread: thread} do
     {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
 

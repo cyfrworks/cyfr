@@ -219,6 +219,29 @@ defmodule Aqua.ApprovalsTest do
              Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
   end
 
+  test "an approval opens only with the digest it is consumed by", %{
+    ctx: ctx,
+    thread: thread,
+    pins: pins
+  } do
+    turn = started!(ctx, thread, pins)
+    {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
+
+    {:ok, %{calls: [%{step: step}]}} =
+      Tape.record_response(ctx, turn, model_step, %{
+        text: nil,
+        tool_calls: [%{tool_call_id: "c1", name: "notes", tool: "notes", action: "keep"}]
+      })
+
+    for digest <- [nil, ""] do
+      assert {:error, :proposal_digest_required} =
+               Tape.open_approval(ctx, turn, step, %{proposal_digest: digest, card: %{}})
+    end
+
+    refute Approvals.proposal?(%{proposal_digest: ""}, %{"tool" => "notes"})
+    refute Approvals.proposal?(%{proposal_digest: nil}, %{"tool" => "notes"})
+  end
+
   test "a card whose proposal no longer matches its approval settles as an error", %{
     ctx: ctx,
     thread: thread,
@@ -263,7 +286,7 @@ defmodule Aqua.ApprovalsTest do
   } do
     turn = started!(ctx, thread, pins)
     past = DateTime.add(DateTime.utc_now(), -60, :second)
-    %{approval: approval, step: step} = card!(ctx, turn, @keep, expires_at: past)
+    %{step: step} = card!(ctx, turn, @keep, expires_at: past)
 
     assert {:ok, 1} = Approvals.expire_due(ctx)
 
@@ -394,6 +417,29 @@ defmodule Aqua.ApprovalsTest do
     {:ok, step2} = Tape.step(ctx, step2.id)
     assert {:error, {:invalid_argument, msg}} = Launch.dispatch(ctx, step2)
     assert msg =~ "hand"
+
+    # A card rewritten after its approval launches nothing.
+    %{approval: approval4, step: step4} =
+      card!(ctx, turn, launch, kind: "execute", step_kind: "launch")
+
+    {:ok, _} = Approvals.resolve(approver_ctx, approval4.id, %{decision: :approved})
+    {:ok, card} = Tape.message(ctx, approval4.message_id)
+
+    rewritten =
+      card
+      |> Threads.payload()
+      |> put_in(["intent", "proposal", "args", "input"], %{"other" => true})
+      |> Jason.encode!()
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(m in Arca.Schemas.Message, where: m.id == ^card.id),
+        set: [payload: rewritten]
+      )
+
+    {:ok, step4} = Tape.step(ctx, step4.id)
+    assert {:error, {:invalid_argument, changed}} = Launch.dispatch(ctx, step4)
+    assert changed =~ "no longer matches"
 
     # A step nobody approved launches nothing.
     %{step: step3} = card!(ctx, turn, launch, kind: "execute", step_kind: "launch")

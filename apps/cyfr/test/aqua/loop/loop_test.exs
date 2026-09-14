@@ -14,7 +14,6 @@ defmodule Aqua.LoopTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Aqua.{Approvals, Tape}
@@ -336,6 +335,52 @@ defmodule Aqua.LoopTest do
              Enum.find(steps, &(&1.action == "keep"))
 
     assert roots() == before
+  end
+
+  test "an approved call whose row no longer matches its approval runs nothing", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    turn = accept!(ctx, thread, "@aqua keep a note")
+
+    script!([
+      calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "remember"}}])
+    ])
+
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+    # The call's row now says something other than what was approved.
+    {:ok, steps} = Tape.steps(ctx, paused)
+    keep = Enum.find(steps, &(&1.action == "keep"))
+    {:ok, row} = Tape.message(ctx, keep.message_id)
+
+    payload =
+      row
+      |> Tape.payload()
+      |> put_in(["arguments", "content"], "something else")
+      |> Jason.encode!()
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(m in Arca.Schemas.Message, where: m.id == ^row.id),
+        set: [payload: payload]
+      )
+
+    ScriptedExecution.script([reply("done")])
+
+    assert :completed =
+             Task.await(
+               Task.async(fn ->
+                 Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+               end),
+               60_000
+             )
+
+    assert {:ok, %{dispatch_state: "closed", outcome: "denied"}} = Tape.step(ctx, keep.id)
+    assert {:error, _} = Aqua.Notes.read(ctx, "n")
   end
 
   test "a grant withdrawn while the model answers does not run the call it used to allow",

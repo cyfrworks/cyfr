@@ -24,6 +24,7 @@ defmodule Emissary.MCP.McpServersToolTest do
 
       actions = tool.input_schema["properties"]["action"]["enum"]
       assert "create" in actions
+      assert "update" in actions
       assert "delete" in actions
       assert "list" in actions
       assert "get" in actions
@@ -134,6 +135,72 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
   end
 
+  describe "handle/3 - create and update" do
+    setup %{ctx: ctx} do
+      on_exit(fn ->
+        for name <- ["kept", "absent"],
+            do: Emissary.MCP.ExternalServerSupervisor.stop(name, ctx.athanor_id)
+      end)
+    end
+
+    test "create refuses a name in use; update replaces the config and keeps it disabled",
+         %{ctx: ctx} do
+      assert {:ok, %{name: "kept"}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "create",
+                 "name" => "kept",
+                 "config" => %{"url" => "https://localhost:99999/mcp"}
+               })
+
+      {:ok, %{id: id}} = Arca.McpServerStorage.get(ctx, "kept")
+
+      assert {:error, {:conflict, message}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "create",
+                 "name" => "kept",
+                 "config" => %{"url" => "https://localhost:99998/mcp"}
+               })
+
+      assert message =~ "update"
+      assert {:ok, %{url: "https://localhost:99999/mcp"}} = Arca.McpServerStorage.get(ctx, "kept")
+
+      assert {:ok, _} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "disable",
+                 "name" => "kept"
+               })
+
+      assert {:ok, %{status: "disabled"}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "update",
+                 "name" => "kept",
+                 "config" => %{"url" => "https://localhost:99998/mcp", "timeout_ms" => 5_000}
+               })
+
+      assert {:ok, server} = Arca.McpServerStorage.get(ctx, "kept")
+      assert server.id == id
+      assert server.url == "https://localhost:99998/mcp"
+      assert server.enabled == false
+      assert Jason.decode!(server.config_json)["timeout_ms"] == 5_000
+    end
+
+    test "update validates like create and finds only a server that exists", %{ctx: ctx} do
+      assert {:error, {:not_found, "Server", "absent"}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "update",
+                 "name" => "absent",
+                 "config" => %{"url" => "https://localhost:99999/mcp"}
+               })
+
+      assert {:error, {:invalid_argument, "Invalid URL:" <> _}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "update",
+                 "name" => "absent",
+                 "config" => %{"url" => "http://169.254.169.254/latest/meta-data/"}
+               })
+    end
+  end
+
   describe "handle/3 - delete" do
     test "requires name", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
@@ -141,7 +208,7 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "deletes existing server", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{name: "to-delete", url: "https://x.com/mcp"})
+      Arca.McpServerStorage.insert(ctx, %{name: "to-delete", url: "https://x.com/mcp"})
 
       assert {:ok, %{deleted: "to-delete"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -160,8 +227,8 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "returns configured servers", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{name: "s1", url: "https://a.com/mcp"})
-      Arca.McpServerStorage.put(ctx, %{name: "s2", url: "https://b.com/mcp"})
+      Arca.McpServerStorage.insert(ctx, %{name: "s1", url: "https://a.com/mcp"})
+      Arca.McpServerStorage.insert(ctx, %{name: "s2", url: "https://b.com/mcp"})
 
       assert {:ok, %{servers: servers, count: 2}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "list"})
@@ -173,7 +240,7 @@ defmodule Emissary.MCP.McpServersToolTest do
 
     test "listing starts no server processes", %{ctx: ctx} do
       # Listing servers must not start processes or open outbound connections.
-      Arca.McpServerStorage.put(ctx, %{name: "lazy-1", url: "https://a.com/mcp", enabled: true})
+      Arca.McpServerStorage.insert(ctx, %{name: "lazy-1", url: "https://a.com/mcp", enabled: true})
 
       assert {:ok, %{servers: [server]}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "list"})
@@ -269,7 +336,7 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "returns server details for existing server", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{name: "get-test", url: "https://x.com/mcp"})
+      Arca.McpServerStorage.insert(ctx, %{name: "get-test", url: "https://x.com/mcp"})
 
       assert {:ok, %{name: "get-test", url: "https://x.com/mcp"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -299,7 +366,7 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "returns status for existing server", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{name: "test-srv", url: "https://localhost:99999/mcp"})
+      Arca.McpServerStorage.insert(ctx, %{name: "test-srv", url: "https://localhost:99999/mcp"})
 
       # Will fail to connect but should return a status result, not a not_found error
       assert {:ok, %{name: "test-srv"}} =
@@ -336,7 +403,7 @@ defmodule Emissary.MCP.McpServersToolTest do
 
   describe "handle/3 - enable/disable" do
     test "disables a server", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{name: "toggle", url: "https://x.com/mcp"})
+      Arca.McpServerStorage.insert(ctx, %{name: "toggle", url: "https://x.com/mcp"})
 
       assert {:ok, %{enabled: false}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -349,7 +416,11 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "enables a disabled server", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{name: "toggle2", url: "https://x.com/mcp", enabled: false})
+      Arca.McpServerStorage.insert(ctx, %{
+        name: "toggle2",
+        url: "https://x.com/mcp",
+        enabled: false
+      })
 
       assert {:ok, %{enabled: true}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -374,13 +445,5 @@ defmodule Emissary.MCP.McpServersToolTest do
       assert {:error, "Unknown tool: other"} =
                McpServersTool.handle("other", ctx, %{"action" => "list"})
     end
-  end
-
-  # Providers answer typed reasons where the class is clear; the shared
-  # renderer is the one spelling of every sentence, so assert through it.
-  # Plain strings pass through unchanged.
-  defp err_msg(reason) do
-    Cyfr.Ops.Error.render(reason) ||
-      flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

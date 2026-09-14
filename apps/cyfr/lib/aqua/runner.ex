@@ -84,7 +84,10 @@ defmodule Aqua.Runner do
 
   defp via(thread_id), do: {:via, Registry, {@registry, thread_id}}
 
-  @doc "The runner for a thread, started if it is not running."
+  @doc """
+  The runner for a thread, started if it is not running. A boot that does
+  not own the control plane starts none: `{:error, :control_plane_lost}`.
+  """
   @spec ensure(String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
   def ensure(thread_id, athanor_id)
       when is_binary(thread_id) and is_binary(athanor_id) do
@@ -93,15 +96,20 @@ defmodule Aqua.Runner do
         {:ok, pid}
 
       [] ->
-        case DynamicSupervisor.start_child(
-               @supervisor,
-               {__MODULE__, {thread_id, athanor_id}}
-             ) do
-          {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> {:ok, pid}
-          :ignore -> {:error, :not_found}
-          {:error, reason} -> {:error, reason}
-        end
+        with :ok <- Cyfr.ControlPlane.assert_owner(),
+             do: start_runner(thread_id, athanor_id)
+    end
+  end
+
+  defp start_runner(thread_id, athanor_id) do
+    case DynamicSupervisor.start_child(
+           @supervisor,
+           {__MODULE__, {thread_id, athanor_id}}
+         ) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      :ignore -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -197,11 +205,13 @@ defmodule Aqua.Runner do
   def restart_for_consent(%Context{} = ctx, thread_id, result) when is_map(result),
     do: call(ctx, thread_id, {:restart_for_consent, ctx, result})
 
-  @doc "Start a runner for every thread holding an open turn."
+  @doc "Start a runner for every thread holding an open turn, while this boot owns the control plane."
   @spec recover_all() :: :ok
   def recover_all do
-    Enum.each(Tape.with_open_turns(), fn {athanor_id, thread_id} ->
-      ensure(thread_id, athanor_id)
+    Cyfr.ControlPlane.when_owner(fn ->
+      Enum.each(Tape.with_open_turns(), fn {athanor_id, thread_id} ->
+        ensure(thread_id, athanor_id)
+      end)
     end)
 
     :ok
@@ -597,15 +607,23 @@ defmodule Aqua.Runner do
 
   def handle_info({:thread, _id, _event}, state), do: {:noreply, state}
 
-  def handle_info({:expire, turn_id}, %{paused: %{turn_id: turn_id}} = state) do
-    _ = Aqua.Approvals.expire_due(state.ctx)
-    {:noreply, settle_paused(%{state | paused: %{state.paused | expiry: nil}})}
+  # A paused turn's timers write only while this boot owns the control
+  # plane; otherwise they ask again later.
+  def handle_info({:expire, turn_id} = timer, %{paused: %{turn_id: turn_id}} = state) do
+    case Cyfr.ControlPlane.when_owner(fn -> Aqua.Approvals.expire_due(state.ctx) end) do
+      :not_owner -> {:noreply, retry_timer(timer, state)}
+      _expired -> {:noreply, settle_paused(%{state | paused: %{state.paused | expiry: nil}})}
+    end
   end
 
   def handle_info({:expire, _turn_id}, state), do: {:noreply, state}
 
-  def handle_info({:resume, turn_id}, %{paused: %{turn_id: turn_id}} = state),
-    do: {:noreply, settle_paused(state)}
+  def handle_info({:resume, turn_id} = timer, %{paused: %{turn_id: turn_id}} = state) do
+    case Cyfr.ControlPlane.when_owner(fn -> settle_paused(state) end) do
+      :not_owner -> {:noreply, retry_timer(timer, state)}
+      settled -> {:noreply, settled}
+    end
+  end
 
   def handle_info({:resume, _turn_id}, state), do: {:noreply, state}
 
@@ -636,6 +654,11 @@ defmodule Aqua.Runner do
   def handle_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
+  end
+
+  defp retry_timer(timer, state) do
+    Process.send_after(self(), timer, @resume_retry_ms)
+    state
   end
 
   defp after_loop(%{live: live} = state, result) do

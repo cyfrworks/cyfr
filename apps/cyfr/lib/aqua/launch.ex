@@ -33,6 +33,7 @@ defmodule Aqua.Launch do
     with {:ok, approval} <- Tape.approval(ctx, approval_id),
          :ok <- approved_launch(approval),
          {:ok, card} <- Tape.message(ctx, approval.message_id),
+         :ok <- card_approved(approval, card),
          {:ok, args} <- launch_args(card),
          {:ok, approver} <- approver(ctx, approval) do
       case Aqua.Ops.call_tool("execution", approver, args) do
@@ -46,6 +47,15 @@ defmodule Aqua.Launch do
 
   defp approved_launch(%{status: "approved", resolution_kind: "launch"}), do: :ok
   defp approved_launch(_approval), do: {:error, :not_approved}
+
+  # The launch runs what the approval was opened for, or nothing.
+  defp card_approved(approval, card) do
+    proposal = get_in(Arca.ThreadStorage.payload(card), ["intent", "proposal"])
+
+    if Aqua.Approvals.proposal?(approval, proposal),
+      do: :ok,
+      else: {:error, {:invalid_argument, "the card no longer matches its approval"}}
+  end
 
   # The proposal the card carried, as the model wrote it and the person
   # saw it. The assistant itself is never launched, and a wrapped

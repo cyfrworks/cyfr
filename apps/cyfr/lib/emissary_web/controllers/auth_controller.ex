@@ -56,14 +56,11 @@ defmodule EmissaryWeb.AuthController do
   """
   def device_complete(conn, %{"ticket" => ticket})
       when is_binary(ticket) and byte_size(ticket) > 0 and byte_size(ticket) <= 64 do
-    key = {:login_device_ticket, ticket}
-
-    case Arca.Cache.get(key) do
+    # Taken in one operation, so of two requests presenting the ticket only
+    # one finds it; and consumed whichever way the check goes: a ticket
+    # presented by the wrong browser is spent, not left for the right one.
+    case Arca.Cache.take({:login_device_ticket, ticket}) do
       {:ok, payload} ->
-        # Consumed whichever way the check goes: a ticket presented by the
-        # wrong browser is spent, not left for the right one to find.
-        Arca.Cache.invalidate(key)
-
         if same_browser?(conn, payload) do
           apply_device_ticket(conn, payload)
         else

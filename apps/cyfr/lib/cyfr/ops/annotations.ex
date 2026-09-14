@@ -89,15 +89,15 @@ defmodule Cyfr.Ops.Annotations do
   @doc """
   The `recovery` annotation of an action: `:replay_safe` for a read
   reviewed as safe to re-dispatch after an uncertain recovery, nil for
-  every other action.
+  every other action — a write annotated replay-safe included.
   """
   @spec recovery(map(), String.t()) :: :replay_safe | nil
-  def recovery(source, action) do
-    case field(source, action, :recovery) do
-      :replay_safe -> :replay_safe
-      _ -> nil
-    end
-  end
+  def recovery(source, action), do: recovery_of(annotation(source, action))
+
+  @doc "`recovery/2` for one action's annotation map."
+  @spec recovery_of(map() | nil) :: :replay_safe | nil
+  def recovery_of(%{kind: :read, recovery: :replay_safe}), do: :replay_safe
+  def recovery_of(_annotation), do: nil
 
   @doc """
   The one codec for a `standing` value as it travels: the annotation's

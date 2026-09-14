@@ -682,6 +682,30 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "didn't fully sync"
     end
 
+    test "of two requests presenting one ticket, one signs in", %{conn: conn} do
+      session = mint_session()
+
+      ticket =
+        mint_ticket(%{
+          session_token: session.token,
+          access_token: nil,
+          outcome: {:proceed, %{unsynced: [], probe: :ok}}
+        })
+
+      signed_in =
+        1..2
+        |> Enum.map(fn _ ->
+          Task.async(fn ->
+            browser_conn(conn)
+            |> get("/auth/device/complete/#{ticket}")
+            |> Plug.Conn.get_session(:sanctum_session_token)
+          end)
+        end)
+        |> Task.await_many(10_000)
+
+      assert Enum.count(signed_in, &(&1 == session.token)) == 1
+    end
+
     # Without this, the ticket is a bearer credential for someone else's
     # session: an attacker completes their own device flow, sends the link
     # to a victim, and the victim's browser is signed in as the attacker —

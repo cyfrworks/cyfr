@@ -197,6 +197,31 @@ defmodule Sanctum.VaultTest do
       assert reloaded.status == "needs_consent"
     end
 
+    test "a binding moves only from the digest it was read at, and a rebind keeps what landed first",
+         %{ctx: ctx} do
+      view = create!(ctx)
+      {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      assert is_binary(entry.binding_digest)
+
+      assert {:error, :binding_moved} =
+               Arca.VaultStorage.move_binding(ctx.athanor_id, view.id, "sha256:stale", %{
+                 oauth_scopes: ~s(["x"])
+               })
+
+      assert {:ok, _} = Vault.rebind(ctx, %{id: view.id, oauth_scopes: ["a"]})
+
+      assert {:ok, %{binding_digest: digest}} =
+               Vault.rebind(ctx, %{
+                 id: view.id,
+                 oauth_endpoints: %{"token_url" => "https://other.example/token"}
+               })
+
+      {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      assert row.oauth_scopes == ~s(["a"])
+      assert row.binding_digest == digest
+      assert {:ok, ^digest} = VaultReader.binding_digest(row)
+    end
+
     test "a rebind with no binding fields is refused", %{ctx: ctx} do
       view = create!(ctx)
 

@@ -19,6 +19,7 @@ import (
 func init() {
 	rootCmd.AddCommand(mcpCmd)
 	mcpCmd.AddCommand(mcpAddCmd)
+	mcpCmd.AddCommand(mcpUpdateCmd)
 	mcpCmd.AddCommand(mcpRemoveCmd)
 	mcpCmd.AddCommand(mcpListCmd)
 	mcpCmd.AddCommand(mcpGetCmd)
@@ -141,6 +142,44 @@ Header values can reference a stored vault entry with the vault: prefix.`,
 					fmt.Printf("  Tools: %s\n", strings.Join(strs, ", "))
 				}
 			}
+		}
+		return nil
+	},
+}
+
+var mcpUpdateCmd = &cobra.Command{
+	Use:   "update <name> <config-json>",
+	Short: "Replace an external MCP server's config",
+	Long: `Replace the connection config of a server already added, whole. The
+server keeps its enabled or disabled state; an enabled one reconnects with
+the new config and its tools are discovered again.
+
+Header values can reference a stored vault entry with the vault: prefix.`,
+	Example: `  cyfr mcp update notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key-2"}}'`,
+	Args:    cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		var config map[string]any
+		if err := json.Unmarshal([]byte(args[1]), &config); err != nil {
+			return fmt.Errorf("Invalid JSON config: %w", err)
+		}
+		if _, ok := config["url"]; !ok {
+			return errors.New("Config must include a \"url\" field.")
+		}
+
+		client := newClient()
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
+			"action": ops.McpServersUpdate,
+			"name":   name,
+			"config": config,
+		})
+		if err != nil {
+			return handleToolError(err)
+		}
+		if flagJSON {
+			output.JSON(result)
+		} else {
+			fmt.Printf("Server '%s' updated (%v).\n", name, result["status"])
 		}
 		return nil
 	},
@@ -334,7 +373,7 @@ var mcpRefreshCmd = &cobra.Command{
 	Args: cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		toolArgs := map[string]any{
-			"action": "refresh",
+			"action": ops.McpServersRefresh,
 		}
 		if len(args) >= 1 {
 			toolArgs["name"] = args[0]

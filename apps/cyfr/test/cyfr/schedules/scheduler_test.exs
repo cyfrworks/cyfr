@@ -176,6 +176,26 @@ defmodule Cyfr.Schedules.SchedulerTest do
     assert row.last_execution_id == execution_id
   end
 
+  test "a boot that does not own the control plane claims no occurrence, and fires once it does",
+       %{ctx: ctx} do
+    Cyfr.ControlPlane.mark(:lost)
+    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+
+    schedule = due!(create_schedule(ctx))
+    pid = scheduler!()
+
+    # The due timer fired on load and was deferred to the recheck.
+    _ = :sys.get_state(pid)
+    send(pid, {:fire, schedule.id})
+    _ = :sys.get_state(pid)
+    assert occurrences(ctx, schedule) == []
+    assert Engine.calls() == []
+
+    Cyfr.ControlPlane.mark(:unclaimed)
+    send(pid, {:fire, schedule.id})
+    wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
+  end
+
   test "an admission that fails marks the occurrence failed without invoking anything", %{
     ctx: ctx
   } do

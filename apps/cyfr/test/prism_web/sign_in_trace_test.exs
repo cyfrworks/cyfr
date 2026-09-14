@@ -102,7 +102,7 @@ defmodule PrismWeb.SignInTraceTest do
             true
 
           {:ok, row} ->
-            case Map.get(Athanors.settings(row), "provisioning_error") do
+            case Athanors.provisioning_failure(row) do
               nil -> false
               err -> flunk("the fill recorded an error instead of finishing: #{inspect(err)}")
             end
@@ -116,8 +116,8 @@ defmodule PrismWeb.SignInTraceTest do
 
     {:ok, filled} = Athanors.get(athanor_id)
 
-    refute Map.has_key?(Athanors.settings(filled), "provisioning_error"),
-           "the fill recorded an error: #{inspect(Athanors.settings(filled))}"
+    refute Athanors.provisioning_failure(filled),
+           "the fill recorded an error: #{inspect(Athanors.provisioning_failure(filled))}"
 
     ctx =
       Sanctum.Context.build(

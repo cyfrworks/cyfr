@@ -47,12 +47,13 @@ defmodule Emissary.MCP.McpServersTool do
       name: "mcp_servers",
       title: "MCP Servers",
       description:
-        "Manage external MCP server connections. Create, delete, enable/disable, and test connections to external MCP servers (e.g., Notion, GitHub, custom servers). External server tools appear in tools/list as server_name:tool_name.",
+        "Manage external MCP server connections. Create, update, delete, enable/disable, and test connections to external MCP servers (e.g., Notion, GitHub, custom servers). External server tools appear in tools/list as server_name:tool_name.",
       annotations: %{
         readOnlyHint: false,
         destructiveHint: true,
         actions: %{
           "create" => %{kind: :write, planes: [:external], permission: :admin},
+          "update" => %{kind: :write, planes: [:external], permission: :admin},
           "delete" => %{kind: :destructive, planes: [:external], permission: :admin},
           # Connection config (URLs, header maps, vault binding names) is
           # shared operator infrastructure, readable by any authenticated
@@ -74,6 +75,7 @@ defmodule Emissary.MCP.McpServersTool do
             "type" => "string",
             "enum" => [
               "create",
+              "update",
               "delete",
               "list",
               "get",
@@ -87,7 +89,8 @@ defmodule Emissary.MCP.McpServersTool do
           "name" => %{
             "type" => "string",
             "description" =>
-              "Server name (required for create/delete/get/test/refresh/enable/disable)"
+              "Server name (required for create/update/delete/get/test/enable/disable; " <>
+                "refresh without one refreshes every server)"
           },
           "config" => %{
             "type" => "object",
@@ -113,7 +116,8 @@ defmodule Emissary.MCP.McpServersTool do
                     "reachable only from inside a chain."
               }
             },
-            "description" => "Server configuration (required for create)"
+            "description" =>
+              "Server configuration (required for create; update replaces it whole)"
           }
         },
         "required" => ["action"]
@@ -125,7 +129,7 @@ defmodule Emissary.MCP.McpServersTool do
   # stored secrets in its headers — the dispatcher enforces the :admin gate
   # from these actions' annotations. Reads (list/get) stay open to any
   # authenticated caller by annotation.
-  @admin_actions ~w(create delete test refresh enable disable)
+  @admin_actions ~w(create update delete test refresh enable disable)
 
   def handle(%Context{} = ctx, %{"action" => action} = args)
       when action in @admin_actions do
@@ -149,6 +153,7 @@ defmodule Emissary.MCP.McpServersTool do
   end
 
   defp dispatch_admin("create", ctx, args), do: handle_create(ctx, args)
+  defp dispatch_admin("update", ctx, args), do: handle_update(ctx, args)
   defp dispatch_admin("delete", ctx, args), do: handle_delete(ctx, args)
   defp dispatch_admin("test", ctx, args), do: handle_test(ctx, args)
   defp dispatch_admin("refresh", ctx, args), do: handle_refresh(ctx, args)
@@ -159,6 +164,48 @@ defmodule Emissary.MCP.McpServersTool do
   # ============================================================================
 
   defp handle_create(ctx, args) do
+    with {:ok, name, config} <- server_args(args),
+         :ok <- under_server_cap(ctx) do
+      case Arca.McpServerStorage.insert(ctx, server_attrs(name, config)) do
+        {:ok, server} ->
+          {:ok, connect(ctx, server)}
+
+        {:error, :exists} ->
+          {:error, {:conflict, "Server '#{name}' already exists — change it with update"}}
+
+        {:error, reason} ->
+          Logger.warning("[MCP.Servers] failed to save server config: #{inspect(reason)}")
+          {:error, {:unavailable, "The server store"}}
+      end
+    end
+  end
+
+  # The connection config is replaced whole; whether the server is enabled
+  # is kept.
+  defp handle_update(ctx, args) do
+    with {:ok, name, config} <- server_args(args) do
+      attrs = server_attrs(name, config)
+
+      case Arca.McpServerStorage.update(ctx, name, Map.take(attrs, [:url, :config_json])) do
+        {:ok, %{enabled: true} = server} ->
+          {:ok, connect(ctx, server)}
+
+        {:ok, server} ->
+          ExternalProvider.invalidate_external_tools_cache(ctx)
+          broadcast_mcp_servers_changed(ctx)
+          {:ok, %{name: server.name, url: server.url, status: "disabled"}}
+
+        {:error, :not_found} ->
+          {:error, {:not_found, "Server", name}}
+
+        {:error, reason} ->
+          Logger.warning("[MCP.Servers] failed to update server config: #{inspect(reason)}")
+          {:error, {:unavailable, "The server store"}}
+      end
+    end
+  end
+
+  defp server_args(args) do
     name = args["name"]
     config = args["config"] || %{}
 
@@ -175,9 +222,21 @@ defmodule Emissary.MCP.McpServersTool do
 
       true ->
         with :ok <- validate_header_credentials(config["headers"]),
-             :ok <- validate_create_url(config["url"]) do
-          handle_create_validated(ctx, name, config)
+             :ok <- validate_create_url(config["url"]),
+             :ok <- validate_tool_patterns(config["tool_patterns"]) do
+          {:ok, name, config}
         end
+    end
+  end
+
+  defp under_server_cap(ctx) do
+    max = Application.get_env(:cyfr, :max_external_servers, 50)
+
+    case Arca.McpServerStorage.list(ctx) do
+      {:ok, existing} when length(existing) < max -> :ok
+      {:ok, _existing} -> {:error, "Maximum server limit (#{max}) reached"}
+      {:error, reason} when is_atom(reason) -> {:error, "Storage error: #{reason}"}
+      {:error, _reason} -> {:error, {:unavailable, "The server store"}}
     end
   end
 
@@ -234,89 +293,57 @@ defmodule Emissary.MCP.McpServersTool do
   defp validate_tool_patterns(_),
     do: {:error, {:invalid_argument, "tool_patterns must be a list of strings"}}
 
-  defp handle_create_validated(ctx, name, config) do
-    max = Application.get_env(:cyfr, :max_external_servers, 50)
+  defp server_attrs(name, config) do
+    base = %{
+      "headers" => config["headers"] || %{},
+      "timeout_ms" => config["timeout_ms"] || 30_000
+    }
 
-    with {:ok, existing} <- Arca.McpServerStorage.list(ctx),
-         true <- length(existing) < max || {:error, "Maximum server limit (#{max}) reached"},
-         :ok <- validate_tool_patterns(config["tool_patterns"]) do
-      attrs = %{
-        name: name,
-        url: config["url"],
-        config_json:
-          encode_config_json(
-            %{
-              "headers" => config["headers"] || %{},
-              "timeout_ms" => config["timeout_ms"] || 30_000
-            }
-            |> then(fn base ->
-              case config["tool_patterns"] do
-                nil -> base
-                patterns -> Map.put(base, "tool_patterns", patterns)
-              end
-            end)
-            |> then(fn base ->
-              # Console reachability is opt-in and stored only when set —
-              # absent means the in-chain default holds. Deliberately not
-              # part of the consent digest (`Sanctum.ToolServerDigest`).
-              if config["console"] == true,
-                do: Map.put(base, "console", true),
-                else: base
-            end)
-          )
-      }
-
-      case Arca.McpServerStorage.put(ctx, attrs) do
-        {:ok, _server} ->
-          ExternalProvider.invalidate_external_tools_cache(ctx)
-          broadcast_mcp_servers_changed(ctx)
-
-          server_config =
-            ExternalServers.server_config(%{name: name, url: config["url"], config: config}, ctx)
-
-          result =
-            case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
-              {:ok, _pid} ->
-                case Emissary.MCP.ExternalServer.get_tools(
-                       name,
-                       ctx.athanor_id
-                     ) do
-                  {:ok, tools} ->
-                    %{
-                      name: name,
-                      url: config["url"],
-                      status: "ready",
-                      tools_discovered: length(tools),
-                      tool_names: Enum.map(tools, & &1["name"])
-                    }
-
-                  {:error, reason} ->
-                    %{
-                      name: name,
-                      url: config["url"],
-                      status: "error",
-                      error: inspect(reason)
-                    }
-                end
-
-              {:error, reason} ->
-                %{
-                  name: name,
-                  url: config["url"],
-                  status: "error",
-                  error: "Failed to start server process: #{inspect(reason)}"
-                }
-            end
-
-          {:ok, result}
-
-        {:error, reason} ->
-          Logger.warning("[MCP.Servers] failed to save server config: #{inspect(reason)}")
-          {:error, {:unavailable, "The server store"}}
+    base =
+      case config["tool_patterns"] do
+        nil -> base
+        patterns -> Map.put(base, "tool_patterns", patterns)
       end
-    else
-      {:error, reason} when is_atom(reason) -> {:error, "Storage error: #{reason}"}
-      {:error, msg} when is_binary(msg) -> {:error, msg}
+
+    # Console reachability is opt-in and stored only when set — absent means
+    # the in-chain default holds. Deliberately not part of the consent
+    # digest (`Sanctum.ToolServerDigest`).
+    base = if config["console"] == true, do: Map.put(base, "console", true), else: base
+
+    %{name: name, url: config["url"], config_json: encode_config_json(base)}
+  end
+
+  # The stored server started (or restarted, when its config moved) and its
+  # tools discovered, as the answer to a create or an update.
+  defp connect(ctx, server) do
+    ExternalProvider.invalidate_external_tools_cache(ctx)
+    broadcast_mcp_servers_changed(ctx)
+
+    case Emissary.MCP.ExternalServerSupervisor.ensure_started(
+           ExternalServers.server_config(server, ctx)
+         ) do
+      {:ok, _pid} ->
+        case Emissary.MCP.ExternalServer.get_tools(server.name, ctx.athanor_id) do
+          {:ok, tools} ->
+            %{
+              name: server.name,
+              url: server.url,
+              status: "ready",
+              tools_discovered: length(tools),
+              tool_names: Enum.map(tools, & &1["name"])
+            }
+
+          {:error, reason} ->
+            %{name: server.name, url: server.url, status: "error", error: inspect(reason)}
+        end
+
+      {:error, reason} ->
+        %{
+          name: server.name,
+          url: server.url,
+          status: "error",
+          error: "Failed to start server process: #{inspect(reason)}"
+        }
     end
   end
 

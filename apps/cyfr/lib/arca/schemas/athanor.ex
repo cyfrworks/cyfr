@@ -40,6 +40,8 @@ defmodule Arca.Schemas.Athanor do
     field :created_by, :string
     field :settings, :string
     field :provisioned_at, :utc_datetime_usec
+    field :provisioning_failed_at, :utc_datetime_usec
+    field :provisioning_failure, :string
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end

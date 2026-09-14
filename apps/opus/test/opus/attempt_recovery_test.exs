@@ -64,6 +64,34 @@ defmodule Opus.AttemptRecoveryTest do
     assert {:ok, _} = ExecutionRecord.renew_lease(record.id, successor.attempt)
   end
 
+  test "the sweep tick of a boot that does not own the control plane marks nothing", %{ctx: ctx} do
+    record =
+      ExecutionRecord.new(ctx, "catalyst:local.test:1.0.0", %{"x" => 1},
+        component_type: :catalyst
+      )
+
+    :ok = ExecutionRecord.write_started(record)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^record.attempt),
+        set: [
+          runner_id: "boot-that-died",
+          lease_until: DateTime.add(DateTime.utc_now(), -5, :second)
+        ]
+      )
+
+    Cyfr.ControlPlane.mark(:lost)
+    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+
+    assert {:noreply, %{}} = Opus.ExecutionSweeper.handle_info(:sweep, %{})
+    assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, record.id)
+
+    Cyfr.ControlPlane.mark(:unclaimed)
+    assert {:noreply, %{}} = Opus.ExecutionSweeper.handle_info(:sweep, %{})
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, record.id)
+  end
+
   test "a completion closes the attempt with the row, and a cancel from a read-back record closes the current one",
        %{ctx: ctx} do
     record = ExecutionRecord.new(ctx, "catalyst:local.test:1.0.0", %{}, component_type: :catalyst)

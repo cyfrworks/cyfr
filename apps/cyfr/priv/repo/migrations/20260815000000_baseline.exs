@@ -62,6 +62,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :created_by, :string, null: false
       add :settings, :text
       add :provisioned_at, :utc_datetime_usec
+      # The last automatic fill that failed: when, and `{"step", "detail"}`
+      # as JSON. Written by the server alone and cleared by a completed fill.
+      add :provisioning_failed_at, :utc_datetime_usec
+      add :provisioning_failure, :text
       # open | frozen: a two-person athanor's members are fixed at creation.
       add :roster, :string, null: false, default: "open"
       # SHA-256 over the JSON-encoded sorted member ids of a frozen pair.

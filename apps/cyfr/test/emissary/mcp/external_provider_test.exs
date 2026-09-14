@@ -25,7 +25,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "returns error for disabled server", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "disabled-srv",
         url: "https://x.com/mcp",
         enabled: false
@@ -37,7 +37,11 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
     test "a row handed in is the revision dispatch speaks to, not a second read", %{ctx: ctx} do
       {:ok, stored} =
-        Arca.McpServerStorage.put(ctx, %{name: "one-rev", url: "https://x.com/mcp", enabled: true})
+        Arca.McpServerStorage.insert(ctx, %{
+          name: "one-rev",
+          url: "https://x.com/mcp",
+          enabled: true
+        })
 
       # The caller judged a revision that is now disabled: dispatch sees
       # that revision, whatever the row says by now.
@@ -57,7 +61,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "refuses an external-plane call unless the server opts in", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "chain-only",
         url: "https://x.com/mcp"
       })
@@ -72,7 +76,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "console opt-in admits the external plane", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "console-ok",
         url: "https://localhost:99999/mcp",
         config_json: Jason.encode!(%{"console" => true})
@@ -89,7 +93,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
     test "the console flag is not part of the consent digest", %{ctx: ctx} do
       {:ok, without_flag} =
-        Arca.McpServerStorage.put(ctx, %{
+        Arca.McpServerStorage.insert(ctx, %{
           name: "digest-check",
           url: "https://x.com/mcp",
           enabled: true
@@ -98,7 +102,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       {:ok, digest_before} = Sanctum.ToolServerDigest.from_server(without_flag)
 
       {:ok, with_flag} =
-        Arca.McpServerStorage.put(ctx, %{
+        Arca.McpServerStorage.insert(ctx, %{
           name: "digest-check2",
           url: "https://x.com/mcp",
           enabled: true,
@@ -117,7 +121,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       # dispatches proxied names as :external, so without the server's
       # opt-in the refusal is the plane sentence — the gate is enforced at
       # dispatch, not left to the HTTP router's cache wiring.
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "plane-pin",
         url: "https://localhost:99999/mcp"
       })
@@ -131,7 +135,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "auto-starts server process on dispatch", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "autostart",
         url: "https://localhost:99999/mcp"
       })
@@ -164,7 +168,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "dispatches to running server", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "dispatch-test",
         url: "https://localhost:99999/mcp"
       })
@@ -192,7 +196,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
   describe "an outbound call's own row" do
     test "an in-chain call is admitted as a tool_call under the caller's lineage and closed after",
          %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{name: "rowed", url: "https://localhost:99999/mcp"})
+      Arca.McpServerStorage.insert(ctx, %{name: "rowed", url: "https://localhost:99999/mcp"})
       parent = "exec_parent_#{System.unique_integer([:positive])}"
 
       assert {:error, _unreachable} =
@@ -224,7 +228,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "a console call writes no row", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "console-rowless",
         url: "https://localhost:99999/mcp",
         config_json: Jason.encode!(%{"console" => true})
@@ -244,7 +248,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "skips disabled servers", %{ctx: ctx} do
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "disabled",
         url: "https://x.com/mcp",
         enabled: false
@@ -317,7 +321,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       on_exit(fn -> Application.delete_env(:cyfr, :execution_payload_store) end)
 
       {:ok, server} =
-        Arca.McpServerStorage.put(ctx, %{name: "kept", url: "https://localhost:99999/mcp"})
+        Arca.McpServerStorage.insert(ctx, %{name: "kept", url: "https://localhost:99999/mcp"})
 
       {:ok, server: server}
     end

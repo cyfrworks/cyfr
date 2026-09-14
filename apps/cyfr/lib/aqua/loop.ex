@@ -559,7 +559,7 @@ defmodule Aqua.Loop do
 
         items =
           Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
-            %{step: call_step, call: call, approved?: false}
+            %{step: call_step, call: call, approval: nil}
           end)
 
         if items == [], do: {:halt, :completed, state}, else: dispatch(state, items)
@@ -717,8 +717,21 @@ defmodule Aqua.Loop do
 
   defp decide(state, touched, item, acc), do: decide_open(state, touched, item, acc)
 
-  defp decide_open(_state, _touched, %{approved?: true} = item, {runnable, cards}),
-    do: {[item | runnable], cards}
+  # An approved call runs as it was approved: the call recalled from its row
+  # must be the proposal the approval's digest names.
+  defp decide_open(
+         state,
+         _touched,
+         %{approval: %{} = approval, step: step, call: {:ok, %Call{} = call}} = item,
+         {runnable, cards}
+       ) do
+    if Aqua.Approvals.proposal?(approval, Policy.proposal(call)) do
+      {[item | runnable], cards}
+    else
+      close(state, step, call, {:error, {:denied, "the call no longer matches its approval"}})
+      {runnable, cards}
+    end
+  end
 
   defp decide_open(state, _touched, %{step: step, call: {:error, message}}, {runnable, cards}) do
     close(state, step, nil, {:error, message})
@@ -974,7 +987,7 @@ defmodule Aqua.Loop do
   # it dispatches. The check can only withdraw an `auto`: a card the person
   # answered is their decision about this exact call, and a standing grant's
   # withdrawal does not retract it.
-  defp still_granted(_state, %{approved?: true}, _call), do: :ok
+  defp still_granted(_state, %{approval: %{}}, _call), do: :ok
 
   defp still_granted(%State{} = state, _item, %Call{} = call) do
     case Turn.current_policy(state.spec) do
@@ -1491,18 +1504,21 @@ defmodule Aqua.Loop do
 
     with {:ok, steps} <- Tape.steps(guest, state.turn) do
       for %{dispatch_state: "proposed", kind: kind} = step <- steps, kind != "model" do
-        %{step: step, call: recall(state, step), approved?: approved?(state, step)}
+        %{step: step, call: recall(state, step), approval: approved(state, step)}
       end
     else
       _ -> []
     end
   end
 
-  defp approved?(%State{} = state, %{approval_id: approval_id}) when is_binary(approval_id) do
-    match?({:ok, %{status: "approved"}}, Tape.approval(guest(state), approval_id))
+  defp approved(%State{} = state, %{approval_id: approval_id}) when is_binary(approval_id) do
+    case Tape.approval(guest(state), approval_id) do
+      {:ok, %{status: "approved"} = approval} -> approval
+      _ -> nil
+    end
   end
 
-  defp approved?(_state, _step), do: false
+  defp approved(_state, _step), do: nil
 
   # The call a proposed step was recorded for, from its tool_call row.
   defp recall(%State{} = state, %{message_id: message_id}) when is_binary(message_id) do
@@ -1664,7 +1680,7 @@ defmodule Aqua.Loop do
          {:denied, "a note kept before a summary holds at most #{@flush_note_max_bytes} bytes"}}
       )
     else
-      item = %{step: step, call: {:ok, call}, approved?: false}
+      item = %{step: step, call: {:ok, call}, approval: nil}
 
       case worker(fn -> run_one(state, item) end, @step_timeout_ms) do
         {:ok, {:uncertain, step, reason}} ->

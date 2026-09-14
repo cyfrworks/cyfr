@@ -741,20 +741,16 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  defp provisioning_error(athanor) do
-    case Athanors.settings(athanor)["provisioning_error"] do
-      %{} = error -> error
-      _ -> nil
-    end
-  end
+  defp provisioning_note(athanor) do
+    case Athanors.provisioning_failure(athanor) do
+      nil ->
+        nil
 
-  defp provisioning_detail(athanor) do
-    case provisioning_error(athanor) do
-      %{"detail" => detail} when is_binary(detail) ->
-        if String.length(detail) > 120, do: String.slice(detail, 0, 120) <> "…", else: detail
+      %{step: step, detail: detail} ->
+        detail =
+          if String.length(detail) > 120, do: String.slice(detail, 0, 120) <> "…", else: detail
 
-      _ ->
-        ""
+        "— last attempt failed at #{step}: #{detail}"
     end
   end
 
@@ -922,10 +918,8 @@ defmodule PrismWeb.ChatLive do
             >
               <span class="min-w-0 truncate">
                 This estate is still being set up
-                <span :if={provisioning_error(@athanor)} class="text-amber-300/80">
-                  — last attempt failed at {provisioning_error(@athanor)["step"]}: {provisioning_detail(
-                    @athanor
-                  )}
+                <span :if={note = provisioning_note(@athanor)} class="text-amber-300/80">
+                  {note}
                 </span>
               </span>
               <button

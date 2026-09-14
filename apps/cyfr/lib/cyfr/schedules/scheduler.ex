@@ -65,8 +65,7 @@ defmodule Cyfr.Schedules.Scheduler do
 
   @impl true
   def handle_continue(:load_schedules, state) do
-    state = state |> load_all_schedules() |> recover_occurrences()
-    {:noreply, state}
+    {:noreply, state |> load_all_schedules() |> recover_when_owner()}
   end
 
   @impl true
@@ -86,10 +85,18 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   @impl true
+  # A boot that does not own the control plane claims no occurrence: the
+  # schedule is asked again at the recheck.
   def handle_info({:fire, schedule_id}, state) do
     state = %{state | timers: Map.delete(state.timers, schedule_id)}
-    {:noreply, fire_schedule(schedule_id, state)}
+
+    case Cyfr.ControlPlane.when_owner(fn -> fire_schedule(schedule_id, state) end) do
+      :not_owner -> {:noreply, recheck_later(schedule_id, state)}
+      fired -> {:noreply, fired}
+    end
   end
+
+  def handle_info(:recover_occurrences, state), do: {:noreply, recover_when_owner(state)}
 
   def handle_info({:recheck, schedule_id}, state) do
     state = %{state | timers: Map.delete(state.timers, schedule_id)}
@@ -218,6 +225,17 @@ defmodule Cyfr.Schedules.Scheduler do
 
       timer_failed(schedule.id, inspect(reason))
       acc
+  end
+
+  defp recover_when_owner(state) do
+    case Cyfr.ControlPlane.when_owner(fn -> recover_occurrences(state) end) do
+      :not_owner ->
+        Process.send_after(self(), :recover_occurrences, @recheck_ms)
+        state
+
+      recovered ->
+        recovered
+    end
   end
 
   # What the last scheduler left open: a claimed occurrence was never

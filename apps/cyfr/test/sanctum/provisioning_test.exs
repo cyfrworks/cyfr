@@ -357,7 +357,7 @@ defmodule Sanctum.ProvisioningTest do
 
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at
-    refute Map.has_key?(Jason.decode!(group.settings || "{}"), "provisioning_error")
+    refute Athanors.provisioning_failure(group)
     {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
     assert profile.kind == "owner"
   end
@@ -389,7 +389,7 @@ defmodule Sanctum.ProvisioningTest do
     assert id == group.id
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at == nil
-    assert Athanors.settings(group)["provisioning_error"]["step"] == "closure"
+    assert %{step: "closure"} = Athanors.provisioning_failure(group)
 
     # the seed itself landed; only the closure is missing, and a retry says so again
     {:ok, [_row]} = Arca.ComponentStorage.list_components(in_group, publisher: "local")
@@ -447,7 +447,7 @@ defmodule Sanctum.ProvisioningTest do
 
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at == nil
-    assert Athanors.settings(group)["provisioning_error"]["step"] == "seed"
+    assert %{step: "seed"} = Athanors.provisioning_failure(group)
 
     assert {:error, {:provisioning_failed, :seed, :bundle_missing}} =
              Provisioning.provision(group, nil)

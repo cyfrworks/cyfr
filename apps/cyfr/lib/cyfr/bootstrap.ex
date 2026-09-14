@@ -37,7 +37,7 @@ defmodule Cyfr.Bootstrap do
 
   @impl true
   def init(:ok) do
-    run()
+    _ = Cyfr.ControlPlane.when_owner(&run/0)
 
     # No process remains after synchronous initialization.
     :ignore

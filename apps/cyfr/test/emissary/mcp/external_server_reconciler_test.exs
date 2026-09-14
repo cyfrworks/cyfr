@@ -51,7 +51,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       })
 
     {:ok, _} =
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "refsrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -82,7 +82,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       })
 
     {:ok, _} =
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "oldnamesrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -103,7 +103,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       Vault.create(ctx, %{name: "unrelated", kind: "api_key", fields: %{"k" => "v"}})
 
     {:ok, _} =
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "quietsrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:

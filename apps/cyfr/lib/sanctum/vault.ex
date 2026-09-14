@@ -36,6 +36,7 @@ defmodule Sanctum.Vault do
   require Logger
 
   @kinds ~w(api_key oauth bundle)
+  @rebind_attempts 3
 
   @type entry_view :: %{
           id: String.t(),
@@ -89,28 +90,29 @@ defmodule Sanctum.Vault do
          hint = Map.get(params, :provider_hint, ""),
          aad = CipherAAD.vault_entry(Context.athanor!(ctx), id, hint),
          {:ok, sealed} <- seal(json, aad) do
-      attrs = %{
-        id: id,
-        athanor_id: Context.athanor!(ctx),
-        name: name,
-        kind: kind,
+      binding = %{
         provider_hint: hint,
-        provenance: Map.get(params, :provenance, "user"),
         field_names: Jason.encode!(Enum.sort(Map.keys(fields))),
         oauth_endpoints: encode_optional_map(Map.get(params, :oauth_endpoints)),
-        oauth_scopes: encode_optional_list(Map.get(params, :oauth_scopes)),
-        status: "active",
-        sealed_payload: sealed
+        oauth_scopes: encode_optional_list(Map.get(params, :oauth_scopes))
       }
 
-      with {:ok, entry} <- Arca.VaultStorage.put(attrs),
-           {:ok, digest} <- VaultReader.binding_digest(entry),
-           :ok <-
-             Arca.VaultStorage.update_binding(Context.athanor!(ctx), id, %{
+      with {:ok, digest} <- VaultReader.binding_digest(binding),
+           {:ok, entry} <-
+             binding
+             |> Map.merge(%{
+               id: id,
+               athanor_id: Context.athanor!(ctx),
+               name: name,
+               kind: kind,
+               provenance: Map.get(params, :provenance, "user"),
+               status: "active",
+               sealed_payload: sealed,
                binding_digest: digest
-             }) do
+             })
+             |> Arca.VaultStorage.put() do
         broadcast(ctx, id, :create)
-        {:ok, view(%{entry | binding_digest: digest})}
+        {:ok, view(entry)}
       end
     end
   end
@@ -205,26 +207,55 @@ defmodule Sanctum.Vault do
       if changes == %{} do
         {:error, :no_binding_changes}
       else
-        rebound = Map.merge(Map.from_struct(entry), changes)
-
-        with {:ok, digest} <- VaultReader.binding_digest(rebound),
-             :ok <-
-               Arca.VaultStorage.update_binding(
-                 Context.athanor!(ctx),
-                 id,
-                 Map.put(changes, :binding_digest, digest)
-               ),
-             {:ok, affected} <-
-               Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
-          Enum.each(affected, fn profile_id ->
-            Arca.ProfileStorage.set_status(Context.athanor!(ctx), profile_id, "needs_consent")
-          end)
-
+        with {:ok, rebound} <- rebind_entry(ctx, entry, changes, @rebind_attempts) do
           broadcast(ctx, id, :rebind)
-          {:ok, %{binding_digest: digest, affected: Enum.sort(affected)}}
+          {:ok, rebound}
         end
       end
     end
+  end
+
+  # One transaction: the binding moves from the digest it was read at, and
+  # every profile whose head consent references the entry is blocked with
+  # it. A rebind that lost the race recomputes against what landed.
+  defp rebind_entry(ctx, entry, changes, attempts) do
+    athanor_id = Context.athanor!(ctx)
+
+    with {:ok, digest} <- VaultReader.binding_digest(Map.merge(Map.from_struct(entry), changes)) do
+      Arca.Repo.transaction(fn ->
+        with :ok <-
+               Arca.VaultStorage.move_binding(
+                 athanor_id,
+                 entry.id,
+                 entry.binding_digest,
+                 Map.put(changes, :binding_digest, digest)
+               ),
+             {:ok, affected} <-
+               Arca.ConsentStorage.head_profiles_referencing(athanor_id, entry.id),
+             :ok <- block_profiles(athanor_id, affected) do
+          %{binding_digest: digest, affected: Enum.sort(affected)}
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:error, :binding_moved} when attempts > 1 ->
+          with {:ok, fresh} <- get_living(ctx, entry.id),
+               do: rebind_entry(ctx, fresh, changes, attempts - 1)
+
+        result ->
+          result
+      end
+    end
+  end
+
+  defp block_profiles(athanor_id, profile_ids) do
+    Enum.reduce_while(profile_ids, :ok, fn profile_id, :ok ->
+      case Arca.ProfileStorage.set_status(athanor_id, profile_id, "needs_consent") do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
   end
 
   # ---------------------------------------------------------------------------

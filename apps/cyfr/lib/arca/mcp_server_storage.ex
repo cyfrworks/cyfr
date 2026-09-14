@@ -79,15 +79,17 @@ defmodule Arca.McpServerStorage do
   end
 
   @doc """
-  Create or update an MCP server config, scoped to the given tenant.
+  Create an MCP server config, scoped to the given tenant, and answer the
+  stored row. A name the athanor already uses is `{:error, :exists}` — a
+  config changes through `update/3`.
 
   Attrs must include `:name` and `:url`. `:config_json` is the raw JSON string
   (the caller serializes; Arca stores it verbatim). Optional: `:enabled`.
   """
-  @spec put(Context.t(), map()) :: {:ok, McpServer.t()} | {:error, term()}
+  @spec insert(Context.t(), map()) :: {:ok, McpServer.t()} | {:error, term()}
   # arca:unscoped-ok the context's athanor is stamped onto the row below before the write.
-  def put(%Context{} = ctx, attrs) when is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.put", fn ->
+  def insert(%Context{} = ctx, attrs) when is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.insert", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       attrs =
@@ -99,18 +101,12 @@ defmodule Arca.McpServerStorage do
         |> Map.put_new(:inserted_at, now)
         |> Map.put(:updated_at, now)
 
-      Arca.Repo.insert_all(
-        McpServer,
-        [attrs],
-        on_conflict: {:replace, [:url, :config_json, :enabled, :updated_at]},
-        conflict_target: [:athanor_id, :name]
-      )
-      |> case do
-        {n, _} when n in [0, 1] ->
-          {:ok, struct(McpServer, attrs)}
-
-        error ->
-          {:error, error}
+      case Arca.Repo.insert_all(McpServer, [attrs],
+             on_conflict: :nothing,
+             conflict_target: [:athanor_id, :name]
+           ) do
+        {1, _} -> get(ctx, attrs.name)
+        {0, _} -> {:error, :exists}
       end
     end)
   end

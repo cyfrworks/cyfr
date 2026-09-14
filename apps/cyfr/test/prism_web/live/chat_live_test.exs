@@ -540,7 +540,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert rendered =~ "Still not set up"
     assert rendered =~ "last attempt failed at"
     {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
-    assert Sanctum.Tenancy.Athanors.settings(row)["provisioning_error"]["step"]
+    assert %{step: _} = Sanctum.Tenancy.Athanors.provisioning_failure(row)
 
     # The pane holds its composer while the estate is being prepared, and
     # says why instead of blaming a missing model.

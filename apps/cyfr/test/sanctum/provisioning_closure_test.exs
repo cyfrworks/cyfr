@@ -78,7 +78,7 @@ defmodule Sanctum.ProvisioningClosureTest do
       assert %DateTime{} = group.provisioned_at,
              "the estate did not provision: #{inspect(Athanors.settings(group))}"
 
-      refute Map.has_key?(Athanors.settings(group), "provisioning_error")
+      refute Athanors.provisioning_failure(group)
 
       # Every model catalyst is a row of the estate: shipped, never pulled.
       for name <- @providers do

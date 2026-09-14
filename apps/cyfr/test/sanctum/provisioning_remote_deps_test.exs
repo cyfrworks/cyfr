@@ -149,8 +149,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     {:ok, group} = Athanors.get(group.id)
     refute group.provisioned_at
 
-    assert %{"step" => "closure", "detail" => detail} =
-             Athanors.settings(group)["provisioning_error"]
+    assert %{step: "closure", detail: detail} = Athanors.provisioning_failure(group)
 
     assert detail =~ "timeout"
 

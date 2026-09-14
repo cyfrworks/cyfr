@@ -224,18 +224,10 @@ defmodule Sanctum.Provisioning do
   #
   # Only automatic fills back off. `athanor.provision` reaches `provision/2`
   # directly, so a person who asks is never told to wait.
-  # `settings` is a document members write through `athanor.settings`, so
-  # nothing here may assume the shape provisioning left: anything that is
-  # not a timestamp reads as "no recent failure", and the next attempt
-  # replaces it with one that is.
-  defp recently_failed?(athanor) do
-    with %{"at" => at} when is_binary(at) <- Athanors.settings(athanor)["provisioning_error"],
-         {:ok, failed_at, _} <- DateTime.from_iso8601(at) do
-      DateTime.diff(DateTime.utc_now(), failed_at, :millisecond) < @retry_after_failure_ms
-    else
-      _ -> false
-    end
-  end
+  defp recently_failed?(%{provisioning_failed_at: %DateTime{} = failed_at}),
+    do: DateTime.diff(DateTime.utc_now(), failed_at, :millisecond) < @retry_after_failure_ms
+
+  defp recently_failed?(_athanor), do: false
 
   @doc """
   Start the fill if needed, and say whether the estate can run a turn yet.
@@ -871,13 +863,7 @@ defmodule Sanctum.Provisioning do
       step: step
     })
 
-    Athanors.put_settings(athanor, %{
-      "provisioning_error" => %{
-        "step" => to_string(step),
-        "detail" => inspect(detail),
-        "at" => DateTime.utc_now() |> DateTime.to_iso8601()
-      }
-    })
+    Athanors.record_provisioning_failure(athanor, step, inspect(detail))
 
     {:error, {:provisioning_failed, step, detail}}
   end

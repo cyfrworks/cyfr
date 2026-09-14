@@ -96,6 +96,21 @@ defmodule Aqua.Approvals do
   end
 
   @doc """
+  Whether `approval` was opened for exactly `proposal`: its digest is the
+  proposal's. An approval without a digest matches nothing.
+  """
+  @spec proposal?(
+          %{required(:proposal_digest) => String.t() | nil, optional(atom()) => term()},
+          term()
+        ) ::
+          boolean()
+  def proposal?(%{proposal_digest: digest}, proposal)
+      when is_binary(digest) and digest != "" and is_map(proposal),
+      do: Aqua.Loop.Policy.proposal_digest(proposal) == digest
+
+  def proposal?(_approval, _proposal), do: false
+
+  @doc """
   How long a card stays open, in seconds: the estate's
   `settings["approvals"]["expiry_hours"]` (a positive integer, read
   defensively — member-writable settings are not trusted to have a
@@ -278,13 +293,7 @@ defmodule Aqua.Approvals do
   defp fetch_approval(_ctx, _id), do: {:error, :not_found}
 
   # A card is consumed by the digest of the proposal it showed.
-  defp digest_matches?(%{proposal_digest: ""}, _intent), do: true
-  defp digest_matches?(%{proposal_digest: nil}, _intent), do: true
-
-  defp digest_matches?(%{proposal_digest: digest}, %{"proposal" => proposal})
-       when is_map(proposal),
-       do: Aqua.Loop.Policy.proposal_digest(proposal) == digest
-
+  defp digest_matches?(approval, %{"proposal" => proposal}), do: proposal?(approval, proposal)
   defp digest_matches?(_approval, _intent), do: false
 
   defp expired?(%{expires_at: %DateTime{} = at}),

@@ -47,7 +47,7 @@ defmodule Opus.ExecutionSweeper do
 
   @impl true
   def handle_info(:sweep, state) do
-    sweep()
+    _ = Cyfr.ControlPlane.when_owner(&sweep/0)
     schedule_sweep()
     {:noreply, state}
   end

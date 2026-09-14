@@ -91,7 +91,11 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   end
 
   defp attempt(state, {athanor_id, entry_id} = key, meta, attempt_no) do
-    case reconcile(athanor_id, entry_id, meta) do
+    case Cyfr.ControlPlane.when_owner(fn -> reconcile(athanor_id, entry_id, meta) end) do
+      # Kept pending: the next sweep asks again.
+      :not_owner ->
+        %{state | pending: Map.put(state.pending, key, %{attempts: attempt_no, meta: meta})}
+
       :ok ->
         %{state | pending: Map.delete(state.pending, key)}
 

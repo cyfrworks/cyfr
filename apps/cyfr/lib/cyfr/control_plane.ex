@@ -48,6 +48,15 @@ defmodule Cyfr.ControlPlane do
     end
   end
 
+  @doc """
+  Run one unit of background work only while this boot owns the control
+  plane: answers `fun.()`, or `:not_owner` without calling it. A background
+  worker asks on every tick, so its work stops when ownership lapses and
+  goes on when ownership is regained.
+  """
+  @spec when_owner((-> result)) :: result | :not_owner when result: var
+  def when_owner(fun) when is_function(fun, 0), do: if(owner?(), do: fun.(), else: :not_owner)
+
   @doc "`:ok` to admit work, `{:error, :control_plane_lost}` to refuse it."
   @spec assert_owner() :: :ok | {:error, :control_plane_lost}
   def assert_owner, do: if(owner?(), do: :ok, else: {:error, :control_plane_lost})

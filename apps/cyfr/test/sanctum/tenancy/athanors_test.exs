@@ -33,12 +33,12 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       stale = athanor
 
       {:ok, _} = Athanors.put_settings(athanor, %{"written_during" => "yes"})
-      {:ok, _} = Athanors.put_settings(stale, %{"provisioning_error" => %{"step" => "deps"}})
+      {:ok, _} = Athanors.put_settings(stale, %{"approvals" => %{"expiry_hours" => 2}})
 
       assert {:ok, fresh} = Athanors.get(athanor.id)
       settings = Athanors.settings(fresh)
 
-      assert settings["provisioning_error"]["step"] == "deps"
+      assert settings["approvals"]["expiry_hours"] == 2
 
       assert settings["written_during"] == "yes",
              "a concurrent settings write was clobbered by a merge over a stale struct"
@@ -228,11 +228,15 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       a = group!()
       b = group!()
 
-      {:ok, a} = Athanors.put_settings(a, %{"provisioning_error" => %{"step" => "closure"}})
+      {:ok, a} = Athanors.record_provisioning_failure(a, :closure, "unreachable")
+
+      assert %{step: "closure", detail: "unreachable", at: %DateTime{}} =
+               Athanors.provisioning_failure(a)
+
       {:ok, a} = Athanors.mark_provisioned(a)
       assert a.provisioned_at != nil
       # a successful run forgets the earlier failure
-      refute Map.has_key?(Athanors.settings(a), "provisioning_error")
+      refute Athanors.provisioning_failure(a)
 
       ids = Athanors.list_by_ids([a.id, b.id, "ath_missing"]) |> Enum.map(& &1.id)
       assert Enum.sort(ids) == Enum.sort([a.id, b.id])

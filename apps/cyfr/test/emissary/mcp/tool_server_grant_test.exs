@@ -19,7 +19,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     ctx = Sanctum.TestContext.local()
 
     {:ok, server} =
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "ghserver",
         url: "https://127.0.0.1:1/mcp",
         config_json:
@@ -189,7 +189,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
   test "one server's grant never authorizes another", %{ctx: ctx, digest: digest} do
     {:ok, _other} =
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "othersrv",
         url: "https://127.0.0.1:2/mcp",
         config_json: Jason.encode!(%{"headers" => %{}, "timeout_ms" => 1_000})

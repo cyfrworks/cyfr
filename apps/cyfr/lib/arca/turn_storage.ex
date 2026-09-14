@@ -1128,9 +1128,10 @@ defmodule Arca.TurnStorage do
   @doc """
   Open an approval for a proposed step: the `approvals` row, the card
   message row that references it, and the step's `approval_id`, in one
-  transaction. `attrs`: `:proposal_digest`, `:expires_at`, `:scope`,
-  `:card` (`%{content, payload}` — the payload the console card reads),
-  `:fence`. Answers `{:ok, %{approval: row, card: row}}`.
+  transaction. `attrs`: `:proposal_digest` (required: the digest the card
+  is consumed by), `:expires_at`, `:scope`, `:card` (`%{content, payload}`
+  — the payload the console card reads), `:fence`. Answers
+  `{:ok, %{approval: row, card: row}}`, or `{:error, :proposal_digest_required}`.
   """
   @spec open_approval(Context.t(), String.t(), map()) ::
           {:ok, %{approval: Approval.t(), card: Message.t()}} | {:error, term()}
@@ -1140,6 +1141,11 @@ defmodule Arca.TurnStorage do
 
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
+          digest = Map.get(attrs, :proposal_digest)
+
+          unless is_binary(digest) and digest != "",
+            do: Arca.Repo.rollback(:proposal_digest_required)
+
           turn = own_step!(athanor_id, step_id, attrs)
           step = step!(athanor_id, step_id)
           thread = thread!(athanor_id, turn.thread_id)
@@ -1170,7 +1176,7 @@ defmodule Arca.TurnStorage do
               thread_id: turn.thread_id,
               status: "pending",
               scope: Map.get(attrs, :scope),
-              proposal_digest: Map.get(attrs, :proposal_digest, ""),
+              proposal_digest: digest,
               expires_at: Map.get(attrs, :expires_at),
               inserted_at: now
             })

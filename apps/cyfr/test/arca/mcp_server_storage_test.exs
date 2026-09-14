@@ -13,11 +13,11 @@ defmodule Arca.McpServerStorageTest do
     {:ok, ctx: ctx}
   end
 
-  describe "put/2" do
+  describe "insert/2" do
     test "creates a new server config", %{ctx: ctx} do
       attrs = %{name: "notion", url: "https://mcp.notion.com/mcp"}
 
-      assert {:ok, server} = McpServerStorage.put(ctx, attrs)
+      assert {:ok, server} = McpServerStorage.insert(ctx, attrs)
       assert server.name == "notion"
       assert server.url == "https://mcp.notion.com/mcp"
       assert server.enabled == true
@@ -32,27 +32,28 @@ defmodule Arca.McpServerStorageTest do
         config_json: json
       }
 
-      assert {:ok, _} = McpServerStorage.put(ctx, attrs)
+      assert {:ok, _} = McpServerStorage.insert(ctx, attrs)
       assert {:ok, server} = McpServerStorage.get(ctx, "github")
       assert server.config_json == json
     end
 
-    test "upserts on conflict", %{ctx: ctx} do
+    test "a name the athanor already uses is refused, and the stored row is kept", %{ctx: ctx} do
       attrs = %{name: "test-server", url: "https://old.example.com/mcp"}
-      assert {:ok, _} = McpServerStorage.put(ctx, attrs)
+      assert {:ok, %{id: id}} = McpServerStorage.insert(ctx, attrs)
 
       attrs2 = %{name: "test-server", url: "https://new.example.com/mcp"}
-      assert {:ok, server} = McpServerStorage.put(ctx, attrs2)
-      assert server.url == "https://new.example.com/mcp"
+      assert {:error, :exists} = McpServerStorage.insert(ctx, attrs2)
 
-      # Should still be one record
-      assert {:ok, [_single]} = McpServerStorage.list(ctx)
+      assert {:ok, [%{id: ^id, url: "https://old.example.com/mcp"}]} =
+               McpServerStorage.list(ctx)
     end
   end
 
   describe "get/2" do
     test "returns server by name", %{ctx: ctx} do
-      assert {:ok, _} = McpServerStorage.put(ctx, %{name: "myserver", url: "https://a.com/mcp"})
+      assert {:ok, _} =
+               McpServerStorage.insert(ctx, %{name: "myserver", url: "https://a.com/mcp"})
+
       assert {:ok, server} = McpServerStorage.get(ctx, "myserver")
       assert server.name == "myserver"
     end
@@ -64,8 +65,8 @@ defmodule Arca.McpServerStorageTest do
 
   describe "list/1" do
     test "returns all servers for tenant", %{ctx: ctx} do
-      assert {:ok, _} = McpServerStorage.put(ctx, %{name: "s1", url: "https://a.com/mcp"})
-      assert {:ok, _} = McpServerStorage.put(ctx, %{name: "s2", url: "https://b.com/mcp"})
+      assert {:ok, _} = McpServerStorage.insert(ctx, %{name: "s1", url: "https://a.com/mcp"})
+      assert {:ok, _} = McpServerStorage.insert(ctx, %{name: "s2", url: "https://b.com/mcp"})
 
       assert {:ok, servers} = McpServerStorage.list(ctx)
       assert length(servers) == 2
@@ -81,7 +82,9 @@ defmodule Arca.McpServerStorageTest do
 
   describe "delete/2" do
     test "removes a server", %{ctx: ctx} do
-      assert {:ok, _} = McpServerStorage.put(ctx, %{name: "deleteme", url: "https://x.com/mcp"})
+      assert {:ok, _} =
+               McpServerStorage.insert(ctx, %{name: "deleteme", url: "https://x.com/mcp"})
+
       assert :ok = McpServerStorage.delete(ctx, "deleteme")
       assert {:error, :not_found} = McpServerStorage.get(ctx, "deleteme")
     end
@@ -94,7 +97,7 @@ defmodule Arca.McpServerStorageTest do
   describe "update/3" do
     test "updates specific fields", %{ctx: ctx} do
       assert {:ok, _} =
-               McpServerStorage.put(ctx, %{name: "updatable", url: "https://old.com/mcp"})
+               McpServerStorage.insert(ctx, %{name: "updatable", url: "https://old.com/mcp"})
 
       assert {:ok, server} = McpServerStorage.update(ctx, "updatable", %{enabled: false})
       assert server.enabled == false
@@ -111,10 +114,10 @@ defmodule Arca.McpServerStorageTest do
       {ctx_a, ctx_b} = Arca.TenantTestHelper.two_contexts()
 
       assert {:ok, _} =
-               McpServerStorage.put(ctx_a, %{name: "shared-name", url: "https://a.com/mcp"})
+               McpServerStorage.insert(ctx_a, %{name: "shared-name", url: "https://a.com/mcp"})
 
       assert {:ok, _} =
-               McpServerStorage.put(ctx_b, %{name: "shared-name", url: "https://b.com/mcp"})
+               McpServerStorage.insert(ctx_b, %{name: "shared-name", url: "https://b.com/mcp"})
 
       assert {:ok, server_a} = McpServerStorage.get(ctx_a, "shared-name")
       assert server_a.url == "https://a.com/mcp"
@@ -127,10 +130,10 @@ defmodule Arca.McpServerStorageTest do
       {ctx_a, ctx_b} = Arca.TenantTestHelper.two_contexts()
 
       assert {:ok, _} =
-               McpServerStorage.put(ctx_a, %{name: "isolated", url: "https://a.com/mcp"})
+               McpServerStorage.insert(ctx_a, %{name: "isolated", url: "https://a.com/mcp"})
 
       assert {:ok, _} =
-               McpServerStorage.put(ctx_b, %{name: "isolated", url: "https://b.com/mcp"})
+               McpServerStorage.insert(ctx_b, %{name: "isolated", url: "https://b.com/mcp"})
 
       assert :ok = McpServerStorage.delete(ctx_a, "isolated")
       assert {:error, :not_found} = McpServerStorage.get(ctx_a, "isolated")
@@ -166,7 +169,7 @@ defmodule Arca.McpServerStorageTest do
       config = %{"headers" => %{"Authorization" => "vault:NOTION"}, "tool_patterns" => ["a_*"]}
 
       {:ok, _} =
-        McpServerStorage.put(ctx, %{
+        McpServerStorage.insert(ctx, %{
           name: "roundtrip",
           url: "https://example.test",
           config_json: Jason.encode!(config)

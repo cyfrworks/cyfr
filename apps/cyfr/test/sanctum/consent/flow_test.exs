@@ -398,7 +398,7 @@ defmodule Sanctum.Consent.FlowTest do
       publish!(ctx, "flow-mcp")
 
       {:ok, server} =
-        Arca.McpServerStorage.put(ctx, %{
+        Arca.McpServerStorage.insert(ctx, %{
           name: "flowsrv",
           url: "https://127.0.0.1:9/mcp",
           config_json: Jason.encode!(%{"headers" => %{}, "timeout_ms" => 1_000})
