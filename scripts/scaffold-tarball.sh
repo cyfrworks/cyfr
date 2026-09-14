@@ -11,9 +11,10 @@ ITEMS=(
   LICENSE LICENSES/ FAIR_SOURCE.md
   wit/
   # Package deployment files for cyfr init: the app, MCP bridge, TLS proxy
-  # and optional builder profile. The bridge is built from the sources
-  # shipped here; the app and builder images are pulled as published.
-  docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/
+  # and optional builder profile. The bridge and its process helper are
+  # built from the sources shipped here; the app and builder images are
+  # pulled as published.
+  docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/ apps/spawn/
   .env.builder.example .env.bridge.example
 )
 FOUND=()

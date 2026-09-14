@@ -10,6 +10,8 @@ on:
       - '**/*.exs'
       - 'apps/codex/**'
       - 'apps/mcp-bridge/**/*.mjs'
+      - 'apps/spawn/**'
+      - 'tests/bridge-image/**'
       - 'wit/**'
       - 'LICENSES/**'
       - '.github/workflows/license-lint.yml'
@@ -20,6 +22,8 @@ on:
       - '**/*.exs'
       - 'apps/codex/**'
       - 'apps/mcp-bridge/**/*.mjs'
+      - 'apps/spawn/**'
+      - 'tests/bridge-image/**'
       - 'wit/**'
       - 'LICENSES/**'
 
@@ -65,7 +69,7 @@ jobs:
                 fail=1
               fi
             fi
-          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
+          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/spawn/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'tests/bridge-image/*.mjs' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
 
           if [ "$fail" -ne 0 ]; then
             echo "License boundary check failed. Fix the headers above."

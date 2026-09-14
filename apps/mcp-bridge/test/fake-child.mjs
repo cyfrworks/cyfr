@@ -70,6 +70,9 @@ process.stdin.on("data", (chunk) => {
     }
 
     if (msg.method === "tools/call") {
+      // `die-on-call` crashes instead of answering.
+      if (mode === "die-on-call") process.exit(3);
+
       // `env-probe` reports what this child can see of its environment —
       // the bridge's secrets must not be in it, its own `env` block must.
       const text =

@@ -126,8 +126,28 @@ services:
       target: mcp-bridge
     expose:
       - "8001"
-    # Use Docker init to reap orphaned descendants and forward signals to Node.
+    # docker-init is PID 1 and forwards stop signals to cyfr-spawn. cyfr-spawn
+    # is the child subreaper of everything it starts, so an orphaned backend
+    # process is reparented to it, not to docker-init, and retired with its uid.
     init: true
+    # cyfr-spawn refuses to start with any capability other than these: it
+    # starts the bridge and each backend under their own uids and signals
+    # their processes. The bridge and every backend run with none.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - KILL
+    security_opt:
+      - no-new-privileges:true
+    # Backend homes: each backend's uid creates its own 0700 home; mode 1733
+    # lets it create one without listing the others. Homes hold npx caches,
+    # so they allow exec. /run holds the bridge's private attach socket.
+    tmpfs:
+      - /var/lib/cyfr-bridge/homes:mode=1733,exec
+      - /tmp:mode=1733
+      - /run:mode=1733
     # Read bridge-only settings from .env.bridge; forward MCP_BRIDGE_TOKEN from .env below.
     env_file:
       - path: .env.bridge
@@ -143,11 +163,14 @@ services:
       - MCP_BRIDGE_TOKEN=${MCP_BRIDGE_TOKEN:-}
     volumes:
       # Host-visible persistence: backends.json lives here, easy to inspect
-      # or back up. The container creates the file on first add_backend.
+      # or back up. The bridge runs as uid 10001 and creates the file on
+      # first add_backend, so the host directory must be writable by that
+      # uid (on Linux: `sudo chown 10001:10001 data/mcp-bridge`).
       - ./data/mcp-bridge:/data
     restart: unless-stopped
-    # Shutdown SIGTERMs the child servers and drains in-flight requests;
-    # compose's default 10s is tight when several children are up.
+    # Shutdown retires every child server (SIGTERM, 2s, then SIGKILL for all
+    # of its processes) and drains in-flight requests; compose's default 10s
+    # is tight when several children are up.
     stop_grace_period: 15s
     logging:
       driver: json-file
