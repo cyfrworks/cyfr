@@ -753,9 +753,11 @@ defmodule Locus.Builder do
   end
 
   # Allowlist the environment exposed to build scripts; exclude server secrets.
+  # The build's output location is the build directory's own, so an
+  # inherited `CARGO_TARGET_DIR` is not passed on.
   @build_env_allowlist ~w(
     PATH HOME LANG LC_ALL LC_CTYPE TMPDIR TERM
-    CARGO_HOME RUSTUP_HOME CARGO_TARGET_DIR
+    CARGO_HOME RUSTUP_HOME
     HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
   )
 

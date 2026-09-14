@@ -82,7 +82,7 @@ RUN ARCH=$(dpkg --print-architecture) \
     && /tmp/rustup-init -y --profile minimal \
     && rm /tmp/rustup-init \
     && rustup target add wasm32-wasip1 wasm32-wasip2 \
-    && cargo install cargo-component@${CARGO_COMPONENT_VERSION} \
+    && cargo install --locked cargo-component@${CARGO_COMPONENT_VERSION} \
     && rm -rf /usr/local/cargo/registry /usr/local/cargo/git \
     && mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
 
