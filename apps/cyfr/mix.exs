@@ -50,6 +50,7 @@ defmodule Cyfr.App.MixProject do
 
   defp deps do
     [
+      {:cyfr_contracts, in_umbrella: true},
       # Sanctum deps
       {:ueberauth, "~> 0.10.8"},
       {:jason, "~> 1.4"},

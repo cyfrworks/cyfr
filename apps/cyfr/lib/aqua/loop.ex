@@ -1857,8 +1857,8 @@ defmodule Aqua.Loop do
   # that. A versioned key finds nothing, and a cap of nil is a check that
   # never fires.
   def catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do
-    with {:ok, name_ref} <- Sanctum.ComponentRef.to_name_ref(catalyst),
-         {:ok, %Sanctum.Limits{max_request_size: cap}} <-
+    with {:ok, name_ref} <- Cyfr.ComponentRef.to_name_ref(catalyst),
+         {:ok, %Cyfr.Limits{max_request_size: cap}} <-
            Sanctum.Authority.node_limits(authority, name_ref) do
       cap
     else
@@ -2017,7 +2017,7 @@ defmodule Aqua.Loop do
   defp retained(request, _excerpt), do: Request.without_excerpt(request)
 
   defp digest(request) do
-    case Sanctum.JCS.hash(request) do
+    case Cyfr.JCS.hash(request) do
       {:ok, digest} -> digest
       _ -> nil
     end

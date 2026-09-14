@@ -1,20 +1,20 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 # A struct defined here rather than borrowed from the app: the property under
 # test is the sanitizer's, and pinning it to whichever production struct happens
 # to carry a credential field today made these tests fail when that struct
 # legitimately lost the field.
-defmodule Sanctum.SanitizerTest.Credentialed do
+defmodule Cyfr.SanitizerTest.Credentialed do
   @moduledoc false
   defstruct [:id, :sanctum_token]
 end
 
-defmodule Sanctum.SanitizerTest do
+defmodule Cyfr.SanitizerTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Sanitizer
-  alias Sanctum.SanitizerTest.Credentialed
+  alias Cyfr.Sanitizer
+  alias Cyfr.SanitizerTest.Credentialed
 
   describe "sanitize/1" do
     test "redacts password keys" do
@@ -158,7 +158,7 @@ defmodule Sanctum.SanitizerTest do
         {"content-type", "application/json"}
       ]
 
-      assert Sanctum.Sanitizer.sanitize(headers) == [
+      assert Cyfr.Sanitizer.sanitize(headers) == [
                {"authorization", "[REDACTED]"},
                {"cookie", "[REDACTED]"},
                {"x-cyfr-signature", "[REDACTED]"},
@@ -167,32 +167,32 @@ defmodule Sanctum.SanitizerTest do
     end
 
     test "the ordinary tagged-tuple shapes still traverse" do
-      assert Sanctum.Sanitizer.sanitize({:error, %{"password" => "hunter2", "id" => "x"}}) ==
+      assert Cyfr.Sanitizer.sanitize({:error, %{"password" => "hunter2", "id" => "x"}}) ==
                {:error, %{"password" => "[REDACTED]", "id" => "x"}}
 
-      assert Sanctum.Sanitizer.sanitize({:ok, "fine"}) == {:ok, "fine"}
+      assert Cyfr.Sanitizer.sanitize({:ok, "fine"}) == {:ok, "fine"}
     end
   end
 
   describe "keys sensitive only in full" do
     test "an OAuth authorization code is redacted" do
-      assert Sanctum.Sanitizer.sanitize(%{"code" => "4/0Adeu5"}) == %{"code" => "[REDACTED]"}
-      assert Sanctum.Sanitizer.sensitive_key?(:code)
-      assert Sanctum.Sanitizer.sensitive_key?("code_verifier")
+      assert Cyfr.Sanitizer.sanitize(%{"code" => "4/0Adeu5"}) == %{"code" => "[REDACTED]"}
+      assert Cyfr.Sanitizer.sensitive_key?(:code)
+      assert Cyfr.Sanitizer.sensitive_key?("code_verifier")
     end
 
     test "codes that are not credentials stay readable" do
-      refute Sanctum.Sanitizer.sensitive_key?("error_code")
-      refute Sanctum.Sanitizer.sensitive_key?("status_code")
+      refute Cyfr.Sanitizer.sensitive_key?("error_code")
+      refute Cyfr.Sanitizer.sensitive_key?("status_code")
 
       # The PKCE challenge is the hash the verifier is checked against; it is
       # public by design, and a log that hides it hides the useful half.
-      refute Sanctum.Sanitizer.sensitive_key?("code_challenge")
+      refute Cyfr.Sanitizer.sensitive_key?("code_challenge")
     end
 
     test "set-cookie and webhook signatures are covered" do
-      assert Sanctum.Sanitizer.sensitive_key?("set-cookie")
-      assert Sanctum.Sanitizer.sensitive_key?("x-hub-signature-256")
+      assert Cyfr.Sanitizer.sensitive_key?("set-cookie")
+      assert Cyfr.Sanitizer.sensitive_key?("x-hub-signature-256")
     end
   end
 end

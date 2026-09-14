@@ -7,7 +7,8 @@ defmodule Locus.HostSurfaceTest do
 
   Checks the builder release’s runtime isolation. It loads cyfr with
   runtime: false; its standalone path may use only pure cyfr modules.
-  Locus.MCP runs in the server and has separate dependencies.
+  Locus.MCP runs in the server and has separate dependencies. The shared
+  contracts (`apps/cyfr_contracts`) are not cyfr and are not counted.
 
   Opus, Arca and Compendium each have a rostered surface for the same
   reason. This is the one that was missing.
@@ -20,29 +21,10 @@ defmodule Locus.HostSurfaceTest do
 
   @surface [
     # ——— Build plane: pure, and safe in the builder release ———
-    # The host ABI, compile-embedded (`Compendium.WITSource`) rather than
-    # read from disk, so the sandbox is written from the release's own
-    # bytes. The Cargo.toml template is delegated here rather than forked.
+    # The Cargo.toml template, delegated here rather than forked.
     "Compendium.Scaffold",
-    "Compendium.WITSource",
-    # Artifact validation before anything is stored: the WASM component
-    # shape, and the tincture bundle's.
-    "Compendium.WasmValidator",
-    # Path grammar for source files written into the build sandbox — the
-    # denylist Arca shares, applied before any file is created.
-    "Cyfr.PathSafety",
-    # Content addressing for build outputs.
-    "Cyfr.Digest",
-    # Reference and limit vocabulary the build request speaks.
-    "Sanctum.ComponentRef",
-    "Sanctum.Limits",
-    # The log-metadata roster and the unexpected-message spelling — shared
-    # phrasing, not capability.
+    # The log-metadata roster — shared phrasing, not capability.
     "Cyfr.LoggerContext",
-    "Cyfr.UnexpectedMessage",
-    "Cyfr.UUID7",
-    # The short-hex mint for scratch-dir labels — pure, like UUID7.
-    "Cyfr.Hex",
     # The builder client's outbound HTTP, classified separately from the
     # pinned OCI path because it talks to an operator-configured sibling.
     "Cyfr.Network",
@@ -76,7 +58,18 @@ defmodule Locus.HostSurfaceTest do
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
-  defp reached do
+  # The shared contracts are not cyfr: their modules are named where they
+  # are defined, and a reach into them is not a reach into the control plane.
+  defp contracts do
+    for path <- Path.wildcard(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
+        [_, module] <- Regex.scan(~r/^defmodule ([A-Z][\w.]*)/m, File.read!(path)),
+        into: MapSet.new(),
+        do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
+  end
+
+  defp reached, do: MapSet.difference(reaches(), contracts())
+
+  defp reaches do
     for path <- Path.wildcard(Path.join(root(), "apps/locus/lib/**/*.ex")),
         line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
         [_, module] <- Regex.scan(@namespace, line),

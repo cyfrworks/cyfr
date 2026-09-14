@@ -18,8 +18,8 @@ defmodule Sanctum.ToolServerDigest do
   (process identity), which consent has no business pinning.
   """
 
-  alias Sanctum.JCS
-  alias Sanctum.ToolPattern
+  alias Cyfr.JCS
+  alias Cyfr.ToolPattern
 
   @doc "Compute the digest for a server's stored configuration."
   @spec compute(map()) :: {:ok, String.t()} | {:error, term()}

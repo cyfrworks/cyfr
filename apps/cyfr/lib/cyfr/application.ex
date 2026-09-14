@@ -14,7 +14,7 @@ defmodule Cyfr.Application do
     # One redaction vocabulary: Phoenix's inbound request-param filter is
     # fed from its owner (config/config.exs deliberately does not spell a
     # list — config files run before this module exists).
-    Application.put_env(:phoenix, :filter_parameters, Sanctum.Sanitizer.filter_parameters())
+    Application.put_env(:phoenix, :filter_parameters, Cyfr.Sanitizer.filter_parameters())
 
     # This boot's name, before any row can carry it.
     Cyfr.Boot.mint()

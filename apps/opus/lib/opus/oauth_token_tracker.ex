@@ -170,7 +170,7 @@ defmodule Opus.OAuthTokenTracker do
 
   defp ceiling_timeout_ms do
     with %{timeout: timeout} <- Sanctum.Policy.Ceiling.platform_ceiling(),
-         {:ok, ms} <- Sanctum.Limits.parse_duration(timeout) do
+         {:ok, ms} <- Cyfr.Limits.parse_duration(timeout) do
       ms
     else
       # An unparseable ceiling is a bug upstream; take the widest value the

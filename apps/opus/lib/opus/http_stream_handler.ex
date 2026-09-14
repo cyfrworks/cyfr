@@ -46,7 +46,7 @@ defmodule Opus.HttpStreamHandler do
 
   alias Sanctum.Authority.Blob.Edge
   alias Sanctum.Context
-  alias Sanctum.Limits
+  alias Cyfr.Limits
   alias Opus.{HttpHandler, HttpRequestValidation}
 
   # Fallback stream timeout, used only when the node limits carry an

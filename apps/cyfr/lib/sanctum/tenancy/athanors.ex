@@ -957,7 +957,7 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Whether `value` is an athanor id (`"ath_..."`) rather than a route slug.
   Discriminating by prefix is sound: the slug grammar (`Sanctum.Slug` /
-  `Sanctum.ComponentRef.personal_slug_regex/0`) admits only lowercase
+  `Cyfr.ComponentRef.personal_slug_regex/0`) admits only lowercase
   alphanumerics and hyphens — a slug can never contain `"_"`.
   """
   @spec athanor_id?(term()) :: boolean()

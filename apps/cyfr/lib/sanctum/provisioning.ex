@@ -158,8 +158,8 @@ defmodule Sanctum.Provisioning do
   end
 
   defp same_component?(a, b) do
-    with {:ok, a_name} <- Sanctum.ComponentRef.to_name_ref(a),
-         {:ok, b_name} <- Sanctum.ComponentRef.to_name_ref(b) do
+    with {:ok, a_name} <- Cyfr.ComponentRef.to_name_ref(a),
+         {:ok, b_name} <- Cyfr.ComponentRef.to_name_ref(b) do
       a_name == b_name
     else
       _ -> a == b

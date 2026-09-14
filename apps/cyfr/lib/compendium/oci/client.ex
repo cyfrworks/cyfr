@@ -84,7 +84,7 @@ defmodule Compendium.OCI.Client do
 
       result = %{
         status: "pulled",
-        component_ref: Sanctum.ComponentRef.to_string(component_ref),
+        component_ref: Cyfr.ComponentRef.to_string(component_ref),
         digest: component.digest,
         manifest_digest: manifest_digest,
         size: component.size,
@@ -169,7 +169,7 @@ defmodule Compendium.OCI.Client do
   # `registry.example/local/formulas/foo:1.0` both resolve to the `local`
   # namespace and both are refused here, at the one point every pull passes
   # through.
-  defp refuse_local_namespace(%Sanctum.ComponentRef{namespace: namespace}),
+  defp refuse_local_namespace(%Cyfr.ComponentRef{namespace: namespace}),
     do: Compendium.NamespacePolicy.refuse_remote_ingress(namespace)
 
   # ============================================================================
@@ -204,7 +204,7 @@ defmodule Compendium.OCI.Client do
     # annotations, config blob, and the returned reference all use the real
     # registry namespace (e.g. "moonmoon69") instead of "local".
     with :ok <- Compendium.RegistryHost.validate_host(registry),
-         {:ok, cref} <- Sanctum.ComponentRef.parse(component_ref_str),
+         {:ok, cref} <- Cyfr.ComponentRef.parse(component_ref_str),
          {:ok, publisher} <- resolve_push_publisher(cref, registry, ctx),
          push_cref = %{cref | namespace: publisher},
          {:ok, component} <- get_local_component(ctx, cref),
@@ -618,7 +618,7 @@ defmodule Compendium.OCI.Client do
         {:ok, component}
 
       {:error, :not_found} ->
-        {:error, "Component not found locally: #{Sanctum.ComponentRef.to_string(cref)}"}
+        {:error, "Component not found locally: #{Cyfr.ComponentRef.to_string(cref)}"}
 
       {:error, reason} ->
         {:error, "Component lookup failed: #{inspect(reason)}"}

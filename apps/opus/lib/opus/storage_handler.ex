@@ -75,7 +75,7 @@ defmodule Opus.StorageHandler do
 
   alias Sanctum.Authority.Blob.Edge
   alias Sanctum.Context
-  alias Sanctum.Limits
+  alias Cyfr.Limits
   alias Opus.EdgeGuard
 
   # ============================================================================

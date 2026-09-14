@@ -56,7 +56,7 @@ defmodule Opus.ActivationStampingTest do
     assert Map.has_key?(graph, @probe_node)
 
     # The stored graph is the canonical form the digest was taken over.
-    assert Sanctum.JCS.hash_binary(row.activation_graph) == row.activation_digest
+    assert Cyfr.JCS.hash_binary(row.activation_graph) == row.activation_digest
   end
 
   test "a nested child execution carries the root's digest and no graph", %{ctx: ctx} do

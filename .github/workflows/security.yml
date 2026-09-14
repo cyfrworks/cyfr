@@ -3,11 +3,7 @@ name: Security
 on:
   pull_request:
     paths:
-      - 'apps/cyfr/**'
-      - 'apps/opus/**'
-      - 'apps/locus/**'
-      - 'apps/codex/**'
-      - 'apps/mcp-bridge/**'
+      - 'apps/**'
       - 'config/**'
       - 'scripts/**'
       - 'tests/**'
@@ -22,11 +18,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apps/cyfr/**'
-      - 'apps/opus/**'
-      - 'apps/locus/**'
-      - 'apps/codex/**'
-      - 'apps/mcp-bridge/**'
+      - 'apps/**'
       - 'config/**'
       - 'scripts/**'
       - 'tests/**'

@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Opus.Test.EdgeFixtures do
   @moduledoc """
-  Builders for `%Sanctum.Authority.Blob.Edge{}` and `%Sanctum.Limits{}`
+  Builders for `%Sanctum.Authority.Blob.Edge{}` and `%Cyfr.Limits{}`
   fixtures in handler unit tests.
 
   Defaults mirror the catalyst type defaults, with schemes explicitly
@@ -11,7 +11,7 @@ defmodule Opus.Test.EdgeFixtures do
   """
 
   alias Sanctum.Authority.Blob.Edge
-  alias Sanctum.Limits
+  alias Cyfr.Limits
 
   @spec edge(keyword()) :: Edge.t()
   def edge(opts \\ []) do

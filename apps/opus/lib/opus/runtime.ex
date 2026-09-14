@@ -39,7 +39,7 @@ defmodule Opus.Runtime do
 
   # Default memory ceiling for sandboxed execution — the shared 64 MiB
   # bound, read from its owner rather than re-spelled here.
-  @default_max_memory_bytes Sanctum.Limits.default_max_memory_bytes()
+  @default_max_memory_bytes Cyfr.Limits.default_max_memory_bytes()
 
   @doc """
   Execute a WASM component with JSON input, returning JSON output.

@@ -25,7 +25,7 @@ defmodule Sanctum.Authority.LimitsPropertyTest do
         case Authority.current_node(after_auth) do
           {:ok, node} ->
             {:ok, raw_limits} = Sanctum.Authority.Blob.node_limits(raw, node)
-            assert Authority.limits(after_auth) == Sanctum.Limits.clamp(raw_limits, ceiling)
+            assert Authority.limits(after_auth) == Cyfr.Limits.clamp(raw_limits, ceiling)
 
           :unbound ->
             assert Authority.limits(after_auth) == Authority.zero_limits()

@@ -124,7 +124,7 @@ defmodule Sanctum.Consent.Plan do
 
   @doc false
   def fetch_component(ctx, source_ref) do
-    with {:ok, parsed} <- Sanctum.ComponentRef.parse(source_ref),
+    with {:ok, parsed} <- Cyfr.ComponentRef.parse(source_ref),
          {:ok, component} <-
            Compendium.Registry.get_latest(ctx, parsed.name, parsed.namespace, parsed.type) do
       {:ok, component}
@@ -217,7 +217,7 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp node_manifest(ctx, node_key) do
-    with {:ok, ref} <- Sanctum.ComponentRef.parse(node_key),
+    with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
          {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       {:ok, Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
     end

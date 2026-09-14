@@ -417,7 +417,7 @@ defmodule PrismWeb.ExecutionsLive do
           >
             <option value="" selected={is_nil(@type_filter)}>All types</option>
             <option
-              :for={type <- Sanctum.ComponentRef.executable_types()}
+              :for={type <- Cyfr.ComponentRef.executable_types()}
               value={type}
               selected={@type_filter == type}
             >

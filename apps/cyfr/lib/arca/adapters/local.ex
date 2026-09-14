@@ -141,7 +141,7 @@ defmodule Arca.Adapters.Local do
         _ -> 0
       end
 
-    if existing + byte_size(content) > Sanctum.Limits.default_max_response_size() do
+    if existing + byte_size(content) > Cyfr.Limits.default_max_response_size() do
       {:error, :object_too_large}
     else
       :ok

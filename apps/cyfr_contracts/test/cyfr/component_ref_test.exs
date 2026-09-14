@@ -1,10 +1,10 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.ComponentRefTest do
+defmodule Cyfr.ComponentRefTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.ComponentRef
+  alias Cyfr.ComponentRef
 
   # ============================================================================
   # parse/1 — requires type prefix

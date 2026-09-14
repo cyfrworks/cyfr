@@ -6,6 +6,7 @@ defmodule Opus.HostSurfaceTest do
   What opus actually needs from cyfr, written down.
 
   Inventories direct CYFR dependencies in Opus beyond the delegates exposed by `Opus.Host`.
+  The shared contracts (`apps/cyfr_contracts`) are not cyfr and are not counted.
 
   The claim is fixed. This is what keeps it fixed: a namespace opus starts
   reaching into that is not on this list fails here, and adding it means
@@ -72,9 +73,6 @@ defmodule Opus.HostSurfaceTest do
 
     # Policy and vocabulary that travel with a request.
     "Sanctum",
-    "Sanctum.Cidr",
-    "Sanctum.ComponentRef",
-    "Sanctum.Limits",
 
     # Shared primitives — glue, by construction available to any node.
     # This boot's name on every execution row (the lease's runner id).
@@ -82,11 +80,8 @@ defmodule Opus.HostSurfaceTest do
     # Whether this boot still owns the control plane — the engine admits
     # nothing when it does not.
     "Cyfr.ControlPlane",
-    "Cyfr.Digest",
     "Cyfr.Execution",
-    "Cyfr.Json",
     "Cyfr.LoggerContext",
-    "Cyfr.MediaType",
     "Cyfr.Network",
     # The operation catalog: an in-chain tool call is dispatched through it.
     "Cyfr.Ops",
@@ -94,24 +89,29 @@ defmodule Opus.HostSurfaceTest do
     # names none — a worker on another node would take it from its
     # assignment, which names the retention class with the input.
     "Cyfr.Retention",
-    "Cyfr.PathSafety",
     # The signed-pulls posture, read at execution as well as at pull so a
     # component stored before the knob was turned on cannot keep running. A
     # worker would need this value from its client, not re-read it locally.
     "Cyfr.RuntimeConfig",
-    "Cyfr.Time",
-    "Cyfr.Bus",
-    # The shared unexpected-message catch-all spelling — a log-line SSOT,
-    # not a capability.
-    "Cyfr.UnexpectedMessage",
-    "Cyfr.UUID7"
+    "Cyfr.Bus"
   ]
 
   @namespace ~r/\b((?:Arca|Sanctum|Compendium|Emissary|Prism|Cyfr)(?:\.[A-Z]\w+)*)\b/
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
-  defp reached do
+  # The shared contracts are not cyfr: their modules are named where they
+  # are defined, and a reach into them is not a reach into the control plane.
+  defp contracts do
+    for path <- Path.wildcard(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
+        [_, module] <- Regex.scan(~r/^defmodule ([A-Z][\w.]*)/m, File.read!(path)),
+        into: MapSet.new(),
+        do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
+  end
+
+  defp reached, do: MapSet.difference(reaches(), contracts())
+
+  defp reaches do
     for path <- Path.wildcard(Path.join(root(), "apps/opus/lib/**/*.ex")),
         line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
         [_, module] <- Regex.scan(@namespace, line),

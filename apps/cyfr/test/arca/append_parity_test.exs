@@ -4,7 +4,7 @@
 defmodule Arca.AppendParityTest do
   @moduledoc """
   Both adapters reject append operations above
-  `Sanctum.Limits.default_max_response_size/0` with `{:error, :object_too_large}`.
+  `Cyfr.Limits.default_max_response_size/0` with `{:error, :object_too_large}`.
   """
   use ExUnit.Case, async: false
 
@@ -23,7 +23,7 @@ defmodule Arca.AppendParityTest do
   end
 
   test "Local refuses an append past the shared ceiling, like S3 does", %{ctx: ctx} do
-    ceiling = Sanctum.Limits.default_max_response_size()
+    ceiling = Cyfr.Limits.default_max_response_size()
     path = ["data", "parity.log"]
 
     # A file already at the ceiling: the cheapest way is to write it whole

@@ -1,7 +1,7 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.Sanitizer do
+defmodule Cyfr.Sanitizer do
   @moduledoc """
   Sanitization utilities for sensitive data.
 
@@ -66,10 +66,10 @@ defmodule Sanctum.Sanitizer do
 
   ## Examples
 
-      iex> Sanctum.Sanitizer.sanitize(%{"password" => "s3cret", "name" => "test"})
+      iex> Cyfr.Sanitizer.sanitize(%{"password" => "s3cret", "name" => "test"})
       %{"password" => "[REDACTED]", "name" => "test"}
 
-      iex> Sanctum.Sanitizer.sanitize(%{"nested" => %{"api_key" => "abc123"}})
+      iex> Cyfr.Sanitizer.sanitize(%{"nested" => %{"api_key" => "abc123"}})
       %{"nested" => %{"api_key" => "[REDACTED]"}}
   """
   @spec sanitize(term()) :: term()

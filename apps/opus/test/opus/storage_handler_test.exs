@@ -982,7 +982,7 @@ defmodule Opus.StorageHandlerTest do
 
   describe "size ceilings from node limits" do
     defp small_limits do
-      %Sanctum.Limits{max_request_size: 16, max_response_size: 16}
+      %Cyfr.Limits{max_request_size: 16, max_response_size: 16}
     end
 
     defp rw_edge do

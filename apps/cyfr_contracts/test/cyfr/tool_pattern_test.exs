@@ -1,10 +1,10 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.ToolPatternTest do
+defmodule Cyfr.ToolPatternTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.ToolPattern
+  alias Cyfr.ToolPattern
 
   describe "matches?/2" do
     test "wildcard matches everything" do

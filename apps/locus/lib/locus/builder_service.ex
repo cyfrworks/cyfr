@@ -113,7 +113,7 @@ defmodule Locus.BuilderService do
          # reads the same source, and a hand-written list here would silently
          # refuse a fifth component kind the rest of the system had accepted.
          {:ok, target_type} <-
-           known(target_type, Sanctum.ComponentRef.valid_types(), "target_type"),
+           known(target_type, Cyfr.ComponentRef.valid_types(), "target_type"),
          language = String.to_existing_atom(language),
          target_type = String.to_existing_atom(target_type),
          :ok <- paired(language, target_type),

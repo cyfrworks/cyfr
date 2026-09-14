@@ -4,7 +4,7 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
   use ExUnit.Case, async: true
 
   alias Sanctum.Authority
-  alias Sanctum.Limits
+  alias Cyfr.Limits
 
   # Zero authority has no resources or control-plane access and uses the specified limit constants.
 
@@ -45,7 +45,7 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
     # Limits.defaults/1 is looser on exactly these; zero limits never take
     # them from it.
     zero = Authority.zero_limits()
-    default = Sanctum.Limits.defaults(:reagent)
+    default = Cyfr.Limits.defaults(:reagent)
 
     assert zero.timeout == "30s" and default.timeout == "1m"
     assert zero.batch_timeout == "30s" and default.batch_timeout == "5m"

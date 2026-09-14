@@ -94,7 +94,7 @@ defmodule Opus.ComponentType do
   # Both the string and atom parse paths derive from the canonical type
   # list, so a new executable type added there is accepted here without a
   # second edit.
-  @valid_type_strings Sanctum.ComponentRef.executable_types()
+  @valid_type_strings Cyfr.ComponentRef.executable_types()
   @valid_types Enum.map(@valid_type_strings, &String.to_atom/1)
 
   @doc """

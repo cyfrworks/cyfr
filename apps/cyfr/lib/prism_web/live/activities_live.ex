@@ -311,7 +311,7 @@ defmodule PrismWeb.ActivitiesLive do
         name = input["tincture_name"] || input[:tincture_name]
 
         if publisher && name,
-          do: Sanctum.ComponentRef.build("tincture", publisher, name),
+          do: Cyfr.ComponentRef.build("tincture", publisher, name),
           else: "tincture/invoke"
 
       "schedule" ->

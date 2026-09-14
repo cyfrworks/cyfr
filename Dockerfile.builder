@@ -36,8 +36,8 @@ RUN mix compile && mix release builder
 FROM debian:bookworm-slim
 
 LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
-# The release loads (never starts) the cyfr app, whose lib/sanctum modules
-# (Sanctum.Limits reaches the builder via Locus.Builder) are FSL-licensed.
+# The release loads (never starts) the cyfr app, which carries lib/sanctum's
+# FSL-licensed modules.
 LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
 
 # procps carries `kill` and `pgrep`, which Debian does not ship in a slim

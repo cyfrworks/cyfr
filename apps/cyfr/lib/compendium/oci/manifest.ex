@@ -22,8 +22,8 @@ defmodule Compendium.OCI.Manifest do
   @readme_media_type "application/vnd.cyfr.readme.v1+markdown"
   @source_media_type "application/vnd.cyfr.source.v1.tar+gzip"
 
-  # Derive OCI media types from Sanctum.ComponentRef.valid_types/0.
-  @type_media_types Map.new(Sanctum.ComponentRef.valid_types(), fn
+  # Derive OCI media types from Cyfr.ComponentRef.valid_types/0.
+  @type_media_types Map.new(Cyfr.ComponentRef.valid_types(), fn
                       "tincture" -> {"tincture", "application/vnd.cyfr.tincture.v1.tar+gzip"}
                       type -> {type, "application/vnd.cyfr.#{type}.v1+wasm"}
                     end)

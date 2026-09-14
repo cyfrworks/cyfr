@@ -62,7 +62,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
     # Dispatch enforces auth + :storage_read; the tenant residual keeps an
     # athanor-less context out of the profile store.
     with :ok <- Context.tenant_ok(ctx) do
-      ref = Sanctum.ComponentRef.build("tincture", publisher, name)
+      ref = Cyfr.ComponentRef.build("tincture", publisher, name)
 
       case Source.impl().profiles(ctx, ref) do
         {:ok, profiles} ->

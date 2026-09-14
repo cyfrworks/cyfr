@@ -308,7 +308,7 @@ defmodule Opus.MCP do
             },
             "type" => %{
               "type" => "string",
-              "enum" => Sanctum.ComponentRef.executable_types(),
+              "enum" => Cyfr.ComponentRef.executable_types(),
               "default" => "reagent",
               "description" =>
                 "Asserted component type — must match the registry's type, " <>
@@ -671,7 +671,7 @@ defmodule Opus.MCP do
     {:error, "profile_unavailable: #{status}"}
   end
 
-  # The chain wraps a ref-grammar refusal (`Sanctum.ComponentRef`'s crafted
+  # The chain wraps a ref-grammar refusal (`Cyfr.ComponentRef`'s crafted
   # prose) — client-safe by construction.
   defp format_root_result({:error, {:invalid_reference, reason}}) when is_binary(reason) do
     {:error, "invalid_reference: #{reason}"}

@@ -112,7 +112,7 @@ defmodule Arca.AuditHandler do
     event = %Arca.Audit.Event{
       name: event_name,
       measurements: measurements,
-      metadata: Sanctum.Sanitizer.sanitize(metadata),
+      metadata: Cyfr.Sanitizer.sanitize(metadata),
       user_id: metadata[:user_id],
       athanor_id: metadata[:athanor_id]
     }

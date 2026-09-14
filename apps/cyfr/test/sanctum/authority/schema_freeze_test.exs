@@ -8,8 +8,8 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
   alias Sanctum.Authority.Blob.Edge
   alias Sanctum.Authority.Blob.Node
   alias Sanctum.Authority.Transition
-  alias Sanctum.Limits
-  alias Sanctum.Policy.Ceiling
+  alias Cyfr.Limits
+  alias Cyfr.Limits.Ceiling
 
   # The authority schema freeze, as a machine gate. Every surface pinned
   # here is frozen — the blob shape, the transition relation, the limit and

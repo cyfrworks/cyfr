@@ -37,7 +37,7 @@ defmodule Sanctum.Consent.CommitDigest do
   """
 
   alias Sanctum.Consent.Normalize
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   @type binding :: %{
           required(:need) => String.t(),

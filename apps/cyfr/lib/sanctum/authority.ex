@@ -25,9 +25,9 @@ defmodule Sanctum.Authority do
   `zero/0` is the authority of code with no applicable profile: no
   resources, no control-plane access, only inert invocation, under the
   `zero_limits/0` constants. Their byte ceilings and rate limit are the
-  shared `Sanctum.Limits` defaults; the other three fields (timeout,
+  shared `Cyfr.Limits` defaults; the other three fields (timeout,
   batch_timeout, max_concurrent_tasks) are deliberately tighter than
-  `Sanctum.Limits.defaults/1`, so they are never derived from it.
+  `Cyfr.Limits.defaults/1`, so they are never derived from it.
 
   ## Root budget
 
@@ -50,7 +50,7 @@ defmodule Sanctum.Authority do
 
   alias Sanctum.Authority.Blob
   alias Sanctum.Authority.Budget
-  alias Sanctum.Limits
+  alias Cyfr.Limits
 
   @type cursor :: {:bound, String.t()} | :unbound
   @type invoke_mode :: :open_inert | :edge_only

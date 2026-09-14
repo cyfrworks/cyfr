@@ -154,7 +154,7 @@ defmodule Cyfr.WitAbiDriftTest do
   test "the worlds registration demands are the ones the engine calls" do
     runtime = File.read!(Path.join(@opus_lib, "opus/runtime.ex"))
 
-    for type <- Sanctum.ComponentRef.executable_types() do
+    for type <- Cyfr.ComponentRef.executable_types() do
       expected = Compendium.WITSource.expected_exports(type)
 
       assert expected != [],

@@ -85,10 +85,10 @@ config :cyfr, :execution_impl, Opus
 config :cyfr, :execution_payload_store, Arca.ExecutionPayloads.Store.Overlay
 
 # Inbound request-param redaction (:filter_parameters) is set at boot by
-# Cyfr.Application from Sanctum.Sanitizer.filter_parameters/0 — the one
+# Cyfr.Application from Cyfr.Sanitizer.filter_parameters/0 — the one
 # redaction vocabulary. It is not spelled here so it cannot drift from it.
 # Outbound response bodies are redacted at their call sites with
-# Sanctum.Sanitizer.sanitize/1.
+# Cyfr.Sanitizer.sanitize/1.
 
 # Arca Repo adapter is selected at build time — Ecto can't swap adapters at
 # runtime. The one CYFR_DATABASE parse lives in database_choice.exs (shared
@@ -207,7 +207,7 @@ config :cyfr, Cyfr.Retention,
   messages_days: 365
 
 # Read-but-not-set here, deliberately: `:webhook_max_body_bytes` derives
-# its default from `Sanctum.Limits.default_max_request_size/0` (a literal
+# its default from `Cyfr.Limits.default_max_request_size/0` (a literal
 # here would be a second spelling of a derived value), and
 # `:platform_ceiling` is a structured policy override
 # (`Sanctum.Policy.Ceiling`), not a scalar knob.

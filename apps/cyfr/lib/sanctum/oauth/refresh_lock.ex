@@ -105,5 +105,5 @@ defmodule Sanctum.OAuth.RefreshLock do
   defp describe_exit(reason) when is_atom(reason), do: inspect(reason)
 
   defp describe_exit(other),
-    do: inspect(Sanctum.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
+    do: inspect(Cyfr.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
 end

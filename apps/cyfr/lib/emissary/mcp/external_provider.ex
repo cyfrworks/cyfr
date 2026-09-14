@@ -137,7 +137,7 @@ defmodule Emissary.MCP.ExternalProvider do
         {:ok, tools} ->
           matched =
             Enum.filter(tools, fn tool ->
-              Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool["name"] || ""))
+              Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, tool["name"] || ""))
             end)
 
           descriptions =
@@ -193,7 +193,7 @@ defmodule Emissary.MCP.ExternalProvider do
 
             tools
             |> Enum.filter(fn tool ->
-              Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool["name"] || ""))
+              Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, tool["name"] || ""))
             end)
             |> Enum.map(fn tool ->
               upstream_ann = tool["annotations"] || %{}
@@ -283,7 +283,7 @@ defmodule Emissary.MCP.ExternalProvider do
               not server.enabled ->
                 {:error, "Server '#{server_name}' is disabled"}
 
-              not Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, remote_tool)) ->
+              not Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, remote_tool)) ->
                 {:error, "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}
 
               plane == :external and not console_reachable?(server) ->

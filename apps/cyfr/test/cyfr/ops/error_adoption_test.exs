@@ -57,8 +57,9 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
   # Every module that defines a tool: those are the ones whose refusals
   # reach a renderer, and the only ones this roster is about.
   defp tool_modules do
-    ["apps/cyfr/lib/**/*.ex", "apps/opus/lib/**/*.ex", "apps/locus/lib/**/*.ex"]
-    |> Enum.flat_map(&(root() |> Path.join(&1) |> Path.wildcard()))
+    root()
+    |> Cyfr.Test.SourceTree.app_libs()
+    |> Enum.flat_map(&Path.wildcard(Path.join([root(), &1, "**/*.ex"])))
     |> Enum.filter(fn path ->
       source = Cyfr.Test.SourceTree.read(path)
       String.contains?(source, "def definition") or String.contains?(source, "def handle(")

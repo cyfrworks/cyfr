@@ -1,12 +1,12 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.LimitsTest do
+defmodule Cyfr.LimitsTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Limits
-  alias Sanctum.Policy.Ceiling
+  alias Cyfr.Limits
+  alias Cyfr.Limits.Ceiling
 
-  doctest Sanctum.Limits
+  doctest Cyfr.Limits
 
   @valid %{
     timeout: "30s",
@@ -227,7 +227,7 @@ defmodule Sanctum.LimitsTest do
     # These literals are the only source of type defaults; the pins are what
     # keep a refactor from silently loosening what an empty ask grants.
     test "the per-type literals are pinned" do
-      for type <- Sanctum.ComponentRef.valid_type_atoms() do
+      for type <- Cyfr.ComponentRef.valid_type_atoms() do
         limits = Limits.defaults(type)
 
         assert limits.max_memory_bytes == 64 * 1024 * 1024
@@ -246,7 +246,7 @@ defmodule Sanctum.LimitsTest do
     end
 
     test "every default is a complete, valid Limits" do
-      for type <- Sanctum.ComponentRef.valid_type_atoms() do
+      for type <- Cyfr.ComponentRef.valid_type_atoms() do
         limits = Limits.defaults(type)
 
         map =

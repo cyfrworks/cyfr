@@ -18,7 +18,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Source
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
   alias Sanctum.Test.AuthorityFixtures, as: Fixtures
 
   @formula "formula:local.assistant"

@@ -41,7 +41,7 @@ defmodule Opus.RateLimiter do
 
   The fourth argument is any map carrying a `:rate_limit` key of
   `%{requests: n, window: "1m"}` — callers pass the node's consented
-  `Sanctum.Limits.rate_limit` (or a platform-config bucket like the emit
+  `Cyfr.Limits.rate_limit` (or a platform-config bucket like the emit
   cap). A nil map or nil `:rate_limit` means unlimited.
   """
 
@@ -278,13 +278,13 @@ defmodule Opus.RateLimiter do
 
   defp get_rate_limit_config(_), do: nil
 
-  # Duration grammar is Sanctum.Limits' — one parser for every enforcement
+  # Duration grammar is Cyfr.Limits' — one parser for every enforcement
   # window, so "1h" cannot mean an hour in one limiter and a fallback minute
   # in another. Unparseable is unparseable, never a default.
   defp parse_window(window) when is_integer(window), do: {:ok, window}
 
   defp parse_window(window) do
-    case Sanctum.Limits.parse_duration(window) do
+    case Cyfr.Limits.parse_duration(window) do
       {:ok, ms} ->
         {:ok, ms}
 

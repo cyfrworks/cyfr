@@ -178,7 +178,7 @@ defmodule Compendium.Manifest do
   defp valid_agent_catalyst?(nil), do: true
 
   defp valid_agent_catalyst?(ref) when is_binary(ref) and ref != "" do
-    match?({:ok, %{version: nil}}, Sanctum.ComponentRef.parse(ref))
+    match?({:ok, %{version: nil}}, Cyfr.ComponentRef.parse(ref))
   end
 
   defp valid_agent_catalyst?(_), do: false

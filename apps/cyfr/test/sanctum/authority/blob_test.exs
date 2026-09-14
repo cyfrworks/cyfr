@@ -5,7 +5,7 @@ defmodule Sanctum.Authority.BlobTest do
 
   alias Sanctum.Authority.Blob
   alias Sanctum.Authority.Blob.Edge
-  alias Sanctum.Limits
+  alias Cyfr.Limits
 
   @formula "formula:local.daily-report"
   @catalyst "catalyst:supabase.com.database"

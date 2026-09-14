@@ -34,7 +34,7 @@ defmodule Sanctum.VaultReader do
 
   alias Sanctum.CipherAAD
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   @type vault_resource :: %{
           required(:entry_id) => String.t(),

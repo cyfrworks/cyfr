@@ -307,7 +307,7 @@ defmodule Cyfr.Network do
     if private_ip?(ip_tuple) do
       cond do
         # 169.254.0.0/16 always blocked — cloud metadata endpoint
-        Sanctum.Cidr.link_local?(ip_tuple) ->
+        Cyfr.Cidr.link_local?(ip_tuple) ->
           {:error, :private_ip_blocked,
            "link-local IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
 
@@ -338,7 +338,7 @@ defmodule Cyfr.Network do
     host = if is_binary(hostname), do: String.downcase(hostname), else: nil
 
     Enum.any?(private_egress_targets(), fn target ->
-      String.downcase(target) == host or Sanctum.Cidr.match?(ip_tuple, target)
+      String.downcase(target) == host or Cyfr.Cidr.match?(ip_tuple, target)
     end)
   end
 

@@ -9,7 +9,7 @@ defmodule Aqua.Loop.Planner do
 
   A request fits while the observed size stays under most of the usable
   window — the context window less the output ceiling and a margin — and
-  its bytes stay under the consented request cap (`Sanctum.Limits`
+  its bytes stay under the consented request cap (`Cyfr.Limits`
   `max_request_size`); past either the planner names the compaction
   boundary: the oldest row the model keeps reading (`first_kept_seq`,
   inclusive), chosen so a tool call is never parted from its results,

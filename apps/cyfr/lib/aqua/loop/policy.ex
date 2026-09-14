@@ -131,7 +131,7 @@ defmodule Aqua.Loop.Policy do
     consented? = Keyword.get(opts, :consented?, fn _ -> false end)
     touched = Keyword.get(opts, :touched, MapSet.new())
 
-    case Sanctum.ComponentRef.parse(reference) do
+    case Cyfr.ComponentRef.parse(reference) do
       {:ok, _} ->
         cond do
           MapSet.member?(touched, name_level(reference)) -> :card
@@ -208,7 +208,7 @@ defmodule Aqua.Loop.Policy do
   def proposal_digest(%{"proposal" => proposal}), do: proposal_digest(proposal)
 
   def proposal_digest(proposal) when is_map(proposal) do
-    {:ok, digest} = Sanctum.JCS.hash(proposal)
+    {:ok, digest} = Cyfr.JCS.hash(proposal)
     digest
   end
 

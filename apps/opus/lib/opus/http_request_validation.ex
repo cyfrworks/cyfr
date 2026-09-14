@@ -29,7 +29,7 @@ defmodule Opus.HttpRequestValidation do
   alias Opus.EdgeGuard
   alias Sanctum.Authority.Blob.Edge
   alias Sanctum.Context
-  alias Sanctum.Limits
+  alias Cyfr.Limits
 
   @valid_http_methods %{
     "GET" => :get,

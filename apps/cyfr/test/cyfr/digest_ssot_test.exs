@@ -37,7 +37,7 @@ defmodule Cyfr.DigestSSOTTest do
       scanned()
       |> Enum.filter(fn path -> Regex.match?(@construction, Cyfr.Test.SourceTree.read(path)) end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
-      |> Enum.reject(&(&1 == "apps/cyfr/lib/cyfr/digest.ex"))
+      |> Enum.reject(&(&1 == "apps/cyfr_contracts/lib/cyfr/digest.ex"))
 
     assert offenders == [],
            "digest spelling constructed outside Cyfr.Digest: #{inspect(offenders)}"
@@ -48,7 +48,7 @@ defmodule Cyfr.DigestSSOTTest do
       scanned()
       |> Enum.filter(fn path -> Regex.match?(@bare_hex, Cyfr.Test.SourceTree.read(path)) end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
-      |> Enum.reject(&(&1 == "apps/cyfr/lib/cyfr/digest.ex"))
+      |> Enum.reject(&(&1 == "apps/cyfr_contracts/lib/cyfr/digest.ex"))
 
     assert offenders == [],
            "bare-hex digest spelling constructed outside Cyfr.Digest: #{inspect(offenders)}"

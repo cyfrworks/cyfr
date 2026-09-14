@@ -14,7 +14,7 @@ defmodule Prism.TelemetryBridge do
 
   Telemetry metadata is by convention whatever the emitter felt like
   attaching, and this module forwards it verbatim to browser sessions. That
-  is a trust boundary, so every message goes through `Sanctum.Sanitizer`
+  is a trust boundary, so every message goes through `Cyfr.Sanitizer`
   on the way out: today's emitters carry only identifiers and outcomes, and
   the next one to carry a credential name should not be the thing that finds
   out.
@@ -191,7 +191,7 @@ defmodule Prism.TelemetryBridge do
   defp safe_broadcast(topic_fun, metadata, message) do
     case scoped_topic(topic_fun, metadata) do
       {:ok, topic} ->
-        case Phoenix.PubSub.broadcast(@pubsub, topic, Sanctum.Sanitizer.sanitize(message)) do
+        case Phoenix.PubSub.broadcast(@pubsub, topic, Cyfr.Sanitizer.sanitize(message)) do
           :ok ->
             :ok
 

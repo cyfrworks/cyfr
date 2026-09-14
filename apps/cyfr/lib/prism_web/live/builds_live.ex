@@ -220,7 +220,7 @@ defmodule PrismWeb.BuildsLive do
           case Compendium.ComponentPath.parse(segments) do
             {:ok, %{type: type, publisher: publisher, name: name, version: version}} ->
               [
-                Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+                Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
                   type: type,
                   namespace: publisher,
                   name: name,

@@ -11,7 +11,7 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   Every edge A → B carries B's own resources, and every node's grant is
   manifest-sourced: resources come from the declared caps (the ask,
-  granted whole at this grain) and limits from `Sanctum.Limits.defaults/1`
+  granted whole at this grain) and limits from `Cyfr.Limits.defaults/1`
   under `caps.limits`. A manifest with no `needs`/`caps` blocks grants the
   empty ask — deny-all resources under type-default limits.
 
@@ -25,7 +25,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   """
 
   alias Compendium.Manifest.Caps
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   @type vault_fn ::
           (node_key :: String.t(), row :: map(), manifest :: map() -> map() | nil)
@@ -222,7 +222,7 @@ defmodule Sanctum.Consent.BlobBuilder do
     defaults =
       node_key
       |> node_type()
-      |> Sanctum.Limits.defaults()
+      |> Cyfr.Limits.defaults()
       |> Map.from_struct()
 
     defaults
@@ -237,14 +237,14 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   defp node_type(node_key) do
-    case Sanctum.ComponentRef.parse(node_key) do
+    case Cyfr.ComponentRef.parse(node_key) do
       {:ok, ref} -> String.to_existing_atom(ref.type)
       {:error, _} -> :reagent
     end
   end
 
   defp node_row(ctx, node_key) do
-    case Sanctum.ComponentRef.parse(node_key) do
+    case Cyfr.ComponentRef.parse(node_key) do
       {:ok, ref} ->
         case Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
           {:ok, row} -> {:ok, row}
@@ -266,7 +266,7 @@ defmodule Sanctum.Consent.BlobBuilder do
       {:ok, deps} ->
         deps
         |> Enum.map(fn dep ->
-          {Sanctum.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name),
+          {Cyfr.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name),
            dep.optional == true}
         end)
         |> Enum.reject(fn {key, optional?} -> optional? and not Map.has_key?(graph, key) end)

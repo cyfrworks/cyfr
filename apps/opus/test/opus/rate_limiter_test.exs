@@ -261,12 +261,12 @@ defmodule Opus.RateLimiterTest do
     end
   end
 
-  describe "Sanctum.Limits struct" do
-    test "works with a Sanctum.Limits struct as the limit source" do
+  describe "Cyfr.Limits struct" do
+    test "works with a Cyfr.Limits struct as the limit source" do
       athanor_id = athanor()
       component_ref = "local.test-component:1.0.0"
 
-      limits = %Sanctum.Limits{
+      limits = %Cyfr.Limits{
         timeout: "30s",
         max_memory_bytes: 64 * 1024 * 1024,
         max_request_size: 1_048_576,

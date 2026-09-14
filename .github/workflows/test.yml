@@ -3,9 +3,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apps/cyfr/**'
-      - 'apps/opus/**'
-      - 'apps/locus/**'
+      # Every Elixir app; the CLI has its own workflow.
+      - 'apps/**'
+      - '!apps/codex/**'
       # ClientProtocolDriftTest and StackShapeTest read server.mjs literals;
       # a bridge-only change must run the Elixir suite that pins them.
       - 'apps/mcp-bridge/**'
@@ -37,9 +37,9 @@ on:
       - '.dockerignore'
   pull_request:
     paths:
-      - 'apps/cyfr/**'
-      - 'apps/opus/**'
-      - 'apps/locus/**'
+      # Every Elixir app; the CLI has its own workflow.
+      - 'apps/**'
+      - '!apps/codex/**'
       # ClientProtocolDriftTest and StackShapeTest read server.mjs literals;
       # a bridge-only change must run the Elixir suite that pins them.
       - 'apps/mcp-bridge/**'
@@ -281,7 +281,7 @@ jobs:
               echo "$bad"
               fail=1
             fi
-          done < <(git ls-files 'apps/cyfr/lib/*.ex' 'apps/cyfr/lib/**/*.ex' 'apps/opus/lib/*.ex' 'apps/opus/lib/**/*.ex' 'apps/locus/lib/*.ex' 'apps/locus/lib/**/*.ex')
+          done < <(git ls-files 'apps/*/lib/*.ex' 'apps/*/lib/**/*.ex')
           if [ "$fail" -ne 0 ]; then
             echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D|E>."
             exit 1

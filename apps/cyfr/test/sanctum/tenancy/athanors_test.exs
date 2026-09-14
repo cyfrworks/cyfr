@@ -114,7 +114,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
       assert second.slug != first.slug
       refute second.slug =~ "--"
-      assert second.slug =~ Sanctum.ComponentRef.personal_slug_regex()
+      assert second.slug =~ Cyfr.ComponentRef.personal_slug_regex()
     end
 
     test "one person, one personal athanor" do

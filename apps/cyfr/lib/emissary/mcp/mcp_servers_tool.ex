@@ -279,7 +279,7 @@ defmodule Emissary.MCP.McpServersTool do
   defp validate_tool_patterns(nil), do: :ok
 
   defp validate_tool_patterns(patterns) when is_list(patterns) do
-    case Enum.reject(patterns, &Sanctum.ToolPattern.valid?/1) do
+    case Enum.reject(patterns, &Cyfr.ToolPattern.valid?/1) do
       [] ->
         :ok
 

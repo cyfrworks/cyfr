@@ -95,7 +95,7 @@ defmodule Compendium.Scaffold do
   defp validate_name(name) when is_binary(name) do
     # The component name grammar lives in one place; a scaffold that accepted
     # a name registration refuses would strand the user one step later.
-    case Sanctum.ComponentRef.validate_name(name) do
+    case Cyfr.ComponentRef.validate_name(name) do
       :ok -> :ok
       {:error, reason} -> {:error, "Invalid component name: '#{name}'. #{reason}"}
     end
@@ -106,7 +106,7 @@ defmodule Compendium.Scaffold do
   defp validate_type(nil), do: {:error, "Missing required argument: type"}
 
   defp validate_type(type) when is_binary(type) do
-    if type in Sanctum.ComponentRef.valid_types() do
+    if type in Cyfr.ComponentRef.valid_types() do
       :ok
     else
       {:error,
@@ -121,7 +121,7 @@ defmodule Compendium.Scaffold do
 
   # Use the shared component version grammar.
   defp validate_version(version) when is_binary(version) do
-    case Sanctum.ComponentRef.validate_version(version) do
+    case Cyfr.ComponentRef.validate_version(version) do
       :ok -> :ok
       {:error, _} -> {:error, "Invalid version: '#{version}'. Must be valid semver (e.g. 0.1.0)"}
     end
@@ -164,7 +164,7 @@ defmodule Compendium.Scaffold do
 
   # The one spelling of a local reference — never hand-interpolated.
   defp local_ref(type, name, version) do
-    Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+    Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
       type: type,
       namespace: Compendium.ComponentPath.default_publisher(),
       name: name,

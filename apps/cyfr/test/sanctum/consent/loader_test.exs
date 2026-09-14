@@ -7,7 +7,7 @@ defmodule Sanctum.Consent.LoaderTest do
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Source
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
   alias Sanctum.Test.AuthorityFixtures, as: Fixtures
 
   setup do
@@ -64,7 +64,7 @@ defmodule Sanctum.Consent.LoaderTest do
     # loader refuses a mismatch, and every case below is about some other
     # failure. A test that wants the mismatch itself passes `:blob_digest`.
     Map.put_new_lazy(merged, :blob_digest, fn ->
-      Sanctum.JCS.hash_binary(merged.resolved_policy)
+      Cyfr.JCS.hash_binary(merged.resolved_policy)
     end)
   end
 

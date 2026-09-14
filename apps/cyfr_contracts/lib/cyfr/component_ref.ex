@@ -1,7 +1,7 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.ComponentRef do
+defmodule Cyfr.ComponentRef do
   @moduledoc """
   Canonical component reference parser and formatter.
 
@@ -113,14 +113,14 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.parse("catalyst:local.my-tool:1.0.0")
-      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: "1.0.0"}}
+      iex> Cyfr.ComponentRef.parse("catalyst:local.my-tool:1.0.0")
+      {:ok, %Cyfr.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: "1.0.0"}}
 
-      iex> Sanctum.ComponentRef.parse("c:local.my-tool")
-      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}}
+      iex> Cyfr.ComponentRef.parse("c:local.my-tool")
+      {:ok, %Cyfr.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}}
 
-      iex> Sanctum.ComponentRef.parse("c:stripe.com.api:0.1.0")
-      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "stripe.com", name: "api", version: "0.1.0"}}
+      iex> Cyfr.ComponentRef.parse("c:stripe.com.api:0.1.0")
+      {:ok, %Cyfr.ComponentRef{type: "catalyst", namespace: "stripe.com", name: "api", version: "0.1.0"}}
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
   def parse(ref) when is_binary(ref) do
@@ -148,12 +148,12 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> ref = %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: "1.0.0"}
-      iex> Sanctum.ComponentRef.to_string(ref)
+      iex> ref = %Cyfr.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: "1.0.0"}
+      iex> Cyfr.ComponentRef.to_string(ref)
       "catalyst:local.my-tool:1.0.0"
 
-      iex> ref = %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}
-      iex> Sanctum.ComponentRef.to_string(ref)
+      iex> ref = %Cyfr.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}
+      iex> Cyfr.ComponentRef.to_string(ref)
       "catalyst:local.my-tool"
   """
   @spec to_string(t()) :: String.t()
@@ -170,10 +170,10 @@ defmodule Sanctum.ComponentRef do
 
   Builds type:namespace.name references with an optional :version suffix.
 
-      iex> Sanctum.ComponentRef.build("tincture", "acme", "docs")
+      iex> Cyfr.ComponentRef.build("tincture", "acme", "docs")
       "tincture:acme.docs"
 
-      iex> Sanctum.ComponentRef.build("reagent", "local", "fetch", "1.2.0")
+      iex> Cyfr.ComponentRef.build("reagent", "local", "fetch", "1.2.0")
       "reagent:local.fetch:1.2.0"
   """
   @spec build(String.t(), String.t(), String.t(), String.t() | nil) :: String.t()
@@ -194,13 +194,13 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.normalize("catalyst:local.my-tool:1.0.0")
+      iex> Cyfr.ComponentRef.normalize("catalyst:local.my-tool:1.0.0")
       {:ok, "catalyst:local.my-tool:1.0.0"}
 
-      iex> Sanctum.ComponentRef.normalize("c:local.my-tool:1.0.0")
+      iex> Cyfr.ComponentRef.normalize("c:local.my-tool:1.0.0")
       {:ok, "catalyst:local.my-tool:1.0.0"}
 
-      iex> Sanctum.ComponentRef.normalize("local.my-tool:1.0.0")
+      iex> Cyfr.ComponentRef.normalize("local.my-tool:1.0.0")
       {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0 or c:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
   """
   @spec normalize(String.t()) :: {:ok, String.t()} | {:error, String.t()}
@@ -232,13 +232,13 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.normalize_flexible("c:local.my-tool:1.0.0")
-      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: "1.0.0"}}
+      iex> Cyfr.ComponentRef.normalize_flexible("c:local.my-tool:1.0.0")
+      {:ok, %Cyfr.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: "1.0.0"}}
 
-      iex> Sanctum.ComponentRef.normalize_flexible("c:local.my-tool")
-      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}}
+      iex> Cyfr.ComponentRef.normalize_flexible("c:local.my-tool")
+      {:ok, %Cyfr.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}}
 
-      iex> Sanctum.ComponentRef.normalize_flexible("local.my-tool:1.0.0")
+      iex> Cyfr.ComponentRef.normalize_flexible("local.my-tool:1.0.0")
       {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0 or c:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
   """
   @spec normalize_flexible(String.t()) :: {:ok, t()} | {:error, String.t()}
@@ -277,13 +277,13 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.normalize_or_name_ref("c:local.claude:0.1.0")
+      iex> Cyfr.ComponentRef.normalize_or_name_ref("c:local.claude:0.1.0")
       {:ok, "catalyst:local.claude:0.1.0"}
 
-      iex> Sanctum.ComponentRef.normalize_or_name_ref("c:local.claude")
+      iex> Cyfr.ComponentRef.normalize_or_name_ref("c:local.claude")
       {:ok, "catalyst:local.claude"}
 
-      iex> Sanctum.ComponentRef.normalize_or_name_ref("not valid")
+      iex> Cyfr.ComponentRef.normalize_or_name_ref("not valid")
       {:error, _}
   """
   @spec normalize_or_name_ref(String.t()) :: {:ok, String.t()} | {:error, String.t()}
@@ -300,10 +300,10 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.pinned?(%Sanctum.ComponentRef{namespace: "local", name: "claude", version: "0.1.0"})
+      iex> Cyfr.ComponentRef.pinned?(%Cyfr.ComponentRef{namespace: "local", name: "claude", version: "0.1.0"})
       true
 
-      iex> Sanctum.ComponentRef.pinned?(%Sanctum.ComponentRef{namespace: "local", name: "claude", version: nil})
+      iex> Cyfr.ComponentRef.pinned?(%Cyfr.ComponentRef{namespace: "local", name: "claude", version: nil})
       false
   """
   @spec pinned?(t()) :: boolean()
@@ -317,11 +317,11 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> ref = %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: "0.1.0"}
-      iex> Sanctum.ComponentRef.to_name_ref(ref)
+      iex> ref = %Cyfr.ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: "0.1.0"}
+      iex> Cyfr.ComponentRef.to_name_ref(ref)
       "catalyst:local.claude"
 
-      iex> Sanctum.ComponentRef.to_name_ref("catalyst:local.claude:0.1.0")
+      iex> Cyfr.ComponentRef.to_name_ref("catalyst:local.claude:0.1.0")
       {:ok, "catalyst:local.claude"}
   """
   @spec to_name_ref(t()) :: String.t()
@@ -344,10 +344,10 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.validate("catalyst:local.my-tool:1.0.0")
+      iex> Cyfr.ComponentRef.validate("catalyst:local.my-tool:1.0.0")
       :ok
 
-      iex> Sanctum.ComponentRef.validate("")
+      iex> Cyfr.ComponentRef.validate("")
       {:error, "component ref cannot be empty"}
   """
   @spec validate(String.t()) :: :ok | {:error, String.t()}
@@ -365,10 +365,10 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.validate_type("catalyst")
+      iex> Cyfr.ComponentRef.validate_type("catalyst")
       :ok
 
-      iex> Sanctum.ComponentRef.validate_type("invalid")
+      iex> Cyfr.ComponentRef.validate_type("invalid")
       {:error, "invalid component type: invalid. Must be one of: catalyst, reagent, formula, tincture"}
   """
   @spec validate_type(String.t() | nil) :: :ok | {:error, String.t()}
@@ -388,7 +388,7 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.valid_types()
+      iex> Cyfr.ComponentRef.valid_types()
       ["catalyst", "reagent", "formula", "tincture"]
   """
   @spec valid_types() :: [String.t()]
@@ -400,7 +400,7 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.valid_type_atoms()
+      iex> Cyfr.ComponentRef.valid_type_atoms()
       [:catalyst, :reagent, :formula, :tincture]
   """
   @spec valid_type_atoms() :: [atom()]
@@ -413,7 +413,7 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.executable_types()
+      iex> Cyfr.ComponentRef.executable_types()
       ["catalyst", "reagent", "formula"]
   """
   @spec executable_types() :: [String.t()]
@@ -424,10 +424,10 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.expand_type_shorthand("c")
+      iex> Cyfr.ComponentRef.expand_type_shorthand("c")
       "catalyst"
 
-      iex> Sanctum.ComponentRef.expand_type_shorthand("catalyst")
+      iex> Cyfr.ComponentRef.expand_type_shorthand("catalyst")
       "catalyst"
   """
   @spec expand_type_shorthand(String.t()) :: String.t()
@@ -446,7 +446,7 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.source_types()
+      iex> Cyfr.ComponentRef.source_types()
       ["agent"]
   """
   @spec source_types() :: [String.t()]
@@ -572,16 +572,16 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.validate_namespace("local")
+      iex> Cyfr.ComponentRef.validate_namespace("local")
       :ok
 
-      iex> Sanctum.ComponentRef.validate_namespace("alice")
+      iex> Cyfr.ComponentRef.validate_namespace("alice")
       :ok
 
-      iex> Sanctum.ComponentRef.validate_namespace("stripe.com")
+      iex> Cyfr.ComponentRef.validate_namespace("stripe.com")
       :ok
 
-      iex> Sanctum.ComponentRef.validate_namespace("@alice")
+      iex> Cyfr.ComponentRef.validate_namespace("@alice")
       {:error, "namespace must not contain '@' — personal slugs are bare (e.g. 'alice'); publishers require a dot (e.g. 'stripe.com')"}
   """
   @spec validate_namespace(String.t()) :: :ok | {:error, String.t()}
@@ -709,10 +709,10 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.validate_publisher("cyfr")
+      iex> Cyfr.ComponentRef.validate_publisher("cyfr")
       :ok
 
-      iex> Sanctum.ComponentRef.validate_publisher("stripe.com")
+      iex> Cyfr.ComponentRef.validate_publisher("stripe.com")
       :ok
   """
   @spec validate_publisher(String.t()) :: :ok | {:error, String.t()}
@@ -726,10 +726,10 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.validate_name("my-tool")
+      iex> Cyfr.ComponentRef.validate_name("my-tool")
       :ok
 
-      iex> Sanctum.ComponentRef.validate_name("MY_CAPS")
+      iex> Cyfr.ComponentRef.validate_name("MY_CAPS")
       {:error, "name must be lowercase alphanumeric with hyphens, cannot start/end with hyphen"}
   """
   @spec validate_name(term()) :: :ok | {:error, String.t()}
@@ -776,10 +776,10 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.validate_version("1.0.0")
+      iex> Cyfr.ComponentRef.validate_version("1.0.0")
       :ok
 
-      iex> Sanctum.ComponentRef.validate_version(nil)
+      iex> Cyfr.ComponentRef.validate_version(nil)
       {:error, "version is required. Use an explicit semver version (e.g., 1.0.0)."}
   """
   @spec validate_version(term()) :: :ok | {:error, String.t()}
@@ -800,6 +800,6 @@ defmodule Sanctum.ComponentRef do
   def validate_version(_), do: {:error, "version must be a string"}
 
   defimpl String.Chars do
-    def to_string(ref), do: Sanctum.ComponentRef.to_string(ref)
+    def to_string(ref), do: Cyfr.ComponentRef.to_string(ref)
   end
 end

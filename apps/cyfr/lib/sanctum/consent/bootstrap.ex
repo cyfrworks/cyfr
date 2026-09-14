@@ -56,7 +56,7 @@ defmodule Sanctum.Consent.Bootstrap do
   alias Sanctum.Consent.CommitDigest
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   @type result :: %{
           minted: [String.t()],
@@ -136,7 +136,7 @@ defmodule Sanctum.Consent.Bootstrap do
     # Every valid type is profile-bearing: tinctures are not executable,
     # but a profile is what makes one invocable at all — the route selects
     # it. Owner profiles mint here; public ones only via profile.publish.
-    types = Sanctum.ComponentRef.valid_types()
+    types = Cyfr.ComponentRef.valid_types()
 
     case Arca.ComponentStorage.list_components(ctx,
            publisher: Compendium.ComponentPath.default_publisher(),

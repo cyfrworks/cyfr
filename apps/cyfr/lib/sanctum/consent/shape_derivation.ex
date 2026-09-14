@@ -28,7 +28,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   alias Compendium.Manifest.Caps
   alias Compendium.Manifest.Needs
   alias Sanctum.Consent.ShapeDigest
-  alias Sanctum.ToolPattern
+  alias Cyfr.ToolPattern
 
   @doc """
   The live shape digest for a source ref, or `{:error, reason}` when the
@@ -178,7 +178,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # activation closure; `manifest_blocks/2` above keeps the narrower shape
   # its other callers read.
   defp manifest_row(ctx, source_ref) do
-    with {:ok, ref} <- Sanctum.ComponentRef.parse(source_ref),
+    with {:ok, ref} <- Cyfr.ComponentRef.parse(source_ref),
          {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
       {:ok, row, Needs.from_manifest(manifest), Caps.from_manifest(manifest)}

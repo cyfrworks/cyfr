@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// The shared fixture binds this parser's verdicts to Sanctum.ComponentRef's
+// The shared fixture binds this parser's verdicts to Cyfr.ComponentRef's
 // (its Elixir twin reads the same file from cross_language_drift_test.exs).
 // The drift test proves both sources spell the same regexes; this proves
 // they reach the same verdicts. Every case carries a full

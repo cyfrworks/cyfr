@@ -12,7 +12,7 @@ defmodule Opus.ChainTest do
   alias Sanctum.Authority.Blob
   alias Sanctum.Consent.Source
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]

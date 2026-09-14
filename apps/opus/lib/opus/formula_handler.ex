@@ -76,7 +76,7 @@ defmodule Opus.FormulaHandler do
   require Logger
 
   alias Sanctum.Context
-  alias Sanctum.Limits
+  alias Cyfr.Limits
 
   # ============================================================================
   # Public API
@@ -96,7 +96,7 @@ defmodule Opus.FormulaHandler do
   ## Options
 
   - `:root_execution_id` - The top-level execution ID for routing emit events to the root SSE stream (falls back to `parent_execution_id`)
-  - `:limits` - The node's `Sanctum.Limits` (batch timeout, max concurrent tasks)
+  - `:limits` - The node's `Cyfr.Limits` (batch timeout, max concurrent tasks)
   - `:authority` - The `Sanctum.Authority` the chain runs under (required).
     Execution dispatch goes through `Opus.Chain` and every other tool through
     `Cyfr.Ops.Catalog.call_in_chain/5`. A formula run always carries one — the

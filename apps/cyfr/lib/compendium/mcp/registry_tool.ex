@@ -621,7 +621,7 @@ defmodule Compendium.MCP.RegistryTool do
   defp resolve_component_id(""), do: {:ok, nil}
 
   defp resolve_component_id(ref) when is_binary(ref) do
-    with {:ok, %Sanctum.ComponentRef{} = r} <- Sanctum.ComponentRef.parse(ref),
+    with {:ok, %Cyfr.ComponentRef{} = r} <- Cyfr.ComponentRef.parse(ref),
          :ok <- Shared.ensure_fully_qualified(r),
          {:ok, comp} <-
            Compendium.Registry.Client.get_component(

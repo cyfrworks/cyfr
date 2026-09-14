@@ -156,7 +156,7 @@ defmodule Arca.Execution do
     case get_field(changeset, :kind) do
       "turn" -> validate_inclusion(changeset, :component_type, ["agent"])
       "tool_call" -> validate_inclusion(changeset, :component_type, ["tool_server"])
-      _ -> validate_inclusion(changeset, :component_type, Sanctum.ComponentRef.executable_types())
+      _ -> validate_inclusion(changeset, :component_type, Cyfr.ComponentRef.executable_types())
     end
   end
 

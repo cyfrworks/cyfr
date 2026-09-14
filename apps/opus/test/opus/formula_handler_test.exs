@@ -147,7 +147,7 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "build_formula_imports/3" do
     test "returns {imports, tracker_pid} tuple with all eight functions", %{ctx: ctx} do
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
@@ -686,7 +686,7 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "build_formula_imports includes cancel function", %{ctx: ctx} do
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_cancel_check",
@@ -782,7 +782,7 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "cleanup_registry/1" do
     test "stops tracker and returns :ok", %{ctx: ctx} do
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {_imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_cleanup",
@@ -829,7 +829,7 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "emit integration" do
     test "emit returns ok with sequence number", %{ctx: ctx} do
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_test",
@@ -852,7 +852,7 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "emit sequence increments across calls", %{ctx: ctx} do
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_seq",
@@ -876,7 +876,7 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "emit handles invalid JSON gracefully", %{ctx: ctx} do
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_bad",
@@ -900,7 +900,7 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit delivers events via PubSub", %{ctx: ctx} do
       execution_id = "exec_emit_pubsub_#{:rand.uniform(100_000)}"
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
@@ -930,7 +930,7 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit masks dispensed secrets before the event leaves the runtime", %{ctx: ctx} do
       execution_id = "exec_emit_mask_#{:rand.uniform(100_000)}"
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
@@ -958,7 +958,7 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit buffers events for replay via since/2", %{ctx: ctx} do
       execution_id = "exec_emit_buffer_#{:rand.uniform(100_000)}"
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
@@ -1005,7 +1005,7 @@ defmodule Opus.FormulaHandlerTest do
         nil
       )
 
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
@@ -1037,7 +1037,7 @@ defmodule Opus.FormulaHandlerTest do
          %{ctx: ctx} do
       root_id = "exec_root_#{:rand.uniform(100_000)}"
       parent_id = "exec_child_#{:rand.uniform(100_000)}"
-      limits = Sanctum.Limits.defaults(:formula)
+      limits = Cyfr.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, parent_id,

@@ -33,9 +33,9 @@ defmodule Compendium.Manifest.Needs do
   @name_re ~r/^[a-z][a-z0-9_-]{0,31}$/
   @type_re ~r/^[a-z_]+:[a-z0-9._-]+$/
   # Needs accept credential kinds and the executable types defined by
-  # Sanctum.ComponentRef.
+  # Cyfr.ComponentRef.
   @credential_kinds ~w(api_key oauth bundle)
-  @kinds @credential_kinds ++ Sanctum.ComponentRef.executable_types()
+  @kinds @credential_kinds ++ Cyfr.ComponentRef.executable_types()
   @entry_keys ~w(type reason fields scopes required)
 
   @type error :: {:invalid_needs, term()}

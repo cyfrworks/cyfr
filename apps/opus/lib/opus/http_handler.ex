@@ -39,7 +39,7 @@ defmodule Opus.HttpHandler do
 
   alias Sanctum.Authority.Blob.Edge
   alias Sanctum.Context
-  alias Sanctum.Limits
+  alias Cyfr.Limits
   alias Opus.EdgeGuard
   alias Opus.HttpRequestValidation
 
@@ -59,7 +59,7 @@ defmodule Opus.HttpHandler do
   ## Parameters
 
   - `edge` - The `Sanctum.Authority.Blob.Edge` to enforce (nil = deny all egress)
-  - `limits` - The node's `Sanctum.Limits` (sizes, timeout)
+  - `limits` - The node's `Cyfr.Limits` (sizes, timeout)
   - `ctx` - The execution `Sanctum.Context`
   - `component_ref` - Component reference string for telemetry/audit
 

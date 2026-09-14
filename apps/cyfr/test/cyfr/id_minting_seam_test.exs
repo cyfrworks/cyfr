@@ -25,12 +25,12 @@ defmodule Cyfr.IdMintingSeamTest do
   @allowed %{
     # The generator's own home: `generate_id/1` composes the prefix around
     # the raw UUID; the moduledoc and a doctest show the raw form.
-    "apps/cyfr/lib/cyfr/uuid7.ex" => 2
+    "apps/cyfr_contracts/lib/cyfr/uuid7.ex" => 2
   }
 
   test "bare UUID minting exists only at the enumerated exceptions" do
     found =
-      for dir <- ~w(apps/cyfr/lib apps/opus/lib apps/locus/lib),
+      for dir <- Cyfr.Test.SourceTree.app_libs(@root),
           file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
           count = length(Regex.scan(@bare_pattern, Cyfr.Test.SourceTree.read(file))),
           count > 0,

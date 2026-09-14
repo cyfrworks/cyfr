@@ -24,7 +24,7 @@ defmodule Opus.EdgeGuardTest do
 
   alias Opus.EdgeGuard
   alias Sanctum.Authority.Blob.Edge
-  alias Sanctum.Limits
+  alias Cyfr.Limits
 
   defp edge(attrs), do: struct!(Edge, attrs)
 

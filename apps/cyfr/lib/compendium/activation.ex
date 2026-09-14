@@ -29,9 +29,9 @@ defmodule Compendium.Activation do
   graph — and so the digest — changes with it.
   """
 
-  alias Sanctum.ComponentRef
+  alias Cyfr.ComponentRef
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   # Mirrors Compendium.DependencyResolver's traversal bound.
   @max_depth 10
@@ -160,7 +160,7 @@ defmodule Compendium.Activation do
     publisher = Compendium.ComponentPath.normalize_publisher(field(component, :publisher))
     name = field(component, :name)
 
-    Sanctum.ComponentRef.build(type, publisher, name)
+    Cyfr.ComponentRef.build(type, publisher, name)
   end
 
   # ============================================================================

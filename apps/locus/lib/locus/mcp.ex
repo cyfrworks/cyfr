@@ -105,9 +105,9 @@ defmodule Locus.MCP do
   # Caller supplies the bytes; no server-side data is exposed.
   # Max base64 input size: 50MB binary ≈ 67MB base64
   # 64 MiB — the shared memory ceiling's spelling
-  # (`Sanctum.Limits.default_max_memory_bytes/0`), reused as the base64
+  # (`Cyfr.Limits.default_max_memory_bytes/0`), reused as the base64
   # input bound so the two cannot drift apart.
-  @max_base64_size Sanctum.Limits.default_max_memory_bytes()
+  @max_base64_size Cyfr.Limits.default_max_memory_bytes()
 
   # Validate stays deliberately public, but decoding and walking up to
   # 48 MiB of WASM is real CPU with no build-slot accounting — so each
@@ -443,7 +443,7 @@ defmodule Locus.MCP do
     # drift. Every later step (source read, version resolution's target,
     # artifact store) uses the local publisher, so a non-local reference
     # must be refused here rather than silently renamespaced.
-    case Sanctum.ComponentRef.parse(reference) do
+    case Cyfr.ComponentRef.parse(reference) do
       {:ok, ref} ->
         case Compendium.NamespacePolicy.require_local_build(ref.namespace) do
           :ok -> {:ok, ref.type, ref.name, ref.version}
@@ -461,7 +461,7 @@ defmodule Locus.MCP do
   defp resolve_version(ctx, reference, _type, _name, nil) do
     case Compendium.Resolver.resolve(ctx, reference) do
       {:ok, resolved_ref, _metadata} ->
-        {:ok, parsed} = Sanctum.ComponentRef.parse(resolved_ref)
+        {:ok, parsed} = Cyfr.ComponentRef.parse(resolved_ref)
         {:ok, parsed.version}
 
       {:error, reason} ->

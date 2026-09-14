@@ -268,14 +268,14 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   defp reason_text(reason) when is_binary(reason), do: reason
-  defp reason_text(reason), do: inspect(Sanctum.Sanitizer.sanitize(reason))
+  defp reason_text(reason), do: inspect(Cyfr.Sanitizer.sanitize(reason))
 
   # ============================================================================
   # Tools List Filtering
   # ============================================================================
 
   defp handle_tools_list_for(tools, component_ref) do
-    case Sanctum.ComponentRef.parse(component_ref) do
+    case Cyfr.ComponentRef.parse(component_ref) do
       {:ok, %{type: "formula"}} ->
         filtered = Cyfr.Ops.Catalog.in_chain_view(tools)
         {:ok, %{tools: filtered, component_ref: component_ref, filtered: true}}

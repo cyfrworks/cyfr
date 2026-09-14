@@ -41,7 +41,7 @@ defmodule Cyfr.Ops.LiteralDriftTest do
           do: {Path.relative_to(file, @root), "#{tool}.#{action}"}
 
     ex_pairs =
-      for dir <- ~w(apps/cyfr/lib apps/opus/lib apps/locus/lib),
+      for dir <- Cyfr.Test.SourceTree.app_libs(@root),
           file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
           [_, tool, action] <- Regex.scan(@ex_call, Cyfr.Test.SourceTree.read(file)),
           do: {Path.relative_to(file, @root), "#{tool}.#{action}"}

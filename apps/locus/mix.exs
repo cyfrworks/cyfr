@@ -41,10 +41,10 @@ defmodule Locus.MixProject do
       {:plug, "~> 1.16"},
       {:bandit, "~> 1.5"},
       {:req, "~> 0.5"},
+      {:cyfr_contracts, in_umbrella: true},
       # runtime: false so the `builder` release can start :locus with the
-      # cyfr app LOADED but not STARTED — the builder needs cyfr's pure
-      # modules (PathSafety, Digest, LoggerContext, WasmValidator,
-      # Scaffold, WITSource, Sanctum.Limits), never its supervision tree.
+      # cyfr app LOADED but not STARTED — the builder needs cyfr's
+      # LoggerContext and Scaffold template, never its supervision tree.
       # The cyfr release starts :cyfr explicitly, and its ordering in the
       # root mix.exs is what guarantees :cyfr boots first there — OTP has
       # no edge for it. The one locus module that DOES need the started

@@ -515,7 +515,7 @@ defmodule Compendium.Registry do
   first (see `get_latest/4`).
 
   When looking up by namespace.name:version reference, pass the name and version
-  extracted by `Sanctum.ComponentRef.parse/1`. Optionally pass a publisher and
+  extracted by `Cyfr.ComponentRef.parse/1`. Optionally pass a publisher and
   component_type to disambiguate.
   """
   def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
@@ -1145,7 +1145,7 @@ defmodule Compendium.Registry do
     version = component[:version]
 
     ref =
-      Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+      Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
         type: type,
         namespace: publisher,
         name: name,
@@ -1237,14 +1237,14 @@ defmodule Compendium.Registry do
   defp validate_publish_origin(_publisher, _origin), do: :ok
 
   defp validate_name(name) do
-    case Sanctum.ComponentRef.validate_name(name) do
+    case Cyfr.ComponentRef.validate_name(name) do
       :ok -> :ok
       {:error, msg} -> {:error, {:invalid_name, msg}}
     end
   end
 
   defp validate_version(version) do
-    case Sanctum.ComponentRef.validate_version(version) do
+    case Cyfr.ComponentRef.validate_version(version) do
       :ok -> :ok
       {:error, msg} -> {:error, {:invalid_version, msg}}
     end
@@ -1256,7 +1256,7 @@ defmodule Compendium.Registry do
   Component-identity rules live here, with the registry (the component domain) —
   not in the Arca storage layer, which persists already-validated bytes. Checks
   that name/version/component_type/publisher are present and each passes its
-  `Sanctum.ComponentRef` field validator. Returns `:ok` or `{:error, reason}`.
+  `Cyfr.ComponentRef` field validator. Returns `:ok` or `{:error, reason}`.
   """
   @spec validate_attrs(map()) :: :ok | {:error, term()}
   def validate_attrs(attrs) when is_map(attrs) do
@@ -1264,10 +1264,10 @@ defmodule Compendium.Registry do
          {:ok, version} <- require_field(attrs, :version),
          {:ok, type} <- require_field(attrs, :component_type),
          {:ok, publisher} <- require_field(attrs, :publisher),
-         :ok <- Sanctum.ComponentRef.validate_name(name),
-         :ok <- Sanctum.ComponentRef.validate_version(version),
-         :ok <- Sanctum.ComponentRef.validate_type(type),
-         :ok <- Sanctum.ComponentRef.validate_publisher(publisher) do
+         :ok <- Cyfr.ComponentRef.validate_name(name),
+         :ok <- Cyfr.ComponentRef.validate_version(version),
+         :ok <- Cyfr.ComponentRef.validate_type(type),
+         :ok <- Cyfr.ComponentRef.validate_publisher(publisher) do
       :ok
     end
   end

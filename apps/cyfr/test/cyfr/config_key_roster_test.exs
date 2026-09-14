@@ -82,8 +82,8 @@ defmodule Cyfr.ConfigKeyRosterTest do
   # `Application.get_env/fetch_env/compile_env` on `:cyfr`, ignoring
   # comments so a key named in prose is not mistaken for a read.
   defp keys_read do
-    for glob <- ["apps/cyfr/lib/**/*.ex", "apps/opus/lib/**/*.ex", "apps/locus/lib/**/*.ex"],
-        path <- Path.wildcard(Path.join(root(), glob)),
+    for lib <- Cyfr.Test.SourceTree.app_libs(root()),
+        path <- Path.wildcard(Path.join([root(), lib, "**/*.ex"])),
         source = Cyfr.Test.SourceTree.read(path),
         code = source |> Cyfr.Test.CodeLines.lines() |> Enum.join("\n"),
         [_, key] <-

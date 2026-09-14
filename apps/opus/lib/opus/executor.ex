@@ -391,7 +391,7 @@ defmodule Opus.Executor do
 
     # An unparseable consented timeout fails the execution rather than
     # substituting a default — a fallback here would silently run the node
-    # under a ceiling nobody consented to (mirrors Sanctum.Limits.new/1).
+    # under a ceiling nobody consented to (mirrors Cyfr.Limits.new/1).
     with {:ok, timeout_ms} <- node_timeout_ms(limits, p.component_ref),
          exec_opts = [
            component_type: p.component_type,
@@ -423,7 +423,7 @@ defmodule Opus.Executor do
   end
 
   defp node_timeout_ms(limits, component_ref) do
-    case Sanctum.Limits.timeout_ms(limits) do
+    case Cyfr.Limits.timeout_ms(limits) do
       {:ok, ms} -> {:ok, ms}
       {:error, reason} -> {:error, "invalid consented timeout for #{component_ref}: #{reason}"}
     end
@@ -697,7 +697,7 @@ defmodule Opus.Executor do
   defp check_response_size(p, masked_output) do
     # Limits ride exec_opts from enforce_authority; their absence here means
     # the pipeline was bypassed — refuse rather than substitute a ceiling.
-    %Sanctum.Limits{max_response_size: max_response} = Keyword.fetch!(p.exec_opts, :limits)
+    %Cyfr.Limits{max_response_size: max_response} = Keyword.fetch!(p.exec_opts, :limits)
 
     case Jason.encode(masked_output) do
       {:ok, output_json} ->
@@ -836,7 +836,7 @@ defmodule Opus.Executor do
   # Returns {:ok, encoded_json} on success so callers can reuse the encoded form.
   defp validate_input_size(input, exec_opts, ctx, component_ref) do
     # Same posture as check_response_size: no limits, no execution.
-    %Sanctum.Limits{max_request_size: max_size} = Keyword.fetch!(exec_opts, :limits)
+    %Cyfr.Limits{max_request_size: max_size} = Keyword.fetch!(exec_opts, :limits)
 
     case Jason.encode(input) do
       {:ok, input_json} ->
@@ -883,7 +883,7 @@ defmodule Opus.Executor do
   # The authority variant never re-resolves: the blob's node limits are the
   # policy. The limiter keys on {athanor, ref} either way, so buckets are
   # continuous across the cutover.
-  defp check_authority_rate_limit(ctx, component_ref, %Sanctum.Limits{} = limits) do
+  defp check_authority_rate_limit(ctx, component_ref, %Cyfr.Limits{} = limits) do
     case check_rate_limit(ctx, component_ref, limits) do
       {:ok, _remaining} ->
         :ok
@@ -905,7 +905,7 @@ defmodule Opus.Executor do
   # enforceable, so unavailability denies rather than silently allowing
   # unbounded requests. Every denial is audited here, after the try/catch,
   # keeping the audit write's own failures out of the fail-closed handling.
-  defp check_rate_limit(ctx, component_ref, %Sanctum.Limits{} = limits) do
+  defp check_rate_limit(ctx, component_ref, %Cyfr.Limits{} = limits) do
     result =
       try do
         Opus.RateLimiter.check(ctx.athanor_id, component_ref, %{
@@ -1619,7 +1619,7 @@ defmodule Opus.Executor do
       nil ->
         nil
 
-      %Sanctum.Limits{} = limits ->
+      %Cyfr.Limits{} = limits ->
         edge = Keyword.get(exec_opts, :edge)
 
         %{

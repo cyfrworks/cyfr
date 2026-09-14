@@ -37,14 +37,9 @@ defmodule Cyfr.SanctumSurfacesTest do
     # with on first read has to be there before the turn roots an
     # authority in it. The tool keeps the same hook for readers outside
     # the harness.
-    # `Sanctum.JCS` is the canonical form a card's proposal is digested in
-    # (`Aqua.Loop.Policy.proposal_digest/1`) — the same canon the consent
-    # digests use, so a decision consumes exactly what was shown.
-    # `Sanctum.Limits` is the loop's deadline: the timeout the authority's
-    # consented node limits carry, parsed once per turn.
     "aqua" => ~w(
-      Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.JCS
-      Sanctum.Limits Sanctum.Notify Sanctum.Provisioning Sanctum.Sanitizer Sanctum.Tenancy
+      Sanctum.Authority Sanctum.Context Sanctum.Notify Sanctum.Provisioning
+      Sanctum.Tenancy
     ),
     # `Sanctum.Provisioning` is `Compendium.MCP.AquaTool` and
     # `ComponentTool`'s list action alone — the first-need hook. A group
@@ -53,45 +48,34 @@ defmodule Cyfr.SanctumSurfacesTest do
     # a DM must not wait on a registry round trip that can fail. These two
     # tools ARE the bundle's readers, so the hook lives where the read is
     # rather than in every caller that might trigger one.
-    # `Sanctum.Limits` is here for `Compendium.Manifest.Caps` alone: a
-    # manifest's `limits` block is that module's vocabulary, and the caps
-    # reader matches the keys against its closed field list rather than
-    # trusting `String.to_existing_atom/1` to find atoms some other module
-    # happened to load first.
     "compendium" => ~w(
-      Sanctum.Cipher Sanctum.CipherAAD Sanctum.ComponentRef Sanctum.Consent
-      Sanctum.Context Sanctum.JCS Sanctum.Limits Sanctum.Namespace
-      Sanctum.Provisioning Sanctum.Sanitizer Sanctum.SignIn Sanctum.ToolPattern
-      Sanctum.VaultReader
+      Sanctum.Cipher Sanctum.CipherAAD Sanctum.Consent Sanctum.Context
+      Sanctum.Namespace Sanctum.Provisioning Sanctum.SignIn Sanctum.VaultReader
     ),
     # Cyfr.Release uses Sanctum.Cipher for key rotation. Cyfr.Ops uses
     # consent classes, chain authority, authorization rendering, and
     # the Sanctum.Catalog port.
     "cyfr" => ~w(
-      Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cidr
-      Sanctum.Cipher Sanctum.Consent Sanctum.Context
-      Sanctum.Door Sanctum.Notify
-      Sanctum.OAuth
-      Sanctum.Provisioning Sanctum.ProvisioningRegistry Sanctum.ProvisioningSupervisor
-      Sanctum.PubSub
-      Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy Sanctum.ToolServerDigest
-      Sanctum.Unauthorized Sanctum.UnauthorizedError
+      Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
+      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth
+      Sanctum.Provisioning Sanctum.ProvisioningRegistry
+      Sanctum.ProvisioningSupervisor Sanctum.PubSub Sanctum.Session
+      Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
+      Sanctum.UnauthorizedError
     ),
     # Aqua.Notes resolves personal notes through users.personal_athanor_id.
     "emissary" => ~w(
-      Sanctum.ComponentRef Sanctum.Context Sanctum.Sanitizer Sanctum.ToolPattern
-      Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.VaultReader
+      Sanctum.Context Sanctum.ToolServerDigest Sanctum.Unauthorized
+      Sanctum.VaultReader
     ),
     "emissary_web" => ~w(
       Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
-      Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Limits
-      Sanctum.Sanitizer Sanctum.Session Sanctum.SignIn
+      Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Session Sanctum.SignIn
       Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.TinctureAuth
-      Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault
-      Sanctum.Webhook
+      Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Webhook
     ),
     "prism" => ~w(
-      Sanctum.Context Sanctum.Notify Sanctum.Sanitizer Sanctum.Tenancy
+      Sanctum.Context Sanctum.Notify Sanctum.Tenancy
     ),
     # `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` alone,
     # and it is here for the same reason `emissary_web` has it: the console
@@ -102,10 +86,9 @@ defmodule Cyfr.SanctumSurfacesTest do
     # (`LoginLive`, `RegistryLive`). Assembling `connect_info` is a web
     # concern; the hop rules stay in the auth domain, spelled once.
     "prism_web" => ~w(
-      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp
-      Sanctum.ComponentRef Sanctum.Consent Sanctum.Context Sanctum.Door
-      Sanctum.Notify Sanctum.Session Sanctum.SignIn Sanctum.Tenancy
-      Sanctum.TinctureAuth Sanctum.Webhook
+      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
+      Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.Session Sanctum.SignIn
+      Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Webhook
     )
   }
 

@@ -17,6 +17,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   use ExUnit.Case, async: true
 
   @engine_libs [
+    "apps/cyfr_contracts/lib",
     "apps/opus/lib",
     "apps/locus/lib",
     # The domain inside cyfr holds the same rule: storage, components and
@@ -40,7 +41,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   # layer, and an engine that names it has taken the browser surface as a
   # dependency. Scoped to apps/opus and apps/locus only; inside cyfr the
   # domain namespaces are held to the written-down roster below.
-  @engine_apps ["apps/opus/lib", "apps/locus/lib"]
+  @engine_apps ["apps/cyfr_contracts/lib", "apps/opus/lib", "apps/locus/lib"]
   @forbidden_web_from_engine_apps ~r/\bEmissaryWeb\.[A-Z]/
 
   defp root, do: Path.expand("../../../..", __DIR__)
@@ -162,7 +163,7 @@ defmodule Cyfr.NamespaceDirectionTest do
 
   test "the shared primitives live in the glue namespace" do
     assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/bus.ex"))
-    assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/uuid7.ex"))
+    assert File.exists?(Path.join(root(), "apps/cyfr_contracts/lib/cyfr/uuid7.ex"))
 
     refute File.exists?(Path.join(root(), "apps/cyfr/lib/prism/topics.ex")),
            "Cyfr.Bus moved out of the console namespace; it must not come back"

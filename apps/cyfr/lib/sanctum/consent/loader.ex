@@ -41,9 +41,9 @@ defmodule Sanctum.Consent.Loader do
   alias Sanctum.Authority.Blob
   alias Sanctum.Consent.Loader.Decision
   alias Sanctum.Consent.Source
-  alias Sanctum.ComponentRef
+  alias Cyfr.ComponentRef
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   @type load_error ::
           Sanctum.Consent.error()

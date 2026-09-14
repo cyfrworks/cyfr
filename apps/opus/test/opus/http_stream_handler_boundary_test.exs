@@ -23,7 +23,7 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
     {imports, exec_ref} =
       HttpStreamHandler.build_stream_imports(
         nil,
-        Sanctum.Limits.defaults(:catalyst),
+        Cyfr.Limits.defaults(:catalyst),
         Sanctum.TestContext.local(),
         "catalyst:local.streamer:0.1.0"
       )

@@ -1,25 +1,23 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.ComponentRefGrammarTest do
+defmodule Cyfr.ComponentRefGrammarTest do
   @moduledoc """
   Checks construction uses the shared type:namespace.name grammar
   with an optional :version suffix.
 
-  `Sanctum.ComponentRef.build/4` is the one author now. This test keeps it
+  `Cyfr.ComponentRef.build/4` is the one author now. This test keeps it
   that way, and pins the grammar it produces.
   """
 
   use ExUnit.Case, async: true
 
-  alias Sanctum.ComponentRef
+  alias Cyfr.ComponentRef
 
   # The shape a hand-spelled ref takes: a literal type prefix, a colon, an
   # interpolation, a dot, an interpolation. Anything matching this is a
   # second author of the grammar.
   @hand_spelled ~r/"[a-z_]*:#\{[^}]+\}\.#\{/
-
-  @searched ~w(apps/cyfr/lib apps/opus/lib apps/locus/lib)
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -47,7 +45,8 @@ defmodule Sanctum.ComponentRefGrammarTest do
 
   test "nothing else spells the grammar" do
     offenders =
-      @searched
+      root()
+      |> Cyfr.Test.SourceTree.app_libs()
       |> Enum.flat_map(&Path.wildcard(Path.join([root(), &1, "**/*.ex"])))
       |> Enum.reject(&String.ends_with?(&1, "component_ref.ex"))
       |> Enum.flat_map(fn path ->
@@ -68,7 +67,7 @@ defmodule Sanctum.ComponentRefGrammarTest do
 
            #{Enum.map_join(offenders, "\n", &"  #{&1}")}
 
-           Use `Sanctum.ComponentRef.build/4` so the one place that knows a
+           Use `Cyfr.ComponentRef.build/4` so the one place that knows a
            ref is `type:namespace.name` stays one place.
            """
   end

@@ -156,7 +156,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
                Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["guest/"]}}})
     end
 
-    test "limits carry the Sanctum.Limits vocabulary with strict durations" do
+    test "limits carry the Cyfr.Limits vocabulary with strict durations" do
       assert {:error, {:invalid_caps, {:invalid_limit, "timeout", "5min"}}} =
                Caps.validate(%{"caps" => %{"limits" => %{"timeout" => "5min"}}})
 
@@ -277,7 +277,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
     end
   end
 
-  describe "the limits roster stays bound to Sanctum.Limits" do
+  describe "the limits roster stays bound to Cyfr.Limits" do
     test "Caps admits exactly the fields Limits clamps" do
       # Caps holds a string-keyed copy (the manifest is JSON; Caps is
       # Apache, Limits is FSL) — this pin is what makes the copy safe. A
@@ -287,7 +287,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
         Enum.sort(~w(max_memory_bytes max_request_size max_response_size
                      max_concurrent_tasks timeout batch_timeout rate_limit))
 
-      limits_roster = Sanctum.Limits.fields() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+      limits_roster = Cyfr.Limits.fields() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
 
       assert caps_roster == limits_roster
     end
@@ -310,7 +310,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
 
         result = Caps.validate(manifest)
 
-        limits_ok? = match?({:ok, _}, Sanctum.Limits.parse_duration(value))
+        limits_ok? = match?({:ok, _}, Cyfr.Limits.parse_duration(value))
 
         assert result == :ok == ok?,
                "Caps disagrees on #{inspect(value)}: got #{inspect(result)}"

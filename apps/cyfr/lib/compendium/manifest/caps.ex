@@ -24,15 +24,15 @@ defmodule Compendium.Manifest.Caps do
       }
 
   Closed vocabulary at every level; everything optional. `tools` speaks
-  the `Sanctum.ToolPattern` grammar and is expanded at consent time.
-  `limits` carries the `Sanctum.Limits` field names — suggestions under
+  the `Cyfr.ToolPattern` grammar and is expanded at consent time.
+  `limits` carries the `Cyfr.Limits` field names — suggestions under
   the platform ceiling, operator-adjustable at commit. `schemes` absent
   means `["https"]` at consent.
   """
 
   @egress_keys ~w(domains methods schemes private_ips)
   @storage_keys ~w(paths actions)
-  # String-keyed spellings of `Sanctum.Limits.fields/0` — the manifest is
+  # String-keyed spellings of `Cyfr.Limits.fields/0` — the manifest is
   # JSON and this module is Apache while Limits is FSL, so the copy stays,
   # but a pin test (`manifest_needs_caps_test.exs`) binds the two: a new
   # clamped limit that this roster does not admit would be refused at
@@ -40,7 +40,7 @@ defmodule Compendium.Manifest.Caps do
   @limit_int_keys ~w(max_memory_bytes max_request_size max_response_size max_concurrent_tasks)
   @limit_duration_keys ~w(timeout batch_timeout)
   # Accept unit-suffixed durations or bare integer seconds, matching
-  # Sanctum.Limits.parse_duration/1. Anchor the whole input to reject newlines.
+  # Cyfr.Limits.parse_duration/1. Anchor the whole input to reject newlines.
   @duration_re ~r/\A\d+(ms|s|m|h)?\z/
 
   @type error :: {:invalid_caps, term()}
@@ -153,7 +153,7 @@ defmodule Compendium.Manifest.Caps do
   defp validate_tools(nil), do: :ok
 
   defp validate_tools(tools) when is_list(tools) do
-    case Enum.find(tools, &(not Sanctum.ToolPattern.valid?(&1))) do
+    case Enum.find(tools, &(not Cyfr.ToolPattern.valid?(&1))) do
       nil -> :ok
       bad -> {:error, {:invalid_caps, {:invalid_tool_pattern, bad}}}
     end
@@ -233,7 +233,7 @@ defmodule Compendium.Manifest.Caps do
   defp string_set(nil), do: []
   defp string_set(list) when is_list(list), do: list |> Enum.uniq() |> Enum.sort()
 
-  # The limit keys are `Sanctum.Limits`' closed vocabulary, matched by
+  # The limit keys are `Cyfr.Limits`' closed vocabulary, matched by
   # name — never `String.to_existing_atom/1`, which only answers once the
   # module that owns the atom has happened to be loaded.
   defp normalize_limits(limits) do
@@ -247,7 +247,7 @@ defmodule Compendium.Manifest.Caps do
   end
 
   defp limit_key(key) when is_binary(key) do
-    Enum.find(Sanctum.Limits.fields(), &(Atom.to_string(&1) == key)) ||
+    Enum.find(Cyfr.Limits.fields(), &(Atom.to_string(&1) == key)) ||
       raise ArgumentError, "unknown limit #{inspect(key)}"
   end
 end

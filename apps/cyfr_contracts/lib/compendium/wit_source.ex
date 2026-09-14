@@ -20,7 +20,7 @@ defmodule Compendium.WITSource do
   # + File.read! calls below run only at module compilation; runtime never
   # touches the filesystem for WIT.
   wit_entries =
-    for type <- Sanctum.ComponentRef.executable_types() do
+    for type <- Cyfr.ComponentRef.executable_types() do
       type_dir = Path.join(@wit_root, type)
 
       # arca:bypass-ok=C — compile-time embed of the tracked wit/ tree.

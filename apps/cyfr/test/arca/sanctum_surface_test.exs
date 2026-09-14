@@ -21,19 +21,15 @@ defmodule Arca.SanctumSurfaceTest do
 
   # The Sanctum namespaces lib/arca reaches into IN CODE (doc prose
   # mentions many more — the filter below is what keeps this list honest),
-  # and why each is here. Narrower than it reads from a raw grep: eight
-  # namespaces, mostly vocabulary.
+  # and why each is here. Narrower than it reads from a raw grep, and mostly vocabulary.
   @surface [
     # The tenancy carrier and its resolution — the reason the cycle
     # exists at all: every scoped read and stamped write names it.
     "Sanctum.Context",
     "Sanctum.Tenancy",
 
-    # Vocabulary and limits that travel with rows.
+    # Vocabulary that travels with rows.
     "Sanctum.Atoms",
-    "Sanctum.ComponentRef",
-    "Sanctum.Limits",
-    "Sanctum.Sanitizer",
 
     # The one genuine domain-logic reach: the webhook signature header's
     # default is the domain's to name.

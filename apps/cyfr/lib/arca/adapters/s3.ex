@@ -106,7 +106,7 @@ defmodule Arca.Adapters.S3 do
     with {:ok, existing} <- read_for_append(ctx, segments) do
       merged = existing <> content
 
-      if byte_size(merged) > Sanctum.Limits.default_max_response_size() do
+      if byte_size(merged) > Cyfr.Limits.default_max_response_size() do
         {:error, :object_too_large}
       else
         put(ctx, segments, merged)

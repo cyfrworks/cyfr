@@ -31,7 +31,7 @@ defmodule Sanctum.Consent.Commit do
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Consent.Source
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
   alias Sanctum.VaultReader
 
   @type decisions :: %{
@@ -389,7 +389,7 @@ defmodule Sanctum.Consent.Commit do
       {:ok,
        requested
        |> Enum.filter(fn pattern ->
-         is_binary(pattern) and Sanctum.ToolPattern.valid?(pattern) and
+         is_binary(pattern) and Cyfr.ToolPattern.valid?(pattern) and
            covered_by_config?(pattern, config)
        end)
        |> Enum.uniq()
@@ -526,7 +526,7 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp node_manifest(ctx, node_key) do
-    with {:ok, ref} <- Sanctum.ComponentRef.parse(node_key),
+    with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
          {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       {:ok, Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
     end
@@ -1214,7 +1214,7 @@ defmodule Sanctum.Consent.Commit do
 
   defp render_limits(nil), do: []
 
-  defp render_limits(%Sanctum.Limits{} = limits) do
+  defp render_limits(%Cyfr.Limits{} = limits) do
     rate =
       case limits.rate_limit do
         %{requests: requests, window: window} -> "#{requests}/#{window}"

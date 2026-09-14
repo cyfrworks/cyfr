@@ -520,7 +520,7 @@ defmodule Locus.Builder do
 
   @max_output_files 500
   # The shared 64 MiB ceiling — the same bound the base64 ingress uses.
-  @max_output_total_bytes Sanctum.Limits.default_max_memory_bytes()
+  @max_output_total_bytes Cyfr.Limits.default_max_memory_bytes()
 
   defp check_output_count(paths) when length(paths) > @max_output_files,
     do:

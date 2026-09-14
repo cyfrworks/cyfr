@@ -744,13 +744,13 @@ defmodule PrismWeb.RegistryLive do
   defp reference_of(c) do
     # cyfr.run's /v1/components response uses `component_type` (full word:
     # catalyst / reagent / formula / tincture). That's also the canonical
-    # type prefix accepted by `Sanctum.ComponentRef.parse/1` — use it
+    # type prefix accepted by `Cyfr.ComponentRef.parse/1` — use it
     # directly with no remapping.
     t = cf(c, "component_type") || "catalyst"
     ns = c["_namespace"] || cf(c, "namespace_slug") || ""
     n = cf(c, "name") || ""
     v = cf(c, "version") || ""
-    Sanctum.ComponentRef.build(t, ns, n, v)
+    Cyfr.ComponentRef.build(t, ns, n, v)
   end
 
   defp badge_class(c) do

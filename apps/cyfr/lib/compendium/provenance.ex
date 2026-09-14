@@ -226,7 +226,7 @@ defmodule Compendium.Provenance do
           | nil
   def upstream_status(%Context{} = ctx, component) do
     with forked when is_binary(forked) <- forked_from(component),
-         {:ok, %Sanctum.ComponentRef{} = cref} <- Sanctum.ComponentRef.parse(forked),
+         {:ok, %Cyfr.ComponentRef{} = cref} <- Cyfr.ComponentRef.parse(forked),
          {:ok, rows} <-
            Arca.ComponentStorage.list_components(ctx,
              name: cref.name,

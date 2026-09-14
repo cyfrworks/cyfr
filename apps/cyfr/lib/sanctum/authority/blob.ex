@@ -21,8 +21,8 @@ defmodule Sanctum.Authority.Blob do
   built.
   """
 
-  alias Sanctum.ComponentRef
-  alias Sanctum.Limits
+  alias Cyfr.ComponentRef
+  alias Cyfr.Limits
 
   defmodule Edge do
     @moduledoc """
@@ -87,7 +87,7 @@ defmodule Sanctum.Authority.Blob do
     @moduledoc false
 
     @type t :: %__MODULE__{
-            limits: Sanctum.Limits.t(),
+            limits: Cyfr.Limits.t(),
             edges: %{optional(String.t()) => Sanctum.Authority.Blob.Edge.t()}
           }
 
@@ -142,7 +142,7 @@ defmodule Sanctum.Authority.Blob do
       {:ok, other} ->
         {:error,
          {:invalid_structure, "",
-          "must be an object, got: #{inspect(Sanctum.Sanitizer.sanitize(other))}"}}
+          "must be an object, got: #{inspect(Cyfr.Sanitizer.sanitize(other))}"}}
 
       {:error, err} ->
         {:error, {:invalid_json, err}}
@@ -555,7 +555,7 @@ defmodule Sanctum.Authority.Blob do
   end
 
   defp validate_resource(_kind, raw),
-    do: {:error, "unexpected shape: #{inspect(Sanctum.Sanitizer.sanitize(raw))}"}
+    do: {:error, "unexpected shape: #{inspect(Cyfr.Sanitizer.sanitize(raw))}"}
 
   defp validate_lender(nil), do: {:ok, nil}
 
@@ -596,11 +596,10 @@ defmodule Sanctum.Authority.Blob do
   end
 
   defp validate_tool_server(raw),
-    do:
-      {:error, "tool server must be an object, got: #{inspect(Sanctum.Sanitizer.sanitize(raw))}"}
+    do: {:error, "tool server must be an object, got: #{inspect(Cyfr.Sanitizer.sanitize(raw))}"}
 
   defp validate_tool_patterns(patterns) do
-    case Enum.reject(patterns, &Sanctum.ToolPattern.valid?/1) do
+    case Enum.reject(patterns, &Cyfr.ToolPattern.valid?/1) do
       [] -> :ok
       bad -> {:error, "invalid tool patterns: #{inspect(bad)}"}
     end
@@ -617,7 +616,7 @@ defmodule Sanctum.Authority.Blob do
   end
 
   defp validate_projection(raw),
-    do: {:error, "projection must be an object, got: #{inspect(Sanctum.Sanitizer.sanitize(raw))}"}
+    do: {:error, "projection must be an object, got: #{inspect(Cyfr.Sanitizer.sanitize(raw))}"}
 
   defp string_list_resource(raw, keys) do
     with :ok <- keys_or_reason(raw, Enum.map(keys, &elem(&1, 0))) do

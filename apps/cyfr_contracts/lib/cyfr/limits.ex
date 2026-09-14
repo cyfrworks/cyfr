@@ -1,21 +1,21 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Limits do
+defmodule Cyfr.Limits do
   @moduledoc """
   The resolved numeric limits for one node of a consented execution graph.
 
-  Carries exactly the seven fields `Sanctum.Policy.Ceiling` clamps — and
+  Carries exactly the seven fields `Cyfr.Limits.Ceiling` clamps — and
   nothing else. Instances live inside a resolved policy blob (one per node)
   and are clamped against the platform ceiling once, when an Authority is
   built, never at use time. The field set is locked to
-  `Sanctum.Policy.Ceiling.clamped_fields/0` by test so the two cannot drift.
+  `Cyfr.Limits.Ceiling.clamped_fields/0` by test so the two cannot drift.
 
   Durations are strings (`"30s"`, `"5m"`); parse on demand with
   `timeout_ms/1` / `batch_timeout_ms/1` or `parse_duration/1`.
 
   ## Examples
 
-      iex> {:ok, limits} = Sanctum.Limits.new(%{
+      iex> {:ok, limits} = Cyfr.Limits.new(%{
       ...>   "timeout" => "30s",
       ...>   "max_memory_bytes" => 67_108_864,
       ...>   "max_request_size" => 1_048_576,
@@ -29,7 +29,7 @@ defmodule Sanctum.Limits do
       iex> limits.rate_limit
       %{requests: 100, window: "1m"}
 
-      iex> Sanctum.Limits.new(%{"timeout" => "30s"})
+      iex> Cyfr.Limits.new(%{"timeout" => "30s"})
       {:error, {:invalid_limit, :batch_timeout, "is required"}}
 
   """
@@ -68,7 +68,7 @@ defmodule Sanctum.Limits do
   @doc """
   The seven limit field names, sorted.
 
-  Locked to `Sanctum.Policy.Ceiling.clamped_fields/0` by test.
+  Locked to `Cyfr.Limits.Ceiling.clamped_fields/0` by test.
   """
   @spec fields() :: [atom()]
   def fields, do: @fields
@@ -165,7 +165,7 @@ defmodule Sanctum.Limits do
   end
 
   @doc """
-  Build a `%Sanctum.Limits{}` from an atom- or string-keyed map.
+  Build a `%Cyfr.Limits{}` from an atom- or string-keyed map.
 
   Fail-closed allowlist parsing: every one of the seven fields is required,
   unknown keys are rejected, numerics must be non-negative integers (no
@@ -185,8 +185,7 @@ defmodule Sanctum.Limits do
 
   def new(other) do
     {:error,
-     {:invalid_limit, :input,
-      "expected a map, got: #{inspect(Sanctum.Sanitizer.sanitize(other))}"}}
+     {:invalid_limit, :input, "expected a map, got: #{inspect(Cyfr.Sanitizer.sanitize(other))}"}}
   end
 
   @doc """
@@ -228,10 +227,10 @@ defmodule Sanctum.Limits do
 
   ## Examples
 
-      iex> Sanctum.Limits.parse_duration("30s")
+      iex> Cyfr.Limits.parse_duration("30s")
       {:ok, 30_000}
 
-      iex> Sanctum.Limits.parse_duration("5m")
+      iex> Cyfr.Limits.parse_duration("5m")
       {:ok, 300_000}
 
   """
@@ -281,12 +280,12 @@ defmodule Sanctum.Limits do
   end
 
   @doc """
-  Clamp against a ceiling map. Delegates to `Sanctum.Policy.Ceiling.clamp/2`
+  Clamp against a ceiling map. Delegates to `Cyfr.Limits.Ceiling.clamp/2`
   so there is exactly one clamping implementation.
   """
   @spec clamp(t(), map()) :: t()
   def clamp(%__MODULE__{} = limits, ceiling) when is_map(ceiling) do
-    Sanctum.Policy.Ceiling.clamp(limits, ceiling)
+    Cyfr.Limits.Ceiling.clamp(limits, ceiling)
   end
 
   # ============================================================================
@@ -360,7 +359,7 @@ defmodule Sanctum.Limits do
       map_size(value) != 2 ->
         {:error,
          "must have exactly requests and window, got: " <>
-           inspect(Sanctum.Sanitizer.sanitize(value))}
+           inspect(Cyfr.Sanitizer.sanitize(value))}
 
       not (is_integer(requests) and requests >= 0) ->
         {:error, "requests must be a non-negative integer, got: #{inspect(requests)}"}

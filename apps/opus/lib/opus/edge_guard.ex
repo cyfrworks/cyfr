@@ -6,7 +6,7 @@ defmodule Opus.EdgeGuard do
   Resource checks over a consent edge, shared by every WASI host handler.
 
   An execution's capability is the `%Sanctum.Authority.Blob.Edge{}` it runs
-  under plus the node's `%Sanctum.Limits{}`. This module is the single home
+  under plus the node's `%Cyfr.Limits{}`. This module is the single home
   for matching a concrete request against that edge — domains, schemes,
   methods, private IPs, storage paths and actions — and for the request /
   response size checks against the limits.
@@ -26,7 +26,7 @@ defmodule Opus.EdgeGuard do
   """
 
   alias Sanctum.Authority.Blob.Edge
-  alias Sanctum.Limits
+  alias Cyfr.Limits
 
   @type edge :: Edge.t() | nil
 
@@ -129,7 +129,7 @@ defmodule Opus.EdgeGuard do
         false
 
       entries ->
-        if Sanctum.Cidr.link_local?(ip_tuple) do
+        if Cyfr.Cidr.link_local?(ip_tuple) do
           false
         else
           ip_string = :inet.ntoa(ip_tuple) |> to_string()
@@ -281,10 +281,10 @@ defmodule Opus.EdgeGuard do
   end
 
   # Exact-IP entries compare against the canonical ntoa string; CIDR entries
-  # delegate to the Sanctum.Cidr SSOT (IPv4 + IPv6).
+  # delegate to the Cyfr.Cidr SSOT (IPv4 + IPv6).
   defp ip_entry_matches?(entry, ip_tuple, ip_string) do
     if String.contains?(entry, "/") do
-      Sanctum.Cidr.ip_in_cidr?(ip_tuple, entry)
+      Cyfr.Cidr.ip_in_cidr?(ip_tuple, entry)
     else
       entry == ip_string
     end

@@ -15,7 +15,7 @@ import (
 // validateTincturePublisher rejects obviously invalid publisher slugs (e.g. a
 // leading '@', uppercase, or illegal characters) before the MCP call. The
 // server enforces the same rules; this early check gives the user a clearer
-// inline error without a round-trip. Mirrors Sanctum.ComponentRef.validate_namespace/1.
+// inline error without a round-trip. Mirrors Cyfr.ComponentRef.validate_namespace/1.
 func validateTincturePublisher(slug string) error {
 	if err := ref.ValidateNamespace(slug); err != nil {
 		return fmt.Errorf("Invalid publisher %q: %w", slug, err)

@@ -392,7 +392,7 @@ defmodule Sanctum.Authority.Transition do
   def external_tool_granted?(%Authority{resources: %{tool_servers: servers}}, digest, tool)
       when is_list(servers) do
     case Enum.find(servers, &(&1.server_digest == digest)) do
-      %{tool_patterns: patterns} -> Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool))
+      %{tool_patterns: patterns} -> Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, tool))
       nil -> false
     end
   end

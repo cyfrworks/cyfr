@@ -315,7 +315,7 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp deadline_ms(%Authority{} = authority) do
-    case Sanctum.Limits.timeout_ms(Authority.limits(authority)) do
+    case Cyfr.Limits.timeout_ms(Authority.limits(authority)) do
       {:ok, ms} when ms > 0 -> ms
       _ -> @default_deadline_ms
     end

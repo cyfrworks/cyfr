@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.JCS do
+defmodule Cyfr.JCS do
   @moduledoc """
   Canonical JSON (RFC 8785) over a deliberately restricted domain — the one
   canonicalizer behind every security digest in the system.
@@ -32,13 +32,13 @@ defmodule Sanctum.JCS do
 
   ## Examples
 
-      iex> Sanctum.JCS.encode(%{"b" => 1, "a" => [true, "x"]})
+      iex> Cyfr.JCS.encode(%{"b" => 1, "a" => [true, "x"]})
       {:ok, ~s({"a":[true,"x"],"b":1})}
 
-      iex> Sanctum.JCS.encode(%{"n" => 1.5})
+      iex> Cyfr.JCS.encode(%{"n" => 1.5})
       {:error, {:invalid_value, ["n"], :float_not_permitted}}
 
-      iex> {:ok, digest} = Sanctum.JCS.hash(%{"a" => 1})
+      iex> {:ok, digest} = Cyfr.JCS.hash(%{"a" => 1})
       iex> String.starts_with?(digest, "sha256:")
       true
   """

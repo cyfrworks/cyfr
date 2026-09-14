@@ -25,14 +25,14 @@ defmodule Compendium.ReleaseDigest do
   Everything else — description, schema, examples, tags — is presentational
   and deliberately excluded, so re-describing a release does not change its
   activation identity. Absent blocks are omitted rather than nulled, since
-  the canonical domain has no null (`Sanctum.JCS`).
+  the canonical domain has no null (`Cyfr.JCS`).
 
-  Canonicalization is `Sanctum.JCS`, whose restricted domain refuses floats.
+  Canonicalization is `Cyfr.JCS`, whose restricted domain refuses floats.
   A manifest carrying a float in one of these blocks therefore cannot be
   published — fail-closed by construction rather than by a separate check.
   """
 
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   # Include only supported manifest fields in the digest.
   @security_blocks ~w(dependencies needs caps)

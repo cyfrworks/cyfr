@@ -609,14 +609,14 @@ defmodule Sanctum.ApiKey do
   end
 
   # Exact-IP match stays a string compare in ip_matches?/2; only the CIDR
-  # arithmetic is delegated to the Sanctum.Cidr SSOT. The operator-facing
+  # arithmetic is delegated to the Cyfr.Cidr SSOT. The operator-facing
   # misconfig warning is preserved (fires whenever the IP or CIDR is
   # unparseable, exactly as before). ip_in_network?/3 is used directly (no
   # v4-mapped unwrap) to keep this path's prior behaviour identical.
   defp ip_in_cidr?(ip_string, cidr_string) do
-    case {Sanctum.Cidr.parse_ip(ip_string), Sanctum.Cidr.parse_cidr(cidr_string)} do
+    case {Cyfr.Cidr.parse_ip(ip_string), Cyfr.Cidr.parse_cidr(cidr_string)} do
       {{:ok, ip}, {:ok, {network, prefix_length}}} ->
-        Sanctum.Cidr.ip_in_network?(ip, network, prefix_length)
+        Cyfr.Cidr.ip_in_network?(ip, network, prefix_length)
 
       _ ->
         Logger.warning(
