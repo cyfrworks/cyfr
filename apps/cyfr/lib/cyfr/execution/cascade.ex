@@ -17,28 +17,39 @@ defmodule Cyfr.Execution.Cascade do
   (`Cyfr.Execution.Sweeper`).
   """
 
+  require Logger
+
   alias Cyfr.Execution.{Events, Record, Telemetry}
 
   @doc """
   Fail the running children of a failed formula's record. Catalysts and
   reagents start no children, so any other record is a no-op.
   """
-  @spec fail_children(Record.t()) :: :ok
+  @spec fail_children(Record.t()) :: :ok | {:error, term()}
   def fail_children(%Record{component_type: :formula, id: id}), do: fail_children_of(id)
   def fail_children(%Record{}), do: :ok
 
   @doc """
   Fail the running children of execution `execution_id`, whatever its type.
   The children are listed within the parent row's own athanor
-  (`Arca.Execution.list_running_children/1`).
+  (`Arca.Execution.list_running_children/1`); a store that cannot list
+  them answers `{:error, reason}` and nothing is failed.
   """
-  @spec fail_children_of(String.t()) :: :ok
+  @spec fail_children_of(String.t()) :: :ok | {:error, term()}
   def fail_children_of(execution_id) do
-    for child <- Arca.Execution.list_running_children(execution_id) do
-      fail_child(execution_id, child)
-    end
+    case Arca.Execution.list_running_children(execution_id) do
+      children when is_list(children) ->
+        Enum.each(children, &fail_child(execution_id, &1))
 
-    :ok
+      {:error, reason} = error ->
+        # Nothing is failed: the children run on, and end on their own.
+        Logger.error(
+          "[Cyfr.Execution.Cascade] children of #{execution_id} could not be listed: " <>
+            inspect(reason)
+        )
+
+        error
+    end
   end
 
   defp fail_child(parent_id, child) do

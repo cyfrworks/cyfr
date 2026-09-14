@@ -98,11 +98,12 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     # the registry, so the answer is immediate and never leaves this machine.
     setup do
       previous = Application.get_env(:cyfr, :registry_health_probe)
-      Arca.Cache.invalidate(:registry_health)
+      key = {:registry_health, Compendium.RegistryHost.canonical_host()}
+      Arca.Cache.invalidate(key)
 
       on_exit(fn ->
         Application.put_env(:cyfr, :registry_health_probe, previous)
-        Arca.Cache.invalidate(:registry_health)
+        Arca.Cache.invalidate(key)
       end)
 
       :ok
@@ -117,6 +118,18 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
       assert result.services.registry == "unreachable"
       assert System.monotonic_time(:millisecond) - started < 5_000
+    end
+
+    test "what configuration decides is answered afresh, never from a cached probe" do
+      Application.put_env(:cyfr, :registry_health_probe, true)
+      ctx = Sanctum.TestContext.local()
+
+      {:ok, probed} = SystemProvider.handle("system", ctx, %{"action" => "status"})
+      assert probed.services.registry == "unreachable"
+
+      Application.put_env(:cyfr, :registry_health_probe, false)
+      {:ok, unprobed} = SystemProvider.handle("system", ctx, %{"action" => "status"})
+      assert unprobed.services.registry == "unknown"
     end
 
     test "with the probe off the answer is unknown, never a guess" do
