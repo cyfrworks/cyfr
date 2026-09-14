@@ -115,6 +115,20 @@ if config_env() != :test do
                 end
             end)
 
+    # How long the bridge runs a stdio server's backends without hearing from
+    # this server, in milliseconds: 1000 to 60000, default 30000. Every sync
+    # and renewal asks for this lease and renewals go out every third of it,
+    # so backends whose server crashed, lost the control plane or cannot
+    # reach the bridge are retired within one lease. A value outside the
+    # range refuses the boot.
+    if lease_ms = env_int.("CYFR_MCP_BRIDGE_LEASE_MS", nil) do
+      unless lease_ms in 1_000..60_000 do
+        raise "[Cyfr] FATAL: CYFR_MCP_BRIDGE_LEASE_MS must be between 1000 and 60000 (milliseconds)"
+      end
+
+      config :cyfr, :mcp_bridge_lease_ms, lease_ms
+    end
+
     # Device label attached to registry credentials (unset = hostname).
     config :cyfr, :device_label, env_str.("CYFR_DEVICE_LABEL", nil)
 

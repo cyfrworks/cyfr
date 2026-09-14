@@ -518,6 +518,22 @@ defmodule Emissary.MCP.BridgeTest do
     end
   end
 
+  test "the configured lease is what a sync and a renewal ask for, renewed every third of it",
+       %{ctx: ctx, fake: fake} do
+    Application.put_env(:cyfr, :mcp_bridge_lease_ms, 6_000)
+    on_exit(fn -> Application.delete_env(:cyfr, :mcp_bridge_lease_ms) end)
+
+    bridge = start_supervised!({Bridge, url: fake.url, root: @root})
+    assert %{lease_ms: 6_000, tick_ms: 2_000} = :sys.get_state(bridge)
+    assert_receive {:control, "hello", _hello, _fields}, 2_000
+
+    vault_entry(ctx)
+    connect(ctx, stdio_row(ctx, "leased"))
+    assert_receive {:control, "sync", %{"lease_ms" => 6_000}, _fields}, 2_000
+    tick(bridge)
+    assert_receive {:control, "renew", %{"lease_ms" => 6_000}, _fields}, 2_000
+  end
+
   test "a restarted bridge is greeted, reconciled and every live owner synced under its new boot",
        %{ctx: ctx, fake: fake} do
     bridge = start_bridge(fake)

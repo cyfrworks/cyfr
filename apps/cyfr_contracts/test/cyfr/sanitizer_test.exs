@@ -189,6 +189,16 @@ defmodule Cyfr.SanitizerTest do
       refute Cyfr.Sanitizer.sensitive_key?("code_challenge")
     end
 
+    test "a vault entry's material is redacted whatever its field names are" do
+      assert Cyfr.Sanitizer.sanitize(%{
+               "action" => "create",
+               "kind" => "api_key",
+               "fields" => %{"value" => "vault-material"}
+             }) == %{"action" => "create", "kind" => "api_key", "fields" => "[REDACTED]"}
+
+      refute Cyfr.Sanitizer.sensitive_key?("field_names")
+    end
+
     test "set-cookie and webhook signatures are covered" do
       assert Cyfr.Sanitizer.sensitive_key?("set-cookie")
       assert Cyfr.Sanitizer.sensitive_key?("x-hub-signature-256")

@@ -238,8 +238,11 @@ export class Owners {
    * Starts, replaces or extends an owner. `backends` come from
    * `validateBackends`; `openEnv()` answers the opened environment
    * (`{backend: {NAME: value}}`) and is called only for a new version.
-   * Syncs of one owner run one at a time. Resolves to `{status, backends}`;
-   * throws a Refusal.
+   * A new version answers once every backend is ready or failed, or after
+   * the ready bound or half the lease, whichever comes first: the lease runs
+   * from the sync, so a backend still starting is reported as such rather
+   * than lapsing its owner. Syncs of one owner run one at a time. Resolves
+   * to `{status, backends}`; throws a Refusal.
    */
   sync({ athanor, server, g, e, leaseMs, backends, openEnv }) {
     return this.#locked(ownerKey(athanor, server), () =>
@@ -309,7 +312,7 @@ export class Owners {
 
     await withTimeout(
       Promise.all([...owner.backends.values()].map((b) => b.settled)),
-      this.#options.readyTimeoutMs,
+      Math.min(this.#options.readyTimeoutMs, leaseMs / 2),
     );
 
     if (this.#owners.get(key) !== owner || owner.state === "draining") throw new Refusal("conflict");

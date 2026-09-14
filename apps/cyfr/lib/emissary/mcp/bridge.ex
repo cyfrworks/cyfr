@@ -30,10 +30,11 @@ defmodule Emissary.MCP.Bridge do
       are resolved through `Sanctum.VaultReader` and sealed for the owner
       and the bridge's lifetime (`Cyfr.BridgeAuth.seal/5`). The resolved
       values live only in the task that sends the message;
-    * `renew` every 10 s for every live owner whose row still passes the
-      fence, asking for a 30 s lease. An owner that fails the fence is
-      released; an owner the bridge no longer knows has its epoch raised.
-      Either way its process is stopped;
+    * `renew` every third of the lease for every live owner whose row
+      still passes the fence, asking for the lease again (`:mcp_bridge_lease_ms`,
+      `CYFR_MCP_BRIDGE_LEASE_MS`: 30 s unless set). An owner that fails the
+      fence is released; an owner the bridge no longer knows has its epoch
+      raised. Either way its process is stopped;
     * `release` on every stop path — a server process that stops or exits,
       a failed fence, `release_referencing/2` — retried on every tick until
       the bridge acknowledges it;
@@ -61,8 +62,7 @@ defmodule Emissary.MCP.Bridge do
   alias Emissary.MCP.BackendDefinition
   alias Emissary.MCP.VaultRef
 
-  @lease_ms 30_000
-  @tick_ms 10_000
+  @default_lease_ms 30_000
   @control_timeout_ms 10_000
   # The bridge answers a sync once every backend is ready or failed (within
   # 15 s), after draining the version it replaces.
@@ -96,6 +96,7 @@ defmodule Emissary.MCP.Bridge do
       :generation,
       :pool_size,
       :inflight,
+      lease_ms: 30_000,
       tick_ms: 10_000,
       owners: %{},
       releases: %{},
@@ -112,7 +113,9 @@ defmodule Emissary.MCP.Bridge do
   Start the controller. Answers `:ignore` unless a bridge URL and a 32-byte
   root key are configured (`:mcp_bridge_url` and `:mcp_bridge_key`, or the
   `:url` and `:root` options), and while `:cluster` is on: a cluster of
-  control planes runs no stdio servers. `:tick_ms` sets the renewal cadence.
+  control planes runs no stdio servers. `:lease_ms` sets the lease each
+  sync and renewal asks for (default `:mcp_bridge_lease_ms`, else 30 s) and
+  `:tick_ms` the renewal cadence (default a third of the lease).
   """
   def start_link(opts \\ []) do
     url = Keyword.get(opts, :url, Application.get_env(:cyfr, :mcp_bridge_url))
@@ -194,13 +197,21 @@ defmodule Emissary.MCP.Bridge do
   def init(opts) do
     root = Keyword.fetch!(opts, :root)
 
+    lease_ms =
+      Keyword.get(
+        opts,
+        :lease_ms,
+        Application.get_env(:cyfr, :mcp_bridge_lease_ms, @default_lease_ms)
+      )
+
     state = %State{
       url: String.trim_trailing(Keyword.fetch!(opts, :url), "/"),
       root: root,
       control_key: BridgeAuth.control_key(root),
       seal_key: BridgeAuth.seal_key(root),
       cyfr_boot: Cyfr.Boot.id(),
-      tick_ms: Keyword.get(opts, :tick_ms, @tick_ms)
+      lease_ms: lease_ms,
+      tick_ms: Keyword.get(opts, :tick_ms, div(lease_ms, 3))
     }
 
     send(self(), :tick)
@@ -545,6 +556,7 @@ defmodule Emissary.MCP.Bridge do
       boot: state.boot,
       generation: state.generation,
       seq: System.unique_integer([:monotonic, :positive]),
+      lease_ms: state.lease_ms,
       timeout: timeout
     }
   end
@@ -655,7 +667,7 @@ defmodule Emissary.MCP.Bridge do
         "type" => "sync",
         "owner" => %{"athanor" => spec.athanor_id, "server" => spec.server_id},
         "e" => spec.epoch,
-        "lease_ms" => @lease_ms,
+        "lease_ms" => spec.lease_ms,
         "backends" => Enum.map(backends, &definition/1),
         "sealed" => sealed
       }
@@ -695,7 +707,7 @@ defmodule Emissary.MCP.Bridge do
       for {athanor, server} = key <- keys,
           do: %{"athanor" => athanor, "server" => server, "e" => spec.owners[key]}
 
-    answer = post(spec, %{"type" => "renew", "lease_ms" => @lease_ms, "owners" => owners})
+    answer = post(spec, %{"type" => "renew", "lease_ms" => spec.lease_ms, "owners" => owners})
 
     with {:http, 200, _boot, %{"unknown" => [_ | _] = unknown}} <- answer do
       for %{"athanor" => athanor, "server" => server, "e" => epoch} <- unknown do

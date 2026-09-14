@@ -321,6 +321,28 @@ test("an owner whose lease lapses is retired, answering lapsed and then unknown_
   }
 });
 
+test("a sync whose backend is still starting answers within half its lease, and the owner lives on renewal", async () => {
+  const { instance, server, controller } = await startBridge({ leaseCheckMs: 20 });
+  try {
+    const owner = newOwner();
+    const started = Date.now();
+    const answer = await controller.sync({ ...owner, leaseMs: 1_000, backends: [backend("never-ready")] });
+    assert.equal(answer.status, 200, JSON.stringify(answer.body));
+    assert.ok(Date.now() - started < 1_000, "the sync waited past its lease");
+    assert.deepEqual(answer.body, { status: "running", backends: [{ name: "b", status: "initializing", tools: 0 }] });
+
+    for (let i = 0; i < 4; i++) {
+      await sleep(400);
+      assert.deepEqual((await controller.renew([owner], 1_000)).body, { renewed: [owner], unknown: [] });
+    }
+    const listed = await controller.invoke(owner, "tools/list");
+    assert.deepEqual([listed.status, listed.body.result.tools], [200, []]);
+    await controller.release([owner]);
+  } finally {
+    await stopBridge({ instance, server });
+  }
+});
+
 test("renew extends exactly the owners running at the version named", async () => {
   const owner = newOwner(4);
   await synced(owner, [backend("well-behaved")]);

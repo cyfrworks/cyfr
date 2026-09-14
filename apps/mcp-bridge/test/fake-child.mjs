@@ -8,6 +8,8 @@ const mode = process.argv[2] || "well-behaved";
 // `exit-at-start` ends before reading anything.
 if (mode === "exit-at-start") process.exit(4);
 
+// `never-ready` reads its input and answers nothing.
+
 // `stderr-env` writes its PROBE_OWN value to stderr as it starts.
 if (mode === "stderr-env") process.stderr.write(`starting with ${process.env.PROBE_OWN}\n`);
 
@@ -33,6 +35,8 @@ process.stdin.on("data", (chunk) => {
     } catch {
       continue;
     }
+
+    if (mode === "never-ready") continue;
 
     if (msg.method === "initialize") {
       // A peer's OWN request, with an id counter that — like the bridge's —

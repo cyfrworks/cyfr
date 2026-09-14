@@ -260,6 +260,48 @@ jobs:
       - name: Build a component through its lock lifecycle, and a tincture
         run: python3 scripts/builder-smoke.py cyfr-builder:smoke
 
+  bridge-e2e:
+    name: MCP bridge failures and leaks (cyfr + mcp-bridge images)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the app image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          tags: cyfr:bridge-e2e
+          cache-from: type=gha,scope=cyfr-bridge-e2e
+          cache-to: type=gha,scope=cyfr-bridge-e2e,mode=max
+      - name: Build the bridge image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.node
+          target: mcp-bridge
+          load: true
+          tags: cyfr-mcp-bridge:bridge-e2e
+          cache-from: type=gha,scope=mcp-bridge-e2e
+          cache-to: type=gha,scope=mcp-bridge-e2e,mode=max
+      # Both images under docker compose with the services' own settings and
+      # a 5 s bridge lease (tests/bridge-image/compose.e2e.yml): a crash of
+      # cyfr between an update's commit and its sync, a sync held back across
+      # a bridge restart, a revoke while the control channel is down, a dead
+      # controller, a killed spawner and a crash-looping backend, each with
+      # what cyfr and the bridge observe; and a canary vault entry echoed by
+      # a backend that reaches no log, request-log row, execution payload or
+      # file under cyfr's data volume.
+      - name: Failures and leaks
+        env:
+          CYFR_IMAGE: cyfr:bridge-e2e
+          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
+        run: node --test tests/bridge-image/e2e.test.mjs
+
   arca-seam:
     name: Arca single-seam (no untagged filesystem I/O)
     runs-on: ubuntu-latest

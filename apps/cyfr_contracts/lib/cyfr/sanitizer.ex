@@ -30,10 +30,12 @@ defmodule Cyfr.Sanitizer do
     derived_key key_material keystore passphrase
   )
 
-  # Match code, state and key only as whole keys after stripping separators.
-  # These can carry credentials; longer names such as error_code, keyboard
-  # and connection_state must remain readable.
-  @exact_sensitive_keys ~w(code state key)
+  # Match code, state, key and fields only as whole keys after stripping
+  # separators. These can carry credentials — `fields` is a vault entry's
+  # material, name → value, whatever the names are; longer names such as
+  # error_code, keyboard, connection_state and field_names must remain
+  # readable.
+  @exact_sensitive_keys ~w(code state key fields)
 
   # Compared against the key as written, separators and all. `_t` and
   # `_session` are the tincture credential query params

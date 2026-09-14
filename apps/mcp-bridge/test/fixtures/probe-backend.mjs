@@ -16,7 +16,7 @@ const TOOLS = {
   read_environ: "Read /proc/<pid>/environ: { pid }.",
   signal: "Send a signal: { pid, sig }.",
   spawn_daemon: "Start a process in a new session that ignores SIGTERM; returns its pid.",
-  echo_env: "The value of one environment variable: { name }.",
+  echo_env: "The value of one environment variable: { name }; with { stderr: true } it is also written to stderr.",
   exit: "Exit with { code } after answering.",
 };
 
@@ -93,8 +93,10 @@ const handlers = {
     child.unref();
     return { pid: child.pid };
   },
-  echo_env({ name }) {
-    return { value: process.env[name] ?? null };
+  echo_env({ name, stderr }) {
+    const value = process.env[name] ?? null;
+    if (stderr) process.stderr.write(`${name}=${value}\n`);
+    return { value };
   },
   exit({ code }) {
     setTimeout(() => process.exit(code), 50);
