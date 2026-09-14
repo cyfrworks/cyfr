@@ -22,7 +22,8 @@ defmodule Sanctum.Authority.BudgetGuard do
 
   use GenServer
 
-  alias Sanctum.Authority.Budget
+  alias Cyfr.Authority.Budget
+  alias Sanctum.Authority.BudgetCounter
 
   # Explicit rather than inherited: every charge and release in the system
   # funnels through this one process, so its call timeout is a parameter of
@@ -74,7 +75,7 @@ defmodule Sanctum.Authority.BudgetGuard do
   """
   @spec release_after_exit(Budget.t(), term()) :: :ok
   def release_after_exit(%Budget{}, {:timeout, _}), do: :ok
-  def release_after_exit(%Budget{} = budget, _reason), do: Budget.release(budget)
+  def release_after_exit(%Budget{} = budget, _reason), do: BudgetCounter.release(budget)
 
   @impl true
   def init(_opts) do
@@ -113,12 +114,12 @@ defmodule Sanctum.Authority.BudgetGuard do
 
     case Map.pop(state.guards, key) do
       {nil, _} ->
-        Budget.release(budget)
+        BudgetCounter.release(budget)
         {:reply, :ok, state}
 
       {{ref, guarded}, guards} ->
         Process.demonitor(ref, [:flush])
-        Budget.release(guarded)
+        BudgetCounter.release(guarded)
         {:reply, :ok, %{state | guards: guards, refs: Map.delete(state.refs, ref)}}
     end
   end
@@ -131,7 +132,7 @@ defmodule Sanctum.Authority.BudgetGuard do
 
       {key, refs} ->
         {{^ref, budget}, guards} = Map.pop(state.guards, key)
-        Budget.release(budget)
+        BudgetCounter.release(budget)
         {:noreply, %{state | guards: guards, refs: refs}}
     end
   end

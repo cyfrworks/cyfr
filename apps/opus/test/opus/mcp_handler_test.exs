@@ -12,8 +12,8 @@ defmodule Opus.FormulaHandlerMcpTest do
   use ExUnit.Case, async: false
 
   alias Opus.FormulaHandler
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Context
 
   @mcp_node "formula:local.mcp-root"
@@ -79,7 +79,9 @@ defmodule Opus.FormulaHandlerMcpTest do
       activation: %{@mcp_node => "sha256:act-mcp"}
     }
 
-    {:ok, auth} = Authority.root(profile, blob)
+    {:ok, auth} =
+      Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
+
     auth
   end
 

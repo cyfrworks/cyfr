@@ -21,7 +21,7 @@ defmodule Cyfr.Json do
       masquerade as data.
 
   Guest-facing envelopes keep their own shapes where the wire demands it
-  (`Opus.WitResponse.safe_encode/1` answers the guest protocol's error
+  (`Cyfr.WitResponse.safe_encode/1` answers the guest protocol's error
   object); this module is for host-side storage and logs.
   """
 

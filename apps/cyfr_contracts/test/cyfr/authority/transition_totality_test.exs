@@ -1,13 +1,11 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.TransitionTotalityTest do
+defmodule Cyfr.Authority.TransitionTotalityTest do
   use ExUnit.Case, async: true
-  use ExUnitProperties
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
-  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
-  alias Sanctum.Test.AuthorityGen, as: Gen
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
+  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
   # Enumerate every cursor, guest-function and target combination and verify its defined outcome.
 
@@ -50,33 +48,6 @@ defmodule Sanctum.Authority.TransitionTotalityTest do
     end
   end
 
-  property "randomized authorities, functions and targets stay inside the closed union" do
-    check all(
-            {graph, meta} <- Gen.graph(),
-            fun <- member_of(Transition.guest_functions()),
-            target <- Gen.target(meta),
-            descend <- integer(0..3),
-            max_runs: 100
-          ) do
-      root = Gen.rooted({graph, meta})
-
-      auth =
-        Enum.reduce(List.duplicate(:down, descend), root, fn :down, acc ->
-          need = Gen.compliant_need(acc, meta)
-
-          case Transition.step(acc, :call, Gen.invoke_at(acc, meta, "formula:evil.corp.w", need)) do
-            {:child_zero, child} -> child
-            _ -> acc
-          end
-        end)
-
-      outcome = Transition.step(auth, fun, target)
-
-      assert valid_outcome?(outcome),
-             "undefined outcome for {#{inspect(auth.cursor)}, #{fun}}: #{inspect(outcome)}"
-    end
-  end
-
   test "outcome tags are the pinned closed set" do
     assert Transition.outcome_tags() == [
              :child,
@@ -102,11 +73,11 @@ defmodule Sanctum.Authority.TransitionTotalityTest do
     end
   end
 
-  # The closed outcome union, spelled out.
+  # The decision's closed outcome union, spelled out. It charges no budget,
+  # so `{:deny, :invoke_budget_exhausted}` is not among them.
   defp valid_outcome?({:child, %Authority{}}), do: true
   defp valid_outcome?({:child_zero, %Authority{cursor: :unbound, policy: :none}}), do: true
   defp valid_outcome?({:deny, :depth_cap}), do: true
-  defp valid_outcome?({:deny, :invoke_budget_exhausted}), do: true
   defp valid_outcome?({:deny, :edge_only}), do: true
   defp valid_outcome?({:deny, {:need, kind}}), do: kind in [:required, :undeclared]
   defp valid_outcome?({:deny, :tool_not_granted}), do: true

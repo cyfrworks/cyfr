@@ -12,7 +12,7 @@ defmodule Compendium.Activation do
   digest alone says nothing about declared capability.
 
   Nodes are keyed by **name-level ref** (`type:namespace.name`, no version),
-  matching `Sanctum.Authority.Blob`'s node-key grammar — code identity lives
+  matching `Cyfr.Authority.Blob`'s node-key grammar — code identity lives
   in the digest, never in the key.
 
   Only static dependencies are walked. Dynamic dispatch is deliberately

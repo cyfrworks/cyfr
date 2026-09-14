@@ -24,8 +24,8 @@ defmodule Aqua.Loop.Clone do
   alias Aqua.Tape
   alias Arca.Schemas.Message
   alias Compendium.AgentSource
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
 
   @type refusal ::
           {:no_role_edge, String.t()}

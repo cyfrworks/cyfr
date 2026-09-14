@@ -114,7 +114,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   defp edge_vaults(node, nodes) do
-    ingress = node.edges[Sanctum.Authority.Blob.ingress_key()]
+    ingress = node.edges[Cyfr.Authority.Blob.ingress_key()]
     ingress_vault = if is_map(ingress), do: [ingress["__vault__"]], else: []
 
     dep_vaults =
@@ -163,7 +163,7 @@ defmodule Sanctum.Consent.BlobBuilder do
             |> Map.merge(extras)
             |> Map.put("__vault__", vault)
 
-          Map.put(edges, Sanctum.Authority.Blob.ingress_key(), ingress)
+          Map.put(edges, Cyfr.Authority.Blob.ingress_key(), ingress)
         else
           edges
         end

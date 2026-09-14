@@ -18,7 +18,7 @@ defmodule Sanctum.Consent.ShapeDiff do
   returns an empty diff.
   """
 
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority.Blob
 
   @egress ~w(domains methods schemes private_ips)
   @storage ~w(paths actions)

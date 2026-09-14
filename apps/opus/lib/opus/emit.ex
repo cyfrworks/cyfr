@@ -22,7 +22,7 @@ defmodule Opus.Emit do
   Streamed text is masked across event boundaries. Each logical stream —
   the answer's `text.delta` text, and each index's `tool_call.delta`
   arguments — holds back only the tail that could begin a credential's
-  masked form (`Opus.SecretMasker.pending_prefix/2`), so a credential split
+  masked form (`Cyfr.SecretMasker.pending_prefix/2`), so a credential split
   over two deltas is masked whole whatever events arrive between them, and
   text that ends in no such prefix goes out at once. A
   stream's held text goes out when that stream ends: a call's arguments
@@ -36,8 +36,9 @@ defmodule Opus.Emit do
 
   require Logger
 
-  alias Opus.{ExecutionEventBuffer, OAuthTokenTracker, SecretMasker}
-  alias Sanctum.Authority
+  alias Cyfr.Authority
+  alias Cyfr.SecretMasker
+  alias Opus.{ExecutionEventBuffer, OAuthTokenTracker}
 
   @budget %{requests: 3000, window: "1m"}
 
@@ -253,6 +254,6 @@ defmodule Opus.Emit do
     end
   end
 
-  defp safe_encode(data), do: Opus.WitResponse.safe_encode(data)
-  defp encode_error(type, message), do: Opus.WitResponse.encode_error(type, message)
+  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
+  defp encode_error(type, message), do: Cyfr.WitResponse.encode_error(type, message)
 end

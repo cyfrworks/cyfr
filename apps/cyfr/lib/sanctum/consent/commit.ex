@@ -48,9 +48,9 @@ defmodule Sanctum.Consent.Commit do
           optional(:durable_storage) => boolean()
         }
 
-  # Derive public-source limits from Sanctum.Authority.zero_limits/0.
+  # Derive public-source limits from Cyfr.Authority.zero_limits/0.
   # Policy defaults may be less restrictive.
-  @public_limits Sanctum.Authority.zero_limits()
+  @public_limits Cyfr.Authority.zero_limits()
                  |> Map.from_struct()
                  |> Map.new(fn
                    {:rate_limit, %{requests: r, window: w}} ->
@@ -191,7 +191,7 @@ defmodule Sanctum.Consent.Commit do
       for {from, node} <- nodes,
           {edge_key, %{"vault" => %{"via" => %{"label" => label}} = vault}} <-
             node["edges"] || %{},
-          {:ok, dep} <- [Sanctum.Authority.Blob.edge_target(edge_key)] do
+          {:ok, dep} <- [Cyfr.Authority.Blob.edge_target(edge_key)] do
         %{
           from: from,
           dep: dep,
@@ -209,7 +209,7 @@ defmodule Sanctum.Consent.Commit do
   defp check_no_tool_servers(head, source_ref) do
     with {:ok, %{"nodes" => nodes}} <- Jason.decode(head.resolved_policy),
          %{"edges" => edges} <- Map.get(nodes, source_ref, %{}),
-         %{} = ingress <- Map.get(edges, Sanctum.Authority.Blob.ingress_key(), %{}) do
+         %{} = ingress <- Map.get(edges, Cyfr.Authority.Blob.ingress_key(), %{}) do
       case Map.get(ingress, "tool_servers") do
         [_ | _] -> {:error, :grant_requires_full_commit}
         _ -> :ok
@@ -547,9 +547,9 @@ defmodule Sanctum.Consent.Commit do
 
   defp lender_binding(ctx, profile) do
     with {:ok, head} <- Source.impl().head_consent(ctx, profile.id),
-         {:ok, blob} <- Sanctum.Authority.Blob.parse(head.resolved_policy),
-         {:ok, ingress} <- Sanctum.Authority.Blob.ingress(blob, profile.source_ref),
-         true <- Sanctum.Authority.Blob.bound_vault?(ingress.vault) do
+         {:ok, blob} <- Cyfr.Authority.Blob.parse(head.resolved_policy),
+         {:ok, ingress} <- Cyfr.Authority.Blob.ingress(blob, profile.source_ref),
+         true <- Cyfr.Authority.Blob.bound_vault?(ingress.vault) do
       {:ok, ingress.vault}
     else
       _ -> {:error, {:selection_unbound, profile.source_ref, profile.label}}
@@ -718,7 +718,7 @@ defmodule Sanctum.Consent.Commit do
     decisions
     |> Map.get(:bindings, [])
     |> Enum.reduce_while({:ok, [], %{}}, fn raw, {:ok, acc, entries} ->
-      need = Map.get(raw, :need, Sanctum.Authority.Blob.ingress_key())
+      need = Map.get(raw, :need, Cyfr.Authority.Blob.ingress_key())
 
       with {:ok, declared_need} <- check_known_need(need, declared),
            {:ok, entry} <- fetch_active_entry(ctx, Map.get(raw, :entry_id)),
@@ -968,8 +968,8 @@ defmodule Sanctum.Consent.Commit do
 
   defp check_binding_digests(blob_json, prep) do
     parsed =
-      case Sanctum.Authority.Blob.parse(blob_json) do
-        {:ok, blob} -> Sanctum.Authority.Blob.entry_digest_conflicts(blob)
+      case Cyfr.Authority.Blob.parse(blob_json) do
+        {:ok, blob} -> Cyfr.Authority.Blob.entry_digest_conflicts(blob)
         _ -> []
       end
 
@@ -1182,7 +1182,7 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp render_grants(prep) do
-    case Sanctum.Authority.Blob.parse(prep.blob_json) do
+    case Cyfr.Authority.Blob.parse(prep.blob_json) do
       {:ok, blob} ->
         blob.nodes
         |> Enum.sort_by(fn {ref, _node} -> ref end)

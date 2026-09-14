@@ -3,8 +3,8 @@
 defmodule Sanctum.Consent.BootstrapTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Source

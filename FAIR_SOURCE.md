@@ -21,9 +21,13 @@ Apache-licensed code is not independently buildable: it calls into Sanctum
 throughout (storage consults the tenant policy and cipher), so running CYFR
 means running the FSL part under its terms — the split governs what you may
 reuse elsewhere, not what boots alone. The shared contracts
-(`apps/cyfr_contracts`: component references, limits, digests, canonical JSON
-and the other pure primitives every part of CYFR speaks) depend on no other
-app and build alone, with the repository's `wit/` definitions compiled in. Elixir files carry an in-band
+(`apps/cyfr_contracts`: component references, limits, digests, canonical JSON,
+the authority an execution runs under as data — the consent policy blob, the
+transition relation, root-profile selection — secret masking, and the other
+pure primitives every part of CYFR speaks) depend on no other app and build
+alone, with the repository's `wit/` definitions compiled in; Sanctum keeps the
+authority's live half (the invoke-budget counter, the consent loader and the
+platform ceiling). Elixir files carry an in-band
 `SPDX-License-Identifier` header (there is no `REUSE.toml`), and the
 [license-lint CI](.github/workflows/license-lint.yml) enforces the boundary
 mechanically.

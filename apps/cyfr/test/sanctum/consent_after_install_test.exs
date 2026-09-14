@@ -131,7 +131,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     {:ok, group} = Athanors.get(group.id)
     assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
 
-    assert {:ok, %Sanctum.Authority{}} =
+    assert {:ok, %Cyfr.Authority{}} =
              Cyfr.Execution.authority_for(in_group, :default, @formula)
 
     assert Cyfr.ConsentDrift.state(in_group, @formula) == :ok
@@ -161,7 +161,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     # ships in the seed, so its consent stands and a turn still pins it.
     assert Cyfr.ConsentDrift.state(in_group) == :ok
 
-    assert {:ok, %Sanctum.Authority{}} =
+    assert {:ok, %Cyfr.Authority{}} =
              Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")
   end
 

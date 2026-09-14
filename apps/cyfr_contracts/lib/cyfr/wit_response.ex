@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.WitResponse do
+defmodule Cyfr.WitResponse do
   @moduledoc """
   Shared WIT-boundary response encoding for catalyst host functions.
 

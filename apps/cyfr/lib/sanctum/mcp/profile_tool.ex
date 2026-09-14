@@ -316,7 +316,7 @@ defmodule Sanctum.MCP.ProfileTool do
     decoded =
       Enum.map(list, fn binding ->
         %{
-          need: Map.get(binding, "need", Sanctum.Authority.Blob.ingress_key()),
+          need: Map.get(binding, "need", Cyfr.Authority.Blob.ingress_key()),
           entry_id: binding["entry_id"]
         }
         |> Cyfr.MapUtil.put_present(:fields, binding["fields"])

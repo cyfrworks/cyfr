@@ -102,7 +102,7 @@ defmodule Opus.ActivationStampingTest do
     {:ok, result} =
       Opus.Executor.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
         type: :formula,
-        authority: Sanctum.Authority.zero()
+        authority: Cyfr.Authority.zero()
       )
 
     assert result.status == :completed

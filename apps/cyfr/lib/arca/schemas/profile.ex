@@ -15,7 +15,7 @@ defmodule Arca.Schemas.Profile do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias Sanctum.Authority.RootSelect
+  alias Cyfr.Authority.RootSelect
 
   @kinds ~w(owner public)
   @statuses ~w(active needs_consent revoked)
@@ -39,7 +39,7 @@ defmodule Arca.Schemas.Profile do
   @doc """
   A profile row about to be inserted.
 
-  The label rule has one owner — `Sanctum.Authority.RootSelect.valid_label?/1`,
+  The label rule has one owner — `Cyfr.Authority.RootSelect.valid_label?/1`,
   whose `decode/1` tells an id from a label by the `prof_` prefix and is
   only sound while no stored label wears it — and this is where a write is
   held to it. The active-identity index rides along so a race answers

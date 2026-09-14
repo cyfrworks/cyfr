@@ -4,7 +4,7 @@ defmodule Sanctum.Authority.TrampolinePropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # An unbound caller invoking an inert node cannot gain access to that node's granted edges.

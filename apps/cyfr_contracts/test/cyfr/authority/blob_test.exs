@@ -1,10 +1,10 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.BlobTest do
+defmodule Cyfr.Authority.BlobTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Authority.Blob
-  alias Sanctum.Authority.Blob.Edge
+  alias Cyfr.Authority.Blob
+  alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Limits
 
   @formula "formula:local.daily-report"

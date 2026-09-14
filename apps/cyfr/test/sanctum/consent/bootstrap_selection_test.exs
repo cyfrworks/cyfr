@@ -69,8 +69,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   end
 
   defp edge!(policy, from, to) do
-    {:ok, blob} = Sanctum.Authority.Blob.parse(policy)
-    {:ok, edge} = Sanctum.Authority.Blob.lookup_edge(blob, from, to, "")
+    {:ok, blob} = Cyfr.Authority.Blob.parse(policy)
+    {:ok, edge} = Cyfr.Authority.Blob.lookup_edge(blob, from, to, "")
     edge
   end
 

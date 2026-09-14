@@ -5,7 +5,7 @@ defmodule Opus.Chain do
   Root and child execution under an authority.
 
   `run_root/5` is the external-ingress entry: it selects a profile, loads
-  the head consent into a `Sanctum.Authority` (fail-closed), and hands the
+  the head consent into a `Cyfr.Authority` (fail-closed), and hands the
   executor an execution that must run under it. `run_child/5` is the
   in-chain entry: it advances the caller's authority through the transition
   relation and executes the target under the child authority that falls
@@ -22,9 +22,8 @@ defmodule Opus.Chain do
   influence them.
   """
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.RootSelect
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.RootSelect
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
@@ -40,7 +39,7 @@ defmodule Opus.Chain do
   @doc """
   Root an execution chain under a profile's consent.
 
-  `profile_selector` is a `t:Sanctum.Authority.RootSelect.selector/0`:
+  `profile_selector` is a `t:Cyfr.Authority.RootSelect.selector/0`:
   `{:id, _}` or `{:label, _}` to pin, `:default` for the single active
   owner profile — which fails on ambiguity rather than choosing.
 
@@ -105,12 +104,12 @@ defmodule Opus.Chain do
         # process dies inside. The hold is a row too
         # (`Arca.BudgetReservations`), released with the slot.
         with :ok <- Opus.Chain.Charge.take(decision.authority, opts) do
-          Authority.guard_invoke(decision.authority)
+          Sanctum.Authority.guard_invoke(decision.authority)
 
           try do
             execute_child(decision, input, opts)
           after
-            Authority.release_invoke(decision.authority)
+            Sanctum.Authority.release_invoke(decision.authority)
             Opus.Chain.Charge.give_back(decision.authority, opts)
           end
         end
@@ -189,13 +188,13 @@ defmodule Opus.Chain do
           # the registry is what cancel kills through, so the compensation
           # must exist before the pid is findable, or a kill in the gap
           # leaked the slot step_invoke charged.
-          Authority.guard_invoke(decision.authority)
+          Sanctum.Authority.guard_invoke(decision.authority)
           Registry.register(Opus.ExecutionRegistry, execution_id, :running)
 
           try do
             execute_child(decision, input, opts)
           after
-            Authority.release_invoke(decision.authority)
+            Sanctum.Authority.release_invoke(decision.authority)
           end
         end)
 
@@ -205,7 +204,7 @@ defmodule Opus.Chain do
            %{execution_id: execution_id, stream_url: "/api/executions/#{execution_id}/events"}}
 
         {:error, reason} ->
-          Authority.release_invoke(decision.authority)
+          Sanctum.Authority.release_invoke(decision.authority)
           {:error, {:stream_start_failed, reason}}
       end
     end
@@ -244,7 +243,7 @@ defmodule Opus.Chain do
            declared_needs: Keyword.get(opts, :declared_needs, [])
          }}
 
-      case Transition.step(authority, guest_fn, target) do
+      case Sanctum.Authority.step(authority, guest_fn, target) do
         {:child, child} ->
           {:ok,
            %{

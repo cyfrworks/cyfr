@@ -3,12 +3,12 @@
 defmodule Sanctum.Consent.LoaderTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Authority
+  alias Cyfr.Authority
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Source
   alias Sanctum.Context
   alias Cyfr.JCS
-  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
+  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
   setup do
     start_supervised!(Source.Memory)

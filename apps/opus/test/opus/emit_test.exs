@@ -35,7 +35,7 @@ defmodule Opus.EmitTest do
   end
 
   defp open(ctx, stream_id, opts \\ []) do
-    Emit.open(stream_id, [ctx: ctx, authority: Sanctum.Authority.zero()] ++ opts)
+    Emit.open(stream_id, [ctx: ctx, authority: Cyfr.Authority.zero()] ++ opts)
   end
 
   defp emit(emitter, event), do: Emit.emit(emitter, Jason.encode!(event)) |> Jason.decode!()
@@ -169,7 +169,7 @@ defmodule Opus.EmitTest do
 
   test "an oversized or malformed event is refused", %{ctx: ctx, stream_id: stream_id} do
     emitter = open(ctx, stream_id)
-    max = Sanctum.Authority.limits(Sanctum.Authority.zero()).max_request_size
+    max = Cyfr.Authority.limits(Cyfr.Authority.zero()).max_request_size
 
     oversized = Emit.emit(emitter, Jason.encode!(%{"text" => String.duplicate("x", max)}))
     assert %{"error" => %{"type" => "resource_limit"}} = Jason.decode!(oversized)

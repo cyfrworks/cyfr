@@ -28,7 +28,7 @@ defmodule Aqua.Ops do
   dropped); the helper forwards them so the runner can name a card's own
   execution without the argument map carrying it.
   """
-  @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Sanctum.Authority.t(), keyword()) ::
+  @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Cyfr.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def call_in_chain(tool, %Sanctum.Context{} = ctx, args, authority, opts \\ []) do
     Cyfr.Ops.Catalog.call_in_chain(tool, ctx, args, authority, opts)

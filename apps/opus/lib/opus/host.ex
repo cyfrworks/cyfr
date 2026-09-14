@@ -14,7 +14,7 @@ defmodule Opus.Host do
 
   The honest statement is narrower and still useful: **this is the plane a
   component's execution crosses, and it is the one that would go over the
-  wire** (`Sanctum.Authority.to_wire/1`). The rest — storage, cache, the
+  wire** (`Cyfr.Authority.to_wire/1`). The rest — storage, cache, the
   row plane, network policy, the shared primitives under `Cyfr.` — is
   infrastructure a worker would need a real client for, not a behaviour it
   would implement. `Opus.HostSurfaceTest` keeps that list from growing
@@ -28,7 +28,7 @@ defmodule Opus.Host do
   defdelegate load_root(ctx, profile, opts), to: Sanctum.Consent.Loader
 
   @doc "An in-chain tool call under a running component's authority."
-  @spec tool_call(String.t(), Context.t(), map(), Sanctum.Authority.t(), keyword()) ::
+  @spec tool_call(String.t(), Context.t(), map(), Cyfr.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   defdelegate tool_call(name, ctx, args, authority, opts \\ []),
     to: Cyfr.Ops.Catalog,

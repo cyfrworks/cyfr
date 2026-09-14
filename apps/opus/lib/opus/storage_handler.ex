@@ -73,7 +73,7 @@ defmodule Opus.StorageHandler do
 
   require Logger
 
-  alias Sanctum.Authority.Blob.Edge
+  alias Cyfr.Authority.Blob.Edge
   alias Sanctum.Context
   alias Cyfr.Limits
   alias Opus.EdgeGuard
@@ -92,7 +92,7 @@ defmodule Opus.StorageHandler do
 
   ## Parameters
 
-  - `edge` - The `Sanctum.Authority.Blob.Edge` carrying `storage` grants
+  - `edge` - The `Cyfr.Authority.Blob.Edge` carrying `storage` grants
     (nil = deny all storage)
   - `ctx` - The execution `Sanctum.Context`
   - `component_ref` - Component reference string for telemetry/audit
@@ -733,14 +733,14 @@ defmodule Opus.StorageHandler do
   # Private: Response Encoding
   # ============================================================================
 
-  defp safe_encode(data), do: Opus.WitResponse.safe_encode(data)
+  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
 
   defp encode_success(result) do
     safe_encode(Map.put(result, "status", "ok"))
   end
 
   @doc false
-  def encode_error(type, message), do: Opus.WitResponse.encode_error(type, message)
+  def encode_error(type, message), do: Cyfr.WitResponse.encode_error(type, message)
 
   # ============================================================================
   # Private: Telemetry

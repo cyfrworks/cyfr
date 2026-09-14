@@ -12,7 +12,7 @@ defmodule Opus.ChainChargeIdentityTest do
   use ExUnit.Case, async: false
 
   alias Opus.Chain.Charge
-  alias Sanctum.Test.AuthorityFixtures
+  alias Cyfr.Test.AuthorityFixtures
 
   setup do
     Arca.Cache.init()

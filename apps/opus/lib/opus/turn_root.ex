@@ -27,7 +27,7 @@ defmodule Opus.TurnRoot do
   @type claim :: %{
           execution_id: String.t(),
           attempt: String.t(),
-          authority: Sanctum.Authority.t(),
+          authority: Cyfr.Authority.t(),
           activation_digest: String.t() | nil,
           lease_until: DateTime.t(),
           budget_id: String.t(),

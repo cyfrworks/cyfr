@@ -90,7 +90,7 @@ defmodule Sanctum.ProvisioningClosureTest do
       # The soul is consented and loads: its whole closure is the local seed.
       assert {:ok, [_profile]} = Source.DB.profiles(in_group, "agent:local.aqua")
 
-      assert {:ok, %Sanctum.Authority{} = auth} =
+      assert {:ok, %Cyfr.Authority{} = auth} =
                Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua",
                  consent_source: Source.DB
                )

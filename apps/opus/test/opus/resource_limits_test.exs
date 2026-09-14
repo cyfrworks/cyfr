@@ -4,8 +4,8 @@
 defmodule Opus.ResourceLimitsTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
@@ -74,7 +74,9 @@ defmodule Opus.ResourceLimitsTest do
       activation: %{@test_node => "sha256:act-limits"}
     }
 
-    {:ok, auth} = Authority.root(profile, blob)
+    {:ok, auth} =
+      Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
+
     auth
   end
 

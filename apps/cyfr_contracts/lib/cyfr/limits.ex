@@ -82,7 +82,7 @@ defmodule Cyfr.Limits do
   @spec default_max_response_size() :: pos_integer()
   def default_max_response_size, do: @default_max_response_size
 
-  # One spelling each of the other shared defaults; `Sanctum.Authority`'s
+  # One spelling each of the other shared defaults; `Cyfr.Authority`'s
   # zero limits take their byte ceilings and rate limit from here.
   @default_max_request_size 1_048_576
   @default_max_memory_bytes 67_108_864

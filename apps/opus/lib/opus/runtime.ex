@@ -54,7 +54,7 @@ defmodule Opus.Runtime do
   - `:reference` - Component reference string (for telemetry and errors)
   - `:digest` - Content digest (the compiled-component cache key)
   - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
-  - `:authority` - The `Sanctum.Authority` this execution runs under
+  - `:authority` - The `Cyfr.Authority` this execution runs under
   - `:authority_required` - Defaults to true: a nil `:authority` raises instead
     of executing (a WASM run always carries one; this is the final invariant
     guard). Pass `false` only for authority-free harness runs in tests.
@@ -359,12 +359,12 @@ defmodule Opus.Runtime do
   # authority execution without a vault edge resolves nothing, fail closed.
   # Public-profile storage rides explicit opts derived from the authority's
   # profile kind — never a flag a guest could influence.
-  defp public_storage_opts(%Sanctum.Authority{profile_kind: :public}), do: [public?: true]
+  defp public_storage_opts(%Cyfr.Authority{profile_kind: :public}), do: [public?: true]
   defp public_storage_opts(_authority), do: []
 
-  defp oauth_resolver_opts(%Sanctum.Authority{resources: resources}, ctx) do
+  defp oauth_resolver_opts(%Cyfr.Authority{resources: resources}, ctx) do
     case resources do
-      %Sanctum.Authority.Blob.Edge{vault: %{} = vault} ->
+      %Cyfr.Authority.Blob.Edge{vault: %{} = vault} ->
         [resolver: fn provider -> Sanctum.VaultReader.oauth_token(ctx, vault, provider) end]
 
       _ ->

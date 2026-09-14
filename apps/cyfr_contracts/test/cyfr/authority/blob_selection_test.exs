@@ -1,24 +1,17 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.Authority.BlobSelectionTest do
+defmodule Cyfr.Authority.BlobSelectionTest do
   @moduledoc """
   A vault resource is bound to an entry or selected from a profile of the
-  edge's target; both forms parse, encode and travel the wire unchanged,
-  and nothing in between is a vault.
+  edge's target; both forms parse and encode unchanged, and nothing in
+  between is a vault.
   """
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
-  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
-
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    :ok
-  end
+  alias Cyfr.Authority.Blob
+  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
   @formula "formula:local.assistant"
   @catalyst "catalyst:local.claude"
@@ -104,71 +97,5 @@ defmodule Sanctum.Authority.BlobSelectionTest do
 
     assert {:ok, %{vault: %{entry_id: "e"}}} = Blob.lookup_edge(resolved, @formula, @catalyst, "")
     assert {:ok, %{vault: nil}} = Blob.ingress(resolved, @formula)
-  end
-
-  test "an authority whose edge selects a vault survives the wire" do
-    {:ok, blob} = Blob.parse(graph(%{"via" => %{"label" => "default"}}))
-
-    profile = %{
-      profile_id: "prof-aqua",
-      consent_id: "consent-aqua",
-      source_ref: @formula,
-      kind: :owner,
-      invoke_mode: :open_inert,
-      activation: %{@formula => "sha256:f", @catalyst => "sha256:c"}
-    }
-
-    {:ok, root} = Authority.root(profile, blob)
-    {:ok, edge} = Blob.lookup_edge(root.policy, @formula, @catalyst, "")
-    child = Fixtures.reserve!(Authority.bound_child(root, @catalyst, edge))
-
-    assert {:ok, back} = Authority.from_wire(Authority.to_wire(child))
-
-    assert back.resources.vault == %{
-             via: %{label: "default", binding_digest: nil},
-             projection: nil
-           }
-
-    assert back.policy == root.policy
-  end
-
-  test "a bound vault's lender survives parse, encode and the wire" do
-    bound = %{
-      "entry_id" => "vault-1",
-      "binding_digest" => "sha256:key",
-      "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]},
-      "lender" => %{"profile_id" => "prof-claude", "consent_id" => "consent-claude"}
-    }
-
-    assert {:ok, blob} = Blob.parse(graph(bound))
-    assert {:ok, edge} = Blob.lookup_edge(blob, @formula, @catalyst, "")
-
-    assert edge.vault == %{
-             entry_id: "vault-1",
-             binding_digest: "sha256:key",
-             projection: %{fields: ["ANTHROPIC_API_KEY"], scopes: []},
-             lender: %{profile_id: "prof-claude", consent_id: "consent-claude"}
-           }
-
-    assert Blob.parse(Blob.to_map(blob)) == {:ok, blob}
-
-    profile = %{
-      profile_id: "prof-aqua",
-      consent_id: "consent-aqua",
-      source_ref: @formula,
-      kind: :owner,
-      invoke_mode: :open_inert,
-      activation: %{@formula => "sha256:f", @catalyst => "sha256:c"}
-    }
-
-    {:ok, root} = Authority.root(profile, blob)
-    {:ok, edge} = Blob.lookup_edge(root.policy, @formula, @catalyst, "")
-    child = Fixtures.reserve!(Authority.bound_child(root, @catalyst, edge))
-    assert {:ok, back} = Authority.from_wire(Authority.to_wire(child))
-
-    assert back.resources.vault.lender == %{
-             profile_id: "prof-claude",
-             consent_id: "consent-claude"
-           }
   end
 end

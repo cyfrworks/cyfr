@@ -72,7 +72,7 @@ defmodule Opus.AuthorityPlumbingTest do
 
   test "an :authority passed to Executor.run reaches the runtime intact", %{ctx: ctx} do
     attach_witness()
-    authority = Sanctum.Authority.zero()
+    authority = Cyfr.Authority.zero()
     execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
 
     _result =
@@ -115,7 +115,7 @@ defmodule Opus.AuthorityPlumbingTest do
 
   test "authority_required with an authority proceeds to the runtime", %{ctx: ctx} do
     attach_witness()
-    authority = Sanctum.Authority.zero()
+    authority = Cyfr.Authority.zero()
 
     _result =
       Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
@@ -139,7 +139,7 @@ defmodule Opus.AuthorityPlumbingTest do
     # check passed and execution was attempted.
     result =
       Opus.Runtime.execute_component(<<0, 1, 2, 3>>, %{},
-        authority: Sanctum.Authority.zero(),
+        authority: Cyfr.Authority.zero(),
         authority_required: true
       )
 

@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.Blob do
+defmodule Cyfr.Authority.Blob do
   @moduledoc """
   The parsed, typed form of a consent revision's resolved policy blob.
 
@@ -34,7 +34,7 @@ defmodule Sanctum.Authority.Blob do
     the consent approved — or **selected**: the entry that the edge's
     target binds on the ingress of its own owner profile of the named
     label, pinned to a binding digest when the consent pinned one.
-    `Sanctum.Consent.Loader` turns a selection into a bound resource when
+    Loading a consent at root turns a selection into a bound resource when
     that profile is active and its ingress carries a matching entry, and
     pins the lender (`profile_id`, `consent_id`) so a later revoke or
     revision refuses the next unseal; a selection that does not resolve
@@ -88,7 +88,7 @@ defmodule Sanctum.Authority.Blob do
 
     @type t :: %__MODULE__{
             limits: Cyfr.Limits.t(),
-            edges: %{optional(String.t()) => Sanctum.Authority.Blob.Edge.t()}
+            edges: %{optional(String.t()) => Cyfr.Authority.Blob.Edge.t()}
           }
 
     @enforce_keys [:limits]

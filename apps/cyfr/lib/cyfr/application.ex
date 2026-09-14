@@ -40,7 +40,7 @@ defmodule Cyfr.Application do
     # deliberately NOT owned here: it is a disposable read-through cache,
     # created and re-created by its one supervised owner
     # (`Arca.Cache.Sweeper`) — a sweeper crash flushes it, harmlessly.
-    Sanctum.Authority.Budget.ensure_table()
+    Sanctum.Authority.BudgetCounter.ensure_table()
 
     # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do

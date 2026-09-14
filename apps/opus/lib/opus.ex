@@ -47,7 +47,7 @@ defmodule Opus do
   """
   @spec run_root(
           Context.t(),
-          Sanctum.Authority.RootSelect.selector(),
+          Cyfr.Authority.RootSelect.selector(),
           String.t(),
           map(),
           keyword()
@@ -71,8 +71,8 @@ defmodule Opus do
   Derive (without executing) the authority a `run_root` for this selector
   and reference would run under. See `Opus.Chain.authority_for/4`.
   """
-  @spec authority_for(Context.t(), Sanctum.Authority.RootSelect.selector(), String.t(), keyword()) ::
-          {:ok, Sanctum.Authority.t()} | {:error, term()}
+  @spec authority_for(Context.t(), Cyfr.Authority.RootSelect.selector(), String.t(), keyword()) ::
+          {:ok, Cyfr.Authority.t()} | {:error, term()}
   @impl Cyfr.Execution
   defdelegate authority_for(ctx, profile_selector, reference, opts \\ []), to: Opus.Chain
 
@@ -105,7 +105,7 @@ defmodule Opus do
   Advance a running chain's authority through one invocation and execute
   the target — the in-chain entry. See `Opus.Chain.run_child/5`.
   """
-  @spec run_child(Sanctum.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
+  @spec run_child(Cyfr.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   @impl Cyfr.Execution
   defdelegate run_child(authority, reference, need, input, opts), to: Opus.Chain

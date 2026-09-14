@@ -4,9 +4,8 @@ defmodule Sanctum.Authority.WirePropertyTest do
   use ExUnit.Case, async: false
   use ExUnitProperties
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   setup do
@@ -27,7 +26,7 @@ defmodule Sanctum.Authority.WirePropertyTest do
 
       auths =
         Enum.scan(program, auth, fn {fun, target, need}, acc ->
-          case Transition.step(acc, fun, Gen.invoke_at(acc, meta, target, need)) do
+          case Sanctum.Authority.step(acc, fun, Gen.invoke_at(acc, meta, target, need)) do
             {:child, child} -> child
             {:child_zero, child} -> child
             _ -> acc
@@ -36,20 +35,20 @@ defmodule Sanctum.Authority.WirePropertyTest do
 
       for a <- [auth | auths] do
         wire = Authority.to_wire(a)
-        assert {:ok, back} = Authority.from_wire(wire)
+        assert {:ok, back} = Sanctum.Authority.from_wire(wire)
         assert back == a
 
         # JSON-safe: encodes, and decodes to the same wire map.
         assert {:ok, json} = Jason.encode(wire)
         assert Jason.decode!(json) == wire
-        assert {:ok, ^a} = Authority.from_wire(Jason.decode!(json))
+        assert {:ok, ^a} = Sanctum.Authority.from_wire(Jason.decode!(json))
       end
     end
   end
 
   test "the zero authority round-trips" do
     zero = reserve!(Authority.zero())
-    assert {:ok, ^zero} = Authority.from_wire(Authority.to_wire(zero))
+    assert {:ok, ^zero} = Sanctum.Authority.from_wire(Authority.to_wire(zero))
   end
 
   test "the wire map carries no refs, pids or functions" do
@@ -81,49 +80,54 @@ defmodule Sanctum.Authority.WirePropertyTest do
     # The wire carries the id alone; the cap comes back from the row.
     assert %{"budget" => %{"id" => id}} = wire = Authority.to_wire(auth)
     assert id == auth.budget.id
-    {:ok, twin} = Authority.from_wire(wire)
+    {:ok, twin} = Sanctum.Authority.from_wire(wire)
     assert twin.budget == auth.budget
 
-    assert :ok = Authority.try_acquire_invoke(auth)
-    assert Authority.budget(twin).in_flight == 1
-    :ok = Authority.release_invoke(twin)
-    assert Authority.budget(auth).in_flight == 0
+    assert :ok = Sanctum.Authority.try_acquire_invoke(auth)
+    assert Sanctum.Authority.budget(twin).in_flight == 1
+    :ok = Sanctum.Authority.release_invoke(twin)
+    assert Sanctum.Authority.budget(auth).in_flight == 0
   end
 
   test "a reservation the store does not know, or one released, does not cross" do
     {graph, meta} = Gen.graph() |> Enum.take(1) |> hd()
     auth = Gen.rooted({graph, meta})
 
-    assert {:error, {:unknown_reservation, _}} = Authority.from_wire(Authority.to_wire(auth))
+    assert {:error, {:unknown_reservation, _}} =
+             Sanctum.Authority.from_wire(Authority.to_wire(auth))
 
     reserve!(auth)
-    {:ok, _} = Authority.from_wire(Authority.to_wire(auth))
+    {:ok, _} = Sanctum.Authority.from_wire(Authority.to_wire(auth))
 
     {1, _} =
       Arca.Repo.update_all(Arca.Schemas.BudgetReservation, set: [released_at: DateTime.utc_now()])
 
-    assert {:error, {:released_reservation, _}} = Authority.from_wire(Authority.to_wire(auth))
+    assert {:error, {:released_reservation, _}} =
+             Sanctum.Authority.from_wire(Authority.to_wire(auth))
   end
 
   test "from_wire fails closed on a malformed map" do
     {graph, meta} = Gen.graph() |> Enum.take(1) |> hd()
     wire = Authority.to_wire(reserve!(Gen.rooted({graph, meta})))
 
-    assert {:error, {:invalid_wire_keys, _}} = Authority.from_wire(Map.delete(wire, "budget"))
-    assert {:error, {:invalid_wire_keys, _}} = Authority.from_wire(Map.put(wire, "extra", 1))
+    assert {:error, {:invalid_wire_keys, _}} =
+             Sanctum.Authority.from_wire(Map.delete(wire, "budget"))
+
+    assert {:error, {:invalid_wire_keys, _}} =
+             Sanctum.Authority.from_wire(Map.put(wire, "extra", 1))
 
     assert {:error, {:invalid_wire_cursor, _}} =
-             Authority.from_wire(%{wire | "cursor" => "bound"})
+             Sanctum.Authority.from_wire(%{wire | "cursor" => "bound"})
 
     assert {:error, {:invalid_wire_budget, _}} =
-             Authority.from_wire(%{wire | "budget" => %{"id" => "x", "cap" => 1}})
+             Sanctum.Authority.from_wire(%{wire | "budget" => %{"id" => "x", "cap" => 1}})
 
     assert {:error, {:invalid_wire_value, _}} =
-             Authority.from_wire(%{wire | "invoke_mode" => "anything"})
+             Sanctum.Authority.from_wire(%{wire | "invoke_mode" => "anything"})
 
     bad_policy = put_in(wire, ["policy", "canonical"], "jcs-9")
-    assert {:error, {:invalid_wire_policy, _}} = Authority.from_wire(bad_policy)
-    assert {:error, {:invalid_wire, _}} = Authority.from_wire("not a map")
+    assert {:error, {:invalid_wire_policy, _}} = Sanctum.Authority.from_wire(bad_policy)
+    assert {:error, {:invalid_wire, _}} = Sanctum.Authority.from_wire("not a map")
   end
 
   test "the wire cannot raise its own ceiling or restart its own depth" do
@@ -144,7 +148,7 @@ defmodule Sanctum.Authority.WirePropertyTest do
         end)
       end)
 
-    assert {:ok, back} = Authority.from_wire(over)
+    assert {:ok, back} = Sanctum.Authority.from_wire(over)
 
     for {_ref, node} <- back.policy.nodes do
       assert node.limits.max_memory_bytes <= ceiling.max_memory_bytes
@@ -153,9 +157,9 @@ defmodule Sanctum.Authority.WirePropertyTest do
     # Depth is bounded by the same cap `Transition` checks against, so a wire
     # map cannot hand back an authority already past it.
     assert {:error, {:invalid_wire_depth, _}} =
-             Authority.from_wire(%{wire | "depth" => Authority.depth_cap() + 1})
+             Sanctum.Authority.from_wire(%{wire | "depth" => Authority.depth_cap() + 1})
 
-    assert {:ok, _} = Authority.from_wire(%{wire | "depth" => Authority.depth_cap()})
+    assert {:ok, _} = Sanctum.Authority.from_wire(%{wire | "depth" => Authority.depth_cap()})
   end
 
   test "Blob.to_map is the inverse of Blob.parse" do

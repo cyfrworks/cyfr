@@ -33,13 +33,7 @@ defmodule Arca.SanctumSurfaceTest do
 
     # The one genuine domain-logic reach: the webhook signature header's
     # default is the domain's to name.
-    "Sanctum.Webhook",
-
-    # The profile label grammar belongs to the selector vocabulary
-    # (`Sanctum.Authority.RootSelect.valid_label?/1`): `decode/1` tells an
-    # id from a label by prefix and is only sound while no stored label
-    # wears it, so the profile schema holds every insert to that one rule.
-    "Sanctum.Authority"
+    "Sanctum.Webhook"
   ]
 
   @namespace ~r/\bSanctum(?:\.[A-Z]\w+)+\b/

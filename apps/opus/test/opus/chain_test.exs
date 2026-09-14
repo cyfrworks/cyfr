@@ -8,8 +8,8 @@ defmodule Opus.ChainTest do
   # decided before compilation).
   use ExUnit.Case, async: false
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Consent.Source
   alias Sanctum.Context
   alias Cyfr.JCS
@@ -175,7 +175,7 @@ defmodule Opus.ChainTest do
       Keyword.merge(
         [
           root_execution_id: parent_id,
-          limits: Sanctum.Authority.limits(auth),
+          limits: Cyfr.Authority.limits(auth),
           authority: auth,
           emitter: Opus.Emit.open(parent_id, ctx: Context.enter_guest(ctx), authority: auth),
           declared_needs: [],
@@ -402,7 +402,9 @@ defmodule Opus.ChainTest do
         activation: %{@root_node => "sha256:act-root"}
       }
 
-      {:ok, auth} = Authority.root(profile, blob)
+      {:ok, auth} =
+        Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
+
       auth
     end
 
@@ -503,7 +505,8 @@ defmodule Opus.ChainTest do
         activation: %{@root_node => "sha256:act-root"}
       }
 
-      {:ok, auth} = Authority.root(profile, blob)
+      {:ok, auth} =
+        Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
 
       assert {:error, {:invoke_denied, :edge_only}} =
                Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
@@ -736,7 +739,7 @@ defmodule Opus.ChainTest do
 
       assert %{"task_id" => _} = Jason.decode!(spawn_fn.(request))
       assert_receive {:authority_entered, _}, 30_000
-      wait_until(fn -> Authority.budget(auth).in_flight == 0 end)
+      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     end
 
     test "an in-chain run_stream is spawn-shaped and returns stream info", %{ctx: ctx} do
@@ -768,7 +771,7 @@ defmodule Opus.ChainTest do
       assert stream_url == "/api/executions/#{execution_id}/events"
       assert_receive {:authority_entered, metadata}, 30_000
       assert metadata.execution_id == execution_id
-      wait_until(fn -> Authority.budget(auth).in_flight == 0 end)
+      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     end
 
     test "authority_for loads the root authority without executing anything", %{
@@ -810,7 +813,7 @@ defmodule Opus.ChainTest do
 
     test "a spawn charges the root budget and a denied spawn does not", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
 
       {:ok, decision} =
         Opus.Chain.step_invoke(
@@ -820,9 +823,9 @@ defmodule Opus.ChainTest do
           child_opts(ctx, guest_fn: :spawn)
         )
 
-      assert Authority.budget(decision.authority).in_flight == 1
-      :ok = Authority.release_invoke(decision.authority)
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(decision.authority).in_flight == 1
+      :ok = Sanctum.Authority.release_invoke(decision.authority)
+      assert Sanctum.Authority.budget(auth).in_flight == 0
 
       # Depth-capped spawn consumes nothing.
       deep =
@@ -838,19 +841,19 @@ defmodule Opus.ChainTest do
                  child_opts(ctx, guest_fn: :spawn)
                )
 
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
     end
   end
 
   describe "run_child/5 as a spawn" do
     test "a spawn-shaped child holds the slot for the call and releases it on return", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
 
       _result =
         Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx, guest_fn: :spawn))
 
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
     end
 
     test "with a charge identity the hold is a row, taken before the run and given back after", %{
@@ -886,7 +889,7 @@ defmodule Opus.ChainTest do
           child_opts(ctx, guest_fn: :spawn, charge: charge)
         )
 
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
       assert %{charged: 0} = Arca.BudgetReservations.lookup(ctx.athanor_id, auth.budget.id)
       assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, auth.budget.id)
 
@@ -903,7 +906,7 @@ defmodule Opus.ChainTest do
                  child_opts(ctx, guest_fn: :spawn, charge: charge)
                )
 
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
     end
 
     test "a hold past its admission window refuses the child before it runs", %{ctx: ctx} do
@@ -951,7 +954,7 @@ defmodule Opus.ChainTest do
                )
 
       assert Arca.Repo.get(Arca.Execution, child_id) == nil
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
     end
   end
 end

@@ -1,11 +1,11 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.TransitionAsyncEmitTest do
+defmodule Cyfr.Authority.TransitionAsyncEmitTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
-  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
+  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
   @formula "formula:local.daily-report"
   @catalyst "catalyst:supabase.com.database"
@@ -50,16 +50,6 @@ defmodule Sanctum.Authority.TransitionAsyncEmitTest do
 
       assert {:invalid, {:malformed_target, :spawn, :event}} =
                Transition.step(auth, :spawn, {:event, %{"msg" => "hi"}})
-    end
-
-    test "async functions and malformed spawns never touch the budget" do
-      auth = Fixtures.root!(%{}, ceiling: %{max_concurrent_tasks: 1})
-
-      Transition.step(auth, :await, {:task, "task_1"})
-      Transition.step(auth, :poll, {:task, "task_1"})
-      Transition.step(auth, :spawn, {:event, %{"msg" => "hi"}})
-
-      assert Authority.budget(auth).in_flight == 0
     end
   end
 

@@ -13,9 +13,8 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
 
   import Cyfr.Test.Wait
 
+  alias Cyfr.Test.AuthorityFixtures
   alias Cyfr.Test.ScriptedExecution
-  alias Sanctum.Authority
-  alias Sanctum.Test.AuthorityFixtures
 
   @moduletag :requires_opus_modules
 
@@ -101,7 +100,7 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
     assert_receive {:scripted_probe, worker, ^child_id}, 5_000
     assert worker == task.pid
 
-    assert Authority.budget(auth).in_flight == 1
+    assert Sanctum.Authority.budget(auth).in_flight == 1
     assert {:ok, [charge_row]} = Arca.BudgetReservations.charges(athanor_id, auth.budget.id)
     assert charge_row.admitted_at != nil
     assert charge_row.holder_execution_id == child_id
@@ -118,7 +117,7 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
 
     assert data["content"] == [%{"type" => "text", "text" => "hi"}]
 
-    assert Authority.budget(auth).in_flight == 0
+    assert Sanctum.Authority.budget(auth).in_flight == 0
     assert {:ok, []} = Arca.BudgetReservations.charges(athanor_id, auth.budget.id)
 
     assert %{state: "completed", outcome: "ok"} =
@@ -145,7 +144,7 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
 
     assert admitted_at != nil
 
-    wait_until(fn -> Authority.budget(auth).in_flight == 0 end)
+    wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     wait_until(fn -> Opus.ExecutionSemaphore.status().child_active == 0 end)
   end
 
@@ -160,7 +159,7 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
     assert %{state: "failed", outcome: "error"} =
              Arca.ExecutionAttempts.current(athanor_id, child_id)
 
-    assert Authority.budget(auth).in_flight == 0
+    assert Sanctum.Authority.budget(auth).in_flight == 0
     assert {:ok, []} = Arca.BudgetReservations.charges(athanor_id, auth.budget.id)
   end
 
@@ -175,7 +174,7 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
 
     assert {:error, :hold_expired} = run(fx)
     assert Arca.ExecutionAttempts.current(athanor_id, child_id) == nil
-    assert Authority.budget(auth).in_flight == 0
+    assert Sanctum.Authority.budget(auth).in_flight == 0
     assert ScriptedExecution.calls() == []
   end
 

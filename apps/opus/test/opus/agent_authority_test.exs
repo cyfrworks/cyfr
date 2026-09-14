@@ -112,7 +112,7 @@ defmodule Opus.AgentAuthorityTest do
     assert web.source_ref == "agent:local.web"
 
     {:ok, http_edge} =
-      Sanctum.Authority.Blob.lookup_edge(web.policy, "agent:local.web", "catalyst:local.http", "")
+      Cyfr.Authority.Blob.lookup_edge(web.policy, "agent:local.web", "catalyst:local.http", "")
 
     assert http_edge.egress.domains != []
   end
@@ -154,7 +154,7 @@ defmodule Opus.AgentAuthorityTest do
     {:ok, soul} = Opus.Chain.authority_for(ctx, :default, @soul)
 
     {:ok, web_edge} =
-      Sanctum.Authority.Blob.lookup_edge(
+      Cyfr.Authority.Blob.lookup_edge(
         soul.policy,
         "agent:local.web",
         "catalyst:local.claude",
@@ -162,7 +162,7 @@ defmodule Opus.AgentAuthorityTest do
       )
 
     {:ok, artisan_edge} =
-      Sanctum.Authority.Blob.lookup_edge(
+      Cyfr.Authority.Blob.lookup_edge(
         soul.policy,
         "agent:local.artisan",
         "catalyst:local.claude",

@@ -23,7 +23,7 @@ defmodule Opus.EdgeGuardTest do
   use ExUnit.Case, async: true
 
   alias Opus.EdgeGuard
-  alias Sanctum.Authority.Blob.Edge
+  alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Limits
 
   defp edge(attrs), do: struct!(Edge, attrs)

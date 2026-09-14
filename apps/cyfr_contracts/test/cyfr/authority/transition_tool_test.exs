@@ -1,11 +1,11 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.TransitionToolTest do
+defmodule Cyfr.Authority.TransitionToolTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
-  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
+  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
   @catalyst "catalyst:supabase.com.database"
 
@@ -96,40 +96,6 @@ defmodule Sanctum.Authority.TransitionToolTest do
 
       assert {:deny, :tool_server_not_granted} =
                Transition.step(auth, :call, external("sha256:other-server", "issues.list"))
-    end
-  end
-
-  # ============================================================================
-  # Spawned tool dispatch charges the root budget
-  # ============================================================================
-
-  describe "spawn budget on tools" do
-    test "a spawned tool dispatch takes a slot; a denied one does not" do
-      auth = Fixtures.root!(%{}, ceiling: %{max_concurrent_tasks: 1})
-
-      assert {:deny, :tool_not_granted} = Transition.step(auth, :spawn, tool("storage", "write"))
-      assert Authority.budget(auth).in_flight == 0
-
-      assert {:allow_tool, _} = Transition.step(auth, :spawn, tool("storage", "read"))
-      assert Authority.budget(auth).in_flight == 1
-
-      assert {:deny, :invoke_budget_exhausted} =
-               Transition.step(auth, :spawn, tool("storage", "read"))
-
-      Authority.release_invoke(auth)
-
-      assert {:allow_tool, _} =
-               Transition.step(auth, :spawn, external(Fixtures.server_digest(), "repo_get"))
-    end
-
-    test "a synchronous tool call never consumes budget" do
-      auth = Fixtures.root!(%{}, ceiling: %{max_concurrent_tasks: 1})
-
-      for _ <- 1..5 do
-        assert {:allow_tool, _} = Transition.step(auth, :call, tool("storage", "read"))
-      end
-
-      assert Authority.budget(auth).in_flight == 0
     end
   end
 

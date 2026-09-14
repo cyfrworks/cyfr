@@ -9,8 +9,8 @@ defmodule Emissary.MCP.NotesToolTest do
 
   alias Emissary.MCP.NotesTool, as: Tool
   alias Cyfr.Ops.Catalog
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Context
 
   setup do
@@ -94,7 +94,8 @@ defmodule Emissary.MCP.NotesToolTest do
           invoke_mode: :open_inert,
           activation: %{node => "sha256:notes"}
         },
-        blob
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
       )
 
     auth

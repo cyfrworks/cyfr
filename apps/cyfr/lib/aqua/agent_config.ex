@@ -234,8 +234,8 @@ defmodule Aqua.AgentConfig do
 
     with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, soul),
          {:ok, edge} <-
-           Sanctum.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
-      Sanctum.Authority.Blob.bound_vault?(edge.vault)
+           Cyfr.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
+      Cyfr.Authority.Blob.bound_vault?(edge.vault)
     else
       _ -> false
     end

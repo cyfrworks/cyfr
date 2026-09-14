@@ -11,11 +11,11 @@ defmodule Sanctum.Consent.Source do
 
   A consent arrives fully decoded: the adapter owns JSON/binary decoding,
   the loader never parses storage formats other than the resolved policy
-  blob itself (which stays a string because `Sanctum.Authority.Blob.parse/1`
+  blob itself (which stays a string because `Cyfr.Authority.Blob.parse/1`
   is the single fail-closed entry for it).
   """
 
-  alias Sanctum.Authority.RootSelect
+  alias Cyfr.Authority.RootSelect
   alias Sanctum.Context
 
   @typedoc """

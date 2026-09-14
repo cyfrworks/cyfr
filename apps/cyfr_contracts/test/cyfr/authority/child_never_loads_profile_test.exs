@@ -1,11 +1,11 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.ChildNeverLoadsProfileTest do
+defmodule Cyfr.Authority.ChildNeverLoadsProfileTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
-  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
+  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
   # A child receives the caller's selected edge, even when the callee has
   # a profile with broader grants. Transition must not load callee profiles.
@@ -25,7 +25,7 @@ defmodule Sanctum.Authority.ChildNeverLoadsProfileTest do
 
     # It is loadable as a ROOT (external ingress)…
     {:ok, direct_blob} =
-      Sanctum.Authority.Blob.parse(%{
+      Cyfr.Authority.Blob.parse(%{
         "canonical" => "jcs-1",
         "nodes" => %{
           @catalyst => %{
@@ -40,7 +40,7 @@ defmodule Sanctum.Authority.ChildNeverLoadsProfileTest do
         }
       })
 
-    {:ok, direct} = Authority.root(callee_own_profile, direct_blob)
+    {:ok, direct} = Authority.root(callee_own_profile, direct_blob, ceiling: Fixtures.ceiling())
     assert direct.resources.vault.entry_id == "vault-admin"
 
     # …but in-chain, the child transition uses the CALLER's edge only.

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.SecretMasker do
+defmodule Cyfr.SecretMasker do
   @moduledoc """
   Masks credential values in execution output to prevent leakage in logs.
 
@@ -12,14 +12,11 @@ defmodule Opus.SecretMasker do
   ## Usage
 
   The caller supplies the values, because it is the caller that dispensed
-  them — `Opus.ExecutionPipeline.secrets/1` is the one collector (vault
-  fields preloaded by the executor plus whatever `Opus.OAuthHandler`
-  dispensed during the run). Masking happens at each egress of
-  guest-influenced text: completed output and failure messages in
-  `Opus.Executor` (record, telemetry, terminal event), and guest-emitted
-  events in `Opus.FormulaHandler.handle_emit`.
+  them (the vault fields unsealed for the run plus the OAuth tokens handed
+  out during it), and masks at each egress of guest-influenced text:
+  completed output, failure messages and guest-emitted events.
 
-      masked_output = Opus.SecretMasker.mask(output, secret_values)
+      masked_output = Cyfr.SecretMasker.mask(output, secret_values)
 
   ## Security Note
 
@@ -40,10 +37,10 @@ defmodule Opus.SecretMasker do
 
   ## Examples
 
-      iex> Opus.SecretMasker.mask(%{"result" => "key is sk-secret123"}, ["sk-secret123"])
+      iex> Cyfr.SecretMasker.mask(%{"result" => "key is sk-secret123"}, ["sk-secret123"])
       %{"result" => "key is [REDACTED]"}
 
-      iex> Opus.SecretMasker.mask(%{"data" => ["value1", "sk-secret"]}, ["sk-secret"])
+      iex> Cyfr.SecretMasker.mask(%{"data" => ["value1", "sk-secret"]}, ["sk-secret"])
       %{"data" => ["value1", "[REDACTED]"]}
 
   """
@@ -68,10 +65,10 @@ defmodule Opus.SecretMasker do
   releases part of a credential it would have masked whole, and holds
   nothing back when the text ends in no such prefix.
 
-      iex> Opus.SecretMasker.pending_prefix("key: sk-se", ["sk-secret"])
+      iex> Cyfr.SecretMasker.pending_prefix("key: sk-se", ["sk-secret"])
       5
 
-      iex> Opus.SecretMasker.pending_prefix("nothing to hold", ["sk-secret"])
+      iex> Cyfr.SecretMasker.pending_prefix("nothing to hold", ["sk-secret"])
       0
   """
   @spec pending_prefix(binary(), [String.t()]) :: non_neg_integer()
@@ -109,7 +106,7 @@ defmodule Opus.SecretMasker do
 
           {:error, _} ->
             Logger.warning(
-              "[Opus.SecretMasker] JSON re-decode failed after masking — masking operation may have broken JSON structure. Falling back to direct map masking."
+              "[Cyfr.SecretMasker] JSON re-decode failed after masking — masking operation may have broken JSON structure. Falling back to direct map masking."
             )
 
             mask_map(output, secret_values)
@@ -117,7 +114,7 @@ defmodule Opus.SecretMasker do
 
       {:error, _} ->
         Logger.debug(
-          "[Opus.SecretMasker] Output is not JSON-encodable, using direct map masking instead"
+          "[Cyfr.SecretMasker] Output is not JSON-encodable, using direct map masking instead"
         )
 
         mask_map(output, secret_values)

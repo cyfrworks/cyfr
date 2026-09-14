@@ -40,7 +40,7 @@ defmodule Cyfr.Test.ScriptedExecution do
 
   @behaviour Cyfr.Execution
 
-  alias Sanctum.Authority
+  alias Cyfr.Authority
 
   @agent __MODULE__
 
@@ -157,12 +157,12 @@ defmodule Cyfr.Test.ScriptedExecution do
     with {:ok, decision} <- chain().step_invoke(authority, reference, need, opts) do
       if Keyword.get(opts, :guest_fn) == :spawn do
         with :ok <- charge().take(decision.authority, opts) do
-          Authority.guard_invoke(decision.authority)
+          Sanctum.Authority.guard_invoke(decision.authority)
 
           try do
             run_scripted(decision, reference, input, opts)
           after
-            Authority.release_invoke(decision.authority)
+            Sanctum.Authority.release_invoke(decision.authority)
             charge().give_back(decision.authority, opts)
           end
         end

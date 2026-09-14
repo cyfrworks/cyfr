@@ -2,288 +2,64 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Authority do
   @moduledoc """
-  The runtime authority of one execution in a consented chain.
+  The live half of `Cyfr.Authority`: what an authority does against this
+  node's running state rather than as data.
 
-  An Authority is built once per root execution from a profile and its
-  consent's resolved policy blob, then travels the chain by value: every
-  child transition returns a *new* Authority. What a node may do is decided
-  entirely by the cursor position and the edge resources captured here —
-  a `Sanctum.Context` supplies tenant binding and attribution, never
-  in-chain authorization.
-
-  ## Cursor
-
-  `{:bound, node_ref}` — the execution is a node of the consented graph;
-  its consumable resources are exactly the edge it was reached through.
-  `:unbound` — the execution fell off the graph (dynamic dispatch to an
-  unconsented component). Unbound is structural: `policy` and `resources`
-  become `:none` and the identity fields nil, so no descendant *can*
-  consult a consent node. Boundness is never regained.
-
-  ## ZeroAuthority
-
-  `zero/0` is the authority of code with no applicable profile: no
-  resources, no control-plane access, only inert invocation, under the
-  `zero_limits/0` constants. Their byte ceilings and rate limit are the
-  shared `Cyfr.Limits` defaults; the other three fields (timeout,
-  batch_timeout, max_concurrent_tasks) are deliberately tighter than
-  `Cyfr.Limits.defaults/1`, so they are never derived from it.
-
-  ## Root budget
-
-  `budget` names the root-keyed invoke budget (`Sanctum.Authority.Budget`):
-  an id and a cap, created once per root and copied into every child
-  Authority — including unbound ones — so concurrency is bounded per root
-  tree, not per level, and the bound survives closure capture across spawn
-  layers. The id names the root's reservation row
-  (`Arca.BudgetReservations`), which is the authority on what is in
-  flight; the counter behind the id on this node is a pre-check. The
-  struct itself is plain data, and the wire carries the id alone: a
-  reader takes the cap from the row.
-
-  ## Wire
-
-  An Authority is plain data end to end — `to_wire/1` gives the JCS-ready
-  map of its twelve fields and `from_wire/1` reads it back — so a worker
-  on another node can run under exactly the authority the root resolved.
+    * `step/3` is `Cyfr.Authority.Transition.step/3` with the root budget
+      charged. Every `spawn` outcome that starts work — a bound child, a
+      zero child, or an allowed tool dispatch — takes one slot of the
+      root-keyed invoke budget at this single chokepoint; exhaustion turns
+      the outcome into `{:deny, :invoke_budget_exhausted}`. A denied or
+      malformed spawn consumes nothing, and synchronous `call` is bounded
+      by the depth cap instead: it adds no concurrency, the parent blocks.
+      The caller releases the slot via `release_invoke/1` when the spawned
+      work completes.
+    * The invoke-budget counter (`Sanctum.Authority.BudgetCounter`) behind
+      the budget id: `try_acquire_invoke/1`, `guard_invoke/2`,
+      `release_invoke/1` and `budget/1`. The id names the root's reservation
+      row (`Arca.BudgetReservations`), which is the authority on what is in
+      flight; the counter on this node is a pre-check.
+    * `from_wire/1`, which reads `Cyfr.Authority.to_wire/1`'s map back under
+      this instance's platform ceiling and the reservation row's cap.
   """
 
-  alias Sanctum.Authority.Blob
-  alias Sanctum.Authority.Budget
-  alias Cyfr.Limits
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
+  alias Cyfr.Authority.Budget
+  alias Cyfr.Authority.Transition
+  alias Sanctum.Authority.BudgetCounter
+  alias Sanctum.Authority.BudgetGuard
 
-  @type cursor :: {:bound, String.t()} | :unbound
-  @type invoke_mode :: :open_inert | :edge_only
-  @type profile_kind :: :owner | :public
-
-  @type profile :: %{
-          required(:profile_id) => String.t(),
-          required(:consent_id) => String.t(),
-          required(:source_ref) => String.t(),
-          required(:kind) => profile_kind(),
-          required(:invoke_mode) => invoke_mode(),
-          required(:activation) => %{optional(String.t()) => String.t()}
-        }
-
-  @type root_error ::
-          {:invalid_profile, atom()}
-          | {:unknown_source_node, String.t()}
-          | {:missing_ingress, String.t()}
-
-  @type t :: %__MODULE__{
-          profile_id: String.t() | nil,
-          consent_id: String.t() | nil,
-          source_ref: String.t() | nil,
-          profile_kind: profile_kind() | nil,
-          policy: Blob.t() | :none,
-          activation: %{optional(String.t()) => String.t()},
-          invoke_mode: invoke_mode(),
-          cursor: cursor(),
-          resources: Blob.Edge.t() | :none,
-          chain: [String.t()],
-          depth: non_neg_integer(),
-          budget: Budget.t()
-        }
-
-  defstruct [
-    :profile_id,
-    :consent_id,
-    :source_ref,
-    :profile_kind,
-    :policy,
-    :activation,
-    :invoke_mode,
-    :cursor,
-    :resources,
-    :chain,
-    :depth,
-    :budget
-  ]
-
-  # Chain depth bound. Must sit strictly below the per-tenant execution
-  # semaphore slot count (default 16): a parent holds its slot while
-  # blocking on a child, so a deeper chain than there are slots would
-  # self-deadlock a tenant. Asserted against live config in the opus suite.
-  @depth_cap 8
-
-  # ZeroAuthority limits (see moduledoc): the timeouts and the task bound
-  # stay tighter than any type default.
-  @zero_limits %Limits{
-    timeout: "30s",
-    max_memory_bytes: Limits.default_max_memory_bytes(),
-    max_request_size: Limits.default_max_request_size(),
-    max_response_size: Limits.default_max_response_size(),
-    rate_limit: Limits.default_rate_limit(),
-    max_concurrent_tasks: 1,
-    batch_timeout: "30s"
-  }
-
-  @valid_kinds [:owner, :public]
-  @valid_invoke_modes [:open_inert, :edge_only]
+  @depth_cap Authority.depth_cap()
 
   # ============================================================================
-  # Construction
+  # Charged transition
   # ============================================================================
 
   @doc """
-  The authority of a component with no applicable profile.
+  Apply one guest function to a target under an Authority, charging the
+  root budget for every `spawn` that starts work.
+
+  The decision is `Cyfr.Authority.Transition.step/3`'s; a caller that
+  dispatches the outcome as spawned work steps through here so no handler
+  can forget the charge and no deny path needs a rollback.
   """
-  @spec zero() :: t()
-  def zero do
-    %__MODULE__{
-      profile_id: nil,
-      consent_id: nil,
-      source_ref: nil,
-      profile_kind: nil,
-      policy: :none,
-      activation: %{},
-      invoke_mode: :open_inert,
-      cursor: :unbound,
-      resources: :none,
-      chain: [],
-      depth: 0,
-      budget: Budget.new(@zero_limits.max_concurrent_tasks)
-    }
+  @spec step(Authority.t(), Transition.guest_fn(), Transition.target()) :: Transition.outcome()
+  def step(%Authority{} = auth, guest_fn, target) do
+    auth
+    |> Transition.step(guest_fn, target)
+    |> charge_spawn_budget(auth, guest_fn)
   end
 
-  @doc """
-  The ZeroAuthority limit constants.
-  """
-  @spec zero_limits() :: Limits.t()
-  def zero_limits, do: @zero_limits
-
-  @doc """
-  Build the root Authority for a profile from its consent's resolved blob.
-
-  The blob is ceiling-clamped here — an Authority is clamped by
-  construction, never at use time. Fails closed when the blob has no node
-  for the profile's source ref or that node lacks an `"@ingress"` edge
-  (authority always comes from an edge, even for direct invocation), and
-  when a public profile is not `:edge_only`.
-
-  Options: `:ceiling` overrides the platform ceiling (tests only).
-  """
-  @spec root(profile(), Blob.t(), keyword()) :: {:ok, t()} | {:error, root_error()}
-  def root(profile, %Blob{} = blob, opts \\ []) do
-    ceiling = Keyword.get(opts, :ceiling) || Sanctum.Policy.Ceiling.platform_ceiling()
-
-    with :ok <- validate_profile(profile),
-         clamped = Blob.clamp(blob, ceiling),
-         {:ok, source_node} <- fetch_source_node(clamped, profile.source_ref),
-         {:ok, ingress_edge} <- fetch_ingress(clamped, profile.source_ref) do
-      {:ok,
-       %__MODULE__{
-         profile_id: profile.profile_id,
-         consent_id: profile.consent_id,
-         source_ref: profile.source_ref,
-         profile_kind: profile.kind,
-         policy: clamped,
-         activation: profile.activation,
-         invoke_mode: profile.invoke_mode,
-         cursor: {:bound, profile.source_ref},
-         resources: ingress_edge,
-         chain: [profile.source_ref],
-         depth: 0,
-         budget:
-           Budget.new(source_node.limits.max_concurrent_tasks, Keyword.get(opts, :budget_id))
-       }}
+  defp charge_spawn_budget(outcome, auth, :spawn)
+       when elem(outcome, 0) in [:child, :child_zero, :allow_tool] do
+    case try_acquire_invoke(auth) do
+      :ok -> outcome
+      {:error, :invoke_budget_exhausted} -> {:deny, :invoke_budget_exhausted}
     end
   end
 
-  # ============================================================================
-  # Child construction (used by Sanctum.Authority.Transition)
-  # ============================================================================
-
-  @doc """
-  The Authority a child receives through a consented edge: bound at the
-  target, carrying exactly that edge's resources.
-  """
-  @spec bound_child(t(), String.t(), Blob.Edge.t()) :: t()
-  def bound_child(%__MODULE__{cursor: {:bound, _}} = auth, dep_ref, %Blob.Edge{} = edge) do
-    %{
-      auth
-      | cursor: {:bound, dep_ref},
-        resources: edge,
-        chain: auth.chain ++ [dep_ref],
-        depth: auth.depth + 1
-    }
-  end
-
-  @doc """
-  The Authority a child receives with no matching edge: ZeroAuthority state
-  with the parent's chain, depth and root budget. Structural — the blob and
-  identity fields are gone, so unboundness is absorbing by construction.
-  """
-  @spec unbound_child(t(), String.t()) :: t()
-  def unbound_child(%__MODULE__{} = auth, target_ref) do
-    %{
-      auth
-      | profile_id: nil,
-        consent_id: nil,
-        source_ref: nil,
-        profile_kind: nil,
-        policy: :none,
-        activation: %{},
-        invoke_mode: :open_inert,
-        cursor: :unbound,
-        resources: :none,
-        chain: auth.chain ++ [target_ref],
-        depth: auth.depth + 1
-    }
-  end
-
-  @doc """
-  Self-invocation at the same activation identity preserves the cursor
-  and resources; only chain and depth advance.
-  """
-  @spec self_child(t(), String.t()) :: t()
-  def self_child(%__MODULE__{cursor: {:bound, _}} = auth, reference) do
-    %{auth | chain: auth.chain ++ [reference], depth: auth.depth + 1}
-  end
-
-  # ============================================================================
-  # Inspection
-  # ============================================================================
-
-  @doc """
-  The chain depth cap.
-  """
-  @spec depth_cap() :: pos_integer()
-  def depth_cap, do: @depth_cap
-
-  @spec bound?(t()) :: boolean()
-  def bound?(%__MODULE__{cursor: {:bound, _}}), do: true
-  def bound?(%__MODULE__{cursor: :unbound}), do: false
-
-  @spec current_node(t()) :: {:ok, String.t()} | :unbound
-  def current_node(%__MODULE__{cursor: {:bound, node}}), do: {:ok, node}
-  def current_node(%__MODULE__{cursor: :unbound}), do: :unbound
-
-  @doc """
-  The limits governing this execution: the current node's clamped limits
-  when bound, the ZeroAuthority constants when unbound. A bound Authority
-  without a blob is unrepresentable through the constructors, so there is
-  deliberately no clause for it.
-  """
-  @spec limits(t()) :: Limits.t()
-  def limits(%__MODULE__{cursor: {:bound, node}, policy: %Blob{} = blob}) do
-    {:ok, limits} = Blob.node_limits(blob, node)
-    limits
-  end
-
-  def limits(%__MODULE__{cursor: :unbound}), do: @zero_limits
-
-  @doc """
-  The limits consented for one node of the graph, by ref, whether or not
-  the cursor stands on it. A caller that must size a request before
-  stepping onto the node that will receive it needs this; `limits/1`
-  answers only for where the cursor is.
-  """
-  @spec node_limits(t(), String.t()) :: {:ok, Limits.t()} | {:error, :unknown_node}
-  def node_limits(%__MODULE__{policy: %Blob{} = blob}, node_ref) when is_binary(node_ref),
-    do: Blob.node_limits(blob, node_ref)
-
-  def node_limits(%__MODULE__{}, _node_ref), do: {:error, :unknown_node}
+  defp charge_spawn_budget(outcome, _auth, _fun), do: outcome
 
   # ============================================================================
   # Root budget
@@ -296,54 +72,28 @@ defmodule Sanctum.Authority do
   holder is brutally killed (the cancel and await-timeout paths) is
   released by the guard's `:DOWN` compensation instead of leaking.
   """
-  @spec try_acquire_invoke(t()) :: :ok | {:error, :invoke_budget_exhausted}
-  def try_acquire_invoke(%__MODULE__{budget: %Budget{} = budget}), do: Budget.try_acquire(budget)
+  @spec try_acquire_invoke(Authority.t()) :: :ok | {:error, :invoke_budget_exhausted}
+  def try_acquire_invoke(%Authority{budget: %Budget{} = budget}),
+    do: BudgetCounter.try_acquire(budget)
 
   @doc """
   Register the calling (or named) process as the holder of one charged
   slot — see `Sanctum.Authority.BudgetGuard`.
   """
-  @spec guard_invoke(t(), pid()) :: :ok
-  def guard_invoke(%__MODULE__{budget: %Budget{} = budget}, pid \\ self()),
-    do: Sanctum.Authority.BudgetGuard.guard(budget, pid)
+  @spec guard_invoke(Authority.t(), pid()) :: :ok
+  def guard_invoke(%Authority{budget: %Budget{} = budget}, pid \\ self()),
+    do: BudgetGuard.guard(budget, pid)
 
-  @spec release_invoke(t()) :: :ok
-  def release_invoke(%__MODULE__{budget: %Budget{} = budget}),
-    do: Sanctum.Authority.BudgetGuard.release(budget, self())
+  @spec release_invoke(Authority.t()) :: :ok
+  def release_invoke(%Authority{budget: %Budget{} = budget}),
+    do: BudgetGuard.release(budget, self())
 
-  @spec budget(t()) :: %{in_flight: non_neg_integer(), cap: non_neg_integer()}
-  def budget(%__MODULE__{budget: %Budget{} = budget}), do: Budget.snapshot(budget)
+  @spec budget(Authority.t()) :: %{in_flight: non_neg_integer(), cap: non_neg_integer()}
+  def budget(%Authority{budget: %Budget{} = budget}), do: BudgetCounter.snapshot(budget)
 
   # ============================================================================
   # Wire
   # ============================================================================
-
-  @doc """
-  The Authority as a JCS-ready map: string keys, JSON values, nothing
-  process-bound. `from_wire/1` reads it back.
-  """
-  @spec to_wire(t()) :: map()
-  def to_wire(%__MODULE__{} = auth) do
-    %{
-      "profile_id" => auth.profile_id,
-      "consent_id" => auth.consent_id,
-      "source_ref" => auth.source_ref,
-      "profile_kind" => auth.profile_kind && Atom.to_string(auth.profile_kind),
-      "policy" => if(match?(%Blob{}, auth.policy), do: Blob.to_map(auth.policy), else: nil),
-      "activation" => auth.activation,
-      "invoke_mode" => Atom.to_string(auth.invoke_mode),
-      "cursor" =>
-        case auth.cursor do
-          {:bound, ref} -> %{"bound" => ref}
-          :unbound -> "unbound"
-        end,
-      "resources" =>
-        if(match?(%Blob.Edge{}, auth.resources), do: Blob.edge_to_map(auth.resources), else: nil),
-      "chain" => auth.chain,
-      "depth" => auth.depth,
-      "budget" => %{"id" => auth.budget.id}
-    }
-  end
 
   @doc """
   An Authority back from its wire map. Fail-closed: every field is
@@ -351,7 +101,7 @@ defmodule Sanctum.Authority do
   a malformed cursor or a policy that does not parse is an error, never a
   looser Authority.
   """
-  @spec from_wire(map()) :: {:ok, t()} | {:error, term()}
+  @spec from_wire(map()) :: {:ok, Authority.t()} | {:error, term()}
   def from_wire(%{} = wire) do
     with :ok <- wire_keys(wire),
          {:ok, profile_kind} <- wire_enum(wire["profile_kind"], [:owner, :public], true),
@@ -364,7 +114,7 @@ defmodule Sanctum.Authority do
          :ok <- wire_activation(wire["activation"]),
          :ok <- wire_depth(wire["depth"]) do
       {:ok,
-       %__MODULE__{
+       %Authority{
          profile_id: wire["profile_id"],
          consent_id: wire["consent_id"],
          source_ref: wire["source_ref"],
@@ -409,11 +159,11 @@ defmodule Sanctum.Authority do
 
   defp wire_policy(%{} = map) do
     case Blob.parse(map) do
-      # Clamped on the way in, exactly as `root/3` clamps on the way out of a
-      # consent. A wire map is the one route to an Authority that does not
-      # pass through `root/3`, so it re-establishes the ceiling itself — a
-      # sender that could install its own limits would be a sender that
-      # writes its own roof.
+      # Clamped on the way in, exactly as `Cyfr.Authority.root/3` clamps on
+      # the way out of a consent. A wire map is the one route to an Authority
+      # that does not pass through `root/3`, so it re-establishes the ceiling
+      # itself — a sender that could install its own limits would be a sender
+      # that writes its own roof.
       {:ok, blob} -> {:ok, Blob.clamp(blob, Sanctum.Policy.Ceiling.platform_ceiling())}
       {:error, reason} -> {:error, {:invalid_wire_policy, reason}}
     end
@@ -467,64 +217,11 @@ defmodule Sanctum.Authority do
 
   defp wire_activation(other), do: {:error, {:invalid_wire_activation, other}}
 
-  # Bounded by the same cap `Sanctum.Authority.Transition` checks before every
+  # Bounded by the same cap `Cyfr.Authority.Transition` checks before every
   # invoke. Accepting any non-negative integer let a wire map hand back an
   # authority already past the cap — or restart the count at zero, which is
   # the other half of the same hole.
   defp wire_depth(depth) when is_integer(depth) and depth >= 0 and depth <= @depth_cap, do: :ok
+
   defp wire_depth(other), do: {:error, {:invalid_wire_depth, other}}
-
-  # ============================================================================
-  # Private
-  # ============================================================================
-
-  defp validate_profile(%{} = profile) do
-    cond do
-      not (is_binary(profile[:profile_id]) and profile[:profile_id] != "") ->
-        {:error, {:invalid_profile, :profile_id}}
-
-      not (is_binary(profile[:consent_id]) and profile[:consent_id] != "") ->
-        {:error, {:invalid_profile, :consent_id}}
-
-      not (is_binary(profile[:source_ref]) and profile[:source_ref] != "") ->
-        {:error, {:invalid_profile, :source_ref}}
-
-      profile[:kind] not in @valid_kinds ->
-        {:error, {:invalid_profile, :kind}}
-
-      profile[:invoke_mode] not in @valid_invoke_modes ->
-        {:error, {:invalid_profile, :invoke_mode}}
-
-      not valid_activation?(profile[:activation]) ->
-        {:error, {:invalid_profile, :activation}}
-
-      profile[:kind] == :public and profile[:invoke_mode] != :edge_only ->
-        {:error, {:invalid_profile, :public_requires_edge_only}}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_profile(_), do: {:error, {:invalid_profile, :not_a_map}}
-
-  defp valid_activation?(%{} = activation) when not is_struct(activation) do
-    Enum.all?(activation, fn {k, v} -> is_binary(k) and is_binary(v) end)
-  end
-
-  defp valid_activation?(_), do: false
-
-  defp fetch_source_node(blob, source_ref) do
-    case Blob.node(blob, source_ref) do
-      {:ok, node} -> {:ok, node}
-      {:error, :unknown_node} -> {:error, {:unknown_source_node, source_ref}}
-    end
-  end
-
-  defp fetch_ingress(blob, source_ref) do
-    case Blob.ingress(blob, source_ref) do
-      {:ok, edge} -> {:ok, edge}
-      {:error, :missing_ingress} -> {:error, {:missing_ingress, source_ref}}
-    end
-  end
 end

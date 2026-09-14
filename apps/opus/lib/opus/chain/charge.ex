@@ -17,7 +17,7 @@ defmodule Opus.Chain.Charge do
   attempt at all holds the slot alone.
   """
 
-  alias Sanctum.Authority
+  alias Cyfr.Authority
 
   @doc """
   The call's options with a charge identity: the given one, or one
@@ -57,7 +57,7 @@ defmodule Opus.Chain.Charge do
           :ok
 
         refusal ->
-          Sanctum.Authority.Budget.release(budget)
+          Sanctum.Authority.BudgetCounter.release(budget)
           {:error, {:invoke_denied, refusal_reason(refusal)}}
       end
     else

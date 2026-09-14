@@ -149,7 +149,7 @@ defmodule Sanctum.Consent.Plan do
       nil ->
         [
           %{
-            need: Sanctum.Authority.Blob.ingress_key(),
+            need: Cyfr.Authority.Blob.ingress_key(),
             reason: "credentials this component may use when invoked",
             required: false
           }
@@ -261,9 +261,9 @@ defmodule Sanctum.Consent.Plan do
       {:ok, profiles} ->
         for %{kind: :owner, status: :active} = profile <- profiles,
             {:ok, head} <- [Source.impl().head_consent(ctx, profile.id)],
-            {:ok, blob} <- [Sanctum.Authority.Blob.parse(head.resolved_policy)],
-            {:ok, ingress} <- [Sanctum.Authority.Blob.ingress(blob, dep)],
-            Sanctum.Authority.Blob.bound_vault?(ingress.vault),
+            {:ok, blob} <- [Cyfr.Authority.Blob.parse(head.resolved_policy)],
+            {:ok, ingress} <- [Cyfr.Authority.Blob.ingress(blob, dep)],
+            Cyfr.Authority.Blob.bound_vault?(ingress.vault),
             {:ok, entry} <-
               [
                 Sanctum.VaultReader.usable(

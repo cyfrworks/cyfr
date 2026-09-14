@@ -7,8 +7,8 @@ defmodule Opus.FormulaHandlerTest do
   import Cyfr.Test.Wait
 
   alias Opus.FormulaHandler
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
@@ -49,7 +49,7 @@ defmodule Opus.FormulaHandlerTest do
 
   # Helper to build MCP-format requests
   defp emitter(ctx, stream_id, opts \\ []),
-    do: Opus.Emit.open(stream_id, [ctx: ctx, authority: Sanctum.Authority.zero()] ++ opts)
+    do: Opus.Emit.open(stream_id, [ctx: ctx, authority: Cyfr.Authority.zero()] ++ opts)
 
   defp mcp_request(tool, action, args \\ %{}) do
     Jason.encode!(%{"tool" => tool, "action" => action, "args" => args})
@@ -113,7 +113,9 @@ defmodule Opus.FormulaHandlerTest do
       activation: %{@fh_node => "sha256:act-fh"}
     }
 
-    {:ok, auth} = Authority.root(profile, blob)
+    {:ok, auth} =
+      Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
+
     auth
   end
 
@@ -130,7 +132,7 @@ defmodule Opus.FormulaHandlerTest do
       Keyword.merge(
         [
           root_execution_id: parent_id,
-          limits: Sanctum.Authority.limits(auth),
+          limits: Cyfr.Authority.limits(auth),
           authority: auth,
           emitter: Opus.Emit.open(parent_id, ctx: Context.enter_guest(ctx), authority: auth),
           declared_needs: [],
@@ -152,7 +154,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, "exec_parent-123")
         )
 
@@ -184,7 +186,7 @@ defmodule Opus.FormulaHandlerTest do
     test "works without limits (defaults)", %{ctx: ctx} do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, "exec_parent-123")
         )
 
@@ -540,7 +542,7 @@ defmodule Opus.FormulaHandlerTest do
       result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
       parsed = Jason.decode!(result)
       assert parsed["error"]["type"] == "tool_denied"
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -691,7 +693,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_cancel_check",
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, "exec_cancel_check")
         )
 
@@ -787,7 +789,7 @@ defmodule Opus.FormulaHandlerTest do
       {_imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_cleanup",
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, "exec_cleanup")
         )
 
@@ -834,7 +836,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_test",
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, "exec_emit_test")
         )
 
@@ -857,7 +859,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_seq",
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, "exec_emit_seq")
         )
 
@@ -881,7 +883,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_bad",
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, "exec_emit_bad")
         )
 
@@ -905,7 +907,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, execution_id)
         )
 
@@ -935,7 +937,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, execution_id, secrets: ["sk-super-secret-value"])
         )
 
@@ -963,7 +965,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, execution_id)
         )
 
@@ -1010,7 +1012,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, execution_id)
         )
 
@@ -1043,7 +1045,7 @@ defmodule Opus.FormulaHandlerTest do
         FormulaHandler.build_formula_imports(ctx, parent_id,
           root_execution_id: root_id,
           limits: limits,
-          authority: Sanctum.Authority.zero(),
+          authority: Cyfr.Authority.zero(),
           emitter: emitter(ctx, root_id)
         )
 

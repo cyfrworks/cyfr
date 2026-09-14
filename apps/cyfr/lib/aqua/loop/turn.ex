@@ -17,7 +17,7 @@ defmodule Aqua.Loop.Turn do
 
   alias Aqua.Loop.Request
   alias Aqua.Tape
-  alias Sanctum.Authority
+  alias Cyfr.Authority
   alias Sanctum.Context
 
   @default_deadline_ms 15 * 60 * 1000

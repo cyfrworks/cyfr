@@ -4,7 +4,7 @@
 defmodule Sanctum.Consent.FlowTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Authority
+  alias Cyfr.Authority
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Plan

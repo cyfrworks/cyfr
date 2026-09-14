@@ -4,8 +4,8 @@ defmodule Sanctum.Authority.InvocationPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # Invocation permission depends on edge presence and invoke_mode, independently of edge resources.

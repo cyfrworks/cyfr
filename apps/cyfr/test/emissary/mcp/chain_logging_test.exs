@@ -12,8 +12,8 @@ defmodule Emissary.MCP.ChainLoggingTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Context
 
   @node "formula:local.chain-logging"
@@ -72,7 +72,8 @@ defmodule Emissary.MCP.ChainLoggingTest do
           invoke_mode: :open_inert,
           activation: %{@node => "sha256:chain"}
         },
-        blob
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
       )
 
     auth

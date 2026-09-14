@@ -210,10 +210,10 @@ defmodule Opus.ChainScopeTest do
       }
     }
 
-    {:ok, blob} = Sanctum.Authority.Blob.parse(graph)
+    {:ok, blob} = Cyfr.Authority.Blob.parse(graph)
 
     {:ok, auth} =
-      Sanctum.Authority.root(
+      Cyfr.Authority.root(
         %{
           profile_id: "prof-scope",
           consent_id: "consent-scope",
@@ -222,7 +222,8 @@ defmodule Opus.ChainScopeTest do
           invoke_mode: :open_inert,
           activation: %{node => "sha256:scope"}
         },
-        blob
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
       )
 
     auth

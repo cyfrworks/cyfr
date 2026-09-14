@@ -231,7 +231,7 @@ defmodule Sanctum.Consent.Bootstrap do
         {:ok, %{"nodes" => nodes}} when is_map(nodes) ->
           for {from, node} <- nodes,
               {key, %{"vault" => %{"via" => _}}} <- node["edges"] || %{},
-              {:ok, dep} <- [Sanctum.Authority.Blob.edge_target(key)],
+              {:ok, dep} <- [Cyfr.Authority.Blob.edge_target(key)],
               into: MapSet.new(),
               do: {from, dep}
 

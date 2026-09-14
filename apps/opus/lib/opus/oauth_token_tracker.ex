@@ -4,7 +4,7 @@
 defmodule Opus.OAuthTokenTracker do
   @moduledoc """
   Owns the ETS table of OAuth access tokens dispensed to WASM guests during
-  execution, so `Opus.SecretMasker` can redact them from stored output.
+  execution, so `Cyfr.SecretMasker` can redact them from stored output.
 
   The table is `:private` and owned by this supervised process — plaintext
   access tokens are never held in a `:public` table readable by any process on
@@ -58,7 +58,7 @@ defmodule Opus.OAuthTokenTracker do
 
   @doc """
   Collect and delete all dispensed tokens for an execution. Returns the token
-  strings for `Opus.SecretMasker`. Safe to call multiple times (second call
+  strings for `Cyfr.SecretMasker`. Safe to call multiple times (second call
   returns `[]`).
   """
   @spec collect(String.t() | nil) :: [String.t()]

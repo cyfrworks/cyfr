@@ -5,7 +5,7 @@ defmodule Opus.EdgeGuard do
   @moduledoc """
   Resource checks over a consent edge, shared by every WASI host handler.
 
-  An execution's capability is the `%Sanctum.Authority.Blob.Edge{}` it runs
+  An execution's capability is the `%Cyfr.Authority.Blob.Edge{}` it runs
   under plus the node's `%Cyfr.Limits{}`. This module is the single home
   for matching a concrete request against that edge — domains, schemes,
   methods, private IPs, storage paths and actions — and for the request /
@@ -25,7 +25,7 @@ defmodule Opus.EdgeGuard do
   tests pin them, so they must not drift.
   """
 
-  alias Sanctum.Authority.Blob.Edge
+  alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Limits
 
   @type edge :: Edge.t() | nil

@@ -136,12 +136,11 @@ defmodule Compendium.AgentSourceTest do
 
     # The node keys are the blob's grammar.
     assert {:ok, _} =
-             Sanctum.Authority.Blob.parse(%{
+             Cyfr.Authority.Blob.parse(%{
                "canonical" => "jcs-1",
                "nodes" =>
                  Map.new(keys, fn key ->
-                   {key,
-                    %{"limits" => Sanctum.Test.AuthorityFixtures.limits_map(), "edges" => %{}}}
+                   {key, %{"limits" => Cyfr.Test.AuthorityFixtures.limits_map(), "edges" => %{}}}
                  end)
              })
   end

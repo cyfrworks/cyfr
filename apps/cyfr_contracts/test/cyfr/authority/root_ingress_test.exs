@@ -1,12 +1,12 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.RootIngressTest do
+defmodule Cyfr.Authority.RootIngressTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
-  alias Sanctum.Authority.Transition
-  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
+  alias Cyfr.Authority.Transition
+  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
   # Direct catalyst invocation receives resources through the synthetic @ingress edge.
 
@@ -43,7 +43,8 @@ defmodule Sanctum.Authority.RootIngressTest do
     {:ok, auth} =
       Authority.root(
         Fixtures.profile(%{source_ref: @catalyst, activation: %{@catalyst => "sha256:c"}}),
-        blob
+        blob,
+        ceiling: Fixtures.ceiling()
       )
 
     {:ok, ingress_edge} = Blob.ingress(auth.policy, @catalyst)
@@ -74,7 +75,8 @@ defmodule Sanctum.Authority.RootIngressTest do
     assert {:error, {:missing_ingress, @catalyst}} =
              Authority.root(
                Fixtures.profile(%{source_ref: @catalyst, activation: %{@catalyst => "sha256:c"}}),
-               blob
+               blob,
+               ceiling: Fixtures.ceiling()
              )
   end
 end

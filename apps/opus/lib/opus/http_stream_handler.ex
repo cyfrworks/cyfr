@@ -44,7 +44,7 @@ defmodule Opus.HttpStreamHandler do
 
   require Logger
 
-  alias Sanctum.Authority.Blob.Edge
+  alias Cyfr.Authority.Blob.Edge
   alias Sanctum.Context
   alias Cyfr.Limits
   alias Opus.{HttpHandler, HttpRequestValidation}
@@ -541,7 +541,7 @@ defmodule Opus.HttpStreamHandler do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
   end
 
-  defp safe_encode(data), do: Opus.WitResponse.safe_encode(data)
+  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
 
-  defp encode_error(type, message), do: Opus.WitResponse.encode_error(type, message)
+  defp encode_error(type, message), do: Cyfr.WitResponse.encode_error(type, message)
 end

@@ -74,10 +74,10 @@ defmodule Aqua.LoopTest do
     # The graph is keyed the way `Opus.Chain` steps: by name. Asking with
     # the version answers nothing, and a cap of nil is a size check that
     # never fires — which is what the loop did while it asked that way.
-    assert {:error, :unknown_node} = Sanctum.Authority.node_limits(authority, versioned)
+    assert {:error, :unknown_node} = Cyfr.Authority.node_limits(authority, versioned)
 
     assert {:ok, %Cyfr.Limits{max_request_size: cap}} =
-             Sanctum.Authority.node_limits(authority, name_ref)
+             Cyfr.Authority.node_limits(authority, name_ref)
 
     assert is_integer(cap) and cap > 0
   end

@@ -4,8 +4,8 @@ defmodule Sanctum.Authority.LimitsPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
   alias Sanctum.Policy.Ceiling
   alias Sanctum.Test.AuthorityGen, as: Gen
 
@@ -24,7 +24,7 @@ defmodule Sanctum.Authority.LimitsPropertyTest do
       for {_before, _step, _outcome, after_auth} <- Gen.run_walk(auth, meta, steps) do
         case Authority.current_node(after_auth) do
           {:ok, node} ->
-            {:ok, raw_limits} = Sanctum.Authority.Blob.node_limits(raw, node)
+            {:ok, raw_limits} = Cyfr.Authority.Blob.node_limits(raw, node)
             assert Authority.limits(after_auth) == Cyfr.Limits.clamp(raw_limits, ceiling)
 
           :unbound ->
@@ -43,7 +43,7 @@ defmodule Sanctum.Authority.LimitsPropertyTest do
         need_arg = if need == "", do: nil, else: need
         {:child, child} = Transition.step(auth, :call, Gen.invoke_at(auth, meta, to, need_arg))
 
-        {:ok, callee_limits} = Sanctum.Authority.Blob.node_limits(auth.policy, to)
+        {:ok, callee_limits} = Cyfr.Authority.Blob.node_limits(auth.policy, to)
         assert Authority.limits(child) == callee_limits
       end
     end

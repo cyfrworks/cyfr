@@ -45,7 +45,7 @@ defmodule Opus.ExecutionProvenanceTest do
         ctx,
         Probe.probe_ref(),
         %{"op" => "echo"},
-        [type: :formula, authority: Sanctum.Authority.zero()] ++ opts
+        [type: :formula, authority: Cyfr.Authority.zero()] ++ opts
       )
 
     assert result.status == :completed

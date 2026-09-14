@@ -37,7 +37,7 @@ defmodule Opus.HttpHandler do
 
   require Logger
 
-  alias Sanctum.Authority.Blob.Edge
+  alias Cyfr.Authority.Blob.Edge
   alias Sanctum.Context
   alias Cyfr.Limits
   alias Opus.EdgeGuard
@@ -58,7 +58,7 @@ defmodule Opus.HttpHandler do
 
   ## Parameters
 
-  - `edge` - The `Sanctum.Authority.Blob.Edge` to enforce (nil = deny all egress)
+  - `edge` - The `Cyfr.Authority.Blob.Edge` to enforce (nil = deny all egress)
   - `limits` - The node's `Cyfr.Limits` (sizes, timeout)
   - `ctx` - The execution `Sanctum.Context`
   - `component_ref` - Component reference string for telemetry/audit
@@ -354,7 +354,7 @@ defmodule Opus.HttpHandler do
   # Private: Response Encoding
   # ============================================================================
 
-  defp safe_encode(data), do: Opus.WitResponse.safe_encode(data)
+  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
 
   @doc false
   def encode_response(status, headers, body) do
@@ -391,7 +391,7 @@ defmodule Opus.HttpHandler do
   end
 
   @doc false
-  def encode_error(type, message), do: Opus.WitResponse.encode_error(type, message)
+  def encode_error(type, message), do: Cyfr.WitResponse.encode_error(type, message)
 
   # Replace invalid UTF-8 bytes with the Unicode replacement character (U+FFFD).
   # Some servers (e.g. japan-guide.com) return Windows-1252 or other legacy

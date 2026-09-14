@@ -63,12 +63,25 @@ defmodule Locus.HostSurfaceTest do
   defp contracts do
     modules =
       for path <- Path.wildcard(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
-          [_, module] <- Regex.scan(~r/^defmodule ([A-Z][\w.]*)/m, File.read!(path)),
+          module <- defined_modules(File.read!(path)),
           into: MapSet.new(),
           do: module
 
     if MapSet.size(modules) == 0, do: raise("no modules found under apps/cyfr_contracts/lib")
     modules
+  end
+
+  # Every `defmodule` in formatted source, a nested one named under the
+  # module enclosing it (`Outer.Inner`): each level indents two spaces.
+  defp defined_modules(source) do
+    source
+    |> Cyfr.Test.CodeLines.lines()
+    |> Enum.flat_map(&Regex.scan(~r/^((?:  )*)defmodule ([A-Z][\w.]*) do/, &1))
+    |> Enum.map_reduce([], fn [_, indent, name], enclosing ->
+      path = Enum.take(enclosing, div(byte_size(indent), 2)) ++ [name]
+      {Enum.join(path, "."), path}
+    end)
+    |> elem(0)
   end
 
   # A reach counts unless it names a contracts module exactly, so a cyfr

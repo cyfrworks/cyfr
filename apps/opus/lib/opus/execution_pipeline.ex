@@ -24,7 +24,7 @@ defmodule Opus.ExecutionPipeline do
           record: ExecutionRecord.t() | nil,
           exec_opts: keyword(),
           host_policy: map() | nil,
-          edge: Sanctum.Authority.Blob.Edge.t() | nil,
+          edge: Cyfr.Authority.Blob.Edge.t() | nil,
           preloaded_fields: map(),
           started_written: reference() | nil,
           opts: keyword()

@@ -116,7 +116,7 @@ defmodule Opus.ExecutionSemaphore do
   """
   @spec max_tenant_footprint(pos_integer()) :: pos_integer()
   def max_tenant_footprint(tenant_max) when is_integer(tenant_max),
-    do: tenant_max * Sanctum.Authority.depth_cap()
+    do: tenant_max * Cyfr.Authority.depth_cap()
 
   # Said once, at boot, where an operator can act on it. Capping children per
   # tenant is not the fix: a chain that cannot get a child slot waits while
@@ -128,7 +128,7 @@ defmodule Opus.ExecutionSemaphore do
     if footprint >= max do
       Logger.warning(
         "[Opus.ExecutionSemaphore] one athanor can hold every slot on this node: " <>
-          "#{tenant_max} roots x depth #{Sanctum.Authority.depth_cap()} = #{footprint} >= " <>
+          "#{tenant_max} roots x depth #{Cyfr.Authority.depth_cap()} = #{footprint} >= " <>
           "#{max} slots. Children are exempt from the per-tenant cap by design (a chain " <>
           "must be able to finish), so the cap bounds roots, not footprint. Lower " <>
           "CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT or raise " <>

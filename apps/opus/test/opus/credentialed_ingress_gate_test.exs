@@ -12,8 +12,8 @@ defmodule Opus.CredentialedIngressGateTest do
 
   use ExUnit.Case, async: false
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.CipherAAD
   alias Sanctum.Vault.Payload
   alias Sanctum.VaultReader
@@ -81,7 +81,8 @@ defmodule Opus.CredentialedIngressGateTest do
           invoke_mode: :open_inert,
           activation: %{node => "sha256:gate"}
         },
-        blob
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
       )
 
     auth

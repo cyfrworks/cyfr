@@ -3,11 +3,11 @@
 defmodule Sanctum.Authority.SchemaFreezeTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
-  alias Sanctum.Authority.Blob.Edge
-  alias Sanctum.Authority.Blob.Node
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
+  alias Cyfr.Authority.Blob.Edge
+  alias Cyfr.Authority.Blob.Node
+  alias Cyfr.Authority.Transition
   alias Cyfr.Limits
   alias Cyfr.Limits.Ceiling
 
@@ -184,7 +184,8 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
             "catalyst:supabase.com.database" => "sha256:act-c"
           }
         },
-        blob
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
       )
 
     source_invoke =

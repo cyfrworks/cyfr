@@ -11,7 +11,7 @@ defmodule Opus.Executor do
 
   ## Usage
 
-  Every execution roots under a `Sanctum.Authority` — production callers go
+  Every execution roots under a `Cyfr.Authority` — production callers go
   through the `Opus` facade (`run_root`/`run_child`), which derives one from
   the caller's consented profile. Calling the executor directly requires
   passing the authority explicitly:
@@ -178,7 +178,7 @@ defmodule Opus.Executor do
     # budget its authority was minted with; a child charges its root's.
     record_opts =
       case {opts[:root_execution_id], opts[:authority]} do
-        {nil, %Sanctum.Authority{budget: %Sanctum.Authority.Budget{id: id, cap: cap}}} ->
+        {nil, %Cyfr.Authority{budget: %Cyfr.Authority.Budget{id: id, cap: cap}}} ->
           [{:reservation, %{budget_id: id, cap: cap}} | record_opts]
 
         _ ->
@@ -371,7 +371,7 @@ defmodule Opus.Executor do
   # rather than running with ambient permissions.
   defp stage_enforce_policy(%ExecutionPipeline{} = p, input) do
     case p.opts[:authority] do
-      %Sanctum.Authority{} = authority ->
+      %Cyfr.Authority{} = authority ->
         staged(p, enforce_authority(p, authority, input))
 
       other ->
@@ -386,7 +386,7 @@ defmodule Opus.Executor do
   # Static-dependency satisfaction was already proven by the loader's
   # all-or-nothing activation resolution.
   defp enforce_authority(%ExecutionPipeline{} = p, authority, input) do
-    limits = Sanctum.Authority.limits(authority)
+    limits = Cyfr.Authority.limits(authority)
     edge = edge_resources(authority)
 
     # An unparseable consented timeout fails the execution rather than
@@ -430,7 +430,7 @@ defmodule Opus.Executor do
   end
 
   # Store runtime facts and join attribution from immutable consent rows on read.
-  defp authority_audit(%ExecutionPipeline{} = p, %Sanctum.Authority{} = authority) do
+  defp authority_audit(%ExecutionPipeline{} = p, %Cyfr.Authority{} = authority) do
     %{
       consent_id: authority.consent_id,
       activation_digest: p.opts[:activation_digest],
@@ -442,16 +442,16 @@ defmodule Opus.Executor do
     }
   end
 
-  defp edge_resources(%Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{} = edge}),
+  defp edge_resources(%Cyfr.Authority{resources: %Cyfr.Authority.Blob.Edge{} = edge}),
     do: edge
 
-  defp edge_resources(%Sanctum.Authority{resources: :none}), do: nil
+  defp edge_resources(%Cyfr.Authority{resources: :none}), do: nil
 
   defp cursor_state({:bound, node}), do: "bound:" <> node
   defp cursor_state(:unbound), do: "unbound"
   defp cursor_state(_), do: nil
 
-  defp value_source(%Sanctum.Authority.Blob.Edge{vault: %{entry_id: entry_id}}),
+  defp value_source(%Cyfr.Authority.Blob.Edge{vault: %{entry_id: entry_id}}),
     do: Emissary.MCP.VaultRef.build(entry_id)
 
   defp value_source(_resources), do: nil
@@ -503,7 +503,7 @@ defmodule Opus.Executor do
 
   defp resolve_vault_fields(%ExecutionPipeline{} = p) do
     case p.opts[:authority] do
-      %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{via: via}}} = authority ->
+      %Cyfr.Authority{resources: %Cyfr.Authority.Blob.Edge{vault: %{via: via}}} = authority ->
         {:error,
          {:setup_required,
           %{
@@ -513,7 +513,7 @@ defmodule Opus.Executor do
             reason: vault_setup_reason({:selection_unbound, via.label})
           }}}
 
-      %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
+      %Cyfr.Authority{resources: %Cyfr.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
         if Sanctum.Consent.Loader.pinned_intact?(p.ctx, authority) do
           case Opus.Host.unseal(p.ctx, vault) do
             {:ok, secrets} ->
@@ -584,7 +584,7 @@ defmodule Opus.Executor do
   # ===========================================================================
 
   defp finalize_execution(%ExecutionPipeline{} = p, output, exec_metadata) do
-    masked_output = Opus.SecretMasker.mask(output, ExecutionPipeline.secrets(p))
+    masked_output = Cyfr.SecretMasker.mask(output, ExecutionPipeline.secrets(p))
 
     with :ok <- check_application_error(p, masked_output),
          :ok <- check_response_size(p, masked_output) do
@@ -1442,7 +1442,7 @@ defmodule Opus.Executor do
   # broadcasting them. secrets/1 also drains the OAuth token tracker.
   defp handle_failure(%ExecutionPipeline{} = p, error_msg) do
     record = p.record
-    error_msg = Opus.SecretMasker.mask(error_msg, ExecutionPipeline.secrets(p))
+    error_msg = Cyfr.SecretMasker.mask(error_msg, ExecutionPipeline.secrets(p))
     failed_record = ExecutionRecord.fail(record, error_msg)
 
     if :atomics.get(p.started_written, 1) == 0 do

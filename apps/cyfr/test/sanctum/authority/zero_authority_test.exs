@@ -3,80 +3,25 @@
 defmodule Sanctum.Authority.ZeroAuthorityTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Authority
-  alias Cyfr.Limits
+  alias Cyfr.Authority
 
-  # Zero authority has no resources or control-plane access and uses the specified limit constants.
-
-  test "zero/0 carries nothing" do
-    zero = Authority.zero()
-
-    assert zero.profile_id == nil
-    assert zero.consent_id == nil
-    assert zero.source_ref == nil
-    assert zero.profile_kind == nil
-    assert zero.policy == :none
-    assert zero.activation == %{}
-    assert zero.invoke_mode == :open_inert
-    assert zero.cursor == :unbound
-    assert zero.resources == :none
-    assert zero.chain == []
-    assert zero.depth == 0
-    refute Authority.bound?(zero)
-    assert Authority.current_node(zero) == :unbound
-  end
-
-  test "zero_limits/0 returns the specified limit values" do
-    expected = %Limits{
-      timeout: "30s",
-      max_memory_bytes: 67_108_864,
-      max_request_size: 1_048_576,
-      max_response_size: 5_242_880,
-      rate_limit: %{requests: 100, window: "1m"},
-      max_concurrent_tasks: 1,
-      batch_timeout: "30s"
-    }
-
-    assert Authority.zero_limits() == expected
-    assert Authority.limits(Authority.zero()) == expected
-  end
-
-  test "zero limits are strictly tighter than type defaults on three fields" do
-    # Limits.defaults/1 is looser on exactly these; zero limits never take
-    # them from it.
-    zero = Authority.zero_limits()
-    default = Cyfr.Limits.defaults(:reagent)
-
-    assert zero.timeout == "30s" and default.timeout == "1m"
-    assert zero.batch_timeout == "30s" and default.batch_timeout == "5m"
-    assert zero.max_concurrent_tasks == 1 and default.max_concurrent_tasks == 10
-  end
-
-  test "zero byte ceilings and rate limit are the shared Limits defaults" do
-    zero = Authority.zero_limits()
-
-    assert zero.max_request_size == Limits.default_max_request_size()
-    assert zero.max_memory_bytes == Limits.default_max_memory_bytes()
-    assert zero.max_response_size == Limits.default_max_response_size()
-    assert zero.rate_limit == Limits.default_rate_limit()
-    assert Limits.defaults(:reagent).rate_limit == Limits.default_rate_limit()
-  end
+  # A zero authority's invoke budget admits one spawn at a time, per zero/0 call.
 
   test "zero budget admits exactly one spawn" do
     zero = Authority.zero()
 
-    assert Authority.budget(zero) == %{in_flight: 0, cap: 1}
-    assert Authority.try_acquire_invoke(zero) == :ok
-    assert Authority.try_acquire_invoke(zero) == {:error, :invoke_budget_exhausted}
-    assert Authority.release_invoke(zero) == :ok
-    assert Authority.try_acquire_invoke(zero) == :ok
+    assert Sanctum.Authority.budget(zero) == %{in_flight: 0, cap: 1}
+    assert Sanctum.Authority.try_acquire_invoke(zero) == :ok
+    assert Sanctum.Authority.try_acquire_invoke(zero) == {:error, :invoke_budget_exhausted}
+    assert Sanctum.Authority.release_invoke(zero) == :ok
+    assert Sanctum.Authority.try_acquire_invoke(zero) == :ok
   end
 
   test "every zero/0 call is an independent budget" do
     a = Authority.zero()
     b = Authority.zero()
 
-    assert Authority.try_acquire_invoke(a) == :ok
-    assert Authority.try_acquire_invoke(b) == :ok
+    assert Sanctum.Authority.try_acquire_invoke(a) == :ok
+    assert Sanctum.Authority.try_acquire_invoke(b) == :ok
   end
 end

@@ -12,7 +12,7 @@ defmodule Opus.AuthorityDepthSemaphoreTest do
   # deployment configures. If this test is red, the configuration is unsafe
   # (or the cap grew); do not weaken the assertion.
   test "authority depth cap fits inside the child reserve" do
-    cap = Sanctum.Authority.depth_cap()
+    cap = Cyfr.Authority.depth_cap()
 
     assert cap <= Opus.ExecutionSemaphore.child_reserve(Opus.ExecutionSemaphore.default_slots())
 

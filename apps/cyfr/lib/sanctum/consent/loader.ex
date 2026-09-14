@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.Loader do
   @moduledoc """
-  Fail-closed construction of a root `Sanctum.Authority` from a profile's
+  Fail-closed construction of a root `Cyfr.Authority` from a profile's
   head consent.
 
   The checks run in a fixed order, each refusing rather than degrading:
@@ -11,7 +11,7 @@ defmodule Sanctum.Consent.Loader do
   2. head consent exists
   3. consent internal validity (pinned ⟺ non-empty version — the database
      cannot enforce it portably, so the loader is the gate)
-  4. the resolved policy blob parses (`Sanctum.Authority.Blob.parse/1`)
+  4. the resolved policy blob parses (`Cyfr.Authority.Blob.parse/1`)
   5. **blob/refs equality** — every bound vault reference inside the blob
      must exactly equal the consent's stored `vault_refs`; any asymmetry
      means the blob and the reverse index disagree about what was
@@ -26,7 +26,7 @@ defmodule Sanctum.Consent.Loader do
      with unequal binding digests is refused; the loader never picks
   8. the `Sanctum.Consent.Loader.Decision` table over granted vs installed
      activation
-  9. `Sanctum.Authority.root/3` — ceiling clamping happens inside
+  9. `Cyfr.Authority.root/3` — ceiling clamping happens inside
 
   The live side of the integrity evaluation (`live` and `live_shape_digest`)
   is supplied by the caller, because resolving installed components is
@@ -37,8 +37,8 @@ defmodule Sanctum.Consent.Loader do
 
   require Logger
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Consent.Loader.Decision
   alias Sanctum.Consent.Source
   alias Cyfr.ComponentRef
@@ -443,6 +443,11 @@ defmodule Sanctum.Consent.Loader do
       activation: running.graph
     }
 
-    Authority.root(profile_map, blob, Keyword.take(opts, [:ceiling, :budget_id]))
+    ceiling = Keyword.get(opts, :ceiling) || Sanctum.Policy.Ceiling.platform_ceiling()
+
+    Authority.root(profile_map, blob,
+      ceiling: ceiling,
+      budget_id: Keyword.get(opts, :budget_id)
+    )
   end
 end

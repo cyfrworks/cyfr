@@ -1,9 +1,9 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.RootSelectTest do
+defmodule Cyfr.Authority.RootSelectTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Authority.RootSelect
+  alias Cyfr.Authority.RootSelect
 
   # Real-shaped ids: `Cyfr.UUID7.generate_id("prof")` emits `prof_<uuid>`,
   # and `decode/1` discriminates on exactly that prefix.

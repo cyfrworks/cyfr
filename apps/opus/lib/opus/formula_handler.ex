@@ -97,7 +97,7 @@ defmodule Opus.FormulaHandler do
 
   - `:root_execution_id` - The top-level execution ID for routing emit events to the root SSE stream (falls back to `parent_execution_id`)
   - `:limits` - The node's `Cyfr.Limits` (batch timeout, max concurrent tasks)
-  - `:authority` - The `Sanctum.Authority` the chain runs under (required).
+  - `:authority` - The `Cyfr.Authority` the chain runs under (required).
     Execution dispatch goes through `Opus.Chain` and every other tool through
     `Cyfr.Ops.Catalog.call_in_chain/5`. A formula run always carries one — the
     executor raises before reaching here (`Opus.Executor.stage_enforce_policy`),
@@ -1031,7 +1031,7 @@ defmodule Opus.FormulaHandler do
   # Private: Response Encoding
   # ============================================================================
 
-  defp safe_encode(data), do: Opus.WitResponse.safe_encode(data)
+  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
 
   defp encode_success(output) do
     safe_encode(%{
@@ -1042,7 +1042,7 @@ defmodule Opus.FormulaHandler do
 
   @doc false
   def encode_error(type, message),
-    do: Opus.WitResponse.encode_error(type, stringify_reason(message))
+    do: Cyfr.WitResponse.encode_error(type, stringify_reason(message))
 
   defp encode_error_with_remediation(type, message, remediation) do
     safe_encode(%{

@@ -1902,7 +1902,7 @@ defmodule Aqua.Loop do
   def catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do
     with {:ok, name_ref} <- Cyfr.ComponentRef.to_name_ref(catalyst),
          {:ok, %Cyfr.Limits{max_request_size: cap}} <-
-           Sanctum.Authority.node_limits(authority, name_ref) do
+           Cyfr.Authority.node_limits(authority, name_ref) do
       cap
     else
       _ -> nil
@@ -1950,7 +1950,7 @@ defmodule Aqua.Loop do
          declared_needs: []
        }}
 
-    match?({:child, _}, Sanctum.Authority.Transition.step(spec.authority, :call, target))
+    match?({:child, _}, Cyfr.Authority.Transition.step(spec.authority, :call, target))
   rescue
     ArgumentError -> false
   end

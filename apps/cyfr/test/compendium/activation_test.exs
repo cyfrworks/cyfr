@@ -145,7 +145,7 @@ defmodule Compendium.ActivationTest do
         end)
 
       assert {:ok, _blob} =
-               Sanctum.Authority.Blob.parse(%{"canonical" => "jcs-1", "nodes" => nodes})
+               Cyfr.Authority.Blob.parse(%{"canonical" => "jcs-1", "nodes" => nodes})
     end
 
     test "a version-pinned dependency resolves to that exact release", %{ctx: ctx} do

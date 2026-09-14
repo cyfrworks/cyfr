@@ -12,13 +12,13 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
   use ExUnit.Case, async: false
 
-  alias Sanctum.Authority.Blob
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority.Blob
+  alias Cyfr.Authority.Transition
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
   alias Sanctum.Consent.Source
   alias Sanctum.MCP.ProfileTool
-  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
+  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
   alias Sanctum.Vault
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))

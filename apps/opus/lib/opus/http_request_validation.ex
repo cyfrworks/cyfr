@@ -27,7 +27,7 @@ defmodule Opus.HttpRequestValidation do
   require Logger
 
   alias Opus.EdgeGuard
-  alias Sanctum.Authority.Blob.Edge
+  alias Cyfr.Authority.Blob.Edge
   alias Sanctum.Context
   alias Cyfr.Limits
 

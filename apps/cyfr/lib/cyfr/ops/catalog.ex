@@ -40,9 +40,10 @@ defmodule Cyfr.Ops.Catalog do
   operation: a component reaches nothing by itself. A guest-planed
   context with an Authority reaches the in-chain set — the actions whose
   annotation names the `:in_chain` plane, derived from the declarations
-  and nothing else — and only through `Sanctum.Authority.Transition.step/3`,
-  which answers for the chain's grants; the identity conjunct is then
-  the caller's own permission. An external-plane caller, a person or a
+  and nothing else — and only through `Sanctum.Authority.step/3`, the
+  transition relation with a spawn's budget charged, which answers for the
+  chain's grants; the identity conjunct is then the caller's own
+  permission. An external-plane caller, a person or a
   key, is judged by the annotations alone: plane, auth, permission,
   consent class, scope. There is no rule that depends on which runner is
   asking.
@@ -260,7 +261,7 @@ defmodule Cyfr.Ops.Catalog do
   """
   def call_in_chain(name, ctx, args, authority, opts \\ [])
 
-  def call_in_chain(name, %Context{} = ctx, args, %Sanctum.Authority{} = authority, opts)
+  def call_in_chain(name, %Context{} = ctx, args, %Cyfr.Authority{} = authority, opts)
       when is_map(args) do
     guest_fn = Keyword.get(opts, :guest_fn, :call)
 
@@ -281,7 +282,7 @@ defmodule Cyfr.Ops.Catalog do
 
     with :ok <- check_in_chain_reachable(name, args),
          {:ok, target, server} <- in_chain_target(ctx, name, args) do
-      case Sanctum.Authority.Transition.step(authority, guest_fn, target) do
+      case Sanctum.Authority.step(authority, guest_fn, target) do
         {:allow_tool, resource} ->
           warn_on_description_drift(ctx, authority, resource)
 
@@ -318,11 +319,11 @@ defmodule Cyfr.Ops.Catalog do
 
             {:error, reason} ->
               # The slot the transition charged goes back: the row refused it.
-              Sanctum.Authority.Budget.release(authority.budget)
+              Sanctum.Authority.BudgetCounter.release(authority.budget)
 
               {:error,
                "Denied by chain authority: " <>
-                 "#{Sanctum.Authority.Transition.deny_message(reason)} for '#{name}'"}
+                 "#{Cyfr.Authority.Transition.deny_message(reason)} for '#{name}'"}
           end
 
         {:deny, reason} ->
@@ -330,7 +331,7 @@ defmodule Cyfr.Ops.Catalog do
           # `inspect`, which put internal terms on the guest's wire.
           {:error,
            "Denied by chain authority: " <>
-             "#{Sanctum.Authority.Transition.deny_message(reason)} for '#{name}'"}
+             "#{Cyfr.Authority.Transition.deny_message(reason)} for '#{name}'"}
 
         {:invalid, {:malformed_target, fun, tag}} ->
           {:error, "Invalid in-chain call: #{fun}/#{tag}"}
@@ -366,7 +367,7 @@ defmodule Cyfr.Ops.Catalog do
 
   # The hold an outbound execution's admission stamps: the reservation the
   # chain's authority was minted with and the charge row taken at the gate.
-  defp hold_of(%Sanctum.Authority{budget: %{id: reservation_id}}, %{id: id}),
+  defp hold_of(%Cyfr.Authority{budget: %{id: reservation_id}}, %{id: id}),
     do: %{reservation_id: reservation_id, id: id}
 
   defp hold_of(_authority, _charge), do: nil
@@ -549,7 +550,7 @@ defmodule Cyfr.Ops.Catalog do
     reachable =
       for {action, %{planes: planes}} <- actions,
           :in_chain in planes,
-          Sanctum.Authority.Transition.tool_granted?(authority, name, action),
+          Cyfr.Authority.Transition.tool_granted?(authority, name, action),
           do: action
 
     case {reachable, get_in(tool_def, ["inputSchema", "properties", "action", "enum"])} do
@@ -581,7 +582,7 @@ defmodule Cyfr.Ops.Catalog do
           Enum.filter(tools, fn t ->
             case String.split(t["name"], ":", parts: 2) do
               [_, remote] ->
-                Sanctum.Authority.Transition.external_tool_granted?(authority, digest, remote)
+                Cyfr.Authority.Transition.external_tool_granted?(authority, digest, remote)
 
               _ ->
                 false

@@ -28,18 +28,14 @@ defmodule Cyfr.SanctumSurfacesTest do
   #     `emissary` — domain code whose Sanctum reach should stay vocabulary
   #     and the tenancy carrier.
   @surfaces %{
-    # `Sanctum.Authority` is `Aqua.Ops` alone: the in-chain call an
-    # approved proposal runs under carries the chain's authority, and the
-    # seam's contract names its type. `Sanctum.Provisioning` is
-    # `Aqua.AgentConfig`'s two in-process agent reads alone — the first-need
-    # hook: a turn reads its estate's tree in-process now rather than
-    # through the `aqua` tool, and the bundle a group estate is filled
-    # with on first read has to be there before the turn roots an
-    # authority in it. The tool keeps the same hook for readers outside
-    # the harness.
+    # `Sanctum.Provisioning` is `Aqua.AgentConfig`'s two in-process agent
+    # reads alone — the first-need hook: a turn reads its estate's tree
+    # in-process now rather than through the `aqua` tool, and the bundle a
+    # group estate is filled with on first read has to be there before the
+    # turn roots an authority in it. The tool keeps the same hook for
+    # readers outside the harness.
     "aqua" => ~w(
-      Sanctum.Authority Sanctum.Context Sanctum.Notify Sanctum.Provisioning
-      Sanctum.Tenancy
+      Sanctum.Context Sanctum.Notify Sanctum.Provisioning Sanctum.Tenancy
     ),
     # `Sanctum.Provisioning` is `Compendium.MCP.AquaTool` and
     # `ComponentTool`'s list action alone — the first-need hook. A group
@@ -53,8 +49,10 @@ defmodule Cyfr.SanctumSurfacesTest do
       Sanctum.Namespace Sanctum.Provisioning Sanctum.SignIn Sanctum.VaultReader
     ),
     # Cyfr.Release uses Sanctum.Cipher for key rotation. Cyfr.Ops uses
-    # consent classes, chain authority, authorization rendering, and
-    # the Sanctum.Catalog port.
+    # consent classes, the spawn-charged chain authority step and its
+    # invoke budget, authorization rendering, and the Sanctum.Catalog port;
+    # Cyfr.Application creates the invoke-budget counter and supervises its
+    # guard.
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
       Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth

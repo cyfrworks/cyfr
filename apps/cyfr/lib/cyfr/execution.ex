@@ -14,7 +14,7 @@ defmodule Cyfr.Execution do
   translation; a worker split changes the implementation, not the callers.
   """
 
-  alias Sanctum.Authority.RootSelect
+  alias Cyfr.Authority.RootSelect
   alias Sanctum.Context
 
   @type impl :: module()
@@ -45,7 +45,7 @@ defmodule Cyfr.Execution do
   # chain's, `need` the edge's (nil for none), and `opts` carry `ctx` and
   # the host lineage (`parent_execution_id`, `root_execution_id`) exactly
   # as the formula host builds them for a guest's child call. Never a root.
-  @callback run_child(Sanctum.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
+  @callback run_child(Cyfr.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
               {:ok, map()} | {:error, term()}
   # The logical root a host loop holds for a turn: an `executions` row of
   # kind `turn` with its attempt, reservation and a `:root` slot, taken
@@ -130,7 +130,7 @@ defmodule Cyfr.Execution do
   transient content (the room excerpt); the row's `input_hash` and
   envelope still describe `input`, the bytes that were sent.
   """
-  @spec run_child(Sanctum.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
+  @spec run_child(Cyfr.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_child(authority, reference, need, input, opts) when is_list(opts),
     do: call(:run_child, [authority, reference, need, input, opts])

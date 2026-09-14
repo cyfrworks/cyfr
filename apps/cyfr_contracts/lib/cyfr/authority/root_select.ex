@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.RootSelect do
+defmodule Cyfr.Authority.RootSelect do
   @moduledoc """
   Pure root-profile selection decisions.
 
@@ -60,7 +60,7 @@ defmodule Sanctum.Authority.RootSelect do
 
   Discriminating by prefix is sound because `valid_label?/1` refuses a
   label that would look like one — the same trick, and the same
-  obligation, as `Sanctum.Tenancy.Athanors.athanor_id?/1`.
+  obligation, as telling an athanor id (`"ath_…"`) from a route slug.
   """
   @spec profile_id?(term()) :: boolean()
   def profile_id?(value), do: is_binary(value) and String.starts_with?(value, @id_prefix)

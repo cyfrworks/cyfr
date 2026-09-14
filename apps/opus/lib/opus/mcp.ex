@@ -650,7 +650,7 @@ defmodule Opus.MCP do
   # not have to know which of the two they are holding;
   # `RootSelect.decode/1` owns the discrimination, and the label grammar
   # is what keeps it from being a guess.
-  defp profile_selector(args), do: Sanctum.Authority.RootSelect.decode(args["profile"])
+  defp profile_selector(args), do: Cyfr.Authority.RootSelect.decode(args["profile"])
 
   # Keep consent signals typed for protocol codes, structured data and shared rendering.
   defp format_root_result({:error, {tag, payload}})

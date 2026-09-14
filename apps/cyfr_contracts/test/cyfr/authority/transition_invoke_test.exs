@@ -1,11 +1,11 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.TransitionInvokeTest do
+defmodule Cyfr.Authority.TransitionInvokeTest do
   use ExUnit.Case, async: true
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
-  alias Sanctum.Test.AuthorityFixtures, as: Fixtures
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
+  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
   @formula "formula:local.daily-report"
   @catalyst "catalyst:supabase.com.database"
@@ -219,72 +219,6 @@ defmodule Sanctum.Authority.TransitionInvokeTest do
                  :spawn,
                  Fixtures.invoke(@formula, activation_digest: Fixtures.activation()[@formula])
                )
-    end
-  end
-
-  # ============================================================================
-  # Root budget (spawn only)
-  # ============================================================================
-
-  describe "spawn budget" do
-    test "spawn charges the root budget; call does not" do
-      auth = Fixtures.root!(%{}, ceiling: %{max_concurrent_tasks: 2})
-
-      # Synchronous calls never consume budget.
-      for _ <- 1..5 do
-        assert {:child, _} =
-                 Transition.step(
-                   auth,
-                   :call,
-                   Fixtures.invoke(@catalyst,
-                     need: "source",
-                     declared_needs: Fixtures.formula_needs()
-                   )
-                 )
-      end
-
-      assert Authority.budget(auth).in_flight == 0
-
-      assert {:child_zero, _} = Transition.step(auth, :spawn, Fixtures.invoke("formula:local.a"))
-      assert {:child_zero, _} = Transition.step(auth, :spawn, Fixtures.invoke("formula:local.b"))
-
-      assert {:deny, :invoke_budget_exhausted} =
-               Transition.step(auth, :spawn, Fixtures.invoke("formula:local.c"))
-
-      Authority.release_invoke(auth)
-      assert {:child_zero, _} = Transition.step(auth, :spawn, Fixtures.invoke("formula:local.c"))
-    end
-
-    test "the budget is root-keyed: children spend the same pool" do
-      auth = Fixtures.root!(%{}, ceiling: %{max_concurrent_tasks: 2})
-
-      {:child_zero, child} = Transition.step(auth, :spawn, Fixtures.invoke("formula:local.a"))
-
-      # One slot is held by the spawn above; the child's own spawn takes
-      # the second; a grandchild spawn then exhausts the ROOT's pool.
-      {:child_zero, grandchild} =
-        Transition.step(child, :spawn, Fixtures.invoke("formula:local.b"))
-
-      assert {:deny, :invoke_budget_exhausted} =
-               Transition.step(grandchild, :spawn, Fixtures.invoke("formula:local.c"))
-
-      assert Authority.budget(auth) == %{in_flight: 2, cap: 2}
-    end
-
-    test "a denied spawn consumes nothing" do
-      auth = Fixtures.root!(%{}, ceiling: %{max_concurrent_tasks: 1})
-
-      for _ <- 1..3 do
-        assert {:deny, {:need, :required}} =
-                 Transition.step(
-                   auth,
-                   :spawn,
-                   Fixtures.invoke(@catalyst, declared_needs: Fixtures.formula_needs())
-                 )
-      end
-
-      assert Authority.budget(auth).in_flight == 0
-      assert {:child_zero, _} = Transition.step(auth, :spawn, Fixtures.invoke("formula:local.a"))
     end
   end
 end

@@ -6,16 +6,17 @@ defmodule Sanctum.Authority.BudgetGuardTest do
 
   import Cyfr.Test.Wait
 
-  alias Sanctum.Authority.Budget
+  alias Cyfr.Authority.Budget
+  alias Sanctum.Authority.BudgetCounter
   alias Sanctum.Authority.BudgetGuard
 
   setup do
-    Sanctum.Authority.Budget.ensure_table()
+    BudgetCounter.ensure_table()
     {:ok, budget: Budget.new(2)}
   end
 
   test "a brutally killed holder's slot is released by the :DOWN compensation", %{budget: budget} do
-    :ok = Budget.try_acquire(budget)
+    :ok = BudgetCounter.try_acquire(budget)
     test_pid = self()
 
     holder =
@@ -38,15 +39,15 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     Process.exit(holder, :kill)
 
     wait_until(
-      fn -> Budget.snapshot(budget).in_flight == 0 end,
+      fn -> BudgetCounter.snapshot(budget).in_flight == 0 end,
       2_000,
       "the killed holder's slot to come back"
     )
   end
 
   test "an explicit release removes the guard — the death cannot release twice", %{budget: budget} do
-    :ok = Budget.try_acquire(budget)
-    :ok = Budget.try_acquire(budget)
+    :ok = BudgetCounter.try_acquire(budget)
+    :ok = BudgetCounter.try_acquire(budget)
 
     test_pid = self()
 
@@ -62,7 +63,7 @@ defmodule Sanctum.Authority.BudgetGuardTest do
       end)
 
     assert_receive :released, 1000
-    assert Budget.snapshot(budget).in_flight == 1
+    assert BudgetCounter.snapshot(budget).in_flight == 1
 
     # The holder dies AFTER its explicit release; the demonitored guard
     # must not release the second (still legitimately held) slot.
@@ -76,21 +77,21 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     # for the compensation to run reads exactly like a compensation that
     # correctly did not fire.
     :sys.get_state(BudgetGuard)
-    assert Budget.snapshot(budget).in_flight == 1
+    assert BudgetCounter.snapshot(budget).in_flight == 1
 
-    :ok = Budget.release(budget)
-    assert Budget.snapshot(budget).in_flight == 0
+    :ok = BudgetCounter.release(budget)
+    assert BudgetCounter.snapshot(budget).in_flight == 0
   end
 
   test "a release with no guard registered releases directly", %{budget: budget} do
-    :ok = Budget.try_acquire(budget)
+    :ok = BudgetCounter.try_acquire(budget)
     :ok = BudgetGuard.release(budget, self())
-    assert Budget.snapshot(budget).in_flight == 0
+    assert BudgetCounter.snapshot(budget).in_flight == 0
   end
 
   describe "release_after_exit/2 — what a failed release call means for the slot" do
     test "a timeout does not release: the queued message still will", %{budget: budget} do
-      :ok = Budget.try_acquire(budget)
+      :ok = BudgetCounter.try_acquire(budget)
 
       # The guard is alive and the `{:release, ...}` message is in its
       # mailbox; only the reply was given up on. Releasing here as well
@@ -102,24 +103,24 @@ defmodule Sanctum.Authority.BudgetGuardTest do
                  {:timeout, {GenServer, :call, [BudgetGuard, {:release, budget, self()}, 5000]}}
                )
 
-      assert Budget.snapshot(budget).in_flight == 1
+      assert BudgetCounter.snapshot(budget).in_flight == 1
 
-      :ok = Budget.release(budget)
-      assert Budget.snapshot(budget).in_flight == 0
+      :ok = BudgetCounter.release(budget)
+      assert BudgetCounter.snapshot(budget).in_flight == 0
     end
 
     test "an exit that means the call never landed releases directly", %{budget: budget} do
-      :ok = Budget.try_acquire(budget)
+      :ok = BudgetCounter.try_acquire(budget)
 
       assert :ok = BudgetGuard.release_after_exit(budget, {:noproc, {GenServer, :call, []}})
-      assert Budget.snapshot(budget).in_flight == 0
+      assert BudgetCounter.snapshot(budget).in_flight == 0
     end
 
     test "a guard that died mid-handling still gives the slot back", %{budget: budget} do
-      :ok = Budget.try_acquire(budget)
+      :ok = BudgetCounter.try_acquire(budget)
 
       assert :ok = BudgetGuard.release_after_exit(budget, :shutdown)
-      assert Budget.snapshot(budget).in_flight == 0
+      assert BudgetCounter.snapshot(budget).in_flight == 0
     end
   end
 end

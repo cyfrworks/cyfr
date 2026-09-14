@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Sanctum.Authority.Transition do
+defmodule Cyfr.Authority.Transition do
   @moduledoc """
   The total transition relation over the eight guest-facing invoke
   functions.
@@ -16,7 +16,7 @@ defmodule Sanctum.Authority.Transition do
   default.
 
   Returns the authority verdict. In-chain dispatch also requires identity
-  permission from `Sanctum.Context`; both checks must allow the operation.
+  permission from the request context; both checks must allow the operation.
 
   ## Resolver-supplied inputs
 
@@ -31,14 +31,12 @@ defmodule Sanctum.Authority.Transition do
 
   ## Root budget
 
-  Every `spawn` outcome that starts work — a bound child, a zero child, or
-  an allowed tool dispatch — takes one slot of the root-keyed invoke
-  budget at a single chokepoint; exhaustion turns the outcome into
-  `{:deny, :invoke_budget_exhausted}`. A denied or malformed spawn
-  consumes nothing. Synchronous `call` is bounded by the depth cap
-  instead: it adds no concurrency, the parent blocks. The caller releases
-  the slot via `Sanctum.Authority.release_invoke/1` when the spawned work
-  completes.
+  `step/3` is the decision alone and charges nothing. Where spawned work is
+  dispatched, every `spawn` outcome that starts work — a bound child, a
+  zero child, or an allowed tool dispatch — also takes one slot of the
+  root-keyed invoke budget, and exhaustion turns the outcome into
+  `{:deny, :invoke_budget_exhausted}`. A denied or malformed spawn consumes
+  nothing; synchronous `call` is bounded by the depth cap instead.
 
   ## Event attribution
 
@@ -46,8 +44,8 @@ defmodule Sanctum.Authority.Transition do
   size caps, rate limits and the envelope's origin marker.
   """
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
 
   @guest_functions [:call, :spawn, :await, :await_all, :await_any, :poll, :cancel, :emit]
   @target_tags [:invoke, :tool, :external_tool, :task, :tasks, :event]
@@ -243,7 +241,6 @@ defmodule Sanctum.Authority.Transition do
     @relation
     |> Map.fetch!(key)
     |> apply_handler(auth, guest_fn, target)
-    |> charge_spawn_budget(auth, guest_fn)
   end
 
   @doc "The eight guest function names."
@@ -414,24 +411,6 @@ defmodule Sanctum.Authority.Transition do
       {:deny, :tool_server_not_granted}
     end
   end
-
-  # ============================================================================
-  # Budget chokepoint
-  # ============================================================================
-
-  # Every spawn outcome that starts work takes one root-keyed slot; a
-  # denied or malformed spawn takes nothing. Charging happens here, after
-  # the decision, so no handler can forget it and no deny path needs a
-  # rollback.
-  defp charge_spawn_budget(outcome, auth, :spawn)
-       when elem(outcome, 0) in [:child, :child_zero, :allow_tool] do
-    case Authority.try_acquire_invoke(auth) do
-      :ok -> outcome
-      {:error, :invoke_budget_exhausted} -> {:deny, :invoke_budget_exhausted}
-    end
-  end
-
-  defp charge_spawn_budget(outcome, _auth, _fun), do: outcome
 
   # ============================================================================
   # Tags
