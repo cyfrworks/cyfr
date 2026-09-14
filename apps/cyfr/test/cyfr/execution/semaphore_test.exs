@@ -37,6 +37,38 @@ defmodule Cyfr.Execution.SemaphoreTest do
       assert status.active == 0
     end
 
+    test "a process holding two slots gives them back one release at a time" do
+      assert :ok = Semaphore.acquire(5_000, :root, "ath_nested")
+      assert :ok = Semaphore.acquire(5_000, :child, "ath_nested")
+      assert %{active: 2, root_active: 1, child_active: 1} = Semaphore.status()
+
+      Semaphore.release()
+      assert %{active: 1} = Semaphore.status()
+
+      Semaphore.release()
+      assert %{active: 0, tenants: tenants} = Semaphore.status()
+      refute Map.has_key?(tenants, "ath_nested")
+    end
+
+    test "a process that dies holding two slots gives both back" do
+      parent = self()
+
+      holder =
+        spawn(fn ->
+          :ok = Semaphore.acquire(5_000, :root, "ath_nested_down")
+          :ok = Semaphore.acquire(5_000, :child, "ath_nested_down")
+          send(parent, :held)
+          receive do: (:exit -> :ok)
+        end)
+
+      assert_receive :held, 5_000
+      assert %{active: 2} = Semaphore.status()
+
+      send(holder, :exit)
+      wait_until(fn -> Semaphore.status().active == 0 end)
+      refute Map.has_key?(Semaphore.status().tenants, "ath_nested_down")
+    end
+
     test "double release is a no-op" do
       assert :ok = Semaphore.acquire()
       Semaphore.release()
@@ -769,8 +801,9 @@ defmodule Cyfr.Execution.SemaphoreTest do
     defp backdate_holds(by_ms) do
       :sys.replace_state(Process.whereis(Semaphore), fn state ->
         monitors =
-          Map.new(state.monitors, fn {pid, {ref, acquired_at, tenant, class}} ->
-            {pid, {ref, acquired_at - by_ms, tenant, class}}
+          Map.new(state.monitors, fn {pid, {ref, holdings}} ->
+            {pid,
+             {ref, Enum.map(holdings, fn {at, tenant, class} -> {at - by_ms, tenant, class} end)}}
           end)
 
         %{state | monitors: monitors}
@@ -782,7 +815,7 @@ defmodule Cyfr.Execution.SemaphoreTest do
     defp swallow_down(server, pid) do
       :sys.replace_state(Process.whereis(server), fn state ->
         case state.monitors[pid] do
-          {ref, _acquired_at, _tenant, _class} -> Process.demonitor(ref, [:flush])
+          {ref, _holdings} -> Process.demonitor(ref, [:flush])
           _ -> :ok
         end
 

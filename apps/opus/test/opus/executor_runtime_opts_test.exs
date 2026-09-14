@@ -64,12 +64,19 @@ defmodule Opus.ExecutorRuntimeOptsTest do
     # vault map, :digest keys the compiled-component cache — a caller
     # overwriting any of them would run under another tenant, other
     # secrets, or another component's compiled bytes.
-    pipeline = consented() ++ [preloaded_fields: %{"key" => "sealed"}, digest: "sha256:real"]
+    pipeline =
+      consented() ++
+        [
+          preloaded_fields: %{"key" => "sealed"},
+          digest: "sha256:real",
+          execution_attempt: "att_1"
+        ]
 
     caller = [
       ctx: :attacker_context,
       preloaded_fields: %{"key" => "injected"},
       execution_id: "exec_other",
+      execution_attempt: "att_other",
       digest: "sha256:poisoned"
     ]
 
@@ -78,7 +85,17 @@ defmodule Opus.ExecutorRuntimeOptsTest do
     assert out[:ctx] == :a_context
     assert out[:preloaded_fields] == %{"key" => "sealed"}
     assert out[:execution_id] == "exec_1"
+    assert out[:execution_attempt] == "att_1"
     assert out[:digest] == "sha256:real"
+  end
+
+  test "the attempt that owns the row reaches the runtime" do
+    # The lease watch renews under it and a guest's spawns are charged to
+    # it: without it every renewal answers lost, and a run still going at
+    # the first lease tick is killed.
+    out = Executor.runtime_opts(consented() ++ [execution_attempt: "att_1"], [])
+
+    assert out[:execution_attempt] == "att_1"
   end
 
   test "with no authority-derived value, the caller's is used" do

@@ -1104,6 +1104,9 @@ defmodule Opus.Executor do
     :limits,
     :ctx,
     :execution_id,
+    # The attempt that owns the row: the lineage a guest's in-chain calls
+    # and spawns carry, and what the lease watch renews under.
+    :execution_attempt,
     :root_execution_id,
     :reference,
     :digest,
@@ -1121,13 +1124,10 @@ defmodule Opus.Executor do
 
   @doc false
   # The options the runtime runs on. Caller opts fill in what the pipeline did
-  # not settle; they never overwrite what it did — for ANY key. An earlier
-  # version protected only the four authority-derived keys, which left
-  # `:ctx` (the tenant every host import scopes on), `:preloaded_fields`
-  # (the unsealed vault map) and `:digest` (the compiled-component cache
-  # key) caller-overridable; no live caller did, but the comment on
-  # `enforce_authority/3` ("nothing is re-resolved at execution time") held
-  # only by that accident.
+  # not settle; they never overwrite what it did — for any key, so `:ctx`
+  # (the tenant every host import scopes on), `:preloaded_fields` (the
+  # unsealed vault map), `:digest` (the compiled-component cache key) and
+  # `:execution_attempt` stay the pipeline's.
   @spec runtime_opts(keyword(), keyword()) :: keyword()
   def runtime_opts(exec_opts, opts) do
     opts

@@ -20,17 +20,18 @@ defmodule Opus.Chain.Charge do
   alias Cyfr.Authority
 
   @doc """
-  The call's options with a charge identity: the given one, or one
-  derived from `:attempt` (with `:execution_id` minted for the child when
-  absent), or the options unchanged when no attempt is known.
+  The call's options with a charge identity: the given one, or, for a
+  spawn under a known attempt, one derived from `:attempt` (with
+  `:execution_id` minted for the child when absent). A synchronous call,
+  which takes no charge, and a spawn under no attempt are left unchanged.
   """
   @spec identify(keyword()) :: keyword()
   def identify(opts) do
-    case {Keyword.get(opts, :charge), Keyword.get(opts, :attempt)} do
-      {%{id: _}, _} ->
+    case {Keyword.get(opts, :charge), Keyword.get(opts, :attempt), Keyword.get(opts, :guest_fn)} do
+      {%{id: _}, _, _} ->
         opts
 
-      {nil, attempt} when is_binary(attempt) ->
+      {nil, attempt, :spawn} when is_binary(attempt) ->
         execution_id = Keyword.get(opts, :execution_id) || Opus.ExecutionRecord.generate_id()
 
         opts

@@ -59,6 +59,11 @@ defmodule Opus.ChainChargeIdentityTest do
 
     assert [charge: ^given] = Charge.identify(charge: given)
     assert [guest_fn: :spawn] = Charge.identify(guest_fn: :spawn)
+
+    # A synchronous call takes no charge, so it is given no identity to
+    # admit under.
+    assert [attempt: ^attempt, guest_fn: :call] =
+             Charge.identify(attempt: attempt, guest_fn: :call)
   end
 
   test "a full reservation refuses an unnamed spawn before anything runs", %{

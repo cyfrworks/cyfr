@@ -324,7 +324,10 @@ defmodule Cyfr.Execution.Semaphore do
        tenant_max: tenant_max,
        child_reserve: child_reserve(max),
        count: 0,
-       # holder pid => {monitor, acquired_at, tenant, class}
+       # holder pid => {monitor, [{acquired_at, tenant, class}]}, newest
+       # holding first: one process can hold several slots (a synchronous
+       # child running in its parent's process), each counted and released
+       # on its own.
        monitors: %{},
        # roots held per tenant (the per-athanor cap)
        tenant_roots: %{},
@@ -393,16 +396,16 @@ defmodule Cyfr.Execution.Semaphore do
     now = System.monotonic_time(:millisecond)
 
     holders =
-      Enum.map(state.monitors, fn {pid, {_ref, acquired_at, _tenant, class}} ->
+      for {pid, {_ref, holdings}} <- state.monitors, {acquired_at, _tenant, class} <- holdings do
         %{
           pid: inspect(pid),
           alive: Process.alive?(pid),
           held_ms: now - acquired_at,
           class: class
         }
-      end)
+      end
 
-    by_class = Enum.frequencies_by(state.monitors, fn {_pid, {_r, _at, _t, class}} -> class end)
+    by_class = Enum.frequencies_by(holders, & &1.class)
 
     reply = %{
       max: state.max,
@@ -429,7 +432,7 @@ defmodule Cyfr.Execution.Semaphore do
 
   @impl true
   def handle_call(:force_release_all, _from, state) do
-    holder_count = map_size(state.monitors)
+    holder_count = holding_count(state)
     waiter_count = total_waiter_count(state)
 
     if holder_count > 0 or waiter_count > 0 do
@@ -438,7 +441,7 @@ defmodule Cyfr.Execution.Semaphore do
           "#{waiter_count} queued waiter(s)"
       )
 
-      Enum.each(state.monitors, fn {_pid, {mon_ref, _at, _tenant, _class}} ->
+      Enum.each(state.monitors, fn {_pid, {mon_ref, _holdings}} ->
         Process.demonitor(mon_ref, [:flush])
       end)
 
@@ -510,17 +513,21 @@ defmodule Cyfr.Execution.Semaphore do
     end
   end
 
+  # A process that went away gives back everything it held and leaves any
+  # queue it was waiting in: a holder can also be waiting for another slot.
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    # Process could be a holder or a queued waiter
-    case Map.get(state.waiter_monitors, pid) do
-      nil ->
-        {:noreply, do_release(state, pid)}
+    state =
+      case Map.get(state.waiter_monitors, pid) do
+        nil ->
+          state
 
-      {_from, mon_ref, _class, _tenant} ->
-        Process.demonitor(mon_ref, [:flush])
-        {:noreply, remove_waiter(state, pid)}
-    end
+        {_from, mon_ref, _class, _tenant} ->
+          Process.demonitor(mon_ref, [:flush])
+          remove_waiter(state, pid)
+      end
+
+    {:noreply, release_all(state, pid)}
   end
 
   @impl true
@@ -538,7 +545,7 @@ defmodule Cyfr.Execution.Semaphore do
 
   @impl true
   def terminate(_reason, state) do
-    holder_count = map_size(state.monitors)
+    holder_count = holding_count(state)
     waiter_count = total_waiter_count(state)
 
     if holder_count > 0 or waiter_count > 0 do
@@ -548,7 +555,7 @@ defmodule Cyfr.Execution.Semaphore do
       )
     end
 
-    Enum.each(state.monitors, fn {_pid, {mon_ref, _at, _tenant, _class}} ->
+    Enum.each(state.monitors, fn {_pid, {mon_ref, _holdings}} ->
       Process.demonitor(mon_ref, [:flush])
     end)
 
@@ -567,7 +574,6 @@ defmodule Cyfr.Execution.Semaphore do
   defp foreground_slot_free?(state), do: state.count < state.max - state.child_reserve
 
   defp grant(state, pid, tenant, class) do
-    mon_ref = Process.monitor(pid)
     acquired_at = System.monotonic_time(:millisecond)
     new_count = state.count + 1
 
@@ -576,13 +582,29 @@ defmodule Cyfr.Execution.Semaphore do
         "(#{new_count}/#{state.max})"
     )
 
-    %{
-      state
-      | count: new_count,
-        monitors: Map.put(state.monitors, pid, {mon_ref, acquired_at, tenant, class})
-    }
+    %{state | count: new_count}
+    |> add_holding(pid, nil, {acquired_at, tenant, class})
     |> inc_tenant(tenant, class)
   end
+
+  # One more holding for `pid`, under the one monitor it keeps however many
+  # slots it holds; `monitor` is one the caller already took, or nil.
+  defp add_holding(state, pid, monitor, holding) do
+    monitors =
+      case Map.get(state.monitors, pid) do
+        {mon_ref, holdings} ->
+          if monitor, do: Process.demonitor(monitor, [:flush])
+          Map.put(state.monitors, pid, {mon_ref, [holding | holdings]})
+
+        nil ->
+          Map.put(state.monitors, pid, {monitor || Process.monitor(pid), [holding]})
+      end
+
+    %{state | monitors: monitors}
+  end
+
+  defp holding_count(state),
+    do: Enum.reduce(state.monitors, 0, fn {_pid, {_ref, holdings}}, n -> n + length(holdings) end)
 
   # A slot handed to a waiter: the count stays, the holder changes.
   defp transfer(state, from, waiter_mon_ref, tenant, class) do
@@ -595,11 +617,8 @@ defmodule Cyfr.Execution.Semaphore do
         "(#{state.count}/#{state.max})"
     )
 
-    %{
-      state
-      | monitors:
-          Map.put(state.monitors, waiter_pid, {waiter_mon_ref, acquired_at, tenant, class})
-    }
+    state
+    |> add_holding(waiter_pid, waiter_mon_ref, {acquired_at, tenant, class})
     |> inc_tenant(tenant, class)
   end
 
@@ -673,18 +692,31 @@ defmodule Cyfr.Execution.Semaphore do
     end
   end
 
+  # Give back `pid`'s newest holding; an unknown caller releases nothing.
   defp do_release(%{monitors: monitors} = state, pid) do
-    case Map.pop(monitors, pid) do
-      {nil, _monitors} ->
-        # Already released or unknown caller — no-op
+    case Map.get(monitors, pid) do
+      nil ->
         state
 
-      {{mon_ref, _acquired_at, tenant, class}, new_monitors} ->
-        Process.demonitor(mon_ref, [:flush])
+      {mon_ref, [{_acquired_at, tenant, class} | rest]} ->
+        monitors =
+          if rest == [] do
+            Process.demonitor(mon_ref, [:flush])
+            Map.delete(monitors, pid)
+          else
+            Map.put(monitors, pid, {mon_ref, rest})
+          end
 
-        %{state | monitors: new_monitors}
+        %{state | monitors: monitors}
         |> dec_tenant(tenant, class)
         |> hand_off_slot(pid)
+    end
+  end
+
+  defp release_all(state, pid) do
+    case Map.get(state.monitors, pid) do
+      nil -> state
+      {_mon_ref, holdings} -> Enum.reduce(holdings, state, fn _, acc -> do_release(acc, pid) end)
     end
   end
 
@@ -888,11 +920,10 @@ defmodule Cyfr.Execution.Semaphore do
     now = System.monotonic_time(:millisecond)
 
     stale_pids =
-      state.monitors
-      |> Enum.filter(fn {pid, {_ref, acquired_at, _tenant, _class}} ->
-        now - acquired_at > @max_hold_ms and not Process.alive?(pid)
-      end)
-      |> Enum.map(fn {pid, _} -> pid end)
+      for {pid, {_ref, holdings}} <- state.monitors,
+          {acquired_at, _tenant, _class} = List.last(holdings),
+          now - acquired_at > @max_hold_ms and not Process.alive?(pid),
+          do: pid
 
     if stale_pids != [] do
       Logger.warning(
@@ -901,7 +932,7 @@ defmodule Cyfr.Execution.Semaphore do
       )
     end
 
-    Enum.reduce(stale_pids, state, fn pid, acc -> do_release(acc, pid) end)
+    Enum.reduce(stale_pids, state, fn pid, acc -> release_all(acc, pid) end)
   end
 
   defp schedule_sweep do
