@@ -54,20 +54,6 @@ defmodule PrismWeb.SignInTraceTest do
     Application.put_env(:cyfr, :provisioning_inline, false)
 
     on_exit(fn ->
-      # STOP THE FILLS BEFORE RESTORING THE PATHS. This is the only test that
-      # turns `provisioning_inline` off, so it is the only one with real
-      # background tasks in flight — and `after_sign_in/1` starts a second
-      # one (`retry_groups_async/1`) that this test never waits for. A task
-      # still running when the env is restored provisions against the REAL
-      # `seed_path` and `base_path`, where a failed registration's
-      # `rollback_unit` deletes the unit it was writing. That deleted 38
-      # files out of the repo's own seed tree before this callback existed.
-      for {_, pid, _, _} <-
-            Task.Supervisor.children(Sanctum.ProvisioningSupervisor)
-            |> Enum.map(&{nil, &1, nil, nil}) do
-        Task.Supervisor.terminate_child(Sanctum.ProvisioningSupervisor, pid)
-      end
-
       for {key, value} <- prev do
         if is_nil(value),
           do: Application.delete_env(:cyfr, key),
@@ -76,6 +62,12 @@ defmodule PrismWeb.SignInTraceTest do
 
       File.rm_rf!(test_dir)
     end)
+
+    # Fills run in the background here, and `after_sign_in/1` starts one this
+    # test never waits for. A fill still running when the paths are restored
+    # provisions against the repository's own seed and data trees, where a
+    # failed registration's rollback deletes the unit it was writing.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     :ok
   end

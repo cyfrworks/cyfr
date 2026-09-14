@@ -29,8 +29,7 @@ defmodule Aqua.RunnerTest do
 
   setup do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "runner_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path, :consent_source, :execution_impl]
@@ -49,6 +48,9 @@ defmodule Aqua.RunnerTest do
           else: Application.delete_env(:cyfr, key)
       end
     end)
+
+    # The runners run under the paths restored above.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
     {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: ctx.athanor_id)

@@ -12,8 +12,7 @@ defmodule Emissary.MCP.ThreadToolTest do
   alias Cyfr.Ops.{Catalog, Visibility}
 
   setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
 
     ctx = Sanctum.TestContext.local()
     {:ok, thread} = Threads.create(ctx)

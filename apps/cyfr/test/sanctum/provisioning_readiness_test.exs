@@ -18,8 +18,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
   alias Sanctum.Tenancy.Athanors
 
   setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
 
     n = System.unique_integer([:positive])
     creator = "github|https://github.com|ready-#{n}"

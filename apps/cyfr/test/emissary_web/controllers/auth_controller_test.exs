@@ -206,12 +206,6 @@ defmodule EmissaryWeb.AuthControllerTest do
     alias Compendium.Registry.CredentialStore
 
     setup do
-      # ConnCase (parent) already checks out the Arca.Repo sandbox — don't
-      # re-check-out here (raises {:already, :owner}). The sandbox mode needs
-      # to be :shared so the Bypass plug request process can see the sandbox
-      # connection, matching CredentialStore writes in the test process.
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-
       original_provider = Application.get_env(:cyfr, :auth_provider)
       Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")

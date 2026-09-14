@@ -5,8 +5,8 @@ defmodule PrismWeb.ConnCase do
   @moduledoc """
   Test case for the Prism (LiveView) surface.
 
-  Checks out the SQL sandbox (shared mode for sync tests, so LiveView
-  processes and supervised tasks can hit the repo), imports
+  Starts the SQL sandbox (`Cyfr.Test.Sandbox`: shared for sync tests, so
+  LiveView processes and supervised tasks can hit the repo), imports
   `Phoenix.LiveViewTest`, and provides helpers to sign a test user in the
   way the browser does — a `Sanctum.Session` row, a claimed personal
   namespace, a membership — and mount authenticated LiveViews.
@@ -32,42 +32,7 @@ defmodule PrismWeb.ConnCase do
   end
 
   setup tags do
-    # The sandbox owner is its own process, not the test: the work a page
-    # leaves behind (a thread runner finishing a turn, a task on one
-    # of the supervisors below) is stopped from `on_exit`, which runs after
-    # the test process is gone. Were the test the owner, that work would
-    # lose its connection first, crash, and be restarting when the teardown
-    # reaches it. Callbacks run last-registered first, so the owner is
-    # stopped only after everything that used it has been.
-    owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Arca.Repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(owner) end)
-
-    # LiveViews spawn work on these supervisors (session refresh, AQUA calls,
-    # MCP tool dispatch); let that work reach the sandbox connection — and
-    # stop whatever is still running when the test ends, or a straggler
-    # holding the sandbox connection makes the next test's first write
-    # find the database busy.
-    supervisors =
-      for name <- [Aqua.TaskSupervisor, Emissary.TaskSupervisor],
-          pid = Process.whereis(name),
-          is_pid(pid) do
-        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, pid)
-        pid
-      end
-
-    on_exit(fn ->
-      for sup <- supervisors, child <- Task.Supervisor.children(sup) do
-        Task.Supervisor.terminate_child(sup, child)
-      end
-
-      # Thread runners the chat page started idle out on their own,
-      # which is far too late for the next test's sandbox.
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(Aqua.RunnerSupervisor),
-          is_pid(pid) do
-        DynamicSupervisor.terminate_child(Aqua.RunnerSupervisor, pid)
-      end
-    end)
-
+    Cyfr.Test.Sandbox.setup!(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 
