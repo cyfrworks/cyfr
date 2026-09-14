@@ -103,7 +103,7 @@ defmodule Sanctum.Tenancy.Athanors do
     result =
       Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.mint_group", fn ->
         Arca.Repo.transaction(fn ->
-          with :ok <- hold_creator(creator_user_id),
+          with :ok <- hold_person(creator_user_id),
                :ok <-
                  Caps.check_counted(:max_groups_per_person, fn ->
                    count_groups_created_by(creator_user_id)
@@ -138,7 +138,7 @@ defmodule Sanctum.Tenancy.Athanors do
 
   # A write to the row holds it until the transaction ends, on either
   # adapter.
-  defp hold_creator(user_id) do
+  defp hold_person(user_id) do
     from(u in Arca.Schemas.User,
       where: u.id == ^user_id,
       update: [set: [updated_at: u.updated_at]]
@@ -188,7 +188,7 @@ defmodule Sanctum.Tenancy.Athanors do
         {:ok, athanor}
 
       {:error, :not_found} ->
-        with :ok <- check_pair_cap(user_a, user_b), do: mint_pair(key, user_a, user_b)
+        mint_pair(key, user_a, user_b)
 
       {:error, _} = err ->
         err
@@ -197,11 +197,14 @@ defmodule Sanctum.Tenancy.Athanors do
 
   def create_pair(_, _), do: {:error, :invalid_pair}
 
-  # A pair is minted for two, so the cap is asked for both. Without it one
-  # member of a large room could mint an estate per co-member from the
-  # wire — a DM asks nobody else's consent — and spend `CYFR_MAX_ATHANORS`
-  # for everyone.
+  # A pair is minted for two, so the cap is asked for both, inside the mint
+  # with both people's rows held (in one order, so two mints cannot
+  # deadlock). Without it one member of a large room could mint an estate
+  # per co-member from the wire — a DM asks nobody else's consent — and
+  # spend `CYFR_MAX_ATHANORS` for everyone.
   defp check_pair_cap(user_a, user_b) do
+    Enum.each(Enum.sort([user_a, user_b]), &hold_person/1)
+
     Enum.reduce_while([user_a, user_b], :ok, fn user_id, :ok ->
       case Caps.check_counted(:max_pairs_per_person, fn -> count_pairs_of(user_id) end) do
         :ok -> {:cont, :ok}
@@ -249,7 +252,8 @@ defmodule Sanctum.Tenancy.Athanors do
     result =
       Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.mint_pair", fn ->
         Arca.Repo.transaction(fn ->
-          with {:ok, slug} <- resolve_slug(nil, name),
+          with :ok <- check_pair_cap(user_a, user_b),
+               {:ok, slug} <- resolve_slug(nil, name),
                {:ok, athanor} <-
                  create(%{
                    kind: "group",

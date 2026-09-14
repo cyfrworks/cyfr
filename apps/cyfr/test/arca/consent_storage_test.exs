@@ -124,6 +124,21 @@ defmodule Arca.ConsentStorageTest do
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 1
     end
 
+    test "a racing writer at the same revision is refused with head_moved, not raised",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_multi_5")
+
+      {:ok, first} =
+        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+      assert {:error, :head_moved} =
+               ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+      {:ok, head, _refs} = ConsentStorage.get_head(athanor, profile.id)
+      assert head.id == first.id
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 1
+    end
+
     test "a refs row violating the vault FK rolls the revision back",
          %{athanor: athanor} do
       profile = profile!(athanor, "prof_multi_4")

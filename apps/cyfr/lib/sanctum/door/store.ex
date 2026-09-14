@@ -145,17 +145,17 @@ defmodule Sanctum.Door.Store do
         {:ok, :existing, entry}
 
       {:error, :not_found} ->
-        with {:ok, entry} <-
-               insert(%{
-                 kind: kind,
-                 value: value,
-                 effect: "allow",
-                 status: "requested",
-                 requested_by: requested_by,
-                 note: note
-               }) do
-          {:ok, :created, entry}
-        end
+        insert_new(%{
+          kind: kind,
+          value: value,
+          effect: "allow",
+          status: "requested",
+          requested_by: requested_by,
+          note: note
+        })
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -233,9 +233,39 @@ defmodule Sanctum.Door.Store do
     value = if kind == "email", do: downcase(value), else: value
 
     case find(kind, value) do
-      {:ok, entry} -> update(entry, attrs)
-      {:error, :not_found} -> insert(Map.merge(attrs, %{kind: kind, value: value}))
-      {:error, _} = err -> err
+      {:ok, entry} ->
+        update(entry, attrs)
+
+      {:error, :not_found} ->
+        case insert_new(Map.merge(attrs, %{kind: kind, value: value})) do
+          {:ok, :created, entry} -> {:ok, entry}
+          {:ok, :existing, entry} -> update(entry, attrs)
+          {:error, _} = err -> err
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # The unique `[kind, value]` index is the arbiter: an insert that lost the
+  # race to another write of the same entry answers the row that landed.
+  defp insert_new(attrs) do
+    case insert(attrs) do
+      {:ok, entry} ->
+        {:ok, :created, entry}
+
+      {:error, %Ecto.Changeset{errors: errors}} = error ->
+        if Enum.any?(errors, fn {field, {_message, meta}} ->
+             field == :kind and meta[:constraint] == :unique
+           end) do
+          with {:ok, entry} <- find(attrs.kind, attrs.value), do: {:ok, :existing, entry}
+        else
+          error
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 

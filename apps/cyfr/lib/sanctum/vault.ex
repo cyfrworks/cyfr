@@ -215,37 +215,45 @@ defmodule Sanctum.Vault do
     end
   end
 
-  # One transaction: the binding moves from the digest it was read at, and
-  # every profile whose head consent references the entry is blocked with
-  # it. A rebind that lost the race recomputes against what landed.
+  # A rebind that lost the race recomputes against what landed.
   defp rebind_entry(ctx, entry, changes, attempts) do
-    athanor_id = Context.athanor!(ctx)
+    case move_binding(entry, changes) do
+      {:error, :binding_moved} when attempts > 1 ->
+        with {:ok, fresh} <- get_living(ctx, entry.id),
+             do: rebind_entry(ctx, fresh, changes, attempts - 1)
 
+      result ->
+        result
+    end
+  end
+
+  @doc """
+  Move a vault entry's binding (`changes`: `field_names`, `oauth_endpoints`,
+  `oauth_scopes`) in one transaction: the binding moves from the digest
+  `entry` was read at, and every profile whose head consent references the
+  entry is set `needs_consent` with it, so no consent ever covers a binding
+  it did not approve. `{:error, :binding_moved}` when another change landed
+  first or the entry is gone. The caller authorizes and broadcasts.
+  """
+  @spec move_binding(map(), map()) ::
+          {:ok, %{binding_digest: String.t(), affected: [String.t()]}} | {:error, term()}
+  def move_binding(%{athanor_id: athanor_id, id: id} = entry, changes) when is_map(changes) do
     with {:ok, digest} <- VaultReader.binding_digest(Map.merge(Map.from_struct(entry), changes)) do
       Arca.Repo.transaction(fn ->
         with :ok <-
                Arca.VaultStorage.move_binding(
                  athanor_id,
-                 entry.id,
+                 id,
                  entry.binding_digest,
                  Map.put(changes, :binding_digest, digest)
                ),
-             {:ok, affected} <-
-               Arca.ConsentStorage.head_profiles_referencing(athanor_id, entry.id),
+             {:ok, affected} <- Arca.ConsentStorage.head_profiles_referencing(athanor_id, id),
              :ok <- block_profiles(athanor_id, affected) do
           %{binding_digest: digest, affected: Enum.sort(affected)}
         else
           {:error, reason} -> Arca.Repo.rollback(reason)
         end
       end)
-      |> case do
-        {:error, :binding_moved} when attempts > 1 ->
-          with {:ok, fresh} <- get_living(ctx, entry.id),
-               do: rebind_entry(ctx, fresh, changes, attempts - 1)
-
-        result ->
-          result
-      end
     end
   end
 

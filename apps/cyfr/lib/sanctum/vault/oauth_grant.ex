@@ -452,9 +452,9 @@ defmodule Sanctum.Vault.OAuthGrant do
   end
 
   # A grant whose endpoints or scopes differ from the entry's stored
-  # binding fields is a binding change: update them, recompute the derived
-  # digest, and flip referencing profiles to needs_consent. The common
-  # re-auth (same binding) touches nothing.
+  # binding fields is a binding change, moved with the referencing profiles
+  # set needs_consent in one transaction (`Sanctum.Vault.move_binding/2`).
+  # The common re-auth (same binding) touches nothing.
   defp maybe_rebind(entry, target) do
     stored_endpoints = decode_map(entry.oauth_endpoints)
     stored_scopes = decode_list(entry.oauth_scopes)
@@ -469,30 +469,12 @@ defmodule Sanctum.Vault.OAuthGrant do
         oauth_scopes: Jason.encode!(target.scopes)
       }
 
-      rebound = Map.merge(Map.from_struct(entry), changes)
+      case Sanctum.Vault.move_binding(entry, changes) do
+        {:ok, _moved} ->
+          {:ok, true}
 
-      with {:ok, digest} <- VaultReader.binding_digest(rebound),
-           :ok <-
-             Arca.VaultStorage.update_binding(
-               entry.athanor_id,
-               entry.id,
-               Map.put(changes, :binding_digest, digest)
-             ),
-           {:ok, affected} <-
-             Arca.ConsentStorage.head_profiles_referencing(entry.athanor_id, entry.id) do
-        Enum.each(affected, fn profile_id ->
-          Arca.ProfileStorage.set_status(entry.athanor_id, profile_id, "needs_consent")
-        end)
-
-        {:ok, true}
-      else
         error ->
-          # The binding moved but the profiles that consented to the OLD
-          # binding may not have been flipped to needs_consent — so a wider
-          # grant could run under a consent nobody re-approved. Reporting
-          # success here is the one fail-open in the credential path: refuse
-          # instead, and let the caller surface it.
-          Logger.error("[Vault.OAuthGrant] rebind bookkeeping failed: #{inspect(error)}")
+          Logger.error("[Vault.OAuthGrant] rebind failed: #{inspect(error)}")
           {:error, :rebind_bookkeeping_failed}
       end
     end

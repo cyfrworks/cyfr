@@ -92,8 +92,16 @@ defmodule Arca.ConsentStorage do
 
     verify = Keyword.get(opts, :verify, fn -> :ok end)
 
+    # A writer that lost the race to the same revision meets the unique
+    # index before the head CAS; both answer `:head_moved`.
+    consent =
+      Consent
+      |> struct(row)
+      |> Ecto.Changeset.change()
+      |> Ecto.Changeset.unique_constraint([:profile_id, :revision])
+
     multi
-    |> Ecto.Multi.insert(:consent, struct(Consent, row))
+    |> Ecto.Multi.insert(:consent, consent)
     |> Ecto.Multi.run(:refs, fn _repo, _done ->
       # insert_all cannot signal a partial write through its return shape;
       # the count assertion is what makes the refs leg able to fail at all.
@@ -119,8 +127,16 @@ defmodule Arca.ConsentStorage do
   defp run_multi(multi, return_key) do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.run_multi", fn ->
       case Arca.Repo.transaction(multi) do
-        {:ok, done} -> {:ok, Map.fetch!(done, return_key)}
-        {:error, _step, reason, _done} -> {:error, reason}
+        {:ok, done} ->
+          {:ok, Map.fetch!(done, return_key)}
+
+        {:error, :consent, %Ecto.Changeset{errors: errors} = changeset, _done} ->
+          if Keyword.has_key?(errors, :profile_id),
+            do: {:error, :head_moved},
+            else: {:error, changeset}
+
+        {:error, _step, reason, _done} ->
+          {:error, reason}
       end
     end)
   end
