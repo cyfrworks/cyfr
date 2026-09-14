@@ -22,8 +22,8 @@ throughout (storage consults the tenant policy and cipher), so running CYFR
 means running the FSL part under its terms — the split governs what you may
 reuse elsewhere, not what boots alone. The shared contracts
 (`apps/cyfr_contracts`: component references, limits, digests, canonical JSON
-and the other pure primitives every part of CYFR speaks) depend on nothing
-else in the repository and build alone. Elixir files carry an in-band
+and the other pure primitives every part of CYFR speaks) depend on no other
+app and build alone, with the repository's `wit/` definitions compiled in. Elixir files carry an in-band
 `SPDX-License-Identifier` header (there is no `REUSE.toml`), and the
 [license-lint CI](.github/workflows/license-lint.yml) enforces the boundary
 mechanically.

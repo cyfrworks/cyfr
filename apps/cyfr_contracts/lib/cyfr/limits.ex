@@ -155,9 +155,8 @@ defmodule Cyfr.Limits do
   `caps.limits` merges over before the operator adjusts and the ceiling
   clamps.
 
-  Deliberately literal (the ZeroAuthority doctrine): these literals are the
-  only source, so nothing can silently loosen them — the per-type values
-  are pinned by test.
+  Deliberately literal: these literals are the only source, so nothing can
+  silently loosen them — the per-type values are pinned by test.
   """
   @spec defaults(atom()) :: t()
   def defaults(component_type) when is_map_key(@type_defaults, component_type) do

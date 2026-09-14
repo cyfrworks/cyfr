@@ -34,9 +34,7 @@ defmodule Cyfr.BusTest do
         assert String.starts_with?(topic, "tenant:ath_1:"),
                "#{fun}/1 is not tenant-prefixed"
 
-        # One vocabulary: three topics once skipped the prefix, and
-        # "schedules" vs "bus:schedules" were one word apart with
-        # different message shapes.
+        # One vocabulary: every tenant topic is spelled under `bus:`.
         assert String.starts_with?(topic, "tenant:ath_1:bus:"),
                "#{fun}/1 does not use the bus: vocabulary"
       end

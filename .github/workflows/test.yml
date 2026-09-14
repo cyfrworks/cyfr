@@ -3,12 +3,9 @@ on:
   push:
     branches: [main]
     paths:
-      # Every Elixir app; the CLI has its own workflow.
+      # Every app: the Elixir suite also pins the CLI's grammar and the
+      # bridge's protocol literals (ClientProtocolDriftTest, StackShapeTest).
       - 'apps/**'
-      - '!apps/codex/**'
-      # ClientProtocolDriftTest and StackShapeTest read server.mjs literals;
-      # a bridge-only change must run the Elixir suite that pins them.
-      - 'apps/mcp-bridge/**'
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
@@ -37,12 +34,9 @@ on:
       - '.dockerignore'
   pull_request:
     paths:
-      # Every Elixir app; the CLI has its own workflow.
+      # Every app: the Elixir suite also pins the CLI's grammar and the
+      # bridge's protocol literals (ClientProtocolDriftTest, StackShapeTest).
       - 'apps/**'
-      - '!apps/codex/**'
-      # ClientProtocolDriftTest and StackShapeTest read server.mjs literals;
-      # a bridge-only change must run the Elixir suite that pins them.
-      - 'apps/mcp-bridge/**'
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
@@ -262,6 +256,12 @@ jobs:
         run: |
           set -uo pipefail
           fail=0
+          sources="$(git ls-files 'apps/*/lib/*.ex' 'apps/*/lib/**/*.ex')"
+          # A scan that reads nothing would pass; refuse it.
+          if [ -z "$sources" ]; then
+            echo "::error::no application sources matched — the scan would read nothing"
+            exit 1
+          fi
           while IFS= read -r f; do
             case "$f" in
               */arca/adapters/*) continue ;;
@@ -281,7 +281,7 @@ jobs:
               echo "$bad"
               fail=1
             fi
-          done < <(git ls-files 'apps/*/lib/*.ex' 'apps/*/lib/**/*.ex')
+          done <<< "$sources"
           if [ "$fail" -ne 0 ]; then
             echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D|E>."
             exit 1
@@ -304,6 +304,26 @@ jobs:
           if [ -n "$hits" ]; then
             echo "::error::build droppings under seed/ — install media must be clean"
             echo "$hits"
+            exit 1
+          fi
+      # A tincture ships its entry file: a declared build's output is part of
+      # the seed media, so a checkout that lacks it cannot register the
+      # tincture.
+      - name: Every seed tincture's entry is tracked
+        run: |
+          set -uo pipefail
+          bad=""
+          for manifest in seed/components/tinctures/local/*/*/cyfr-manifest.json; do
+            vdir="$(dirname "$manifest")"
+            entry="$(jq -r '.tincture.entry // "index.html"' "$manifest")"
+            if ! git ls-files --error-unmatch "$vdir/$entry" >/dev/null 2>&1; then
+              bad="$bad"$'\n'"$vdir/$entry"
+            fi
+          done
+          bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
+          if [ -n "$bad" ]; then
+            echo "::error::seed tincture entries not tracked"
+            echo "$bad"
             exit 1
           fi
       # Require new version directories for seed changes; existing bundle versions are immutable.
@@ -373,6 +393,11 @@ jobs:
           failures="$(mktemp)"
           git grep -hoE 'compile_env\(:cyfr, *:[a-z_0-9]+' -- 'apps/**/*.ex' 'apps/**/*.exs' \
             | sed 's/.*:cyfr, *://' | sort -u > "$keys"
+          # A scan that finds no compile-time key reads nothing; refuse it.
+          if [ ! -s "$keys" ]; then
+            echo "::error::no compile_env reads matched — the scan would check nothing"
+            exit 1
+          fi
 
           while IFS= read -r key; do
             [ -n "$key" ] || continue
@@ -437,7 +462,7 @@ jobs:
             'Prism\.AuthExchange\b' \
             'PrismWeb\.LiveClaimGate\b' \
             'CYFR_PRISM_' \
-            'Prism\.AquaThreads\b' \
+            'Prism\.AquaConversations\b' \
             ':aqua_path\b' \
             ':4001\b|4001:4001' \
             'CYFR_PORTA_' \

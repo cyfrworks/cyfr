@@ -48,7 +48,7 @@ defmodule Aqua.Loop do
   @flush_action "keep"
   @flush_key "#{@flush_tool}.#{@flush_action}"
   @flush_note_max_bytes 64 * 1024
-  @flush_instruction "The older part of this conversation is about to be summarized, and what " <>
+  @flush_instruction "The older part of this thread is about to be summarized, and what " <>
                        "the summary leaves out will be gone. Keep anything worth remembering " <>
                        "beyond it — a decision, a preference, a fact the work will need — with " <>
                        "notes.keep now. Reply with nothing else."
@@ -1762,7 +1762,7 @@ defmodule Aqua.Loop do
         state,
         step,
         call,
-        {:error, {:denied, "only #{@flush_key} runs while the conversation is summarized"}}
+        {:error, {:denied, "only #{@flush_key} runs while the thread is summarized"}}
       )
 
   defp keep_note(%State{} = state, step, {:error, message}),

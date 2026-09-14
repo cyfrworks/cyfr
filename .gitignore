@@ -73,8 +73,8 @@ apps/*/priv/static/cache_manifest.json
 apps/codex/cyfr
 apps/codex/codex
 
-# goreleaser output
-dist/
+# goreleaser output (a seed tincture's dist/ is its shipped build, tracked)
+/apps/codex/dist/
 cyfr-scaffold.tar.gz
 
 # Runtime storage all lives under data/ (ignored above). The repo's

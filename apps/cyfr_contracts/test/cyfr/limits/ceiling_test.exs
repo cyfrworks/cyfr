@@ -49,9 +49,8 @@ defmodule Cyfr.Limits.CeilingTest do
     end
 
     test "a float ceiling clamps instead of raising" do
-      # `lower_of/3` admits a float, but `div/2` is integer-only — an
-      # operator override of `%{rate_limit_requests: 5_000.0}` raised
-      # ArithmeticError where the pre-clamp code simply worked.
+      # A float ceiling (an operator override such as
+      # `%{rate_limit_requests: 5_000.0}`) bounds the whole requests below it.
       limits = limits(rate_limit: %{requests: 50_000, window: "1m"})
 
       clamped = Ceiling.clamp(limits, %{rate_limit_requests: 5_000.0})

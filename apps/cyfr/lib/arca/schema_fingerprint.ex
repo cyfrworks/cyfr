@@ -21,10 +21,12 @@ defmodule Arca.SchemaFingerprint do
 
   @key "schema_fingerprint"
   @migrations_dir Path.expand("../../priv/repo/migrations", __DIR__)
+  # arca:bypass-ok=C — compile-time read of the tracked migration sources.
   @migrations @migrations_dir |> Path.join("*.exs") |> Path.wildcard() |> Enum.sort()
 
   for path <- @migrations, do: @external_resource(path)
 
+  # arca:bypass-ok=C — compile-time read of the tracked migration sources.
   @fingerprint @migrations
                |> Enum.map_join(fn path -> Path.basename(path) <> "\n" <> File.read!(path) end)
                |> Cyfr.Digest.sha256_hex()

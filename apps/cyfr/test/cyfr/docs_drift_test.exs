@@ -40,7 +40,7 @@ defmodule Cyfr.DocsDriftTest do
     doc = File.read!(@readme)
 
     # The README draws the tree with a trailing slash per directory —
-    # matched with the slash so "metadata" prose can't stand in for `meta/`.
+    # matched with the slash so a word in prose can't stand in for a root.
     for root <- Arca.Storage.tenant_roots() ++ Arca.Storage.global_prefixes() do
       assert doc =~ root <> "/",
              "root #{root}/ is missing from README's storage tree"

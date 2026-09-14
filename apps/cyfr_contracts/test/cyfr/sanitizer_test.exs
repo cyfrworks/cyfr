@@ -2,9 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 
 # A struct defined here rather than borrowed from the app: the property under
-# test is the sanitizer's, and pinning it to whichever production struct happens
-# to carry a credential field today made these tests fail when that struct
-# legitimately lost the field.
+# test is the sanitizer's, independent of which production struct carries a
+# credential field.
 defmodule Cyfr.SanitizerTest.Credentialed do
   @moduledoc false
   defstruct [:id, :sanctum_token]
@@ -166,7 +165,7 @@ defmodule Cyfr.SanitizerTest do
              ]
     end
 
-    test "the ordinary tagged-tuple shapes still traverse" do
+    test "the ordinary tagged-tuple shapes traverse" do
       assert Cyfr.Sanitizer.sanitize({:error, %{"password" => "hunter2", "id" => "x"}}) ==
                {:error, %{"password" => "[REDACTED]", "id" => "x"}}
 
