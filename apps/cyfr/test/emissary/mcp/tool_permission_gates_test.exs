@@ -124,25 +124,6 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                    "X-Client-Version" => "1.2.3"
                  })
                )
-
-      # Reject secret: references with an error directing callers to vault:.
-      assert {:error, msg} =
-               Emissary.MCP.McpServersTool.handle(
-                 "mcp_servers",
-                 ctx,
-                 create_args(%{"Authorization" => "secret:MY_TOKEN"})
-               )
-
-      assert msg =~ "vault:"
-
-      # Even in a header whose NAME is not credential-shaped — otherwise the
-      # row persists and only fails at server boot.
-      assert {:error, _} =
-               Emissary.MCP.McpServersTool.handle(
-                 "mcp_servers",
-                 ctx,
-                 create_args(%{"X-Thing" => "secret:MY_TOKEN"})
-               )
     end
   end
 

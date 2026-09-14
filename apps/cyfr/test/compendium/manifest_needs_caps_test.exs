@@ -194,15 +194,6 @@ defmodule Compendium.ManifestNeedsCapsTest do
       assert bare != with_needs
       assert with_caps != with_needs
     end
-
-    test "the retired blocks no longer contribute to the digest (subtractive change)" do
-      legacy = %{"setup" => %{"policy" => %{"timeout" => "30s"}}, "wasi" => %{"http" => true}}
-
-      # Unsupported manifest blocks do not contribute to the release digest.
-      {:ok, with_legacy} = Compendium.ReleaseDigest.compute("sha256:abc", legacy)
-      {:ok, without} = Compendium.ReleaseDigest.compute("sha256:abc", %{})
-      assert with_legacy == without
-    end
   end
 
   describe "registration refuses malformed blocks" do
@@ -245,87 +236,24 @@ defmodule Compendium.ManifestNeedsCapsTest do
                })
     end
 
-    test "publish_bytes refuses a manifest with a setup block", %{ctx: ctx, wasm: wasm} do
+    test "publish_bytes refuses a manifest with an unknown top-level key", %{ctx: ctx, wasm: wasm} do
       manifest =
         Jason.encode!(%{
-          "name" => "legacy-setup",
+          "name" => "unknown-key",
           "version" => "1.0.0",
           "type" => "reagent",
           "setup" => %{"policy" => %{"allowed_domains" => ["a.example"]}}
         })
 
-      assert {:error, {:legacy_manifest_blocks, msg}} =
+      assert {:error, {:unknown_manifest_keys, msg}} =
                Compendium.Registry.publish_bytes(ctx, wasm, %{
-                 name: "legacy-setup",
+                 name: "unknown-key",
                  version: "1.0.0",
                  type: "reagent",
                  manifest: manifest
                })
 
-      assert msg =~ "retired block(s) setup"
-      assert msg =~ "declare needs/caps instead"
-    end
-
-    test "publish_bytes refuses a manifest with an oauth block", %{ctx: ctx, wasm: wasm} do
-      manifest =
-        Jason.encode!(%{
-          "name" => "legacy-oauth",
-          "version" => "1.0.0",
-          "type" => "reagent",
-          "oauth" => %{"google" => %{"scopes" => ["email"]}}
-        })
-
-      assert {:error, {:legacy_manifest_blocks, msg}} =
-               Compendium.Registry.publish_bytes(ctx, wasm, %{
-                 name: "legacy-oauth",
-                 version: "1.0.0",
-                 type: "reagent",
-                 manifest: manifest
-               })
-
-      assert msg =~ "retired block(s) oauth"
-    end
-
-    test "publish_bytes refuses a manifest with a wasi block", %{ctx: ctx, wasm: wasm} do
-      manifest =
-        Jason.encode!(%{
-          "name" => "legacy-wasi",
-          "version" => "1.0.0",
-          "type" => "reagent",
-          "wasi" => %{"http" => true}
-        })
-
-      assert {:error, {:legacy_manifest_blocks, msg}} =
-               Compendium.Registry.publish_bytes(ctx, wasm, %{
-                 name: "legacy-wasi",
-                 version: "1.0.0",
-                 type: "reagent",
-                 manifest: manifest
-               })
-
-      assert msg =~ "retired block(s) wasi"
-    end
-
-    test "publish_bytes names every retired block a manifest carries", %{ctx: ctx, wasm: wasm} do
-      manifest =
-        Jason.encode!(%{
-          "name" => "legacy-all",
-          "version" => "1.0.0",
-          "type" => "reagent",
-          "setup" => %{"policy" => %{}},
-          "oauth" => %{"google" => %{}},
-          "wasi" => %{"http" => true}
-        })
-
-      assert {:error, {:legacy_manifest_blocks, msg}} =
-               Compendium.Registry.publish_bytes(ctx, wasm, %{
-                 name: "legacy-all",
-                 version: "1.0.0",
-                 type: "reagent",
-                 manifest: manifest
-               })
-
-      assert msg =~ "setup/oauth/wasi"
+      assert msg =~ "unknown top-level key(s): setup"
     end
 
     test "publish_bytes accepts well-formed needs and caps", %{ctx: ctx, wasm: wasm} do

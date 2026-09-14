@@ -100,7 +100,7 @@ defmodule Compendium.Registry.Transport do
     result =
       Cyfr.Network.pinned_request(method, url, headers, body,
         receive_timeout: limits.receive_timeout,
-        allow_private: :policy,
+        private_policy: :operator,
         max_response_bytes: @max_response_bytes
       )
 

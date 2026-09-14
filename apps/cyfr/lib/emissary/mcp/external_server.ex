@@ -625,7 +625,7 @@ defmodule Emissary.MCP.ExternalServer do
         # only when the operator named it in the private-egress allowlist.
         opts = [
           receive_timeout: state.timeout_ms,
-          allow_private: :policy,
+          private_policy: :operator,
           # Enforced while the body streams in — the transfer aborts at the
           # ceiling, so a hostile peer cannot make this node buffer an
           # arbitrarily large body before a post-hoc check.
@@ -898,19 +898,6 @@ defmodule Emissary.MCP.ExternalServer do
 
   def resolve_headers(_headers, _athanor_id), do: {:ok, %{}}
 
-  # `vault:` is the only credential reference. `secret:` is refused rather
-  # than falling through to the literal clause below, which would send the
-  # operator's reference text to a third party as the header value — a
-  # request that silently fails to authenticate while looking like it tried.
-  defp resolve_value("secret:" <> _name, athanor_id) do
-    Logger.warning(
-      "[ExternalServer] 'secret:' is not a credential reference — " <>
-        "use vault:<entry name> (athanor=#{athanor_id})"
-    )
-
-    {:error, :unknown_credential_reference}
-  end
-
   # A vault-backed header: `vault:<entry name>` resolves the entry's single
   # material field. Deliberately single-field — a header carries one value,
   # and picking silently from a bundle would smuggle the wrong credential
@@ -1012,7 +999,7 @@ defmodule Emissary.MCP.ExternalServer do
 
   defp validate_server_url(url) do
     Cyfr.Network.validate_redirect_url(url,
-      allow_private: :policy
+      private_policy: :operator
     )
   end
 

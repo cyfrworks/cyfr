@@ -608,19 +608,6 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  # An entry that is not a string cannot match an IP. `encode_allowlist/1`
-  # refuses to write one now, but a row stored before it did must fail the
-  # match rather than the request: raising here took down the whole
-  # authentication path, and did so on every call for that key.
-  defp ip_matches?(_client_ip, pattern) do
-    Logger.warning(
-      "[ApiKey] ignoring a non-string ip_allowlist entry (#{inspect(pattern)}); " <>
-        "the key's allowlist should be rewritten"
-    )
-
-    false
-  end
-
   # Exact-IP match stays a string compare in ip_matches?/2; only the CIDR
   # arithmetic is delegated to the Sanctum.Cidr SSOT. The operator-facing
   # misconfig warning is preserved (fires whenever the IP or CIDR is

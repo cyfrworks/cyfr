@@ -340,7 +340,7 @@ defmodule Arca.StorageTest do
       assert Storage.locate(["aqua"]) == :above_unit
 
       assert {:dir, _, _} = Storage.locate(["components", "catalysts", "local", "n", "1.0.0"])
-      assert {:file, _} = Storage.locate(["aqua", "agents", "a.md"])
+      assert {:file, _} = Storage.locate(["aqua", "roles", "a.md"])
     end
 
     test "seed_prefix/1 spells the seed vocabulary, and only for seed roots" do
@@ -474,7 +474,7 @@ defmodule Arca.StorageLocatorWiringTest do
       Arca.Storage.install_locators!()
     end
 
-    assert {:file, _} = Arca.Storage.locate(["aqua", "agents", "a.md"])
+    assert {:file, _} = Arca.Storage.locate(["aqua", "roles", "a.md"])
 
     # A root wired to a module without locate/1 is refused too.
     Application.put_env(:cyfr, :overlay_locators, %{original | "aqua" => String})

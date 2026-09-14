@@ -196,7 +196,7 @@ defmodule Arca.Storage do
   # - class: `:tenant` roots live under `athanors/{athanor_id}/`;
   #   `:tenant_reserved` roots live there too but only the server's own
   #   machinery may mutate them (`Arca.Overlay`'s internal-write scope or
-  #   an `auth_method: :system` context — the `meta/` origin marks);
+  #   an `auth_method: :system` context);
   #   `:global` roots stay at the storage root.
   # - guest name: what a WASM guest may call the root (`nil` = host-only,
   #   invisible at the guest boundary). A guest scope is a physical

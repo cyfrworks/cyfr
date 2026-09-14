@@ -270,42 +270,16 @@ defmodule Compendium.Registry.CredentialStore do
             atom_key = safe_atom(k)
             if atom_key in @valid_keys, do: Map.put(acc, atom_key, v), else: acc
           end)
-          |> Map.update(:type, :push_token, &normalize_type/1)
+          |> Map.update(:type, nil, &safe_atom/1)
 
-        {:ok, credential}
+        # The one credential shape this store writes; any other row is unusable.
+        if credential.type == :push_token, do: {:ok, credential}, else: :not_found
 
       _ ->
         :not_found
     end
   rescue
     ArgumentError -> :not_found
-  end
-
-  # Normalize credential types; log nil or unknown values and default to :push_token.
-  defp normalize_type(t) when is_atom(t), do: t
-
-  defp normalize_type(t) when is_binary(t) do
-    case safe_atom(t) do
-      nil ->
-        Logger.warning(
-          "[CredentialStore] credential type=#{inspect(t)} not a known atom; " <>
-            "coercing to :push_token (likely stale row predating auth-refactor)"
-        )
-
-        :push_token
-
-      atom ->
-        atom
-    end
-  end
-
-  defp normalize_type(other) do
-    Logger.warning(
-      "[CredentialStore] credential type=#{inspect(other)} unexpected shape; " <>
-        "coercing to :push_token"
-    )
-
-    :push_token
   end
 
   defp safe_atom(s) when is_binary(s) do

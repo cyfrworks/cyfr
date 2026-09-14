@@ -16,10 +16,9 @@ defmodule Sanctum.Consent.Bootstrap do
   formula runs it with, and revoking or rebinding it there is one act.
 
   A boot revises a **bootstrap-only** head (`granted_via: "bootstrap"`,
-  never touched by a person) in two cases: it lacks a selection its
-  dependencies now declare under an unmoved shape, or its shape moved
-  because the seed did — every node of the live closure is vouched for,
-  so the revision is the same operator-vouched mint as the first. A node
+  never touched by a person) when its shape moved because the seed did —
+  every node of the live closure is vouched for, so the revision is the
+  same operator-vouched mint as the first. A node
   is vouched for when the seed ships it at the seed's own digest, or when
   the head already names it at that digest: a release that retires the
   version an estate holds does not turn that unchanged copy into a
@@ -346,9 +345,8 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  # A bootstrap-only head is re-minted when what a mint would produce today
-  # differs from it in a way the seed alone accounts for (see
-  # `revisable/5`).
+  # A bootstrap-only head is re-minted when the seed moved its shape (see
+  # `revisable/4`).
   defp revise_bootstrap(ctx, component, source_ref, profile, head, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, nodes} <-
@@ -357,7 +355,7 @@ defmodule Sanctum.Consent.Bootstrap do
            ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <- compute_digests(ctx, source_ref, JCS.hash_binary(blob_json)),
-         :ok <- revisable(head, blob_json, digests, activation.graph, vouched),
+         :ok <- revisable(head, digests, activation.graph, vouched),
          {:ok, activation_json} <- JCS.encode(activation.graph),
          {:ok, _consent} <-
            Arca.ConsentStorage.insert_revision(
@@ -386,19 +384,13 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  # Under an unmoved shape, only the selections may differ. Under a moved
-  # shape, every node of the live closure must be vouched for at its
-  # digest — a dependency a person installed, edited or pinned elsewhere
-  # moves the shape too, and that is not the seed's.
-  defp revisable(head, blob_json, digests, graph, vouched) do
+  # Under a moved shape, every node of the live closure must be vouched for
+  # at its digest — a dependency a person installed, edited or pinned
+  # elsewhere moves the shape too, and that is not the seed's.
+  defp revisable(head, digests, graph, vouched) do
     cond do
-      digests.shape_digest == head.shape_digest and blob_json == head.resolved_policy ->
-        {:skip, :already_bootstrapped}
-
       digests.shape_digest == head.shape_digest ->
-        if same_but_selections?(blob_json, head.resolved_policy),
-          do: :ok,
-          else: {:skip, :already_bootstrapped}
+        {:skip, :already_bootstrapped}
 
       Enum.all?(graph, fn {key, digest} -> vouched?(vouched, key, digest) end) ->
         :ok
@@ -407,33 +399,6 @@ defmodule Sanctum.Consent.Bootstrap do
         {:skip, :shape_moved}
     end
   end
-
-  defp same_but_selections?(blob_json, head_json) do
-    with {:ok, fresh} <- Jason.decode(blob_json),
-         {:ok, head} <- Jason.decode(head_json) do
-      strip_selections(fresh) == strip_selections(head)
-    else
-      _ -> false
-    end
-  end
-
-  defp strip_selections(%{"nodes" => nodes} = blob) do
-    %{
-      blob
-      | "nodes" =>
-          Map.new(nodes, fn {ref, node} ->
-            edges =
-              Map.new(node["edges"] || %{}, fn
-                {key, %{"vault" => %{"via" => _}} = edge} -> {key, Map.delete(edge, "vault")}
-                {key, edge} -> {key, edge}
-              end)
-
-            {ref, Map.put(node, "edges", edges)}
-          end)
-    }
-  end
-
-  defp strip_selections(other), do: other
 
   defp resolve_activation(ctx, component) do
     case Compendium.Activation.resolve(ctx, component) do

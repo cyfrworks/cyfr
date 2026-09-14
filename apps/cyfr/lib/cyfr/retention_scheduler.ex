@@ -76,8 +76,7 @@ defmodule Cyfr.RetentionScheduler do
       {"expired session sweep", &sweep_expired_sessions/0},
       {"webhook delivery sweep", &sweep_webhook_deliveries/0},
       {"stale tmp sweep", &sweep_stale_tmp_files/0},
-      {"thread blob orphan sweep", &sweep_thread_blob_orphans/0},
-      {"health probe sweep", &sweep_health_probe_dir/0}
+      {"thread blob orphan sweep", &sweep_thread_blob_orphans/0}
     ]
   end
 
@@ -133,21 +132,6 @@ defmodule Cyfr.RetentionScheduler do
       Logger.warning("[RetentionScheduler] #{kind} cleanup failed: #{inspect(reason)}",
         athanor_id: athanor_id
       )
-    end
-  end
-
-  # The storage readiness probe overwrites one fixed key and cleans up
-  # after itself; this belt reclaims anything a failed delete (or the old
-  # per-probe naming scheme) stranded. A racing probe's in-flight key may
-  # go with it — the probe treats that delete race as success. The
-  # spelling is `Cyfr.HealthProbe.dir/0`, shared with the writer.
-  defp sweep_health_probe_dir do
-    case Arca.delete_tree(Sanctum.system_context(), Cyfr.HealthProbe.dir()) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[RetentionScheduler] Health-probe sweep failed: #{inspect(reason)}")
     end
   end
 

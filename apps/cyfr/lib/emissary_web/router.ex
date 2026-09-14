@@ -388,10 +388,8 @@ defmodule EmissaryWeb.Router do
       scope "/a/:athanor" do
         # Forward to /chat with the athanor selected.
         live "/", ChatRedirectLive, :index
-        # AQUA page and agents-path redirect.
         live "/aqua", AquaLive, :index
         live "/files", FilesLive, :index
-        live "/agents", AquaRedirectLive, :index
         # /activities: unified activities feed (mcp_log + execution fan-out).
         live "/activities", ActivitiesLive, :index
         # /enforcements: live policy-decision feed (Arca.PolicyLog rows from

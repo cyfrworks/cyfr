@@ -195,7 +195,7 @@ defmodule Compendium.OCI.Blob do
     location = normalize_url(location, ref)
 
     case Cyfr.Network.validate_redirect_url(location,
-           allow_private: :policy
+           private_policy: :operator
          ) do
       :ok ->
         # Append digest query param to the upload URL
@@ -239,7 +239,7 @@ defmodule Compendium.OCI.Blob do
     # body must never buffer past the largest legitimate blob.
     opts = [
       receive_timeout: 60_000,
-      allow_private: :policy,
+      private_policy: :operator,
       max_response_bytes: max_blob_bytes()
     ]
 

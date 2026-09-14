@@ -19,23 +19,17 @@ type Config struct {
 // Context is a named server connection.
 //
 // Token holds a bearer credential from cyfr login or a cyfr_ API key.
-// SessionID is accepted as a fallback when reading existing configuration.
 type Context struct {
-	URL       string `json:"url"`
-	Token     string `json:"token,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
+	URL   string `json:"url"`
+	Token string `json:"token,omitempty"`
 }
 
-// Credential returns the context's bearer credential, preferring the modern
-// `token` field over the legacy `session_id` spelling.
+// Credential returns the context's bearer credential.
 func (c *Context) Credential() string {
 	if c == nil {
 		return ""
 	}
-	if c.Token != "" {
-		return c.Token
-	}
-	return c.SessionID
+	return c.Token
 }
 
 // DefaultConfigDir returns ~/.cyfr.
@@ -153,14 +147,12 @@ func (c *Config) CurrentURL() string {
 }
 
 // SetToken stores the bearer credential for the active context and saves.
-// It writes token and clears the fallback session_id field.
 func (c *Config) SetToken(token string) error {
 	ctx := c.Current()
 	if ctx == nil {
 		return fmt.Errorf("no active context")
 	}
 	ctx.Token = token
-	ctx.SessionID = ""
 	return c.Save()
 }
 

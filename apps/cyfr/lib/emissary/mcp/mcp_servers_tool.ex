@@ -182,7 +182,7 @@ defmodule Emissary.MCP.McpServersTool do
   end
 
   defp validate_create_url(url) do
-    case Cyfr.Network.validate_redirect_url(url, allow_private: :policy) do
+    case Cyfr.Network.validate_redirect_url(url, private_policy: :operator) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_argument, "Invalid URL: #{reason}"}}
     end
@@ -191,18 +191,10 @@ defmodule Emissary.MCP.McpServersTool do
   # A literal value in a credential-shaped header would be persisted
   # UNENCRYPTED in mcp_servers.config_json. Reject it instead of sealing —
   # `vault:NAME` references resolve host-side from the sealed vault
-  # (writer-independently). `secret:` references retired with that plane.
+  # (writer-independently).
   defp validate_header_credentials(headers) when is_map(headers) do
     Enum.find_value(headers, :ok, fn {key, value} ->
       cond do
-        # A retired-scheme reference in ANY header would otherwise be
-        # persisted and only fail at server boot ("Failed to resolve
-        # header") — refuse it here where the message can explain.
-        Emissary.MCP.VaultRef.retired_ref?(value) ->
-          {:error,
-           "Header '#{key}' uses the retired \"secret:\" reference — " <>
-             "use \"vault:ENTRY\" (a single-field vault entry)"}
-
         is_binary(value) and not Emissary.MCP.VaultRef.vault_ref?(value) and
             credential_shaped_header_name?(key) ->
           {:error,

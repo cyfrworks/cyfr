@@ -247,30 +247,8 @@ defmodule Compendium.AquaTemplateTest do
   test "seed_check/0 fails loud on broken install media", %{template: template} do
     assert :ok = AquaTemplate.seed_check()
 
-    # A v2-shaped mount (agent.json at the root) gets a pointed message.
-    File.write!(Path.join(template, "agent.json"), "{}")
-    assert {:error, :seed_is_v2_shaped} = AquaTemplate.seed_check()
-    File.rm!(Path.join(template, "agent.json"))
-
     # A tree without a soul is no template at all.
     File.rm!(Path.join([template, "aqua.md"]))
     assert {:error, :template_missing} = AquaTemplate.seed_check()
-
-    # The shape before the soul had a file of its own — agents under
-    # `agents/`, nothing beside them — gets its own pointed message rather
-    # than the generic "no soul", so the operator learns which tree they
-    # mounted.
-    legacy = Path.join(template, AquaPath.legacy_agents_dirname())
-    File.mkdir_p!(legacy)
-    File.write!(Path.join(legacy, "aqua.md"), "---\ntitle: Old\n---\n\nold soul\n")
-    assert {:error, :seed_is_agents_shaped} = AquaTemplate.seed_check()
-
-    # A current tree that still carries a stale `agents/` beside its soul
-    # is the current shape with a leftover — it reads, and the leftover is
-    # not among what the seed ships.
-    write_seed!(template, "v3")
-    assert :ok = AquaTemplate.seed_check()
-    refute Enum.any?(AquaTemplate.files(), &(hd(&1) == AquaPath.legacy_agents_dirname()))
-    assert ["aqua.md"] in AquaTemplate.files()
   end
 end

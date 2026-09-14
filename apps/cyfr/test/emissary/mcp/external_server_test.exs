@@ -237,28 +237,17 @@ defmodule Emissary.MCP.ExternalServerTest do
     end
   end
 
-  describe "header secret resolution" do
+  describe "header vault resolution" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
       :ok
     end
 
-    test "secret: references are retired — the reference form itself refuses" do
+    test "reports only the header name on a missing vault entry" do
       assert {:error, message} =
                ExternalServer.resolve_headers(
-                 %{"authorization" => "secret:EXT_PROJ_TOKEN"},
-                 "ath_test"
-               )
-
-      assert message =~ "authorization"
-      refute message =~ "EXT_PROJ_TOKEN"
-    end
-
-    test "reports only the header name on a missing secret" do
-      assert {:error, message} =
-               ExternalServer.resolve_headers(
-                 %{"authorization" => "secret:EXT_MISSING"},
+                 %{"authorization" => "vault:EXT_MISSING"},
                  "ath_test"
                )
 

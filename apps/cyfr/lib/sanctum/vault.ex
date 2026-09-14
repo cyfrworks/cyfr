@@ -153,8 +153,6 @@ defmodule Sanctum.Vault do
   entry's `field_names` — changing the schema is a rebind, and silently
   accepting a different shape here would smuggle a binding change past
   re-consent.
-
-  Version-1 pointer payloads return `:legacy_pointer_retired`; recreate them with credential material.
   """
   @spec rotate(Context.t(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
   def rotate(%Context{} = ctx, %{id: id, fields: fields, expected_payload_rev: expected} = params)

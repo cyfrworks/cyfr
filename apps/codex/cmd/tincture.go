@@ -4,10 +4,8 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"github.com/cyfr/codex/internal/ops"
-	"os"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/ref"
@@ -40,7 +38,6 @@ func tincturePublicPath(result map[string]any, publisher, name string) string {
 func init() {
 	rootCmd.AddCommand(tinctureCmd)
 	tinctureCmd.AddCommand(tinctureVisibilityCmd)
-	tinctureVisibilityCmd.AddCommand(tinctureVisibilitySetCmd)
 	tinctureVisibilityCmd.AddCommand(tinctureVisibilityGetCmd)
 }
 
@@ -56,19 +53,6 @@ var tinctureVisibilityCmd = &cobra.Command{
 	Short: "Manage tincture public/private visibility",
 	Long: `Control whether a tincture is publicly accessible at /t/:athanor/:publisher/:name
 without authentication. Tinctures default to private (accessible only via Prism shell).`,
-}
-
-var tinctureVisibilitySetCmd = &cobra.Command{
-	Use:   "set <publisher> <name> <true|false>",
-	Short: "Retired — publishing is a consent decision",
-	Args:  cobra.ArbitraryArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		// Public visibility requires an active public profile.
-		fmt.Fprintln(os.Stderr, "  To publish:   run profile.publish on the tincture's owner profile (plan -> preview -> commit)")
-		fmt.Fprintln(os.Stderr, "  To unpublish: run profile.revoke on the tincture's public profile")
-		fmt.Fprintln(os.Stderr, "  To check:     cyfr tincture visibility get <publisher> <name>")
-		return errors.New("Publishing is a consent decision, not a toggle.")
-	},
 }
 
 var tinctureVisibilityGetCmd = &cobra.Command{

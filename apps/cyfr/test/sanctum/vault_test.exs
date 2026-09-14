@@ -4,7 +4,6 @@
 defmodule Sanctum.VaultTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.CipherAAD
   alias Sanctum.Vault
   alias Sanctum.VaultReader
 
@@ -173,31 +172,6 @@ defmodule Sanctum.VaultTest do
 
       {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
       assert entry.status == "active"
-    end
-
-    test "a retired v1 pointer row cannot rotate — recreate the entry", %{ctx: ctx} do
-      id = Cyfr.UUID7.generate_id("vlt")
-      aad = CipherAAD.vault_entry(ctx.athanor_id, id, "legacy")
-      pointer = ~s({"v":1,"legacy":{"secrets":[{"name":"PTR_KEY","scope":"project"}]}})
-      {:ok, sealed} = Sanctum.Cipher.encrypt(pointer, aad)
-
-      {:ok, _} =
-        Arca.VaultStorage.put(%{
-          id: id,
-          athanor_id: ctx.athanor_id,
-          name: "legacy:ptr",
-          provider_hint: "legacy",
-          kind: "bundle",
-          field_names: Jason.encode!(["PTR_KEY"]),
-          sealed_payload: sealed
-        })
-
-      assert {:error, :legacy_pointer_retired} =
-               Vault.rotate(ctx, %{
-                 id: id,
-                 fields: %{"PTR_KEY" => "typed-fresh"},
-                 expected_payload_rev: 0
-               })
     end
   end
 

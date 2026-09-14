@@ -78,8 +78,6 @@ defmodule Compendium.Manifest do
   # (`Cyfr.Models` reads `model/chat@1`).
   @contract_pattern ~r/\A[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*@[1-9][0-9]*\z/
 
-  @legacy_blocks ~w(setup oauth wasi)
-
   @doc "The closed top-level manifest key roster (docs derive from this)."
   @spec known_keys() :: [String.t()]
   def known_keys, do: @known_keys
@@ -101,7 +99,6 @@ defmodule Compendium.Manifest do
 
   The refusals, in order:
 
-      * unsupported `setup`, `oauth` or `wasi` blocks;
       * unknown top-level keys;
       * malformed `needs` or `caps` blocks;
       * malformed `tincture` or `dependencies` blocks, which feed CSP,
@@ -110,8 +107,7 @@ defmodule Compendium.Manifest do
   """
   @spec validate(map()) :: :ok | {:error, term()}
   def validate(manifest) when is_map(manifest) do
-    with :ok <- reject_legacy_blocks(manifest),
-         :ok <- reject_unknown_keys(manifest),
+    with :ok <- reject_unknown_keys(manifest),
          :ok <- Compendium.Manifest.Needs.validate(manifest),
          :ok <- Compendium.Manifest.Caps.validate(manifest),
          :ok <- validate_tincture_block(manifest),
@@ -333,19 +329,6 @@ defmodule Compendium.Manifest do
   defp valid_dependency_entry?(entry) when is_binary(entry), do: true
   defp valid_dependency_entry?(%{"ref" => ref}) when is_binary(ref), do: true
   defp valid_dependency_entry?(_), do: false
-
-  defp reject_legacy_blocks(manifest) do
-    case Enum.filter(@legacy_blocks, &Map.has_key?(manifest, &1)) do
-      [] ->
-        :ok
-
-      keys ->
-        {:error,
-         {:legacy_manifest_blocks,
-          "Manifest declares retired block(s) #{Enum.join(keys, "/")} — declare needs/caps " <>
-            "instead (see component-guide.md, \"Migrating from setup/oauth\")"}}
-    end
-  end
 
   defp reject_unknown_keys(manifest) do
     case manifest |> Map.keys() |> Enum.filter(&(is_binary(&1) and &1 not in @known_keys)) do

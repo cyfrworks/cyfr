@@ -31,11 +31,6 @@ defmodule Compendium.AquaPath do
   @roles "roles"
   @skills "skills"
   @skill_manifest "SKILL.md"
-  # The directory an earlier tree shape kept its agents in. Nothing reads
-  # it; it is recognised as a unit so `reset all` can drop a stale shadow
-  # an estate wrote there before the shape changed.
-  @legacy_agents "agents"
-
   # The one grammar for role and scroll names — the tool boundary
   # (`Compendium.MCP.AquaTool.validate_name`) and the unit locator both
   # speak it, so a name the tools refuse can never mint a unit.
@@ -123,21 +118,6 @@ defmodule Compendium.AquaPath do
   """
   @spec roles_dirname() :: String.t()
   def roles_dirname, do: @roles
-
-  @doc """
-  The directory an earlier tree shape kept its agents in. Nothing reads
-  it; `locate/1` still recognises a file there as a unit so `reset all`
-  can drop a stale shadow, and the seed side uses the name to keep such a
-  directory out of what the template is said to ship.
-
-  ## Examples
-
-      iex> Compendium.AquaPath.legacy_agents_dirname()
-      "agents"
-
-  """
-  @spec legacy_agents_dirname() :: String.t()
-  def legacy_agents_dirname, do: @legacy_agents
 
   @doc """
   One role's file — a shadow unit of its own.
@@ -239,9 +219,9 @@ defmodule Compendium.AquaPath do
   @impl Arca.Storage.UnitLocator
   def locate([@root_name, @soul_file | _rest]), do: {:file, soul_file()}
 
-  def locate([@root_name, dir, file | _rest]) when dir in [@roles, @legacy_agents] do
+  def locate([@root_name, @roles, file | _rest]) do
     if String.ends_with?(file, ".md") and valid_name?(Path.basename(file, ".md")) do
-      {:file, @root ++ [dir, file]}
+      {:file, @root ++ [@roles, file]}
     else
       :above_unit
     end

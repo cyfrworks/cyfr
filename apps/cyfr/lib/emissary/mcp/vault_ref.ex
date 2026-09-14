@@ -4,12 +4,9 @@
 defmodule Emissary.MCP.VaultRef do
   @moduledoc """
   Constructs and classifies `vault:<name>` credential references.
-
-  Rejects the unsupported `secret:` scheme with an actionable error.
   """
 
   @prefix "vault:"
-  @retired_prefix "secret:"
 
   @doc "The reference prefix."
   @spec prefix() :: String.t()
@@ -27,8 +24,4 @@ defmodule Emissary.MCP.VaultRef do
   @doc "Whether a header value is a vault reference."
   @spec vault_ref?(term()) :: boolean()
   def vault_ref?(value), do: is_binary(value) and String.starts_with?(value, @prefix)
-
-  @doc "Whether a header value uses the retired `secret:` scheme."
-  @spec retired_ref?(term()) :: boolean()
-  def retired_ref?(value), do: is_binary(value) and String.starts_with?(value, @retired_prefix)
 end

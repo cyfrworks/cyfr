@@ -4,7 +4,7 @@
 defmodule Cyfr.NetworkPrivatePolicyTest do
   @moduledoc """
   Private egress is a named allowlist, not a deployment mode: with
-  `allow_private: :policy` a private address is reachable only when the
+  `private_policy: :operator` a private address is reachable only when the
   operator listed the host, the address, or a range that contains it.
   """
   use ExUnit.Case, async: false
@@ -26,7 +26,7 @@ defmodule Cyfr.NetworkPrivatePolicyTest do
 
     assert {:error, msg} =
              Cyfr.Network.validate_redirect_url("http://127.0.0.1:8001/mcp",
-               allow_private: :policy
+               private_policy: :operator
              )
 
     assert msg =~ "private IP"
@@ -49,7 +49,7 @@ defmodule Cyfr.NetworkPrivatePolicyTest do
 
     assert :ok =
              Cyfr.Network.validate_redirect_url("http://127.0.0.1:8001/mcp",
-               allow_private: :policy
+               private_policy: :operator
              )
   end
 
@@ -57,15 +57,19 @@ defmodule Cyfr.NetworkPrivatePolicyTest do
     Application.put_env(:cyfr, :private_egress_targets, ["169.254.0.0/16"])
 
     assert {:error, msg} =
-             Cyfr.Network.validate_redirect_url("http://169.254.169.254/", allow_private: :policy)
+             Cyfr.Network.validate_redirect_url("http://169.254.169.254/",
+               private_policy: :operator
+             )
 
     assert msg =~ "link-local"
 
     Application.put_env(:cyfr, :private_egress_targets, [])
-    assert :ok = Cyfr.Network.validate_redirect_url("http://127.0.0.1:1/", allow_private: true)
+
+    assert :ok =
+             Cyfr.Network.validate_redirect_url("http://127.0.0.1:1/", private_policy: :allow_all)
 
     assert {:error, _} =
-             Cyfr.Network.validate_redirect_url("http://127.0.0.1:1/", allow_private: false)
+             Cyfr.Network.validate_redirect_url("http://127.0.0.1:1/", private_policy: :deny)
 
     assert {:error, _} = Cyfr.Network.validate_redirect_url("http://127.0.0.1:1/")
   end

@@ -161,29 +161,4 @@ defmodule Sanctum.VaultReaderTest do
       assert {:error, :no_oauth_material} = VaultReader.oauth_token(ctx, resource, "google")
     end
   end
-
-  describe "v1 legacy pointers" do
-    test "a pointer fails closed as retired — nothing dispenses", %{ctx: ctx} do
-      id = Cyfr.UUID7.generate_id("vlt")
-      aad = CipherAAD.vault_entry(ctx.athanor_id, id, "legacy")
-
-      pointer = ~s({"v":1,"legacy":{"secrets":[{"name":"PTR_KEY","scope":"project"}]}})
-      {:ok, sealed} = Sanctum.Cipher.encrypt(pointer, aad)
-
-      {:ok, entry} =
-        Arca.VaultStorage.put(%{
-          id: id,
-          athanor_id: ctx.athanor_id,
-          name: "legacy:ptr",
-          provider_hint: "legacy",
-          kind: "bundle",
-          sealed_payload: sealed
-        })
-
-      {:ok, digest} = VaultReader.binding_digest(entry)
-
-      assert {:error, :legacy_pointer_retired} =
-               VaultReader.fetch(ctx, %{entry_id: id, binding_digest: digest})
-    end
-  end
 end

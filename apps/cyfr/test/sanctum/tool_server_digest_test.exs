@@ -32,7 +32,7 @@ defmodule Sanctum.ToolServerDigestTest do
       variants = [
         %{@base | url: "https://evil.example/sse"},
         %{@base | enabled: false},
-        %{@base | headers: %{"authorization" => "secret:OTHER_TOKEN"}},
+        %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN"}},
         %{@base | tool_patterns: ["issues.*"]}
       ]
 

@@ -246,8 +246,8 @@ cyfr build compile t:local.stock-dashboard:0.1.0
 # Open it in Prism (the athanor in focus is in the URL)
 open http://localhost:4000/a/@alice/tinctures
 
-# Make it publicly reachable at /t/@alice/local/stock-dashboard
-cyfr tincture visibility set local stock-dashboard true
+# Check whether it is publicly reachable at /t/@alice/local/stock-dashboard
+cyfr tincture visibility get local stock-dashboard
 ```
 
 **Data.** Tinctures are self-contained frontends — CYFR serves their web content, not a database. Pull backend data at runtime by calling formulas or catalysts through the auto-injected `cyfr` SDK; if you need static seed data, ship a `data.db` (or any file) as a static asset and read it client-side.
@@ -264,7 +264,7 @@ await cyfr.setTitle("Stock Dashboard");
 await cyfr.ready();
 ```
 
-Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. Tinctures default to private — use `cyfr tincture visibility set` to publish one. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
+Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. Tinctures default to private; publishing one is a consent decision — the profile tool's `publish` (plan → preview → commit) mints its public profile, and revoking that profile unpublishes it. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
 
 ### Fork a Component
 
@@ -658,7 +658,6 @@ Commands marked with `[i]` support interactive selection when run without argume
 | Command | Description |
 |---------|-------------|
 | `cyfr tincture visibility get <publisher> <name>` | Check whether a tincture is private to Prism or publicly reachable |
-| `cyfr tincture visibility set <publisher> <name> <true\|false>` | Control whether a tincture is public at `/t/<athanor>/<publisher>/<name>` |
 
 ### MCP Servers
 

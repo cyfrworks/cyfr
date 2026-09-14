@@ -112,12 +112,9 @@ defmodule EmissaryWeb.HealthController do
     end
   end
 
-  @doc """
-  Returns the readiness probe’s key under the `system/` global root.
-  `Cyfr.HealthProbe` also supplies this key to the retention sweep.
-  """
+  @doc "The readiness probe's directory under the `system/` global root."
   @spec probe_dir() :: [String.t()]
-  defdelegate probe_dir, to: Cyfr.HealthProbe, as: :dir
+  def probe_dir, do: ["system", "health"]
 
   # Round-trips a tiny write through Arca so a full disk, a read-only volume,
   # or broken object-store credentials flip readiness — the boot-time raw-File
@@ -134,9 +131,7 @@ defmodule EmissaryWeb.HealthController do
     # the directory (this endpoint is unauthenticated — on an object store
     # a per-probe sweep was a billable LIST + batch DELETE per cache
     # window). Concurrent probes racing on the shared key are covered by
-    # the `:not_found` arm below; the retention sweep — which reads
-    # the same `Cyfr.HealthProbe.dir/0` spelling — is the belt for legacy
-    # `.write_probe.<n>` strays. "system" is in
+    # the `:not_found` arm below. "system" is in
     # `Arca.Storage.global_prefixes/0` — witnessed in the controller test.
     path = probe_dir() ++ [".write_probe"]
 

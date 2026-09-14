@@ -290,7 +290,7 @@ defmodule Sanctum.Vault.OAuth do
   def http_post(url, headers, body, credential \\ :refresh_token) do
     with :ok <- require_https(url, credential) do
       case Cyfr.Network.pinned_request(:post, url, headers, body,
-             allow_private: :policy,
+             private_policy: :operator,
              receive_timeout: 15_000,
              # A token response is a small JSON object; the endpoint is
              # caller-supplied, so the ceiling streams rather than trusting it.

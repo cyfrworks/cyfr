@@ -199,8 +199,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       %{kind: "navigate", to: "/etc/passwd"},
       # Under a page the nav offers, but no route serves it.
       %{kind: "navigate", to: "/components/not/a/page"},
-      # `/agents` only forwards elsewhere; the page it forwards to is the target.
-      %{kind: "navigate", to: "/agents"},
       %{kind: "navigate", to: "/executions?id=exec_a"}
     ]
 

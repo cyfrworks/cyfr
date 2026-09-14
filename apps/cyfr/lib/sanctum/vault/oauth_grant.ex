@@ -437,9 +437,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp still_living(%{status: "revoked"}), do: {:error, :revoked}
   defp still_living(_), do: :ok
 
-  # Preserve v2 material fields across a re-auth; a v1 pointer (or an
-  # unreadable payload) converts to empty-fields material — the pointer's
-  # legacy rows are not this entry's material and never migrate silently.
+  # Preserve material fields across a re-auth; an unreadable payload
+  # converts to empty-fields material.
   defp current_fields(entry) do
     aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 

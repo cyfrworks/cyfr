@@ -28,8 +28,6 @@ defmodule Sanctum.VaultReader do
   per entry. An OAuth `projection.scopes` is enforced at dispense: the
   requested scopes must be a subset of what the entry was authorized
   for, because an issued token cannot be attenuated after the fact.
-
-  `Sanctum.Vault.Payload` rejects version-1 pointers as `{:error, :legacy_pointer_retired}`.
   """
 
   require Logger
@@ -93,8 +91,8 @@ defmodule Sanctum.VaultReader do
   single-field entry. Deliberately no binding-digest check (there is no consent
   digest to compare against) and no projection; the caller enforces its own
   single-value policy. This is host code, not guest code, so there is no
-  anonymous caller to reject. Fails closed on a missing, non-`active`, or v1
-  entry, exactly as the consent path does.
+  anonymous caller to reject. Fails closed on a missing, non-`active`, or
+  unreadable entry, exactly as the consent path does.
   """
   @spec unseal_by_name(String.t(), String.t()) ::
           {:ok, %{String.t() => String.t()}} | {:error, error()}

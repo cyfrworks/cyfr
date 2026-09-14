@@ -60,13 +60,11 @@ defmodule Cyfr.Network do
 
   ## Options
 
-    * `:allow_private` - when `true`, permits private IPs except
-      169.254.0.0/16 (link-local/cloud metadata) which is always blocked.
-      `:policy` permits a private IP only when the host or the IP is on the
-      operator's private-egress allowlist (`CYFR_PRIVATE_EGRESS_TARGETS`,
-      `private_allowed?/2`) — the posture every deployment shares once it has
-      a door: a compose-network mcp-bridge or the lights in Home are named,
-      not implied by "single user".
+    * `:private_policy` — see `pin/2` (default `:deny`). `:operator` permits
+      a private IP only when the host or the IP is on the operator's
+      private-egress allowlist (`CYFR_PRIVATE_EGRESS_TARGETS`,
+      `private_allowed?/2`): a compose-network mcp-bridge is named, never
+      implied.
 
   Returns `:ok` or `{:error, reason_string}`.
   """
@@ -82,13 +80,13 @@ defmodule Cyfr.Network do
   Resolve a URL's host, validate the IP, and return both the validated IP
   tuple and the parsed URI so the caller can pin the connection to that IP.
 
-  Single source of truth for the scheme/host/IP checks. Same `:allow_private`
+  Single source of truth for the scheme/host/IP checks. Same `:private_policy`
   semantics as `validate_redirect_url/2`.
   """
   @spec resolve_and_validate(String.t(), keyword()) ::
           {:ok, :inet.ip_address(), URI.t()} | {:error, String.t()}
   def resolve_and_validate(url, opts \\ []) do
-    case pin(url, translate_legacy_opts(opts)) do
+    case pin(url, opts) do
       {:ok, %{ip_tuple: ip_tuple, uri: uri}} -> {:ok, ip_tuple, uri}
       {:error, _type, message} -> {:error, message}
     end
@@ -150,17 +148,6 @@ defmodule Cyfr.Network do
     end
   end
 
-  defp translate_legacy_opts(opts) do
-    policy =
-      case Keyword.get(opts, :allow_private, false) do
-        true -> :allow_all
-        :policy -> :operator
-        _ -> :deny
-      end
-
-    opts |> Keyword.delete(:allow_private) |> Keyword.put(:private_policy, policy)
-  end
-
   @doc """
   Issue an HTTP request with SSRF protection AND DNS-rebinding protection.
 
@@ -175,7 +162,7 @@ defmodule Cyfr.Network do
 
   ## Options
 
-    * `:allow_private` — see `validate_redirect_url/2` (default `false`)
+    * `:private_policy` — see `pin/2` (default `:deny`)
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
@@ -190,7 +177,7 @@ defmodule Cyfr.Network do
     # The identity semantics matter here: no accept-encoding and no decode
     # (OCI digest verification hashes the body as received), no redirects,
     # no Req-level retry — `pin/2` bakes exactly that policy in.
-    case pin(url, translate_legacy_opts(opts)) do
+    case pin(url, opts) do
       {:ok, %{req_opts: req_opts}} ->
         max_bytes = Keyword.get(opts, :max_response_bytes)
 

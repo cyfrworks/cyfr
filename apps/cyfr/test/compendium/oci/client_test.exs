@@ -248,7 +248,7 @@ defmodule Compendium.OCI.ClientTest do
       original_auth = Application.get_env(:cyfr, :auth_provider)
 
       Application.put_env(:cyfr, :base_path, test_dir)
-      # No auth provider → localhost registries are reachable (allow_private).
+      # No auth provider → localhost registries are reachable (private_policy: :allow_all).
       Application.delete_env(:cyfr, :auth_provider)
 
       on_exit(fn ->

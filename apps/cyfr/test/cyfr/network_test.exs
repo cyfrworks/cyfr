@@ -50,21 +50,23 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "169.254.169.254"
     end
 
-    test "169.254.x.x always blocked even with allow_private: true" do
+    test "169.254.x.x always blocked even with private_policy: :allow_all" do
       assert {:error, msg} =
                Network.validate_redirect_url("http://169.254.169.254/latest/meta-data/",
-                 allow_private: true
+                 private_policy: :allow_all
                )
 
       assert msg =~ "link-local IP"
     end
 
-    test "allow_private: true permits 127.0.0.1" do
-      assert :ok = Network.validate_redirect_url("http://127.0.0.1/v2/", allow_private: true)
+    test "private_policy: :allow_all permits 127.0.0.1" do
+      assert :ok =
+               Network.validate_redirect_url("http://127.0.0.1/v2/", private_policy: :allow_all)
     end
 
-    test "allow_private: true permits localhost" do
-      assert :ok = Network.validate_redirect_url("http://localhost/v2/", allow_private: true)
+    test "private_policy: :allow_all permits localhost" do
+      assert :ok =
+               Network.validate_redirect_url("http://localhost/v2/", private_policy: :allow_all)
     end
 
     test "DNS failure returns error" do
@@ -180,9 +182,9 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "private IP"
     end
 
-    test "always blocks link-local (cloud metadata) even with allow_private" do
+    test "always blocks link-local (cloud metadata) even with private_policy: :allow_all" do
       assert {:error, msg} =
-               Network.resolve_and_validate("http://169.254.169.254/", allow_private: true)
+               Network.resolve_and_validate("http://169.254.169.254/", private_policy: :allow_all)
 
       assert msg =~ "link-local"
     end
@@ -200,7 +202,7 @@ defmodule Cyfr.NetworkTest do
     test "always blocks the link-local metadata endpoint" do
       assert {:error, msg} =
                Network.pinned_request(:get, "http://169.254.169.254/latest/meta-data/",
-                 allow_private: true
+                 private_policy: :allow_all
                )
 
       assert msg =~ "link-local"
