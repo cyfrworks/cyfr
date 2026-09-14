@@ -91,6 +91,10 @@ func TestImagesFromCompose(t *testing.T) {
     image: ghcr.io/cyfrworks/cyfr:latest
   caddy:
     image: caddy:2-alpine
+    profiles: ["tls"]
+  builder:
+    image: ghcr.io/cyfrworks/cyfr-builder:latest
+    profiles: ["builder"]
   mcp-bridge:
     build:
       context: .
@@ -100,10 +104,7 @@ func TestImagesFromCompose(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := imagesFromCompose(path)
-	want := []string{
-		"ghcr.io/cyfrworks/cyfr:latest",
-		"caddy:2-alpine",
-	}
+	want := []string{"ghcr.io/cyfrworks/cyfr:latest"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("images mismatch\n  got:  %v\n  want: %v", got, want)
 	}

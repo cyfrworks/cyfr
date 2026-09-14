@@ -19,7 +19,12 @@ defmodule Locus.Builder do
 
   ## Security Properties (what is actually enforced here)
 
-  - Temp directory per compilation, cleaned up immediately
+  - One build tree per compilation, removed with it: the project, and the
+    homes its toolchain writes — `HOME`, `CARGO_HOME` and the npm cache —
+    so nothing one build downloads or leaves behind is read by another
+  - The inherited environment reduced to an allowlist (paths, locale,
+    proxies); server secrets never reach a build
+  - A build that carries a `Cargo.lock` builds `--locked` to it
   - Source size and path traversal validated before writing to disk
   - Compiled WASM validated (`Compendium.WasmValidator`) before returning
   - Output bounded: dist file count/bytes capped, compiler chatter capped
@@ -102,12 +107,17 @@ defmodule Locus.Builder do
       brutal kill, so an over-budget build ends here as
       `{:error, :compilation_timeout}` with its slot released rather than
       losing the race to the caller's kill. Raising it past that deadline
-      gives back the graceful failure. (This line said "300s", which is the
-      deadline itself.)
+      gives back the graceful failure.
+    - `:resolve` - Rust only. `true` resolves the crate graph afresh,
+      ignoring a `"Cargo.lock"` among the sources. Otherwise a build that
+      carries a `"Cargo.lock"` builds `--locked` to it — a dependency the
+      lock does not cover fails with cargo's own message — and a build
+      that carries none resolves one.
 
   ## Returns
 
-  For `:rust`: `{:ok, %{wasm_bytes, digest, size, exports, language, target_type}}`
+  For `:rust`: `{:ok, %{wasm_bytes, digest, size, exports, language, target_type, lockfile}}`,
+  where `lockfile` is the `Cargo.lock` the build used
   For `:javascript`: `{:ok, %{output_files, digest, size, exports, language, target_type}}`
   On failure: `{:error, reason}`
   """
@@ -123,10 +133,13 @@ defmodule Locus.Builder do
     with :ok <- paired(language, target_type),
          :ok <- validate_source_files(source_files, language),
          :ok <- check_toolchain(language) do
-      timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
-      on_progress = Keyword.get(opts, :on_progress, fn _phase, _message -> :ok end)
+      settings = %{
+        timeout_ms: Keyword.get(opts, :timeout_ms, @default_timeout_ms),
+        on_progress: Keyword.get(opts, :on_progress, fn _phase, _message -> :ok end),
+        resolve?: Keyword.get(opts, :resolve, false) == true
+      }
 
-      do_compile(source_files, language, target_type, timeout_ms, on_progress)
+      do_compile(source_files, language, target_type, settings)
     end
   end
 
@@ -236,17 +249,22 @@ defmodule Locus.Builder do
   # Private: Compilation
   # ============================================================================
 
-  defp do_compile(source_files, :rust, target_type, timeout_ms, on_progress) do
-    with {:ok, tmp_dir} <- create_temp_dir() do
+  defp do_compile(source_files, :rust, target_type, settings) do
+    %{timeout_ms: timeout_ms, on_progress: on_progress} = settings
+    sources = if settings.resolve?, do: Map.delete(source_files, "Cargo.lock"), else: source_files
+
+    with {:ok, build} <- create_build_tree() do
       try do
         on_progress.(:preparing, "Preparing source files...")
 
-        with :ok <- write_source(tmp_dir, :rust, target_type, source_files),
+        with :ok <- write_source(build.project, :rust, target_type, sources),
+             :ok <- seed_cargo_home(build.cargo),
              :ok <- on_progress.(:compiling, "Compiling #{target_type} (rust)..."),
-             {:ok, wasm_path} <- run_compiler(tmp_dir, :rust, timeout_ms, on_progress),
+             {:ok, wasm_path} <- run_compiler(build, timeout_ms, on_progress),
              :ok <- on_progress.(:validating, "Validating WASM binary..."),
              {:ok, wasm_bytes} <- File.read(wasm_path),
-             {:ok, validation} <- Compendium.WasmValidator.validate(wasm_bytes) do
+             {:ok, validation} <- Compendium.WasmValidator.validate(wasm_bytes),
+             {:ok, lockfile} <- read_lockfile(build.project) do
           on_progress.(
             :complete,
             "Build complete — #{validation.size} bytes, #{length(validation.exports)} export(s)"
@@ -259,7 +277,8 @@ defmodule Locus.Builder do
              size: validation.size,
              exports: validation.exports,
              language: "rust",
-             target_type: to_string(target_type)
+             target_type: to_string(target_type),
+             lockfile: lockfile
            }}
         else
           error ->
@@ -267,21 +286,23 @@ defmodule Locus.Builder do
             error
         end
       after
-        File.rm_rf(tmp_dir)
+        File.rm_rf(build.root)
       end
     end
   end
 
-  defp do_compile(source_files, :javascript, target_type, timeout_ms, on_progress) do
-    with {:ok, tmp_dir} <- create_temp_dir() do
+  defp do_compile(source_files, :javascript, target_type, settings) do
+    %{timeout_ms: timeout_ms, on_progress: on_progress} = settings
+
+    with {:ok, build} <- create_build_tree() do
       try do
         on_progress.(:preparing, "Preparing source files...")
 
-        with :ok <- write_source(tmp_dir, :javascript, target_type, source_files),
+        with :ok <- write_source(build.project, :javascript, target_type, source_files),
              :ok <-
                on_progress.(:compiling, "Building tincture (npm install && npm run build)..."),
-             {:ok, _exit_code, _output} <- run_js_build(tmp_dir, timeout_ms, on_progress),
-             {:ok, output_files} <- collect_dist_files(tmp_dir) do
+             {:ok, _exit_code, _output} <- run_js_build(build, timeout_ms, on_progress),
+             {:ok, output_files} <- collect_dist_files(build.project) do
           {digest, size} = Cyfr.Digest.file_set(output_files)
 
           on_progress.(
@@ -304,28 +325,68 @@ defmodule Locus.Builder do
             error
         end
       after
-        File.rm_rf(tmp_dir)
+        File.rm_rf(build.root)
       end
     end
   end
 
-  defp create_temp_dir do
+  # A build's whole tree under the system temp directory, which must allow
+  # executing files (build scripts and bundler binaries run from it): the
+  # project it compiles and the homes its toolchain writes.
+  defp create_build_tree do
     case System.tmp_dir() do
       nil ->
         {:error, :no_tmp_dir}
 
       tmp ->
-        id = Cyfr.Hex.short()
-        dir = Path.join(tmp, "locus_build_#{id}")
+        root = Path.join(tmp, "locus_build_#{Cyfr.Hex.short()}")
 
-        case File.mkdir_p(dir) do
-          :ok ->
-            watch_tmp_dir(self(), dir)
-            {:ok, dir}
+        build = %{
+          root: root,
+          project: Path.join(root, "project"),
+          home: Path.join(root, "home"),
+          cargo: Path.join(root, "cargo"),
+          npm: Path.join(root, "npm")
+        }
 
-          {:error, reason} ->
-            {:error, {:mkdir_failed, reason}}
+        watch_tmp_dir(self(), root)
+
+        Enum.reduce_while([build.project, build.home, build.cargo, build.npm], {:ok, build}, fn
+          dir, ok ->
+            case File.mkdir_p(dir) do
+              :ok -> {:cont, ok}
+              {:error, reason} -> {:halt, {:error, {:mkdir_failed, reason}}}
+            end
+        end)
+    end
+  end
+
+  # The crates baked into the builder image (`:build_cargo_seed`, a Cargo
+  # home holding a registry cache), copied into the build's own Cargo home:
+  # the build starts with them without sharing a cache another build could
+  # write. A seed that is configured and absent is a broken image.
+  defp seed_cargo_home(cargo_home) do
+    case Application.get_env(:cyfr, :build_cargo_seed) do
+      seed when is_binary(seed) ->
+        registry = Path.join(seed, "registry")
+
+        with true <- File.dir?(registry) || {:error, {:cargo_seed_missing, registry}},
+             {:ok, _copied} <- File.cp_r(registry, Path.join(cargo_home, "registry")) do
+          :ok
+        else
+          {:error, {:cargo_seed_missing, _}} = error -> error
+          {:error, reason, file} -> {:error, {:cargo_seed_copy_failed, file, reason}}
         end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp read_lockfile(project) do
+    case File.read(Path.join(project, "Cargo.lock")) do
+      {:ok, lockfile} -> {:ok, lockfile}
+      {:error, _} -> {:error, {:output_not_found, "the build left no Cargo.lock"}}
     end
   end
 
@@ -457,13 +518,14 @@ defmodule Locus.Builder do
     end
   end
 
-  defp run_compiler(tmp_dir, :rust, timeout_ms, on_progress) do
-    output_dir = Path.join(tmp_dir, "target/wasm32-wasip2/release")
-    crate_name = extract_crate_name(tmp_dir)
-    output = Path.join(output_dir, "#{crate_name}.wasm")
-    args = ["component", "build", "--release", "--target", "wasm32-wasip2"]
+  defp run_compiler(build, timeout_ms, on_progress) do
+    project = build.project
+    output_dir = Path.join(project, "target/wasm32-wasip2/release")
+    output = Path.join(output_dir, "#{extract_crate_name(project)}.wasm")
+    locked = if File.exists?(Path.join(project, "Cargo.lock")), do: ["--locked"], else: []
+    args = ["component", "build", "--release", "--target", "wasm32-wasip2"] ++ locked
 
-    run_with_timeout("cargo", args, tmp_dir, output, timeout_ms, on_progress)
+    run_with_timeout("cargo", args, build, output, timeout_ms, on_progress)
   end
 
   # Extract the crate name from Cargo.toml to determine the output .wasm filename.
@@ -483,7 +545,7 @@ defmodule Locus.Builder do
     end
   end
 
-  defp run_js_build(tmp_dir, timeout_ms, on_progress) do
+  defp run_js_build(build, timeout_ms, on_progress) do
     sh = System.find_executable("sh") || "sh"
 
     run_with_timeout(
@@ -492,7 +554,7 @@ defmodule Locus.Builder do
       # host. Modern esbuild/Vite ship platform binaries as optional
       # dependencies, so tincture builds do not need lifecycle scripts.
       ["-c", "npm install --no-audit --no-fund --ignore-scripts 2>&1 && npm run build 2>&1"],
-      tmp_dir,
+      build,
       nil,
       timeout_ms,
       on_progress
@@ -589,7 +651,7 @@ defmodule Locus.Builder do
     end
   end
 
-  defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do
+  defp run_with_timeout(command, args, build, output_path, timeout_ms, on_progress) do
     logger_metadata = Cyfr.LoggerContext.capture()
     caller = self()
 
@@ -622,14 +684,12 @@ defmodule Locus.Builder do
             :exit_status,
             :stderr_to_stdout,
             {:args, spawn_args},
-            {:cd, cwd},
+            {:cd, build.project},
             # User-supplied code runs during a build (the project's own
-            # `npm run build` script, its build.rs) — and a port child
+            # `npm run build` script, its build.rs), and a port child
             # inherits the BEAM's entire environment: database URL, keyring
-            # material, provider keys. Everything not on the allowlist is
-            # explicitly unset ({Name, false}); the toolchain needs only
-            # its own homes, locale, and the proxy knobs.
-            {:env, scrubbed_build_env()}
+            # material, provider keys.
+            {:env, build_env(build)}
           ])
 
         # Store OS PID so the parent can kill the process tree on timeout
@@ -699,8 +759,7 @@ defmodule Locus.Builder do
   # inside `Task.yield/2` — and the task is deliberately UNLINKED from it,
   # so killing the caller (the MCP tool layer brutal-kills its provider task
   # on its own deadline) leaves the task running with nothing left to time
-  # it out. An earlier comment here claimed that kill arrived "through the
-  # link"; `async_nolink` never made one.
+  # it out.
   #
   # So the watcher outlives both and reaps the group when either dies
   # abnormally. A double kill against the builder's own timeout path is a
@@ -752,21 +811,36 @@ defmodule Locus.Builder do
     end
   end
 
-  # Allowlist the environment exposed to build scripts; exclude server secrets.
-  # The build's output location is the build directory's own, so an
-  # inherited `CARGO_TARGET_DIR` is not passed on.
+  # What a build inherits: paths, locale and the proxy settings. Its homes
+  # are its own (`build_homes/1`); the installed Rust toolchain is read from
+  # where it is installed.
   @build_env_allowlist ~w(
-    PATH HOME LANG LC_ALL LC_CTYPE TMPDIR TERM
-    CARGO_HOME RUSTUP_HOME
+    PATH LANG LC_ALL LC_CTYPE TMPDIR TERM
     HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
   )
 
-  defp scrubbed_build_env do
-    # A port's :env option MODIFIES the inherited environment rather than
-    # replacing it, so the scrub is spelled as explicit removals.
-    for {key, _} <- System.get_env(), key not in @build_env_allowlist do
-      {String.to_charlist(key), false}
-    end
+  defp build_env(build) do
+    homes = build_homes(build)
+
+    # A port's :env option modifies the inherited environment rather than
+    # replacing it, so everything else is spelled as explicit removals.
+    removed =
+      for {key, _} <- System.get_env(),
+          key not in @build_env_allowlist and not Map.has_key?(homes, key),
+          do: {String.to_charlist(key), false}
+
+    removed ++
+      Enum.map(homes, fn {key, value} -> {String.to_charlist(key), String.to_charlist(value)} end)
+  end
+
+  defp build_homes(build) do
+    %{
+      "HOME" => build.home,
+      "CARGO_HOME" => build.cargo,
+      "npm_config_cache" => build.npm,
+      "RUSTUP_HOME" =>
+        System.get_env("RUSTUP_HOME") || Path.join(System.user_home() || "/", ".rustup")
+    }
   end
 
   @doc false

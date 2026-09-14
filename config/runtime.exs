@@ -129,6 +129,10 @@ if config_env() != :test do
   # attached to the builder network alone, so every interface there is
   # that network; a builder run outside compose binds one address here.
   config :cyfr, :builder_bind, env_str.("CYFR_BUILDER_BIND", "0.0.0.0")
+  # A Cargo home whose registry cache every Rust build starts from, copied
+  # into the build's own Cargo home. The builder image sets it to the
+  # crates the scaffold depends on; unset, a build fetches every crate.
+  config :cyfr, :build_cargo_seed, env_str.("CYFR_BUILD_CARGO_SEED", nil)
 
   # Whether this server builds components at all — `build.compile` on every
   # surface. An appliance that only runs what it pulled turns it off, and

@@ -25,7 +25,8 @@ defmodule Locus.BuilderClientTest do
                  built(%{
                    "wasm_base64" => Base.encode64(@wasm),
                    "digest" => "sha256:" <> String.duplicate("f", 64),
-                   "size" => 1
+                   "size" => 1,
+                   "lockfile" => "version = 4\n"
                  })
                )
 
@@ -33,6 +34,19 @@ defmodule Locus.BuilderClientTest do
       assert result.digest == real.digest
       assert result.size == real.size
       refute result.digest == "sha256:" <> String.duplicate("f", 64)
+      assert result.lockfile == "version = 4\n"
+    end
+
+    test "refuses a component build whose lock is missing, not text, or past the source ceiling" do
+      oversized = String.duplicate("x", Locus.Builder.max_source_bytes() + 1)
+
+      for lockfile <- [nil, 42, oversized] do
+        body = %{"wasm_base64" => Base.encode64(@wasm)}
+        body = if lockfile, do: Map.put(body, "lockfile", lockfile), else: body
+
+        assert {:error, {:builder_malformed_result, ["lockfile"]}} =
+                 BuilderClient.decode_result(built(body))
+      end
     end
 
     test "refuses bytes that are not a valid component" do

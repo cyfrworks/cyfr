@@ -70,6 +70,11 @@ defmodule Locus.MCP do
               "description" =>
                 "Component reference to compile, e.g. 'catalyst:local.my-api:0.1.0' (compile action)"
             },
+            "resolve" => %{
+              "type" => "boolean",
+              "description" =>
+                "compile only, Rust: resolve the crates afresh and keep the new Cargo.lock — needed after a dependency changes; otherwise a component with a Cargo.lock builds locked to it"
+            },
             "wasm_base64" => %{
               "type" => "string",
               "description" => "Base64-encoded WASM binary (validate action)"
@@ -129,10 +134,12 @@ defmodule Locus.MCP do
       when is_binary(reference) do
     with :ok <- builds_enabled(),
          {:ok, build_id} <- settle_build_id(ctx, args["build_id"]) do
+      resolve? = args["resolve"] == true
+
       if args["async"] == true do
-        start_async_compile(ctx, reference, build_id)
+        start_async_compile(ctx, reference, build_id, resolve?)
       else
-        run_compile(ctx, reference, build_id)
+        run_compile(ctx, reference, build_id, resolve?)
       end
     end
   end
@@ -237,11 +244,11 @@ defmodule Locus.MCP do
   defp settle_build_id(_ctx, _other),
     do: {:error, {:invalid_argument, "build_id must be a string"}}
 
-  defp run_compile(ctx, reference, build_id) do
+  defp run_compile(ctx, reference, build_id, resolve?) do
     case Locus.BuildLimiter.acquire(Locus.BuildLimiter, ctx.athanor_id) do
       :ok ->
         try do
-          do_run_compile(ctx, reference, build_id)
+          do_run_compile(ctx, reference, build_id, resolve?)
         after
           Locus.BuildLimiter.release()
         end
@@ -255,7 +262,7 @@ defmodule Locus.MCP do
   # Async mode: record "started", run the same pipeline off the request
   # process, record the outcome. Completion also rides the build:<id> topic
   # the progress callback already broadcasts on.
-  defp start_async_compile(ctx, reference, build_id) do
+  defp start_async_compile(ctx, reference, build_id, resolve?) do
     case Cyfr.BuildRecords.record_started(ctx, build_id, reference) do
       :ok ->
         logger_metadata = Cyfr.LoggerContext.capture()
@@ -264,7 +271,7 @@ defmodule Locus.MCP do
           Task.Supervisor.start_child(Locus.TaskSupervisor, fn ->
             Cyfr.LoggerContext.restore(logger_metadata)
 
-            case run_compile(ctx, reference, build_id) do
+            case run_compile(ctx, reference, build_id, resolve?) do
               {:ok, result} ->
                 Cyfr.BuildRecords.record_finished(ctx, build_id, "compiled", result)
 
@@ -307,7 +314,7 @@ defmodule Locus.MCP do
   defp format_async_error(reason),
     do: if(is_binary(reason), do: reason, else: inspect(reason))
 
-  defp do_run_compile(ctx, reference, build_id) do
+  defp do_run_compile(ctx, reference, build_id, resolve?) do
     build_meta = %{
       build_id: build_id,
       reference: reference,
@@ -329,7 +336,7 @@ defmodule Locus.MCP do
       with {:ok, type, name, version} <- parse_reference(reference),
            {:ok, version} <- resolve_version(ctx, reference, type, name, version),
            {:ok, source_files} <- read_source_tree(ctx, type, name, version),
-           {:ok, result} <- do_compile(source_files, type, on_progress) do
+           {:ok, result} <- do_compile(source_files, type, on_progress, resolve?) do
         # Save compiled artifacts — WASM binary or tincture output files
         store_result =
           if Map.has_key?(result, :output_files) do
@@ -339,7 +346,8 @@ defmodule Locus.MCP do
               Compendium.ComponentPath.wasm_path(type, publisher(), name, version)
 
             # Apply the tenant storage cap to bounded build output.
-            Arca.put(ctx, wasm_path, result.wasm_bytes)
+            with :ok <- Arca.put(ctx, wasm_path, result.wasm_bytes),
+                 do: keep_lockfile(ctx, type, name, version, source_files, result)
           end
 
         case store_result do
@@ -508,10 +516,25 @@ defmodule Locus.MCP do
     end
   end
 
+  # The Cargo.lock a Rust build used becomes the unit's, so the next build of
+  # the same sources is locked to it.
+  defp keep_lockfile(ctx, type, name, version, source_files, %{lockfile: lockfile})
+       when is_binary(lockfile) do
+    if Map.get(source_files, "Cargo.lock") == lockfile do
+      :ok
+    else
+      path = Compendium.ComponentPath.version_dir(type, publisher(), name, version)
+      Arca.put(ctx, path ++ ["src", "Cargo.lock"], lockfile)
+    end
+  end
+
+  defp keep_lockfile(_ctx, _type, _name, _version, _source_files, _result), do: :ok
+
   # Collect all source files under src_base as a map of relative paths to
   # contents — one subtree read, no per-entry probing. Excludes the shared
   # build droppings (target/, node_modules/, .git/ — the same predicate
-  # every tree copy applies) and keeps only .rs/.wit files and Cargo.toml.
+  # every tree copy applies) and keeps only .rs/.wit files, Cargo.toml and
+  # Cargo.lock.
   defp collect_source_files(ctx, src_base) do
     case Arca.read_subtree(ctx, src_base) do
       {:ok, pairs} ->
@@ -519,7 +542,7 @@ defmodule Locus.MCP do
             not Arca.Storage.build_dropping?(rel),
             name = List.last(rel),
             String.ends_with?(name, ".rs") or String.ends_with?(name, ".wit") or
-              name == "Cargo.toml",
+              name in ["Cargo.toml", "Cargo.lock"],
             into: %{} do
           {Path.join(rel), content}
         end
@@ -529,11 +552,11 @@ defmodule Locus.MCP do
     end
   end
 
-  defp do_compile(source_files, type, on_progress) do
+  defp do_compile(source_files, type, on_progress, resolve?) do
     target_type = String.to_existing_atom(type)
     language = Locus.Builder.language_for(target_type)
 
-    build_opts = [target_type: target_type, on_progress: on_progress]
+    build_opts = [target_type: target_type, on_progress: on_progress, resolve: resolve?]
 
     # The build-isolation seam: CYFR_BUILDER_URL set → the builder
     # container compiles; unset → in-process, with Locus.Builder's honest

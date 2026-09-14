@@ -72,6 +72,9 @@ services:
   # Compose forwards the token; put builder-only overrides in .env.builder.
   builder:
     container_name: cyfr-builder
+    # Pulled as published; a source checkout builds it with
+    # `docker compose --profile builder build builder`.
+    image: ghcr.io/cyfrworks/cyfr-builder:latest
     build:
       context: .
       dockerfile: Dockerfile.builder
@@ -94,10 +97,12 @@ services:
       - builder
     # No /data mount, read-only root: the builder holds no tenant state —
     # sources arrive in the request, artifacts leave in the response, and
-    # the only writable surface is its own build scratch.
+    # the only writable surface is its own build scratch, where each build
+    # keeps its tree and its homes. Build scripts and bundler binaries run
+    # from there, so the scratch allows exec.
     read_only: true
     tmpfs:
-      - /tmp:size=2g
+      - /tmp:size=2g,exec
     restart: unless-stopped
     logging:
       driver: json-file

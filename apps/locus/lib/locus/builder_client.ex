@@ -78,16 +78,23 @@ defmodule Locus.BuilderClient do
     if total > ceiling do
       {:error, {:source_too_large, total, ceiling}}
     else
-      do_compile_remote(source_files, language, target_type, on_progress)
+      do_compile_remote(
+        source_files,
+        language,
+        target_type,
+        on_progress,
+        Keyword.get(opts, :resolve, false) == true
+      )
     end
   end
 
-  defp do_compile_remote(source_files, language, target_type, on_progress) do
+  defp do_compile_remote(source_files, language, target_type, on_progress, resolve?) do
     body = %{
       "source_files" =>
         Map.new(source_files, fn {path, content} -> {path, Base.encode64(content)} end),
       "language" => Atom.to_string(language),
-      "target_type" => Atom.to_string(target_type)
+      "target_type" => Atom.to_string(target_type),
+      "resolve" => resolve?
     }
 
     on_progress.(:compiling, "Building in the builder container…")
@@ -165,7 +172,8 @@ defmodule Locus.BuilderClient do
   @spec decode_result(map()) :: {:ok, map()} | {:error, term()}
   def decode_result(%{"wasm_base64" => b64} = built) when is_binary(b64) do
     with {:ok, bytes} <- decode64(b64, "wasm_base64"),
-         {:ok, validation} <- validate_wasm(bytes) do
+         {:ok, validation} <- validate_wasm(bytes),
+         {:ok, lockfile} <- lockfile(built["lockfile"]) do
       {:ok,
        %{
          wasm_bytes: bytes,
@@ -173,7 +181,8 @@ defmodule Locus.BuilderClient do
          size: validation.size,
          exports: validation.exports,
          language: built["language"],
-         target_type: built["target_type"]
+         target_type: built["target_type"],
+         lockfile: lockfile
        }}
     end
   end
@@ -199,6 +208,16 @@ defmodule Locus.BuilderClient do
 
   def decode_result(built),
     do: {:error, {:builder_malformed_result, Map.keys(built)}}
+
+  # A lock becomes part of the unit's sources, so it is held to the source
+  # ceiling.
+  defp lockfile(lockfile) when is_binary(lockfile) do
+    if byte_size(lockfile) <= Locus.Builder.max_source_bytes(),
+      do: {:ok, lockfile},
+      else: {:error, {:builder_malformed_result, ["lockfile"]}}
+  end
+
+  defp lockfile(_lockfile), do: {:error, {:builder_malformed_result, ["lockfile"]}}
 
   defp decode_output_files(files) do
     Enum.reduce_while(files, {:ok, %{}}, fn {path, b64}, {:ok, acc} ->

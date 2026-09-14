@@ -74,10 +74,11 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 			fmt.Fprintf(os.Stderr, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
 		}
 
-		// Warm-pull every image referenced in docker-compose.yml (cyfr, caddy —
-		// mcp-bridge is `build:`-only and has no image: line, so it's skipped).
-		// Plain `docker pull` doesn't need .env to exist. Falls back to the
-		// published cyfr image on a dev build (no compose).
+		// Warm-pull the images docker-compose.yml starts by default (cyfr —
+		// mcp-bridge is `build:`-only, and a service behind a profile is
+		// pulled when its profile first starts it). Plain `docker pull`
+		// doesn't need .env to exist. Falls back to the published cyfr image
+		// on a dev build (no compose).
 		images := imagesFromCompose("docker-compose.yml")
 		if len(images) == 0 {
 			images = []string{"ghcr.io/cyfrworks/cyfr:latest"}
@@ -279,7 +280,7 @@ func imagesFromCompose(path string) []string {
 	var images []string
 	for i := 0; i+1 < len(services.Content); i += 2 {
 		svc := services.Content[i+1]
-		if svc.Kind != yaml.MappingNode {
+		if svc.Kind != yaml.MappingNode || mapValue(svc, "profiles") != nil {
 			continue
 		}
 		if img := mapValue(svc, "image"); img != nil && img.Value != "" {

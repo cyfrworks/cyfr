@@ -57,14 +57,14 @@ defmodule Locus.BuilderService do
   end
 
   post "/build" do
-    with {:ok, source_files, language, target_type} <- decode_request(conn.body_params),
+    with {:ok, source_files, language, target_type, resolve?} <- decode_request(conn.body_params),
          # The cap is enforced on THIS side of the wire too: the client-side
          # limiter governs one app node, but two app nodes (or anything else
          # holding the token) could otherwise run unbounded concurrent
          # cargo builds in the one container sized for a couple.
          :ok <- acquire_slot() do
       try do
-        run_build(conn, source_files, language, target_type)
+        run_build(conn, source_files, language, target_type, resolve?)
       after
         Locus.BuildLimiter.release()
       end
@@ -101,13 +101,16 @@ defmodule Locus.BuilderService do
     end
   end
 
-  defp decode_request(%{
-         "source_files" => sources,
-         "language" => language,
-         "target_type" => target_type
-       })
+  defp decode_request(
+         %{
+           "source_files" => sources,
+           "language" => language,
+           "target_type" => target_type
+         } = request
+       )
        when is_map(sources) and is_binary(language) and is_binary(target_type) do
-    with {:ok, language} <-
+    with {:ok, resolve?} <- resolve_flag(request),
+         {:ok, language} <-
            known(language, Enum.map(Locus.Builder.languages(), &Atom.to_string/1), "language"),
          # The roster, not a copy of it: `Compendium.Scaffold.validate_type/1`
          # reads the same source, and a hand-written list here would silently
@@ -118,11 +121,15 @@ defmodule Locus.BuilderService do
          target_type = String.to_existing_atom(target_type),
          :ok <- paired(language, target_type),
          {:ok, decoded} <- decode_sources(sources) do
-      {:ok, decoded, language, target_type}
+      {:ok, decoded, language, target_type, resolve?}
     end
   end
 
   defp decode_request(_), do: {:error, "source_files, language and target_type are required"}
+
+  defp resolve_flag(%{"resolve" => resolve}) when is_boolean(resolve), do: {:ok, resolve}
+  defp resolve_flag(%{"resolve" => _}), do: {:error, "resolve must be a boolean"}
+  defp resolve_flag(_request), do: {:ok, false}
 
   defp paired(language, target_type) do
     if Locus.Builder.language_for(target_type) == language,
@@ -166,7 +173,7 @@ defmodule Locus.BuilderService do
     Locus.BuildLimiter.acquire(Locus.BuildLimiter, nil)
   end
 
-  defp run_build(conn, source_files, language, target_type) do
+  defp run_build(conn, source_files, language, target_type, resolve?) do
     log = :ets.new(:build_log, [:public])
     # [line_seq, bytes_retained] — the byte budget mirrors Locus.Builder's
     # own retained-output cap, so a chatty build cannot grow this table
@@ -189,7 +196,8 @@ defmodule Locus.BuilderService do
     result =
       Locus.Builder.compile(source_files, language,
         target_type: target_type,
-        on_progress: on_progress
+        on_progress: on_progress,
+        resolve: resolve?
       )
 
     logs =
@@ -210,6 +218,7 @@ defmodule Locus.BuilderService do
           exports: built.exports,
           language: built.language,
           target_type: built.target_type,
+          lockfile: built.lockfile,
           logs: logs
         })
 

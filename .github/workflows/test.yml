@@ -25,7 +25,6 @@ on:
       - 'seed/**'
       # Surfaces the vocabulary gate scans: it cannot turn red on a change it
       # never runs on.
-      - 'apps/codex/**'
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
@@ -56,7 +55,6 @@ on:
       - 'seed/**'
       # Surfaces the vocabulary gate scans: it cannot turn red on a change it
       # never runs on.
-      - 'apps/codex/**'
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
@@ -241,6 +239,26 @@ jobs:
       - name: MinIO logs
         if: failure()
         run: docker logs minio
+
+  builder-image:
+    name: Builder image (Rust lock lifecycle, diagnostics, tincture)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the builder image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.builder
+          load: true
+          tags: cyfr-builder:smoke
+          cache-from: type=gha,scope=builder
+          cache-to: type=gha,scope=builder,mode=max
+      # Run as compose runs it: a read-only root and the build scratch alone
+      # writable. Builds fetch from crates.io and the npm registry.
+      - name: Build a component through its lock lifecycle, and a tincture
+        run: python3 scripts/builder-smoke.py cyfr-builder:smoke
 
   arca-seam:
     name: Arca single-seam (no untagged filesystem I/O)

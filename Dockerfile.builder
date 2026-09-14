@@ -42,9 +42,7 @@ LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
 
 # procps carries `kill` and `pgrep`, which Debian does not ship in a slim
 # base and which `Locus.Builder` shells out to when a build overruns its
-# deadline or its caller goes away. Without them every cleanup was an
-# :enoent the code rescued into a warning, so a runaway cargo or npm tree
-# outlived the request that started it.
+# deadline or its caller goes away.
 RUN apt-get update && apt-get install -y \
     libstdc++6 \
     openssl \
@@ -102,8 +100,10 @@ RUN ARCH=$(dpkg --print-architecture) \
     && rm /tmp/node.tar.xz \
     && node --version && npm --version
 
-RUN groupadd -r app && useradd -r -g app -d /app app \
-    && chown -R app:app /usr/local/cargo /usr/local/rustup
+# The toolchains stay root-owned: a build reads them and writes only its
+# own build tree (`Locus.Builder`), so no build can alter what the next
+# one compiles with.
+RUN groupadd -r app && useradd -r -g app -d /app app
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
@@ -116,6 +116,23 @@ WORKDIR /app
 COPY --from=relbuilder /app/_build/prod/rel/builder ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
+
+# The crates every scaffolded Rust component depends on, fetched once into
+# a root-owned Cargo home; each build copies its registry cache into the
+# build's own Cargo home (`CYFR_BUILD_CARGO_SEED`). The manifests are the
+# release's own templates, so the seed follows the scaffold.
+ENV CYFR_BUILD_CARGO_SEED=/opt/cyfr/cargo-seed
+RUN /app/bin/builder eval ' \
+      for type <- [:reagent, :catalyst, :formula] do \
+        dir = Path.join("/tmp/cargo-seed", Atom.to_string(type)); \
+        File.mkdir_p!(Path.join(dir, "src")); \
+        File.write!(Path.join(dir, "src/lib.rs"), ""); \
+        File.write!(Path.join(dir, "Cargo.toml"), Locus.Builder.cargo_toml_for(type)) \
+      end' \
+    && for manifest in /tmp/cargo-seed/*/Cargo.toml; do \
+         CARGO_HOME="$CYFR_BUILD_CARGO_SEED" cargo fetch --manifest-path "$manifest" || exit 1; \
+       done \
+    && rm -rf /tmp/cargo-seed
 
 # No `COPY wit/` here: Compendium.WITSource embeds the whole WIT tree at
 # COMPILE time (stage 1 copies it for that), and the runtime never reads

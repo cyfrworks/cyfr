@@ -120,6 +120,20 @@ defmodule Locus.BuilderServiceTest do
     end
   end
 
+  test "a resolve that is not a boolean is refused" do
+    body = %{
+      "source_files" => %{"src/lib.rs" => Base.encode64("fn main() {}")},
+      "language" => "rust",
+      "target_type" => "reagent",
+      "resolve" => "yes"
+    }
+
+    conn = post_build(body, [{"authorization", "Bearer " <> @token}])
+
+    assert conn.status == 400
+    assert Jason.decode!(conn.resp_body)["error"] =~ "resolve must be a boolean"
+  end
+
   test "sources that are not base64 are refused" do
     body = %{
       "source_files" => %{"src/lib.rs" => "not base64 !!!"},
