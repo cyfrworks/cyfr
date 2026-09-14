@@ -103,9 +103,10 @@ defmodule Arca.McpServerStorage do
 
       case Arca.Repo.insert_all(McpServer, [attrs],
              on_conflict: :nothing,
-             conflict_target: [:athanor_id, :name]
+             conflict_target: [:athanor_id, :name],
+             returning: true
            ) do
-        {1, _} -> get(ctx, attrs.name)
+        {1, [server]} -> {:ok, server}
         {0, _} -> {:error, :exists}
       end
     end)
@@ -144,12 +145,12 @@ defmodule Arca.McpServerStorage do
         |> Enum.to_list()
 
       query =
-        from(s in McpServer, where: s.name == ^name)
+        from(s in McpServer, where: s.name == ^name, select: s)
         |> where_tenant(ctx)
 
       case Arca.Repo.update_all(query, set: set) do
+        {1, [server]} -> {:ok, server}
         {0, _} -> {:error, :not_found}
-        {_n, _} -> get(ctx, name)
       end
     end)
   end

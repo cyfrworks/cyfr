@@ -449,6 +449,7 @@ defmodule PrismWeb.McpServersLive do
             />
             <p class="text-xs text-gray-600 mt-1">
               Use <code class="text-gray-500">vault:ENTRY</code>
+              or <code class="text-gray-500">Bearer vault:ENTRY</code>
               in header values to reference a stored vault entry
               (create one on the Vault page).
             </p>

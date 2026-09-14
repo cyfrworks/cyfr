@@ -302,7 +302,10 @@ defmodule Emissary.MCP.McpServersToolTest do
         "name" => "hdr-vault",
         "config" => %{
           "url" => "https://localhost:99999/mcp",
-          "headers" => %{"authorization" => "vault:my_entry"}
+          "headers" => %{
+            "authorization" => "Bearer vault:my_entry",
+            "x-api-key" => "vault:other_entry"
+          }
         }
       })
 
@@ -312,7 +315,74 @@ defmodule Emissary.MCP.McpServersToolTest do
                  "name" => "hdr-vault"
                })
 
-      assert config["headers"]["authorization"] == "vault:my_entry"
+      assert config["headers"]["authorization"] == "Bearer vault:my_entry"
+      assert config["headers"]["x-api-key"] == "vault:other_entry"
+    end
+  end
+
+  describe "handle/3 - a disabled server" do
+    test "is neither tested nor refreshed by name, and a refresh of all skips it", %{ctx: ctx} do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(ctx, %{
+          name: "dormant",
+          url: "https://127.0.0.1:9/mcp",
+          enabled: false,
+          config_json: Jason.encode!(%{"headers" => %{}, "timeout_ms" => 1_000})
+        })
+
+      for action <- ["test", "refresh"] do
+        assert {:error, {:invalid_argument, message}} =
+                 McpServersTool.handle("mcp_servers", ctx, %{
+                   "action" => action,
+                   "name" => "dormant"
+                 })
+
+        assert message =~ "disabled"
+      end
+
+      assert {:ok, %{refreshed: refreshed, failed: failed}} =
+               McpServersTool.handle("mcp_servers", ctx, %{"action" => "refresh"})
+
+      refute "dormant" in refreshed
+      refute Enum.any?(failed, &(&1.name == "dormant"))
+
+      assert Registry.lookup(Emissary.MCP.ExternalServerRegistry, {"dormant", ctx.athanor_id}) ==
+               []
+    end
+  end
+
+  describe "the stored row" do
+    test "insert and update answer the row they wrote", %{ctx: ctx} do
+      assert {:ok, %{id: "mcp_" <> _ = id, name: "rowsrv", enabled: true}} =
+               Arca.McpServerStorage.insert(ctx, %{name: "rowsrv", url: "https://127.0.0.1:9/mcp"})
+
+      assert {:ok, %{id: ^id, enabled: false}} =
+               Arca.McpServerStorage.update(ctx, "rowsrv", %{enabled: false})
+
+      assert {:error, :exists} =
+               Arca.McpServerStorage.insert(ctx, %{name: "rowsrv", url: "https://127.0.0.1:9/mcp"})
+
+      assert {:error, :not_found} = Arca.McpServerStorage.update(ctx, "nosuch", %{enabled: true})
+    end
+
+    test "a row deleted and recreated under its name is served by a new process", %{ctx: ctx} do
+      attrs = %{name: "reborn", url: "https://127.0.0.1:9/mcp"}
+      {:ok, first} = Arca.McpServerStorage.insert(ctx, attrs)
+      config = Emissary.MCP.ExternalServers.server_config(first, ctx)
+      {:ok, old_pid} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
+
+      :ok = Arca.McpServerStorage.delete(ctx, "reborn")
+      {:ok, second} = Arca.McpServerStorage.insert(ctx, attrs)
+      refute second.id == first.id
+
+      {:ok, new_pid} =
+        Emissary.MCP.ExternalServerSupervisor.ensure_started(
+          Emissary.MCP.ExternalServers.server_config(second, ctx)
+        )
+
+      refute new_pid == old_pid
+      refute Process.alive?(old_pid)
+      Emissary.MCP.ExternalServerSupervisor.stop("reborn", ctx.athanor_id)
     end
   end
 

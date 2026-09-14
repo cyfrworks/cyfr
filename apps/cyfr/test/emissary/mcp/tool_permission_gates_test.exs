@@ -25,10 +25,10 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
   describe "mcp_servers management requires :admin" do
     # Denials are asserted through the dispatcher — the permission gate lives
     # in the action annotations, enforced by the catalog, not in the handler.
-    test "mutating actions are denied for an execute-only context" do
+    test "mutating actions, and reading a server's config, are denied for an execute-only context" do
       ctx = execute_only_ctx()
 
-      for action <- ~w(create delete enable disable test refresh) do
+      for action <- ~w(create delete enable disable test refresh get) do
         assert {:error, reason} =
                  Cyfr.Ops.Catalog.call_external("mcp_servers", ctx, %{
                    "action" => action,
@@ -40,7 +40,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       end
     end
 
-    test "reads stay open to authenticated callers" do
+    test "the listing stays open to authenticated callers" do
       ctx = execute_only_ctx()
 
       assert {:ok, %{servers: _}} =

@@ -5,11 +5,12 @@ defmodule Sanctum.ToolServerDigest do
   @moduledoc """
   External MCP configuration digest pinned by a consent tool_server resource.
 
-  `JCS({url, enabled, header_templates, tool_patterns})` over the stored
-  header **templates** (`vault:ENTRY` references and non-credential
-  literals), never resolved values: rotating a referenced vault entry must
-  not move the digest, while re-pointing the URL or swapping a header
-  reference must. There is deliberately no stored digest column — a
+  `JCS({id, url, enabled, header_templates, tool_patterns})` over the
+  server row's id and its stored header **templates** (vault references
+  and non-credential literals), never resolved values: rotating a
+  referenced vault entry must not move the digest, while re-pointing the
+  URL, swapping a header reference, or deleting the row and creating
+  another under the same name must. There is deliberately no stored digest column — a
   stored digest is a cache someone forgets to recompute; deriving at
   read makes "changed config ⇒ mismatch ⇒ deny" true by construction.
 
@@ -23,8 +24,9 @@ defmodule Sanctum.ToolServerDigest do
 
   @doc "Compute the digest for a server's stored configuration."
   @spec compute(map()) :: {:ok, String.t()} | {:error, term()}
-  def compute(%{url: url, enabled: enabled, headers: headers, tool_patterns: patterns})
-      when is_binary(url) and is_boolean(enabled) and is_map(headers) and is_list(patterns) do
+  def compute(%{id: id, url: url, enabled: enabled, headers: headers, tool_patterns: patterns})
+      when is_binary(id) and is_binary(url) and is_boolean(enabled) and is_map(headers) and
+             is_list(patterns) do
     header_templates =
       headers
       |> Enum.map(fn {name, template} ->
@@ -33,6 +35,7 @@ defmodule Sanctum.ToolServerDigest do
       |> Enum.sort_by(& &1["name"])
 
     JCS.hash(%{
+      "id" => id,
       "url" => url,
       "enabled" => enabled,
       "header_templates" => header_templates,
@@ -60,6 +63,7 @@ defmodule Sanctum.ToolServerDigest do
     config = Arca.McpServerStorage.config(server)
 
     compute(%{
+      id: server.id,
       url: server.url,
       enabled: server.enabled == true,
       headers: config["headers"] || %{},

@@ -3,19 +3,26 @@
 
 defmodule Emissary.MCP.ExternalServerReconciler do
   @moduledoc """
-  Makes vault mutations bite immediately for external MCP servers.
+  Makes vault mutations and archives bite immediately for external MCP
+  servers.
 
   Server processes cache resolved header credentials for their lifetime,
   so a rotate, rebind, revoke, delete or rename of a referenced entry would
-  otherwise keep flowing until a restart. This listener watches the
-  global vault signal, finds the tenant's servers whose header templates
-  reference the changed entry (`vault:<name>`), stops their processes and
-  drops the tenant caches — the next call re-resolves fresh, or fails
-  closed if the credential is gone.
+  otherwise keep flowing until a restart. This listener watches the global
+  vault signal, finds the tenant's servers whose header templates reference
+  the changed entry by the names the signal carries
+  (`Emissary.MCP.VaultRef.names/1`), stops their processes — which ends
+  their calls in flight — and drops the tenant caches: the next call
+  re-resolves fresh, or fails closed if the credential is gone. A signal
+  that names no entry stops every server of the athanor whose templates
+  reference any.
 
   A rename belongs in that set even though it touches no material: header
   templates reference an entry by NAME and resolve at request time, so moving
   a name between entries changes what a live server sends.
+
+  An archived athanor (`Cyfr.Bus.athanor_archived_global/0`) has every one
+  of its server processes stopped.
 
   Reconcile failures are **not** swallowed: a raise or transient storage error
   emits `[:cyfr, :emissary, :external_server, :reconcile_failed]` telemetry and is
@@ -53,6 +60,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   @impl GenServer
   def init(_opts) do
     Phoenix.PubSub.subscribe(Emissary.PubSub, @topic)
+    Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.athanor_archived_global())
     schedule_sweep()
     {:ok, %{pending: %{}}}
   end
@@ -66,6 +74,16 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   # A vault change with a verb we don't reconcile (e.g. :create) — expected;
   # ignore without the catch-all's warning.
   def handle_info({:vault_entry_changed_global, _athanor, _entry, _verb, _meta}, state) do
+    {:noreply, state}
+  end
+
+  def handle_info({:athanor_archived_global, athanor_id}, state) do
+    Emissary.MCP.ExternalServerSupervisor.stop_athanor(athanor_id)
+
+    Emissary.MCP.ExternalProvider.invalidate_external_tools_cache(
+      Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
+    )
+
     {:noreply, state}
   end
 
@@ -99,15 +117,6 @@ defmodule Emissary.MCP.ExternalServerReconciler do
       :ok ->
         %{state | pending: Map.delete(state.pending, key)}
 
-      {:error, :unresolvable} ->
-        # The changed entry cannot be identified (hard-deleted row); a retry
-        # cannot help, so stop tracking it.
-        Logger.warning(
-          "[ExternalServerReconciler] cannot resolve changed vault entry #{entry_id}; dropping"
-        )
-
-        %{state | pending: Map.delete(state.pending, key)}
-
       {:error, reason} ->
         :telemetry.execute(
           [:cyfr, :emissary, :external_server, :reconcile_failed],
@@ -130,38 +139,31 @@ defmodule Emissary.MCP.ExternalServerReconciler do
     end
   end
 
-  @spec reconcile(String.t(), String.t(), map()) :: :ok | {:error, :unresolvable | term()}
+  @spec reconcile(String.t(), String.t(), map()) :: :ok | {:error, term()}
   defp reconcile(athanor_id, entry_id, meta) do
     ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
 
-    case Arca.VaultStorage.get(athanor_id, entry_id) do
-      {:ok, entry} ->
-        with {:ok, servers} <- Arca.McpServerStorage.list(ctx) do
-          stop_affected(servers, entry, meta, athanor_id, entry_id, ctx)
-          :ok
-        end
-
-      # The row is gone entirely — its name is unknown, so no server can be
-      # matched. Terminal, not retryable.
-      {:error, :not_found} ->
-        {:error, :unresolvable}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, servers} <- Arca.McpServerStorage.list(ctx) do
+      stop_affected(servers, changed_names(meta), athanor_id, entry_id, ctx)
+      :ok
     end
   rescue
     error ->
       {:error, Exception.message(error)}
   end
 
-  defp stop_affected(servers, entry, meta, athanor_id, entry_id, ctx) do
-    # Reconcile servers referencing both the current and vacated vault-entry names.
-    refs =
-      [entry.name | List.wrap(meta[:old_name])]
-      |> Enum.uniq()
-      |> Enum.map(&Emissary.MCP.VaultRef.build/1)
+  # The names a live template may spell for the changed entry: its name and,
+  # on a rename, the one it vacated. A signal naming none matches every
+  # template.
+  defp changed_names(meta) do
+    case Enum.filter([meta[:name], meta[:old_name]], &is_binary/1) do
+      [] -> :any
+      names -> names
+    end
+  end
 
-    affected = Enum.filter(servers, fn server -> Enum.any?(refs, &references?(server, &1)) end)
+  defp stop_affected(servers, names, athanor_id, entry_id, ctx) do
+    affected = Enum.filter(servers, &references?(&1, names))
 
     if affected != [] do
       Enum.each(affected, fn server ->
@@ -185,13 +187,16 @@ defmodule Emissary.MCP.ExternalServerReconciler do
 
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
 
-  defp references?(server, ref) do
-    headers =
+  defp references?(server, names) do
+    referenced =
       case Arca.McpServerStorage.config(server) do
-        %{"headers" => %{} = headers} -> headers
-        _ -> %{}
+        %{"headers" => %{} = headers} -> Emissary.MCP.VaultRef.names(headers)
+        _ -> []
       end
 
-    Enum.any?(headers, fn {_name, template} -> template == ref end)
+    case names do
+      :any -> referenced != []
+      names -> Enum.any?(referenced, &(&1 in names))
+    end
   end
 end

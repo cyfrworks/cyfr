@@ -460,6 +460,13 @@ defmodule Sanctum.Tenancy.Athanors do
   defp close(%Athanor{id: id}) do
     Sanctum.ApiKey.revoke_all_for_athanor(id)
     cancel_running(id)
+
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      Cyfr.Bus.athanor_archived_global(),
+      {:athanor_archived_global, id}
+    )
+
     :ok
   end
 

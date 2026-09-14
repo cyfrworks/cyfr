@@ -102,10 +102,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       {:ok, digest_before} = Sanctum.ToolServerDigest.from_server(without_flag)
 
       {:ok, with_flag} =
-        Arca.McpServerStorage.insert(ctx, %{
-          name: "digest-check2",
-          url: "https://x.com/mcp",
-          enabled: true,
+        Arca.McpServerStorage.update(ctx, "digest-check", %{
           config_json: Jason.encode!(%{"console" => true})
         })
 

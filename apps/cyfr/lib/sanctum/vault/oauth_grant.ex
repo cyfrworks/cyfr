@@ -335,7 +335,7 @@ defmodule Sanctum.Vault.OAuthGrant do
              Arca.VaultStorage.update_binding(pending.athanor_id, id, %{
                binding_digest: digest
              }) do
-        broadcast(pending, id, :create)
+        broadcast(pending, id, target.name, :create)
         {:ok, %{entry_id: id, name: target.name, provider: target.provider, rebound: false}}
       end
     end
@@ -418,7 +418,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp reactivate(_entry), do: :ok
 
   defp granted(pending, entry, target, rebound) do
-    broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
+    broadcast(pending, entry.id, entry.name, if(rebound, do: :rebind, else: :rotate))
     {:ok, %{entry_id: entry.id, name: entry.name, provider: target.provider, rebound: rebound}}
   end
 
@@ -473,7 +473,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   # Plumbing
   # ---------------------------------------------------------------------------
 
-  defp broadcast(pending, entry_id, verb) do
+  defp broadcast(pending, entry_id, name, verb) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       Cyfr.Bus.vault_changed(pending.athanor_id),
@@ -483,7 +483,7 @@ defmodule Sanctum.Vault.OAuthGrant do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       Cyfr.Bus.vault_changed_global(),
-      {:vault_entry_changed_global, pending.athanor_id, entry_id, verb, %{}}
+      {:vault_entry_changed_global, pending.athanor_id, entry_id, verb, %{name: name}}
     )
   end
 

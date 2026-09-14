@@ -22,7 +22,7 @@ defmodule Cyfr.Bus do
 
   ## Global topics
 
-  Five topics are deliberately unscoped, and each is listed in `global/0` with
+  Six topics are deliberately unscoped, and each is listed in `global/0` with
   the reason. They carry no tenant payload, or they are the signal that a
   tenant boundary just moved — `sanctum:vault_changed` exists precisely so a
   reconciler outside any one athanor learns that a credential changed.
@@ -208,9 +208,9 @@ defmodule Cyfr.Bus do
   A vault entry changed anywhere on this server.
 
   Messages: `{:vault_entry_changed_global, athanor_id, entry_id, verb, meta}`
-  — `meta` is `%{old_name: name}` on a rename (the name being vacated is
-  what a live server's header template still spells; the row only ever
-  shows the new one) and `%{}` otherwise.
+  — `meta` carries the entry's `name` for every verb (a deleted row can no
+  longer be read for it), and `old_name` too on a rename (the name being
+  vacated is what a live server's header template still spells).
 
   Unscoped on purpose: `Emissary.MCP.ExternalServerReconciler` is a single
   server-wide process that must restart any external MCP server whose headers
@@ -220,6 +220,16 @@ defmodule Cyfr.Bus do
   """
   @spec vault_changed_global() :: String.t()
   def vault_changed_global, do: "sanctum:vault_changed"
+
+  @doc """
+  An athanor was archived. Messages: `{:athanor_archived_global, athanor_id}`.
+
+  Unscoped on purpose: the processes that serve an athanor from outside any
+  tenant topic — the external MCP servers — must stop whichever athanor it
+  was.
+  """
+  @spec athanor_archived_global() :: String.t()
+  def athanor_archived_global, do: "sanctum:athanor_archived"
 
   @doc """
   Session lifecycle. Messages: `{:sessions_revoked, user_id}`,
@@ -276,6 +286,7 @@ defmodule Cyfr.Bus do
   def global do
     [
       {"sanctum:vault_changed", "server-wide credential reconciliation"},
+      {"sanctum:athanor_archived", "stops the processes serving an archived athanor"},
       {"sanctum:sessions", "internal auth signal, keyed by person"},
       {"sanctum:memberships:<user_id>", "subject is the person, not an athanor"},
       {"platform:notify", "audience is the operator, outside any athanor"},

@@ -7,6 +7,7 @@ defmodule Sanctum.ToolServerDigestTest do
   alias Sanctum.ToolServerDigest
 
   @base %{
+    id: "mcp_row_1",
     url: "https://mcp.example/sse",
     enabled: true,
     headers: %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr"},
@@ -30,6 +31,7 @@ defmodule Sanctum.ToolServerDigestTest do
       {:ok, base} = ToolServerDigest.compute(@base)
 
       variants = [
+        %{@base | id: "mcp_row_2"},
         %{@base | url: "https://evil.example/sse"},
         %{@base | enabled: false},
         %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN"}},
@@ -52,6 +54,7 @@ defmodule Sanctum.ToolServerDigestTest do
   describe "from_server/1 + tool_patterns/1" do
     test "derives from a stored row shape" do
       server = %{
+        id: "mcp_row_1",
         url: "https://mcp.example/sse",
         enabled: true,
         config_json:
@@ -69,6 +72,7 @@ defmodule Sanctum.ToolServerDigestTest do
     test "timeout_ms is process identity, not consent identity" do
       row = fn timeout ->
         %{
+          id: "mcp_row_1",
           url: "https://mcp.example/sse",
           enabled: true,
           config_json: Jason.encode!(%{"headers" => %{}, "timeout_ms" => timeout})

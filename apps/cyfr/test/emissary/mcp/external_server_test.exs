@@ -79,9 +79,14 @@ defmodule Emissary.MCP.ExternalServerTest do
       cap = Application.get_env(:cyfr, :external_server_max_in_flight, 8)
 
       fakes = for _ <- 1..cap, do: spawn(fn -> Process.sleep(:infinity) end)
+      caller = self()
 
       :sys.replace_state(pid, fn state ->
-        in_flight = Map.new(fakes, fn fake -> {fake, Process.monitor(fake)} end)
+        in_flight =
+          Map.new(fakes, fn fake ->
+            {fake, {Process.monitor(fake), {caller, make_ref()}, Process.monitor(caller)}}
+          end)
+
         %{state | status: :ready, in_flight: in_flight}
       end)
 
@@ -115,6 +120,28 @@ defmodule Emissary.MCP.ExternalServerTest do
       # The monitor above was created by the replace_state closure, which runs
       # in the server process — its :DOWN goes to the server.
       wait_until(fn -> map_size(:sys.get_state(pid).in_flight) == 0 end)
+    end
+
+    test "a stopped server ends its calls in flight and answers their callers", %{
+      name: name,
+      athanor_id: athanor_id
+    } do
+      pid = start_server(name, athanor_id)
+      task = spawn(fn -> Process.sleep(:infinity) end)
+      watched = Process.monitor(task)
+      tag = make_ref()
+      caller = self()
+
+      :sys.replace_state(pid, fn state ->
+        entry = {Process.monitor(task), {caller, tag}, Process.monitor(caller)}
+        %{state | in_flight: Map.put(state.in_flight, task, entry)}
+      end)
+
+      :ok = Emissary.MCP.ExternalServerSupervisor.stop(name, athanor_id)
+
+      assert_receive {:DOWN, ^watched, :process, ^task, :killed}, 5_000
+      assert_receive {^tag, {:error, {:uncertain, message}}}, 5_000
+      assert message =~ "stopped"
     end
 
     test "the configured upstream timeout is clamped below the caller deadline", %{
@@ -253,6 +280,23 @@ defmodule Emissary.MCP.ExternalServerTest do
 
       assert message =~ "authorization"
       refute message =~ "EXT_MISSING"
+    end
+
+    test "a scheme-prefixed reference resolves to the scheme and the entry's value" do
+      ctx = Sanctum.TestContext.local()
+
+      {:ok, _} =
+        Sanctum.Vault.create(ctx, %{
+          name: "ext-bearer",
+          kind: "api_key",
+          fields: %{"token" => "sk-ext-0123456789"}
+        })
+
+      assert {:ok, %{"authorization" => "Bearer sk-ext-0123456789", "accept" => "text/plain"}} =
+               ExternalServer.resolve_headers(
+                 %{"authorization" => "Bearer vault:ext-bearer", "accept" => "text/plain"},
+                 ctx.athanor_id
+               )
     end
 
     test "a reference this server does not resolve is refused, never sent as a literal" do

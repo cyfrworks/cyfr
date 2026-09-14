@@ -275,25 +275,26 @@ defmodule Sanctum.VaultTest do
       assert_receive {:vault_entry_changed, _, :revoke}
     end
 
-    test "a rename is a resolution change, so the global signal carries it too", %{ctx: ctx} do
-      # External MCP servers hold `vault:<name>` header references that
-      # `VaultReader.unseal_by_name/2` resolves at request time, so renaming a
-      # different entry onto a name changes what a running server dispenses
-      # without touching any entry's material. That is exactly what the global
-      # signal exists to tell the reconciler about, and rename was the one
-      # mutation that stayed quiet.
+    test "every global signal names its entry, and a rename names the name it vacated too", %{
+      ctx: ctx
+    } do
+      # External MCP servers hold header templates that resolve an entry by
+      # NAME at request time, so the reconciler matches servers by the names
+      # a signal carries — a deleted row can no longer be read for its name,
+      # and a template may still spell the name a rename vacated.
       Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.vault_changed_global())
 
       view = create!(ctx)
-      assert_receive {:vault_entry_changed_global, _, _, :create, %{}}
-
       original_name = view.name
+      assert_receive {:vault_entry_changed_global, _, _, :create, %{name: ^original_name}}
+
       :ok = Vault.rename(ctx, view.id, "moved")
 
-      # The signal carries the VACATED name: a server's header template
-      # still spells it, and the row can only ever show the new one — the
-      # reconciler cannot find the name-losing servers without it.
-      assert_receive {:vault_entry_changed_global, _, _, :rename, %{old_name: ^original_name}}
+      assert_receive {:vault_entry_changed_global, _, _, :rename,
+                      %{name: "moved", old_name: ^original_name}}
+
+      :ok = Vault.delete(ctx, view.id)
+      assert_receive {:vault_entry_changed_global, _, _, :delete, %{name: "moved"}}
 
       assert :rename in Emissary.MCP.ExternalServerReconciler.relevant_verbs()
     end

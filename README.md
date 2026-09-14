@@ -306,8 +306,9 @@ cyfr mcp list
 # Server tools appear as github:tool_name in your tool list
 ```
 
-Header values support vault references (`vault:ENTRY_NAME`) — the named vault entry's
-single field is resolved at request time, so credentials stay encrypted at rest and never
+Header values support vault references (`vault:ENTRY_NAME`, or with a scheme,
+`Bearer vault:ENTRY_NAME`) — the named vault entry's single field is resolved at request
+time, after the scheme when there is one, so credentials stay encrypted at rest and never
 appear in the server config.
 
 ## Deploy to a Server

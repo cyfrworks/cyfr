@@ -55,13 +55,13 @@ defmodule Emissary.MCP.McpServersTool do
           "create" => %{kind: :write, planes: [:external], permission: :admin},
           "update" => %{kind: :write, planes: [:external], permission: :admin},
           "delete" => %{kind: :destructive, planes: [:external], permission: :admin},
-          # Connection config (URLs, header maps, vault binding names) is
-          # shared operator infrastructure, readable by any authenticated
-          # user — but it is not a chain capability: a formula uses the
+          # The listing (names, status, the vault entries a server reads) is
+          # open to any authenticated caller; a server's connection config is
+          # the operator's. Neither is a chain capability: a formula uses the
           # connected servers' TOOLS through its authority grants, it never
           # reads the wiring behind them.
           "list" => %{kind: :read, planes: [:external]},
-          "get" => %{kind: :read, planes: [:external]},
+          "get" => %{kind: :read, planes: [:external], permission: :admin},
           "test" => %{kind: :execute, planes: [:external], permission: :admin},
           "refresh" => %{kind: :write, planes: [:external], permission: :admin},
           "enable" => %{kind: :write, planes: [:external], permission: :admin},
@@ -475,6 +475,9 @@ defmodule Emissary.MCP.McpServersTool do
       {:error, {:invalid_argument, "Missing required parameter: name"}}
     else
       case Arca.McpServerStorage.get(ctx, name) do
+        {:ok, %{enabled: false}} ->
+          {:error, disabled(name)}
+
         {:ok, server} ->
           server_config = ExternalServers.server_config(server, ctx)
 
@@ -528,6 +531,9 @@ defmodule Emissary.MCP.McpServersTool do
     if name && name != "" do
       # Refresh single server — verify tenant ownership first
       case Arca.McpServerStorage.get(ctx, name) do
+        {:ok, %{enabled: false}} ->
+          {:error, disabled(name)}
+
         {:ok, server} ->
           server_config = ExternalServers.server_config(server, ctx)
 
@@ -557,11 +563,12 @@ defmodule Emissary.MCP.McpServersTool do
           {:error, {:unavailable, "The server store"}}
       end
     else
-      # Refresh all servers — parallel with concurrency limit
+      # Refresh every enabled server — parallel with concurrency limit
       case Arca.McpServerStorage.list(ctx) do
         {:ok, servers} ->
           results =
             servers
+            |> Enum.filter(& &1.enabled)
             |> Task.async_stream(
               fn server ->
                 server_config = ExternalServers.server_config(server, ctx)
@@ -611,6 +618,10 @@ defmodule Emissary.MCP.McpServersTool do
       end
     end
   end
+
+  # A disabled server is started by nothing: enabling it is the one way back.
+  defp disabled(name),
+    do: {:invalid_argument, "Server '#{name}' is disabled — enable it first"}
 
   defp handle_enable_disable(ctx, args, enabled) do
     name = args["name"]
@@ -662,23 +673,19 @@ defmodule Emissary.MCP.McpServersTool do
     end
   end
 
-  # A `vault:` reference names a vault entry, which is the binding an
-  # operator needs to see; anything else is a literal and only its presence
-  # is reported.
-  defp redact_header({name, "vault:" <> _ = reference}), do: {name, reference}
-  defp redact_header({name, _literal}), do: {name, "[set]"}
+  # A vault template names a vault entry, which is the binding an operator
+  # needs to see; anything else is a literal and only its presence is
+  # reported.
+  defp redact_header({name, value}) do
+    if Emissary.MCP.VaultRef.vault_ref?(value), do: {name, value}, else: {name, "[set]"}
+  end
 
-  # The vault entry names a server's headers reference (`vault:<name>`).
+  # The vault entry names a server's header templates reference.
   defp vault_refs(server) do
-    server
-    |> ExternalServers.config_map()
-    |> Map.get("headers", %{})
-    |> Enum.flat_map(fn
-      {_header, "vault:" <> name} when name != "" -> [name]
+    case ExternalServers.config_map(server) |> Map.get("headers") do
+      %{} = headers -> Emissary.MCP.VaultRef.names(headers)
       _ -> []
-    end)
-    |> Enum.uniq()
-    |> Enum.sort()
+    end
   end
 
   defp encode_config_json(config) when is_map(config) do

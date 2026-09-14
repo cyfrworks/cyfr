@@ -172,8 +172,13 @@ defmodule Emissary.MCP.ExternalServer do
     ]
   end
 
+  # Exits are trapped so a stop — a vault change, a deleted row, an archived
+  # athanor — runs `terminate/2`, which ends every upstream call still in
+  # flight with the credentials this process resolved.
   @impl true
   def init(config) do
+    Process.flag(:trap_exit, true)
+
     state = %State{
       name: config[:name],
       url: config[:url],
@@ -439,6 +444,14 @@ defmodule Emissary.MCP.ExternalServer do
   @impl true
   def terminate(reason, state) do
     Logger.info("[ExternalServer] #{state.name} shutting down: #{inspect(reason)}")
+
+    for {task_pid, {task_ref, from, caller_ref}} <- state.in_flight do
+      Process.demonitor(task_ref, [:flush])
+      Process.demonitor(caller_ref, [:flush])
+      Process.exit(task_pid, :kill)
+      GenServer.reply(from, {:error, {:uncertain, "Server #{state.name} stopped mid-call"}})
+    end
+
     :ok
   end
 
@@ -898,16 +911,32 @@ defmodule Emissary.MCP.ExternalServer do
 
   def resolve_headers(_headers, _athanor_id), do: {:ok, %{}}
 
-  # A vault-backed header: `vault:<entry name>` resolves the entry's single
-  # material field. Deliberately single-field — a header carries one value,
-  # and picking silently from a bundle would smuggle the wrong credential
-  # into the wrong header. Errors stay opaque outward, like secrets.
-  defp resolve_value("vault:" <> entry_name, athanor_id) do
+  # A vault-backed header (`Emissary.MCP.VaultRef.template/1`) resolves the
+  # entry's single material field. Deliberately single-field — a header
+  # carries one value, and picking silently from a bundle would smuggle the
+  # wrong credential into the wrong header. Errors stay opaque outward, like
+  # secrets.
+  defp resolve_value(value, athanor_id) when is_binary(value) do
+    cond do
+      Emissary.MCP.VaultRef.unresolved_ref?(value) ->
+        {:error, :unresolved_ref}
+
+      match?({:ok, _}, Emissary.MCP.VaultRef.template(value)) ->
+        resolve_template(value, athanor_id)
+
+      true ->
+        {:ok, value}
+    end
+  end
+
+  defp resolve_template(value, athanor_id) do
+    {:ok, %{name: entry_name} = template} = Emissary.MCP.VaultRef.template(value)
+
     case Sanctum.VaultReader.unseal_by_name(athanor_id, entry_name) do
       {:ok, fields} ->
         case Map.values(fields) do
           [value] ->
-            {:ok, value}
+            {:ok, Emissary.MCP.VaultRef.render(template, value)}
 
           _ ->
             Logger.debug(
@@ -925,12 +954,6 @@ defmodule Emissary.MCP.ExternalServer do
 
         {:error, :vault_ref_unavailable}
     end
-  end
-
-  defp resolve_value(value, _athanor_id) when is_binary(value) do
-    if Emissary.MCP.VaultRef.unresolved_ref?(value),
-      do: {:error, :unresolved_ref},
-      else: {:ok, value}
   end
 
   # ============================================================================
@@ -957,7 +980,7 @@ defmodule Emissary.MCP.ExternalServer do
 
       cond do
         not is_binary(resolved) -> []
-        is_binary(raw) and String.starts_with?(raw, "vault:") -> with_bare_token(resolved)
+        Emissary.MCP.VaultRef.vault_ref?(raw) -> with_bare_token(resolved)
         credential_shaped_header?(key) -> with_bare_token(resolved)
         true -> []
       end

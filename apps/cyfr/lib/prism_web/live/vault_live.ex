@@ -258,7 +258,7 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
-  # Which MCP servers draw on each entry (`vault:<name>` headers) —
+  # Which MCP servers draw on each entry (headers referencing it) —
   # shown on the row, so revoking one is done knowing what it breaks.
   defp fetch_used_by(socket) do
     used_by =

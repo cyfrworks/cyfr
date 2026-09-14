@@ -30,13 +30,14 @@ defmodule Emissary.MCP.ExternalServers do
 
   @doc """
   The keyword config `Emissary.MCP.ExternalServerSupervisor.ensure_started/1`
-  takes, from a stored row or a freshly-built `%{name:, url:, config:}`.
+  takes, from a stored row: its id, name, url, header templates and timeout.
   """
   @spec server_config(map(), Context.t()) :: keyword()
-  def server_config(%{name: name, url: url} = server, %Context{} = ctx) do
+  def server_config(%{id: id, name: name, url: url} = server, %Context{} = ctx) do
     config = config_map(server)
 
     [
+      id: id,
       name: name,
       url: url,
       headers: config["headers"] || %{},

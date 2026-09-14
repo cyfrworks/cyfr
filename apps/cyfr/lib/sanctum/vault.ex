@@ -111,7 +111,7 @@ defmodule Sanctum.Vault do
                binding_digest: digest
              })
              |> Arca.VaultStorage.put() do
-        broadcast(ctx, id, :create)
+        broadcast(ctx, id, :create, %{name: entry.name})
         {:ok, view(entry)}
       end
     end
@@ -141,7 +141,7 @@ defmodule Sanctum.Vault do
       # reference entries by name, so the servers a rename breaks are the
       # ones still spelling the old one — a post-hoc read of the row can
       # only ever see the new name.
-      broadcast(ctx, id, :rename, %{old_name: entry.name})
+      broadcast(ctx, id, :rename, %{name: new_name, old_name: entry.name})
       :ok
     end
   end
@@ -173,7 +173,7 @@ defmodule Sanctum.Vault do
             Arca.VaultStorage.set_status(Context.athanor!(ctx), id, "active")
           end
 
-          broadcast(ctx, id, :rotate)
+          broadcast(ctx, id, :rotate, %{name: entry.name})
           {:ok, expected + 1}
 
         {:error, _} = err ->
@@ -208,7 +208,7 @@ defmodule Sanctum.Vault do
         {:error, :no_binding_changes}
       else
         with {:ok, rebound} <- rebind_entry(ctx, entry, changes, @rebind_attempts) do
-          broadcast(ctx, id, :rebind)
+          broadcast(ctx, id, :rebind, %{name: entry.name})
           {:ok, rebound}
         end
       end
@@ -278,11 +278,11 @@ defmodule Sanctum.Vault do
   @spec revoke(Context.t(), String.t()) :: {:ok, %{affected: [String.t()]}} | {:error, term()}
   def revoke(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
-         {:ok, _entry} <- get_living(ctx, id),
+         {:ok, entry} <- get_living(ctx, id),
          :ok <- Arca.VaultStorage.set_status(Context.athanor!(ctx), id, "revoked"),
          {:ok, affected} <-
            Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
-      broadcast(ctx, id, :revoke)
+      broadcast(ctx, id, :revoke, %{name: entry.name})
       {:ok, %{affected: Enum.sort(affected)}}
     end
   end
@@ -291,9 +291,9 @@ defmodule Sanctum.Vault do
   @spec delete(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
-         {:ok, _entry} <- get_any(ctx, id),
+         {:ok, entry} <- get_any(ctx, id),
          :ok <- Arca.VaultStorage.tombstone(Context.athanor!(ctx), id) do
-      broadcast(ctx, id, :delete)
+      broadcast(ctx, id, :delete, %{name: entry.name})
       :ok
     end
   end
@@ -424,7 +424,7 @@ defmodule Sanctum.Vault do
     end
   end
 
-  defp broadcast(ctx, entry_id, verb, meta \\ %{}) do
+  defp broadcast(ctx, entry_id, verb, %{name: _} = meta) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       Cyfr.Bus.vault_changed(ctx),
