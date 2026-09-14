@@ -1061,7 +1061,6 @@ A typical live-data pipeline:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CYFR_GITHUB_CLIENT_ID` | — | GitHub OAuth app client ID (for `cyfr login`) |
-| `CYFR_GITHUB_CLIENT_SECRET` | — | GitHub OAuth app client secret |
 | `CYFR_GOOGLE_CLIENT_ID` | — | Google OAuth client ID (alternative sign-in provider) |
 | `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
 | `CYFR_SESSION_TTL_HOURS` | `720` | Session idle timeout in hours (30 days; `0` = never expire) |

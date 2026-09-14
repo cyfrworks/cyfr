@@ -31,96 +31,59 @@ defmodule Sanctum.Auth.OIDCTest do
   end
 
   describe "authenticate/1 with Ueberauth.Auth struct" do
-    test "creates user from GitHub auth" do
-      auth = %{
-        __struct__: Ueberauth.Auth,
-        uid: "12345",
-        provider: :github,
-        info: %{
-          email: "alice@example.com",
-          nickname: "alice"
-        },
-        extra: nil
-      }
+    setup do
+      Application.put_env(:cyfr, :oidc_issuer, "https://auth.example.com")
+      on_exit(fn -> Application.delete_env(:cyfr, :oidc_issuer) end)
+      :ok
+    end
+
+    defp oidcc_auth(fields) do
+      Map.merge(
+        %{__struct__: Ueberauth.Auth, uid: "sub-123", provider: :oidcc, info: %{}, extra: nil},
+        Map.new(fields)
+      )
+    end
+
+    test "names the person by the configured issuer's identity key" do
+      auth = oidcc_auth(info: %{email: "alice@example.com", nickname: "alice"})
 
       {:ok, ctx} = OIDC.authenticate(auth)
 
-      assert ctx.user_id == "github|https://github.com|12345"
+      assert ctx.user_id == "oidcc|https://auth.example.com|sub-123"
       assert ctx.email == "alice@example.com"
-      assert ctx.provider == "github"
-      assert match?(%MapSet{}, ctx.permissions)
+      assert ctx.provider == "oidcc"
+      assert ctx.athanor_id == nil
     end
 
-    test "creates user from Google auth with verified email" do
-      auth = %{
-        __struct__: Ueberauth.Auth,
-        uid: "google_user_123",
-        provider: :google,
-        info: %{
-          email: "bob@gmail.com"
-        },
-        extra: %{raw_info: %{user: %{"email_verified" => true}}}
-      }
-
-      {:ok, ctx} = OIDC.authenticate(auth)
-
-      assert ctx.user_id == "google|https://accounts.google.com|google_user_123"
-      assert ctx.email == "bob@gmail.com"
-      assert ctx.provider == "google"
-    end
-
-    test "rejects Google auth with email_verified: false" do
-      auth = %{
-        __struct__: Ueberauth.Auth,
-        uid: "google_user_123",
-        provider: :google,
-        info: %{email: "bob@gmail.com"},
-        extra: %{raw_info: %{user: %{"email_verified" => false}}}
-      }
+    test "rejects an issuer that says the email is not verified" do
+      auth =
+        oidcc_auth(
+          info: %{email: "bob@example.com"},
+          extra: %{raw_info: %{userinfo: %{"email_verified" => false}}}
+        )
 
       assert {:error, :email_not_verified} = OIDC.authenticate(auth)
     end
 
     test "rejects missing email" do
-      auth = %{
-        __struct__: Ueberauth.Auth,
-        uid: "12345",
-        provider: :github,
-        info: %{nickname: "alice"},
-        extra: nil
-      }
-
-      assert {:error, :missing_email} = OIDC.authenticate(auth)
+      assert {:error, :missing_email} = OIDC.authenticate(oidcc_auth(info: %{nickname: "alice"}))
     end
 
     test "extracts email from extra.raw_info when info.email is nil" do
-      auth = %{
-        __struct__: Ueberauth.Auth,
-        uid: "12345",
-        provider: :github,
-        info: %{nickname: "alice"},
-        extra: %{
-          raw_info: %{"email" => "alice@extra.com"}
-        }
-      }
+      auth =
+        oidcc_auth(
+          info: %{nickname: "alice"},
+          extra: %{raw_info: %{"email" => "alice@extra.com"}}
+        )
 
       {:ok, ctx} = OIDC.authenticate(auth)
 
       assert ctx.email == "alice@extra.com"
     end
 
-    test "grants the full wildcard by default" do
-      auth = %{
-        __struct__: Ueberauth.Auth,
-        uid: "12345",
-        provider: :github,
-        info: %{email: "alice@example.com"},
-        extra: nil
-      }
+    test "grants the person's permissions" do
+      {:ok, ctx} = OIDC.authenticate(oidcc_auth(info: %{email: "alice@example.com"}))
 
-      {:ok, ctx} = OIDC.authenticate(auth)
-
-      # A configured OIDC provider grants the authenticated session's full permissions.
       assert MapSet.equal?(ctx.permissions, MapSet.new(Sanctum.Context.person_permissions()))
       assert Sanctum.Context.has_permission?(ctx, :execute)
     end

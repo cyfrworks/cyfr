@@ -236,9 +236,8 @@ defmodule EmissaryWeb.Router do
     get "/callback", OAuthCallbackController, :callback
   end
 
-  # OAuth/OIDC authentication routes. GitHub/Google browser sign-in is
-  # device flow on `/login`; `/auth/:provider` is the OIDC kickoff (and
-  # leftover web OAuth if a client secret is configured). Static paths
+  # Sign-in routes. GitHub/Google sign in by device flow on `/login`;
+  # `/auth/:provider` is the OIDC kickoff. Static paths
   # sit above `/:provider` so they cannot be captured as a provider name.
   scope "/auth", EmissaryWeb do
     pipe_through :browser

@@ -2,193 +2,30 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Auth.OAuthTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Sanctum.Auth.OAuth
 
-  # authenticate/1 resolves the caller's athanor from memberships, which reads the
-  # DB — check out the sandbox for the whole module.
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    :ok
-  end
-
-  describe "authenticate/1 with GitHub" do
-    setup do
-      # Store original config
-      original = Application.get_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
-
-      # Configure GitHub OAuth
-      Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth,
-        client_id: "test_github_id",
-        client_secret: "test_github_secret"
-      )
-
-      on_exit(fn ->
-        if original do
-          Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth, original)
-        else
-          Application.delete_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
-        end
-      end)
-
-      :ok
-    end
-
-    test "authenticates GitHub user successfully" do
-      params = %{
-        provider: :github,
-        uid: "12345",
-        info: %{email: "alice@example.com"}
-      }
-
-      {:ok, user} = OAuth.authenticate(params)
-
-      assert user.user_id == "github|https://github.com|12345"
-      assert user.email == "alice@example.com"
-      assert user.provider == "github"
-      assert MapSet.equal?(user.permissions, MapSet.new(Sanctum.Context.person_permissions()))
-    end
-
-    test "rejects GitHub user with missing email" do
-      params = %{
-        provider: :github,
-        uid: "12345",
-        info: %{email: nil}
-      }
-
-      assert {:error, :missing_email} = OAuth.authenticate(params)
-    end
-
-    test "rejects GitHub user when provider reports email_verified: false" do
-      params = %{
-        provider: :github,
-        uid: "12345",
-        info: %{email: "alice@example.com"},
-        extra: %{raw_info: %{user: %{"email_verified" => false}}}
-      }
-
-      assert {:error, :email_not_verified} = OAuth.authenticate(params)
-    end
-  end
-
-  describe "authenticate/1 with Google" do
-    setup do
-      original = Application.get_env(:ueberauth, Ueberauth.Strategy.Google.OAuth)
-
-      Application.put_env(:ueberauth, Ueberauth.Strategy.Google.OAuth,
-        client_id: "test_google_id",
-        client_secret: "test_google_secret"
-      )
-
-      on_exit(fn ->
-        if original do
-          Application.put_env(:ueberauth, Ueberauth.Strategy.Google.OAuth, original)
-        else
-          Application.delete_env(:ueberauth, Ueberauth.Strategy.Google.OAuth)
-        end
-      end)
-
-      :ok
-    end
-
-    test "authenticates Google user with verified email" do
-      params = %{
-        provider: :google,
-        uid: "108xyz",
-        info: %{email: "bob@gmail.com"},
-        extra: %{raw_info: %{user: %{"email_verified" => true}}}
-      }
-
-      {:ok, user} = OAuth.authenticate(params)
-
-      assert user.user_id == "google|https://accounts.google.com|108xyz"
-      assert user.email == "bob@gmail.com"
-      assert user.provider == "google"
-    end
-
-    test "rejects Google user with email_verified: false" do
-      params = %{
-        provider: :google,
-        uid: "108xyz",
-        info: %{email: "bob@gmail.com"},
-        extra: %{raw_info: %{user: %{"email_verified" => false}}}
-      }
-
-      assert {:error, :email_not_verified} = OAuth.authenticate(params)
-    end
-
-    test "rejects Google user when email_verified claim is missing" do
-      params = %{
-        provider: :google,
-        uid: "108xyz",
-        info: %{email: "bob@gmail.com"},
-        extra: %{raw_info: %{user: %{}}}
-      }
-
-      assert {:error, :email_not_verified} = OAuth.authenticate(params)
-    end
-  end
-
-  describe "authenticate/1 with unsupported provider" do
-    test "rejects Okta (handled by the OIDC provider, not OAuth)" do
-      params = %{
-        provider: :okta,
-        uid: "okta123",
-        info: %{email: "user@company.com"}
-      }
-
-      {:error, {:unsupported_provider, :okta}} = OAuth.authenticate(params)
-    end
-
-    test "rejects Azure AD (handled by the OIDC provider, not OAuth)" do
-      params = %{
-        provider: :azure_ad,
-        uid: "azure123",
-        info: %{email: "user@company.com"}
-      }
-
-      {:error, {:unsupported_provider, :azure_ad}} = OAuth.authenticate(params)
-    end
-
-    test "rejects a generic OIDC provider (handled by Sanctum.Auth.OIDC, not OAuth)" do
-      params = %{
-        provider: :oidc,
-        uid: "oidc123",
-        info: %{email: "user@company.com"}
-      }
-
-      {:error, {:unsupported_provider, :oidc}} = OAuth.authenticate(params)
-    end
-  end
-
-  describe "authenticate/1 with invalid params" do
-    test "returns error for empty params" do
-      {:error, :invalid_params} = OAuth.authenticate(%{})
-    end
-
-    test "returns error for nil params" do
-      {:error, :invalid_params} = OAuth.authenticate(nil)
+  describe "authenticate/1" do
+    test "refuses every browser callback: GitHub and Google sign in by device flow" do
+      for params <- [
+            %{provider: :github, uid: "12345", info: %{email: "alice@example.com"}},
+            %{provider: :google, uid: "g1", info: %{email: "bob@example.com"}},
+            %{},
+            nil
+          ] do
+        assert {:error, :auth_provider_not_supported} = OAuth.authenticate(params)
+      end
     end
   end
 
   describe "current_user/1" do
     test "returns nil when no session" do
-      fake_conn = %Plug.Conn{
-        private: %{},
-        req_headers: []
-      }
-
-      assert OAuth.current_user(fake_conn) == nil
+      assert OAuth.current_user(%Plug.Conn{private: %{}, req_headers: []}) == nil
     end
   end
 
-  describe "behaviour compliance" do
-    test "implements Sanctum.Auth behaviour" do
-      behaviours = OAuth.__info__(:attributes)[:behaviour]
-
-      assert Sanctum.Auth in behaviours
-    end
+  test "implements the Sanctum.Auth behaviour" do
+    assert Sanctum.Auth in OAuth.__info__(:attributes)[:behaviour]
   end
 end

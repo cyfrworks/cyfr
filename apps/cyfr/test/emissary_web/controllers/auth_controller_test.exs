@@ -3,7 +3,7 @@
 
 defmodule EmissaryWeb.AuthControllerTest do
   @moduledoc """
-  Tests for the OAuth authentication controller.
+  Tests for the sign-in controller.
 
   Tests cover:
   - request/2: Unknown provider handling
@@ -22,7 +22,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert html_response(conn, 404) =~ "Unknown sign-in provider"
     end
 
-    test "GET /auth/github without web-callback credentials is 404, not 500", %{conn: conn} do
+    test "GET /auth/github is 404: GitHub signs in by device flow", %{conn: conn} do
       conn = get(conn, ~p"/auth/github")
       assert html_response(conn, 404) =~ "Unknown sign-in provider"
     end
@@ -58,7 +58,7 @@ defmodule EmissaryWeb.AuthControllerTest do
 
     test "returns error for invalid callback without auth data", %{conn: conn} do
       # Simulate a callback without Ueberauth data
-      conn = get(conn, ~p"/auth/github/callback")
+      conn = get(conn, ~p"/auth/oidcc/callback")
 
       assert html_response(conn, 400) =~ "Invalid sign-in callback"
     end
@@ -66,7 +66,7 @@ defmodule EmissaryWeb.AuthControllerTest do
     test "handles ueberauth failure", %{conn: conn} do
       # Simulate Ueberauth failure
       failure = %Ueberauth.Failure{
-        provider: :github,
+        provider: :oidcc,
         errors: [
           %Ueberauth.Failure.Error{message: "Access denied"}
         ]
@@ -88,7 +88,7 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       auth = %Ueberauth.Auth{
         uid: "99999",
-        provider: :github,
+        provider: :oidcc,
         info: %Ueberauth.Auth.Info{email: "stranger@example.com", name: "Stranger"},
         credentials: %Ueberauth.Auth.Credentials{
           token: "gho_x",
@@ -107,7 +107,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert conn.status == 403
       assert conn.resp_body =~ "not allowed on this server"
       refute get_session(conn, :sanctum_session_token)
-      user_id = Sanctum.Auth.Identity.builtin_key(:github, "99999")
+      user_id = "oidcc|https://idp.test|99999"
       assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identity(user_id)
     end
 
@@ -116,7 +116,7 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       auth = %Ueberauth.Auth{
         uid: "77777",
-        provider: :github,
+        provider: :oidcc,
         info: %Ueberauth.Auth.Info{email: "banned@example.com", name: "Banned"},
         credentials: %Ueberauth.Auth.Credentials{
           token: "gho_x",
@@ -135,10 +135,10 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert conn.status == 403
     end
 
-    defp github_auth(uid, email) do
+    defp oidcc_auth(uid, email) do
       %Ueberauth.Auth{
         uid: uid,
-        provider: :github,
+        provider: :oidcc,
         info: %Ueberauth.Auth.Info{email: email, name: "Test User"},
         credentials: %Ueberauth.Auth.Credentials{
           token: "gho_mock_access_token",
@@ -152,12 +152,12 @@ defmodule EmissaryWeb.AuthControllerTest do
     test "a first-time person signs in on their own athanor even with cyfr.run unreachable",
          %{conn: conn} do
       uid = "first-#{System.unique_integer([:positive])}"
-      user_id = "github|https://github.com|#{uid}"
+      user_id = "oidcc|https://idp.test|#{uid}"
 
       conn =
         conn
         |> Plug.Test.init_test_session(%{})
-        |> assign(:ueberauth_auth, github_auth(uid, "test@example.com"))
+        |> assign(:ueberauth_auth, oidcc_auth(uid, "test@example.com"))
         |> EmissaryWeb.AuthController.callback(%{})
 
       assert redirected_to(conn) == "/"
@@ -173,12 +173,12 @@ defmodule EmissaryWeb.AuthControllerTest do
     test "a returning person signs in and lands in the chat even with cyfr.run unreachable",
          %{conn: conn} do
       uid = "back-#{System.unique_integer([:positive])}"
-      user_id = "github|https://github.com|#{uid}"
+      user_id = "oidcc|https://idp.test|#{uid}"
 
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
           id: user_id,
-          provider: "github",
+          provider: "oidcc",
           email: "back@example.com",
           verified: true
         })
@@ -190,7 +190,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         conn
         |> Plug.Test.init_test_session(%{})
         |> Phoenix.ConnTest.fetch_flash()
-        |> assign(:ueberauth_auth, github_auth(uid, "back@example.com"))
+        |> assign(:ueberauth_auth, oidcc_auth(uid, "back@example.com"))
         |> EmissaryWeb.AuthController.callback(%{})
 
       assert redirected_to(conn) == "/"
@@ -252,10 +252,10 @@ defmodule EmissaryWeb.AuthControllerTest do
       |> Plug.Conn.resp(status, Jason.encode!(body))
     end
 
-    defp verified_github_auth(uid, opts \\ []) do
+    defp verified_oidcc_auth(uid, opts \\ []) do
       %Ueberauth.Auth{
         uid: uid,
-        provider: :github,
+        provider: :oidcc,
         info: %Ueberauth.Auth.Info{
           email: Keyword.get(opts, :email, "alice@example.com"),
           name: "Alice"
@@ -266,7 +266,7 @@ defmodule EmissaryWeb.AuthControllerTest do
           expires: false
         },
         extra: %Ueberauth.Auth.Extra{
-          raw_info: %{user: %{"email_verified" => true}}
+          raw_info: %{userinfo: %{"email_verified" => true}}
         }
       }
     end
@@ -292,7 +292,7 @@ defmodule EmissaryWeb.AuthControllerTest do
          %{conn: conn, bypass: bypass} do
       n = System.unique_integer([:positive])
       uid = "auth_cb_happy_#{n}"
-      user_id = "github|https://github.com|#{uid}"
+      user_id = "oidcc|https://idp.test|#{uid}"
 
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 200, %{
@@ -301,7 +301,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         })
       end)
 
-      conn = callback(conn, verified_github_auth(uid))
+      conn = callback(conn, verified_oidcc_auth(uid))
 
       assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
@@ -347,7 +347,7 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       assert Plug.Conn.get_session(conn, :planted) == "pre-login"
 
-      conn = callback(conn, verified_github_auth(uid))
+      conn = callback(conn, verified_oidcc_auth(uid))
 
       assert is_binary(session_of(conn))
       refute Plug.Conn.get_session(conn, :planted)
@@ -364,7 +364,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       on_exit(fn -> Application.put_env(:cyfr, :caps, previous) end)
 
       n = System.unique_integer([:positive])
-      conn = callback(conn, verified_github_auth("full_#{n}", email: "full#{n}@example.com"))
+      conn = callback(conn, verified_oidcc_auth("full_#{n}", email: "full#{n}@example.com"))
 
       body = html_response(conn, 401)
       assert body =~ "full"
@@ -388,16 +388,14 @@ defmodule EmissaryWeb.AuthControllerTest do
         })
       end)
 
-      conn = callback(conn, verified_github_auth(uid, email: email))
+      conn = callback(conn, verified_oidcc_auth(uid, email: email))
 
       assert redirected_to(conn) == "/"
 
       # Their own athanor is minted at admission and is what the session
       # names; the operator bit is a platform row beside it, not a seat.
       assert {:ok, %{id: personal_id}} =
-               Sanctum.Tenancy.Athanors.get_by_owner(
-                 person_id("github|https://github.com|#{uid}")
-               )
+               Sanctum.Tenancy.Athanors.get_by_owner(person_id("oidcc|https://idp.test|#{uid}"))
 
       assert {:ok, %{athanor_id: ^personal_id, platform_admin: true}} =
                Sanctum.Session.load(session_of(conn), surface: :console)
@@ -406,13 +404,13 @@ defmodule EmissaryWeb.AuthControllerTest do
     test "no personal namespace: signed in on their own athanor, IdP token kept for the claim",
          %{conn: conn, bypass: bypass} do
       uid = "auth_cb_unclaimed_#{System.unique_integer([:positive])}"
-      user_id = "github|https://github.com|#{uid}"
+      user_id = "oidcc|https://idp.test|#{uid}"
 
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 200, %{"personal_namespace" => nil, "memberships" => []})
       end)
 
-      conn = callback(conn, verified_github_auth(uid))
+      conn = callback(conn, verified_oidcc_auth(uid))
 
       assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
@@ -437,7 +435,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         json_resp(c, 412, %{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
       end)
 
-      conn = callback(conn, verified_github_auth(uid))
+      conn = callback(conn, verified_oidcc_auth(uid))
       assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
       assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
@@ -449,13 +447,13 @@ defmodule EmissaryWeb.AuthControllerTest do
       bypass: bypass
     } do
       uid = "auth_cb_401_#{System.unique_integer([:positive])}"
-      user_id = "github|https://github.com|#{uid}"
+      user_id = "oidcc|https://idp.test|#{uid}"
 
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 401, %{"error" => "invalid_access_token"})
       end)
 
-      conn = callback(conn, verified_github_auth(uid, token: "expired_token"))
+      conn = callback(conn, verified_oidcc_auth(uid, token: "expired_token"))
 
       assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
@@ -470,7 +468,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       end)
 
       uid = "auth_cb_5xx_#{System.unique_integer([:positive])}"
-      conn1 = callback(conn, verified_github_auth(uid))
+      conn1 = callback(conn, verified_oidcc_auth(uid))
       assert redirected_to(conn1) == "/"
       assert is_binary(session_of(conn1))
       assert Phoenix.Flash.get(conn1.assigns.flash, :error) =~ "couldn't be reached"
@@ -480,14 +478,14 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: "github|https://github.com|#{back}",
-          provider: "github",
+          id: "oidcc|https://idp.test|#{back}",
+          provider: "oidcc",
           email: "alice@example.com",
           verified: true
         })
 
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "back#{n}")
-      conn2 = callback(build_conn(), verified_github_auth(back))
+      conn2 = callback(build_conn(), verified_oidcc_auth(back))
       assert redirected_to(conn2) == "/"
       assert is_binary(session_of(conn2))
       assert Phoenix.Flash.get(conn2.assigns.flash, :error) =~ "couldn't be reached"
@@ -508,7 +506,7 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       n = System.unique_integer([:positive])
       uid = "auth_cb_putfail_#{n}"
-      user_id = "github|https://github.com|#{uid}"
+      user_id = "oidcc|https://idp.test|#{uid}"
 
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 200, %{
@@ -517,7 +515,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         })
       end)
 
-      conn = callback(conn, verified_github_auth(uid))
+      conn = callback(conn, verified_oidcc_auth(uid))
 
       assert redirected_to(conn) == "/"
       assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(person_id(user_id))
@@ -535,7 +533,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       uid = "auth_cb_nojson_#{System.unique_integer([:positive])}"
 
       # The registry down, and the IdP giving no token: a redirect each time.
-      for auth <- [verified_github_auth(uid), verified_github_auth(uid, token: nil)] do
+      for auth <- [verified_oidcc_auth(uid), verified_oidcc_auth(uid, token: nil)] do
         conn = callback(conn, auth)
         assert conn.status == 302
         refute Enum.any?(Plug.Conn.get_resp_header(conn, "content-type"), &(&1 =~ "json"))

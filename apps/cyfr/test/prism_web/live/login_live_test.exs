@@ -3,10 +3,9 @@
 
 defmodule PrismWeb.LoginLiveTest do
   @moduledoc """
-  Prism sign-in uses GitHub/Google device flow on this page, not the
-  leftover Ueberauth web-callback at `/auth/:provider`. A GitHub OAuth
-  app that only has a client id (device flow) must not be sent there —
-  that path `fetch_env!`s `Ueberauth.Strategy.Github.OAuth` and 500s.
+  Prism sign-in for GitHub and Google is device flow on this page; they
+  have no browser callback. A deployment on its own issuer links to
+  `/auth/oidcc`.
   """
   use PrismWeb.ConnCase, async: false
 

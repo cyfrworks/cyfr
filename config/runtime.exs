@@ -468,28 +468,11 @@ if config_env() != :test do
     # MCP server on this list, never as a URL the bundled http catalyst fetches.
     config :cyfr, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
 
-    # GitHub OAuth
-    # Device flow (CLI and Prism) only needs client ID — no secret.
-    # Ueberauth's leftover web-callback strategy is registered only when a
-    # secret is also set (otherwise GET /auth/github 500s inside the strategy).
+    # GitHub and Google sign in by device flow (CLI and Prism). GitHub needs
+    # only a client ID; Google needs a client ID and secret.
     github_id = env_str.("CYFR_GITHUB_CLIENT_ID", nil)
-    github_secret = env_str.("CYFR_GITHUB_CLIENT_SECRET", nil)
-
-    if github_id && github_secret do
-      config :ueberauth, Ueberauth.Strategy.Github.OAuth,
-        client_id: github_id,
-        client_secret: github_secret
-    end
-
-    # Google device flow requires both client ID and client secret.
     google_id = env_str.("CYFR_GOOGLE_CLIENT_ID", nil)
     google_secret = env_str.("CYFR_GOOGLE_CLIENT_SECRET", nil)
-
-    if google_id && google_secret do
-      config :ueberauth, Ueberauth.Strategy.Google.OAuth,
-        client_id: google_id,
-        client_secret: google_secret
-    end
 
     # Device Flow credentials for Google. `google_client_id` is sent on both
     # the device-code request and the token exchange; `google_client_secret`
@@ -531,9 +514,7 @@ if config_env() != :test do
 
     config :cyfr, :oci_registry_url, oci_registry_url_config
 
-    # Device Flow Client IDs for Sanctum authentication
-    # Device Flow only needs client ID, no secret required.
-    # (`github_id` was read once above, next to the Ueberauth pair.)
+    # GitHub device flow needs only its client ID (read above).
     if github_id do
       config :cyfr, :github_client_id, github_id
     end
@@ -573,50 +554,26 @@ if config_env() != :test do
               "an OIDC provider signs in through the browser page a headless node refuses"
     end
 
-    # Build Ueberauth providers list dynamically
-    providers = []
+    # Generic OIDC, the one browser-callback sign-in. When selected, register
+    # the issuer for ueberauth_oidcc and its strategy. CYFR_OIDC_ISSUER is also
+    # pinned at `:cyfr, :oidc_issuer` — the single source both the boot
+    # reserved-host check (`Cyfr.Application.validate_oidc_issuer_config!/0`) and
+    # the login id builder (`Sanctum.Auth.OIDC.resolve_issuer/0`) read.
+    if auth_provider == Sanctum.Auth.OIDC do
+      {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
 
-    providers =
-      if github_id && github_secret do
-        [{:github, {Ueberauth.Strategy.Github, [default_scope: "user:email"]}} | providers]
-      else
-        providers
-      end
+      config :cyfr, :oidc_issuer, oidc.issuer
+      config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
 
-    providers =
-      if google_id && google_secret do
-        [{:google, {Ueberauth.Strategy.Google, [default_scope: "email profile"]}} | providers]
-      else
-        providers
-      end
-
-    # Generic OIDC. When selected, register the issuer for ueberauth_oidcc and add
-    # the strategy. CYFR_OIDC_ISSUER is also pinned at `:cyfr, :oidc_issuer` — the
-    # single source both the boot reserved-host check
-    # (`Cyfr.Application.validate_oidc_issuer_config!/0`) and the login id builder
-    # (`Sanctum.Auth.OIDC.resolve_issuer/2`) read.
-    providers =
-      if auth_provider == Sanctum.Auth.OIDC do
-        {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
-
-        config :cyfr, :oidc_issuer, oidc.issuer
-        config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
-
-        # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
-        # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
-        # and the canonical `oidcc|<iss>|<sub>` id form.
-        oidc_provider =
-          {:oidcc,
-           {Ueberauth.Strategy.Oidcc,
-            issuer: :cyfr_oidc, client_id: oidc.client_id, client_secret: oidc.client_secret}}
-
-        [oidc_provider | providers]
-      else
-        providers
-      end
-
-    if providers != [] do
-      config :ueberauth, Ueberauth, providers: providers
+      # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
+      # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
+      # and the canonical `oidcc|<iss>|<sub>` id form.
+      config :ueberauth, Ueberauth,
+        providers: [
+          oidcc:
+            {Ueberauth.Strategy.Oidcc,
+             issuer: :cyfr_oidc, client_id: oidc.client_id, client_secret: oidc.client_secret}
+        ]
     end
 
     # Storage backend. Unset/`local` keeps the filesystem default from config.exs;

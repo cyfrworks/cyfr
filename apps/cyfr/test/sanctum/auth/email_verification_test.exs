@@ -6,56 +6,16 @@ defmodule Sanctum.Auth.EmailVerificationTest do
 
   alias Sanctum.Auth.EmailVerification
 
-  defp extra(email_verified), do: %{raw_info: %{user: %{"email_verified" => email_verified}}}
-  defp extra_missing, do: %{raw_info: %{user: %{}}}
+  defp extra(email_verified), do: %{raw_info: %{userinfo: %{"email_verified" => email_verified}}}
+  defp extra_missing, do: %{raw_info: %{userinfo: %{}}}
 
   describe "missing email — rejected for every provider" do
-    test "github with nil email" do
-      assert {:error, :missing_email} = EmailVerification.verify(:github, nil, extra(true))
-    end
-
-    test "google with empty-string email" do
-      assert {:error, :missing_email} = EmailVerification.verify(:google, "", extra(true))
-    end
-
     test "oidcc with nil email" do
       assert {:error, :missing_email} = EmailVerification.verify(:oidcc, nil, extra(true))
     end
-  end
 
-  describe "github — absence of email_verified is accepted" do
-    test "explicit true → :ok" do
-      assert :ok = EmailVerification.verify(:github, "alice@example.com", extra(true))
-    end
-
-    test "explicit false → :email_not_verified" do
-      assert {:error, :email_not_verified} =
-               EmailVerification.verify(:github, "alice@example.com", extra(false))
-    end
-
-    test "missing email_verified claim → :ok (Ueberauth already filters unverified primaries)" do
-      assert :ok = EmailVerification.verify(:github, "alice@example.com", extra_missing())
-    end
-  end
-
-  describe "google — email_verified must be explicitly true" do
-    test "explicit true → :ok" do
-      assert :ok = EmailVerification.verify(:google, "bob@example.com", extra(true))
-    end
-
-    test "explicit false → :email_not_verified" do
-      assert {:error, :email_not_verified} =
-               EmailVerification.verify(:google, "bob@example.com", extra(false))
-    end
-
-    test "missing email_verified claim → :email_not_verified" do
-      assert {:error, :email_not_verified} =
-               EmailVerification.verify(:google, "bob@example.com", extra_missing())
-    end
-
-    test "stringly-typed \"true\" is not treated as true → :email_not_verified" do
-      assert {:error, :email_not_verified} =
-               EmailVerification.verify(:google, "bob@example.com", extra("true"))
+    test "an unknown provider with an empty-string email" do
+      assert {:error, :missing_email} = EmailVerification.verify(:custom, "", extra(true))
     end
   end
 
@@ -74,28 +34,10 @@ defmodule Sanctum.Auth.EmailVerificationTest do
     end
   end
 
-  describe "alternate claim shapes" do
-    test "atom :email_verified key" do
-      extra = %{raw_info: %{user: %{email_verified: true}}}
-      assert :ok = EmailVerification.verify(:google, "bob@example.com", extra)
-    end
-
-    test "stringly-keyed \"user\" map" do
-      extra = %{raw_info: %{"user" => %{"email_verified" => true}}}
-      assert :ok = EmailVerification.verify(:google, "bob@example.com", extra)
-    end
-
-    test "unrecognized shape → treated as missing claim" do
-      assert {:error, :email_not_verified} =
-               EmailVerification.verify(:google, "bob@example.com", %{})
-    end
-  end
-
   describe "the real ueberauth_oidcc shape" do
-    # `%UeberauthOidcc.RawInfo{}` carries `opts/claims/userinfo/introspection`
-    # and no `:user` key at all, so every synthetic shape above misses it. The
-    # generic-OIDC arms are only real if they read what the strategy actually
-    # builds (`Ueberauth.Strategy.Oidcc.extra/1`).
+    # `%UeberauthOidcc.RawInfo{}` carries `opts/claims/userinfo/introspection`;
+    # the arms are only real if they read what the strategy actually builds
+    # (`Ueberauth.Strategy.Oidcc.extra/1`).
     defp oidcc(fields), do: %{raw_info: struct!(UeberauthOidcc.RawInfo, fields)}
 
     test "userinfo email_verified is read" do

@@ -5,23 +5,14 @@ defmodule Sanctum.Auth.OIDC do
   @moduledoc """
   OIDC authentication provider for `Sanctum.Auth`.
 
-  Integrates with Ueberauth to support OAuth2/OIDC providers — GitHub and
-  Google directly, plus generic OIDC issuers via `ueberauth_oidcc` (used
-  by deployments that federate against an enterprise IdP).
+  Signs a person in through a generic OIDC issuer via `ueberauth_oidcc`,
+  for deployments that federate against their own IdP. GitHub and Google
+  sign in by device flow (`Sanctum.Auth.DeviceFlow`), not through this
+  provider.
 
   ## Configuration
 
-  Configure providers in `config/runtime.exs`:
-
-      # GitHub OAuth
-      export CYFR_GITHUB_CLIENT_ID=xxx
-      export CYFR_GITHUB_CLIENT_SECRET=xxx
-
-      # Google OAuth
-      export CYFR_GOOGLE_CLIENT_ID=xxx
-      export CYFR_GOOGLE_CLIENT_SECRET=xxx
-
-      # Generic OIDC
+      export CYFR_AUTH_PROVIDER=oidc
       export CYFR_OIDC_ISSUER=https://auth.example.com
       export CYFR_OIDC_CLIENT_ID=xxx
       export CYFR_OIDC_CLIENT_SECRET=xxx
@@ -51,19 +42,19 @@ defmodule Sanctum.Auth.OIDC do
       auth = %Ueberauth.Auth{
         uid: "12345",
         info: %{email: "alice@example.com", nickname: "alice"},
-        provider: :github
+        provider: :oidcc
       }
 
       {:ok, ctx} = Sanctum.Auth.OIDC.authenticate(auth)
       ctx.user_id
-      #=> "github|https://github.com|12345"
+      #=> "oidcc|https://auth.example.com|12345"
   """
   def authenticate(%{__struct__: Ueberauth.Auth} = auth) do
     provider = auth.provider
     # Resolve issuer first — this is a deployment-configuration assertion
     # (raises on misconfigured OIDC wiring) and must fail fast regardless of
     # user-input state like email.
-    iss = resolve_issuer(auth, provider)
+    iss = resolve_issuer()
 
     email = get_email(auth)
     extra = Map.get(auth, :extra) || %{}
@@ -131,19 +122,12 @@ defmodule Sanctum.Auth.OIDC do
     end
   end
 
-  # Direct GitHub/Google OAuth strategies hardcode the provider's issuer.
-  # The generic-OIDC path (`ueberauth_oidcc`) pulls `iss` from the id_token
-  # or the strategy's `urls.oidc_issuer` field.
-  defp resolve_issuer(_auth, provider) when provider in [:github, :google] do
-    Identity.issuer(provider)
-  end
-
-  defp resolve_issuer(_auth, _provider) do
-    # Generic OIDC: the canonical issuer is the operator-configured value,
-    # pinned at boot from CYFR_OIDC_ISSUER (config/runtime.exs). Reading it here
-    # — rather than digging it out of ueberauth_oidcc's Auth struct — keeps the
-    # user-id issuer deterministic and reads the SAME source as the boot
-    # reserved-host check (Cyfr.Application.validate_oidc_issuer_config!/0).
+  # The canonical issuer is the operator-configured value, pinned at boot
+  # from CYFR_OIDC_ISSUER (config/runtime.exs). Reading it here — rather than
+  # digging it out of ueberauth_oidcc's Auth struct — keeps the user-id issuer
+  # deterministic and reads the SAME source as the boot reserved-host check
+  # (Cyfr.Application.validate_oidc_issuer_config!/0).
+  defp resolve_issuer do
     iss =
       case Cyfr.RuntimeConfig.oidc_issuer() do
         issuer when is_binary(issuer) and issuer != "" ->
@@ -159,7 +143,7 @@ defmodule Sanctum.Auth.OIDC do
     # would be the split one. Boot refuses the same value more gently.
     if Identity.reserved_issuer?(iss) do
       raise "OIDC issuer policy violation: ueberauth_oidcc wired against a reserved issuer " <>
-              "(#{iss}); use ueberauth_github or ueberauth_google directly."
+              "(#{iss}); GitHub and Google sign in by device flow."
     end
 
     iss

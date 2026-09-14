@@ -3,18 +3,14 @@
 
 defmodule Sanctum.Auth.EmailVerification do
   @moduledoc """
-  Provider-specific email-verification guard shared by the web OAuth paths
-  (`Sanctum.Auth.OAuth` by default, or a configured auth provider).
+  The email-verification guard for the browser callback (`ueberauth_oidcc`).
 
-  The CLI path (`Sanctum.Auth.DeviceFlow.fetch_user_info/2`) applies the same
-  rule directly on the userinfo JSON it fetches — this module mirrors that
-  rule for the Ueberauth.Auth struct.
+  The device-flow path (`Sanctum.Auth.DeviceFlow.fetch_user_info/2`) applies
+  its own per-provider rule directly on the userinfo JSON it fetches.
 
-  Rule: reject missing email; reject explicitly-unverified email. Missing
-  `email_verified` claim is treated per-provider — GitHub's verified-primary
-  is surfaced by Ueberauth itself, so absence of the flag is accepted;
-  Google always emits the flag in userinfo, so its absence is treated as
-  unverified and rejected.
+  Rule: reject a missing email; reject an explicitly unverified one. Generic
+  OIDC issuers do not always emit `email_verified`, so its absence is
+  accepted for `:oidcc`; any other provider must assert `true`.
   """
 
   @type result :: :ok | {:error, :missing_email | :email_not_verified}
@@ -23,31 +19,15 @@ defmodule Sanctum.Auth.EmailVerification do
   @doc """
   Verify the email on a Ueberauth.Auth struct for the given provider.
 
-  Reads the claim wherever the strategy put it: `raw_info.userinfo` then
-  `raw_info.claims` for `ueberauth_oidcc`, `raw_info.user` for the OAuth
-  strategies (GitHub, Google).
+  Reads the claim wherever the strategy put it: `raw_info.userinfo`, then
+  `raw_info.claims`.
   """
   @spec verify(atom(), String.t() | nil, map() | any()) :: result()
   def verify(_provider, email, _extra) when email in [nil, ""], do: {:error, :missing_email}
 
-  def verify(:github, _email, extra) do
-    case email_verified_claim(extra) do
-      false -> {:error, :email_not_verified}
-      _ -> :ok
-    end
-  end
-
-  def verify(:google, _email, extra) do
-    case email_verified_claim(extra) do
-      true -> :ok
-      _ -> {:error, :email_not_verified}
-    end
-  end
-
-  # Generic OIDC (ueberauth_oidcc): respect the claim when present, accept its
-  # absence. OIDC issuers don't always emit `email_verified`, and a
-  # missing-claim rejection would break valid deployments; an issuer that
-  # explicitly says `false` is still a real signal and is rejected.
+  # Respect the claim when present, accept its absence: a missing-claim
+  # rejection would break valid deployments, while an issuer that explicitly
+  # says `false` is a real signal.
   def verify(:oidcc, _email, extra) do
     case email_verified_claim(extra) do
       false -> {:error, :email_not_verified}
@@ -55,9 +35,8 @@ defmodule Sanctum.Auth.EmailVerification do
     end
   end
 
-  # Unknown provider: fail closed. We have no basis to trust the address, so
-  # require an explicit `email_verified == true` (same posture as Google).
-  # An absent or false claim is rejected rather than silently accepted.
+  # Unknown provider: fail closed — only an explicit `email_verified == true`
+  # is trusted.
   def verify(_other, _email, extra) do
     case email_verified_claim(extra) do
       true -> :ok
@@ -67,29 +46,23 @@ defmodule Sanctum.Auth.EmailVerification do
 
   @doc """
   `verify/3`, and what the provider actually asserted: `{:ok, true}` when
-  it proved the address, `{:ok, false}` never (that is a refusal), and
-  `{:ok, :unknown}` when it said nothing. The door admits an exact email
-  entry only on `true`; GitHub's primary email is verified by the strategy
-  itself, so its silence counts as `true`.
+  it proved the address and `{:ok, :unknown}` when it said nothing. An
+  explicit `false` is a refusal. The door admits an exact email entry only
+  on `true`.
   """
   @spec verify_with_claim(atom(), String.t() | nil, map() | any()) ::
           {:ok, claim()} | {:error, :missing_email | :email_not_verified}
   def verify_with_claim(provider, email, extra) do
     with :ok <- verify(provider, email, extra) do
-      case {provider, email_verified_claim(extra)} do
-        {_, true} -> {:ok, true}
-        {:github, :unknown} -> {:ok, true}
-        {_, _} -> {:ok, :unknown}
+      case email_verified_claim(extra) do
+        true -> {:ok, true}
+        _ -> {:ok, :unknown}
       end
     end
   end
 
-  # Read OAuth userinfo from raw_info.user and OIDC verification from
-  # its RawInfo fields. Userinfo takes precedence over id-token claims.
+  # Userinfo takes precedence over id-token claims.
   defp email_verified_claim(%{raw_info: %{userinfo: %{"email_verified" => v}}}), do: v
   defp email_verified_claim(%{raw_info: %{claims: %{"email_verified" => v}}}), do: v
-  defp email_verified_claim(%{raw_info: %{user: %{"email_verified" => v}}}), do: v
-  defp email_verified_claim(%{raw_info: %{user: %{email_verified: v}}}), do: v
-  defp email_verified_claim(%{raw_info: %{"user" => %{"email_verified" => v}}}), do: v
   defp email_verified_claim(_), do: :unknown
 end

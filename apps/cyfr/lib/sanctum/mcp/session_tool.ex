@@ -327,7 +327,7 @@ defmodule Sanctum.MCP.SessionTool do
 
   # Device-flow CLI auth requires the default OAuth provider. Deployments that
   # pin `:auth_provider` to a configured OIDC provider use the web OIDC flow at
-  # `/auth/<provider>` — device_init/device_poll are gated off in that case.
+  # `/auth/oidcc` — device_init/device_poll are gated off in that case.
   # Installs with `:auth_provider = nil` are treated as the default (OAuth)
   # for this check,
   # so local dev without explicit config still works.
@@ -342,6 +342,6 @@ defmodule Sanctum.MCP.SessionTool do
   defp device_flow_disabled_message do
     "Device-flow CLI auth requires the GitHub/Google OAuth provider. " <>
       "This deployment is configured with a different auth provider; " <>
-      "use the web flow at `/auth/<provider>` instead."
+      "use the web flow at `/auth/oidcc` instead."
   end
 end

@@ -31,8 +31,8 @@ defmodule Sanctum.Auth.Identity do
   @doc """
   Build the identity key `"<provider>|<iss>|<subject>"`.
 
-  Used by every sign-in path (OAuth, DeviceFlow, the Ueberauth callback)
-  so the key shape stays consistent.
+  Used by every sign-in path (device flow, the OIDC callback) so the key
+  shape stays consistent.
   """
   @spec key(String.t() | atom(), String.t(), String.t()) :: String.t()
   def key(provider, iss, sub) when is_atom(provider),
@@ -91,8 +91,8 @@ defmodule Sanctum.Auth.Identity do
   @doc """
   Canonical `iss` (RFC 7519 issuer) for a built-in provider.
 
-  GitHub and Google have stable, well-known issuer URLs; OAuth and DeviceFlow
-  do not receive an `iss` from their userinfo endpoints, so they use these to
+  GitHub and Google have stable, well-known issuer URLs; device flow does
+  not receive an `iss` from their userinfo endpoints, so it uses these to
   build ids in the same shape an OIDC-claim login produces.
 
   ## Examples
