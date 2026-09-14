@@ -24,12 +24,16 @@ defmodule Cyfr.ControlPlaneTest do
     assert ControlPlane.owner?()
     assert {:ok, owner, _until} = Claim.holder()
     assert owner == me()
+    assert {:ok, generation} = ControlPlane.generation()
 
     :ok = GenServer.stop(pid)
     refute ControlPlane.owner?()
+    assert ControlPlane.generation() == :none
 
-    # The row is left expired: the next boot claims without waiting.
-    assert {:ok, _} = Claim.claim("boot-next", 60_000)
+    # The row is left expired: the next boot claims without waiting, one
+    # generation up.
+    assert {:ok, _, next} = Claim.claim("boot-next", 60_000)
+    assert next == generation + 1
   end
 
   test "ownership is the lease deadline: it lapses on the clock and is regained by renewal" do
@@ -53,7 +57,7 @@ defmodule Cyfr.ControlPlaneTest do
     Process.sleep(200)
     refute ControlPlane.owner?()
 
-    assert {:ok, _} = Claim.claim("boot-successor", 60_000)
+    assert {:ok, _, _} = Claim.claim("boot-successor", 60_000)
 
     # The old holder's tick finds the row another's, records the loss and
     # cannot reclaim a live lease.
@@ -67,7 +71,7 @@ defmodule Cyfr.ControlPlaneTest do
   end
 
   test "a holder that stopped without releasing is waited out and replaced" do
-    assert {:ok, _} = Claim.claim("boot-killed", 300)
+    assert {:ok, _, _} = Claim.claim("boot-killed", 300)
 
     started = System.monotonic_time(:millisecond)
     {:ok, pid} = ControlPlane.start_link(name: nil, lease_ms: 60_000, renew_ms: 60_000)
@@ -82,7 +86,7 @@ defmodule Cyfr.ControlPlaneTest do
   end
 
   test "a holder that keeps renewing is live, and the second boot refuses" do
-    assert {:ok, _} = Claim.claim("boot-live", 400)
+    assert {:ok, _, _} = Claim.claim("boot-live", 400)
     test = self()
 
     renewer =

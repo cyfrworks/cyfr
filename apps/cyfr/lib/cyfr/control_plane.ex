@@ -30,6 +30,7 @@ defmodule Cyfr.ControlPlane do
   # and the ceiling on that wait relative to this boot's lease.
   @wait_slack_ms 250
   @ownership_key {__MODULE__, :ownership}
+  @generation_key {__MODULE__, :generation}
 
   @typedoc """
   What this boot holds: a lease until a deadline, the plane outright (a
@@ -45,6 +46,20 @@ defmodule Cyfr.ControlPlane do
       {:held, %DateTime{} = until} -> DateTime.compare(DateTime.utc_now(), until) == :lt
       :lost -> false
       :unclaimed -> not claim_enabled?()
+    end
+  end
+
+  @doc """
+  The generation of the claim this boot last won (`Cyfr.ControlPlane.Claim`),
+  or `:none` for a boot that has claimed nothing — a cluster node, or one
+  whose claim is switched off. Work this boot issues under its generation
+  is fenced against a later holder's.
+  """
+  @spec generation() :: {:ok, pos_integer()} | :none
+  def generation do
+    case :persistent_term.get(@generation_key, nil) do
+      generation when is_integer(generation) -> {:ok, generation}
+      nil -> :none
     end
   end
 
@@ -94,7 +109,8 @@ defmodule Cyfr.ControlPlane do
 
       true ->
         case claim_or_wait(me, lease_ms) do
-          {:ok, expires_at} ->
+          {:ok, expires_at, generation} ->
+            :persistent_term.put(@generation_key, generation)
             mark({:held, expires_at})
             Process.send_after(self(), :renew, renew_ms)
             {:ok, %{state | expires_at: expires_at}}
@@ -155,6 +171,7 @@ defmodule Cyfr.ControlPlane do
 
   def terminate(_reason, state) do
     mark(:lost)
+    :persistent_term.erase(@generation_key)
 
     case Claim.release(state.me) do
       :ok ->
@@ -204,8 +221,9 @@ defmodule Cyfr.ControlPlane do
   # absent or expired row, never a live one another boot holds.
   defp reclaim(state) do
     case Claim.claim(state.me, state.lease_ms) do
-      {:ok, expires_at} ->
+      {:ok, expires_at, generation} ->
         Logger.warning("[Cyfr.ControlPlane] ownership regained")
+        :persistent_term.put(@generation_key, generation)
         mark({:held, expires_at})
         %{state | expires_at: expires_at}
 

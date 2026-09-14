@@ -3,47 +3,57 @@
 
 defmodule Cyfr.ControlPlane.Claim do
   @moduledoc """
-  The control-plane lease row: `{"owner": boot, "expires_at": iso8601}`
-  under one key of `Arca.ServerMetaStorage`, written only by conditional
-  statements so two boots cannot both believe they hold it.
+  The control-plane lease row:
+  `{"owner": boot, "expires_at": iso8601, "generation": n}` under one key of
+  `Arca.ServerMetaStorage`, written only by conditional statements so two
+  boots cannot both believe they hold it.
+
+  The generation rises by one with every claim — a boot taking the plane,
+  or taking it back after its lease lapsed — and is kept by renewals and
+  release, so whatever a holder issued under an earlier generation is
+  recognisably older than what the current holder issues.
   """
 
   @key "control_plane_owner"
 
   @doc """
-  Take the lease for `me`: an absent row is recorded, an expired row or
-  one already `me`'s is replaced, a live row held by another boot refuses
-  with `{:error, {:held, owner, until}}`.
+  Take the lease for `me` under the next generation: an absent row is
+  recorded at generation 1, an expired row or one already `me`'s is
+  replaced one generation up, a live row held by another boot refuses with
+  `{:error, {:held, owner, until}}`.
   """
   @spec claim(String.t(), pos_integer()) ::
-          {:ok, DateTime.t()} | {:error, {:held, String.t(), DateTime.t()} | term()}
+          {:ok, DateTime.t(), pos_integer()}
+          | {:error, {:held, String.t(), DateTime.t()} | term()}
   def claim(me, lease_ms), do: claim(me, lease_ms, 2)
 
   defp claim(_me, _lease_ms, 0), do: {:error, :racing}
 
   defp claim(me, lease_ms, attempts) do
-    {value, expires_at} = lease(me, lease_ms)
+    retry = fn -> claim(me, lease_ms, attempts - 1) end
 
     case Arca.ServerMetaStorage.get(@key) do
       {:error, :not_found} ->
+        {value, expires_at} = lease(me, lease_ms, 1)
+
         case Arca.ServerMetaStorage.put_new(@key, value) do
-          {:ok, :recorded} -> {:ok, expires_at}
-          {:error, :exists} -> claim(me, lease_ms, attempts - 1)
+          {:ok, :recorded} -> {:ok, expires_at, 1}
+          {:error, :exists} -> retry.()
           {:error, reason} -> {:error, reason}
         end
 
       {:ok, previous} ->
         case decode(previous) do
-          {:ok, owner, until} ->
+          {:ok, owner, until, generation} ->
             if owner == me or DateTime.compare(DateTime.utc_now(), until) != :lt do
-              replace(previous, value, expires_at, fn -> claim(me, lease_ms, attempts - 1) end)
+              replace(previous, me, lease_ms, generation + 1, retry)
             else
               {:error, {:held, owner, until}}
             end
 
           :error ->
             # An unreadable row is nobody's: replace it.
-            replace(previous, value, expires_at, fn -> claim(me, lease_ms, attempts - 1) end)
+            replace(previous, me, lease_ms, 1, retry)
         end
 
       {:error, reason} ->
@@ -54,10 +64,9 @@ defmodule Cyfr.ControlPlane.Claim do
   @doc "Push `me`'s lease out; `:lost` when the row is no longer `me`'s."
   @spec renew(String.t(), pos_integer()) :: {:ok, DateTime.t()} | :lost
   def renew(me, lease_ms) do
-    {value, expires_at} = lease(me, lease_ms)
-
     with {:ok, previous} <- Arca.ServerMetaStorage.get(@key),
-         {:ok, ^me, _until} <- decode(previous),
+         {:ok, ^me, _until, generation} <- decode(previous),
+         {value, expires_at} = lease(me, lease_ms, generation),
          :ok <- Arca.ServerMetaStorage.compare_and_put(@key, previous, value) do
       {:ok, expires_at}
     else
@@ -74,8 +83,8 @@ defmodule Cyfr.ControlPlane.Claim do
     case Arca.ServerMetaStorage.get(@key) do
       {:ok, previous} ->
         case decode(previous) do
-          {:ok, ^me, _until} ->
-            {value, _expired} = lease(me, -1)
+          {:ok, ^me, _until, generation} ->
+            {value, _expired} = lease(me, -1, generation)
 
             case Arca.ServerMetaStorage.compare_and_put(@key, previous, value) do
               :ok -> :ok
@@ -99,31 +108,40 @@ defmodule Cyfr.ControlPlane.Claim do
   @spec holder() :: {:ok, String.t(), DateTime.t()} | :none
   def holder do
     with {:ok, raw} <- Arca.ServerMetaStorage.get(@key),
-         {:ok, owner, until} <- decode(raw) do
+         {:ok, owner, until, _generation} <- decode(raw) do
       {:ok, owner, until}
     else
       _ -> :none
     end
   end
 
-  defp replace(previous, value, expires_at, retry) do
+  defp replace(previous, me, lease_ms, generation, retry) do
+    {value, expires_at} = lease(me, lease_ms, generation)
+
     case Arca.ServerMetaStorage.compare_and_put(@key, previous, value) do
-      :ok -> {:ok, expires_at}
+      :ok -> {:ok, expires_at, generation}
       {:error, :stale} -> retry.()
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp lease(me, lease_ms) do
+  defp lease(me, lease_ms, generation) do
     expires_at = DateTime.add(DateTime.utc_now(), lease_ms, :millisecond)
-    {Jason.encode!(%{"owner" => me, "expires_at" => DateTime.to_iso8601(expires_at)}), expires_at}
+
+    value = %{
+      "owner" => me,
+      "expires_at" => DateTime.to_iso8601(expires_at),
+      "generation" => generation
+    }
+
+    {Jason.encode!(value), expires_at}
   end
 
   defp decode(raw) do
-    with {:ok, %{"owner" => owner, "expires_at" => iso}} when is_binary(owner) <-
-           Jason.decode(raw),
+    with {:ok, %{"owner" => owner, "expires_at" => iso, "generation" => generation}}
+         when is_binary(owner) and is_integer(generation) and generation > 0 <- Jason.decode(raw),
          {:ok, until, _} <- DateTime.from_iso8601(iso) do
-      {:ok, owner, until}
+      {:ok, owner, until, generation}
     else
       _ -> :error
     end

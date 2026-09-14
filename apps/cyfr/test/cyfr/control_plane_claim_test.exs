@@ -13,7 +13,7 @@ defmodule Cyfr.ControlPlane.ClaimTest do
   end
 
   test "one boot holds the lease; a second is refused until it lapses" do
-    assert {:ok, until} = Claim.claim("boot-a", 60_000)
+    assert {:ok, until, 1} = Claim.claim("boot-a", 60_000)
     assert {:ok, "boot-a", ^until} = Claim.holder()
 
     assert {:error, {:held, "boot-a", ^until}} = Claim.claim("boot-b", 60_000)
@@ -21,22 +21,33 @@ defmodule Cyfr.ControlPlane.ClaimTest do
     assert {:ok, _} = Claim.renew("boot-a", 60_000)
 
     # The holder re-claims its own row freely (a restart of the same boot id).
-    assert {:ok, _} = Claim.claim("boot-a", 60_000)
+    assert {:ok, _, 2} = Claim.claim("boot-a", 60_000)
   end
 
   test "an expired lease is anybody's, and the old holder then renews nothing" do
-    assert {:ok, _} = Claim.claim("boot-a", 1)
+    assert {:ok, _, 1} = Claim.claim("boot-a", 1)
     Process.sleep(5)
 
-    assert {:ok, _} = Claim.claim("boot-b", 60_000)
+    assert {:ok, _, 2} = Claim.claim("boot-b", 60_000)
     assert {:ok, "boot-b", _} = Claim.holder()
     assert :lost = Claim.renew("boot-a", 60_000)
   end
 
   test "an unreadable row is nobody's" do
     assert {:ok, :recorded} = Arca.ServerMetaStorage.put_new("control_plane_owner", "garbage")
-    assert {:ok, _} = Claim.claim("boot-a", 60_000)
+    assert {:ok, _, 1} = Claim.claim("boot-a", 60_000)
     assert {:ok, "boot-a", _} = Claim.holder()
+  end
+
+  test "every claim raises the generation; renewal and release keep it" do
+    assert {:ok, _, 1} = Claim.claim("boot-a", 60_000)
+    assert {:ok, _} = Claim.renew("boot-a", 60_000)
+    assert :ok = Claim.release("boot-a")
+    assert {:ok, _, 2} = Claim.claim("boot-b", 60_000)
+    assert {:error, {:held, "boot-b", _}} = Claim.claim("boot-a", 60_000)
+    assert {:ok, _} = Claim.renew("boot-b", 60_000)
+    assert :ok = Claim.release("boot-b")
+    assert {:ok, _, 3} = Claim.claim("boot-a", 60_000)
   end
 
   test "the store's conditional writes are conditional" do
