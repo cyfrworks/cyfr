@@ -24,10 +24,10 @@ config :cyfr,
     Emissary.MCP.Tools.RecordsProvider,
     # Chat on the wire, so Prism is a client of the agent runtime rather
     # than the only way to reach it.
-    Emissary.MCP.ConversationTool,
+    Emissary.MCP.ThreadTool,
     # A card decided from the wire: the same door the console's buttons use.
     Emissary.MCP.ApprovalTool,
-    # What was kept out of a conversation — a separate object from the tape,
+    # What was kept out of a thread — a separate object from the tape,
     # which is what lets a thread be erased honestly.
     Emissary.MCP.NotesTool,
     # The athanor's files as the Files page shows them, one tier per folder.
@@ -175,7 +175,7 @@ config :cyfr, :provisioning_required_pull_budget_ms, :timer.minutes(10)
 config :cyfr, :returning_probe_ms, 5_000
 # The context window assumed for a model whose catalyst reports none and
 # whose catalyst name the host's table does not know, in tokens. The loop
-# compacts a conversation against this when nothing better is reported.
+# compacts a thread against this when nothing better is reported.
 config :cyfr, :model_context_window_default, 128_000
 
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
@@ -204,7 +204,7 @@ config :cyfr, Cyfr.Retention,
   policy_log_days: 30,
   # Days of MCP request log kept.
   mcp_log_days: 30,
-  # Days of conversation messages kept.
+  # Days of thread messages kept.
   messages_days: 365
 
 # Read-but-not-set here, deliberately: `:webhook_max_body_bytes` derives

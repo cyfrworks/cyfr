@@ -24,7 +24,7 @@ defmodule PrismWeb.VaultLive do
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.vault_changed(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.vault_changed(ctx))
     end
 
     socket =

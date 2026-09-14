@@ -3,7 +3,7 @@
 
 defmodule Emissary.MCP.NotesTool do
   @moduledoc """
-  The `notes` tool: what somebody kept out of a conversation, on the wire.
+  The `notes` tool: what somebody kept out of a thread, on the wire.
 
   The domain is `Aqua.Notes`; this module is its door, and two gates sit on
   it on two axes. The storage root is host-only — `Arca.Storage`'s layout
@@ -30,8 +30,8 @@ defmodule Emissary.MCP.NotesTool do
 
   ## What a person may pre-answer
 
-  `keep` may be granted standing for one conversation and no wider
-  (`standing: :conversation`); `pin` never (`standing: false`), because a
+  `keep` may be granted standing for one thread and no wider
+  (`standing: :thread`); `pin` never (`standing: false`), because a
   pinned page is read into every turn and each change to it deserves a
   click; `forget` is destructive and already takes no standing allow. The
   annotation is the one source for every gate that honours it.
@@ -56,7 +56,7 @@ defmodule Emissary.MCP.NotesTool do
       name: "notes",
       title: "Notes",
       description:
-        "What was kept out of a conversation. Distinct from the transcript: erasing a " <>
+        "What was kept out of a thread. Distinct from the transcript: erasing a " <>
           "thread does not erase what someone kept from it. A note lands in the estate " <>
           "you are working in; two pinned pages (about-you, about-us) are read into " <>
           "every turn and held short.",
@@ -73,7 +73,7 @@ defmodule Emissary.MCP.NotesTool do
             kind: :write,
             planes: [:external, :in_chain],
             consent: :interactive,
-            standing: :conversation
+            standing: :thread
           },
           "pin" => %{
             kind: :write,
@@ -149,10 +149,10 @@ defmodule Emissary.MCP.NotesTool do
             "type" => "string",
             "description" => "list, search: the `next` cursor a previous page answered."
           },
-          "conversation" => %{
+          "thread" => %{
             "type" => "string",
             "description" =>
-              "keep, pin, at the door: provenance — the conversation the note was kept " <>
+              "keep, pin, at the door: provenance — the thread the note was kept " <>
                 "from. In a chain the host stamps it and this is ignored."
           },
           "execution" => %{
@@ -231,19 +231,19 @@ defmodule Emissary.MCP.NotesTool do
   defp page(args), do: [limit: args["limit"], after: args["after"]]
 
   # Where a note was kept from. In a chain the registry stamps the
-  # execution and the conversation onto the call as host-only keys
+  # execution and the thread onto the call as host-only keys
   # (`Cyfr.Ops.Catalog`'s lineage), and those are the only
-  # provenance read there — a value the model put under `conversation` or
+  # provenance read there — a value the model put under `thread` or
   # `execution` is ignored, never recorded. At the door a person says
   # what they choose to.
   defp provenance(args, %Context{plane: :guest}) do
     [
-      conversation: args["conversation_id"],
+      thread: args["thread_id"],
       execution: args["root_execution_id"] || args["parent_execution_id"]
     ]
   end
 
   defp provenance(args, _ctx) do
-    [conversation: args["conversation"], execution: args["execution"]]
+    [thread: args["thread"], execution: args["execution"]]
   end
 end

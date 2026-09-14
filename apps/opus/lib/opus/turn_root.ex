@@ -39,7 +39,7 @@ defmodule Opus.TurnRoot do
   Claim the root for `agent_ref` under the profile `opts[:profile]`
   selects (`:default` when absent): load the authority, admit the row
   with its attempt and reservation, take the `:root` slot on the calling
-  process, start the keeper. `opts` also: `:turn_id`, `:conversation_id`,
+  process, start the keeper. `opts` also: `:turn_id`, `:thread_id`,
   `:envelope` (the input the row's envelope describes), `:timeout_ms`
   (the slot wait), `:tick_ms` (the keeper's period).
   """

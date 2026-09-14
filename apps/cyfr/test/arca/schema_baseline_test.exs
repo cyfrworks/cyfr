@@ -14,15 +14,15 @@ defmodule Arca.SchemaBaselineTest do
     api_keys components executions mcp_logs policy_logs
     vault_entries profiles consents consent_vault_refs consent_proofs
     oauth_provider_credentials mcp_servers webhooks cron_schedules
-    conversations messages build_records tool_grants topic_subscriptions
+    threads messages build_records tool_grants thread_subscriptions
   )
 
   @expected_tables ~w(
     athanors users server_allowlist memberships sessions api_keys registry_tokens components
     executions mcp_logs policy_logs vault_entries profiles
     consents consent_vault_refs consent_proofs oauth_provider_credentials
-    mcp_servers webhooks webhook_deliveries cron_schedules conversations messages
-    build_records tool_grants topic_subscriptions
+    mcp_servers webhooks webhook_deliveries cron_schedules threads messages
+    build_records tool_grants thread_subscriptions
   )
 
   setup do

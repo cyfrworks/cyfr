@@ -163,15 +163,15 @@ defmodule Cyfr.Application do
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
       {Task.Supervisor, name: Aqua.TaskSupervisor},
-      # Conversation runners: one process per conversation with open
+      # Thread runners: one process per thread with open
       # turns, started on demand; the recovery task starts one for every
-      # conversation holding an open turn when the server last stopped.
+      # thread holding an open turn when the server last stopped.
       # Registry and the supervisor whose children register in it restart
       # together.
       group(Aqua.RunnerTree, [
         {Registry, keys: :unique, name: Aqua.RunnerRegistry},
         {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one},
-        maybe_conversation_recovery()
+        maybe_thread_recovery()
       ]),
       # Last, and synchronous: reconciles the platform-admin roster against
       # the env and offers new seed media to the estates that exist (the
@@ -205,8 +205,8 @@ defmodule Cyfr.Application do
   end
 
   # Off in the test env: suites drive runners directly.
-  defp maybe_conversation_recovery do
-    if Application.get_env(:cyfr, :conversation_recovery, true) do
+  defp maybe_thread_recovery do
+    if Application.get_env(:cyfr, :thread_recovery, true) do
       [
         Supervisor.child_spec(
           {Task, &Aqua.Runner.recover_all/0},

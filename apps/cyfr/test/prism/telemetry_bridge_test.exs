@@ -14,7 +14,7 @@ defmodule Prism.TelemetryBridgeTest do
 
   describe "handle_event/4" do
     test "broadcasts execution_started to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:executions"))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("bus:executions"))
 
       :telemetry.execute([:cyfr, :opus, :execute, :start], %{duration: 100}, %{
         component: "test",
@@ -25,7 +25,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "drops an event that names no athanor" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:executions"))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("bus:executions"))
 
       :telemetry.execute([:cyfr, :opus, :execute, :start], %{duration: 100}, %{
         component: "unscoped"
@@ -35,7 +35,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "broadcasts execution_completed to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:executions"))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("bus:executions"))
 
       :telemetry.execute([:cyfr, :opus, :execute, :stop], %{duration: 200}, %{
         component: "test",
@@ -46,7 +46,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "broadcasts execution_failed to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:executions"))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("bus:executions"))
 
       :telemetry.execute([:cyfr, :opus, :execute, :exception], %{duration: 50}, %{
         component: "test",
@@ -59,7 +59,7 @@ defmodule Prism.TelemetryBridgeTest do
 
     test "a failed schedule fire reaches the athanor's notify topic (the tray)" do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(@athanor))
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:schedule_runs"))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("bus:schedule_runs"))
 
       :telemetry.execute([:cyfr, :schedules, :failed], %{count: 1}, %{
         schedule_id: "sched_x",
@@ -76,7 +76,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "broadcasts request events to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:requests"))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("bus:requests"))
 
       :telemetry.execute([:cyfr, :emissary, :request], %{count: 1}, %{
         method: "tools/call",
@@ -87,7 +87,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "broadcasts policy decisions to enforcement subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:enforcement"))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("bus:enforcement"))
 
       :telemetry.execute(
         [:cyfr, :sanctum, :policy, :decision],

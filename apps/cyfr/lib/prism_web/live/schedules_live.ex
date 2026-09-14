@@ -26,9 +26,9 @@ defmodule PrismWeb.SchedulesLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.schedules(ctx))
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.executions(ctx))
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.components(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.schedules(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.executions(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.components(ctx))
     end
 
     socket =

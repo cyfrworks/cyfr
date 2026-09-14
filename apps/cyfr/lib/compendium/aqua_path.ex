@@ -5,7 +5,7 @@ defmodule Compendium.AquaPath do
   @moduledoc """
   Path construction for the athanor's AQUA tree — the `aqua/` tenant
   scope's one spelling, as `Compendium.ComponentPath` is for `components/`
-  and `Arca.ConversationStorage.blob_root/1` for `conversations/`.
+  and `Arca.ThreadStorage.blob_root/1` for `threads/`.
 
   The tree holds one soul, a flat closet of roles, and the scrolls
   (`locate/1` is the grammar the overlay consults, via

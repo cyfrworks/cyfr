@@ -76,7 +76,7 @@ defmodule Cyfr.RetentionScheduler do
       {"expired session sweep", &sweep_expired_sessions/0},
       {"webhook delivery sweep", &sweep_webhook_deliveries/0},
       {"stale tmp sweep", &sweep_stale_tmp_files/0},
-      {"conversation blob orphan sweep", &sweep_conversation_blob_orphans/0},
+      {"thread blob orphan sweep", &sweep_thread_blob_orphans/0},
       {"health probe sweep", &sweep_health_probe_dir/0}
     ]
   end
@@ -151,18 +151,18 @@ defmodule Cyfr.RetentionScheduler do
     end
   end
 
-  # Conversation blob dirs no row backs (a blob delete that failed after
+  # Thread blob dirs no row backs (a blob delete that failed after
   # its rows were reclaimed) — swept so the bytes stop counting against
   # the athanor's storage cap forever.
-  defp sweep_conversation_blob_orphans do
-    case Cyfr.Retention.sweep_conversation_blob_orphans() do
+  defp sweep_thread_blob_orphans do
+    case Cyfr.Retention.sweep_thread_blob_orphans() do
       {:ok, %{dirs_deleted: 0, errors: []}} ->
         :ok
 
       {:ok, %{dirs_deleted: deleted, tenants: tenants, errors: errors}} ->
         if deleted > 0 do
           Logger.info(
-            "[RetentionScheduler] Reclaimed #{deleted} orphaned conversation blob dirs " <>
+            "[RetentionScheduler] Reclaimed #{deleted} orphaned thread blob dirs " <>
               "across #{tenants} tenants"
           )
         end

@@ -14,7 +14,7 @@ defmodule Arca.TurnTapeStorageTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Arca.ExecutionAttempts
   alias Arca.Schemas.Message
   alias Arca.TurnStorage
@@ -26,8 +26,8 @@ defmodule Arca.TurnTapeStorageTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local()
-    {:ok, conv} = Conversations.create(ctx)
-    {:ok, ctx: ctx, conv: conv}
+    {:ok, thread} = Threads.create(ctx)
+    {:ok, ctx: ctx, thread: thread}
   end
 
   # A turn root: a `kind: "turn"` execution with its reservation.
@@ -51,9 +51,9 @@ defmodule Arca.TurnTapeStorageTest do
     %{execution: execution, attempt: attempt, budget_id: budget_id}
   end
 
-  defp accept_turn!(ctx, conv, text, opts \\ []) do
+  defp accept_turn!(ctx, thread, text, opts \\ []) do
     {:ok, %{message: message, turn: turn}} =
-      TurnStorage.accept_message(ctx, conv.id, %{
+      TurnStorage.accept_message(ctx, thread.id, %{
         message: %{
           author: Keyword.get(opts, :author, ctx.user_id),
           content: text,
@@ -122,48 +122,48 @@ defmodule Arca.TurnTapeStorageTest do
   describe "acceptance" do
     test "room content is a row alone; an addressed message opens its turn atomically", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
       assert {:ok, %{message: post, turn: nil}} =
-               TurnStorage.accept_message(ctx, conv.id, %{
+               TurnStorage.accept_message(ctx, thread.id, %{
                  message: %{author: ctx.user_id, content: "just saying"}
                })
 
       assert post.seq == 1 and is_nil(post.turn_id)
 
-      %{message: message, turn: turn} = accept_turn!(ctx, conv, "@aqua do it", client_id: "c-1")
+      %{message: message, turn: turn} = accept_turn!(ctx, thread, "@aqua do it", client_id: "c-1")
       assert turn.status == "accepted"
       assert turn.message_id == message.id
       assert turn.fence != ""
       assert turn.runner_id == Cyfr.Boot.id()
-      assert {:ok, %{turn_seq: 1, orchestrator: "aqua"}} = Conversations.get(ctx, conv.id)
+      assert {:ok, %{turn_seq: 1, orchestrator: "aqua"}} = Threads.get(ctx, thread.id)
 
       # The same client id is one acceptance: the retry finds it.
       assert {:error, :duplicate_client_id} =
-               TurnStorage.accept_message(ctx, conv.id, %{
+               TurnStorage.accept_message(ctx, thread.id, %{
                  message: %{author: ctx.user_id, content: "@aqua do it", client_id: "c-1"},
                  turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
                })
 
       assert {:ok, %{message: %{id: mid}, turn: %{id: tid}}} =
-               TurnStorage.accepted(ctx, conv.id, "c-1")
+               TurnStorage.accepted(ctx, thread.id, "c-1")
 
       assert mid == message.id and tid == turn.id
-      assert {:ok, [%{id: ^tid}]} = TurnStorage.open_turns(ctx, conv.id)
+      assert {:ok, [%{id: ^tid}]} = TurnStorage.open_turns(ctx, thread.id)
     end
 
-    test "a steer attaches to the live turn without opening another", %{ctx: ctx, conv: conv} do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+    test "a steer attaches to the live turn without opening another", %{ctx: ctx, thread: thread} do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, _root} = start!(ctx, turn)
 
       assert {:ok, %{message: steer, turn: %{id: tid}}} =
-               TurnStorage.accept_message(ctx, conv.id, %{
+               TurnStorage.accept_message(ctx, thread.id, %{
                  message: %{author: ctx.user_id, content: "also this"},
                  steer_turn_id: turn.id
                })
 
       assert tid == turn.id and steer.turn_id == turn.id
-      assert {:ok, [_]} = TurnStorage.open_turns(ctx, conv.id)
+      assert {:ok, [_]} = TurnStorage.open_turns(ctx, thread.id)
       assert TurnStorage.steer_pending?(ctx, turn.id)
     end
   end
@@ -171,10 +171,10 @@ defmodule Arca.TurnTapeStorageTest do
   describe "start" do
     test "an accepted turn starts once, with its pins and the boundary at its own message", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
-      {:ok, _} = Conversations.append(ctx, conv.id, %{author: ctx.user_id, content: "earlier"})
-      %{message: message, turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+      {:ok, _} = Threads.append(ctx, thread.id, %{author: ctx.user_id, content: "earlier"})
+      %{message: message, turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {started, root} = start!(ctx, turn)
 
       assert started.status == "running"
@@ -194,8 +194,8 @@ defmodule Arca.TurnTapeStorageTest do
 
   describe "steps" do
     test "a response is committed before any call runs, each call dispatches once and closes with its result",
-         %{ctx: ctx, conv: conv} do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua read a.txt")
+         %{ctx: ctx, thread: thread} do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua read a.txt")
       {turn, root} = start!(ctx, turn)
 
       {model_step, %{text: text, calls: [%{message: call_row, step: call_step}]}} =
@@ -205,7 +205,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert call_row.kind == "tool_call"
 
       assert %{"provider_data" => %{"thought_signature" => "sig-call_1"}} =
-               Conversations.payload(call_row)
+               Threads.payload(call_row)
 
       assert call_step.dispatch_state == "proposed"
       assert call_step.child_execution_id == "exec_child_call_1"
@@ -240,9 +240,9 @@ defmodule Arca.TurnTapeStorageTest do
 
     test "the step barrier binds only a dispatched, current, uncancelled generation", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, _root} = start!(ctx, turn)
       {_model, %{calls: [%{step: step}]}} = respond!(ctx, turn, [{"c", "files", "read"}])
 
@@ -278,9 +278,9 @@ defmodule Arca.TurnTapeStorageTest do
     test "skipping closes the unstarted steps with a synthetic result and invalidates their cards",
          %{
            ctx: ctx,
-           conv: conv
+           thread: thread
          } do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, _root} = start!(ctx, turn)
 
       {_model, %{calls: [%{step: s1}, %{step: s2}]}} =
@@ -307,8 +307,8 @@ defmodule Arca.TurnTapeStorageTest do
 
   describe "approvals" do
     test "a decision consumes the card once: approved returns the step to proposed, declined closes it denied",
-         %{ctx: ctx, conv: conv} do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+         %{ctx: ctx, thread: thread} do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, _root} = start!(ctx, turn)
 
       {_model, %{calls: [%{step: s1}, %{step: s2}]}} =
@@ -365,8 +365,8 @@ defmodule Arca.TurnTapeStorageTest do
 
   describe "pause, resume, finish, takeover" do
     test "pausing takes the turn, its attempt and its root out of running together, and resume brings them back",
-         %{ctx: ctx, conv: conv} do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+         %{ctx: ctx, thread: thread} do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, root} = start!(ctx, turn)
       Process.sleep(15)
 
@@ -395,8 +395,8 @@ defmodule Arca.TurnTapeStorageTest do
     end
 
     test "finish is the one terminal write: turn, attempt, root and reservation close together, once",
-         %{ctx: ctx, conv: conv} do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+         %{ctx: ctx, thread: thread} do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, root} = start!(ctx, turn)
 
       assert {:ok, done} = TurnStorage.finish(ctx, turn.id, "completed", %{fence: turn.fence})
@@ -414,11 +414,11 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:error, :already_finished} = TurnStorage.finish(ctx, turn.id, "failed")
 
       # A turn that never started closes on its own.
-      %{turn: queued} = accept_turn!(ctx, conv, "@aqua later")
+      %{turn: queued} = accept_turn!(ctx, thread, "@aqua later")
       assert {:ok, %{status: "cancelled"}} = TurnStorage.finish(ctx, queued.id, "cancelled")
 
       # An uncertain end fails the root and marks the attempt uncertain.
-      %{turn: t3} = accept_turn!(ctx, conv, "@aqua again")
+      %{turn: t3} = accept_turn!(ctx, thread, "@aqua again")
       {t3, root3} = start!(ctx, t3)
 
       assert {:ok, %{status: "uncertain"}} =
@@ -433,9 +433,9 @@ defmodule Arca.TurnTapeStorageTest do
     test "a takeover renews the fence, opens the successor and counts the recovery, up to the cap",
          %{
            ctx: ctx,
-           conv: conv
+           thread: thread
          } do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, root} = start!(ctx, turn)
       lapsed = DateTime.add(DateTime.utc_now(), -1, :second)
 
@@ -466,9 +466,9 @@ defmodule Arca.TurnTapeStorageTest do
 
     test "superseding renews the fence and cancel-marks every dispatched step", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, _root} = start!(ctx, turn)
 
       {_m, %{calls: [%{step: s1}, %{step: s2}]}} =
@@ -488,11 +488,11 @@ defmodule Arca.TurnTapeStorageTest do
 
   describe "the projection" do
     test "a turn reads its own rows uncapped, holds an undrained steer, and never a queued member's message",
-         %{ctx: ctx, conv: conv} do
+         %{ctx: ctx, thread: thread} do
       {:ok, earlier} =
-        Conversations.append(ctx, conv.id, %{author: ctx.user_id, content: "earlier"})
+        Threads.append(ctx, thread.id, %{author: ctx.user_id, content: "earlier"})
 
-      %{message: message, turn: turn} = accept_turn!(ctx, conv, "@aqua read")
+      %{message: message, turn: turn} = accept_turn!(ctx, thread, "@aqua read")
       {turn, _root} = start!(ctx, turn)
 
       {_m, %{text: text, calls: [%{message: call, step: step}]}} =
@@ -504,10 +504,10 @@ defmodule Arca.TurnTapeStorageTest do
         TurnStorage.close_step(ctx, step.id, "ok", %{result: %{content: "ok"}})
 
       # Another member queues a turn; a steer arrives from the actor.
-      %{message: queued} = accept_turn!(ctx, conv, "@aqua me too", author: "usr_bob")
+      %{message: queued} = accept_turn!(ctx, thread, "@aqua me too", author: "usr_bob")
 
       {:ok, %{message: steer}} =
-        TurnStorage.accept_message(ctx, conv.id, %{
+        TurnStorage.accept_message(ctx, thread.id, %{
           message: %{author: ctx.user_id, content: "and also"},
           steer_turn_id: turn.id
         })
@@ -539,12 +539,15 @@ defmodule Arca.TurnTapeStorageTest do
     test "a queued turn started after its predecessor finished sees the predecessor's final rows",
          %{
            ctx: ctx,
-           conv: conv
+           thread: thread
          } do
-      %{turn: a} = accept_turn!(ctx, conv, "@aqua first")
+      %{turn: a} = accept_turn!(ctx, thread, "@aqua first")
       {a, _} = start!(ctx, a)
-      %{message: b_message, turn: b} = accept_turn!(ctx, conv, "@aqua second", author: "usr_bob")
-      %{message: c_message} = accept_turn!(ctx, conv, "@aqua third", author: "usr_carol")
+
+      %{message: b_message, turn: b} =
+        accept_turn!(ctx, thread, "@aqua second", author: "usr_bob")
+
+      %{message: c_message} = accept_turn!(ctx, thread, "@aqua third", author: "usr_carol")
 
       {_m, %{text: a_text, calls: [%{step: step}]}} = respond!(ctx, a, [{"c", "files", "read"}])
       {:ok, _} = TurnStorage.dispatch_step(ctx, step.id)
@@ -562,11 +565,11 @@ defmodule Arca.TurnTapeStorageTest do
       refute c_message.id in ids
     end
 
-    test "the first message of an empty conversation is inside the window", %{
+    test "the first message of an empty thread is inside the window", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
-      %{message: message, turn: turn} = accept_turn!(ctx, conv, "@aqua hello")
+      %{message: message, turn: turn} = accept_turn!(ctx, thread, "@aqua hello")
       {turn, _} = start!(ctx, turn)
       assert turn.window_upto_seq == message.seq
       assert {:ok, [%{id: id}]} = TurnStorage.projection(ctx, turn.id)
@@ -576,9 +579,9 @@ defmodule Arca.TurnTapeStorageTest do
 
     test "a clone reads its own rows only, and the parent sees the clone's rows not at all", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
-      %{turn: parent} = accept_turn!(ctx, conv, "@aqua build")
+      %{turn: parent} = accept_turn!(ctx, thread, "@aqua build")
       {parent, root} = start!(ctx, parent)
 
       assert {:ok, %{turn: clone, step: step, task: task}} =
@@ -626,8 +629,8 @@ defmodule Arca.TurnTapeStorageTest do
       end)
     end
 
-    test "a mark takes the turn's fence and the step's generation", %{ctx: ctx, conv: conv} do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+    test "a mark takes the turn's fence and the step's generation", %{ctx: ctx, thread: thread} do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, _root} = start!(ctx, turn)
       [step] = dispatched!(ctx, turn, ["c1"], 1)
 
@@ -653,8 +656,8 @@ defmodule Arca.TurnTapeStorageTest do
     end
 
     test "the stop is one transaction: the mark, the cancel-marks, the skips, the covering row, the boundary",
-         %{ctx: ctx, conv: conv} do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+         %{ctx: ctx, thread: thread} do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, root} = start!(ctx, turn)
       [c1, c2, c3] = dispatched!(ctx, turn, ["c1", "c2", "c3"], 2)
       assert c1.dispatch_state == "dispatched" and c2.dispatch_state == "dispatched"
@@ -675,7 +678,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert paused.window_upto_seq == row.seq
       assert row.kind == "turn_aborted"
 
-      assert %{"covers" => covers} = Conversations.payload(row)
+      assert %{"covers" => covers} = Threads.payload(row)
       assert Enum.sort(Enum.map(covers, & &1["step_id"])) == Enum.sort([c1.id, c2.id])
       assert Enum.all?(covers, &(&1["generation"] == 0))
 
@@ -703,12 +706,12 @@ defmodule Arca.TurnTapeStorageTest do
                  generation: 0
                })
 
-      rows = Conversations.messages(ctx, conv.id)
+      rows = Threads.messages(ctx, thread.id)
       assert [_] = Enum.filter(rows, &(&1.kind == "turn_aborted"))
 
       # The sender's next line past the boundary acknowledges it.
       {:ok, _} =
-        TurnStorage.accept_message(ctx, conv.id, %{
+        TurnStorage.accept_message(ctx, thread.id, %{
           message: %{author: ctx.user_id, content: "go on"},
           steer_turn_id: turn.id
         })
@@ -719,8 +722,8 @@ defmodule Arca.TurnTapeStorageTest do
     end
 
     test "a running turn a dead runner left with an uncovered uncertainty is set down paused, its attempt retired",
-         %{ctx: ctx, conv: conv} do
-      %{turn: turn} = accept_turn!(ctx, conv, "@aqua go")
+         %{ctx: ctx, thread: thread} do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, root} = start!(ctx, turn)
       [c1, c2] = dispatched!(ctx, turn, ["c1", "c2"], 2)
 
@@ -752,11 +755,11 @@ defmodule Arca.TurnTapeStorageTest do
 
       {:ok, steps} = TurnStorage.steps(ctx, turn.id)
       assert %{dispatch_state: "uncertain"} = Enum.find(steps, &(&1.id == c2.id))
-      [row] = Enum.filter(Conversations.messages(ctx, conv.id), &(&1.kind == "turn_aborted"))
+      [row] = Enum.filter(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
       assert paused.window_upto_seq == row.seq
 
       covered =
-        row |> Conversations.payload() |> Map.fetch!("covers") |> Enum.map(& &1["step_id"])
+        row |> Threads.payload() |> Map.fetch!("covers") |> Enum.map(& &1["step_id"])
 
       assert Enum.sort(covered) == Enum.sort([c1.id, c2.id])
 

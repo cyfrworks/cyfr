@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Retention.Conversations do
+defmodule Cyfr.Retention.Threads do
   @moduledoc """
-  Conversations whose last activity is older than N days — messages and
+  Threads whose last activity is older than N days — messages and
   attachment blobs go with them; one with a running turn is never touched
-  (`Arca.ConversationStorage` owns that rule).
+  (`Arca.ThreadStorage` owns that rule).
   """
   @behaviour Cyfr.Retention.Kind
 
@@ -24,7 +24,7 @@ defmodule Cyfr.Retention.Conversations do
     cutoff = Cyfr.Retention.Kind.days_cutoff(days)
 
     if dry_run,
-      do: Arca.ConversationStorage.count_before(ctx, cutoff),
-      else: Arca.ConversationStorage.delete_before(ctx, cutoff)
+      do: Arca.ThreadStorage.count_before(ctx, cutoff),
+      else: Arca.ThreadStorage.delete_before(ctx, cutoff)
   end
 end

@@ -12,7 +12,7 @@ defmodule PrismWeb.FocusIntentTest do
 
   This walks the seam end to end for every intent, without a hand-kept list
   of pages: mint the path through `Aqua.Intents`, hand it to a real
-  `PrismWeb.ConversationPaneLive` the way the runner does and take the path
+  `PrismWeb.ThreadPaneLive` the way the runner does and take the path
   it pushes to the browser — the athanor in focus prefixed, a global page
   left alone — ask the router which LiveView serves it, and require that
   module's source to read every query key the mint produced. The roster
@@ -22,7 +22,7 @@ defmodule PrismWeb.FocusIntentTest do
 
   use PrismWeb.ConnCase, async: false
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Tenancy.Athanors
 
   # Each `ui.*.focus` kind with arguments good enough to mint its path. The
@@ -47,7 +47,7 @@ defmodule PrismWeb.FocusIntentTest do
     conn = log_in_user(conn, user)
     estate = seated_athanor()
     ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
-    {:ok, conv} = Conversations.create(ctx)
+    {:ok, thread} = Threads.create(ctx)
 
     # A kept catalogue: the pane must not spawn a model-listing run whose
     # writes outlive this test and lock the next one's setup out of SQLite.
@@ -55,15 +55,15 @@ defmodule PrismWeb.FocusIntentTest do
     on_exit(fn -> PrismWeb.ModelCatalog.forget(estate.id) end)
 
     {:ok, pane, _} =
-      live_isolated(conn, PrismWeb.ConversationPaneLive,
-        session: %{"athanor_id" => estate.id, "conversation_id" => conv.id, "ui_mode" => "dev"}
+      live_isolated(conn, PrismWeb.ThreadPaneLive,
+        session: %{"athanor_id" => estate.id, "thread_id" => thread.id, "ui_mode" => "dev"}
       )
 
-    {:ok, pane: pane, conv: conv, user: user, estate: estate}
+    {:ok, pane: pane, thread: thread, user: user, estate: estate}
   end
 
-  defp pushed(%{pane: pane, conv: conv, user: user}, intent) do
-    send(pane.pid, {:conversation, conv.id, {:intents, [intent], user.user_id}})
+  defp pushed(%{pane: pane, thread: thread, user: user}, intent) do
+    send(pane.pid, {:thread, thread.id, {:intents, [intent], user.user_id}})
     render(pane)
     assert_push_event(pane, "aqua:intents", %{intents: [%{kind: "navigate", to: to}]})
     to
@@ -141,8 +141,8 @@ defmodule PrismWeb.FocusIntentTest do
   end
 
   test "a global page is pushed as it is, with no estate in its address",
-       %{estate: estate, conv: conv} = context do
-    path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(estate), conv.id)
+       %{estate: estate, thread: thread} = context do
+    path = PrismWeb.ChatLive.chat_path(Athanors.route_slug(estate), thread.id)
     assert PrismWeb.Nav.global?(path)
 
     assert {:ok, %{kind: "navigate", to: ^path} = intent} =

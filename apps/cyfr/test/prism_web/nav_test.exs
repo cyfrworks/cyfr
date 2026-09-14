@@ -68,7 +68,7 @@ defmodule PrismWeb.NavTest do
     # A bare path decides the same way — the palette and an intent hand
     # one in — and a query string does not change the answer.
     assert Nav.href("/chat", "home") == "/chat"
-    assert Nav.href("/chat?a=home&c=conv_1", "home") == "/chat?a=home&c=conv_1"
+    assert Nav.href("/chat?a=home&c=thread_1", "home") == "/chat?a=home&c=thread_1"
     assert Nav.href("/aqua", "home") == "/a/home/aqua"
     assert Nav.href("/executions?id=exec_1", "home") == "/a/home/executions?id=exec_1"
   end

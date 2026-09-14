@@ -833,7 +833,7 @@ defmodule Arca.OverlayTest do
   describe "always-on decorator" do
     test "paths outside the overlaid roots pass through verbatim", %{ctx: ctx} do
       :ok = Arca.put(ctx, ["data", "sub", "file.txt"], "guest bytes")
-      :ok = Arca.put(ctx, ["conversations", "conv_1", "blob.bin"], "blob")
+      :ok = Arca.put(ctx, ["threads", "thread_1", "blob.bin"], "blob")
 
       assert {:ok, "guest bytes"} = Arca.get(ctx, ["data", "sub", "file.txt"])
       assert {:ok, [{"sub", :dir}]} = Arca.list_typed(ctx, ["data"])
@@ -844,8 +844,8 @@ defmodule Arca.OverlayTest do
       assert {:ok, leaves} = Arca.list_recursive(ctx, [])
       assert ["data", "sub", "file.txt"] in leaves
 
-      assert :ok = Arca.delete_tree(ctx, ["conversations"])
-      refute Arca.exists?(ctx, ["conversations", "conv_1", "blob.bin"])
+      assert :ok = Arca.delete_tree(ctx, ["threads"])
+      refute Arca.exists?(ctx, ["threads", "thread_1", "blob.bin"])
     end
 
     test "configuring the overlay as the adapter raises instead of recursing", %{ctx: ctx} do

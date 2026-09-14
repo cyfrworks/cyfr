@@ -37,7 +37,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
     tenancy_resolver_override: :seam,
     catalog: :seam,
     tool_providers_lenient: :seam,
-    conversation_recovery: :seam,
+    thread_recovery: :seam,
     device_flow: :seam,
     provisioning_inline: :seam,
     record_sink_inline: :seam,

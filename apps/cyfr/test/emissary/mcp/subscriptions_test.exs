@@ -68,7 +68,7 @@ defmodule Emissary.MCP.SubscriptionsTest do
 
       Phoenix.PubSub.broadcast(
         Emissary.PubSub,
-        Cyfr.Topics.mcp_servers(ctx),
+        Cyfr.Bus.mcp_servers(ctx),
         :mcp_servers_changed
       )
 
@@ -95,7 +95,7 @@ defmodule Emissary.MCP.SubscriptionsTest do
 
       Phoenix.PubSub.broadcast(
         Emissary.PubSub,
-        Cyfr.Topics.mcp_servers(other),
+        Cyfr.Bus.mcp_servers(other),
         :mcp_servers_changed
       )
 

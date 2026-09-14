@@ -122,9 +122,9 @@ config :cyfr, cron_scheduler_enabled: false
 # tests.
 config :cyfr, provisioning_boot_enabled: false
 
-# Likewise the conversation-runner boot recovery reads the repo before any
+# Likewise the thread-runner boot recovery reads the repo before any
 # sandbox exists; the runner suite drives recovery itself.
-config :cyfr, conversation_recovery: false
+config :cyfr, thread_recovery: false
 
 # Bookkeeping rows are written in the caller: the sandbox connection is the
 # test's, and every assertion reads the row right after the call.

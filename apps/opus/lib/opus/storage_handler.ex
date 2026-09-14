@@ -565,7 +565,7 @@ defmodule Opus.StorageHandler do
 
   # The bare root is a synthetic listing of the two guest scopes — never an
   # Arca walk: `[]` would list the athanor's whole data root, where host
-  # state (aqua/, conversations/) lives alongside guest files, and
+  # state (aqua/, threads/) lives alongside guest files, and
   # a `*` path grant would hand all of it to the guest.
   defp dispatch("list", %{path: ""}, _limits, _ctx) do
     {:ok, %{"path" => "", "files" => Enum.map(valid_scopes(), &(&1 <> "/"))}}
@@ -708,7 +708,7 @@ defmodule Opus.StorageHandler do
   # athanor — a catalyst can never read or write another athanor's bytes
   # because no path spelling names one. A guest scope is the athanor's root
   # of the same name, a physical sibling of the host scopes (aqua/,
-  # conversations/, …) so a `data/` grant can never see them; the roster is
+  # threads/, …) so a `data/` grant can never see them; the roster is
   # the layout's, applied here at the boundary.
   defp normalize_path(path, _ctx) when is_binary(path) do
     path

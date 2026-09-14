@@ -140,7 +140,7 @@ defmodule Cyfr.Execution do
   its reservation and a `:root` slot on the calling process, with the
   agent's authority loaded and no guest started. `opts`: `:profile`
   (a `RootSelect` selector, `:default` when absent), `:turn_id`,
-  `:conversation_id`, `:envelope` (the input keys the row records).
+  `:thread_id`, `:envelope` (the input keys the row records).
   Answers the claim the loop keeps (`execution_id`, `attempt`,
   `authority`, `activation_digest`, `lease_until`, `budget_id`, `token`,
   `keeper`).

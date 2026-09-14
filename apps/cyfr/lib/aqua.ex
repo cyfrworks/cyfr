@@ -3,10 +3,10 @@
 
 defmodule Aqua do
   @moduledoc """
-  The agent-orchestration domain: conversations, turns, and the action
+  The agent-orchestration domain: threads, turns, and the action
   plane an agent speaks through.
 
-  - `Aqua.Runner` — one process per conversation; every send is admitted
+  - `Aqua.Runner` — one process per thread; every send is admitted
     and accepted through it, and it owns the turns' lifecycle.
   - `Aqua.Loop` — one turn, run by the process that holds its root: the
     model rounds, the dispatch, the cards, the clones (`Aqua.Loop.Turn`,
@@ -28,7 +28,7 @@ defmodule Aqua do
     `Aqua.Roster` — who may be addressed.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into an
     estate you belong to.
-  - `Aqua.Notes` — what somebody chose to keep out of a conversation: the
+  - `Aqua.Notes` — what somebody chose to keep out of a thread: the
     estate's pinned page and its filed pile, surviving the tape.
   - `Aqua.RoomExcerpt` — what the person has open beside the thread, read
     for the turn as quoted material.

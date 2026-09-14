@@ -41,7 +41,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     vault_and_consent()
     registrations()
     schedules()
-    conversations()
+    threads()
     turns()
     record_fingerprint()
   end
@@ -731,9 +731,9 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # Athanor-scoped tool decisions, kept apart from authored agent policy:
     # effective policy is the declared permissions plus allows, minus denies.
-    # An agent-scope grant applies across conversations; a conversation-scope
+    # An agent-scope grant applies across threads; a thread-scope
     # grant only to the named one. Each scope has its own unique index,
-    # because agent rows carry no conversation id and a nullable composite
+    # because agent rows carry no thread id and a nullable composite
     # key would permit duplicates; effect is not in either key, so flipping
     # allow/deny updates one row.
     create table(:tool_grants, primary_key: false) do
@@ -741,7 +741,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :athanor_id, :string, null: false
       add :scope, :string, null: false
       add :effect, :string, null: false
-      add :conversation_id, :string
+      add :thread_id, :string
       add :agent_name, :string, null: false
       add :tool, :string, null: false
       add :action, :string, null: false
@@ -749,16 +749,16 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :granted_at, :utc_datetime_usec, null: false
     end
 
-    # Named short on purpose: Ecto's default name for the conversation-scope
+    # Named short on purpose: Ecto's default name for the thread-scope
     # key is 73 bytes and Postgres truncates at 63, so the changeset could
     # never match what the database reports. SQLite reports a violation by
     # column, so `Arca.ToolGrantStorage` declares the constraint under both
     # spellings.
     create unique_index(
              :tool_grants,
-             [:conversation_id, :agent_name, :tool, :action],
-             where: "scope = 'conversation'",
-             name: :tool_grants_conversation_scope_index
+             [:thread_id, :agent_name, :tool, :action],
+             where: "scope = 'thread'",
+             name: :tool_grants_thread_scope_index
            )
 
     create unique_index(
@@ -908,16 +908,16 @@ defmodule Arca.Repo.Migrations.Baseline do
   end
 
   # ==========================================================================
-  # Conversations
+  # Threads
   # ==========================================================================
 
-  # A conversation belongs to the athanor; every member sees the same thread.
+  # A thread belongs to the athanor; every member sees the same thread.
   # Rows are the shared, durable record — no browser session owns a turn.
-  defp conversations do
-    create table(:conversations, primary_key: false) do
+  defp threads do
+    create table(:threads, primary_key: false) do
       add :id, :string, primary_key: true
       add :athanor_id, :string, null: false
-      add :title, :string, null: false, default: "New conversation"
+      add :title, :string, null: false, default: "New thread"
       # Attribution: the person who opened it. The athanor owns it.
       add :created_by, :string, null: false
       # The agent the last turn addressed.
@@ -929,18 +929,18 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:conversations, [:id, :athanor_id])
-    create index(:conversations, [:athanor_id, :last_message_at])
+    create unique_index(:threads, [:id, :athanor_id])
+    create index(:threads, [:athanor_id, :last_message_at])
 
     create table(:messages, primary_key: false) do
       add :id, :string, primary_key: true
 
-      add :conversation_id,
-          references(:conversations, type: :string, on_delete: :delete_all),
+      add :thread_id,
+          references(:threads, type: :string, on_delete: :delete_all),
           null: false
 
       add :athanor_id, :string, null: false
-      # Position in the thread; assigned by the runner, dense per conversation.
+      # Position in the thread; assigned by the runner, dense per thread.
       add :seq, :integer, null: false
       # Who wrote it: a user id, an agent, or "system".
       add :author, :string, null: false
@@ -950,7 +950,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :content, :text, null: false, default: ""
       # Kind-specific JSON: an approval's intent and proposal, a text
       # message's attachment refs (bytes under
-      # data/athanors/{athanor_id}/conversations/{conv}/{msg}/), an error's
+      # data/athanors/{athanor_id}/threads/{thread}/{msg}/), an error's
       # source.
       add :payload, :text
       # Approvals: pending | running | approved | declined | error.
@@ -967,24 +967,24 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :inserted_at, :utc_datetime_usec, null: false
     end
 
-    create unique_index(:messages, [:conversation_id, :seq])
-    create unique_index(:messages, [:conversation_id, :client_id], where: "client_id IS NOT NULL")
+    create unique_index(:messages, [:thread_id, :seq])
+    create unique_index(:messages, [:thread_id, :client_id], where: "client_id IS NOT NULL")
     create index(:messages, [:athanor_id, :inserted_at])
     create index(:messages, [:athanor_id, :turn_id])
-    create index(:messages, [:conversation_id, :status])
+    create index(:messages, [:thread_id, :status])
 
     # Follows for each member's sidebar: display only; membership still
     # decides access.
-    create table(:topic_subscriptions, primary_key: false) do
+    create table(:thread_subscriptions, primary_key: false) do
       add :id, :string, primary_key: true
       add :athanor_id, :string, null: false
-      add :conversation_id, :string, null: false
+      add :thread_id, :string, null: false
       add :user_id, :string, null: false
       add :joined_at, :utc_datetime_usec, null: false
     end
 
-    create unique_index(:topic_subscriptions, [:conversation_id, :user_id])
-    create index(:topic_subscriptions, [:athanor_id, :user_id])
+    create unique_index(:thread_subscriptions, [:thread_id, :user_id])
+    create index(:thread_subscriptions, [:athanor_id, :user_id])
   end
 
   # ==========================================================================
@@ -1002,8 +1002,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :id, :string, primary_key: true
       add :athanor_id, :string, null: false
 
-      add :conversation_id,
-          references(:conversations,
+      add :thread_id,
+          references(:threads,
             type: :string,
             on_delete: :delete_all,
             with: [athanor_id: :athanor_id]
@@ -1040,10 +1040,10 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create unique_index(:turns, [:id, :athanor_id])
-    create index(:turns, [:athanor_id, :conversation_id, :accepted_at])
+    create index(:turns, [:athanor_id, :thread_id, :accepted_at])
     create index(:turns, [:athanor_id, :status])
     create index(:turns, [:athanor_id, :parent_turn_id])
-    create unique_index(:turns, [:conversation_id, :message_id], where: "message_id IS NOT NULL")
+    create unique_index(:turns, [:thread_id, :message_id], where: "message_id IS NOT NULL")
 
     create unique_index(:turns, [:root_execution_id],
              where: "root_execution_id IS NOT NULL AND parent_turn_id IS NULL"
@@ -1107,7 +1107,7 @@ defmodule Arca.Repo.Migrations.Baseline do
           ),
           null: false
 
-      add :conversation_id, :string
+      add :thread_id, :string
       add :step_id, :string
       add :message_id, :string
       # pending | approved | declined | expired | error
@@ -1127,7 +1127,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:approvals, [:id, :athanor_id])
     create index(:approvals, [:athanor_id, :status])
     create index(:approvals, [:athanor_id, :turn_id])
-    create index(:approvals, [:athanor_id, :conversation_id, :status])
+    create index(:approvals, [:athanor_id, :thread_id, :status])
     create index(:approvals, [:athanor_id, :status, :expires_at])
   end
 

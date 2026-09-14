@@ -20,7 +20,7 @@ defmodule Cyfr.UnexpectedMessage do
   such message would be an alarm about normal operation.
 
   Bounds inspection of unexpected messages, including large execution
-  and conversation payloads.
+  and thread payloads.
   """
 
   require Logger

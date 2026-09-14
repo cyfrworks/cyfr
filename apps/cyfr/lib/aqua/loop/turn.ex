@@ -3,7 +3,7 @@
 
 defmodule Aqua.Loop.Turn do
   @moduledoc """
-  What a loop runs, rebuilt from rows: the turn and its conversation, the
+  What a loop runs, rebuilt from rows: the turn and its thread, the
   agent as the turn pinned it — the revision bytes, whose capability
   digest must equal the one the turn started under — the roster and the
   roles the soul may clone into, the effective policy composed with the
@@ -29,7 +29,7 @@ defmodule Aqua.Loop.Turn do
     :ctx,
     :guest,
     :turn,
-    :conversation,
+    :thread,
     :agent,
     :roster,
     :roles,
@@ -59,13 +59,13 @@ defmodule Aqua.Loop.Turn do
   def build(%Context{} = ctx, turn, opts) do
     authority = Keyword.fetch!(opts, :authority)
 
-    with {:ok, conversation} <- Tape.conversation(ctx, turn.conversation_id),
+    with {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          {:ok, agent} <- agent(ctx, turn, roster),
          soul? = Compendium.AgentSource.soul?(agent["name"]),
          roles = if(soul?, do: roles(roster), else: []),
          {:ok, grants} <-
-           Aqua.ToolGrants.for_agents(ctx, turn.conversation_id, [agent["name"]]),
+           Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
          policy =
            Aqua.ToolGrants.resolve(agent["tool_policy"] || %{}, grants[agent["name"]] || []),
          {:ok, catalyst, model} <- model(ctx, turn, agent, opts) do
@@ -76,7 +76,7 @@ defmodule Aqua.Loop.Turn do
         ctx: ctx,
         guest: Context.enter_guest(ctx),
         turn: turn,
-        conversation: conversation,
+        thread: thread,
         agent: agent,
         roster: roster,
         roles: roles,
@@ -301,7 +301,7 @@ defmodule Aqua.Loop.Turn do
   def current_policy(%__MODULE__{ctx: ctx, turn: turn, agent: agent}) do
     name = agent["name"]
 
-    with {:ok, grants} <- Aqua.ToolGrants.for_agents(ctx, turn.conversation_id, [name]) do
+    with {:ok, grants} <- Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [name]) do
       {:ok, Aqua.ToolGrants.resolve(agent["tool_policy"] || %{}, grants[name] || [])}
     end
   end
@@ -318,12 +318,12 @@ defmodule Aqua.Loop.Turn do
   defp decode(%{} = map), do: map
 
   defp excerpt(ctx, %{
-         "room" => %{"athanor_id" => athanor_id, "conversation_id" => conv_id} = room
+         "room" => %{"athanor_id" => athanor_id, "thread_id" => thread_id} = room
        })
-       when is_binary(athanor_id) and is_binary(conv_id) do
+       when is_binary(athanor_id) and is_binary(thread_id) do
     case Aqua.RoomExcerpt.read(ctx, %{
            athanor_id: athanor_id,
-           conversation_id: conv_id,
+           thread_id: thread_id,
            estate: room["estate"],
            title: room["title"]
          }) do
@@ -335,14 +335,14 @@ defmodule Aqua.Loop.Turn do
   defp excerpt(_ctx, _options), do: nil
 
   # The initiating message's attachments as typed blocks.
-  defp attachments(ctx, %{message_id: message_id, conversation_id: conversation_id})
+  defp attachments(ctx, %{message_id: message_id, thread_id: thread_id})
        when is_binary(message_id) do
     case Tape.message(ctx, message_id) do
       {:ok, row} ->
         refs = Aqua.Attachments.attachments_of([row])
 
         ctx
-        |> Aqua.Attachments.load(conversation_id, refs)
+        |> Aqua.Attachments.load(thread_id, refs)
         |> Enum.map(fn %{"media_type" => media, "data" => data, "filename" => name} ->
           %{
             "type" =>

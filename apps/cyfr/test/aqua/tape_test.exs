@@ -3,7 +3,7 @@
 
 defmodule Aqua.TapeTest do
   @moduledoc """
-  The tape commits before it speaks: a row reaches the conversation's
+  The tape commits before it speaks: a row reaches the thread's
   topic only once its transaction landed; a fence that moved refuses the
   write; a sender's replay answers the same acceptance and a changed
   send is refused; a guest-planed context writes unchanged.
@@ -12,16 +12,16 @@ defmodule Aqua.TapeTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Tape
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local()
-    {:ok, conv} = Conversations.create(ctx)
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, conv.id))
-    {:ok, ctx: ctx, conv: conv}
+    {:ok, thread} = Threads.create(ctx)
+    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    {:ok, ctx: ctx, thread: thread}
   end
 
   defp root!(ctx, turn) do
@@ -42,9 +42,9 @@ defmodule Aqua.TapeTest do
     {execution, attempt}
   end
 
-  defp started!(ctx, conv, text) do
+  defp started!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: text},
         turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
       })
@@ -65,7 +65,7 @@ defmodule Aqua.TapeTest do
   test "acceptance is one transaction and one broadcast, and a replay answers the same identity",
        %{
          ctx: ctx,
-         conv: conv
+         thread: thread
        } do
     send_attrs = %{
       message: %{author: ctx.user_id, content: "@aqua go", client_id: "c-1"},
@@ -78,26 +78,26 @@ defmodule Aqua.TapeTest do
     }
 
     assert {:ok, %{message: message, turn: turn, replayed: false}} =
-             Tape.accept(ctx, conv.id, send_attrs)
+             Tape.accept(ctx, thread.id, send_attrs)
 
-    assert_receive {:conversation, conv_id, {:message, %{id: mid}}}
-    assert conv_id == conv.id and mid == message.id
+    assert_receive {:thread, thread_id, {:message, %{id: mid}}}
+    assert thread_id == thread.id and mid == message.id
 
     assert {:ok, %{message: %{id: ^mid}, turn: %{id: tid}, replayed: true}} =
-             Tape.accept(ctx, conv.id, send_attrs)
+             Tape.accept(ctx, thread.id, send_attrs)
 
     assert tid == turn.id
-    refute_receive {:conversation, _, {:message, _}}, 100
+    refute_receive {:thread, _, {:message, _}}, 100
 
     changed = put_in(send_attrs, [:message, :content], "@aqua something else")
-    assert {:error, :client_id_reused} = Tape.accept(ctx, conv.id, changed)
+    assert {:error, :client_id_reused} = Tape.accept(ctx, thread.id, changed)
 
     other_actor = put_in(send_attrs, [:message, :author], "usr_bob")
-    assert {:error, :client_id_reused} = Tape.accept(ctx, conv.id, other_actor)
+    assert {:error, :client_id_reused} = Tape.accept(ctx, thread.id, other_actor)
   end
 
   test "a message id already taken is the same send by its client id, and another's otherwise",
-       %{ctx: ctx, conv: conv} do
+       %{ctx: ctx, thread: thread} do
     id = Cyfr.UUID7.generate_id("msg")
 
     attrs = %{
@@ -106,27 +106,27 @@ defmodule Aqua.TapeTest do
     }
 
     assert {:ok, %{message: %{id: ^id}, turn: turn, replayed: false}} =
-             Tape.accept(ctx, conv.id, attrs)
+             Tape.accept(ctx, thread.id, attrs)
 
     assert {:ok, %{message: %{id: ^id}, turn: ^turn, replayed: true}} =
-             Tape.accept(ctx, conv.id, attrs)
+             Tape.accept(ctx, thread.id, attrs)
 
     # The same id under another client id, or under none, is another send.
     other = put_in(attrs, [:message, :client_id], "c-other")
-    assert {:error, :message_id_reused} = Tape.accept(ctx, conv.id, other)
+    assert {:error, :message_id_reused} = Tape.accept(ctx, thread.id, other)
 
     bare = update_in(attrs, [:message], &Map.delete(&1, :client_id))
-    assert {:error, :message_id_reused} = Tape.accept(ctx, conv.id, bare)
+    assert {:error, :message_id_reused} = Tape.accept(ctx, thread.id, bare)
 
-    assert [_] = Conversations.messages(ctx, conv.id)
+    assert [_] = Threads.messages(ctx, thread.id)
   end
 
   test "rows are broadcast only after they committed, and a moved fence refuses", %{
     ctx: ctx,
-    conv: conv
+    thread: thread
   } do
-    turn = started!(ctx, conv, "@aqua read")
-    assert_receive {:conversation, _, {:message, _}}
+    turn = started!(ctx, thread, "@aqua read")
+    assert_receive {:thread, _, {:message, _}}
     guest = Sanctum.Context.enter_guest(ctx)
 
     {:ok, step} = Tape.record_model_intent(guest, turn, %{idempotency_key: "model:1"})
@@ -150,9 +150,9 @@ defmodule Aqua.TapeTest do
                ]
              })
 
-    assert_receive {:conversation, _, {:message, %{id: text_id}}}
+    assert_receive {:thread, _, {:message, %{id: text_id}}}
     assert text_id == text.id
-    assert_receive {:conversation, _, {:message, %{id: call_id}}}
+    assert_receive {:thread, _, {:message, %{id: call_id}}}
     assert call_id == call.id
 
     assert {:ok, [%{id: ^text_id}, %{id: ^call_id}]} =
@@ -166,14 +166,14 @@ defmodule Aqua.TapeTest do
     assert {:ok, %{result: result}} =
              Tape.close_step(guest, turn, call_step, "ok", %{result: %{content: "line"}})
 
-    assert_receive {:conversation, _, {:message, %{id: result_id}}}
+    assert_receive {:thread, _, {:message, %{id: result_id}}}
     assert result_id == result.id
 
     # The fence moves: the old turn value writes nothing more.
     {:ok, superseded} = Tape.supersede(ctx, turn)
     assert superseded.fence != turn.fence
     assert {:error, :superseded} = Tape.record_model_intent(guest, turn, %{})
-    refute_receive {:conversation, _, _}, 50
+    refute_receive {:thread, _, _}, 50
 
     # The rows a turn owns but no step produced change what the next request
     # reads, so a superseded runner must not be able to add one either.
@@ -185,16 +185,16 @@ defmodule Aqua.TapeTest do
              })
 
     assert {:error, :superseded} = Tape.append_aborted(guest, turn, "stopped")
-    refute_receive {:conversation, _, _}, 50
+    refute_receive {:thread, _, _}, 50
 
     assert {:ok, finished} = Tape.finish(ctx, superseded, "cancelled", %{error: "stopped"})
     assert finished.status == "cancelled"
-    assert_receive {:conversation, _, {:turn_finished}}
+    assert_receive {:thread, _, {:turn_finished}}
   end
 
-  test "a card is announced to the estate, and its decision too", %{ctx: ctx, conv: conv} do
+  test "a card is announced to the estate, and its decision too", %{ctx: ctx, thread: thread} do
     :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(ctx.athanor_id))
-    turn = started!(ctx, conv, "@aqua write")
+    turn = started!(ctx, thread, "@aqua write")
     {:ok, step} = Tape.record_model_intent(ctx, turn, %{})
 
     {:ok, %{calls: [%{step: call_step}]}} =

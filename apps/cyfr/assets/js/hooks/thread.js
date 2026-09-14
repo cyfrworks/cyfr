@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Conversation pane hook — keyboard shortcuts and server-pushed intents.
+// Thread pane hook — keyboard shortcuts and server-pushed intents.
 //
 // Mounted on a pane's root <section>. A page may hold two panes — the
 // room's and the one inside the person's own AQUA panel — so everything
@@ -52,7 +52,7 @@ function writeHeldSend(pane, envelope) {
   }
 }
 
-const Conversation = {
+const Thread = {
   mounted() {
     this.handleEvent("aqua:held_send", ({pane, envelope}) => {
       if (pane !== this.el.id) return
@@ -134,4 +134,4 @@ const Conversation = {
   }
 }
 
-export default Conversation
+export default Thread

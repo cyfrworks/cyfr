@@ -1,19 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ConversationTool do
+defmodule Emissary.MCP.ThreadTool do
   @moduledoc """
-  Chat on the wire: the `conversation` tool.
+  Chat on the wire: the `thread` tool.
 
-  Exposes AQUA conversation addressing, queuing, history and approvals to
-  MCP clients through the conversation runner.
+  Exposes AQUA thread addressing, queuing, history and approvals to
+  MCP clients through the thread runner.
 
   Every turn-shaped action here **wraps `Aqua.Runner`** — there
   is no second implementation of a turn, and no path that starts one
   without the runner's gates. The rest wrap the domain verbs the console
-  itself uses: `create`/`list` are `Arca.ConversationStorage` (how a
+  itself uses: `create`/`list` are `Arca.ThreadStorage` (how a
   headless client gets an id at all), `follow`/`unfollow` are
-  `Arca.TopicSubscriptionStorage` for the caller alone, and `aloud` is
+  `Arca.ThreadSubscriptionStorage` for the caller alone, and `aloud` is
   `Aqua.Aloud.post/5` with every rule decided there.
 
   It lives in Emissary rather than beside the runner for the same reason
@@ -26,14 +26,14 @@ defmodule Emissary.MCP.ConversationTool do
 
   Start chat turns through the runner so the turn pins a profile and later
   approvals use that same authority. Direct execution of the agent formula
-  does not establish this conversation state.
+  does not establish this thread state.
 
   ## Two gates, on different axes
 
     * **Plane.** `Cyfr.Ops.Catalog.call_external/4` refuses a
       `:guest` context outright, and these actions declare
       `planes: [:external]` so they never appear in-chain. A running agent
-      cannot read or post into conversations — including other people's in
+      cannot read or post into threads — including other people's in
       the same estate.
     * **Surface.** Every action declares `consent: :interactive`, which the
       registry's dispatch gate holds to
@@ -64,7 +64,7 @@ defmodule Emissary.MCP.ConversationTool do
   alias Sanctum.Context
 
   @impl true
-  def service, do: "conversation"
+  def service, do: "thread"
 
   @impl true
   def tools, do: [definition()]
@@ -72,12 +72,12 @@ defmodule Emissary.MCP.ConversationTool do
   @doc false
   def definition do
     %{
-      name: "conversation",
-      title: "Conversations",
+      name: "thread",
+      title: "Threads",
       description:
         "Talk to an agent: open or list threads, send a message, follow the reply, " <>
           "stop a turn, decide the approval cards a turn raises, follow or unfollow a " <>
-          "topic, and say one of your own private lines aloud into an estate you " <>
+          "thread, and say one of your own private lines aloud into an estate you " <>
           "belong to. Addressing: in an estate with one person every send starts a " <>
           "turn; with more than one, a send starts a turn only when it names one — " <>
           "@aqua for the estate's assistant, or @<role> for one of its roles. An " <>
@@ -92,7 +92,7 @@ defmodule Emissary.MCP.ConversationTool do
         destructiveHint: false,
         actions: %{
           # `:external` on every action: a running agent must not be able to
-          # read or post into conversations, its own included. And
+          # read or post into threads, its own included. And
           # `:interactive` on every action: only a person's own session may
           # speak, decide, or read as them — never a standing credential.
           "create" => %{kind: :write, planes: [:external], consent: :interactive},
@@ -137,9 +137,9 @@ defmodule Emissary.MCP.ConversationTool do
               "delete"
             ]
           },
-          "conversation" => %{
+          "thread" => %{
             "type" => "string",
-            "description" => "Conversation id (all actions except create and list)"
+            "description" => "Thread id (all actions except create and list)"
           },
           "title" => %{"type" => "string", "description" => "create: the thread's title"},
           "message" => %{
@@ -182,7 +182,7 @@ defmodule Emissary.MCP.ConversationTool do
             "type" => "object",
             "description" =>
               "send: the room the sender has open beside this thread " <>
-                "(athanor_id, conversation_id, title, estate); its newest lines are read " <>
+                "(athanor_id, thread_id, title, estate); its newest lines are read " <>
                 "for this one turn, never stored"
           },
           "files" => %{
@@ -214,15 +214,15 @@ defmodule Emissary.MCP.ConversationTool do
             "type" => "string",
             "description" => "aloud: the estate to post into (you must be a member)"
           },
-          "target_conversation" => %{
+          "target_thread" => %{
             "type" => "string",
-            "description" => "aloud: the topic in that estate to post onto"
+            "description" => "aloud: the thread in that estate to post onto"
           },
           "scope" => %{
             "type" => "string",
-            "enum" => ["once", "conversation", "always", "never"],
+            "enum" => ["once", "thread", "always", "never"],
             "description" =>
-              "approve: once | conversation | always. decline: once | never. " <>
+              "approve: once | thread | always. decline: once | never. " <>
                 "Standing scopes are refused for destructive and external actions."
           },
           "reason" => %{"type" => "string", "description" => "decline: why"},
@@ -244,7 +244,7 @@ defmodule Emissary.MCP.ConversationTool do
   end
 
   @impl true
-  def handle("conversation", %Context{} = ctx, args), do: dispatch(ctx, args)
+  def handle("thread", %Context{} = ctx, args), do: dispatch(ctx, args)
   def handle(tool, _ctx, _args), do: {:error, {:not_found, "tool", tool}}
 
   # ---------------------------------------------------------------------------
@@ -255,7 +255,7 @@ defmodule Emissary.MCP.ConversationTool do
   # :interactive` declaration on every action, enforced by the registry
   # before the handler runs.
 
-  # `create` and `list` name no conversation — they are how a headless
+  # `create` and `list` name no thread — they are how a headless
   # client gets an id in the first place, which is what makes this the
   # same surface the console has rather than one that assumes it.
   defp dispatch(ctx, %{"action" => "create"} = args) do
@@ -265,28 +265,28 @@ defmodule Emissary.MCP.ConversationTool do
         _ -> %{}
       end
 
-    with {:ok, conv} <- Arca.ConversationStorage.create(ctx, attrs) do
-      {:ok, render_conversation(conv)}
+    with {:ok, thread} <- Arca.ThreadStorage.create(ctx, attrs) do
+      {:ok, render_thread(thread)}
     end
   end
 
   defp dispatch(ctx, %{"action" => "list"}) do
-    case Arca.ConversationStorage.list(ctx) do
+    case Arca.ThreadStorage.list(ctx) do
       rows when is_list(rows) ->
-        {:ok, %{conversations: Enum.map(rows, &render_conversation/1), count: length(rows)}}
+        {:ok, %{threads: Enum.map(rows, &render_thread/1), count: length(rows)}}
 
       {:error, _} ->
         {:error, {:unavailable, "Storage"}}
     end
   end
 
-  defp dispatch(ctx, %{"action" => action, "conversation" => id} = args)
+  defp dispatch(ctx, %{"action" => action, "thread" => id} = args)
        when is_binary(id) and id != "" do
     act(action, ctx, id, args)
   end
 
   defp dispatch(_ctx, _args),
-    do: {:error, {:invalid_argument, "conversation requires an 'action' and a 'conversation'"}}
+    do: {:error, {:invalid_argument, "thread requires an 'action' and a 'thread'"}}
 
   # The whole send envelope: the text, a pre-minted id and the refs
   # attached under it, the agent and model, the sender's client id, and
@@ -328,8 +328,8 @@ defmodule Emissary.MCP.ConversationTool do
   end
 
   defp act("get", ctx, id, _args) do
-    with {:ok, conv} <- Arca.ConversationStorage.get(ctx, id) do
-      {:ok, Map.merge(render_conversation(conv), waiting(ctx, id))}
+    with {:ok, thread} <- Arca.ThreadStorage.get(ctx, id) do
+      {:ok, Map.merge(render_thread(thread), waiting(ctx, id))}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
     end
@@ -341,12 +341,12 @@ defmodule Emissary.MCP.ConversationTool do
   # send names them, so the bytes are the sender's own write.
   defp act("attach", ctx, id, %{"message_id" => message_id, "files" => files})
        when is_binary(message_id) and is_list(files) do
-    with {:ok, _conv} <- Arca.ConversationStorage.get(ctx, id),
+    with {:ok, _thread} <- Arca.ThreadStorage.get(ctx, id),
          {:ok, decoded} <- decode_files(files),
          {:ok, refs} <- Aqua.Attachments.store(ctx, id, message_id, decoded) do
       {:ok, %{message_id: message_id, attachments: refs}}
     else
-      {:error, :not_found} -> {:error, {:not_found, "conversation", id}}
+      {:error, :not_found} -> {:error, {:not_found, "thread", id}}
       {:error, {:invalid_argument, _} = reason} -> {:error, reason}
       {:error, reason} -> {:error, {:invalid_argument, "attach refused: #{inspect(reason)}"}}
     end
@@ -386,12 +386,12 @@ defmodule Emissary.MCP.ConversationTool do
   defp act("delete", ctx, id, _args) do
     cond do
       Runner.turn_running?(ctx, id) ->
-        {:error, {:conflict, "a turn is running in this conversation — stop it first"}}
+        {:error, {:conflict, "a turn is running in this thread — stop it first"}}
 
       true ->
-        case Arca.ConversationStorage.delete(ctx, id) do
-          :ok -> {:ok, %{deleted: true, conversation: id}}
-          {:error, :not_found} -> {:error, {:not_found, "conversation", id}}
+        case Arca.ThreadStorage.delete(ctx, id) do
+          :ok -> {:ok, %{deleted: true, thread: id}}
+          {:error, :not_found} -> {:error, {:not_found, "thread", id}}
           {:error, reason} -> {:error, refusal(reason, id)}
         end
     end
@@ -440,17 +440,17 @@ defmodule Emissary.MCP.ConversationTool do
   defp act("decline", _ctx, _id, _args),
     do: {:error, {:invalid_argument, "decline requires 'message_id'"}}
 
-  # The durable truth of a conversation is `messages.seq`, so replay is a
+  # The durable truth of a thread is `messages.seq`, so replay is a
   # cursor over rows. Deliberately NOT `Cyfr.Execution.events_since/3`:
   # that is keyed by execution id and carries a turn's in-flight tool
   # deltas, which are the runner's business. A client that reconnects wants
   # what was SAID, and the final rows are enough.
   defp act("events", ctx, id, args) do
-    with {:ok, _conv} <- Arca.ConversationStorage.get(ctx, id) do
-      case Arca.ConversationStorage.messages(ctx, id, message_opts(args)) do
+    with {:ok, _thread} <- Arca.ThreadStorage.get(ctx, id) do
+      case Arca.ThreadStorage.messages(ctx, id, message_opts(args)) do
         rows when is_list(rows) ->
           rows = Enum.map(rows, &render/1)
-          {:ok, %{conversation: id, messages: rows, cursor: cursor(rows)}}
+          {:ok, %{thread: id, messages: rows, cursor: cursor(rows)}}
 
         {:error, _} ->
           {:error, {:unavailable, "Storage"}}
@@ -462,21 +462,21 @@ defmodule Emissary.MCP.ConversationTool do
 
   # Following is a person's sidebar and notify roster, never an ACL — and
   # never someone else's: the row is always the CALLER's, no `user_id`
-  # argument exists on the wire. The tenant-scoped `get` proves the topic
+  # argument exists on the wire. The tenant-scoped `get` proves the thread
   # is the focused estate's before the row is written.
   defp act("follow", ctx, id, _args) do
-    with {:ok, _conv} <- Arca.ConversationStorage.get(ctx, id),
-         :ok <- Arca.TopicSubscriptionStorage.follow(ctx, id, ctx.user_id) do
-      {:ok, %{following: true, conversation: id}}
+    with {:ok, _thread} <- Arca.ThreadStorage.get(ctx, id),
+         :ok <- Arca.ThreadSubscriptionStorage.follow(ctx, id, ctx.user_id) do
+      {:ok, %{following: true, thread: id}}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
     end
   end
 
   defp act("unfollow", ctx, id, _args) do
-    with {:ok, _conv} <- Arca.ConversationStorage.get(ctx, id),
-         :ok <- Arca.TopicSubscriptionStorage.unfollow(ctx, id, ctx.user_id) do
-      {:ok, %{following: false, conversation: id}}
+    with {:ok, _thread} <- Arca.ThreadStorage.get(ctx, id),
+         :ok <- Arca.ThreadSubscriptionStorage.unfollow(ctx, id, ctx.user_id) do
+      {:ok, %{following: false, thread: id}}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
     end
@@ -489,9 +489,9 @@ defmodule Emissary.MCP.ConversationTool do
   defp act("aloud", ctx, id, %{
          "message_ids" => ids,
          "target_athanor" => target_athanor,
-         "target_conversation" => target_conversation
+         "target_thread" => target_thread
        })
-       when is_list(ids) and is_binary(target_athanor) and is_binary(target_conversation) do
+       when is_list(ids) and is_binary(target_athanor) and is_binary(target_thread) do
     # The validator does not look inside arrays, so the ids' shape and the
     # list's length are checked here: every element copies bytes into the
     # target estate, and a bound is what keeps one call from moving a
@@ -504,22 +504,21 @@ defmodule Emissary.MCP.ConversationTool do
         {:error, {:invalid_argument, "aloud takes at most #{@aloud_max} messages at a time"}}
 
       true ->
-        say_aloud(ctx, id, ids, target_athanor, target_conversation)
+        say_aloud(ctx, id, ids, target_athanor, target_thread)
     end
   end
 
   defp act("aloud", _ctx, _id, _args),
     do:
       {:error,
-       {:invalid_argument,
-        "aloud requires 'message_ids', 'target_athanor' and 'target_conversation'"}}
+       {:invalid_argument, "aloud requires 'message_ids', 'target_athanor' and 'target_thread'"}}
 
-  defp act(action, _ctx, _id, _args), do: {:error, {:unknown_action, "conversation.#{action}"}}
+  defp act(action, _ctx, _id, _args), do: {:error, {:unknown_action, "thread.#{action}"}}
 
-  defp say_aloud(ctx, id, ids, target_athanor, target_conversation) do
-    case Aqua.Aloud.post(ctx, id, ids, target_athanor, target_conversation) do
+  defp say_aloud(ctx, id, ids, target_athanor, target_thread) do
+    case Aqua.Aloud.post(ctx, id, ids, target_athanor, target_thread) do
       {:ok, rows} ->
-        {:ok, %{said_aloud: length(rows), target_conversation: target_conversation}}
+        {:ok, %{said_aloud: length(rows), target_thread: target_thread}}
 
       {:error, :not_a_member} ->
         {:error, {:invalid_argument, "aloud reaches only estates you are a member of"}}
@@ -529,16 +528,15 @@ defmodule Emissary.MCP.ConversationTool do
          {:invalid_argument,
           "only your own lines can be said aloud — or your own assistant's, from your own athanor"}}
 
-      {:error, :same_conversation} ->
-        {:error, {:invalid_argument, "that line is already in this conversation"}}
+      {:error, :same_thread} ->
+        {:error, {:invalid_argument, "that line is already in this thread"}}
 
       {:error, :nothing_to_say} ->
         {:error, {:invalid_argument, "aloud requires at least one message id"}}
 
       {:error, :not_found} ->
         {:error,
-         {:invalid_argument,
-          "the selected messages or the target conversation could not be found"}}
+         {:invalid_argument, "the selected messages or the target thread could not be found"}}
 
       {:error, :attachment_missing} ->
         {:error,
@@ -554,11 +552,11 @@ defmodule Emissary.MCP.ConversationTool do
   # Internal
   # ---------------------------------------------------------------------------
 
-  # The card's approval, pinned to this conversation: a member cannot
+  # The card's approval, pinned to this thread: a member cannot
   # drive one thread's door to settle another thread's card.
-  defp card_approval(ctx, conversation_id, message_id) do
+  defp card_approval(ctx, thread_id, message_id) do
     case Tape.approval_by_message(ctx, message_id) do
-      {:ok, %{conversation_id: ^conversation_id} = approval} -> {:ok, approval}
+      {:ok, %{thread_id: ^thread_id} = approval} -> {:ok, approval}
       {:ok, _elsewhere} -> {:error, {:not_found, "approval", message_id}}
       {:error, :not_found} -> {:error, {:not_found, "approval", message_id}}
       {:error, reason} -> {:error, reason}
@@ -602,7 +600,7 @@ defmodule Emissary.MCP.ConversationTool do
       end
 
     pending =
-      case Arca.ConversationStorage.pending_approvals(ctx, id) do
+      case Arca.ThreadStorage.pending_approvals(ctx, id) do
         rows when is_list(rows) -> Enum.map(rows, &render/1)
         _ -> []
       end
@@ -640,11 +638,11 @@ defmodule Emissary.MCP.ConversationTool do
     if Cyfr.Ops.Error.reason?(reason), do: reason, else: translate(reason, id)
   end
 
-  defp translate(:not_found, id), do: {:not_found, "conversation", id}
+  defp translate(:not_found, id), do: {:not_found, "thread", id}
 
   defp translate(:empty, _id), do: {:invalid_argument, "send requires a non-empty 'message'"}
 
-  defp translate(:unavailable, _id), do: {:unavailable, "Conversations"}
+  defp translate(:unavailable, _id), do: {:unavailable, "Threads"}
   defp translate(:database_error, _id), do: {:unavailable, "Storage"}
 
   # One sentence per reason, and the runner's — the same words the chat
@@ -657,13 +655,13 @@ defmodule Emissary.MCP.ConversationTool do
   # above.
   defp translate(other, _id), do: other
 
-  defp render_conversation(conv) do
+  defp render_thread(thread) do
     %{
-      id: conv.id,
-      title: conv.title,
-      created_by: conv.created_by,
-      last_message_at: conv.last_message_at,
-      at: conv.inserted_at
+      id: thread.id,
+      title: thread.title,
+      created_by: thread.created_by,
+      last_message_at: thread.last_message_at,
+      at: thread.inserted_at
     }
   end
 
@@ -678,7 +676,7 @@ defmodule Emissary.MCP.ConversationTool do
   defp render(%{kind: "approval"} = msg) do
     msg
     |> render_row()
-    |> Map.put(:intent, Arca.ConversationStorage.payload(msg)["intent"])
+    |> Map.put(:intent, Arca.ThreadStorage.payload(msg)["intent"])
   end
 
   defp render(msg), do: render_row(msg)
@@ -697,7 +695,7 @@ defmodule Emissary.MCP.ConversationTool do
 
   # The codec is `Aqua.ApprovalScope`; what each verb accepts is the verb's.
   @approve_scopes Map.new(
-                    [:once, :conversation, :always],
+                    [:once, :thread, :always],
                     &{Aqua.ApprovalScope.to_string(&1), &1}
                   )
   @decline_scopes Map.new([:once, :never], &{Aqua.ApprovalScope.to_string(&1), &1})
@@ -710,7 +708,7 @@ defmodule Emissary.MCP.ConversationTool do
         {:ok, scope}
 
       :error ->
-        {:error, {:invalid_argument, "approve scope must be once, conversation or always"}}
+        {:error, {:invalid_argument, "approve scope must be once, thread or always"}}
     end
   end
 

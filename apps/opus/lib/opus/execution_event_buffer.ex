@@ -182,7 +182,7 @@ defmodule Opus.ExecutionEventBuffer do
   end
 
   defp broadcast(execution_id, athanor_id, event) do
-    topic = Cyfr.Topics.execution_events(execution_id, athanor_id)
+    topic = Cyfr.Bus.execution_events(execution_id, athanor_id)
 
     case Phoenix.PubSub.broadcast(pubsub(), topic, {:execution_event, event}) do
       :ok ->
@@ -297,7 +297,7 @@ defmodule Opus.ExecutionEventBuffer do
   def topic(execution_id, ctx) do
     case extract_athanor_id(ctx) do
       {:ok, athanor_id} ->
-        Cyfr.Topics.execution_events(execution_id, athanor_id)
+        Cyfr.Bus.execution_events(execution_id, athanor_id)
 
       :error ->
         raise ArgumentError,

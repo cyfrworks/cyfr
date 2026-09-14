@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.ConversationPaneLiveTest do
+defmodule PrismWeb.ThreadPaneLiveTest do
   # The pane on its own: what it says when the session is gone, that a
   # refusal reaches the person as a sentence, that what it pushes names
   # the pane it is for, and that a kept model catalogue is read without a
   # run. On a group's room.
   use PrismWeb.ConnCase, async: false
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Tenancy.Athanors
 
   setup %{conn: conn} do
@@ -32,22 +32,22 @@ defmodule PrismWeb.ConversationPaneLiveTest do
     conn = log_in_user(conn, user, athanor_id: room.id)
     in_room = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: room.id}
 
-    {:ok, conv} = Conversations.create(in_room)
-    {:ok, _} = Conversations.append(in_room, conv.id, %{author: user.user_id, content: "hello"})
-    {:ok, conv} = Conversations.get(in_room, conv.id)
+    {:ok, thread} = Threads.create(in_room)
+    {:ok, _} = Threads.append(in_room, thread.id, %{author: user.user_id, content: "hello"})
+    {:ok, thread} = Threads.get(in_room, thread.id)
 
-    {:ok, conn: conn, user: user, room: room, in_room: in_room, conv: conv}
+    {:ok, conn: conn, user: user, room: room, in_room: in_room, thread: thread}
   end
 
   defp route(athanor), do: Athanors.route_slug(athanor)
 
   # A card as the loop opens it: a turn with its root, the model step,
   # the call, and the approval on the tape.
-  defp card!(ctx, conv, proposal) do
+  defp card!(ctx, thread, proposal) do
     alias Aqua.Tape
 
     {:ok, %{turn: turn}} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua pin it"},
         turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
       })
@@ -126,8 +126,8 @@ defmodule PrismWeb.ConversationPaneLiveTest do
     end
   end
 
-  defp room_pane(conn, room, conv) do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), conv.id))
+  defp room_pane(conn, room, thread) do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     child!(view, "pane-" <> room.id)
   end
@@ -139,18 +139,22 @@ defmodule PrismWeb.ConversationPaneLiveTest do
       })
 
     {:ok, pane, _} =
-      live_isolated(stale, PrismWeb.ConversationPaneLive, session: %{"athanor_id" => room.id})
+      live_isolated(stale, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => room.id})
 
     assert render(pane) =~ "Signed out — reload to continue."
     refute has_element?(pane, "form")
   end
 
   test "a refused standing answer reaches the person as a sentence, not the machine's atom",
-       %{conn: conn, room: room, in_room: in_room, conv: conv} do
+       %{conn: conn, room: room, in_room: in_room, thread: thread} do
     card =
-      card!(in_room, conv, %{"tool" => "notes", "action" => "pin", "args" => %{"name" => "plan"}})
+      card!(in_room, thread, %{
+        "tool" => "notes",
+        "action" => "pin",
+        "args" => %{"name" => "plan"}
+      })
 
-    pane = room_pane(conn, room, conv)
+    pane = room_pane(conn, room, thread)
 
     # What the card dispatches for "always".
     send(pane.pid, {:approval_approve, card.id, :always})
@@ -164,13 +168,13 @@ defmodule PrismWeb.ConversationPaneLiveTest do
     conn: conn,
     user: user,
     room: room,
-    conv: conv
+    thread: thread
   } do
-    pane = room_pane(conn, room, conv)
+    pane = room_pane(conn, room, thread)
     pane_id = "pane-" <> room.id <> "-pane"
     intents = [%{kind: "copy_clipboard", text: "friday"}, %{kind: "navigate", to: "/activities"}]
 
-    send(pane.pid, {:conversation, conv.id, {:intents, intents, user.user_id}})
+    send(pane.pid, {:thread, thread.id, {:intents, intents, user.user_id}})
     render(pane)
 
     assert_push_event(pane, "aqua:intents", %{pane: ^pane_id, intents: pushed})
@@ -178,7 +182,7 @@ defmodule PrismWeb.ConversationPaneLiveTest do
     assert to == PrismWeb.Focus.path(route(room), "/activities")
 
     # Another member's intents are theirs alone.
-    send(pane.pid, {:conversation, conv.id, {:intents, intents, "someone-else"}})
+    send(pane.pid, {:thread, thread.id, {:intents, intents, "someone-else"}})
     render(pane)
     refute_push_event(pane, "aqua:intents", %{intents: _})
   end
@@ -187,9 +191,9 @@ defmodule PrismWeb.ConversationPaneLiveTest do
     conn: conn,
     user: user,
     room: room,
-    conv: conv
+    thread: thread
   } do
-    pane = room_pane(conn, room, conv)
+    pane = room_pane(conn, room, thread)
 
     intents = [
       %{kind: "navigate", to: "/etc/passwd"},
@@ -200,7 +204,7 @@ defmodule PrismWeb.ConversationPaneLiveTest do
       %{kind: "navigate", to: "/executions?id=exec_a"}
     ]
 
-    send(pane.pid, {:conversation, conv.id, {:intents, intents, user.user_id}})
+    send(pane.pid, {:thread, thread.id, {:intents, intents, user.user_id}})
     render(pane)
 
     assert_push_event(pane, "aqua:intents", %{intents: pushed})
@@ -211,7 +215,7 @@ defmodule PrismWeb.ConversationPaneLiveTest do
   test "a kept model catalogue is read on mount without a run", %{
     conn: conn,
     room: room,
-    conv: conv,
+    thread: thread,
     in_room: in_room
   } do
     :ok = PrismWeb.ModelCatalog.remember(room.id, %{"models" => %{"kept" => ["kept-model-1"]}})
@@ -223,16 +227,16 @@ defmodule PrismWeb.ConversationPaneLiveTest do
     assert :ok = PrismWeb.ModelCatalog.load(in_room)
     assert_received {:list_models_result, {:ok, %{"models" => %{"kept" => ["kept-model-1"]}}}}
 
-    pane = room_pane(conn, room, conv)
+    pane = room_pane(conn, room, thread)
     assert has_element?(pane, ~s(select[name="model"] option[value="kept-model-1"]))
   end
 
   test "the pane's copy: its chrome and the composer's stop", %{
     conn: conn,
     room: room,
-    conv: conv
+    thread: thread
   } do
-    html = render(room_pane(conn, room, conv))
+    html = render(room_pane(conn, room, thread))
     assert html =~ "The soul or role this thread is on"
     refute html =~ "autofocus"
     refute html =~ ~r/\bagent\b/
@@ -242,24 +246,24 @@ defmodule PrismWeb.ConversationPaneLiveTest do
   test "a turn stopped on an unknown outcome shows so until it goes on", %{
     conn: conn,
     room: room,
-    conv: conv,
+    thread: thread,
     user: user
   } do
-    pane = room_pane(conn, room, conv)
-    send(pane.pid, {:conversation, conv.id, {:turn_starting, user.user_id}})
+    pane = room_pane(conn, room, thread)
+    send(pane.pid, {:thread, thread.id, {:turn_starting, user.user_id}})
     assert render(pane) =~ "Thinking"
 
-    send(pane.pid, {:conversation, conv.id, {:turn_paused, "trn_x", :uncertain}})
+    send(pane.pid, {:thread, thread.id, {:turn_paused, "trn_x", :uncertain}})
     html = render(pane)
     assert html =~ "Stopped: a tool"
     assert html =~ "Your next message continues this turn"
     refute html =~ "Thinking"
     assert has_element?(pane, ~s(button[phx-click="stop"]))
 
-    send(pane.pid, {:conversation, conv.id, {:turn_starting, user.user_id}})
+    send(pane.pid, {:thread, thread.id, {:turn_starting, user.user_id}})
     refute render(pane) =~ "Stopped: a tool"
 
-    send(pane.pid, {:conversation, conv.id, {:turn_finished}})
+    send(pane.pid, {:thread, thread.id, {:turn_finished}})
     refute has_element?(pane, ~s(button[phx-click="stop"]))
   end
 end

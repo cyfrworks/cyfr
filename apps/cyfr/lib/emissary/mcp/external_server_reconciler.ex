@@ -27,7 +27,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
 
   require Logger
 
-  @topic Cyfr.Topics.vault_changed_global()
+  @topic Cyfr.Bus.vault_changed_global()
   @relevant_verbs [:rotate, :rebind, :revoke, :delete, :rename]
 
   @doc "The vault verbs this reconciler acts on — pinned by `Sanctum.VaultTest`."

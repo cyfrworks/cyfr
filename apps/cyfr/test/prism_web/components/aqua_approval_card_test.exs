@@ -40,8 +40,8 @@ defmodule PrismWeb.AquaApprovalCardTest do
     assert html =~ ~s(phx-value-scope="once")
   end
 
-  test "an action declared standing: conversation offers this chat only" do
-    html = card(%{"action_kind" => "write", "standing" => "conversation"})
+  test "an action declared standing: thread offers this chat only" do
+    html = card(%{"action_kind" => "write", "standing" => "thread"})
     assert html =~ "for this chat"
     refute html =~ ~s(phx-value-scope="always")
   end

@@ -19,7 +19,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest.Probes do
   def planes_only, do: [tool(%{planes: [:external]})]
   def invalid_plane, do: [tool(%{kind: :read, planes: [:sideways]})]
   def empty_planes, do: [tool(%{kind: :read, planes: []})]
-  def invalid_standing, do: [tool(%{kind: :write, planes: [:external], standing: :conversaton})]
+  def invalid_standing, do: [tool(%{kind: :write, planes: [:external], standing: :thred})]
   def unannotated, do: [tool(nil)]
 
   # One provider module per probe: the audit takes its roster as an

@@ -11,8 +11,8 @@ defmodule Arca.Schemas.ToolGrant do
   answered when asked, and the two are composed at use time by
   `Aqua.ToolGrants.effective/2`.
 
-  `scope` says how far the answer reaches: `"conversation"` — this thread
-  only, surviving a runner restart — or `"agent"` — every conversation
+  `scope` says how far the answer reaches: `"thread"` — this thread
+  only, surviving a runner restart — or `"agent"` — every thread
   this agent runs in, in this estate. An agent belongs to the estate whose
   `aqua/` tree holds it, so the row's `athanor_id` is the agent's estate
   as well as the tenancy that reclaims the row.
@@ -28,14 +28,14 @@ defmodule Arca.Schemas.ToolGrant do
   @primary_key {:id, :string, autogenerate: false}
   @type t :: %__MODULE__{}
 
-  @scopes ~w(conversation agent)
+  @scopes ~w(thread agent)
   @effects ~w(allow deny)
 
   schema "tool_grants" do
     field :athanor_id, :string
     field :scope, :string
     field :effect, :string
-    field :conversation_id, :string
+    field :thread_id, :string
     field :agent_name, :string
     field :tool, :string
     field :action, :string
@@ -52,8 +52,8 @@ defmodule Arca.Schemas.ToolGrant do
   def effects, do: @effects
 
   @doc "The scope of an answer for one thread."
-  @spec conversation_scope() :: String.t()
-  def conversation_scope, do: "conversation"
+  @spec thread_scope() :: String.t()
+  def thread_scope, do: "thread"
 
   @doc "The scope of an answer for the agent wherever it runs in its estate."
   @spec agent_scope() :: String.t()
@@ -61,8 +61,8 @@ defmodule Arca.Schemas.ToolGrant do
 
   @doc """
   The row a write is held to: every key present, the scope and effect in
-  the vocabulary, and a conversation named exactly when the scope is a
-  conversation's. The partial unique indexes are declared by the storage
+  the vocabulary, and a thread named exactly when the scope is a
+  thread's. The partial unique indexes are declared by the storage
   module, which knows the names each adapter reports them by.
   """
   @spec changeset(t() | map(), map()) :: Ecto.Changeset.t()
@@ -73,7 +73,7 @@ defmodule Arca.Schemas.ToolGrant do
       :athanor_id,
       :scope,
       :effect,
-      :conversation_id,
+      :thread_id,
       :agent_name,
       :tool,
       :action,
@@ -92,16 +92,16 @@ defmodule Arca.Schemas.ToolGrant do
     ])
     |> validate_inclusion(:scope, @scopes)
     |> validate_inclusion(:effect, @effects)
-    |> validate_conversation()
+    |> validate_thread()
   end
 
-  defp validate_conversation(changeset) do
-    case {get_field(changeset, :scope), get_field(changeset, :conversation_id)} do
-      {"conversation", nil} ->
-        add_error(changeset, :conversation_id, "names no conversation")
+  defp validate_thread(changeset) do
+    case {get_field(changeset, :scope), get_field(changeset, :thread_id)} do
+      {"thread", nil} ->
+        add_error(changeset, :thread_id, "names no thread")
 
       {"agent", id} when is_binary(id) ->
-        add_error(changeset, :conversation_id, "an agent-scope answer names no conversation")
+        add_error(changeset, :thread_id, "an agent-scope answer names no thread")
 
       _ ->
         changeset

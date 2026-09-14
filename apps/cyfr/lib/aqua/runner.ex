@@ -3,9 +3,9 @@
 
 defmodule Aqua.Runner do
   @moduledoc """
-  The process that owns a conversation's turns.
+  The process that owns a thread's turns.
 
-  One runner per conversation, started on demand under
+  One runner per thread, started on demand under
   `Aqua.RunnerSupervisor` and found through `Aqua.RunnerRegistry`. A
   browser session never owns a turn: the runner admits a send, accepts
   it on the tape with the turn it opens, runs the loop in a worker of
@@ -22,7 +22,7 @@ defmodule Aqua.Runner do
   engine being up (`:execution_unavailable`), and the queue having room
   (`:busy`). Only then is the message accepted, atomically with the
   turn — or attached to the running turn as a steer when its own sender
-  writes again, or queued behind it. A `client_id` the conversation
+  writes again, or queued behind it. A `client_id` the thread
   already accepted answers the same identity.
 
   ## Turns
@@ -34,10 +34,10 @@ defmodule Aqua.Runner do
   is no longer seated. A loop that dies without an answer is aborted
   from here (`Aqua.Loop.abort/3`) and its turn ended uncertain, or
   cancelled when a cancel asked for it. A runner that starts finds the
-  conversation's open turns and does what their rows say
+  thread's open turns and does what their rows say
   (`Aqua.Runner.RecoveryTable`).
 
-  ## Broadcasts — `{:conversation, conversation_id, event}`
+  ## Broadcasts — `{:thread, thread_id, event}`
 
   The rows from the tape (`{:message, row}`, `{:turn_finished}`,
   `{:approval_resolved, _}`), and from here `{:turn_starting, user_id}`,
@@ -78,24 +78,24 @@ defmodule Aqua.Runner do
   # ---------------------------------------------------------------------------
 
   @doc false
-  def start_link({conversation_id, athanor_id}) do
-    GenServer.start_link(__MODULE__, {conversation_id, athanor_id}, name: via(conversation_id))
+  def start_link({thread_id, athanor_id}) do
+    GenServer.start_link(__MODULE__, {thread_id, athanor_id}, name: via(thread_id))
   end
 
-  defp via(conversation_id), do: {:via, Registry, {@registry, conversation_id}}
+  defp via(thread_id), do: {:via, Registry, {@registry, thread_id}}
 
-  @doc "The runner for a conversation, started if it is not running."
+  @doc "The runner for a thread, started if it is not running."
   @spec ensure(String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
-  def ensure(conversation_id, athanor_id)
-      when is_binary(conversation_id) and is_binary(athanor_id) do
-    case Registry.lookup(@registry, conversation_id) do
+  def ensure(thread_id, athanor_id)
+      when is_binary(thread_id) and is_binary(athanor_id) do
+    case Registry.lookup(@registry, thread_id) do
       [{pid, _}] ->
         {:ok, pid}
 
       [] ->
         case DynamicSupervisor.start_child(
                @supervisor,
-               {__MODULE__, {conversation_id, athanor_id}}
+               {__MODULE__, {thread_id, athanor_id}}
              ) do
           {:ok, pid} -> {:ok, pid}
           {:error, {:already_started, pid}} -> {:ok, pid}
@@ -107,17 +107,17 @@ defmodule Aqua.Runner do
 
   @doc "The runner's pid when one is running."
   @spec whereis(String.t()) :: pid() | nil
-  def whereis(conversation_id) do
-    case Registry.lookup(@registry, conversation_id) do
+  def whereis(thread_id) do
+    case Registry.lookup(@registry, thread_id) do
       [{pid, _}] -> pid
       [] -> nil
     end
   end
 
-  @doc "Whether a turn is running in this conversation right now, for a viewer of its estate."
+  @doc "Whether a turn is running in this thread right now, for a viewer of its estate."
   @spec turn_running?(Context.t(), String.t()) :: boolean()
-  def turn_running?(%Context{athanor_id: athanor_id}, conversation_id) do
-    case whereis(conversation_id) do
+  def turn_running?(%Context{athanor_id: athanor_id}, thread_id) do
+    case whereis(thread_id) do
       nil ->
         false
 
@@ -131,26 +131,26 @@ defmodule Aqua.Runner do
 
   @doc "The PubSub topic a thread's viewers subscribe to, tenant-prefixed."
   @spec topic(String.t(), String.t()) :: String.t()
-  def topic(conversation_id, athanor_id),
-    do: Cyfr.Topics.conversation(conversation_id, athanor_id)
+  def topic(thread_id, athanor_id),
+    do: Cyfr.Bus.thread(thread_id, athanor_id)
 
-  @doc "Subscribe the calling process to a conversation's broadcasts."
+  @doc "Subscribe the calling process to a thread's broadcasts."
   @spec subscribe(String.t(), String.t()) :: :ok | {:error, term()}
-  def subscribe(conversation_id, athanor_id),
-    do: Phoenix.PubSub.subscribe(Emissary.PubSub, topic(conversation_id, athanor_id))
+  def subscribe(thread_id, athanor_id),
+    do: Phoenix.PubSub.subscribe(Emissary.PubSub, topic(thread_id, athanor_id))
 
   @doc "Undo `subscribe/2` for the calling process."
   @spec unsubscribe(String.t(), String.t()) :: :ok
-  def unsubscribe(conversation_id, athanor_id),
-    do: Phoenix.PubSub.unsubscribe(Emissary.PubSub, topic(conversation_id, athanor_id))
+  def unsubscribe(thread_id, athanor_id),
+    do: Phoenix.PubSub.unsubscribe(Emissary.PubSub, topic(thread_id, athanor_id))
 
   @doc "Tell a thread's viewers about a row appended outside a turn (a line said aloud)."
   @spec announce(Arca.Schemas.Message.t()) :: :ok | {:error, term()}
-  def announce(%{conversation_id: conversation_id, athanor_id: athanor_id} = row) do
+  def announce(%{thread_id: thread_id, athanor_id: athanor_id} = row) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      topic(conversation_id, athanor_id),
-      {:conversation, conversation_id, {:message, row}}
+      topic(thread_id, athanor_id),
+      {:thread, thread_id, {:message, row}}
     )
   end
 
@@ -160,8 +160,8 @@ defmodule Aqua.Runner do
 
   @doc "The live part of the thread for a viewer joining now."
   @spec state(String.t(), String.t()) :: map() | {:error, term()}
-  def state(conversation_id, athanor_id) do
-    with {:ok, pid} <- ensure(conversation_id, athanor_id), do: safe_call(pid, :state)
+  def state(thread_id, athanor_id) do
+    with {:ok, pid} <- ensure(thread_id, athanor_id), do: safe_call(pid, :state)
   end
 
   @doc """
@@ -169,39 +169,39 @@ defmodule Aqua.Runner do
   is opened when it addresses an agent. `opts`: `:id` (a pre-minted
   message id), `:client_id`, `:attachments` (refs), `:model`,
   `:orchestrator` (a pick; an `@name` in the text wins), `:room` (the
-  room the sender had open, `%{"athanor_id", "conversation_id", ...}`),
+  room the sender had open, `%{"athanor_id", "thread_id", ...}`),
   `:orchestrators` (the roster, read here when absent).
   """
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, send_result()} | {:error, term()}
-  def send_message(%Context{} = ctx, conversation_id, text, opts \\ []) do
+  def send_message(%Context{} = ctx, thread_id, text, opts \\ []) do
     with :ok <- Cyfr.ControlPlane.assert_owner() do
       opts = Keyword.put_new_lazy(opts, :orchestrators, fn -> Aqua.Roster.roster(ctx) end)
-      call(ctx, conversation_id, {:send, ctx, text, opts})
+      call(ctx, thread_id, {:send, ctx, text, opts})
     end
   end
 
   @doc "Stop the running or paused turn and drop what waited behind it."
   @spec stop_turn(Context.t(), String.t()) :: :ok | {:error, term()}
-  def stop_turn(%Context{} = ctx, conversation_id), do: call(ctx, conversation_id, {:stop, ctx})
+  def stop_turn(%Context{} = ctx, thread_id), do: call(ctx, thread_id, {:stop, ctx})
 
-  @doc "Stop auto-approving `{tool, action}` for `agent` in this conversation."
+  @doc "Stop auto-approving `{tool, action}` for `agent` in this thread."
   @spec revoke_grant(Context.t(), String.t(), String.t(), String.t(), String.t()) ::
           :ok | {:error, term()}
-  def revoke_grant(%Context{} = ctx, conversation_id, agent, tool, action)
+  def revoke_grant(%Context{} = ctx, thread_id, agent, tool, action)
       when is_binary(agent) and is_binary(tool) and is_binary(action),
-      do: call(ctx, conversation_id, {:revoke_grant, ctx, agent, tool, action})
+      do: call(ctx, thread_id, {:revoke_grant, ctx, agent, tool, action})
 
   @doc "A consent granted mid-turn applies to future roots: the turn is cut and the sender asked to re-send."
   @spec restart_for_consent(Context.t(), String.t(), map()) :: :ok | {:error, term()}
-  def restart_for_consent(%Context{} = ctx, conversation_id, result) when is_map(result),
-    do: call(ctx, conversation_id, {:restart_for_consent, ctx, result})
+  def restart_for_consent(%Context{} = ctx, thread_id, result) when is_map(result),
+    do: call(ctx, thread_id, {:restart_for_consent, ctx, result})
 
-  @doc "Start a runner for every conversation holding an open turn."
+  @doc "Start a runner for every thread holding an open turn."
   @spec recover_all() :: :ok
   def recover_all do
-    Enum.each(Tape.with_open_turns(), fn {athanor_id, conversation_id} ->
-      ensure(conversation_id, athanor_id)
+    Enum.each(Tape.with_open_turns(), fn {athanor_id, thread_id} ->
+      ensure(thread_id, athanor_id)
     end)
 
     :ok
@@ -211,10 +211,10 @@ defmodule Aqua.Runner do
       :ok
   end
 
-  defp call(%Context{} = ctx, conversation_id, request) do
-    with {:ok, conv} <- Tape.conversation(ctx, conversation_id),
-         :ok <- open?(conv.athanor_id),
-         {:ok, pid} <- ensure(conv.id, conv.athanor_id) do
+  defp call(%Context{} = ctx, thread_id, request) do
+    with {:ok, thread} <- Tape.thread(ctx, thread_id),
+         :ok <- open?(thread.athanor_id),
+         {:ok, pid} <- ensure(thread.id, thread.athanor_id) do
       safe_call(pid, request)
     end
   end
@@ -232,20 +232,20 @@ defmodule Aqua.Runner do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def init({conversation_id, athanor_id}) do
+  def init({thread_id, athanor_id}) do
     Process.flag(:trap_exit, true)
 
     ctx =
-      Sanctum.internal_context(user_id: "_conversations", athanor_id: athanor_id, scope: :athanor)
+      Sanctum.internal_context(user_id: "_threads", athanor_id: athanor_id, scope: :athanor)
 
-    with {:ok, conv} <- Tape.conversation(ctx, conversation_id),
+    with {:ok, thread} <- Tape.thread(ctx, thread_id),
          {:ok, %{status: "active"}} <- Athanors.get(athanor_id) do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor_id))
-      :ok = subscribe(conv.id, athanor_id)
+      :ok = subscribe(thread.id, athanor_id)
 
       state =
         touch(%{
-          id: conv.id,
+          id: thread.id,
           athanor_id: athanor_id,
           ctx: ctx,
           # The running loop: its turn, task, sender and agent.
@@ -257,7 +257,7 @@ defmodule Aqua.Runner do
           usage: %{input: 0, output: 0},
           tool_activity: [],
           grants: MapSet.new(),
-          orchestrator: conv.orchestrator,
+          orchestrator: thread.orchestrator,
           idle_ref: nil
         })
 
@@ -309,7 +309,7 @@ defmodule Aqua.Runner do
         for scope <- Aqua.ToolGrants.scopes() do
           Aqua.ToolGrants.revoke(ctx, %{
             scope: scope,
-            conversation_id: state.id,
+            thread_id: state.id,
             agent_name: agent,
             tool: tool,
             action: action
@@ -578,19 +578,19 @@ defmodule Aqua.Runner do
 
   # A card decided: the paused turn continues once none is pending.
   def handle_info(
-        {:conversation, _id, {:approval_resolved, %{turn_id: turn_id}}},
+        {:thread, _id, {:approval_resolved, %{turn_id: turn_id}}},
         %{paused: %{turn_id: turn_id}} = state
       ) do
     {:noreply, settle_paused(state)}
   end
 
-  def handle_info({:conversation, _id, {:usage, usage}}, state),
+  def handle_info({:thread, _id, {:usage, usage}}, state),
     do: {:noreply, %{state | usage: usage}}
 
-  def handle_info({:conversation, _id, {:tool_activity, list}}, state),
+  def handle_info({:thread, _id, {:tool_activity, list}}, state),
     do: {:noreply, %{state | tool_activity: list}}
 
-  def handle_info({:conversation, _id, _event}, state), do: {:noreply, state}
+  def handle_info({:thread, _id, _event}, state), do: {:noreply, state}
 
   def handle_info({:expire, turn_id}, %{paused: %{turn_id: turn_id}} = state) do
     _ = Aqua.Approvals.expire_due(state.ctx)

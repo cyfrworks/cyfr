@@ -149,8 +149,8 @@ defmodule Compendium.ManifestNeedsCapsTest do
       assert {:error, {:invalid_caps, {:invalid_storage_path, "aqua/"}}} =
                Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["data/", "aqua/"]}}})
 
-      assert {:error, {:invalid_caps, {:invalid_storage_path, "conversations/"}}} =
-               Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["conversations/"]}}})
+      assert {:error, {:invalid_caps, {:invalid_storage_path, "threads/"}}} =
+               Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["threads/"]}}})
 
       assert {:error, {:invalid_caps, {:invalid_storage_path, "guest/"}}} =
                Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["guest/"]}}})

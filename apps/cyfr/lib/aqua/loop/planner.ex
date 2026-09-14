@@ -58,7 +58,7 @@ defmodule Aqua.Loop.Planner do
 
     # What the model will actually be sent. The projection keeps every row a
     # compaction already summarized — only the request drops them — so
-    # measuring the raw projection measures the whole conversation again and
+    # measuring the raw projection measures the whole thread again and
     # compacts on the first round of every later turn.
     rows = readable(rows)
 
@@ -335,7 +335,7 @@ defmodule Aqua.Loop.Planner do
   defp maybe_tools(request, _), do: request
 
   defp summary_instruction do
-    "You are compacting a long conversation for the assistant that will continue it. " <>
+    "You are compacting a long thread for the assistant that will continue it. " <>
       "Summarize faithfully and concretely; never invent; keep what the next steps need."
   end
 end

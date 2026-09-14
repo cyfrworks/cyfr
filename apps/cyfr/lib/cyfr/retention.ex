@@ -59,7 +59,7 @@ defmodule Cyfr.Retention do
     Cyfr.Retention.Builds,
     Cyfr.Retention.McpLogs,
     Cyfr.Retention.PolicyLogs,
-    Cyfr.Retention.Conversations
+    Cyfr.Retention.Threads
   ]
 
   @doc "The closed roster of retainable kinds — everything else derives from it."
@@ -218,18 +218,18 @@ defmodule Cyfr.Retention do
   end
 
   @doc """
-  Reclaim orphaned conversation blob directories across every active
-  athanor (`Arca.ConversationStorage.sweep_orphaned_blobs/1` — bytes a
+  Reclaim orphaned thread blob directories across every active
+  athanor (`Arca.ThreadStorage.sweep_orphaned_blobs/1` — bytes a
   best-effort delete once left behind, still counted against the storage
   cap). Roster-driven, each athanor inside its own context.
   """
-  @spec sweep_conversation_blob_orphans() :: {:ok, map()}
-  def sweep_conversation_blob_orphans do
+  @spec sweep_thread_blob_orphans() :: {:ok, map()}
+  def sweep_thread_blob_orphans do
     athanors = Sanctum.Tenancy.Athanors.list_active()
 
     results =
       Enum.map(athanors, fn athanor ->
-        {athanor.id, Arca.ConversationStorage.sweep_orphaned_blobs(athanor_ctx(athanor.id))}
+        {athanor.id, Arca.ThreadStorage.sweep_orphaned_blobs(athanor_ctx(athanor.id))}
       end)
 
     reclaimed =

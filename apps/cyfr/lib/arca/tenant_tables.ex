@@ -18,7 +18,7 @@ defmodule Arca.TenantTables do
   the backend enforces `ON DELETE CASCADE` (SQLite only does with
   `PRAGMA foreign_keys=ON`). `consent_vault_refs` before `consents` and
   `vault_entries`; `consents` before `profiles` (its `profile_id` is a
-  composite FK); `messages` before `conversations`; `webhook_deliveries`
+  composite FK); `messages` before `threads`; `webhook_deliveries`
   before `webhooks`.
 
   ## What this does NOT promise
@@ -50,9 +50,9 @@ defmodule Arca.TenantTables do
     "vault_entries",
     "consent_proofs",
     "tool_grants",
-    "topic_subscriptions",
+    "thread_subscriptions",
     "messages",
-    "conversations",
+    "threads",
     "webhooks",
     "sessions",
     "api_keys",

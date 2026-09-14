@@ -11,7 +11,7 @@ defmodule Emissary.MCP.ApprovalToolTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Tape
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Ops.{Catalog, Visibility}
   alias Sanctum.Context
 
@@ -20,13 +20,13 @@ defmodule Emissary.MCP.ApprovalToolTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local()
-    {:ok, conv} = Conversations.create(ctx)
-    {:ok, ctx: ctx, conv: conv}
+    {:ok, thread} = Threads.create(ctx)
+    {:ok, ctx: ctx, thread: thread}
   end
 
-  defp card!(ctx, conv) do
+  defp card!(ctx, thread) do
     {:ok, %{turn: turn}} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
         turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
       })
@@ -118,14 +118,14 @@ defmodule Emissary.MCP.ApprovalToolTest do
 
   test "a card is listed, declined once through the door, and answered again as a replay", %{
     ctx: ctx,
-    conv: conv
+    thread: thread
   } do
-    %{approval: approval, step: step} = card!(ctx, conv)
+    %{approval: approval, step: step} = card!(ctx, thread)
 
     assert {:ok, %{count: 1, approvals: [%{id: aid, status: "pending"}]}} =
              Catalog.call_external("approval", ctx, %{
                "action" => "list",
-               "conversation" => conv.id
+               "thread" => thread.id
              })
 
     assert aid == approval.id
@@ -144,7 +144,7 @@ defmodule Emissary.MCP.ApprovalToolTest do
     assert {:ok, %{count: 0}} =
              Catalog.call_external("approval", ctx, %{
                "action" => "list",
-               "conversation" => conv.id
+               "thread" => thread.id
              })
 
     assert {:ok, %{decision: "declined", replayed: true}} =
@@ -157,9 +157,9 @@ defmodule Emissary.MCP.ApprovalToolTest do
 
   test "a wrong scope, a missing card and a bad decision are typed refusals", %{
     ctx: ctx,
-    conv: conv
+    thread: thread
   } do
-    %{approval: approval} = card!(ctx, conv)
+    %{approval: approval} = card!(ctx, thread)
 
     assert {:error, {:invalid_argument, msg}} =
              Catalog.call_external("approval", ctx, %{
@@ -185,10 +185,10 @@ defmodule Emissary.MCP.ApprovalToolTest do
                "decision" => "decline"
              })
 
-    assert {:error, {:not_found, "conversation", "conv_nothing"}} =
+    assert {:error, {:not_found, "thread", "thread_nothing"}} =
              Catalog.call_external("approval", ctx, %{
                "action" => "list",
-               "conversation" => "conv_nothing"
+               "thread" => "thread_nothing"
              })
   end
 end

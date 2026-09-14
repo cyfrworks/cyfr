@@ -70,7 +70,7 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "an agent is never rooted from the wire: a turn starts through conversation.send alone",
+    test "an agent is never rooted from the wire: a turn starts through thread.send alone",
          %{ctx: ctx} do
       for action <- ["run", "run_stream"] do
         assert {:error, {:invalid_argument, message}} =
@@ -80,7 +80,7 @@ defmodule Opus.MCPTest do
                    "input" => %{}
                  })
 
-        assert message =~ "conversation.send"
+        assert message =~ "thread.send"
       end
 
       assert {:error, {:invalid_argument, _}} =

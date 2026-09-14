@@ -67,7 +67,7 @@ defmodule PrismWeb.ToolSeamTest do
     # in; `Compendium.MCP.Shared.namespace_bearer/2` reads it afterwards.
     {"apps/cyfr/lib/prism_web/controllers/claim_namespace_controller.ex",
      "Compendium.Registry.CredentialStore.put_push_token"},
-    # Chat IS on the wire now (`conversation.*`, external-plane and
+    # Chat IS on the wire now (`thread.*`, external-plane and
     # OIDC-only, so no agent and no API key reaches it) — and the console
     # is a deliberate in-process client of the same domain functions
     # rather than a caller of its own tool: the LiveView already holds an
@@ -77,13 +77,13 @@ defmodule PrismWeb.ToolSeamTest do
     # Attachments a person drags into their own chat, and the same call
     # undone when the message they belonged to is not sent. Storage-capped by
     # `Sanctum.Tenancy.Caps.check_storage/2` like every other tenant write.
-    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex", "Aqua.Attachments.store"},
-    {"apps/cyfr/lib/prism_web/live/conversation_pane_live.ex", "Aqua.Attachments.discard"}
+    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.Attachments.store"},
+    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.Attachments.discard"}
   ]
 
   # The namespaces whose state the console must not change behind the tool
   # surface. `Aqua` belongs here for the same reason as the rest — a
-  # conversation's blobs are an athanor's state, and an agent writes them
+  # thread's blobs are an athanor's state, and an agent writes them
   # through the same verbs.
   @watched_roots ~w(Arca Sanctum Compendium Opus Locus Emissary Aqua)
 
@@ -196,35 +196,35 @@ defmodule PrismWeb.ToolSeamTest do
            "`@console_owned` names calls that are gone: #{inspect(Enum.sort(stale))}"
   end
 
-  # The chat's verbs go through the tool surface: the same `conversation`
+  # The chat's verbs go through the tool surface: the same `thread`
   # actions a headless client calls, from the page.
   @chat_verbs %{
-    "apps/cyfr/lib/prism_web/live/conversation_pane_live.ex" =>
+    "apps/cyfr/lib/prism_web/live/thread_pane_live.ex" =>
       ~w(create send stop approve decline revoke_grant restart_for_consent),
     "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(follow unfollow delete)
   }
 
-  test "the chat's turn writes go through the conversation tool" do
+  test "the chat's turn writes go through the thread tool" do
     for {rel, verbs} <- @chat_verbs, verb <- verbs do
       source = Cyfr.Test.SourceTree.read(Path.join(root(), rel))
 
       assert source =~ ~s(call_tool(#{if rel =~ "chat_live", do: "focus", else: ""}) or
-               source =~ "conversation/#{verb}",
-             "#{rel} does not call conversation/#{verb} through PrismWeb.Ops"
+               source =~ "thread/#{verb}",
+             "#{rel} does not call thread/#{verb} through PrismWeb.Ops"
 
-      assert source =~ "\"conversation/#{verb}\"",
-             "#{rel} does not name conversation/#{verb}"
+      assert source =~ "\"thread/#{verb}\"",
+             "#{rel} does not name thread/#{verb}"
     end
 
     pane =
       Cyfr.Test.SourceTree.read(
-        Path.join(root(), "apps/cyfr/lib/prism_web/live/conversation_pane_live.ex")
+        Path.join(root(), "apps/cyfr/lib/prism_web/live/thread_pane_live.ex")
       )
 
     refute pane =~ "RoomExcerpt.read",
            "the pane passes the room reference, never the excerpt text"
 
-    refute pane =~ "ConversationRunner.send_message"
+    refute pane =~ "ThreadRunner.send_message"
   end
 
   test "call_tool splits tool/action for both shapes" do

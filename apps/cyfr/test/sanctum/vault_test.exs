@@ -259,7 +259,7 @@ defmodule Sanctum.VaultTest do
 
   describe "broadcasts" do
     test "every mutation announces itself on the tenant vault topic", %{ctx: ctx} do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.vault_changed(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.vault_changed(ctx))
 
       view = create!(ctx)
       assert_receive {:vault_entry_changed, _, :create}
@@ -283,7 +283,7 @@ defmodule Sanctum.VaultTest do
       # without touching any entry's material. That is exactly what the global
       # signal exists to tell the reconciler about, and rename was the one
       # mutation that stayed quiet.
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.vault_changed_global())
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.vault_changed_global())
 
       view = create!(ctx)
       assert_receive {:vault_entry_changed_global, _, _, :create, %{}}

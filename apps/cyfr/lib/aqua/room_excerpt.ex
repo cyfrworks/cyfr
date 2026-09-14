@@ -19,7 +19,7 @@ defmodule Aqua.RoomExcerpt do
   message together stay inside the runner's message cap.
   """
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Context
 
   @max_bytes 16 * 1024
@@ -29,7 +29,7 @@ defmodule Aqua.RoomExcerpt do
   @typedoc "Which room, and how the person sees it named."
   @type room :: %{
           required(:athanor_id) => String.t(),
-          required(:conversation_id) => String.t(),
+          required(:thread_id) => String.t(),
           optional(:title) => String.t() | nil,
           optional(:estate) => String.t() | nil
         }
@@ -44,21 +44,21 @@ defmodule Aqua.RoomExcerpt do
   anything there yet.
   """
   @spec read(Context.t(), room()) :: {:ok, String.t()} | {:error, term()}
-  def read(%Context{} = ctx, %{athanor_id: athanor_id, conversation_id: conversation_id} = room) do
+  def read(%Context{} = ctx, %{athanor_id: athanor_id, thread_id: thread_id} = room) do
     with {:ok, room_ctx} <- Context.focus(ctx, athanor_id),
-         {:ok, conv} <- Conversations.get(room_ctx, conversation_id),
+         {:ok, thread} <- Threads.get(room_ctx, thread_id),
          rows when is_list(rows) <-
-           Conversations.latest_messages(room_ctx, conversation_id, @rows) do
+           Threads.latest_messages(room_ctx, thread_id, @rows) do
       case lines(rows) do
         [] -> {:error, :nothing_said}
-        lines -> {:ok, header(room, conv) <> "\n" <> fit(lines)}
+        lines -> {:ok, header(room, thread) <> "\n" <> fit(lines)}
       end
     end
   end
 
-  defp header(room, conv) do
+  defp header(room, thread) do
     where =
-      [room[:estate], room[:title] || conv.title]
+      [room[:estate], room[:title] || thread.title]
       |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.join(" · ")
 

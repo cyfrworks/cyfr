@@ -52,7 +52,7 @@ defmodule Aqua.Launch do
   # catalyst is a hand, not a launch — both are decided again at this
   # last door, whatever the card said.
   defp launch_args(card) do
-    case get_in(Arca.ConversationStorage.payload(card), ["intent", "proposal"]) do
+    case get_in(Arca.ThreadStorage.payload(card), ["intent", "proposal"]) do
       %{"tool" => "execution", "action" => action, "args" => args}
       when action in @launch_actions and is_map(args) ->
         reference = args["reference"]
@@ -71,7 +71,7 @@ defmodule Aqua.Launch do
             {:ok,
              args
              |> Map.put("action", action)
-             |> Map.drop(["parent_execution_id", "root_execution_id", "conversation_id"])}
+             |> Map.drop(["parent_execution_id", "root_execution_id", "thread_id"])}
         end
 
       _ ->

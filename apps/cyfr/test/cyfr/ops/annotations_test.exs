@@ -76,14 +76,14 @@ defmodule Cyfr.Ops.AnnotationsTest do
   # The one codec for a standing declaration, whichever surface it arrives
   # from: the annotation's atom, the wire's string, or nothing.
   test "a standing declaration decodes to one shape and encodes back to the wire" do
-    assert Annotations.standing(:conversation) == :conversation
-    assert Annotations.standing("conversation") == :conversation
+    assert Annotations.standing(:thread) == :thread
+    assert Annotations.standing("thread") == :thread
     assert Annotations.standing(false) == false
     assert Annotations.standing(nil) == nil
     assert Annotations.standing("anything else") == nil
 
-    assert Annotations.standing_to_wire(:conversation) == "conversation"
-    assert Annotations.standing_to_wire("conversation") == "conversation"
+    assert Annotations.standing_to_wire(:thread) == "thread"
+    assert Annotations.standing_to_wire("thread") == "thread"
     assert Annotations.standing_to_wire(false) == false
     assert Annotations.standing_to_wire(nil) == nil
   end

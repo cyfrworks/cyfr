@@ -795,17 +795,17 @@ defmodule Opus.StorageHandlerTest do
                StorageHandler.validate_path_scope("artifacts/build.wasm")
     end
 
-    test "rejects the host scopes — aqua/ and conversations/ are invisible to guests" do
+    test "rejects the host scopes — aqua/ and threads/ are invisible to guests" do
       assert {:error, :storage_path_denied, _} =
                StorageHandler.validate_path_scope("aqua/agent.json")
 
       assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_scope("aqua")
 
       assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_scope("conversations/conv_1/msg_1/0-file.png")
+               StorageHandler.validate_path_scope("threads/thread_1/msg_1/0-file.png")
 
       assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_scope("conversations")
+               StorageHandler.validate_path_scope("threads")
     end
 
     test "agrees with the manifest parser — a grant that parses is a path this gate honors" do
@@ -816,7 +816,7 @@ defmodule Opus.StorageHandlerTest do
         "components",
         "components/catalysts/local/x/0.1.0/catalyst.wasm",
         "aqua/agent.json",
-        "conversations/conv_1",
+        "threads/thread_1",
         "guest/notes.txt",
         "secrets/key.json"
       ]

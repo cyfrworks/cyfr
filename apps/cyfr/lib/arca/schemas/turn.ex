@@ -3,7 +3,7 @@
 
 defmodule Arca.Schemas.Turn do
   @moduledoc """
-  A turn: accepted work in a conversation and its state. Owned by the athanor; written by the runner for now and by
+  A turn: accepted work in a thread and its state. Owned by the athanor; written by the runner for now and by
   the loop that will own the turn.
   """
 
@@ -15,7 +15,7 @@ defmodule Arca.Schemas.Turn do
 
   schema "turns" do
     field :athanor_id, :string
-    field :conversation_id, :string
+    field :thread_id, :string
     field :orchestrator, :string
     field :requested_by, :string
     field :status, :string

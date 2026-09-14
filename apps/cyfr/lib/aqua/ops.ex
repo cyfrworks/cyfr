@@ -24,7 +24,7 @@ defmodule Aqua.Ops do
   Call a tool on the in-chain plane, under the chain's `authority`.
 
   `opts` are the registry's own (`:lineage` — the host-stamped execution
-  and conversation identity a tool may trust, guest-supplied spellings
+  and thread identity a tool may trust, guest-supplied spellings
   dropped); the helper forwards them so the runner can name a card's own
   execution without the argument map carrying it.
   """
@@ -69,10 +69,10 @@ defmodule Aqua.Ops do
   end
 
   @doc """
-  The registry's `standing` annotation for `tool`/`action` — `:conversation`,
+  The registry's `standing` annotation for `tool`/`action` — `:thread`,
   `false`, or nil when the action declares none or the tool is unknown.
   """
-  @spec action_standing(String.t(), String.t()) :: :conversation | false | nil
+  @spec action_standing(String.t(), String.t()) :: :thread | false | nil
   def action_standing(tool, action) do
     case Cyfr.Ops.Catalog.get_tool(tool) do
       {:ok, tool_def} -> Cyfr.Ops.Annotations.standing(tool_def, action)
@@ -119,7 +119,7 @@ defmodule Aqua.Ops do
   One sentence for a refusal: the shared renderer first (crafted binaries,
   consent signals, the crash vocabulary — the same sentence everywhere),
   and an internal term sanitized BEFORE inspect — this text persists as a
-  conversation message every member reads, and a flattened string is past
+  thread message every member reads, and a flattened string is past
   the sanitizer's reach.
   """
   @spec render_refusal(term()) :: String.t()

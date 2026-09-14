@@ -97,7 +97,7 @@ defmodule Aqua.Kinds do
 
   # from its registry annotation.
 
-  @spec standing_for(String.t(), String.t()) :: :conversation | false | nil
+  @spec standing_for(String.t(), String.t()) :: :thread | false | nil
 
   def standing_for(tool, action) when is_binary(tool) and is_binary(action) do
     cond do

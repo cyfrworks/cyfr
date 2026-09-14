@@ -7,7 +7,7 @@ defmodule Aqua.RoomExcerptTest do
   use ExUnit.Case, async: false
 
   alias Aqua.RoomExcerpt
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Arca.Schemas.Message
 
   setup do
@@ -35,36 +35,37 @@ defmodule Aqua.RoomExcerptTest do
     me = %{Sanctum.TestContext.local() | user_id: user, athanor_id: mine.id}
     in_room = %{me | athanor_id: room.id}
     them = %{in_room | user_id: other}
-    {:ok, conv} = Conversations.create(in_room)
+    {:ok, thread} = Threads.create(in_room)
 
-    {:ok, me: me, them: them, in_room: in_room, room: room, elsewhere: elsewhere, conv: conv}
+    {:ok, me: me, them: them, in_room: in_room, room: room, elsewhere: elsewhere, thread: thread}
   end
 
-  defp say(ctx, conv, attrs) do
+  defp say(ctx, thread, attrs) do
     {:ok, row} =
-      Conversations.append(ctx, conv.id, Map.merge(%{kind: "text", author: ctx.user_id}, attrs))
+      Threads.append(ctx, thread.id, Map.merge(%{kind: "text", author: ctx.user_id}, attrs))
 
     row
   end
 
-  defp room(room, conv, extra \\ %{}) do
-    Map.merge(%{athanor_id: room.id, conversation_id: conv.id}, extra)
+  defp room(room, thread, extra \\ %{}) do
+    Map.merge(%{athanor_id: room.id, thread_id: thread.id}, extra)
   end
 
   test "reads the room's people and its AQUA, named, under the person's own seat",
-       %{me: me, them: them, in_room: in_room, room: room, conv: conv} do
-    say(in_room, conv, %{content: "plan?"})
-    say(them, conv, %{content: "ship friday"})
-    say(in_room, conv, %{author: Message.agent_author(), content: "Friday it is."})
-    say(in_room, conv, %{kind: "approval", content: "", payload: %{"intent" => %{"x" => 1}}})
+       %{me: me, them: them, in_room: in_room, room: room, thread: thread} do
+    say(in_room, thread, %{content: "plan?"})
+    say(them, thread, %{content: "ship friday"})
+    say(in_room, thread, %{author: Message.agent_author(), content: "Friday it is."})
+    say(in_room, thread, %{kind: "approval", content: "", payload: %{"intent" => %{"x" => 1}}})
 
-    say(in_room, conv, %{
+    say(in_room, thread, %{
       author: Message.system_author(),
       kind: "system",
       content: "📝 kept a note"
     })
 
-    assert {:ok, text} = RoomExcerpt.read(me, room(room, conv, %{title: "Plans", estate: "Team"}))
+    assert {:ok, text} =
+             RoomExcerpt.read(me, room(room, thread, %{title: "Plans", estate: "Team"}))
 
     assert String.starts_with?(text, ~s(Read from the room "Team · Plans"))
     assert text =~ ": plan?"
@@ -79,35 +80,35 @@ defmodule Aqua.RoomExcerptTest do
     me: me,
     in_room: in_room,
     room: room,
-    conv: conv
+    thread: thread
   } do
-    say(in_room, conv, %{content: "hi"})
+    say(in_room, thread, %{content: "hi"})
     # The first line names the thread; the header follows the row as it is now.
-    {:ok, conv} = Conversations.get(in_room, conv.id)
-    assert {:ok, text} = RoomExcerpt.read(me, room(room, conv))
-    assert text =~ ~s("#{conv.title}")
+    {:ok, thread} = Threads.get(in_room, thread.id)
+    assert {:ok, text} = RoomExcerpt.read(me, room(room, thread))
+    assert text =~ ~s("#{thread.title}")
   end
 
   test "a room the person holds no seat in is refused; an empty one is nothing to read",
-       %{me: me, in_room: in_room, room: room, conv: conv, elsewhere: elsewhere, them: them} do
-    {:ok, foreign} = Conversations.create(%{them | athanor_id: elsewhere.id})
+       %{me: me, in_room: in_room, room: room, thread: thread, elsewhere: elsewhere, them: them} do
+    {:ok, foreign} = Threads.create(%{them | athanor_id: elsewhere.id})
     assert {:error, _} = RoomExcerpt.read(me, room(elsewhere, foreign))
 
-    assert {:error, :nothing_said} = RoomExcerpt.read(me, room(room, conv))
-    say(in_room, conv, %{content: ""})
-    assert {:error, :nothing_said} = RoomExcerpt.read(me, room(room, conv))
+    assert {:error, :nothing_said} = RoomExcerpt.read(me, room(room, thread))
+    say(in_room, thread, %{content: ""})
+    assert {:error, :nothing_said} = RoomExcerpt.read(me, room(room, thread))
   end
 
   test "bounded: the newest lines that fit, oldest first", %{
     me: me,
     in_room: in_room,
     room: room,
-    conv: conv
+    thread: thread
   } do
     for i <- 1..12,
-        do: say(in_room, conv, %{content: "line #{i} " <> String.duplicate("x", 3_000)})
+        do: say(in_room, thread, %{content: "line #{i} " <> String.duplicate("x", 3_000)})
 
-    assert {:ok, text} = RoomExcerpt.read(me, room(room, conv, %{title: "Long"}))
+    assert {:ok, text} = RoomExcerpt.read(me, room(room, thread, %{title: "Long"}))
     assert byte_size(text) <= RoomExcerpt.max_bytes() + 200
     refute text =~ "line 1 "
     assert text =~ "line 12 "
@@ -121,11 +122,11 @@ defmodule Aqua.RoomExcerptTest do
     me: me,
     in_room: in_room,
     room: room,
-    conv: conv
+    thread: thread
   } do
-    say(in_room, conv, %{content: "huge " <> String.duplicate("é", RoomExcerpt.max_bytes())})
+    say(in_room, thread, %{content: "huge " <> String.duplicate("é", RoomExcerpt.max_bytes())})
 
-    assert {:ok, text} = RoomExcerpt.read(me, room(room, conv, %{title: "Huge"}))
+    assert {:ok, text} = RoomExcerpt.read(me, room(room, thread, %{title: "Huge"}))
     assert text =~ "huge "
     assert String.ends_with?(text, "…")
     assert String.valid?(text)

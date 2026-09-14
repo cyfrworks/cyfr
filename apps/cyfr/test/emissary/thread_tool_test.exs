@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ConversationToolTest do
+defmodule Emissary.MCP.ThreadToolTest do
   # Chat on the wire. The gates are the interesting part: what a client may
   # do, and — more to the point — what a running agent and a standing
   # credential may not.
   use ExUnit.Case, async: false
 
-  alias Arca.ConversationStorage, as: Conversations
-  alias Emissary.MCP.ConversationTool, as: Tool
+  alias Arca.ThreadStorage, as: Threads
+  alias Emissary.MCP.ThreadTool, as: Tool
   alias Cyfr.Ops.{Catalog, Visibility}
 
   setup do
@@ -16,20 +16,20 @@ defmodule Emissary.MCP.ConversationToolTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = Sanctum.TestContext.local()
-    {:ok, conv} = Conversations.create(ctx)
-    {:ok, ctx: ctx, conv: conv}
+    {:ok, thread} = Threads.create(ctx)
+    {:ok, ctx: ctx, thread: thread}
   end
 
-  defp call(ctx, args), do: Tool.handle("conversation", ctx, args)
+  defp call(ctx, args), do: Tool.handle("thread", ctx, args)
 
   # A card as the loop opens it: a turn with its root, the model step, the
   # call, and the approval on the tape; the intent is the card's.
-  defp card!(ctx, conv, intent) do
+  defp card!(ctx, thread, intent) do
     alias Aqua.Tape
     proposal = intent["proposal"]
 
     {:ok, %{turn: turn}} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua do a thing"},
         turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
       })
@@ -92,7 +92,7 @@ defmodule Emissary.MCP.ConversationToolTest do
     # nothing about what a credential can reach.
     test "an API key cannot drive somebody's chat — a star key included", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
       # `authorize_interactive/1` admits `:oidc` and nothing else. The
       # plane gate says nothing about this axis: a `*` key is on the
@@ -100,17 +100,17 @@ defmodule Emissary.MCP.ConversationToolTest do
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
       assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               Catalog.call_external("conversation", star, %{
+               Catalog.call_external("thread", star, %{
                  "action" => "events",
-                 "conversation" => conv.id
+                 "thread" => thread.id
                })
 
       scoped = %{ctx | auth_method: :api_key, api_key_type: :application}
 
       assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               Catalog.call_external("conversation", scoped, %{
+               Catalog.call_external("thread", scoped, %{
                  "action" => "send",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message" => "hi"
                })
     end
@@ -121,25 +121,25 @@ defmodule Emissary.MCP.ConversationToolTest do
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
       shown = Visibility.filter_for_context(Catalog.list_tools(), star)
-      refute Enum.any?(shown, &(&1["name"] == "conversation"))
+      refute Enum.any?(shown, &(&1["name"] == "thread"))
 
       shown_oidc = Visibility.filter_for_context(Catalog.list_tools(), ctx)
-      assert Enum.any?(shown_oidc, &(&1["name"] == "conversation"))
+      assert Enum.any?(shown_oidc, &(&1["name"] == "thread"))
     end
 
     test "a running agent cannot reach it, whatever its allowlist says", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
       # Structural, not policy: `tool_policy` is editable markdown, so a
       # rule that lived there could be granted away. The guest plane is
       # stamped one-way and refused at the registry door.
       guest = Sanctum.Context.enter_guest(ctx)
 
-      assert {:error, {:guest_plane_call, "conversation"}} =
-               Catalog.call_external("conversation", guest, %{
+      assert {:error, {:guest_plane_call, "thread"}} =
+               Catalog.call_external("thread", guest, %{
                  "action" => "events",
-                 "conversation" => conv.id
+                 "thread" => thread.id
                })
     end
 
@@ -156,7 +156,7 @@ defmodule Emissary.MCP.ConversationToolTest do
 
     test "the message schema declares its advisory bound; the runner's byte check governs", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
       assert get_in(Tool.definition().input_schema, ["properties", "message", "maxLength"]) ==
                32_768
@@ -166,22 +166,22 @@ defmodule Emissary.MCP.ConversationToolTest do
       long = String.duplicate("é", 20_000)
 
       assert {:error, :message_too_long} =
-               call(ctx, %{"action" => "send", "conversation" => conv.id, "message" => long})
+               call(ctx, %{"action" => "send", "thread" => thread.id, "message" => long})
 
       assert Cyfr.Ops.Error.message(:message_too_long) =~ "32 KiB"
     end
   end
 
   describe "shape" do
-    test "events replays messages by seq, not execution events", %{ctx: ctx, conv: conv} do
+    test "events replays messages by seq, not execution events", %{ctx: ctx, thread: thread} do
       {:ok, a} =
-        Conversations.append(ctx, conv.id, %{author: ctx.user_id, kind: "text", content: "one"})
+        Threads.append(ctx, thread.id, %{author: ctx.user_id, kind: "text", content: "one"})
 
       {:ok, _b} =
-        Conversations.append(ctx, conv.id, %{author: "aqua", kind: "text", content: "two"})
+        Threads.append(ctx, thread.id, %{author: "aqua", kind: "text", content: "two"})
 
       assert {:ok, %{messages: msgs, cursor: cursor}} =
-               call(ctx, %{"action" => "events", "conversation" => conv.id})
+               call(ctx, %{"action" => "events", "thread" => thread.id})
 
       assert Enum.map(msgs, & &1.content) == ["one", "two"]
       assert cursor == List.last(msgs).seq
@@ -190,18 +190,18 @@ defmodule Emissary.MCP.ConversationToolTest do
       assert {:ok, %{messages: [%{content: "two"}]}} =
                call(ctx, %{
                  "action" => "events",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "after_seq" => a.seq
                })
     end
 
-    test "an empty thread has no cursor to resume from", %{ctx: ctx, conv: conv} do
+    test "an empty thread has no cursor to resume from", %{ctx: ctx, thread: thread} do
       assert {:ok, %{messages: [], cursor: nil}} =
-               call(ctx, %{"action" => "events", "conversation" => conv.id})
+               call(ctx, %{"action" => "events", "thread" => thread.id})
     end
 
     test "an approval row carries its intent on the wire, so a client decides what it can see",
-         %{ctx: ctx, conv: conv} do
+         %{ctx: ctx, thread: thread} do
       intent = %{
         "kind" => "request_approval",
         "title" => "Pull component",
@@ -210,7 +210,7 @@ defmodule Emissary.MCP.ConversationToolTest do
       }
 
       {:ok, apr} =
-        Conversations.append(ctx, conv.id, %{
+        Threads.append(ctx, thread.id, %{
           author: "aqua",
           kind: "approval",
           status: "pending",
@@ -219,44 +219,44 @@ defmodule Emissary.MCP.ConversationToolTest do
         })
 
       assert {:ok, %{messages: rows}} =
-               call(ctx, %{"action" => "events", "conversation" => conv.id})
+               call(ctx, %{"action" => "events", "thread" => thread.id})
 
       assert %{intent: ^intent} = Enum.find(rows, &(&1.id == apr.id))
 
       # A line that is not a card carries no intent key at all.
       {:ok, line} =
-        Conversations.append(ctx, conv.id, %{author: ctx.user_id, kind: "text", content: "hi"})
+        Threads.append(ctx, thread.id, %{author: ctx.user_id, kind: "text", content: "hi"})
 
       assert {:ok, %{messages: rows}} =
-               call(ctx, %{"action" => "events", "conversation" => conv.id})
+               call(ctx, %{"action" => "events", "thread" => thread.id})
 
       refute Map.has_key?(Enum.find(rows, &(&1.id == line.id)), :intent)
     end
 
-    test "refusals are the typed vocabulary, not sentences", %{ctx: ctx, conv: conv} do
+    test "refusals are the typed vocabulary, not sentences", %{ctx: ctx, thread: thread} do
       assert {:error, {:invalid_argument, _}} =
-               call(ctx, %{"action" => "send", "conversation" => conv.id})
+               call(ctx, %{"action" => "send", "thread" => thread.id})
 
       assert {:error, {:invalid_argument, _}} =
-               call(ctx, %{"action" => "approve", "conversation" => conv.id})
+               call(ctx, %{"action" => "approve", "thread" => thread.id})
 
       assert {:error, {:invalid_argument, _}} =
                call(ctx, %{
                  "action" => "approve",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message_id" => "msg_x",
                  "scope" => "forever"
                })
 
-      assert {:error, {:unknown_action, "conversation.dance"}} =
-               call(ctx, %{"action" => "dance", "conversation" => conv.id})
+      assert {:error, {:unknown_action, "thread.dance"}} =
+               call(ctx, %{"action" => "dance", "thread" => thread.id})
 
       assert {:error, {:invalid_argument, _}} = call(ctx, %{"action" => "events"})
     end
 
     test "a refused standing answer is a sentence a person can read, not the runner's atom", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
       # Deciding a card is held to a member's standing, like a send.
       {:ok, _} =
@@ -265,7 +265,7 @@ defmodule Emissary.MCP.ConversationToolTest do
           athanor_id: ctx.athanor_id
         )
 
-      card = fn intent -> card!(ctx, conv, intent) end
+      card = fn intent -> card!(ctx, thread, intent) end
 
       destructive =
         card.(%{
@@ -278,7 +278,7 @@ defmodule Emissary.MCP.ConversationToolTest do
       assert {:error, {:invalid_argument, msg}} =
                call(ctx, %{
                  "action" => "approve",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message_id" => destructive.id,
                  "scope" => "always"
                })
@@ -297,39 +297,39 @@ defmodule Emissary.MCP.ConversationToolTest do
       assert {:error, {:invalid_argument, msg}} =
                call(ctx, %{
                  "action" => "approve",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message_id" => one_click.id,
-                 "scope" => "conversation"
+                 "scope" => "thread"
                })
 
       assert msg == Aqua.ToolGrants.refusal_message({:scope_not_permitted, :never_standing})
       refute msg =~ "never_standing"
     end
 
-    test "another athanor's conversation is not found", %{ctx: ctx, conv: conv} do
+    test "another athanor's thread is not found", %{ctx: ctx, thread: thread} do
       elsewhere = %{ctx | athanor_id: "ath_elsewhere"}
 
       # Typed at the boundary: the runner's bare atom would render as a
       # generic "the tool call failed" on every surface.
-      assert {:error, {:not_found, "conversation", _}} =
-               call(elsewhere, %{"action" => "events", "conversation" => conv.id})
+      assert {:error, {:not_found, "thread", _}} =
+               call(elsewhere, %{"action" => "events", "thread" => thread.id})
     end
 
     test "a headless client can mint and list threads — the id needs no console", %{ctx: ctx} do
       assert {:ok, %{id: id, title: "Plans"}} =
                call(ctx, %{"action" => "create", "title" => "Plans"})
 
-      assert {:ok, %{conversations: rows}} = call(ctx, %{"action" => "list"})
+      assert {:ok, %{threads: rows}} = call(ctx, %{"action" => "list"})
       assert Enum.any?(rows, &(&1.id == id))
     end
 
     test "the estate's thread count is held to the operator's cap", %{ctx: ctx} do
       # The setup already minted one thread; a cap of one refuses the next.
       original = Application.get_env(:cyfr, :caps, [])
-      Application.put_env(:cyfr, :caps, Keyword.put(original, :max_conversations_per_athanor, 1))
+      Application.put_env(:cyfr, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
       on_exit(fn -> Application.put_env(:cyfr, :caps, original) end)
 
-      assert {:error, {:limit_reached, :max_conversations_per_athanor, 1}} =
+      assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
                call(ctx, %{"action" => "create", "title" => "One too many"})
 
       # Another estate's count is its own.
@@ -342,36 +342,36 @@ defmodule Emissary.MCP.ConversationToolTest do
       assert {:ok, %{id: _}} = call(%{ctx | athanor_id: room.id}, %{"action" => "create"})
     end
 
-    test "follow and unfollow are the caller's own rows, on this estate's topics only", %{
+    test "follow and unfollow are the caller's own rows, on this estate's threads only", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
-      alias Arca.TopicSubscriptionStorage, as: Subs
+      alias Arca.ThreadSubscriptionStorage, as: Subs
 
-      :ok = Subs.unfollow(ctx, conv.id, ctx.user_id)
-      refute MapSet.member?(Subs.followed(ctx, ctx.user_id), conv.id)
+      :ok = Subs.unfollow(ctx, thread.id, ctx.user_id)
+      refute MapSet.member?(Subs.followed(ctx, ctx.user_id), thread.id)
 
       assert {:ok, %{following: true}} =
-               call(ctx, %{"action" => "follow", "conversation" => conv.id})
+               call(ctx, %{"action" => "follow", "thread" => thread.id})
 
-      assert MapSet.member?(Subs.followed(ctx, ctx.user_id), conv.id)
+      assert MapSet.member?(Subs.followed(ctx, ctx.user_id), thread.id)
 
       assert {:ok, %{following: false}} =
-               call(ctx, %{"action" => "unfollow", "conversation" => conv.id})
+               call(ctx, %{"action" => "unfollow", "thread" => thread.id})
 
-      refute MapSet.member?(Subs.followed(ctx, ctx.user_id), conv.id)
+      refute MapSet.member?(Subs.followed(ctx, ctx.user_id), thread.id)
 
-      # A topic in another estate is not followable from here.
+      # A thread in another estate is not followable from here.
       elsewhere = %{ctx | athanor_id: "ath_elsewhere"}
 
-      assert {:error, {:not_found, "conversation", _}} =
-               call(elsewhere, %{"action" => "follow", "conversation" => conv.id})
+      assert {:error, {:not_found, "thread", _}} =
+               call(elsewhere, %{"action" => "follow", "thread" => thread.id})
     end
   end
 
   describe "aloud on the wire" do
     setup %{ctx: ctx} do
-      test_path = Path.join(System.tmp_dir!(), "conv_tool_aloud_#{:rand.uniform(1_000_000)}")
+      test_path = Path.join(System.tmp_dir!(), "thread_tool_aloud_#{:rand.uniform(1_000_000)}")
       original = Application.get_env(:cyfr, :base_path)
       Application.put_env(:cyfr, :base_path, test_path)
 
@@ -394,21 +394,21 @@ defmodule Emissary.MCP.ConversationToolTest do
         )
 
       {:ok, room} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Room #{n}")
-      {:ok, shared} = Conversations.create(%{ctx | athanor_id: room.id})
+      {:ok, shared} = Threads.create(%{ctx | athanor_id: room.id})
       {:ok, room: room, shared: shared}
     end
 
     test "the ids are checked in shape and in number before anything is read", %{
       ctx: ctx,
-      conv: conv,
+      thread: thread,
       room: room,
       shared: shared
     } do
       base = %{
         "action" => "aloud",
-        "conversation" => conv.id,
+        "thread" => thread.id,
         "target_athanor" => room.id,
-        "target_conversation" => shared.id
+        "target_thread" => shared.id
       }
 
       # The validator does not look inside arrays: a non-string element
@@ -421,15 +421,15 @@ defmodule Emissary.MCP.ConversationToolTest do
 
     test "your own line reaches the room; someone else's is refused", %{
       ctx: ctx,
-      conv: conv,
+      thread: thread,
       room: room,
       shared: shared
     } do
       {:ok, mine} =
-        Conversations.append(ctx, conv.id, %{author: ctx.user_id, kind: "text", content: "hi"})
+        Threads.append(ctx, thread.id, %{author: ctx.user_id, kind: "text", content: "hi"})
 
       {:ok, other} =
-        Conversations.append(ctx, conv.id, %{
+        Threads.append(ctx, thread.id, %{
           author: "local|idp|someone-else",
           kind: "text",
           content: "not yours"
@@ -438,24 +438,24 @@ defmodule Emissary.MCP.ConversationToolTest do
       assert {:ok, %{said_aloud: 1}} =
                call(ctx, %{
                  "action" => "aloud",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message_ids" => [mine.id],
                  "target_athanor" => room.id,
-                 "target_conversation" => shared.id
+                 "target_thread" => shared.id
                })
 
       assert [%{content: "hi", author: author}] =
-               Conversations.messages(%{ctx | athanor_id: room.id}, shared.id)
+               Threads.messages(%{ctx | athanor_id: room.id}, shared.id)
 
       assert author == ctx.user_id
 
       assert {:error, {:invalid_argument, msg}} =
                call(ctx, %{
                  "action" => "aloud",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message_ids" => [other.id],
                  "target_athanor" => room.id,
-                 "target_conversation" => shared.id
+                 "target_thread" => shared.id
                })
 
       assert msg =~ "your own lines"
@@ -478,23 +478,26 @@ defmodule Emissary.MCP.ConversationToolTest do
       :ok
     end
 
-    test "get answers the thread with its live state", %{ctx: ctx, conv: conv} do
+    test "get answers the thread with its live state", %{ctx: ctx, thread: thread} do
       assert {:ok, %{id: id, running: false, queued: 0, pending_approvals: []}} =
-               call(ctx, %{"action" => "get", "conversation" => conv.id})
+               call(ctx, %{"action" => "get", "thread" => thread.id})
 
-      assert id == conv.id
+      assert id == thread.id
 
-      assert {:error, {:not_found, "conversation", "conv_nothing"}} =
-               call(ctx, %{"action" => "get", "conversation" => "conv_nothing"})
+      assert {:error, {:not_found, "thread", "thread_nothing"}} =
+               call(ctx, %{"action" => "get", "thread" => "thread_nothing"})
     end
 
-    test "files attach under a pre-minted id, and the send names them", %{ctx: ctx, conv: conv} do
+    test "files attach under a pre-minted id, and the send names them", %{
+      ctx: ctx,
+      thread: thread
+    } do
       message_id = Cyfr.UUID7.generate_id("msg")
 
       assert {:ok, %{message_id: ^message_id, attachments: [ref]}} =
                call(ctx, %{
                  "action" => "attach",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message_id" => message_id,
                  "files" => [
                    %{
@@ -508,7 +511,7 @@ defmodule Emissary.MCP.ConversationToolTest do
       assert {:error, {:invalid_argument, _}} =
                call(ctx, %{
                  "action" => "attach",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message_id" => message_id,
                  "files" => [%{"filename" => "x", "media_type" => "text/plain", "data" => "%%%"}]
                })
@@ -516,91 +519,94 @@ defmodule Emissary.MCP.ConversationToolTest do
       assert {:ok, %{accepted: true, message_id: ^message_id, replayed: false, running: false}} =
                call(ctx, %{
                  "action" => "send",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message" => "here is a file",
                  "id" => message_id,
                  "attachments" => [ref],
                  "client_id" => "c-1"
                })
 
-      {:ok, row} = Conversations.get_message(ctx, message_id)
-      assert Conversations.payload(row)["attachments"] == [ref]
+      {:ok, row} = Threads.get_message(ctx, message_id)
+      assert Threads.payload(row)["attachments"] == [ref]
 
       assert {:ok, %{messages: [%{id: ^message_id}], cursor: cursor}} =
-               call(ctx, %{"action" => "messages", "conversation" => conv.id})
+               call(ctx, %{"action" => "messages", "thread" => thread.id})
 
       assert is_integer(cursor)
     end
 
-    test "a room beside the thread is read for the send and never stored", %{ctx: ctx, conv: conv} do
-      {:ok, room} = Conversations.create(ctx, %{title: "the room"})
-      {:ok, _} = Conversations.append(ctx, room.id, %{author: ctx.user_id, content: "room talk"})
+    test "a room beside the thread is read for the send and never stored", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      {:ok, room} = Threads.create(ctx, %{title: "the room"})
+      {:ok, _} = Threads.append(ctx, room.id, %{author: ctx.user_id, content: "room talk"})
 
       assert {:ok, %{accepted: true, message_id: id}} =
                call(ctx, %{
                  "action" => "send",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message" => "about the room",
                  "room" => %{
                    "athanor_id" => ctx.athanor_id,
-                   "conversation_id" => room.id,
+                   "thread_id" => room.id,
                    "title" => "the room"
                  }
                })
 
-      {:ok, row} = Conversations.get_message(ctx, id)
+      {:ok, row} = Threads.get_message(ctx, id)
       assert row.content == "about the room"
-      refute inspect(Conversations.payload(row)) =~ "room talk"
+      refute inspect(Threads.payload(row)) =~ "room talk"
 
       # A room the sender cannot read leaves the send as it is.
       assert {:ok, %{accepted: true}} =
                call(ctx, %{
                  "action" => "send",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "message" => "still sent",
-                 "room" => %{"athanor_id" => "ath_elsewhere", "conversation_id" => "conv_x"}
+                 "room" => %{"athanor_id" => "ath_elsewhere", "thread_id" => "thread_x"}
                })
     end
 
-    test "delete removes the thread whole", %{ctx: ctx, conv: conv} do
-      {:ok, _} = Conversations.append(ctx, conv.id, %{author: ctx.user_id, content: "bye"})
+    test "delete removes the thread whole", %{ctx: ctx, thread: thread} do
+      {:ok, _} = Threads.append(ctx, thread.id, %{author: ctx.user_id, content: "bye"})
 
       assert {:ok, %{deleted: true}} =
-               call(ctx, %{"action" => "delete", "conversation" => conv.id})
+               call(ctx, %{"action" => "delete", "thread" => thread.id})
 
-      assert {:error, {:not_found, "conversation", _}} =
-               call(ctx, %{"action" => "get", "conversation" => conv.id})
+      assert {:error, {:not_found, "thread", _}} =
+               call(ctx, %{"action" => "get", "thread" => thread.id})
 
-      assert {:error, {:not_found, "conversation", _}} =
-               call(ctx, %{"action" => "delete", "conversation" => conv.id})
+      assert {:error, {:not_found, "thread", _}} =
+               call(ctx, %{"action" => "delete", "thread" => thread.id})
     end
 
     test "revoke_grant withdraws a standing answer for the agent it was given for", %{
       ctx: ctx,
-      conv: conv
+      thread: thread
     } do
       {:ok, _} =
         Aqua.ToolGrants.put(ctx, %{
-          scope: "conversation",
+          scope: "thread",
           effect: "allow",
-          conversation_id: conv.id,
+          thread_id: thread.id,
           agent_name: "aqua",
           tool: "notes",
           action: "keep"
         })
 
-      assert {:ok, [_]} = Aqua.ToolGrants.for_conversation(ctx, conv.id, "aqua")
+      assert {:ok, [_]} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
 
       assert {:ok, %{revoked: true}} =
                call(ctx, %{
                  "action" => "revoke_grant",
-                 "conversation" => conv.id,
+                 "thread" => thread.id,
                  "agent_name" => "aqua",
                  "tool" => "notes",
                  "tool_action" => "keep"
                })
 
-      assert {:ok, []} = Aqua.ToolGrants.for_conversation(ctx, conv.id, "aqua")
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
     end
   end
 end

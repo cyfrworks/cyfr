@@ -66,7 +66,7 @@ defmodule Locus.HostSurfaceTest do
     "Compendium.Resolver",
     "Cyfr.BuildRecords",
     "Cyfr.RateLimiter",
-    "Cyfr.Topics",
+    "Cyfr.Bus",
     "Emissary.MCP",
     "Emissary.PubSub",
     "Sanctum.Context"

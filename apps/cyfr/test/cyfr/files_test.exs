@@ -61,12 +61,12 @@ defmodule Cyfr.FilesTest do
              %{name: "data", tier: :open},
              %{name: "aqua", tier: :shaped},
              %{name: "components", tier: :shaped},
-             %{name: "conversations", tier: :read},
+             %{name: "threads", tier: :read},
              %{name: "notes", tier: :read}
            ]
 
     assert {:ok, %{path: "", tier: nil, entries: entries}} = Files.list(ctx, "")
-    assert Enum.map(entries, & &1.name) == ~w(data aqua components conversations notes)
+    assert Enum.map(entries, & &1.name) == ~w(data aqua components threads notes)
     assert Enum.all?(entries, &(&1.kind == :dir))
 
     for hidden <- ["payloads", "guest", "seed", "cache", "system", "secret"] do
@@ -135,9 +135,9 @@ defmodule Cyfr.FilesTest do
 
   test "the read-only folders are listed and read, never written", %{ctx: ctx} do
     assert {:ok, %{tier: :read, entries: []}} = Files.list(ctx, "notes")
-    assert {:ok, %{tier: :read}} = Files.list(ctx, "conversations")
+    assert {:ok, %{tier: :read}} = Files.list(ctx, "threads")
 
-    for path <- ["notes/plan.md", "conversations/conv_1/blob.bin"] do
+    for path <- ["notes/plan.md", "threads/thread_1/blob.bin"] do
       assert {:error, {:invalid_argument, msg}} = Files.write(ctx, path, "x")
       assert msg =~ "read here"
       assert {:error, {:invalid_argument, _}} = Files.delete(ctx, path)

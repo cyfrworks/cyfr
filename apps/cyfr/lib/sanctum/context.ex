@@ -106,7 +106,7 @@ defmodule Sanctum.Context do
     platform_admin: false,
     # Which authorization plane this context is on. :external is every real
     # ingress; :guest is stamped one-way by enter_guest/1 when a context
-    # enters a WASM closure (Opus.Executor before a guest run, the conversation
+    # enters a WASM closure (Opus.Executor before a guest run, the thread
     # runner before an approved in-chain call), and require_permission/2 fails closed on it — a
     # context that has entered a guest closure can never authorize an
     # external-plane call.

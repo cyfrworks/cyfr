@@ -402,9 +402,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # The tenancy unit is the athanor and nothing else. This asserts the old
-      # org/project vocabulary — identifiers, modules, scope atoms, env vars,
-      # ports — cannot creep back into code, config, or operator-facing docs.
+      # The tenancy unit is the athanor and a conversation is a thread. This
+      # asserts the old vocabularies — org/project, conversation/topic
+      # subscription, the prism: PubSub prefix — cannot creep back into code,
+      # config, or operator-facing docs.
       # Free-word "org"/"project" is deliberately not gated (OCI annotations,
       # Mix.Project, Go module paths, "project directory" prose are legitimate).
       - name: Tier A/B fossil patterns must be absent
@@ -436,12 +437,16 @@ jobs:
             'Prism\.AuthExchange\b' \
             'PrismWeb\.LiveClaimGate\b' \
             'CYFR_PRISM_' \
-            'Prism\.AquaConversations\b' \
+            'Prism\.AquaThreads\b' \
             ':aqua_path\b' \
             ':4001\b|4001:4001' \
             'CYFR_PORTA_' \
             'cyfr-porta' \
             'apps/porta/' \
+            '[Cc]onversation|CONVERSATION' \
+            'topic_subscription|TopicSubscription' \
+            'Cyfr\.Topics\b' \
+            'prism:[a-z_]' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then

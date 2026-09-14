@@ -15,12 +15,12 @@ defmodule PrismWeb.TopbarLive do
   | Indicator   | Source                 | Subscribes              |
   |-------------|------------------------|-------------------------|
   | Health      | system/status          | (loaded on mount)       |
-  | Activity    | mcp_log/list           | prism:requests + tinctures + schedules |
-  | Executions  | execution/list         | prism:executions        |
-  | Rate        | mcp_log/stats          | prism:requests          |
-  | Schedules   | schedule/list          | prism:schedules         |
-  | Builds      | telemetry-only         | prism:builds            |
-  | Tinctures   | telemetry-only         | prism:tinctures         |
+  | Activity    | mcp_log/list           | bus:requests + tinctures + schedules |
+  | Executions  | execution/list         | bus:executions        |
+  | Rate        | mcp_log/stats          | bus:requests          |
+  | Schedules   | schedule/list          | bus:schedules         |
+  | Builds      | telemetry-only         | bus:builds            |
+  | Tinctures   | telemetry-only         | bus:tinctures         |
   | User        | the session            |                         |
 
   Builds and Tinctures hide entirely when there's nothing to show, so the
@@ -38,7 +38,7 @@ defmodule PrismWeb.TopbarLive do
 
   use PrismWeb, :live_view
 
-  alias Cyfr.Topics
+  alias Cyfr.Bus
 
   @recent_requests_limit 5
   @recent_tincture_limit 5
@@ -126,11 +126,11 @@ defmodule PrismWeb.TopbarLive do
   # The live indicators are dev's: their fan-in is subscribed only there.
   defp subscribe_indicators(ctx) do
     for topic <- [
-          Topics.requests(ctx),
-          Topics.executions(ctx),
-          Topics.schedule_runs(ctx),
-          Topics.builds(ctx),
-          Topics.tinctures(ctx)
+          Bus.requests(ctx),
+          Bus.executions(ctx),
+          Bus.schedule_runs(ctx),
+          Bus.builds(ctx),
+          Bus.tinctures(ctx)
         ] do
       Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
     end
@@ -299,20 +299,20 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, assign(socket, :platform_requests, platform_requests(socket.assigns.context))}
   end
 
-  # A notify that names a conversation is for that topic's FOLLOWERS: an
+  # A notify that names a thread is for that thread's FOLLOWERS: an
   # approval pending in a thread this person unfollowed does not light
   # their tray. The runner still broadcasts on the one athanor topic — the
   # filter lives at the reader, so no per-user topics exist and the tray
   # is where following becomes a notification fact.
-  def handle_info({:notify, athanor_id, _kind, %{conversation_id: conv_id}}, socket)
-      when is_binary(athanor_id) and is_binary(conv_id) do
+  def handle_info({:notify, athanor_id, _kind, %{thread_id: thread_id}}, socket)
+      when is_binary(athanor_id) and is_binary(thread_id) do
     %{context: ctx, viewing: viewing} = socket.assigns
 
     cond do
       athanor_id == viewing ->
         {:noreply, socket}
 
-      Arca.TopicSubscriptionStorage.follows?(athanor_id, conv_id, ctx.user_id) ->
+      Arca.ThreadSubscriptionStorage.follows?(athanor_id, thread_id, ctx.user_id) ->
         {:noreply, assign(socket, :badges, Prism.Tray.bump(socket.assigns.tray_key, athanor_id))}
 
       true ->

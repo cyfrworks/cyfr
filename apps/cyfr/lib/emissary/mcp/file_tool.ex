@@ -8,7 +8,7 @@ defmodule Emissary.MCP.FileTool do
 
   The domain is `Cyfr.Files`; this module is its door. Paths are the
   console's — `data/…`, `components/…`, `aqua/…`, `notes/…`,
-  `conversations/…` — and what each folder allows is its tier, decided
+  `threads/…` — and what each folder allows is its tier, decided
   in the domain. Reads take `storage_read`, writes and deletes
   `storage_write`; a key with the permission may use them, so a
   script can fill `data/` unattended. The actions are external-plane
@@ -34,7 +34,7 @@ defmodule Emissary.MCP.FileTool do
       description:
         "The athanor's files, as the Files page shows them. data/ is yours to fill; " <>
           "components/ and aqua/ hold shaped units you may edit in place; notes/ and " <>
-          "conversations/ are read here and managed on their own pages. Paths are " <>
+          "threads/ are read here and managed on their own pages. Paths are " <>
           "folder-relative, like data/reports/q3.csv.",
       annotations: %{
         readOnlyHint: false,

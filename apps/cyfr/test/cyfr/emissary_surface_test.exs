@@ -24,7 +24,7 @@ defmodule Cyfr.EmissarySurfaceTest do
   # `Cyfr.Ops`, so its modules are not Emissary's surface, and consent
   # reaches external tool servers through the `Sanctum.Catalog` port):
   #   Emissary.PubSub — the global PubSub server's process name (the
-  #     vocabulary moved to Cyfr.Topics; the name did not).
+  #     vocabulary moved to Cyfr.Bus; the name did not).
 
   @namespace ~r/\bEmissary(?:\.[A-Z]\w+)+\b/
 

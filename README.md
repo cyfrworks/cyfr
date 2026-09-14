@@ -92,11 +92,11 @@ open http://localhost:4000
 
 ## Prism — the web face
 
-**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your conversation with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an estate with one person in it answers every message, and any room with two or more answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own estate that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen estate minted by clicking a person in the chat rail (anyone you share an estate with is there; it ends when either person leaves — clicking again starts a new, empty one), following a topic decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
+**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your thread with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an estate with one person in it answers every message, and any room with two or more answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own estate that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen estate minted by clicking a person in the chat rail (anyone you share an estate with is there; it ends when either person leaves — clicking again starts a new, empty one), following a thread decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
 Around the chat:
 
-- **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and every group and topic you belong to (`/chat?a=<estate>&c=<thread>` deep-links one). The estate's **AQUA** page at `/a/<estate>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a conversation is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search` and `forget` — and a schedule with `keep_outcome` in its metadata files each run's output as one.
+- **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and the threads of every group you belong to (`/chat?a=<estate>&c=<thread>` deep-links one). The estate's **AQUA** page at `/a/<estate>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a thread is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search` and `forget` — and a schedule with `keep_outcome` in its metadata files each run's output as one.
 - **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
 - **The drawer** — off the chat, on every screen size: **AQUA**, **Apps** (tinctures), **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the grant sheet binds a sealed vault entry to the model's catalyst — no developer view needed.
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
@@ -137,8 +137,8 @@ your-project/
             │   ├── formulas/    # Bundled formulas: list-models
             │   └── tinctures/   # Bundled example tinctures + your own
             ├── aqua/       # The athanor's own AQUA: the soul, its roles, its scrolls
-            ├── conversations/  # Chat attachment files
-            ├── notes/      # What was kept out of a conversation — host-only, no guest scope
+            ├── threads/  # Chat attachment files
+            ├── notes/      # What was kept out of a thread — host-only, no guest scope
             ├── payloads/   # Retained execution inputs and results — host-only, by digest
             └── data/       # Files WASM components store — their `data/` scope, and yours
 ```
@@ -146,7 +146,7 @@ your-project/
 > Every folder exists from the moment the athanor is provisioned. The Files
 > page (and the `file` tool) shows the tree the way a phone shows its files:
 > `data/` is yours to fill and clear, `components/` and `aqua/` hold shaped
-> units whose files you edit in place, `notes/` and `conversations/` are read
+> units whose files you edit in place, `notes/` and `threads/` are read
 > there and managed on their own pages, and the server's own storage
 > (`payloads/`, the seed, the cache) is not a folder at all.
 
@@ -488,7 +488,7 @@ the others.
 | `CYFR_MAX_GROUPS_PER_PERSON` | groups one person may **create** (they may belong to more) |
 | `CYFR_MAX_PAIRS_PER_PERSON` | DMs one person may hold open (default 200). A DM is minted for two, so either person at the ceiling refuses it; an ended DM frees its place |
 | `CYFR_MAX_MEMBERS_PER_GROUP` | seats in one group, invitations included |
-| `CYFR_MAX_CONVERSATIONS_PER_ATHANOR` | threads one estate may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |
+| `CYFR_MAX_THREADS_PER_ATHANOR` | threads one estate may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |
 | `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — everything in its tree, its copies of the shipped bundle included; copying a shipped version in is never refused by the cap, but its bytes count from then on |
 
 A new athanor is provisioned with its own copy of the shipped bundle and
@@ -687,7 +687,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
 | `cyfr aqua list/get/status/reset/skills` | Read the AQUA soul, roles, guides and scrolls, see which files are shipped, edited or yours, and reset to shipped `[i]` |
-| `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `conversations/` read-only |
+| `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `threads/` read-only |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
 | `cyfr registry probe` | Force a re-probe against cyfr.run (re-mints push tokens) |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |

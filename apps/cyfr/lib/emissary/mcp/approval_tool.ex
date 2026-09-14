@@ -7,7 +7,7 @@ defmodule Emissary.MCP.ApprovalTool do
 
   `resolve` is `Aqua.Approvals.resolve/3` — the one door a person's
   decision goes through, the same one the console's buttons use — and
-  `list` shows a conversation's open cards. Both are external-plane and
+  `list` shows a thread's open cards. Both are external-plane and
   `consent: :interactive`: a running agent cannot decide its own cards,
   and no standing credential can decide for a person.
 
@@ -33,8 +33,8 @@ defmodule Emissary.MCP.ApprovalTool do
       name: "approval",
       title: "Approvals",
       description:
-        "Decide the approval cards a turn raises, and list a conversation's open " <>
-          "cards. Approve once, for this conversation, or always (where the action " <>
+        "Decide the approval cards a turn raises, and list a thread's open " <>
+          "cards. Approve once, for this thread, or always (where the action " <>
           "allows a standing answer); decline once or never. Deciding a card that " <>
           "was already decided answers the first decision.",
       annotations: %{
@@ -57,15 +57,15 @@ defmodule Emissary.MCP.ApprovalTool do
           },
           "scope" => %{
             "type" => "string",
-            "enum" => ["once", "conversation", "always", "never"],
+            "enum" => ["once", "thread", "always", "never"],
             "description" =>
-              "resolve: approve once | conversation | always; decline once | never. " <>
+              "resolve: approve once | thread | always; decline once | never. " <>
                 "Default once."
           },
           "reason" => %{"type" => "string", "description" => "resolve: why (decline)"},
-          "conversation" => %{
+          "thread" => %{
             "type" => "string",
-            "description" => "list: the conversation whose open cards to show"
+            "description" => "list: the thread whose open cards to show"
           }
         },
         "required" => ["action"]
@@ -93,10 +93,10 @@ defmodule Emissary.MCP.ApprovalTool do
   defp dispatch(_ctx, %{"action" => "resolve"}),
     do: {:error, {:invalid_argument, "resolve requires 'approval' and 'decision'"}}
 
-  defp dispatch(ctx, %{"action" => "list", "conversation" => conversation_id})
-       when is_binary(conversation_id) and conversation_id != "" do
-    with {:ok, _conv} <- Tape.conversation(ctx, conversation_id),
-         {:ok, turns} <- Tape.open_turns(ctx, conversation_id) do
+  defp dispatch(ctx, %{"action" => "list", "thread" => thread_id})
+       when is_binary(thread_id) and thread_id != "" do
+    with {:ok, _thread} <- Tape.thread(ctx, thread_id),
+         {:ok, turns} <- Tape.open_turns(ctx, thread_id) do
       approvals =
         Enum.flat_map(turns, fn turn ->
           case Tape.pending_approvals(ctx, turn) do
@@ -105,26 +105,24 @@ defmodule Emissary.MCP.ApprovalTool do
           end
         end)
 
-      {:ok, %{conversation: conversation_id, approvals: approvals, count: length(approvals)}}
+      {:ok, %{thread: thread_id, approvals: approvals, count: length(approvals)}}
     else
-      {:error, :not_found} -> {:error, {:not_found, "conversation", conversation_id}}
-      {:error, reason} -> {:error, refusal(reason, conversation_id)}
+      {:error, :not_found} -> {:error, {:not_found, "thread", thread_id}}
+      {:error, reason} -> {:error, refusal(reason, thread_id)}
     end
   end
 
   defp dispatch(_ctx, %{"action" => "list"}),
-    do: {:error, {:invalid_argument, "list requires 'conversation'"}}
+    do: {:error, {:invalid_argument, "list requires 'thread'"}}
 
   defp dispatch(_ctx, _args),
     do: {:error, {:invalid_argument, "approval requires an 'action'"}}
 
-  defp choice("approve", scope, _reason) when scope in [nil, "once", "conversation", "always"],
+  defp choice("approve", scope, _reason) when scope in [nil, "once", "thread", "always"],
     do: {:ok, %{decision: :approved, scope: Aqua.ApprovalScope.parse(scope || "once")}}
 
   defp choice("approve", scope, _reason),
-    do:
-      {:error,
-       {:invalid_argument, "approve takes scope once, conversation or always, not #{scope}"}}
+    do: {:error, {:invalid_argument, "approve takes scope once, thread or always, not #{scope}"}}
 
   defp choice("decline", scope, reason) when scope in [nil, "once", "never"],
     do:

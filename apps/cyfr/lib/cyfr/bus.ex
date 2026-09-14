@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Topics do
+defmodule Cyfr.Bus do
   @moduledoc """
   Every PubSub topic in the system, named once, with the messages each one
   carries.
@@ -11,7 +11,7 @@ defmodule Cyfr.Topics do
   Naming them here makes a rename a compile error. `Sanctum.Notify` proves the
   shape: one function for the topic, a `@type` for what rides on it.
 
-  The `prism:` prefix is an in-VM PubSub address shared by the AQUA domain
+  The `bus:` prefix is an in-VM PubSub address shared by the AQUA domain
   and console, independent of module names.
 
   ## Athanor-scoped topics
@@ -51,7 +51,7 @@ defmodule Cyfr.Topics do
   metadata, measurements}`.
   """
   @spec executions(athanor()) :: String.t()
-  def executions(athanor), do: PubSub.topic("prism:executions", athanor)
+  def executions(athanor), do: PubSub.topic("bus:executions", athanor)
 
   @doc """
   MCP request log.
@@ -59,7 +59,7 @@ defmodule Cyfr.Topics do
   Messages: `{:request, metadata, measurements}`.
   """
   @spec requests(athanor()) :: String.t()
-  def requests(athanor), do: PubSub.topic("prism:requests", athanor)
+  def requests(athanor), do: PubSub.topic("bus:requests", athanor)
 
   @doc """
   Component install/remove.
@@ -69,7 +69,7 @@ defmodule Cyfr.Topics do
   from `Compendium.MCP.ComponentTool`.
   """
   @spec components(athanor()) :: String.t()
-  def components(athanor), do: PubSub.topic("prism:components", athanor)
+  def components(athanor), do: PubSub.topic("bus:components", athanor)
 
   @doc """
   Build lifecycle, across all builds of an athanor.
@@ -79,7 +79,7 @@ defmodule Cyfr.Topics do
   travels on `build/2` as a two-element tuple.
   """
   @spec builds(athanor()) :: String.t()
-  def builds(athanor), do: PubSub.topic("prism:builds", athanor)
+  def builds(athanor), do: PubSub.topic("bus:builds", athanor)
 
   @doc """
   A schedule fired or failed to fire.
@@ -88,7 +88,7 @@ defmodule Cyfr.Topics do
   Distinct from `schedules/1`, which carries changes to the schedule rows.
   """
   @spec schedule_runs(athanor()) :: String.t()
-  def schedule_runs(athanor), do: PubSub.topic("prism:schedule_runs", athanor)
+  def schedule_runs(athanor), do: PubSub.topic("bus:schedule_runs", athanor)
 
   @doc """
   Tincture invocation lifecycle.
@@ -97,7 +97,7 @@ defmodule Cyfr.Topics do
   measurements}`.
   """
   @spec tinctures(athanor()) :: String.t()
-  def tinctures(athanor), do: PubSub.topic("prism:tinctures", athanor)
+  def tinctures(athanor), do: PubSub.topic("bus:tinctures", athanor)
 
   @doc """
   Policy enforcement decisions — the allow/deny audit trail.
@@ -105,7 +105,7 @@ defmodule Cyfr.Topics do
   Messages: `{:policy_decision, metadata, measurements}`.
   """
   @spec enforcement(athanor()) :: String.t()
-  def enforcement(athanor), do: PubSub.topic("prism:enforcement", athanor)
+  def enforcement(athanor), do: PubSub.topic("bus:enforcement", athanor)
 
   @doc """
   Webhook rows changed.
@@ -113,7 +113,7 @@ defmodule Cyfr.Topics do
   Messages: `:webhooks_changed`.
   """
   @spec webhooks(athanor()) :: String.t()
-  def webhooks(athanor), do: PubSub.topic("prism:webhooks", athanor)
+  def webhooks(athanor), do: PubSub.topic("bus:webhooks", athanor)
 
   @doc """
   API key rows changed.
@@ -121,7 +121,7 @@ defmodule Cyfr.Topics do
   Messages: `:api_keys_changed`.
   """
   @spec api_keys(athanor()) :: String.t()
-  def api_keys(athanor), do: PubSub.topic("prism:api_keys", athanor)
+  def api_keys(athanor), do: PubSub.topic("bus:api_keys", athanor)
 
   @doc """
   External MCP server rows changed.
@@ -129,7 +129,7 @@ defmodule Cyfr.Topics do
   Messages: `:mcp_servers_changed`.
   """
   @spec mcp_servers(athanor()) :: String.t()
-  def mcp_servers(athanor), do: PubSub.topic("prism:mcp_servers", athanor)
+  def mcp_servers(athanor), do: PubSub.topic("bus:mcp_servers", athanor)
 
   @doc """
   Schedule rows changed — created, edited, paused, removed.
@@ -138,7 +138,7 @@ defmodule Cyfr.Topics do
   carries firings.
   """
   @spec schedules(athanor()) :: String.t()
-  def schedules(athanor), do: PubSub.topic("prism:schedules", athanor)
+  def schedules(athanor), do: PubSub.topic("bus:schedules", athanor)
 
   @doc """
   A vault entry in this athanor changed.
@@ -147,7 +147,7 @@ defmodule Cyfr.Topics do
   counterpart is `vault_changed_global/0`.
   """
   @spec vault_changed(athanor()) :: String.t()
-  def vault_changed(athanor), do: PubSub.topic("prism:vault_changed", athanor)
+  def vault_changed(athanor), do: PubSub.topic("bus:vault_changed", athanor)
 
   # ---------------------------------------------------------------------------
   # Athanor-scoped — one subject at a time
@@ -191,14 +191,14 @@ defmodule Cyfr.Topics do
     do: PubSub.topic("execution:events:#{execution_id}", athanor)
 
   @doc """
-  One conversation's live events, fanned out by `Aqua.Tape` and `Aqua.Runner`.
+  One thread's live events, fanned out by `Aqua.Tape` and `Aqua.Runner`.
 
-  Messages: `{:conversation, conversation_id, event}` — the event shapes
+  Messages: `{:thread, thread_id, event}` — the event shapes
   are documented on the runner, which owns a turn's vocabulary.
   """
-  @spec conversation(String.t(), athanor()) :: String.t()
-  def conversation(conversation_id, athanor),
-    do: PubSub.topic("conversation:#{conversation_id}", athanor)
+  @spec thread(String.t(), athanor()) :: String.t()
+  def thread(thread_id, athanor),
+    do: PubSub.topic("thread:#{thread_id}", athanor)
 
   # ---------------------------------------------------------------------------
   # Global — unscoped on purpose

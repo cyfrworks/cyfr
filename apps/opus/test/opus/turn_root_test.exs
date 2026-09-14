@@ -50,10 +50,10 @@ defmodule Opus.TurnRootTest do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
 
-    {:ok, conv} = Arca.ConversationStorage.create(ctx)
+    {:ok, thread} = Arca.ThreadStorage.create(ctx)
 
     {:ok, %{turn: turn}} =
-      TurnStorage.accept_message(ctx, conv.id, %{
+      TurnStorage.accept_message(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
         turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
       })

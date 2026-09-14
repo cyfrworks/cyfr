@@ -190,7 +190,7 @@ defmodule Aqua.Prompt do
   # told it sees the room's pile and nothing else; a turn in the person's
   # own athanor is told it may also search every estate they belong to.
   # The model never has to discover either by being refused.
-  @notes_rule "These notes belong to the estate this conversation is in. Propose " <>
+  @notes_rule "These notes belong to the estate this thread is in. Propose " <>
                 "`notes.keep` for what people would want found again — a decision, a " <>
                 "fact, a preference — and `notes.pin` only for what every future turn " <>
                 "needs; never keep a secret or a credential."

@@ -21,7 +21,7 @@ defmodule PrismWeb.AttachmentController do
 
   use PrismWeb, :controller
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Tenancy.Athanors
 
   # Types a browser may render inline safely; everything else downloads as
@@ -33,9 +33,9 @@ defmodule PrismWeb.AttachmentController do
 
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- PrismWeb.AuthHelpers.authenticate_session(token, athanor.id),
-         {:ok, msg} <- Conversations.get_message(ctx, message_id),
+         {:ok, msg} <- Threads.get_message(ctx, message_id),
          {:ok, ref} <- find_ref(msg, filename),
-         {:ok, path} <- Aqua.Attachments.blob_path(msg.conversation_id, msg.id, ref) do
+         {:ok, path} <- Aqua.Attachments.blob_path(msg.thread_id, msg.id, ref) do
       conn
       |> put_resp_header("content-type", serve_type(ref["media_type"]))
       |> put_resp_header("content-disposition", disposition(ref["filename"]))

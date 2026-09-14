@@ -185,7 +185,7 @@ defmodule Aqua.Loop.RequestTest do
              %{
                "role" => "user",
                "content" => [
-                 %{"text" => "[Summary of the conversation so far]\nWe discussed x."},
+                 %{"text" => "[Summary of the thread so far]\nWe discussed x."},
                  %{"text" => "new question"},
                  %{"text" => "## Read from the room\n\nBob: hi"}
                ]
@@ -211,7 +211,7 @@ defmodule Aqua.Loop.RequestTest do
     ]
 
     # Without the id there is nothing to aim at and the oldest message takes
-    # it, which is the whole defect in a conversation with history.
+    # it, which is the whole defect in a thread with history.
     assert [%{"content" => [_, ^image]}, _, %{"content" => [_]}] =
              Request.messages(rows, attachments: [image])
 

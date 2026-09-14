@@ -679,7 +679,7 @@ defmodule Locus.MCP do
       if build_id do
         Phoenix.PubSub.broadcast(
           Emissary.PubSub,
-          Cyfr.Topics.build(build_id, ctx),
+          Cyfr.Bus.build(build_id, ctx),
           {:build_progress,
            %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
         )

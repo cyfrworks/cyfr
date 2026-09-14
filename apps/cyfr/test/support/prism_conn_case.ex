@@ -33,7 +33,7 @@ defmodule PrismWeb.ConnCase do
 
   setup tags do
     # The sandbox owner is its own process, not the test: the work a page
-    # leaves behind (a conversation runner finishing a turn, a task on one
+    # leaves behind (a thread runner finishing a turn, a task on one
     # of the supervisors below) is stopped from `on_exit`, which runs after
     # the test process is gone. Were the test the owner, that work would
     # lose its connection first, crash, and be restarting when the teardown
@@ -60,7 +60,7 @@ defmodule PrismWeb.ConnCase do
         Task.Supervisor.terminate_child(sup, child)
       end
 
-      # Conversation runners the chat page started idle out on their own,
+      # Thread runners the chat page started idle out on their own,
       # which is far too late for the next test's sandbox.
       for {_, pid, _, _} <- DynamicSupervisor.which_children(Aqua.RunnerSupervisor),
           is_pid(pid) do

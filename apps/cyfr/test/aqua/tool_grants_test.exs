@@ -19,9 +19,9 @@ defmodule Aqua.ToolGrantsTest do
     attrs =
       Map.merge(
         %{
-          scope: "conversation",
+          scope: "thread",
           effect: "allow",
-          conversation_id: "conv_1",
+          thread_id: "thread_1",
           agent_name: "aqua",
           tool: "component",
           action: "pull"
@@ -40,7 +40,7 @@ defmodule Aqua.ToolGrantsTest do
         "destructive",
         "external",
         :never_standing,
-        :conversation_only,
+        :thread_only,
         :unknown_kind,
         :something_new
       ]
@@ -48,7 +48,7 @@ defmodule Aqua.ToolGrantsTest do
       for reason <- reasons do
         sentence = ToolGrants.refusal_message({:scope_not_permitted, reason})
         assert is_binary(sentence) and String.ends_with?(sentence, ".")
-        refute sentence =~ ~r/never_standing|conversation_only|unknown_kind|foreign_agent/
+        refute sentence =~ ~r/never_standing|thread_only|unknown_kind|foreign_agent/
       end
 
       # The runner spells the kind as the intent stores it (a string), the
@@ -62,8 +62,8 @@ defmodule Aqua.ToolGrantsTest do
       assert ToolGrants.refusal_message({:scope_not_permitted, :never_standing}) =~
                "one click at a time"
 
-      assert ToolGrants.refusal_message({:scope_not_permitted, :conversation_only}) =~
-               "this conversation only"
+      assert ToolGrants.refusal_message({:scope_not_permitted, :thread_only}) =~
+               "this thread only"
     end
   end
 
@@ -128,9 +128,9 @@ defmodule Aqua.ToolGrantsTest do
 
     test "allowed_keys/1 is grant-derived and a deny subtracts" do
       rows = [
-        %{effect: "allow", scope: "conversation", tool: "component", action: "pull"},
+        %{effect: "allow", scope: "thread", tool: "component", action: "pull"},
         %{effect: "deny", scope: "agent", tool: "component", action: "pull"},
-        %{effect: "allow", scope: "conversation", tool: "component", action: "list"}
+        %{effect: "allow", scope: "thread", tool: "component", action: "list"}
       ]
 
       assert ToolGrants.allowed_keys(rows) == MapSet.new([{"component", "list"}])
@@ -143,9 +143,9 @@ defmodule Aqua.ToolGrantsTest do
   end
 
   describe "scope" do
-    test "an agent-scope row carries no conversation, and is keyed by the estate", %{ctx: ctx} do
+    test "an agent-scope row carries no thread, and is keyed by the estate", %{ctx: ctx} do
       assert {:ok, row} = grant(ctx, %{scope: "agent"})
-      assert is_nil(row.conversation_id)
+      assert is_nil(row.thread_id)
       assert row.athanor_id == ctx.athanor_id
     end
 
@@ -185,7 +185,7 @@ defmodule Aqua.ToolGrantsTest do
       for action <- ~w(skill_create skill_update) do
         assert {:error, {:scope_not_permitted, :never_standing}} =
                  grant(ctx, %{tool: "aqua", action: action}),
-               "aqua.#{action} took a conversation-scope standing allow"
+               "aqua.#{action} took a thread-scope standing allow"
 
         assert {:error, {:scope_not_permitted, :never_standing}} =
                  grant(ctx, %{scope: "agent", tool: "aqua", action: action}),
@@ -205,9 +205,9 @@ defmodule Aqua.ToolGrantsTest do
       stale =
         %{
           athanor_id: ctx.athanor_id,
-          scope: "conversation",
+          scope: "thread",
           effect: "allow",
-          conversation_id: "conv_1",
+          thread_id: "thread_1",
           agent_name: "aqua",
           tool: "notes",
           action: "pin",
@@ -217,7 +217,7 @@ defmodule Aqua.ToolGrantsTest do
       assert {:ok, _} = Arca.ToolGrantStorage.put(stale)
       assert {:ok, _} = Arca.ToolGrantStorage.put(%{stale | action: "forget", effect: "deny"})
 
-      rows = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
+      rows = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
       assert length(rows) == 2
 
       assert ToolGrants.allowed_keys(rows) == MapSet.new()
@@ -226,14 +226,14 @@ defmodule Aqua.ToolGrantsTest do
                %{"notes.pin" => "ask", "notes.forget" => "deny"}
     end
 
-    test "a conversation-only action takes a conversation allow and refuses the agent scope",
+    test "a thread-only action takes a thread allow and refuses the agent scope",
          %{ctx: ctx} do
-      # `notes.keep` declares `standing: :conversation`: a filed note
+      # `notes.keep` declares `standing: :thread`: a filed note
       # follows the thread it was kept from, never the agent — so an
       # agent-scope allow is refused outright rather than narrowed.
       assert {:ok, _} = grant(ctx, %{tool: "notes", action: "keep"})
 
-      assert {:error, {:scope_not_permitted, :conversation_only}} =
+      assert {:error, {:scope_not_permitted, :thread_only}} =
                grant(ctx, %{scope: "agent", tool: "notes", action: "keep"})
     end
 
@@ -265,28 +265,28 @@ defmodule Aqua.ToolGrantsTest do
       {:ok, _} = grant(ctx, %{scope: "agent", effect: "allow"})
       {:ok, _} = grant(ctx, %{scope: "agent", effect: "deny"})
 
-      rows = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
+      rows = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
       assert [%{effect: "deny"}] = rows
     end
 
-    test "the same pair in two conversations is two rows", %{ctx: ctx} do
-      {:ok, _} = grant(ctx, %{conversation_id: "conv_1"})
-      {:ok, _} = grant(ctx, %{conversation_id: "conv_2"})
+    test "the same pair in two threads is two rows", %{ctx: ctx} do
+      {:ok, _} = grant(ctx, %{thread_id: "thread_1"})
+      {:ok, _} = grant(ctx, %{thread_id: "thread_2"})
 
-      assert [_] = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
-      assert [_] = rows(ctx, "conv_2", ctx.athanor_id, "aqua")
+      assert [_] = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
+      assert [_] = rows(ctx, "thread_2", ctx.athanor_id, "aqua")
     end
   end
 
-  describe "for_conversation/3" do
+  describe "for_thread/3" do
     test "sees this thread's grants and the agent's, but not another thread's", %{ctx: ctx} do
-      {:ok, _} = grant(ctx, %{conversation_id: "conv_1", tool: "component", action: "pull"})
-      {:ok, _} = grant(ctx, %{conversation_id: "conv_2", tool: "component", action: "list"})
+      {:ok, _} = grant(ctx, %{thread_id: "thread_1", tool: "component", action: "pull"})
+      {:ok, _} = grant(ctx, %{thread_id: "thread_2", tool: "component", action: "list"})
       {:ok, _} = grant(ctx, %{scope: "agent", tool: "record", action: "list"})
 
       keys =
         ctx
-        |> rows("conv_1", ctx.athanor_id, "aqua")
+        |> rows("thread_1", ctx.athanor_id, "aqua")
         |> ToolGrants.allowed_keys()
 
       assert MapSet.equal?(keys, MapSet.new([{"component", "pull"}, {"record", "list"}]))
@@ -295,7 +295,7 @@ defmodule Aqua.ToolGrantsTest do
     test "another agent's grants are not this agent's", %{ctx: ctx} do
       {:ok, _} = grant(ctx, %{agent_name: "planner"})
 
-      assert [] = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
+      assert [] = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
     end
   end
 
@@ -304,23 +304,23 @@ defmodule Aqua.ToolGrantsTest do
       {:ok, _} = grant(ctx, %{})
 
       key = %{
-        scope: "conversation",
-        conversation_id: "conv_1",
+        scope: "thread",
+        thread_id: "thread_1",
         agent_name: "aqua",
         tool: "component",
         action: "pull"
       }
 
       assert :ok = ToolGrants.revoke(ctx, key)
-      assert [] = rows(ctx, "conv_1", ctx.athanor_id, "aqua")
+      assert [] = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
       assert :ok = ToolGrants.revoke(ctx, key)
     end
   end
 
   # The rows a read answers — `{:ok, rows}`, since a store that cannot be
   # read is an error the caller refuses on, never an empty list.
-  defp rows(ctx, conversation_id, _owner, name) do
-    {:ok, rows} = ToolGrants.for_conversation(ctx, conversation_id, name)
+  defp rows(ctx, thread_id, _owner, name) do
+    {:ok, rows} = ToolGrants.for_thread(ctx, thread_id, name)
     rows
   end
 end

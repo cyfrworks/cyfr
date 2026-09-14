@@ -7,15 +7,15 @@ defmodule PrismWeb.AquaApprovalCard do
 
   The agent ends a reply with a `ui.request_approval` block carrying a
   `proposal: {tool, action, args}` payload. `Aqua.Approvals`
-  stores the intent as an approval message and `PrismWeb.ConversationPaneLive`
+  stores the intent as an approval message and `PrismWeb.ThreadPaneLive`
   renders this component for it. On approve/decline the parent LiveView
   dispatches the member's decision to the runner.
 
   Approve carries a *scope*:
 
     - `:once`         — run it this once (default)
-    - `:conversation` — run it, and record a standing allow for the same
-      `tool.action` in this conversation (a `tool_grants` row; it survives
+    - `:thread` — run it, and record a standing allow for the same
+      `tool.action` in this thread (a `tool_grants` row; it survives
       a restart and ends with the thread)
     - `:always`       — run it, and record the standing allow for the agent
       wherever it works (an agent-scope row in its home estate). The row
@@ -26,7 +26,7 @@ defmodule PrismWeb.AquaApprovalCard do
   same one the runner and the grant store enforce: none for a
   `:destructive` / `:external` action, none for an action declared
   `standing: false`, only "for this chat" for one declared
-  `standing: :conversation`. The refusal the runner would post is the
+  `standing: :thread`. The refusal the runner would post is the
   backstop for a race, not the outcome of a visible button.
 
   Risk visualization derives from the action's `kind` (read/write/execute/
@@ -182,10 +182,10 @@ defmodule PrismWeb.AquaApprovalCard do
             >
               <span>remember:</span>
               <button
-                :if={standing_offered?(@kind, @standing, :conversation)}
+                :if={standing_offered?(@kind, @standing, :thread)}
                 type="button"
                 phx-click="approval:approve"
-                phx-value-scope="conversation"
+                phx-value-scope="thread"
                 phx-target={@myself}
                 class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
               >
@@ -209,7 +209,7 @@ defmodule PrismWeb.AquaApprovalCard do
           <div class="mt-2 flex items-center gap-2 text-[11px]">
             <span class="text-green-400">✓ Approved</span>
             <span :if={@resolved_by} class="text-gray-500">by {@resolved_by}</span>
-            <span :if={@scope == :conversation} class="text-gray-500">
+            <span :if={@scope == :thread} class="text-gray-500">
               — auto-approved for this chat
             </span>
             <span :if={@scope == :always} class="text-gray-500">
@@ -317,7 +317,7 @@ defmodule PrismWeb.AquaApprovalCard do
   defp action_kind(_), do: nil
 
   # The action's standing rule as the intent carries it: `false` (never),
-  # `"conversation"` (this thread only) or absent (either scope).
+  # `"thread"` (this thread only) or absent (either scope).
   defp standing(%{"standing" => standing}), do: standing
   defp standing(%{standing: standing}), do: standing
   defp standing(_), do: nil
@@ -329,7 +329,7 @@ defmodule PrismWeb.AquaApprovalCard do
     do: standing_offered(kind, Cyfr.Ops.Annotations.standing(standing), scope)
 
   defp standing_offered(_kind, false, _scope), do: false
-  defp standing_offered(_kind, :conversation, :always), do: false
+  defp standing_offered(_kind, :thread, :always), do: false
   defp standing_offered(_kind, _standing, _scope), do: true
 
   defp safe_atom(s), do: PrismWeb.AquaLive.Catalog.existing_atom(s)

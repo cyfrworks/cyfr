@@ -50,8 +50,8 @@ defmodule Arca.Storage do
     the way it does for rows, with a context focused on it. Each scope has
     exactly one spelling module for its intra-root shapes:
     `components/` → `Compendium.ComponentPath`; `aqua/` →
-    `Compendium.AquaPath`; `conversations/` →
-    `Arca.ConversationStorage.blob_root/1` (the conversation domain's one
+    `Compendium.AquaPath`; `threads/` →
+    `Arca.ThreadStorage.blob_root/1` (the thread domain's one
     module owns both planes' spellings); `data/` — what components
     store — has none by design (the guest names its own paths inside it;
     `guest_scopes/0` says which roots a guest may name at all, applied by
@@ -85,7 +85,7 @@ defmodule Arca.Storage do
       └── athanors/{athanor_id}/         # Tenant-scoped: everything the athanor owns
           ├── components/{type}s/{publisher}/{name}/{version}/
           ├── aqua/                      # the athanor's AQUA agent definitions
-          ├── conversations/             # chat attachment blobs
+          ├── threads/             # chat attachment blobs
           ├── payloads/                  # retained execution bodies — tenant-reserved, system-written
           └── data/                      # what components store — the guest's `data/` scope
 
@@ -231,8 +231,8 @@ defmodule Arca.Storage do
   @layout [
     {"aqua", :tenant, nil, :overlay, :shaped},
     {"components", :tenant, "components", :overlay, :shaped},
-    {"conversations", :tenant, nil, nil, :read},
-    # Host-only notes belong to the athanor in focus and survive conversation
+    {"threads", :tenant, nil, nil, :read},
+    # Host-only notes belong to the athanor in focus and survive thread
     # deletion. Guests have no direct storage scope for this root.
     {"notes", :tenant, nil, nil, :read},
     # An execution's retained input and result bytes, referenced by an
@@ -315,7 +315,7 @@ defmodule Arca.Storage do
   # The guest (WASM) storage vocabulary: the roots a guest may name, each
   # mapped to the tenant scope it stores under — the athanor's root of the
   # same name, a physical sibling of the host scopes (aqua/,
-  # conversations/) so a `data/` grant can never see them.
+  # threads/) so a `data/` grant can never see them.
   @guest_scopes Map.new(
                   for {root, _class, guest, _seed, _tier} <- @layout,
                       guest != nil,

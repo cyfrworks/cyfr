@@ -368,7 +368,7 @@ defmodule Opus.MCP do
      "execution.#{action} cannot be invoked in-chain; a component runs children through the formula host, not by re-rooting"}
   end
 
-  # An agent is addressed in a conversation (`conversation.send`) and runs
+  # An agent is addressed in a thread (`thread.send`) and runs
   # under the turn that claims its root; it is never rooted from here,
   # whatever the caller's grants, so the harness and the console start a
   # turn one way.
@@ -379,7 +379,7 @@ defmodule Opus.MCP do
     if Compendium.AgentSource.agent_ref?(reference) do
       {:error,
        {:invalid_argument,
-        "#{reference} is an agent: it is addressed in a conversation (conversation.send), never run"}}
+        "#{reference} is an agent: it is addressed in a thread (thread.send), never run"}}
     else
       start_root(action, ctx, args)
     end

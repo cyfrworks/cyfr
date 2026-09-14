@@ -59,7 +59,7 @@ defmodule Aqua.AttachmentsTest do
       %{"filename" => "report.pdf", "media_type" => "application/pdf", "bytes" => "two"}
     ]
 
-    assert {:ok, [a, b]} = Attachments.store(ctx, "conv_x", "msg_y", files)
+    assert {:ok, [a, b]} = Attachments.store(ctx, "thread_x", "msg_y", files)
 
     # No storage path in the persisted ref — the blob is named by its
     # stored name alone, and two same-named uploads stay distinct.
@@ -68,14 +68,14 @@ defmodule Aqua.AttachmentsTest do
     assert b["stored_name"] == "1-report.pdf"
     assert a["filename"] == "report.pdf" and b["filename"] == "report.pdf"
 
-    assert {:ok, pa} = Attachments.blob_path("conv_x", "msg_y", a)
-    assert {:ok, pb} = Attachments.blob_path("conv_x", "msg_y", b)
-    assert pa == ["conversations", "conv_x", "msg_y", "0-report.pdf"]
+    assert {:ok, pa} = Attachments.blob_path("thread_x", "msg_y", a)
+    assert {:ok, pb} = Attachments.blob_path("thread_x", "msg_y", b)
+    assert pa == ["threads", "thread_x", "msg_y", "0-report.pdf"]
     assert {:ok, "one"} = Arca.get(ctx, pa)
     assert {:ok, "two"} = Arca.get(ctx, pb)
 
     assert [%{"data" => d1}, %{"data" => d2}] =
-             Attachments.load(ctx, "conv_x", [
+             Attachments.load(ctx, "thread_x", [
                %{message_id: "msg_y", ref: a},
                %{message_id: "msg_y", ref: b}
              ])
@@ -83,7 +83,7 @@ defmodule Aqua.AttachmentsTest do
     assert Base.decode64!(d1) == "one" and Base.decode64!(d2) == "two"
 
     # A ref without a stored name references no blob at all.
-    assert Attachments.blob_path("conv_x", "msg_y", %{"filename" => "report.pdf"}) == :error
+    assert Attachments.blob_path("thread_x", "msg_y", %{"filename" => "report.pdf"}) == :error
   end
 
   test "a filename spelled like Arca's reserved tmp shape still stores", %{ctx: ctx} do
@@ -99,8 +99,8 @@ defmodule Aqua.AttachmentsTest do
     refute Arca.Storage.tmp_name?(Attachments.safe_filename(long))
 
     files = [%{"filename" => "report.tmp.1", "media_type" => "text/plain", "bytes" => "x"}]
-    assert {:ok, [ref]} = Attachments.store(ctx, "conv_t", "msg_t", files)
-    assert {:ok, path} = Attachments.blob_path("conv_t", "msg_t", ref)
+    assert {:ok, [ref]} = Attachments.store(ctx, "thread_t", "msg_t", files)
+    assert {:ok, path} = Attachments.blob_path("thread_t", "msg_t", ref)
     assert {:ok, "x"} = Arca.get(ctx, path)
   end
 
@@ -134,11 +134,11 @@ defmodule Aqua.AttachmentsTest do
       %{"filename" => "b.txt", "media_type" => "text/plain", "bytes" => "FAIL-THIS-WRITE"}
     ]
 
-    assert {:error, :storage_error} = Attachments.store(ctx, "conv_r", "msg_r", files)
+    assert {:error, :storage_error} = Attachments.store(ctx, "thread_r", "msg_r", files)
 
     # The first file was written, then rolled back — a message never
     # references a partial set, and no orphan blob remains.
-    refute Arca.exists?(ctx, ["conversations", "conv_r", "msg_r", "0-a.txt"])
+    refute Arca.exists?(ctx, ["threads", "thread_r", "msg_r", "0-a.txt"])
   end
 
   test "bounds: too many files, a file too large, or a full athanor writes nothing", %{ctx: ctx} do
@@ -158,7 +158,7 @@ defmodule Aqua.AttachmentsTest do
     assert {:ok, _} = Attachments.store(ctx, "c", "m1", ok)
     over = [%{"filename" => "more", "media_type" => "text/plain", "bytes" => "1234567"}]
     assert {:error, :storage_full} = Attachments.store(ctx, "c", "m2", over)
-    refute Arca.exists?(ctx, ["conversations", "c", "m2", "0-more"])
+    refute Arca.exists?(ctx, ["threads", "c", "m2", "0-more"])
   end
 
   test "an unverifiable usage walk surfaces as itself, not a generic error", %{ctx: ctx} do

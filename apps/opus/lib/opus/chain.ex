@@ -418,7 +418,7 @@ defmodule Opus.Chain do
   Load the root authority a reference would execute under, without
   executing anything — the shape an approval flow needs: a human decision
   may only unblock a call, never supply authority, so the approved call
-  runs under the same consented authority the conversation's executions
+  runs under the same consented authority the thread's executions
   do.
 
   It is also the *first* step of a turn: `Aqua.Loop` resolves and pins the

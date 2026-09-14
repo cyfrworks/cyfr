@@ -1,20 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.ConversationStorage do
+defmodule Arca.ThreadStorage do
   @moduledoc """
-  Persistence for the athanor's conversations and their messages — the
+  Persistence for the athanor's threads and their messages — the
   durable record every member reads (`Aqua.Tape` writes it,
-  `PrismWeb.ConversationPaneLive` shows it).
+  `PrismWeb.ThreadPaneLive` shows it).
 
-  A conversation belongs to the athanor of the context that opened it;
+  A thread belongs to the athanor of the context that opened it;
   members are interchangeable, so any member of that athanor may read it,
   send the next message or decide a pending approval. Reads scope through
   `Arca.QueryHelpers.where_tenant/2` (a context without an athanor raises,
   fail closed) and every write stamps the context's athanor.
 
   Message rows are appended in `seq` order by `append/3`; the unique index
-  on `(conversation_id, seq)` is what makes two writers appending at once
+  on `(thread_id, seq)` is what makes two writers appending at once
   safe — the loser retries with the next number. Approval rows move through
   `resolve_approval/4`, a compare-and-set on `status`, so two members
   clicking the same card cannot both run it.
@@ -25,7 +25,7 @@ defmodule Arca.ConversationStorage do
 
   alias Arca.QueryHelpers
   alias Arca.Repo
-  alias Arca.Schemas.Conversation
+  alias Arca.Schemas.Thread
   alias Arca.Schemas.Message
   alias Sanctum.Context
 
@@ -33,20 +33,20 @@ defmodule Arca.ConversationStorage do
   @agent_author Message.agent_author()
   @system_author Message.system_author()
 
-  @default_title "New conversation"
+  @default_title "New thread"
   @title_max 80
 
   # ---------------------------------------------------------------------------
-  # Conversations
+  # Threads
   # ---------------------------------------------------------------------------
 
-  @doc "The athanor's conversations, most recently active first."
-  @spec list(Context.t(), keyword()) :: [Conversation.t()] | {:error, :database_error}
+  @doc "The athanor's threads, most recently active first."
+  @spec list(Context.t(), keyword()) :: [Thread.t()] | {:error, :database_error}
   def list(%Context{} = ctx, opts \\ []) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.list", fn ->
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.list", fn ->
       limit = Keyword.get(opts, :limit, 200)
 
-      from(c in Conversation,
+      from(c in Thread,
         order_by: [desc: coalesce(c.last_message_at, c.inserted_at)],
         limit: ^limit
       )
@@ -55,23 +55,23 @@ defmodule Arca.ConversationStorage do
     end)
   end
 
-  @doc "One conversation of the context's athanor."
+  @doc "One thread of the context's athanor."
   @spec get(Context.t(), String.t()) ::
-          {:ok, Conversation.t()} | {:error, :not_found | :database_error}
+          {:ok, Thread.t()} | {:error, :not_found | :database_error}
   def get(%Context{} = ctx, id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.get", fn ->
-      from(c in Conversation, where: c.id == ^id)
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.get", fn ->
+      from(c in Thread, where: c.id == ^id)
       |> QueryHelpers.where_tenant(ctx)
       |> Repo.one()
       |> case do
         nil -> {:error, :not_found}
-        conv -> {:ok, conv}
+        thread -> {:ok, thread}
       end
     end)
   end
 
   @doc """
-  Open a new conversation in the context's athanor, attributed to its user.
+  Open a new thread in the context's athanor, attributed to its user.
 
   The creator starts out following it — a thread unfollowed by its own
   author would be born invisible — and everyone else follows it
@@ -79,66 +79,66 @@ defmodule Arca.ConversationStorage do
   must not follow other members.
   """
   @spec create(Context.t(), map()) ::
-          {:ok, Conversation.t()} | {:error, Ecto.Changeset.t() | :database_error}
+          {:ok, Thread.t()} | {:error, Ecto.Changeset.t() | :database_error}
   def create(%Context{} = ctx, attrs \\ %{}) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.create", fn ->
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.create", fn ->
       Context.require_tenant!(ctx)
 
       # A thread is a row any member's client can mint from the wire, so
       # the estate's count is held to the operator's cap like its DMs are.
       with :ok <-
-             Sanctum.Tenancy.Caps.check_counted(:max_conversations_per_athanor, fn ->
+             Sanctum.Tenancy.Caps.check_counted(:max_threads_per_athanor, fn ->
                {:ok, count(ctx)}
              end),
-           {:ok, conv} <-
-             %Conversation{}
-             |> Conversation.changeset(%{
-               id: attrs[:id] || Cyfr.UUID7.generate_id("conv"),
+           {:ok, thread} <-
+             %Thread{}
+             |> Thread.changeset(%{
+               id: attrs[:id] || Cyfr.UUID7.generate_id("thread"),
                athanor_id: ctx.athanor_id,
                title: attrs[:title] || @default_title,
                created_by: ctx.user_id || @system_author
              })
              |> Repo.insert() do
-        subscribe_creator(ctx, conv)
-        {:ok, conv}
+        subscribe_creator(ctx, thread)
+        {:ok, thread}
       end
     end)
   end
 
   # How many threads the estate holds — read inside `create/2`'s rescue.
   defp count(%Context{} = ctx) do
-    Repo.aggregate(from(c in Conversation, where: c.athanor_id == ^ctx.athanor_id), :count)
+    Repo.aggregate(from(c in Thread, where: c.athanor_id == ^ctx.athanor_id), :count)
   end
 
-  # Best effort: a topic that exists but is in nobody's sidebar is a
+  # Best effort: a thread that exists but is in nobody's sidebar is a
   # recoverable annoyance (follow it), where failing the create over it
   # would lose the thread itself.
-  defp subscribe_creator(%Context{user_id: creator} = ctx, conv) when is_binary(creator) do
-    Arca.TopicSubscriptionStorage.follow(ctx, conv.id, creator)
+  defp subscribe_creator(%Context{user_id: creator} = ctx, thread) when is_binary(creator) do
+    Arca.ThreadSubscriptionStorage.follow(ctx, thread.id, creator)
   end
 
-  defp subscribe_creator(_ctx, _conv), do: :ok
+  defp subscribe_creator(_ctx, _thread), do: :ok
 
   @doc """
-  Update a conversation's title, orchestrator, turn cursor or last
+  Update a thread's title, orchestrator, turn cursor or last
   activity.
   """
   @spec update(Context.t(), String.t(), map()) ::
-          {:ok, Conversation.t()} | {:error, :not_found | :database_error | Ecto.Changeset.t()}
+          {:ok, Thread.t()} | {:error, :not_found | :database_error | Ecto.Changeset.t()}
   def update(%Context{} = ctx, id, attrs) when is_binary(id) and is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.update", fn ->
-      with {:ok, conv} <- get(ctx, id) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.update", fn ->
+      with {:ok, thread} <- get(ctx, id) do
         attrs =
           attrs
           |> Map.take([:title, :orchestrator, :turn_seq, :last_message_at])
 
-        conv |> Conversation.changeset(attrs) |> Repo.update()
+        thread |> Thread.changeset(attrs) |> Repo.update()
       end
     end)
   end
 
   @doc """
-  Delete a conversation, its messages and its attachment blobs
+  Delete a thread, its messages and its attachment blobs
   (`blob_root/1` under the athanor's storage). Bytes go FIRST: a failed
   blob delete keeps the rows and answers
   `{:error, {:storage_delete_failed, reason}}`, so the DB can never claim
@@ -148,40 +148,39 @@ defmodule Arca.ConversationStorage do
   @spec delete(Context.t(), String.t()) ::
           :ok | {:error, :not_found | {:storage_delete_failed, term()}}
   def delete(%Context{} = ctx, id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.delete", fn -> do_delete(ctx, id) end)
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.delete", fn -> do_delete(ctx, id) end)
   end
 
   defp do_delete(ctx, id) do
-    with {:ok, conv} <- get(ctx, id),
-         :ok <- delete_blobs(ctx, conv.id) do
-      # arca:unscoped-ok get(ctx, id) above establishes conversation ownership.
+    with {:ok, thread} <- get(ctx, id),
+         :ok <- delete_blobs(ctx, thread.id) do
+      # arca:unscoped-ok get(ctx, id) above establishes thread ownership.
       # Delete its messages, follows, and grants. Explicit message deletion
       # also covers SQLite connections without foreign_keys=ON.
       Repo.transaction(fn ->
-        Repo.delete_all(from(m in Message, where: m.conversation_id == ^conv.id))
-        delete_conversation_satellites([conv.id])
-        Repo.delete!(conv)
+        Repo.delete_all(from(m in Message, where: m.thread_id == ^thread.id))
+        delete_thread_satellites([thread.id])
+        Repo.delete!(thread)
       end)
 
       :ok
     end
   end
 
-  # What rides with a conversation besides its messages: who followed it,
+  # What rides with a thread besides its messages: who followed it,
   # and what its members already answered about tool calls in it.
   # Agent-scope grants are untouched — they belong to the agent, not the
   # thread.
   #
   # arca:unscoped-ok scoped transitively — every id comes from a read the
   # caller already tenant-proved (do_delete's `get`, delete_before's
-  # `where_athanor`), and each row names exactly one conversation.
-  defp delete_conversation_satellites(ids) do
-    Repo.delete_all(from(s in Arca.Schemas.TopicSubscription, where: s.conversation_id in ^ids))
+  # `where_athanor`), and each row names exactly one thread.
+  defp delete_thread_satellites(ids) do
+    Repo.delete_all(from(s in Arca.Schemas.ThreadSubscription, where: s.thread_id in ^ids))
 
     Repo.delete_all(
       from(g in Arca.Schemas.ToolGrant,
-        where:
-          g.scope == ^Arca.Schemas.ToolGrant.conversation_scope() and g.conversation_id in ^ids
+        where: g.scope == ^Arca.Schemas.ToolGrant.thread_scope() and g.thread_id in ^ids
       )
     )
 
@@ -189,34 +188,34 @@ defmodule Arca.ConversationStorage do
   end
 
   @doc """
-  Where a conversation's attachment bytes live under the athanor's storage:
-  `conversations/<conversation_id>/<message_id>/<filename>`.
+  Where a thread's attachment bytes live under the athanor's storage:
+  `threads/<thread_id>/<message_id>/<filename>`.
   """
   @spec blob_root(String.t()) :: [String.t()]
-  def blob_root(conversation_id) when is_binary(conversation_id),
-    do: ["conversations", conversation_id]
+  def blob_root(thread_id) when is_binary(thread_id),
+    do: ["threads", thread_id]
 
   @doc """
-  Reclaim conversation blob directories no row backs — the retention
+  Reclaim thread blob directories no row backs — the retention
   sweep's leg. The directories are snapshotted FIRST, then the surviving
-  rows: blobs are only ever written under an existing conversation row
+  rows: blobs are only ever written under an existing thread row
   (`Aqua.Attachments`), so a snapshotted directory either has a row
   (kept) or is a genuine orphan — a concurrent create can never lose its
   bytes to this sweep.
   """
   @spec sweep_orphaned_blobs(Context.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep_orphaned_blobs(%Context{} = ctx) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.sweep_orphaned_blobs", fn ->
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.sweep_orphaned_blobs", fn ->
       do_sweep_orphaned_blobs(ctx)
     end)
   end
 
   defp do_sweep_orphaned_blobs(ctx) do
-    with {:ok, entries} <- Arca.list_typed(ctx, ["conversations"]) do
+    with {:ok, entries} <- Arca.list_typed(ctx, ["threads"]) do
       dirs = for {name, :dir} <- entries, do: name
 
       alive =
-        from(c in Conversation, select: c.id)
+        from(c in Thread, select: c.id)
         |> QueryHelpers.where_tenant(ctx)
         |> Repo.all()
         |> MapSet.new()
@@ -234,8 +233,8 @@ defmodule Arca.ConversationStorage do
   end
 
   # Bytes-first, typed: `:not_found` counts as deleted (nothing stored).
-  defp delete_blobs(ctx, conversation_id) do
-    case Arca.delete_tree(ctx, blob_root(conversation_id)) do
+  defp delete_blobs(ctx, thread_id) do
+    case Arca.delete_tree(ctx, blob_root(thread_id)) do
       :ok -> :ok
       {:error, :not_found} -> :ok
       {:error, reason} -> {:error, {:storage_delete_failed, reason}}
@@ -243,16 +242,16 @@ defmodule Arca.ConversationStorage do
   end
 
   @doc """
-  The messages of a conversation, oldest first. `after_seq:` / `upto_seq:`
+  The messages of a thread, oldest first. `after_seq:` / `upto_seq:`
   bound the window (exclusive / inclusive) — a turn's task is the human
   rows between the last turn's cursor and the message that started it.
   """
   @spec messages(Context.t(), String.t(), keyword()) ::
           [Message.t()] | {:error, :database_error}
-  def messages(%Context{} = ctx, conversation_id, opts \\ []) when is_binary(conversation_id) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.messages", fn ->
+  def messages(%Context{} = ctx, thread_id, opts \\ []) when is_binary(thread_id) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.messages", fn ->
       query =
-        from(m in Message, where: m.conversation_id == ^conversation_id, order_by: [asc: m.seq])
+        from(m in Message, where: m.thread_id == ^thread_id, order_by: [asc: m.seq])
 
       query =
         case Keyword.get(opts, :after_seq) do
@@ -267,7 +266,7 @@ defmodule Arca.ConversationStorage do
         end
 
       # `:limit` bounds a read that would otherwise load every row of a
-      # long-lived conversation; unset loads all (turn assembly needs the
+      # long-lived thread; unset loads all (turn assembly needs the
       # whole transcript).
       query =
         case Keyword.get(opts, :limit) do
@@ -282,19 +281,19 @@ defmodule Arca.ConversationStorage do
   end
 
   @doc """
-  The newest `n` messages of a conversation, in ascending order.
+  The newest `n` messages of a thread, in ascending order.
 
   The console's transcript view: `messages/3`'s `:limit` takes the OLDEST
   rows (it bounds windowed turn assembly), which is the wrong end for a
-  reader opening a long-lived conversation.
+  reader opening a long-lived thread.
   """
   @spec latest_messages(Context.t(), String.t(), pos_integer()) ::
           [Message.t()] | {:error, term()}
-  def latest_messages(%Context{} = ctx, conversation_id, n)
-      when is_binary(conversation_id) and is_integer(n) and n > 0 do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.latest_messages", fn ->
+  def latest_messages(%Context{} = ctx, thread_id, n)
+      when is_binary(thread_id) and is_integer(n) and n > 0 do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.latest_messages", fn ->
       from(m in Message,
-        where: m.conversation_id == ^conversation_id,
+        where: m.thread_id == ^thread_id,
         order_by: [desc: m.seq],
         limit: ^n
       )
@@ -308,7 +307,7 @@ defmodule Arca.ConversationStorage do
   @spec get_message(Context.t(), String.t()) ::
           {:ok, Message.t()} | {:error, :not_found | :database_error}
   def get_message(%Context{} = ctx, id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.get_message", fn ->
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.get_message", fn ->
       from(m in Message, where: m.id == ^id)
       |> QueryHelpers.where_tenant(ctx)
       |> Repo.one()
@@ -319,14 +318,14 @@ defmodule Arca.ConversationStorage do
     end)
   end
 
-  @doc "The approval rows of a conversation still waiting on a decision."
+  @doc "The approval rows of a thread still waiting on a decision."
   @spec pending_approvals(Context.t(), String.t()) ::
           [Message.t()] | {:error, :database_error}
-  def pending_approvals(%Context{} = ctx, conversation_id) when is_binary(conversation_id) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.pending_approvals", fn ->
+  def pending_approvals(%Context{} = ctx, thread_id) when is_binary(thread_id) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.pending_approvals", fn ->
       from(m in Message,
         where:
-          m.conversation_id == ^conversation_id and m.kind == "approval" and
+          m.thread_id == ^thread_id and m.kind == "approval" and
             m.status == "pending",
         order_by: [asc: m.seq]
       )
@@ -336,25 +335,25 @@ defmodule Arca.ConversationStorage do
   end
 
   @doc """
-  Append one message to a conversation.
+  Append one message to a thread.
 
   `attrs`: `:author` (required), `:kind` (default `"text"`), `:content`,
   `:payload` (a map, stored as JSON), `:status`, `:execution_id`. The next
   `seq` is taken inside a transaction; a concurrent appender losing the race
   on the unique index retries. The first user text message titles a
-  conversation that still carries the default title.
+  thread that still carries the default title.
   """
   @spec append(Context.t(), String.t(), map()) ::
           {:ok, Message.t()} | {:error, :not_found | :seq_conflict | Ecto.Changeset.t()}
-  def append(%Context{} = ctx, conversation_id, attrs) when is_map(attrs) do
+  def append(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
     # Rescued like every other write here: the transaction is inside the
     # private helper, where `Arca.DbRescueCoverageTest` (which inspects
     # public heads for repo calls) could not see it — so an outage raised
     # `DBConnection.ConnectionError` into the runner and the LiveView
     # instead of the module's `{:error, :database_error}`.
-    Arca.Repo.Errors.with_db_rescue("Arca.ConversationStorage.append", fn ->
-      with {:ok, conv} <- get(ctx, conversation_id) do
-        do_append(ctx, conv, attrs, 3)
+    Arca.Repo.Errors.with_db_rescue("Arca.ThreadStorage.append", fn ->
+      with {:ok, thread} <- get(ctx, thread_id) do
+        do_append(ctx, thread, attrs, 3)
       end
     end)
   end
@@ -362,21 +361,21 @@ defmodule Arca.ConversationStorage do
   @doc """
   Insert one message inside the caller's transaction, at the next `seq`,
   raising on a store error so the caller's transaction rolls back. The
-  `(conversation_id, seq)` race surfaces as `Ecto.InvalidChangesetError`
-  carrying a `:unique` constraint on `:conversation_id`; a caller that
+  `(thread_id, seq)` race surfaces as `Ecto.InvalidChangesetError`
+  carrying a `:unique` constraint on `:thread_id`; a caller that
   owns the transaction retries the whole transaction on it
-  (`Arca.TurnStorage.with_seq_retry/1`). Titles the conversation from its
+  (`Arca.TurnStorage.with_seq_retry/1`). Titles the thread from its
   first user text and bumps `last_message_at` as `append/3` does.
   """
-  @spec insert_message!(Context.t(), Conversation.t(), map()) :: Message.t()
+  @spec insert_message!(Context.t(), Thread.t(), map()) :: Message.t()
   # arca:db-raise-ok inside the caller's transaction
-  def insert_message!(%Context{} = ctx, %Conversation{} = conv, attrs) when is_map(attrs) do
+  def insert_message!(%Context{} = ctx, %Thread{} = thread, attrs) when is_map(attrs) do
     now = DateTime.utc_now()
 
     seq =
       Repo.one(
         from(m in Message,
-          where: m.conversation_id == ^conv.id and m.athanor_id == ^ctx.athanor_id,
+          where: m.thread_id == ^thread.id and m.athanor_id == ^ctx.athanor_id,
           select: coalesce(max(m.seq), 0)
         )
       ) + 1
@@ -385,7 +384,7 @@ defmodule Arca.ConversationStorage do
       Repo.insert!(
         Message.changeset(%Message{}, %{
           id: attrs[:id] || Cyfr.UUID7.generate_id("msg"),
-          conversation_id: conv.id,
+          thread_id: thread.id,
           athanor_id: ctx.athanor_id,
           seq: seq,
           author: attrs[:author],
@@ -401,22 +400,22 @@ defmodule Arca.ConversationStorage do
         })
       )
 
-    conv
-    |> Conversation.changeset(%{last_message_at: now, title: title_after(conv, msg)})
+    thread
+    |> Thread.changeset(%{last_message_at: now, title: title_after(thread, msg)})
     |> Repo.update!()
 
     msg
   end
 
-  @doc "The message a sender accepted under `client_id` in this conversation, if any."
+  @doc "The message a sender accepted under `client_id` in this thread, if any."
   @spec get_by_client_id(Context.t(), String.t(), String.t()) ::
           {:ok, Message.t()} | {:error, :not_found | :database_error}
-  def get_by_client_id(%Context{} = ctx, conversation_id, client_id)
-      when is_binary(conversation_id) and is_binary(client_id) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.get_by_client_id", fn ->
+  def get_by_client_id(%Context{} = ctx, thread_id, client_id)
+      when is_binary(thread_id) and is_binary(client_id) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.get_by_client_id", fn ->
       case Repo.one(
              from(m in Message,
-               where: m.conversation_id == ^conversation_id and m.athanor_id == ^ctx.athanor_id,
+               where: m.thread_id == ^thread_id and m.athanor_id == ^ctx.athanor_id,
                where: m.client_id == ^client_id
              )
            ) do
@@ -426,9 +425,9 @@ defmodule Arca.ConversationStorage do
     end)
   end
 
-  defp do_append(_ctx, _conv, _attrs, 0), do: {:error, :seq_conflict}
+  defp do_append(_ctx, _thread, _attrs, 0), do: {:error, :seq_conflict}
 
-  defp do_append(ctx, conv, attrs, retries) do
+  defp do_append(ctx, thread, attrs, retries) do
     now = DateTime.utc_now()
 
     result =
@@ -436,7 +435,7 @@ defmodule Arca.ConversationStorage do
         seq =
           Repo.one(
             from(m in Message,
-              where: m.conversation_id == ^conv.id,
+              where: m.thread_id == ^thread.id,
               select: coalesce(max(m.seq), 0)
             )
           ) + 1
@@ -444,7 +443,7 @@ defmodule Arca.ConversationStorage do
         changeset =
           Message.changeset(%Message{}, %{
             id: attrs[:id] || Cyfr.UUID7.generate_id("msg"),
-            conversation_id: conv.id,
+            thread_id: thread.id,
             athanor_id: ctx.athanor_id,
             seq: seq,
             author: attrs[:author],
@@ -461,10 +460,10 @@ defmodule Arca.ConversationStorage do
 
         case Repo.insert(changeset) do
           {:ok, msg} ->
-            conv
-            |> Conversation.changeset(%{
+            thread
+            |> Thread.changeset(%{
               last_message_at: now,
-              title: title_after(conv, msg)
+              title: title_after(thread, msg)
             })
             |> Repo.update!()
 
@@ -480,12 +479,12 @@ defmodule Arca.ConversationStorage do
         {:ok, msg}
 
       {:error, %Ecto.Changeset{errors: errors} = changeset} ->
-        # Only the (conversation_id, seq) unique race retries — any other
+        # Only the (thread_id, seq) unique race retries — any other
         # changeset error on that field is a real refusal, not the race.
-        case Keyword.get(errors, :conversation_id) do
+        case Keyword.get(errors, :thread_id) do
           {_msg, meta} when is_list(meta) ->
             if Keyword.get(meta, :constraint) == :unique,
-              do: do_append(ctx, conv, attrs, retries - 1),
+              do: do_append(ctx, thread, attrs, retries - 1),
               else: {:error, changeset}
 
           _other ->
@@ -494,9 +493,9 @@ defmodule Arca.ConversationStorage do
     end
   end
 
-  # A conversation is named by its first user text; later renames are the
+  # A thread is named by its first user text; later renames are the
   # user's own (`update/3`).
-  defp title_after(%Conversation{title: @default_title}, %Message{
+  defp title_after(%Thread{title: @default_title}, %Message{
          kind: "text",
          author: author,
          content: content
@@ -512,13 +511,13 @@ defmodule Arca.ConversationStorage do
     end
   end
 
-  defp title_after(%Conversation{title: title}, _msg), do: title
+  defp title_after(%Thread{title: title}, _msg), do: title
 
   @doc "Replace a message's content/payload (the runner finalising a streamed turn)."
   @spec update_message(Context.t(), String.t(), map()) ::
           {:ok, Message.t()} | {:error, :not_found | :database_error | Ecto.Changeset.t()}
   def update_message(%Context{} = ctx, id, attrs) when is_binary(id) and is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.update_message", fn ->
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.update_message", fn ->
       with {:ok, msg} <- get_message(ctx, id) do
         attrs =
           attrs
@@ -543,7 +542,7 @@ defmodule Arca.ConversationStorage do
           {:ok, Message.t()} | {:error, :not_found | :already_resolved | :database_error}
   def resolve_approval(%Context{} = ctx, id, from, to, attrs \\ %{})
       when is_binary(id) and to in ~w(running approved declined error) do
-    Arca.Repo.Errors.with_db_rescue("ConversationStorage.resolve_approval", fn ->
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.resolve_approval", fn ->
       do_resolve_approval(ctx, id, from, to, attrs)
     end)
   end
@@ -595,14 +594,14 @@ defmodule Arca.ConversationStorage do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Delete the athanor's conversations whose last activity is older than
+  Delete the athanor's threads whose last activity is older than
   `cutoff` — messages and attachment blobs included. The context is the
   athanor's (retention walks each with an internal context).
   """
   @spec delete_before(Context.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def delete_before(%Context{} = ctx, %DateTime{} = cutoff) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ConversationStorage.delete_before", fn ->
+    Arca.Repo.Errors.with_db_rescue("Arca.ThreadStorage.delete_before", fn ->
       delete_before_rows(ctx, cutoff)
     end)
   end
@@ -610,7 +609,7 @@ defmodule Arca.ConversationStorage do
   defp delete_before_rows(ctx, cutoff) do
     ids = Repo.all(from(c in stale_before(ctx, cutoff), select: c.id))
 
-    # Bytes before rows, per conversation: an id whose blob delete fails
+    # Bytes before rows, per thread: an id whose blob delete fails
     # keeps its rows and retries next cycle — never an orphaned tree the
     # DB has already forgotten.
     deletable =
@@ -620,7 +619,7 @@ defmodule Arca.ConversationStorage do
             true
 
           {:error, reason} ->
-            Logger.warning("[ConversationStorage] keeping #{id} this cycle: #{inspect(reason)}")
+            Logger.warning("[ThreadStorage] keeping #{id} this cycle: #{inspect(reason)}")
 
             false
         end
@@ -630,16 +629,16 @@ defmodule Arca.ConversationStorage do
       {:ok, 0}
     else
       # One transaction, like `do_delete/2`: a crash between the two
-      # deletes otherwise left an empty conversation row behind. The
-      # satellites (follows, conversation-scope grants) sweep with the
+      # deletes otherwise left an empty thread row behind. The
+      # satellites (follows, thread-scope grants) sweep with the
       # rows, same as a hand delete.
       {:ok, count} =
         Repo.transaction(fn ->
-          Repo.delete_all(from(m in Message, where: m.conversation_id in ^deletable))
-          delete_conversation_satellites(deletable)
+          Repo.delete_all(from(m in Message, where: m.thread_id in ^deletable))
+          delete_thread_satellites(deletable)
 
           {count, _} =
-            from(c in Conversation, where: c.id in ^deletable)
+            from(c in Thread, where: c.id in ^deletable)
             |> QueryHelpers.where_tenant(ctx)
             |> Repo.delete_all()
 
@@ -651,32 +650,32 @@ defmodule Arca.ConversationStorage do
   end
 
   # The retention window both verbs speak, scoped the one way this module
-  # scopes: the athanor's conversations whose last activity is older than
-  # `cutoff`, a conversation holding an open turn never among them.
+  # scopes: the athanor's threads whose last activity is older than
+  # `cutoff`, a thread holding an open turn never among them.
   defp stale_before(ctx, cutoff) do
     athanor_id = Context.athanor!(ctx)
 
     open =
       from(t in Arca.Schemas.Turn,
         where: t.athanor_id == ^athanor_id and t.status in ^Arca.TurnStorage.open_statuses(),
-        select: t.conversation_id
+        select: t.thread_id
       )
 
-    from(c in Conversation,
+    from(c in Thread,
       where: c.id not in subquery(open) and coalesce(c.last_message_at, c.inserted_at) < ^cutoff
     )
     |> QueryHelpers.where_tenant(ctx)
   end
 
   @doc """
-  How many conversations `delete_before/2` would remove — the dry-run
-  count, sharing its rule: a conversation with a running turn is never
+  How many threads `delete_before/2` would remove — the dry-run
+  count, sharing its rule: a thread with a running turn is never
   touched.
   """
   @spec count_before(Context.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def count_before(%Context{} = ctx, %DateTime{} = cutoff) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ConversationStorage.count_before", fn ->
+    Arca.Repo.Errors.with_db_rescue("Arca.ThreadStorage.count_before", fn ->
       {:ok, Repo.aggregate(stale_before(ctx, cutoff), :count)}
     end)
   end
@@ -690,7 +689,7 @@ defmodule Arca.ConversationStorage do
   defp encode_json(value), do: Jason.encode!(value)
 
   defp decode_map(json) do
-    case Cyfr.Json.decode_or(json, %{}, "Arca.ConversationStorage.decode_map") do
+    case Cyfr.Json.decode_or(json, %{}, "Arca.ThreadStorage.decode_map") do
       %{} = map -> map
       _ -> %{}
     end

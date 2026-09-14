@@ -100,7 +100,7 @@ defmodule Opus.HostSurfaceTest do
     # worker would need this value from its client, not re-read it locally.
     "Cyfr.RuntimeConfig",
     "Cyfr.Time",
-    "Cyfr.Topics",
+    "Cyfr.Bus",
     # The shared unexpected-message catch-all spelling — a log-line SSOT,
     # not a capability.
     "Cyfr.UnexpectedMessage",

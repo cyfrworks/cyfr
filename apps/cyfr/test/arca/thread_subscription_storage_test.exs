@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.TopicSubscriptionStorageTest do
+defmodule Arca.ThreadSubscriptionStorageTest do
   # Following is about your sidebar, not your access. These are the rules
   # that keep the two apart.
   use ExUnit.Case, async: false
 
-  alias Arca.ConversationStorage, as: Conversations
-  alias Arca.TopicSubscriptionStorage, as: Subs
+  alias Arca.ThreadStorage, as: Threads
+  alias Arca.ThreadSubscriptionStorage, as: Subs
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -24,9 +24,9 @@ defmodule Arca.TopicSubscriptionStorageTest do
   end
 
   test "the creator follows their own thread without picking themselves", %{alice: alice} do
-    {:ok, conv} = Conversations.create(alice, %{title: "Mine"})
+    {:ok, thread} = Threads.create(alice, %{title: "Mine"})
 
-    assert MapSet.member?(Subs.followed(alice, alice.user_id), conv.id)
+    assert MapSet.member?(Subs.followed(alice, alice.user_id), thread.id)
   end
 
   test "create follows nobody but the creator — a client cannot pick for others", %{
@@ -35,41 +35,41 @@ defmodule Arca.TopicSubscriptionStorageTest do
   } do
     # There is deliberately no subscriber list on create: a follow row is
     # always the person's own act, so a stray attr must not write one.
-    {:ok, conv} = Conversations.create(alice, %{title: "Ours", subscribers: [bob.user_id]})
+    {:ok, thread} = Threads.create(alice, %{title: "Ours", subscribers: [bob.user_id]})
 
-    refute MapSet.member?(Subs.followed(bob, bob.user_id), conv.id)
-    assert MapSet.member?(Subs.followed(alice, alice.user_id), conv.id)
+    refute MapSet.member?(Subs.followed(bob, bob.user_id), thread.id)
+    assert MapSet.member?(Subs.followed(alice, alice.user_id), thread.id)
   end
 
   test "someone not picked can still READ it — following is not an ACL", %{
     alice: alice,
     bob: bob
   } do
-    {:ok, conv} = Conversations.create(alice, %{title: "Not yours"})
+    {:ok, thread} = Threads.create(alice, %{title: "Not yours"})
 
-    refute MapSet.member?(Subs.followed(bob, bob.user_id), conv.id)
+    refute MapSet.member?(Subs.followed(bob, bob.user_id), thread.id)
 
     # Access is membership in the estate, and Bob's context has it. An
-    # unfollowed topic renders collapsed and opens on a click; making this
+    # unfollowed thread renders collapsed and opens on a click; making this
     # a permission would be a second, weaker gate beside membership.
-    assert {:ok, ^conv} = Conversations.get(bob, conv.id)
+    assert {:ok, ^thread} = Threads.get(bob, thread.id)
   end
 
   test "follow and unfollow are both idempotent", %{alice: alice, bob: bob} do
-    {:ok, conv} = Conversations.create(alice, %{title: "T"})
+    {:ok, thread} = Threads.create(alice, %{title: "T"})
 
-    :ok = Subs.follow(bob, conv.id, bob.user_id)
-    :ok = Subs.follow(bob, conv.id, bob.user_id)
-    assert Subs.follows?(bob.athanor_id, conv.id, bob.user_id)
+    :ok = Subs.follow(bob, thread.id, bob.user_id)
+    :ok = Subs.follow(bob, thread.id, bob.user_id)
+    assert Subs.follows?(bob.athanor_id, thread.id, bob.user_id)
 
-    :ok = Subs.unfollow(bob, conv.id, bob.user_id)
-    :ok = Subs.unfollow(bob, conv.id, bob.user_id)
-    refute MapSet.member?(Subs.followed(bob, bob.user_id), conv.id)
+    :ok = Subs.unfollow(bob, thread.id, bob.user_id)
+    :ok = Subs.unfollow(bob, thread.id, bob.user_id)
+    refute MapSet.member?(Subs.followed(bob, bob.user_id), thread.id)
   end
 
-  test "unfollowing one topic leaves the others alone", %{alice: alice} do
-    {:ok, a} = Conversations.create(alice, %{title: "A"})
-    {:ok, b} = Conversations.create(alice, %{title: "B"})
+  test "unfollowing one thread leaves the others alone", %{alice: alice} do
+    {:ok, a} = Threads.create(alice, %{title: "A"})
+    {:ok, b} = Threads.create(alice, %{title: "B"})
 
     :ok = Subs.unfollow(alice, a.id, alice.user_id)
 
@@ -79,21 +79,21 @@ defmodule Arca.TopicSubscriptionStorageTest do
   end
 
   test "another estate's follows are not this one's", %{alice: alice} do
-    {:ok, conv} = Conversations.create(alice, %{title: "Here"})
+    {:ok, thread} = Threads.create(alice, %{title: "Here"})
     elsewhere = %{alice | athanor_id: "ath_elsewhere"}
 
-    refute MapSet.member?(Subs.followed(elsewhere, alice.user_id), conv.id)
+    refute MapSet.member?(Subs.followed(elsewhere, alice.user_id), thread.id)
   end
 
   test "unfollow_all/2 drops one person's follows in one estate and nothing else", %{
     alice: alice,
     bob: bob
   } do
-    {:ok, a} = Conversations.create(alice, %{title: "A"})
-    {:ok, b} = Conversations.create(alice, %{title: "B"})
+    {:ok, a} = Threads.create(alice, %{title: "A"})
+    {:ok, b} = Threads.create(alice, %{title: "B"})
     :ok = Subs.follow(bob, a.id, bob.user_id)
 
-    # Bob's follow of the same topic id in another estate is that
+    # Bob's follow of the same thread id in another estate is that
     # estate's row, not this one's.
     elsewhere = %{bob | athanor_id: "ath_other"}
     :ok = Subs.follow(elsewhere, a.id <> "-other", bob.user_id)
@@ -111,7 +111,7 @@ defmodule Arca.TopicSubscriptionStorageTest do
     assert :ok = Subs.unfollow_all(alice.athanor_id, bob.user_id)
   end
 
-  test "deleting a thread sweeps its follows and its conversation-scope grants", %{
+  test "deleting a thread sweeps its follows and its thread-scope grants", %{
     alice: alice,
     bob: bob
   } do
@@ -127,14 +127,14 @@ defmodule Arca.TopicSubscriptionStorageTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
-    {:ok, conv} = Conversations.create(alice, %{title: "Short-lived"})
-    :ok = Subs.follow(bob, conv.id, bob.user_id)
+    {:ok, thread} = Threads.create(alice, %{title: "Short-lived"})
+    :ok = Subs.follow(bob, thread.id, bob.user_id)
 
     {:ok, _} =
       Aqua.ToolGrants.put(alice, %{
-        scope: "conversation",
+        scope: "thread",
         effect: "allow",
-        conversation_id: conv.id,
+        thread_id: thread.id,
         agent_name: "aqua",
         tool: "component",
         action: "pull"
@@ -145,20 +145,20 @@ defmodule Arca.TopicSubscriptionStorageTest do
       Aqua.ToolGrants.put(alice, %{
         scope: "agent",
         effect: "allow",
-        conversation_id: conv.id,
+        thread_id: thread.id,
         agent_name: "aqua",
         tool: "component",
         action: "inspect"
       })
 
-    :ok = Conversations.delete(alice, conv.id)
+    :ok = Threads.delete(alice, thread.id)
 
     # Until the athanor's own destroy, nothing else reclaimed these — a
-    # deleted topic left rows naming it forever.
-    refute Subs.follows?(alice.athanor_id, conv.id, alice.user_id)
-    refute MapSet.member?(Subs.followed(bob, bob.user_id), conv.id)
+    # deleted thread left rows naming it forever.
+    refute Subs.follows?(alice.athanor_id, thread.id, alice.user_id)
+    refute MapSet.member?(Subs.followed(bob, bob.user_id), thread.id)
 
-    remaining = Aqua.ToolGrants.for_conversation(alice, conv.id, "aqua")
+    remaining = Aqua.ToolGrants.for_thread(alice, thread.id, "aqua")
     assert {:ok, [%{scope: "agent", action: "inspect"}]} = remaining
   end
 end

@@ -119,7 +119,7 @@ defmodule Aqua.Loop do
 
   defp setup_required(ctx, turn) do
     _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
-    Tape.announce(ctx, turn.conversation_id, {:consent_required, source_ref(turn), ctx.user_id})
+    Tape.announce(ctx, turn.thread_id, {:consent_required, source_ref(turn), ctx.user_id})
     {:failed, :setup_required}
   end
 
@@ -199,7 +199,7 @@ defmodule Aqua.Loop do
     with {:ok, claim} <-
            Cyfr.Execution.claim_turn_root(ctx, source_ref(turn),
              turn_id: turn.id,
-             conversation_id: turn.conversation_id,
+             thread_id: turn.thread_id,
              envelope: %{"turn" => turn.id}
            ) do
       with {:ok, snapshot} <- Compendium.AgentIndex.snapshot(ctx, turn.orchestrator),
@@ -946,7 +946,7 @@ defmodule Aqua.Loop do
   end
 
   # The grants a member holds are their live decision; the loop decides from
-  # a snapshot `Turn.build/3` took. Revoking "allow in this conversation"
+  # a snapshot `Turn.build/3` took. Revoking "allow in this thread"
   # writes the rows and refreshes the runner, and reaches no loop already
   # running — so the window between a response landing and its calls
   # dispatching, and the window while an earlier call of the same response
@@ -961,7 +961,7 @@ defmodule Aqua.Loop do
       {:ok, policy} ->
         if Policy.auto?(call, policy),
           do: :ok,
-          else: {:denied, "#{call.tool}.#{call.action} is no longer allowed in this conversation"}
+          else: {:denied, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
 
       # A store that cannot answer whether the grant still stands is not a
       # grant. Fail closed, the way every other standing question does.
@@ -1046,7 +1046,7 @@ defmodule Aqua.Loop do
       authority: spec.authority,
       root_execution_id: state.turn.root_execution_id,
       attempt: state.turn.attempt,
-      conversation_id: state.turn.conversation_id,
+      thread_id: state.turn.thread_id,
       agent_ref: Compendium.AgentSource.ref(state.turn.orchestrator),
       charge: Binding.charge(step, state.turn),
       execution_id: step.child_execution_id,
@@ -1722,7 +1722,7 @@ defmodule Aqua.Loop do
   end
 
   defp system_row(%State{} = state, text) do
-    Tape.append(guest(state), state.turn.conversation_id, %{
+    Tape.append(guest(state), state.turn.thread_id, %{
       author: Arca.Schemas.Message.system_author(),
       kind: "system",
       content: text,
@@ -1732,7 +1732,7 @@ defmodule Aqua.Loop do
   end
 
   defp announce(%State{} = state, event),
-    do: Tape.announce(guest(state), state.turn.conversation_id, event)
+    do: Tape.announce(guest(state), state.turn.thread_id, event)
 
   defp worker(fun, timeout) do
     task = Task.Supervisor.async_nolink(Aqua.TaskSupervisor, fun)

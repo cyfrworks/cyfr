@@ -18,7 +18,7 @@ defmodule Arca.TurnStorage do
   transaction; `finish/4` is the one terminal write.
 
   Multi-row writes that append a message run under `with_seq_retry/1`:
-  the `(conversation_id, seq)` race surfaces as a changeset raise inside
+  the `(thread_id, seq)` race surfaces as a changeset raise inside
   the transaction and the whole transaction is retried, since a retry
   inside an aborted Postgres transaction cannot land.
 
@@ -28,7 +28,7 @@ defmodule Arca.TurnStorage do
 
   import Ecto.Query, only: [from: 2, where: 3]
 
-  alias Arca.Schemas.{Approval, Conversation, Message, Turn, TurnStep}
+  alias Arca.Schemas.{Approval, Thread, Message, Turn, TurnStep}
   alias Sanctum.Context
 
   @statuses ["accepted", "running", "paused", "completed", "failed", "cancelled", "uncertain"]
@@ -66,26 +66,26 @@ defmodule Arca.TurnStorage do
   - `:steer_turn_id` — attach the message to a live turn instead.
 
   Answers `{:ok, %{message: row, turn: row | nil}}`. A `client_id` this
-  conversation already accepted answers `{:error, :duplicate_client_id}`,
+  thread already accepted answers `{:error, :duplicate_client_id}`,
   a message `id` already taken `{:error, :message_id_reused}`
   (the caller reads the existing acceptance with `accepted/3`); a
   message that already opened a turn answers `{:error, :turn_exists}`.
   """
   @spec accept_message(Context.t(), String.t(), map()) ::
           {:ok, %{message: Message.t(), turn: Turn.t() | nil}} | {:error, term()}
-  def accept_message(%Context{} = ctx, conversation_id, attrs) when is_map(attrs) do
+  def accept_message(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.accept_message", fn ->
       athanor_id = Context.athanor!(ctx)
       message = Map.fetch!(attrs, :message)
 
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
-          conv = conversation!(athanor_id, conversation_id)
+          thread = thread!(athanor_id, thread_id)
 
           row =
-            Arca.ConversationStorage.insert_message!(
+            Arca.ThreadStorage.insert_message!(
               ctx,
-              conv,
+              thread,
               Map.put(message, :turn_id, Map.get(attrs, :steer_turn_id))
             )
 
@@ -98,7 +98,7 @@ defmodule Arca.TurnStorage do
                 end
 
               %{} = t ->
-                open_turn!(athanor_id, conv, row, t)
+                open_turn!(athanor_id, thread, row, t)
             end
 
           %{message: %{row | turn_id: turn && turn.id}, turn: turn}
@@ -107,9 +107,9 @@ defmodule Arca.TurnStorage do
       |> case do
         {:error, %Ecto.Changeset{errors: errors} = changeset} ->
           cond do
-            unique?(errors, :conversation_id, "client_id") -> {:error, :duplicate_client_id}
+            unique?(errors, :thread_id, "client_id") -> {:error, :duplicate_client_id}
             unique?(errors, :id, "messages") -> {:error, :message_id_reused}
-            unique?(errors, :conversation_id, "message_id") -> {:error, :turn_exists}
+            unique?(errors, :thread_id, "message_id") -> {:error, :turn_exists}
             true -> {:error, changeset}
           end
 
@@ -122,9 +122,9 @@ defmodule Arca.TurnStorage do
   @doc "The acceptance a sender's `client_id` already produced: its message and turn."
   @spec accepted(Context.t(), String.t(), String.t()) ::
           {:ok, %{message: Message.t(), turn: Turn.t() | nil}} | {:error, term()}
-  def accepted(%Context{} = ctx, conversation_id, client_id) do
+  def accepted(%Context{} = ctx, thread_id, client_id) do
     with {:ok, message} <-
-           Arca.ConversationStorage.get_by_client_id(ctx, conversation_id, client_id) do
+           Arca.ThreadStorage.get_by_client_id(ctx, thread_id, client_id) do
       Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.accepted", fn ->
         athanor_id = Context.athanor!(ctx)
 
@@ -145,7 +145,7 @@ defmodule Arca.TurnStorage do
   end
 
   # arca:db-raise-ok inside the caller's transaction
-  defp open_turn!(athanor_id, %Conversation{} = conv, %Message{} = row, attrs) do
+  defp open_turn!(athanor_id, %Thread{} = thread, %Message{} = row, attrs) do
     now = DateTime.utc_now()
 
     turn =
@@ -154,7 +154,7 @@ defmodule Arca.TurnStorage do
         |> Ecto.Changeset.change(%{
           id: Cyfr.UUID7.generate_id("trn"),
           athanor_id: athanor_id,
-          conversation_id: conv.id,
+          thread_id: thread.id,
           message_id: row.id,
           orchestrator: Map.get(attrs, :orchestrator),
           requested_by: Map.get(attrs, :requested_by),
@@ -165,7 +165,7 @@ defmodule Arca.TurnStorage do
           status: "accepted",
           accepted_at: now
         })
-        |> Ecto.Changeset.unique_constraint([:conversation_id, :message_id])
+        |> Ecto.Changeset.unique_constraint([:thread_id, :message_id])
       )
 
     # The initiating message belongs to its turn: attached, it is read by
@@ -174,9 +174,9 @@ defmodule Arca.TurnStorage do
       from(m in Message, where: m.athanor_id == ^athanor_id and m.id == ^row.id)
       |> Arca.Repo.update_all(set: [turn_id: turn.id])
 
-    conv
-    |> Conversation.changeset(%{
-      turn_seq: (conv.turn_seq || 0) + 1,
+    thread
+    |> Thread.changeset(%{
+      turn_seq: (thread.turn_seq || 0) + 1,
       orchestrator: Map.get(attrs, :orchestrator)
     })
     |> Arca.Repo.update!()
@@ -327,11 +327,11 @@ defmodule Arca.TurnStorage do
       Arca.Repo.transaction(fn ->
         turn = turn!(athanor_id, turn_id)
         check_fence!(turn, attrs)
-        conv = conversation!(athanor_id, turn.conversation_id)
+        thread = thread!(athanor_id, turn.thread_id)
 
-        Arca.ConversationStorage.insert_message!(
+        Arca.ThreadStorage.insert_message!(
           ctx,
-          conv,
+          thread,
           attrs |> Map.drop([:fence]) |> Map.put(:turn_id, turn.id)
         )
       end)
@@ -702,9 +702,9 @@ defmodule Arca.TurnStorage do
         )
       )
 
-    conv = conversation!(athanor_id, turn.conversation_id)
+    thread = thread!(athanor_id, turn.thread_id)
 
-    Arca.ConversationStorage.insert_message!(ctx, conv, %{
+    Arca.ThreadStorage.insert_message!(ctx, thread, %{
       author: Message.system_author(),
       kind: "turn_aborted",
       content: content,
@@ -724,7 +724,7 @@ defmodule Arca.TurnStorage do
     |> Enum.map(fn row ->
       covers =
         row
-        |> Arca.ConversationStorage.payload()
+        |> Arca.ThreadStorage.payload()
         |> Map.get("covers", [])
         |> Enum.map(&{&1["step_id"], &1["generation"]})
 
@@ -801,7 +801,7 @@ defmodule Arca.TurnStorage do
         Arca.Repo.transaction(fn ->
           turn = turn!(athanor_id, turn_id)
           check_fence!(turn, response)
-          conv = conversation!(athanor_id, turn.conversation_id)
+          thread = thread!(athanor_id, turn.thread_id)
           now = DateTime.utc_now()
 
           text =
@@ -813,7 +813,7 @@ defmodule Arca.TurnStorage do
                 nil
 
               content ->
-                Arca.ConversationStorage.insert_message!(ctx, conv, %{
+                Arca.ThreadStorage.insert_message!(ctx, thread, %{
                   author: Message.agent_author(),
                   kind: "text",
                   content: content,
@@ -843,7 +843,7 @@ defmodule Arca.TurnStorage do
             |> Map.get(:tool_calls, [])
             |> Enum.map(fn call ->
               row =
-                Arca.ConversationStorage.insert_message!(ctx, conv, %{
+                Arca.ThreadStorage.insert_message!(ctx, thread, %{
                   author: Message.agent_author(),
                   kind: "tool_call",
                   content: Map.get(call, :name, ""),
@@ -1142,13 +1142,13 @@ defmodule Arca.TurnStorage do
           step = step!(athanor_id, step_id)
           turn = turn!(athanor_id, step.turn_id)
           check_fence!(turn, attrs)
-          conv = conversation!(athanor_id, turn.conversation_id)
+          thread = thread!(athanor_id, turn.thread_id)
           card = Map.get(attrs, :card, %{})
           approval_id = Map.get(attrs, :id) || Cyfr.UUID7.generate_id("apr")
           now = DateTime.utc_now()
 
           card_row =
-            Arca.ConversationStorage.insert_message!(ctx, conv, %{
+            Arca.ThreadStorage.insert_message!(ctx, thread, %{
               id: Map.get(card, :id),
               author: Message.agent_author(),
               kind: "approval",
@@ -1167,7 +1167,7 @@ defmodule Arca.TurnStorage do
               turn_id: turn.id,
               step_id: step.id,
               message_id: card_row.id,
-              conversation_id: turn.conversation_id,
+              thread_id: turn.thread_id,
               status: "pending",
               scope: Map.get(attrs, :scope),
               proposal_digest: Map.get(attrs, :proposal_digest, ""),
@@ -1307,7 +1307,7 @@ defmodule Arca.TurnStorage do
           check_fence!(parent, attrs)
           if parent.status != "running", do: Arca.Repo.rollback(:parent_not_running)
           if parent.parent_turn_id, do: Arca.Repo.rollback(:clone_depth)
-          conv = conversation!(athanor_id, parent.conversation_id)
+          thread = thread!(athanor_id, parent.thread_id)
           now = DateTime.utc_now()
           role = Map.fetch!(attrs, :role)
 
@@ -1332,7 +1332,7 @@ defmodule Arca.TurnStorage do
               |> Ecto.Changeset.change(%{
                 id: Cyfr.UUID7.generate_id("trn"),
                 athanor_id: athanor_id,
-                conversation_id: parent.conversation_id,
+                thread_id: parent.thread_id,
                 parent_turn_id: parent.id,
                 root_execution_id: parent.root_execution_id,
                 attempt: parent.attempt,
@@ -1353,7 +1353,7 @@ defmodule Arca.TurnStorage do
             )
 
           task =
-            Arca.ConversationStorage.insert_message!(ctx, conv, %{
+            Arca.ThreadStorage.insert_message!(ctx, thread, %{
               author: Message.agent_author(),
               kind: "text",
               content: Map.get(attrs, :task, ""),
@@ -1445,7 +1445,7 @@ defmodule Arca.TurnStorage do
   @doc """
   The rows a turn may read, in `seq` order: its own rows except undrained
   human steer, plus — behind its boundary — unattached rows and the rows
-  of terminal, non-clone turns of the conversation. A clone reads its
+  of terminal, non-clone turns of the thread. A clone reads its
   own rows only. Rows attached to other open turns are never read.
   """
   @spec projection(Context.t(), String.t()) :: {:ok, [Message.t()]} | {:error, term()}
@@ -1460,17 +1460,17 @@ defmodule Arca.TurnStorage do
         if turn.parent_turn_id do
           Arca.Repo.all(
             from(m in Message,
-              where: m.athanor_id == ^athanor_id and m.conversation_id == ^turn.conversation_id,
+              where: m.athanor_id == ^athanor_id and m.thread_id == ^turn.thread_id,
               where: m.turn_id == ^turn_id,
               order_by: [asc: m.seq]
             )
           )
         else
-          settled = settled_turns(athanor_id, turn.conversation_id)
+          settled = settled_turns(athanor_id, turn.thread_id)
 
           Arca.Repo.all(
             from(m in Message,
-              where: m.athanor_id == ^athanor_id and m.conversation_id == ^turn.conversation_id,
+              where: m.athanor_id == ^athanor_id and m.thread_id == ^turn.thread_id,
               where:
                 (m.turn_id == ^turn_id and (m.author in ^humans or m.seq <= ^window)) or
                   (m.seq <= ^window and (is_nil(m.turn_id) or m.turn_id in subquery(settled))),
@@ -1516,7 +1516,7 @@ defmodule Arca.TurnStorage do
           )
         )
 
-      {:ok, Enum.map(payloads, &Arca.ConversationStorage.payload/1)}
+      {:ok, Enum.map(payloads, &Arca.ThreadStorage.payload/1)}
     end)
   end
 
@@ -1579,16 +1579,16 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "The open turns of a conversation (accepted, running or paused), oldest first."
+  @doc "The open turns of a thread (accepted, running or paused), oldest first."
   @spec open_turns(Context.t(), String.t()) :: {:ok, [Turn.t()]} | {:error, term()}
-  def open_turns(%Context{} = ctx, conversation_id) do
+  def open_turns(%Context{} = ctx, thread_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_turns", fn ->
       athanor_id = Context.athanor!(ctx)
 
       {:ok,
        Arca.Repo.all(
          from(t in Turn,
-           where: t.athanor_id == ^athanor_id and t.conversation_id == ^conversation_id,
+           where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
            where: t.status in ^@open,
            order_by: [asc: t.accepted_at]
          )
@@ -1597,8 +1597,8 @@ defmodule Arca.TurnStorage do
   end
 
   @doc """
-  Every conversation holding an open root turn, across all tenants, as
-  `{athanor_id, conversation_id}` pairs — the boot's recovery scan.
+  Every thread holding an open root turn, across all tenants, as
+  `{athanor_id, thread_id}` pairs — the boot's recovery scan.
   System-internal only.
   """
   @spec with_open_turns() :: [{String.t(), String.t()}]
@@ -1610,7 +1610,7 @@ defmodule Arca.TurnStorage do
         from(t in Turn,
           where: t.status in ^@open and is_nil(t.parent_turn_id),
           distinct: true,
-          select: {t.athanor_id, t.conversation_id}
+          select: {t.athanor_id, t.thread_id}
         )
       )
     end)
@@ -1688,7 +1688,7 @@ defmodule Arca.TurnStorage do
 
   @doc """
   Run `fun` (a transaction that appends a message) again, up to three
-  times, when it fails on the `(conversation_id, seq)` unique race.
+  times, when it fails on the `(thread_id, seq)` unique race.
   """
   @spec with_seq_retry((-> {:ok, term()} | {:error, term()})) :: {:ok, term()} | {:error, term()}
   def with_seq_retry(fun) when is_function(fun, 0), do: with_seq_retry(fun, 3)
@@ -1700,7 +1700,7 @@ defmodule Arca.TurnStorage do
       fun.()
     rescue
       e in Ecto.InvalidChangesetError ->
-        if unique?(e.changeset.errors, :conversation_id, "seq"),
+        if unique?(e.changeset.errors, :thread_id, "seq"),
           do: with_seq_retry(fun, retries - 1),
           else: {:error, e.changeset}
     end
@@ -1734,9 +1734,9 @@ defmodule Arca.TurnStorage do
           nil
 
         %{} = result ->
-          conv = conversation!(athanor_id, turn.conversation_id)
+          thread = thread!(athanor_id, turn.thread_id)
 
-          Arca.ConversationStorage.insert_message!(ctx, conv, %{
+          Arca.ThreadStorage.insert_message!(ctx, thread, %{
             author: Message.system_author(),
             kind: "tool_result",
             content: Map.get(result, :content, ""),
@@ -1862,12 +1862,12 @@ defmodule Arca.TurnStorage do
   # message, and every unattached row or row of a settled turn.
   # arca:db-raise-ok inside the caller's transaction
   defp boundary(athanor_id, %Turn{} = turn) do
-    settled = settled_turns(athanor_id, turn.conversation_id)
+    settled = settled_turns(athanor_id, turn.thread_id)
 
     history =
       Arca.Repo.one(
         from(m in Message,
-          where: m.athanor_id == ^athanor_id and m.conversation_id == ^turn.conversation_id,
+          where: m.athanor_id == ^athanor_id and m.thread_id == ^turn.thread_id,
           where: is_nil(m.turn_id) or m.turn_id in subquery(settled),
           select: coalesce(max(m.seq), 0)
         )
@@ -1888,9 +1888,9 @@ defmodule Arca.TurnStorage do
     max(history, own)
   end
 
-  defp settled_turns(athanor_id, conversation_id) do
+  defp settled_turns(athanor_id, thread_id) do
     from(t in Turn,
-      where: t.athanor_id == ^athanor_id and t.conversation_id == ^conversation_id,
+      where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
       where: t.status in ^@terminal and is_nil(t.parent_turn_id),
       select: t.id
     )
@@ -1931,9 +1931,9 @@ defmodule Arca.TurnStorage do
   end
 
   # arca:db-raise-ok inside the caller's transaction
-  defp conversation!(athanor_id, conversation_id) do
-    Arca.Repo.get_by(Conversation, id: conversation_id, athanor_id: athanor_id) ||
-      Arca.Repo.rollback(:conversation_not_found)
+  defp thread!(athanor_id, thread_id) do
+    Arca.Repo.get_by(Thread, id: thread_id, athanor_id: athanor_id) ||
+      Arca.Repo.rollback(:thread_not_found)
   end
 
   defp check_fence!(%Turn{fence: fence}, attrs) do

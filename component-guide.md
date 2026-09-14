@@ -29,8 +29,8 @@ your-project/
         │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
         │   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
         ├── aqua/          # The athanor's AQUA: the soul, its roles, its scrolls
-        ├── conversations/ # Chat attachment files
-        ├── notes/         # What was kept out of a conversation — host-only, never a guest scope
+        ├── threads/ # Chat attachment files
+        ├── notes/         # What was kept out of a thread — host-only, never a guest scope
         ├── payloads/      # Retained execution inputs and results — host-only, by digest
         └── data/          # Files WASM components store — their `data/` scope, and yours
 ```
@@ -38,7 +38,7 @@ your-project/
 Every folder is laid when the athanor is provisioned. The Files page in the
 console, and the `file` tool behind it, show this tree by tier: `data/` is
 open, `components/` and `aqua/` are shaped, `notes/` and
-`conversations/` are read-only there, and `payloads/` is the server's own and
+`threads/` are read-only there, and `payloads/` is the server's own and
 has no name on the page.
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
@@ -1274,7 +1274,7 @@ the server's, and each folder is one of three tiers.
   (scaffold, pull, fork, the AQUA page), and one the server ships is reset,
   never deleted. An edit inside a component re-registers its row; an edit
   under `aqua/` rewrites the agent index.
-- **Read-only** — `notes/` and `conversations/`. Shown and downloaded here,
+- **Read-only** — `notes/` and `threads/`. Shown and downloaded here,
   written by their own surfaces.
 
 The `file` tool (`list`, `read`, `write`, `delete`) is the same surface on

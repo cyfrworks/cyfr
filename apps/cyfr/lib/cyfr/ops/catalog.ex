@@ -276,7 +276,7 @@ defmodule Cyfr.Ops.Catalog do
 
     args =
       args
-      |> Map.drop(["parent_execution_id", "root_execution_id", "conversation_id", "attempt"])
+      |> Map.drop(["parent_execution_id", "root_execution_id", "thread_id", "attempt"])
       |> put_lineage(Keyword.get(opts, :lineage))
 
     with :ok <- check_in_chain_reachable(name, args),
@@ -419,10 +419,10 @@ defmodule Cyfr.Ops.Catalog do
     # The attempt of the calling execution, so a provider answering the
     # caller its own payload knows which attempt's it is.
     |> Cyfr.MapUtil.put_present("attempt", Map.get(lineage, :attempt))
-    # The conversation an approved card came from — host-stamped like the
+    # The thread an approved card came from — host-stamped like the
     # execution ids, so a tool that records provenance reads it from here
     # and never from what the model wrote.
-    |> Cyfr.MapUtil.put_present("conversation_id", Map.get(lineage, :conversation_id))
+    |> Cyfr.MapUtil.put_present("thread_id", Map.get(lineage, :thread_id))
   end
 
   @doc """
@@ -1006,7 +1006,7 @@ defmodule Cyfr.Ops.Catalog do
   @valid_auth [:anonymous, :signed_in, :required]
   @valid_consent [:interactive, :staging]
   @valid_scopes [:platform]
-  @valid_standing [:conversation, false]
+  @valid_standing [:thread, false]
   @valid_recovery [:replay_safe]
 
   defp audit_action(%{} = annotation) do

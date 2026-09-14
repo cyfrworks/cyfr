@@ -68,8 +68,8 @@ defmodule Arca.StorageTest do
       assert Storage.physical_segments(ath_ctx(), ["components", "tinctures"]) ==
                ["athanors", "ath_x", "components", "tinctures"]
 
-      assert Storage.physical_segments(ath_ctx(), ["conversations", "conv_1", "a.png"]) ==
-               ["athanors", "ath_x", "conversations", "conv_1", "a.png"]
+      assert Storage.physical_segments(ath_ctx(), ["threads", "thread_1", "a.png"]) ==
+               ["athanors", "ath_x", "threads", "thread_1", "a.png"]
 
       # The one spelling: the Local sweep walks the same root this mapping
       # writes under, via tenant_physical_root/0 — never a second literal.
@@ -79,7 +79,7 @@ defmodule Arca.StorageTest do
 
     test "the guest scope is a sibling of the host scopes" do
       # The guest's `data/` is the athanor's `data/` root, so a `data/`
-      # grant physically cannot reach aqua/, conversations/ or any other
+      # grant physically cannot reach aqua/, threads/ or any other
       # host scope — they are siblings, not children.
       assert Storage.physical_segments(ath_ctx(), ["data", "notes.txt"]) ==
                ["athanors", "ath_x", "data", "notes.txt"]
@@ -249,7 +249,7 @@ defmodule Arca.StorageTest do
   describe "classify/1 and tenant_roots/0" do
     test "the tenant roster is closed, and every scope classifies" do
       assert Storage.tenant_roots() ==
-               ~w(aqua components conversations notes payloads data)
+               ~w(aqua components threads notes payloads data)
 
       for root <- Storage.tenant_roots() do
         assert Storage.classify([root, "x"]) == :tenant
@@ -283,7 +283,7 @@ defmodule Arca.StorageTest do
       # Every roster is derived from @layout; these pin the derived values
       # so an edited row cannot silently reshape a roster.
       assert Enum.sort(Storage.tenant_roots()) ==
-               ~w(aqua components conversations data notes payloads)
+               ~w(aqua components data notes payloads threads)
 
       assert Enum.sort(Storage.global_prefixes()) == ~w(cache system)
       assert Enum.sort(Storage.seed_roots()) == ~w(aqua components)
@@ -296,7 +296,7 @@ defmodule Arca.StorageTest do
                %{name: "data", root: "data", tier: :open},
                %{name: "aqua", root: "aqua", tier: :shaped},
                %{name: "components", root: "components", tier: :shaped},
-               %{name: "conversations", root: "conversations", tier: :read},
+               %{name: "threads", root: "threads", tier: :read},
                %{name: "notes", root: "notes", tier: :read}
              ]
 
@@ -304,7 +304,7 @@ defmodule Arca.StorageTest do
                "data" => "data",
                "aqua" => "aqua",
                "components" => "components",
-               "conversations" => "conversations",
+               "threads" => "threads",
                "notes" => "notes"
              }
 
@@ -361,7 +361,7 @@ defmodule Arca.StorageTest do
       assert Storage.valid_guest_path?("components/catalysts/local/x/0.1.0/catalyst.wasm")
 
       refute Storage.valid_guest_path?("aqua/agent.json")
-      refute Storage.valid_guest_path?("conversations/conv_1")
+      refute Storage.valid_guest_path?("threads/thread_1")
       refute Storage.valid_guest_path?("guest/notes.txt")
       refute Storage.valid_guest_path?("datax/notes.txt")
       refute Storage.valid_guest_path?("*")

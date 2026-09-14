@@ -698,7 +698,7 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   defp broadcast_update(ctx) do
-    case Phoenix.PubSub.broadcast(Emissary.PubSub, Cyfr.Topics.schedules(ctx), :schedules_updated) do
+    case Phoenix.PubSub.broadcast(Emissary.PubSub, Cyfr.Bus.schedules(ctx), :schedules_updated) do
       :ok ->
         :ok
 

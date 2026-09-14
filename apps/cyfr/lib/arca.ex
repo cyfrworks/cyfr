@@ -342,9 +342,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["conversations", "conv_1", "msg_1.json"], "{}")
+      iex> Arca.put(ctx, ["threads", "thread_1", "msg_1.json"], "{}")
       :ok
-      iex> Arca.delete_tree(ctx, ["conversations", "conv_1"])
+      iex> Arca.delete_tree(ctx, ["threads", "thread_1"])
       :ok
   """
   @spec delete_tree(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}

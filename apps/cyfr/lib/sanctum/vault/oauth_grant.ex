@@ -506,13 +506,13 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp broadcast(pending, entry_id, verb) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Cyfr.Topics.vault_changed(pending.athanor_id),
+      Cyfr.Bus.vault_changed(pending.athanor_id),
       {:vault_entry_changed, entry_id, verb}
     )
 
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Cyfr.Topics.vault_changed_global(),
+      Cyfr.Bus.vault_changed_global(),
       {:vault_entry_changed_global, pending.athanor_id, entry_id, verb, %{}}
     )
   end

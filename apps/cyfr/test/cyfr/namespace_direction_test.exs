@@ -82,7 +82,7 @@ defmodule Cyfr.NamespaceDirectionTest do
            #{Enum.map_join(found, "\n", &"  #{&1}")}
 
            A shared primitive that both the engine and the console need is
-           glue and belongs under `Cyfr.` — that is what `Cyfr.Topics` and
+           glue and belongs under `Cyfr.` — that is what `Cyfr.Bus` and
            `Cyfr.UUID7` are. Emissary is fair game (the MCP contract); a
            user interface is not.
            """
@@ -161,11 +161,11 @@ defmodule Cyfr.NamespaceDirectionTest do
   end
 
   test "the shared primitives live in the glue namespace" do
-    assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/topics.ex"))
+    assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/bus.ex"))
     assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/uuid7.ex"))
 
     refute File.exists?(Path.join(root(), "apps/cyfr/lib/prism/topics.ex")),
-           "Cyfr.Topics moved out of the console namespace; it must not come back"
+           "Cyfr.Bus moved out of the console namespace; it must not come back"
 
     refute File.exists?(Path.join(root(), "apps/cyfr/lib/emissary/uuid7.ex")),
            "Cyfr.UUID7 moved out of the transport namespace; it must not come back"

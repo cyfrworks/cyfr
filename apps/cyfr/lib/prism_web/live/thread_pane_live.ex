@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.ConversationPaneLive do
+defmodule PrismWeb.ThreadPaneLive do
   @moduledoc """
-  One conversation on screen: the tape, the composer, the approval cards,
+  One thread on screen: the tape, the composer, the approval cards,
   the consent sheet and the uploads — a window onto `Aqua.Runner`
   for one thread, under one focused context.
 
@@ -17,21 +17,21 @@ defmodule PrismWeb.ConversationPaneLive do
   models) are made once, the thread's (its rows, the runner's live state,
   the subscription) on every turn. What the host must know travels back
   as `{:pane, id, message}` to `socket.parent_pid`, first of all
-  `{:ready, pid, conversation_id}` once the pane is live, which is how
+  `{:ready, pid, thread_id}` once the pane is live, which is how
   the host learns where to send the switch.
 
   In the person's own panel (`PrismWeb.AquaPanelLive`, session `"panel"`)
   the pane sits beside a room: it hears what the host page shows
   (`PrismWeb.RoomFeed`), reads that room into each send as the turn's
   context (`Aqua.RoomExcerpt` — under the person's own membership, never
-  kept), and offers to paste a line onto it (`conversation.aloud`).
+  kept), and offers to paste a line onto it (`thread.aloud`).
   """
 
   use PrismWeb, :live_view
 
   require Logger
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Aqua.Runner
   alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Users
@@ -53,8 +53,8 @@ defmodule PrismWeb.ConversationPaneLive do
         socket = socket |> assign(:context, ctx) |> beside(session) |> open(ctx, session)
 
         if connected?(socket) do
-          conversation = socket.assigns.conversation
-          tell_host(socket, {:ready, self(), conversation && conversation.id})
+          thread = socket.assigns.thread
+          tell_host(socket, {:ready, self(), thread && thread.id})
         end
 
         {:ok, socket, layout: false}
@@ -106,7 +106,7 @@ defmodule PrismWeb.ConversationPaneLive do
       |> assign(:athanor, athanor)
       |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
       |> assign(:ui_mode, Prism.Labels.mode(session["ui_mode"], ctx))
-      |> assign(:conversation, nil)
+      |> assign(:thread, nil)
       |> assign(:members, member_labels(ctx))
       |> assign(:roster, roster)
       |> assign(:preparing?, preparing?)
@@ -131,14 +131,14 @@ defmodule PrismWeb.ConversationPaneLive do
 
     socket = if connected?(socket), do: load_models(socket), else: socket
 
-    open_thread(socket, conversation_of(ctx, session["conversation_id"]))
+    open_thread(socket, thread_of(ctx, session["thread_id"]))
   end
 
   # The estate's own topic. `Sanctum.Provisioning` broadcasts
   # `:athanor_changed` when a fill completes, which is what clears the
   # preparing state without a reload.
   defp subscribe_estate(%Sanctum.Context{athanor_id: id}) when is_binary(id) and id != "",
-    do: Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.notify(id))
+    do: Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.notify(id))
 
   defp subscribe_estate(_ctx), do: :ok
 
@@ -148,24 +148,24 @@ defmodule PrismWeb.ConversationPaneLive do
   # The thread a host names, under the pane's own context — so a thread
   # another estate holds is nothing here — or the blank slate, where the
   # first message creates the row.
-  defp conversation_of(ctx, id) when is_binary(id) and id != "" do
-    case Conversations.get(ctx, id) do
-      {:ok, conv} -> conv
+  defp thread_of(ctx, id) when is_binary(id) and id != "" do
+    case Threads.get(ctx, id) do
+      {:ok, thread} -> thread
       _ -> nil
     end
   end
 
-  defp conversation_of(_ctx, _none), do: nil
+  defp thread_of(_ctx, _none), do: nil
 
   # Everything the pane knows of one thread — its rows, the runner's live
   # state and the subscription that keeps them current — replacing what it
   # knew of the last: the tape, the cards, the draft and the turn's state
   # are the thread's, never carried over.
-  defp open_thread(socket, conversation) do
+  defp open_thread(socket, thread) do
     socket =
       socket
       |> unsubscribe_thread()
-      |> assign(:conversation, conversation)
+      |> assign(:thread, thread)
       |> assign(:assistant, nil)
       |> assign(:input, "")
       |> stream(:messages, [], reset: true)
@@ -173,16 +173,16 @@ defmodule PrismWeb.ConversationPaneLive do
       |> assign(:any_messages, false)
       |> reset_live()
 
-    case {connected?(socket), conversation} do
-      {true, %{} = conv} ->
-        Runner.subscribe(conv.id, conv.athanor_id)
-        live = Runner.state(conv.id, conv.athanor_id)
+    case {connected?(socket), thread} do
+      {true, %{} = thread} ->
+        Runner.subscribe(thread.id, thread.athanor_id)
+        live = Runner.state(thread.id, thread.athanor_id)
 
         # Newest window only: unbounded, this read loaded every row of a
-        # long-lived conversation into every viewer's socket. The runner's
+        # long-lived thread into every viewer's socket. The runner's
         # own turn assembly stays windowed separately.
         rows =
-          case Conversations.latest_messages(socket.assigns.context, conv.id, 500) do
+          case Threads.latest_messages(socket.assigns.context, thread.id, 500) do
             rows when is_list(rows) -> rows
             {:error, _} -> []
           end
@@ -198,7 +198,7 @@ defmodule PrismWeb.ConversationPaneLive do
     end
   end
 
-  defp unsubscribe_thread(%{assigns: %{conversation: %{id: id, athanor_id: athanor_id}}} = socket) do
+  defp unsubscribe_thread(%{assigns: %{thread: %{id: id, athanor_id: athanor_id}}} = socket) do
     Runner.unsubscribe(id, athanor_id)
     socket
   end
@@ -310,7 +310,7 @@ defmodule PrismWeb.ConversationPaneLive do
 
   def handle_event("discard_send", _params, %{assigns: %{held_send: %{} = held}} = socket) do
     ctx = socket.assigns.context
-    Aqua.Attachments.discard(ctx, held.conversation_id, held.message_id, held.attachments)
+    Aqua.Attachments.discard(ctx, held.thread_id, held.message_id, held.attachments)
     {:noreply, socket |> assign(:held_send, nil) |> mirror(nil)}
   end
 
@@ -318,7 +318,7 @@ defmodule PrismWeb.ConversationPaneLive do
 
   # The held send the browser kept across a reload, offered back by the
   # pane's hook. It is trusted no further than a send over the wire: the
-  # shape is checked and the conversation must be this member's to read.
+  # shape is checked and the thread must be this member's to read.
   def handle_event("restore_draft", params, socket) do
     case restored(socket, params) do
       {:ok, envelope} -> deliver(socket, envelope, nil)
@@ -327,15 +327,15 @@ defmodule PrismWeb.ConversationPaneLive do
   end
 
   def handle_event("stop", _params, socket) do
-    case socket.assigns.conversation do
+    case socket.assigns.thread do
       nil ->
         {:noreply, socket}
 
-      conv ->
+      thread ->
         {:noreply,
          run(
            socket,
-           &PrismWeb.Ops.call_tool(&1, "conversation/stop", %{"conversation" => conv.id}),
+           &PrismWeb.Ops.call_tool(&1, "thread/stop", %{"thread" => thread.id}),
            cancel_requested: true
          )}
     end
@@ -350,16 +350,16 @@ defmodule PrismWeb.ConversationPaneLive do
         %{"agent" => agent, "tool" => tool, "action" => action},
         socket
       ) do
-    case socket.assigns.conversation do
+    case socket.assigns.thread do
       nil ->
         {:noreply, socket}
 
-      conv ->
+      thread ->
         {:noreply,
          run(
            socket,
-           &PrismWeb.Ops.call_tool(&1, "conversation/revoke_grant", %{
-             "conversation" => conv.id,
+           &PrismWeb.Ops.call_tool(&1, "thread/revoke_grant", %{
+             "thread" => thread.id,
              "agent_name" => agent,
              "tool" => tool,
              "tool_action" => action
@@ -404,17 +404,17 @@ defmodule PrismWeb.ConversationPaneLive do
   end
 
   # A line from this thread onto the room beside it — the same
-  # `conversation.aloud` verb as the picker, its target already known.
+  # `thread.aloud` verb as the picker, its target already known.
   # `Aqua.Aloud` decides what may be said and attributes the copy.
   def handle_event("paste", %{"id" => msg_id}, socket) do
-    case {socket.assigns.room, socket.assigns.conversation} do
-      {%{} = room, %{} = conv} ->
+    case {socket.assigns.room, socket.assigns.thread} do
+      {%{} = room, %{} = thread} ->
         result =
-          call_tool(socket.assigns.context, "conversation/aloud", %{
-            "conversation" => conv.id,
+          call_tool(socket.assigns.context, "thread/aloud", %{
+            "thread" => thread.id,
             "message_ids" => [msg_id],
             "target_athanor" => room["athanor_id"],
-            "target_conversation" => room["conversation_id"]
+            "target_thread" => room["thread_id"]
           })
 
         case result do
@@ -451,11 +451,11 @@ defmodule PrismWeb.ConversationPaneLive do
   # ============================================================================
 
   @impl true
-  def handle_info({:conversation, id, event}, %{assigns: %{conversation: %{id: id}}} = socket) do
-    {:noreply, handle_conversation_event(socket, event)}
+  def handle_info({:thread, id, event}, %{assigns: %{thread: %{id: id}}} = socket) do
+    {:noreply, handle_thread_event(socket, event)}
   end
 
-  def handle_info({:conversation, _other, _event}, socket), do: {:noreply, socket}
+  def handle_info({:thread, _other, _event}, socket), do: {:noreply, socket}
 
   # Approval cards dispatch the decision to their LiveView — this one; a
   # refusal reaches the person who clicked.
@@ -472,16 +472,16 @@ defmodule PrismWeb.ConversationPaneLive do
   def handle_info({:consent_granted, _ref, result}, socket) do
     socket = assign(socket, :consent_sheet_ref, nil)
 
-    case socket.assigns.conversation do
+    case socket.assigns.thread do
       nil ->
         {:noreply, socket}
 
-      conv ->
+      thread ->
         {:noreply,
          run(
            socket,
-           &PrismWeb.Ops.call_tool(&1, "conversation/restart_for_consent", %{
-             "conversation" => conv.id,
+           &PrismWeb.Ops.call_tool(&1, "thread/restart_for_consent", %{
+             "thread" => thread.id,
              "profile_id" => Map.get(result, :profile_id),
              "revision" => Map.get(result, :revision)
            })
@@ -514,11 +514,11 @@ defmodule PrismWeb.ConversationPaneLive do
   # The thread it is already on is left alone: a host that patched its
   # address to the thread this pane just created must not reset the tape.
   def handle_info({:switch_thread, id}, socket) do
-    current = socket.assigns.conversation && socket.assigns.conversation.id
+    current = socket.assigns.thread && socket.assigns.thread.id
 
     if id == current,
       do: {:noreply, socket},
-      else: {:noreply, open_thread(socket, conversation_of(socket.assigns.context, id))}
+      else: {:noreply, open_thread(socket, thread_of(socket.assigns.context, id))}
   end
 
   # The host page opened another thread: the room this pane reads changed.
@@ -566,10 +566,10 @@ defmodule PrismWeb.ConversationPaneLive do
   # A refusal reaches the person who clicked — log-only made the button
   # appear to do nothing.
   defp decide(socket, {:approval_approve, id, scope}) do
-    case socket.assigns.conversation do
-      %{id: conv_id} ->
-        case PrismWeb.Ops.call_tool(socket, "conversation/approve", %{
-               "conversation" => conv_id,
+    case socket.assigns.thread do
+      %{id: thread_id} ->
+        case PrismWeb.Ops.call_tool(socket, "thread/approve", %{
+               "thread" => thread_id,
                "message_id" => id,
                "scope" => Aqua.ApprovalScope.to_string(scope)
              }) do
@@ -580,7 +580,7 @@ defmodule PrismWeb.ConversationPaneLive do
             socket
 
           {:error, reason} ->
-            Logger.warning("[ConversationPane] approve failed: #{inspect(reason)}")
+            Logger.warning("[ThreadPane] approve failed: #{inspect(reason)}")
             put_flash(socket, :error, "Approve failed: #{error_message(reason)}")
         end
 
@@ -590,10 +590,10 @@ defmodule PrismWeb.ConversationPaneLive do
   end
 
   defp decide(socket, {:approval_decline, id, reason, scope}) do
-    case socket.assigns.conversation do
-      %{id: conv_id} ->
-        case PrismWeb.Ops.call_tool(socket, "conversation/decline", %{
-               "conversation" => conv_id,
+    case socket.assigns.thread do
+      %{id: thread_id} ->
+        case PrismWeb.Ops.call_tool(socket, "thread/decline", %{
+               "thread" => thread_id,
                "message_id" => id,
                "reason" => reason,
                "scope" => Aqua.ApprovalScope.to_string(scope)
@@ -605,7 +605,7 @@ defmodule PrismWeb.ConversationPaneLive do
             socket
 
           {:error, why} ->
-            Logger.warning("[ConversationPane] decline failed: #{inspect(why)}")
+            Logger.warning("[ThreadPane] decline failed: #{inspect(why)}")
             put_flash(socket, :error, "Decline failed: #{error_message(why)}")
         end
 
@@ -618,12 +618,12 @@ defmodule PrismWeb.ConversationPaneLive do
   # Runner events
   # ---------------------------------------------------------------------------
 
-  defp handle_conversation_event(socket, {:message, row}), do: upsert_message(socket, row)
-  defp handle_conversation_event(socket, {:message_updated, row}), do: upsert_message(socket, row)
+  defp handle_thread_event(socket, {:message, row}), do: upsert_message(socket, row)
+  defp handle_thread_event(socket, {:message_updated, row}), do: upsert_message(socket, row)
 
   # A turn may start for a message queued earlier — the sender's draft of
   # a newer message stays where it is (`send_message/3` clears on send).
-  defp handle_conversation_event(socket, {:turn_starting, user_id}) do
+  defp handle_thread_event(socket, {:turn_starting, user_id}) do
     socket = assign(socket, :announcement, "AQUA is thinking.")
 
     socket
@@ -636,14 +636,14 @@ defmodule PrismWeb.ConversationPaneLive do
     |> assign(:token_usage, %{input: 0, output: 0})
   end
 
-  defp handle_conversation_event(socket, {:queued, n}), do: assign(socket, :queued, n)
+  defp handle_thread_event(socket, {:queued, n}), do: assign(socket, :queued, n)
 
-  defp handle_conversation_event(socket, {:turn_started, _eid}),
+  defp handle_thread_event(socket, {:turn_started, _eid}),
     do: socket |> assign(:running, true) |> assign(:paused, false) |> assign(:paused_reason, nil)
 
   # The turn stopped on a card, a launch, or a call whose outcome is
   # unknown; the sender it waits on stays named.
-  defp handle_conversation_event(socket, {:turn_paused, _turn_id, reason}) do
+  defp handle_thread_event(socket, {:turn_paused, _turn_id, reason}) do
     socket =
       if reason == :uncertain,
         do: assign(socket, :announcement, "AQUA stopped: a tool's outcome is unknown."),
@@ -657,7 +657,7 @@ defmodule PrismWeb.ConversationPaneLive do
     |> assign(:tool_activity, [])
   end
 
-  defp handle_conversation_event(socket, {:turn_finished}) do
+  defp handle_thread_event(socket, {:turn_finished}) do
     socket = assign(socket, :announcement, "AQUA replied.")
 
     socket
@@ -670,29 +670,29 @@ defmodule PrismWeb.ConversationPaneLive do
     |> assign(:cancel_requested, false)
   end
 
-  defp handle_conversation_event(socket, {:delta, chunk}) do
+  defp handle_thread_event(socket, {:delta, chunk}) do
     assign(socket, :streaming_text, socket.assigns.streaming_text <> chunk)
   end
 
-  defp handle_conversation_event(socket, {:tool_activity, list}),
+  defp handle_thread_event(socket, {:tool_activity, list}),
     do: assign(socket, :tool_activity, list)
 
-  defp handle_conversation_event(socket, {:usage, usage}), do: assign(socket, :token_usage, usage)
-  defp handle_conversation_event(socket, {:grants, grants}), do: assign(socket, :grants, grants)
+  defp handle_thread_event(socket, {:usage, usage}), do: assign(socket, :token_usage, usage)
+  defp handle_thread_event(socket, {:grants, grants}), do: assign(socket, :grants, grants)
 
   # Client intents and the consent sheet are the sender's alone: another
   # member's browser must not navigate because this one asked.
-  defp handle_conversation_event(socket, {:intents, intents, user_id}) do
+  defp handle_thread_event(socket, {:intents, intents, user_id}) do
     if user_id == socket.assigns.context.user_id, do: push_intents(socket, intents), else: socket
   end
 
-  defp handle_conversation_event(socket, {:consent_required, ref, user_id}) do
+  defp handle_thread_event(socket, {:consent_required, ref, user_id}) do
     if user_id == socket.assigns.context.user_id,
       do: assign(socket, :consent_sheet_ref, ref),
       else: socket
   end
 
-  defp handle_conversation_event(socket, {:restart_prompt, text, user_id}) do
+  defp handle_thread_event(socket, {:restart_prompt, text, user_id}) do
     if user_id == socket.assigns.context.user_id do
       socket
       |> assign(:restart_prompt, text)
@@ -702,8 +702,8 @@ defmodule PrismWeb.ConversationPaneLive do
     end
   end
 
-  defp handle_conversation_event(socket, {:error, text}), do: put_flash(socket, :error, text)
-  defp handle_conversation_event(socket, _), do: socket
+  defp handle_thread_event(socket, {:error, text}), do: put_flash(socket, :error, text)
+  defp handle_thread_event(socket, _), do: socket
 
   # The stream owns membership and ordering (stream_insert replaces an
   # existing dom id in place); only the two derived facts the templates
@@ -733,11 +733,11 @@ defmodule PrismWeb.ConversationPaneLive do
     ctx = socket.assigns.context
     message_id = Cyfr.UUID7.generate_id("msg")
 
-    with {:ok, conv, created?} <- current_or_new(socket),
-         {room, socket} = room_context(socket, conv),
-         {:ok, refs} <- Aqua.Attachments.store(ctx, conv.id, message_id, files) do
+    with {:ok, thread, created?} <- current_or_new(socket),
+         {room, socket} = room_context(socket, thread),
+         {:ok, refs} <- Aqua.Attachments.store(ctx, thread.id, message_id, files) do
       envelope = %{
-        conversation_id: conv.id,
+        thread_id: thread.id,
         client_id: Cyfr.UUID7.generate_id("snd"),
         message_id: message_id,
         text: message,
@@ -747,7 +747,7 @@ defmodule PrismWeb.ConversationPaneLive do
         room: Keyword.get(room, :room)
       }
 
-      deliver(socket, envelope, if(created?, do: conv))
+      deliver(socket, envelope, if(created?, do: thread))
     else
       {:error, reason} -> {:noreply, refuse(socket, reason)}
     end
@@ -763,7 +763,7 @@ defmodule PrismWeb.ConversationPaneLive do
   defp deliver(socket, envelope, created) do
     ctx = socket.assigns.context
 
-    case PrismWeb.Ops.call_tool(ctx, "conversation/send", send_args(envelope)) do
+    case PrismWeb.Ops.call_tool(ctx, "thread/send", send_args(envelope)) do
       {:ok, _} ->
         {:noreply,
          socket
@@ -783,7 +783,7 @@ defmodule PrismWeb.ConversationPaneLive do
       {:error, reason} ->
         Aqua.Attachments.discard(
           ctx,
-          envelope.conversation_id,
+          envelope.thread_id,
           envelope.message_id,
           envelope.attachments
         )
@@ -794,7 +794,7 @@ defmodule PrismWeb.ConversationPaneLive do
 
   defp send_args(envelope) do
     %{
-      "conversation" => envelope.conversation_id,
+      "thread" => envelope.thread_id,
       "message" => envelope.text,
       "id" => envelope.message_id,
       "client_id" => envelope.client_id,
@@ -806,13 +806,13 @@ defmodule PrismWeb.ConversationPaneLive do
     |> Map.reject(fn {_k, v} -> is_nil(v) end)
   end
 
-  # A conversation this send created is this pane's now, and the host's
+  # A thread this send created is this pane's now, and the host's
   # to address — the URL is the host's, the pane only asked for a row.
   defp opened(socket, nil), do: socket
 
-  defp opened(socket, conv) do
-    tell_host(socket, {:opened, conv})
-    open_thread(socket, conv)
+  defp opened(socket, thread) do
+    tell_host(socket, {:opened, thread})
+    open_thread(socket, thread)
   end
 
   # What the browser keeps of a held send, so a reload offers it back
@@ -827,23 +827,23 @@ defmodule PrismWeb.ConversationPaneLive do
   defp restored(
          socket,
          %{
-           "conversation_id" => conversation_id,
+           "thread_id" => thread_id,
            "client_id" => client_id,
            "message_id" => message_id,
            "text" => text
          } = params
        )
-       when is_binary(conversation_id) and is_binary(client_id) and is_binary(message_id) and
+       when is_binary(thread_id) and is_binary(client_id) and is_binary(message_id) and
               is_binary(text) do
     attachments = params["attachments"] || []
     room = params["room"]
 
     with true <- is_list(attachments) and Enum.all?(attachments, &is_map/1),
          true <- is_nil(room) or is_map(room),
-         {:ok, _conv} <- Conversations.get(socket.assigns.context, conversation_id) do
+         {:ok, _thread} <- Threads.get(socket.assigns.context, thread_id) do
       {:ok,
        %{
-         conversation_id: conversation_id,
+         thread_id: thread_id,
          client_id: client_id,
          message_id: message_id,
          text: text,
@@ -908,31 +908,31 @@ defmodule PrismWeb.ConversationPaneLive do
   # for this one turn.
   defp room_context(
          %{assigns: %{panel?: true, read_room?: true, room: %{} = room}} = socket,
-         conv
+         thread
        ) do
-    if reads_room?(room, conv), do: {[room: room], socket}, else: {[], socket}
+    if reads_room?(room, thread), do: {[room: room], socket}, else: {[], socket}
   end
 
-  defp room_context(socket, _conv), do: {[], socket}
+  defp room_context(socket, _thread), do: {[], socket}
 
   # Beside a room, and not the room itself: a thread never reads itself,
   # and nothing is pasted onto where it already is.
-  defp reads_room?(%{"conversation_id" => room_id}, conversation) do
-    is_nil(conversation) or conversation.id != room_id
+  defp reads_room?(%{"thread_id" => room_id}, thread) do
+    is_nil(thread) or thread.id != room_id
   end
 
-  defp reads_room?(_room, _conversation), do: false
+  defp reads_room?(_room, _thread), do: false
 
-  defp current_or_new(%{assigns: %{conversation: %{} = conv}}), do: {:ok, conv, false}
+  defp current_or_new(%{assigns: %{thread: %{} = thread}}), do: {:ok, thread, false}
 
   defp current_or_new(socket) do
-    with {:ok, %{id: id}} <- PrismWeb.Ops.call_tool(socket, "conversation/create", %{}),
-         {:ok, conv} <- Conversations.get(socket.assigns.context, id) do
-      {:ok, conv, true}
+    with {:ok, %{id: id}} <- PrismWeb.Ops.call_tool(socket, "thread/create", %{}),
+         {:ok, thread} <- Threads.get(socket.assigns.context, id) do
+      {:ok, thread, true}
     end
   end
 
-  # A conversation verb for the current member, through the tool surface;
+  # A thread verb for the current member, through the tool surface;
   # `assigns` are applied when it answers.
   defp run(socket, fun, assigns \\ []) do
     case fun.(socket.assigns.context) do
@@ -957,7 +957,7 @@ defmodule PrismWeb.ConversationPaneLive do
     {:ok, files}
   rescue
     e ->
-      Logger.warning("[ConversationPane] consume uploads failed: #{Exception.message(e)}")
+      Logger.warning("[ThreadPane] consume uploads failed: #{Exception.message(e)}")
       {:error, :attachments_unreadable}
   end
 
@@ -1073,8 +1073,8 @@ defmodule PrismWeb.ConversationPaneLive do
     socket =
       Enum.reduce(navigates, socket, fn %{to: to}, socket ->
         case own_thread(to, socket.assigns.athanor_route) do
-          {:ok, conversation_id} ->
-            tell_host(socket, {:open_thread, conversation_id})
+          {:ok, thread_id} ->
+            tell_host(socket, {:open_thread, thread_id})
             socket
 
           :elsewhere ->
@@ -1114,7 +1114,7 @@ defmodule PrismWeb.ConversationPaneLive do
     if PrismWeb.Nav.page?(href) do
       true
     else
-      Logger.warning("[ConversationPane] navigate dropped: #{inspect(href)} is not a page")
+      Logger.warning("[ThreadPane] navigate dropped: #{inspect(href)} is not a page")
       false
     end
   end
@@ -1155,7 +1155,7 @@ defmodule PrismWeb.ConversationPaneLive do
     <%!-- Focusable so a click anywhere in the pane makes it the one ⌘. halts. --%>
     <section
       id={@dom <> "-pane"}
-      phx-hook="Conversation"
+      phx-hook="Thread"
       tabindex="-1"
       class="flex flex-1 min-w-0 flex-col focus:outline-none"
     >
@@ -1207,7 +1207,7 @@ defmodule PrismWeb.ConversationPaneLive do
           <span
             :if={MapSet.size(@grants) > 0}
             class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
-            title="Actions auto-approved for this conversation"
+            title="Actions auto-approved for this thread"
           >
             +{MapSet.size(@grants)} this chat
           </span>
@@ -1361,8 +1361,8 @@ defmodule PrismWeb.ConversationPaneLive do
           <%= for {dom_id, msg} <- @streams.messages do %>
             <div id={dom_id}>
               <%= if msg.kind == "approval" do %>
-                <% intent = Conversations.payload(msg)["intent"] || %{} %>
-                <% resolution = Conversations.resolution(msg) %>
+                <% intent = Threads.payload(msg)["intent"] || %{} %>
+                <% resolution = Threads.resolution(msg) %>
                 <.live_component
                   module={PrismWeb.AquaApprovalCard}
                   id={@dom <> "-card-" <> msg.id}
@@ -1384,7 +1384,7 @@ defmodule PrismWeb.ConversationPaneLive do
                     role={role_of(msg)}
                     content={msg.content}
                     author={author_label(msg, @members, @context)}
-                    attachments={Conversations.payload(msg)["attachments"] || []}
+                    attachments={Threads.payload(msg)["attachments"] || []}
                     attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
                   />
                   <%!-- A line you may say aloud: yours, or your assistant's
@@ -1401,7 +1401,7 @@ defmodule PrismWeb.ConversationPaneLive do
                       Say aloud…
                     </button>
                     <button
-                      :if={@panel? and reads_room?(@room, @conversation)}
+                      :if={@panel? and reads_room?(@room, @thread)}
                       type="button"
                       phx-click="paste"
                       phx-value-id={msg.id}
@@ -1536,7 +1536,7 @@ defmodule PrismWeb.ConversationPaneLive do
       </div>
 
       <label
-        :if={@panel? and reads_room?(@room, @conversation)}
+        :if={@panel? and reads_room?(@room, @thread)}
         id={@dom <> "-read-room"}
         title="Each message you send here carries what the room shows — read for you, never kept"
         class="flex cursor-pointer items-center gap-2 border-t border-gray-800 px-3 py-1 text-[11px] text-gray-500"
@@ -1619,7 +1619,7 @@ defmodule PrismWeb.ConversationPaneLive do
 
       <div class="border-t border-gray-800 px-3 py-1.5 text-[11px] text-gray-500 flex items-center justify-between gap-3">
         <span class="truncate">
-          {if @conversation, do: @conversation.title, else: "New conversation"}
+          {if @thread, do: @thread.title, else: "New thread"}
         </span>
         <span :if={@token_usage.input > 0 or @token_usage.output > 0} class="font-mono shrink-0">
           {@token_usage.input} in / {@token_usage.output} out
@@ -1711,7 +1711,7 @@ defmodule PrismWeb.ConversationPaneLive do
   defp author_label(%{author: author} = msg, members, ctx) do
     label = label_for(members, author, ctx)
 
-    if Conversations.payload(msg)["shared_agent"] == true,
+    if Threads.payload(msg)["shared_agent"] == true,
       do: "shared from AQUA by #{label}",
       else: label
   end

@@ -5,13 +5,13 @@ defmodule Aqua.ApprovalScope do
   @moduledoc """
   How far an approval reaches, spelled once.
 
-  Encodes and decodes `:once`, `:conversation`, `:always` and `:never` for
+  Encodes and decodes `:once`, `:thread`, `:always` and `:never` for
   the wire, cards, panes and runner. Action standing declarations use
   `Cyfr.Ops.Annotations.standing/1`.
   """
 
-  @type t :: :once | :conversation | :always | :never
-  @scopes [:once, :conversation, :always, :never]
+  @type t :: :once | :thread | :always | :never
+  @scopes [:once, :thread, :always, :never]
 
   @doc "Every scope, in the order a card offers them."
   @spec all() :: [t()]
@@ -23,7 +23,7 @@ defmodule Aqua.ApprovalScope do
   """
   @spec parse(term()) :: t()
   def parse(scope) when scope in @scopes, do: scope
-  def parse("conversation"), do: :conversation
+  def parse("thread"), do: :thread
   def parse("always"), do: :always
   def parse("never"), do: :never
   def parse(_), do: :once
@@ -34,5 +34,5 @@ defmodule Aqua.ApprovalScope do
 
   @doc "Whether a scope is a STANDING answer — one that answers for calls nobody has seen yet."
   @spec standing?(t()) :: boolean()
-  def standing?(scope), do: scope in [:conversation, :always]
+  def standing?(scope), do: scope in [:thread, :always]
 end

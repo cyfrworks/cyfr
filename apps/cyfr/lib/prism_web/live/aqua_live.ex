@@ -62,7 +62,7 @@ defmodule PrismWeb.AquaLive do
     if connected?(socket) and socket.assigns[:context] do
       Phoenix.PubSub.subscribe(
         Emissary.PubSub,
-        Cyfr.Topics.notify(socket.assigns.context.athanor_id)
+        Cyfr.Bus.notify(socket.assigns.context.athanor_id)
       )
 
       # Paint first, load after: five tool reads and a registry walk stand

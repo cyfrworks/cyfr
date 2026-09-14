@@ -18,7 +18,7 @@ defmodule PrismWeb.ComponentsLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.components(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.components(ctx))
     end
 
     socket =
@@ -160,7 +160,7 @@ defmodule PrismWeb.ComponentsLive do
       resubscribe(
         socket,
         :progress_topic,
-        Cyfr.Topics.progress(progress_id, socket.assigns[:context])
+        Cyfr.Bus.progress(progress_id, socket.assigns[:context])
       )
 
     socket =
@@ -220,7 +220,7 @@ defmodule PrismWeb.ComponentsLive do
       resubscribe(
         socket,
         :register_topic,
-        Cyfr.Topics.register(register_id, socket.assigns[:context])
+        Cyfr.Bus.register(register_id, socket.assigns[:context])
       )
 
     socket =
@@ -305,7 +305,7 @@ defmodule PrismWeb.ComponentsLive do
       resubscribe(
         socket,
         :progress_topic,
-        Cyfr.Topics.progress(progress_id, socket.assigns[:context])
+        Cyfr.Bus.progress(progress_id, socket.assigns[:context])
       )
 
     socket =
@@ -458,7 +458,7 @@ defmodule PrismWeb.ComponentsLive do
     if socket.assigns.register_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Cyfr.Topics.register(socket.assigns.register_id, socket.assigns[:context])
+        Cyfr.Bus.register(socket.assigns.register_id, socket.assigns[:context])
       )
     end
 
@@ -480,7 +480,7 @@ defmodule PrismWeb.ComponentsLive do
     if socket.assigns.register_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Cyfr.Topics.register(socket.assigns.register_id, socket.assigns[:context])
+        Cyfr.Bus.register(socket.assigns.register_id, socket.assigns[:context])
       )
     end
 
@@ -637,7 +637,7 @@ defmodule PrismWeb.ComponentsLive do
     if socket.assigns.progress_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Cyfr.Topics.progress(socket.assigns.progress_id, socket.assigns[:context])
+        Cyfr.Bus.progress(socket.assigns.progress_id, socket.assigns[:context])
       )
     end
   end

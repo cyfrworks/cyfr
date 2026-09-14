@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.Schemas.Conversation do
+defmodule Arca.Schemas.Thread do
   @moduledoc """
-  Ecto schema for the `conversations` table (backs `Arca.ConversationStorage`).
+  Ecto schema for the `threads` table (backs `Arca.ThreadStorage`).
 
-  A conversation is the athanor's: every member reads the same thread and
+  A thread is the athanor's: every member reads the same thread and
   any member may send the next message. Its transcript is its messages;
   its turns are their own rows (`Arca.TurnStorage`). `orchestrator` is
   the agent the last turn addressed, `turn_seq` the cursor of the last
@@ -19,9 +19,9 @@ defmodule Arca.Schemas.Conversation do
 
   @type t :: %__MODULE__{}
 
-  schema "conversations" do
+  schema "threads" do
     field :athanor_id, :string
-    field :title, :string, default: "New conversation"
+    field :title, :string, default: "New thread"
     field :created_by, :string
     field :orchestrator, :string
     field :turn_seq, :integer, default: 0

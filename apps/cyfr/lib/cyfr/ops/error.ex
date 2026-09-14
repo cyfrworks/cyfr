@@ -60,7 +60,7 @@ defmodule Cyfr.Ops.Error do
   def reason?({:unknown_action, name_action}) when is_binary(name_action), do: true
   def reason?(:control_plane_lost), do: true
   def reason?(:not_provisioned), do: true
-  # A conversation's own refusals: what a send or a decision is held to.
+  # A thread's own refusals: what a send or a decision is held to.
   def reason?(:busy), do: true
   def reason?(:not_member), do: true
   def reason?(:archived), do: true
@@ -116,10 +116,10 @@ defmodule Cyfr.Ops.Error do
   def message(:not_provisioned),
     do: "This estate is still being prepared — retry shortly"
 
-  # A conversation's own refusals, one sentence each, the same on the
+  # A thread's own refusals, one sentence each, the same on the
   # wire and on the page.
   def message(:busy), do: "The turn queue is full — send again after the current turn"
-  def message(:not_member), do: "Only a member of the estate can act in its conversations"
+  def message(:not_member), do: "Only a member of the estate can act in its threads"
   def message(:archived), do: "This estate is archived — nothing runs in it"
 
   def message(:no_orchestrator),

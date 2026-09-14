@@ -28,6 +28,6 @@ defmodule Arca.Schemas.Approval do
     field :proposal_digest, :string, default: ""
     field :resolution_kind, :string
     field :launch_execution_id, :string
-    field :conversation_id, :string
+    field :thread_id, :string
   end
 end

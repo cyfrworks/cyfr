@@ -6,7 +6,7 @@ defmodule Cyfr.Files do
   The athanor's files as a person sees them: one tree whose folders are
   the console tier of the storage layout (`Arca.Storage.console_folders/0`),
   spoken in the console's names — `data/`, `components/`, `aqua/`,
-  `notes/`, `conversations/`. The server's own storage has no name here
+  `notes/`, `threads/`. The server's own storage has no name here
   and is never listed; another athanor's tree is unreachable because the
   athanor is the context's, never the path's.
 
@@ -20,7 +20,7 @@ defmodule Cyfr.Files do
       (scaffold, pull, fork, the AQUA page); a unit the server ships is
       restored, never deleted. A write here keeps the registry and the
       agent index in step with the tree.
-    * `:read` (`notes/`, `conversations/`) — listed, read and downloaded;
+    * `:read` (`notes/`, `threads/`) — listed, read and downloaded;
       written only by their own surfaces.
 
   Every operation answers the typed refusals `Cyfr.Ops.Error` renders,

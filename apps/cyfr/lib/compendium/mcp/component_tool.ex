@@ -1137,7 +1137,7 @@ defmodule Compendium.MCP.ComponentTool do
 
     case Phoenix.PubSub.broadcast(
            Emissary.PubSub,
-           Cyfr.Topics.register(register_id, ctx),
+           Cyfr.Bus.register(register_id, ctx),
            {:register_progress, payload}
          ) do
       :ok ->
@@ -1194,7 +1194,7 @@ defmodule Compendium.MCP.ComponentTool do
 
   defp namespace_of(_), do: nil
 
-  # Broadcast to all Prism LiveViews subscribed to prism:components.
+  # Broadcast to all Prism LiveViews subscribed to bus:components.
   # Fires after any state-changing component operation (pull, register, delete, new, publish).
   # A diff's relative segment lists, joined for the wire.
   defp format_diff(%{added: added, removed: removed, changed: changed}) do
@@ -1206,7 +1206,7 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   defp broadcast_components_changed(ctx) do
-    topic = Cyfr.Topics.components(ctx)
+    topic = Cyfr.Bus.components(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)
   end
 
@@ -1219,7 +1219,7 @@ defmodule Compendium.MCP.ComponentTool do
 
     case Phoenix.PubSub.broadcast(
            Emissary.PubSub,
-           Cyfr.Topics.progress(progress_id, ctx),
+           Cyfr.Bus.progress(progress_id, ctx),
            {:progress, payload}
          ) do
       :ok ->

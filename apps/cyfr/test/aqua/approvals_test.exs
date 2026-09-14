@@ -15,7 +15,7 @@ defmodule Aqua.ApprovalsTest do
   import Ecto.Query, only: [from: 2]
 
   alias Aqua.{Approvals, Launch, Tape}
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Consent.{Bootstrap, Source}
   alias Sanctum.Tenancy.{Members, Users}
 
@@ -58,16 +58,16 @@ defmodule Aqua.ApprovalsTest do
 
     {:ok, %{capability_digest: capability}} = Compendium.AgentIndex.snapshot(ctx, "aqua")
 
-    {:ok, conv} = Conversations.create(ctx)
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, conv.id))
+    {:ok, thread} = Threads.create(ctx)
+    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
 
     pins = %{profile_id: profile_id, consent_id: consent_id, agent_capability_digest: capability}
-    {:ok, ctx: ctx, conv: conv, pins: pins}
+    {:ok, ctx: ctx, thread: thread, pins: pins}
   end
 
-  defp started!(ctx, conv, pins) do
+  defp started!(ctx, thread, pins) do
     {:ok, %{turn: turn}} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
         turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
       })
@@ -142,24 +142,23 @@ defmodule Aqua.ApprovalsTest do
 
   test "approving once resumes the step, and deciding again answers the first decision", %{
     ctx: ctx,
-    conv: conv,
+    thread: thread,
     pins: pins
   } do
-    turn = started!(ctx, conv, pins)
-    %{approval: approval, step: step} = card!(ctx, turn, @keep, standing: "conversation")
+    turn = started!(ctx, thread, pins)
+    %{approval: approval, step: step} = card!(ctx, turn, @keep, standing: "thread")
 
     assert {:ok,
             %{decision: "approved", resolution_kind: "continue", replayed: false, pending: 0}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
-    assert_receive {:conversation, _,
-                    {:approval_resolved, %{approval_id: aid, decision: "approved"}}}
+    assert_receive {:thread, _, {:approval_resolved, %{approval_id: aid, decision: "approved"}}}
 
     assert aid == approval.id
     assert {:ok, %{dispatch_state: "proposed", kind: "tool"}} = Tape.step(ctx, step.id)
     assert {:ok, %{status: "approved", decided_by: decided_by}} = Tape.approval(ctx, approval.id)
     assert decided_by == ctx.user_id
-    assert {:ok, []} = Aqua.ToolGrants.for_conversation(ctx, conv.id, "aqua")
+    assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
 
     assert {:ok, %{decision: "approved", replayed: true}} =
              Approvals.resolve(ctx, approval.id, %{decision: :declined, scope: :never})
@@ -170,35 +169,35 @@ defmodule Aqua.ApprovalsTest do
 
   test "a standing answer lands with the decision, and a refused scope decides nothing", %{
     ctx: ctx,
-    conv: conv,
+    thread: thread,
     pins: pins
   } do
-    turn = started!(ctx, conv, pins)
-    %{approval: approval} = card!(ctx, turn, @keep, standing: "conversation")
+    turn = started!(ctx, thread, pins)
+    %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
 
-    assert {:error, {:scope_not_permitted, :conversation_only}} =
+    assert {:error, {:scope_not_permitted, :thread_only}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: :always})
 
     assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
 
     assert {:ok, %{decision: "approved"}} =
-             Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: :conversation})
+             Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: :thread})
 
-    assert {:ok, [%{tool: "notes", action: "keep", effect: "allow", scope: "conversation"}]} =
-             Aqua.ToolGrants.for_conversation(ctx, conv.id, "aqua")
+    assert {:ok, [%{tool: "notes", action: "keep", effect: "allow", scope: "thread"}]} =
+             Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
 
     %{approval: destructive} = card!(ctx, turn, @wipe, kind: "destructive")
 
     assert {:error, {:scope_not_permitted, "destructive"}} =
-             Approvals.resolve(ctx, destructive.id, %{decision: :approved, scope: :conversation})
+             Approvals.resolve(ctx, destructive.id, %{decision: :approved, scope: :thread})
   end
 
   test "declining closes the step denied with a tool result, and never records a deny", %{
     ctx: ctx,
-    conv: conv,
+    thread: thread,
     pins: pins
   } do
-    turn = started!(ctx, conv, pins)
+    turn = started!(ctx, thread, pins)
     %{approval: approval, step: step} = card!(ctx, turn, @wipe, kind: "destructive")
 
     assert {:ok, %{decision: "declined", resolution_kind: "denied"}} =
@@ -214,18 +213,18 @@ defmodule Aqua.ApprovalsTest do
     assert {:ok, %{kind: "tool_result", content: "declined: not that"} = row} =
              Tape.message(ctx, rid)
 
-    assert Conversations.payload(row)["is_error"] == true
+    assert Threads.payload(row)["is_error"] == true
 
     assert {:ok, [%{tool: "files", action: "delete", effect: "deny", scope: "agent"}]} =
-             Aqua.ToolGrants.for_conversation(ctx, conv.id, "aqua")
+             Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
   end
 
   test "a card whose proposal no longer matches its approval settles as an error", %{
     ctx: ctx,
-    conv: conv,
+    thread: thread,
     pins: pins
   } do
-    turn = started!(ctx, conv, pins)
+    turn = started!(ctx, thread, pins)
     %{approval: approval, step: step} = card!(ctx, turn, @keep, digest: "sha256:elsewhere")
 
     assert {:ok, %{decision: "error"}} =
@@ -237,10 +236,10 @@ defmodule Aqua.ApprovalsTest do
 
   test "a card past its expiry settles expired, decided or swept", %{
     ctx: ctx,
-    conv: conv,
+    thread: thread,
     pins: pins
   } do
-    turn = started!(ctx, conv, pins)
+    turn = started!(ctx, thread, pins)
     past = DateTime.add(DateTime.utc_now(), -60, :second)
     %{approval: decided} = card!(ctx, turn, @keep, expires_at: past)
     %{approval: swept} = card!(ctx, turn, @keep, expires_at: past)
@@ -259,10 +258,10 @@ defmodule Aqua.ApprovalsTest do
 
   test "an expired card closes its step denied and leaves the model an answer", %{
     ctx: ctx,
-    conv: conv,
+    thread: thread,
     pins: pins
   } do
-    turn = started!(ctx, conv, pins)
+    turn = started!(ctx, thread, pins)
     past = DateTime.add(DateTime.utc_now(), -60, :second)
     %{approval: approval, step: step} = card!(ctx, turn, @keep, expires_at: past)
 
@@ -274,7 +273,7 @@ defmodule Aqua.ApprovalsTest do
 
     # And the model is told, in the row it reads as the call's result, that
     # the action did not run — the denial it observes instead of waiting.
-    rows = Tape.latest_messages(ctx, conv.id, 50)
+    rows = Tape.latest_messages(ctx, thread.id, 50)
     result = Enum.find(rows, &(&1.kind == "tool_result" and payload_of(&1)["step_id"] == step.id))
 
     assert result, "the expired call left no result for the model to read"
@@ -287,10 +286,10 @@ defmodule Aqua.ApprovalsTest do
 
   test "a turn whose consent or agent moved is failed, never resumed", %{
     ctx: ctx,
-    conv: conv,
+    thread: thread,
     pins: pins
   } do
-    moved = started!(ctx, conv, %{pins | consent_id: "consent_elsewhere"})
+    moved = started!(ctx, thread, %{pins | consent_id: "consent_elsewhere"})
     %{approval: approval} = card!(ctx, moved, @keep)
 
     assert {:error, :turn_superseded} =
@@ -299,7 +298,7 @@ defmodule Aqua.ApprovalsTest do
     assert {:ok, %{status: "error"}} = Tape.approval(ctx, approval.id)
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, moved.id)
 
-    {:ok, other} = Conversations.create(ctx)
+    {:ok, other} = Threads.create(ctx)
     changed = started!(ctx, other, %{pins | agent_capability_digest: "sha256:other"})
     %{approval: approval} = card!(ctx, changed, @keep)
 
@@ -311,7 +310,7 @@ defmodule Aqua.ApprovalsTest do
 
   test "an approved launch is consumed as its approver, or not at all", %{
     ctx: ctx,
-    conv: conv,
+    thread: thread,
     pins: pins
   } do
     n = System.unique_integer([:positive])
@@ -328,7 +327,7 @@ defmodule Aqua.ApprovalsTest do
     {:ok, _} = Members.ensure(approver.id, scope: "athanor", athanor_id: ctx.athanor_id)
     approver_ctx = %{ctx | user_id: approver.id}
 
-    turn = started!(ctx, conv, pins)
+    turn = started!(ctx, thread, pins)
 
     launch = %{
       tool: "execution",

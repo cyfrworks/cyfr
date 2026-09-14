@@ -810,7 +810,7 @@ defmodule Sanctum.Tenancy.Athanors do
   defp slug_free?(kind, slug), do: match?({:error, :not_found}, get_by_slug(kind, slug))
 
   # Only the groups a person deliberately made. A frozen pair is a
-  # conversation, not a group they created, and counting DMs against
+  # thread, not a group they created, and counting DMs against
   # `CYFR_MAX_GROUPS_PER_PERSON` would make the cap mean "how many people
   # may you talk to" — which is not what an operator setting it intends.
   # DMs have their own ceiling, `CYFR_MAX_PAIRS_PER_PERSON`, counted by

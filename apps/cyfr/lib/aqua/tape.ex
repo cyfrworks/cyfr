@@ -10,8 +10,8 @@ defmodule Aqua.Tape do
   Each write is one storage transaction (`Arca.TurnStorage`), fenced on
   the turn's `fence`: a runner whose fence moved is refused
   `{:error, :superseded}`. The rows a person sees are broadcast on the
-  conversation's topic AFTER the transaction commits, in the vocabulary
-  the console already reads (`{:conversation, id, {:message, row}}`);
+  thread's topic AFTER the transaction commits, in the vocabulary
+  the console already reads (`{:thread, id, {:message, row}}`);
   approvals are also announced to the estate (`Sanctum.Notify`). A
   guest-planed context writes here unchanged: the tape is a narrow
   interface, not a plane, and the tenant is the context's.
@@ -22,7 +22,7 @@ defmodule Aqua.Tape do
   them can do.
   """
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
   alias Sanctum.Context
 
@@ -41,7 +41,7 @@ defmodule Aqua.Tape do
   `:client_id`), and one of `:turn` (`%{orchestrator, requested_by,
   model, options}`) or `:steer_turn_id`, or neither for room content.
 
-  A `client_id` this conversation already accepted answers the existing
+  A `client_id` this thread already accepted answers the existing
   acceptance as `replayed: true` when it is the same send — same actor,
   text, attachments, and the same work: the agent, model and room of the
   turn it opened, or the turn it steered — and `{:error, :client_id_reused}`
@@ -51,14 +51,14 @@ defmodule Aqua.Tape do
   """
   @spec accept(Context.t(), String.t(), map()) ::
           {:ok, %{message: row(), turn: turn() | nil, replayed: boolean()}} | {:error, term()}
-  def accept(%Context{} = ctx, conversation_id, attrs) when is_map(attrs) do
-    case TurnStorage.accept_message(ctx, conversation_id, attrs) do
+  def accept(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+    case TurnStorage.accept_message(ctx, thread_id, attrs) do
       {:ok, %{message: message, turn: turn}} ->
-        broadcast(ctx, conversation_id, {:message, message})
+        broadcast(ctx, thread_id, {:message, message})
         {:ok, %{message: message, turn: turn, replayed: false}}
 
       {:error, reason} when reason in [:duplicate_client_id, :message_id_reused] ->
-        replay(ctx, conversation_id, attrs, reason)
+        replay(ctx, thread_id, attrs, reason)
 
       other ->
         other
@@ -69,10 +69,10 @@ defmodule Aqua.Tape do
   # taken — answers what was accepted when it is the same send; the
   # client id is what names the accepted row, so an id offered without one
   # is another send's.
-  defp replay(ctx, conversation_id, attrs, reason) do
+  defp replay(ctx, thread_id, attrs, reason) do
     case get_in(attrs, [:message, :client_id]) do
       client_id when is_binary(client_id) ->
-        case TurnStorage.accepted(ctx, conversation_id, client_id) do
+        case TurnStorage.accepted(ctx, thread_id, client_id) do
           {:ok, %{message: message, turn: turn}} ->
             if same_send?(message, turn, attrs),
               do: {:ok, %{message: message, turn: turn, replayed: true}},
@@ -94,20 +94,20 @@ defmodule Aqua.Tape do
   defp reused(:message_id_reused), do: :message_id_reused
 
   @doc """
-  The acceptance a `client_id` already produced in this conversation:
+  The acceptance a `client_id` already produced in this thread:
   its message and, when the row opened or steered a turn, that turn.
   `{:error, :not_found}` for a `client_id` never accepted.
   """
   @spec accepted(Context.t(), String.t(), String.t()) ::
           {:ok, %{message: row(), turn: turn() | nil}} | {:error, term()}
-  def accepted(%Context{} = ctx, conversation_id, client_id) when is_binary(client_id),
-    do: TurnStorage.accepted(ctx, conversation_id, client_id)
+  def accepted(%Context{} = ctx, thread_id, client_id) when is_binary(client_id),
+    do: TurnStorage.accepted(ctx, thread_id, client_id)
 
   @doc "Append one row outside a turn's step machinery (a system note, a compaction, an aborted mark)."
   @spec append(Context.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}
-  def append(%Context{} = ctx, conversation_id, attrs) when is_map(attrs) do
-    with {:ok, row} <- Conversations.append(ctx, conversation_id, attrs) do
-      broadcast(ctx, conversation_id, {:message, row})
+  def append(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+    with {:ok, row} <- Threads.append(ctx, thread_id, attrs) do
+      broadcast(ctx, thread_id, {:message, row})
       {:ok, row}
     end
   end
@@ -124,7 +124,7 @@ defmodule Aqua.Tape do
 
   # A row the turn owns, written inside its fence. Both of these change what
   # the next request reads, so a runner whose fence has moved must not be
-  # able to add one — the generic `append/3` asks the conversation and would
+  # able to add one — the generic `append/3` asks the thread and would
   # have let a superseded loop rewrite its successor's projection.
   defp turn_row(%Context{} = ctx, turn, attrs) do
     attrs =
@@ -133,7 +133,7 @@ defmodule Aqua.Tape do
       |> Map.put(:fence, turn.fence)
 
     with {:ok, row} <- TurnStorage.append_turn_row(ctx, turn.id, attrs) do
-      broadcast(ctx, turn.conversation_id, {:message, row})
+      broadcast(ctx, turn.thread_id, {:message, row})
       {:ok, row}
     end
   end
@@ -171,7 +171,7 @@ defmodule Aqua.Tape do
   def finish(%Context{} = ctx, turn, status, attrs \\ %{}) do
     with {:ok, finished} <-
            TurnStorage.finish(ctx, turn.id, status, Map.put_new(attrs, :fence, turn.fence)) do
-      broadcast(ctx, turn.conversation_id, {:turn_finished})
+      broadcast(ctx, turn.thread_id, {:turn_finished})
       {:ok, finished}
     end
   end
@@ -217,8 +217,8 @@ defmodule Aqua.Tape do
              model_step.id,
              Map.put_new(response, :fence, turn.fence)
            ) do
-      if text, do: broadcast(ctx, turn.conversation_id, {:message, text})
-      Enum.each(calls, &broadcast(ctx, turn.conversation_id, {:message, &1.message}))
+      if text, do: broadcast(ctx, turn.thread_id, {:message, text})
+      Enum.each(calls, &broadcast(ctx, turn.thread_id, {:message, &1.message}))
       {:ok, recorded}
     end
   end
@@ -234,7 +234,7 @@ defmodule Aqua.Tape do
   def close_step(%Context{} = ctx, turn, step, outcome, attrs \\ %{}) do
     with {:ok, %{result: result} = closed} <-
            TurnStorage.close_step(ctx, step.id, outcome, Map.put_new(attrs, :fence, turn.fence)) do
-      if result, do: broadcast(ctx, turn.conversation_id, {:message, result})
+      if result, do: broadcast(ctx, turn.thread_id, {:message, result})
       {:ok, closed}
     end
   end
@@ -264,7 +264,7 @@ defmodule Aqua.Tape do
   def pause_uncertain(%Context{} = ctx, turn, attrs) when is_map(attrs) do
     with {:ok, %{aborted: aborted} = paused} <-
            TurnStorage.pause_uncertain(ctx, turn.id, Map.put_new(attrs, :fence, turn.fence)) do
-      broadcast(ctx, turn.conversation_id, {:message, aborted})
+      broadcast(ctx, turn.thread_id, {:message, aborted})
       {:ok, paused}
     end
   end
@@ -288,8 +288,8 @@ defmodule Aqua.Tape do
   def skip_steps(%Context{} = ctx, turn, reason) do
     with {:ok, steps} <- TurnStorage.skip_steps(ctx, turn.id, reason, %{fence: turn.fence}) do
       Enum.each(steps, fn step ->
-        with {:ok, row} <- Conversations.get_message(ctx, step.result_message_id),
-             do: broadcast(ctx, turn.conversation_id, {:message, row})
+        with {:ok, row} <- Threads.get_message(ctx, step.result_message_id),
+             do: broadcast(ctx, turn.thread_id, {:message, row})
       end)
 
       {:ok, steps}
@@ -316,10 +316,10 @@ defmodule Aqua.Tape do
   def open_approval(%Context{} = ctx, turn, step, attrs) when is_map(attrs) do
     with {:ok, %{card: card, approval: approval} = opened} <-
            TurnStorage.open_approval(ctx, step.id, Map.put_new(attrs, :fence, turn.fence)) do
-      broadcast(ctx, turn.conversation_id, {:message, card})
+      broadcast(ctx, turn.thread_id, {:message, card})
 
       Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_pending, %{
-        conversation_id: turn.conversation_id,
+        thread_id: turn.thread_id,
         message_id: card.id,
         approval_id: approval.id
       })
@@ -339,15 +339,15 @@ defmodule Aqua.Tape do
              decision,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
-      broadcast(ctx, turn.conversation_id, {:message, card})
+      broadcast(ctx, turn.thread_id, {:message, card})
 
       if step.result_message_id do
-        with {:ok, row} <- Conversations.get_message(ctx, step.result_message_id),
-             do: broadcast(ctx, turn.conversation_id, {:message, row})
+        with {:ok, row} <- Threads.get_message(ctx, step.result_message_id),
+             do: broadcast(ctx, turn.thread_id, {:message, row})
       end
 
       Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_resolved, %{
-        conversation_id: turn.conversation_id,
+        thread_id: turn.thread_id,
         message_id: card.id,
         approval_id: approval_id,
         decision: decision
@@ -355,7 +355,7 @@ defmodule Aqua.Tape do
 
       # The runner holding the turn learns the decision from the topic,
       # after the commit like every row.
-      broadcast(ctx, turn.conversation_id, {
+      broadcast(ctx, turn.thread_id, {
         :approval_resolved,
         %{
           approval_id: approval_id,
@@ -380,7 +380,7 @@ defmodule Aqua.Tape do
   def open_clone_turn(%Context{} = ctx, parent, attrs) when is_map(attrs) do
     with {:ok, %{task: task} = opened} <-
            TurnStorage.open_clone_turn(ctx, parent.id, Map.put_new(attrs, :fence, parent.fence)) do
-      broadcast(ctx, parent.conversation_id, {:message, task})
+      broadcast(ctx, parent.thread_id, {:message, task})
       {:ok, opened}
     end
   end
@@ -426,12 +426,12 @@ defmodule Aqua.Tape do
   @spec step(Context.t(), String.t()) :: {:ok, step()} | {:error, term()}
   def step(%Context{} = ctx, step_id), do: TurnStorage.step(ctx, step_id)
 
-  @doc "The open turns of a conversation, oldest first."
+  @doc "The open turns of a thread, oldest first."
   @spec open_turns(Context.t(), String.t()) :: {:ok, [turn()]} | {:error, term()}
-  def open_turns(%Context{} = ctx, conversation_id),
-    do: TurnStorage.open_turns(ctx, conversation_id)
+  def open_turns(%Context{} = ctx, thread_id),
+    do: TurnStorage.open_turns(ctx, thread_id)
 
-  @doc "Every conversation with an open root turn, across tenants — the boot's recovery scan."
+  @doc "Every thread with an open root turn, across tenants — the boot's recovery scan."
   @spec with_open_turns() :: [{String.t(), String.t()}]
   def with_open_turns, do: TurnStorage.with_open_turns()
 
@@ -461,13 +461,13 @@ defmodule Aqua.Tape do
   def agent_revision(_ctx, _turn), do: {:error, :no_revision}
 
   @doc """
-  Announce an ephemeral console event on the conversation's topic — a
+  Announce an ephemeral console event on the thread's topic — a
   delta, the tool activity, the usage, the sender's intents — without a
   row.
   """
   @spec announce(Context.t(), String.t(), term()) :: :ok
-  def announce(%Context{} = ctx, conversation_id, event),
-    do: broadcast(ctx, conversation_id, event)
+  def announce(%Context{} = ctx, thread_id, event),
+    do: broadcast(ctx, thread_id, event)
 
   @doc "The `tool_call` payloads of the calls a turn and its clones closed."
   @spec closed_calls(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
@@ -475,37 +475,37 @@ defmodule Aqua.Tape do
 
   @doc "The decoded `payload` of a message row."
   @spec payload(row()) :: map()
-  def payload(row), do: Conversations.payload(row)
+  def payload(row), do: Threads.payload(row)
 
   @doc "One message row of the tenant."
   @spec message(Context.t(), String.t()) :: {:ok, row()} | {:error, term()}
-  def message(%Context{} = ctx, message_id), do: Conversations.get_message(ctx, message_id)
+  def message(%Context{} = ctx, message_id), do: Threads.get_message(ctx, message_id)
 
-  @doc "The conversation a turn belongs to."
-  @spec conversation(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def conversation(%Context{} = ctx, conversation_id), do: Conversations.get(ctx, conversation_id)
+  @doc "The thread a turn belongs to."
+  @spec thread(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def thread(%Context{} = ctx, thread_id), do: Threads.get(ctx, thread_id)
 
-  @doc "The newest rows of a conversation, for a viewer."
+  @doc "The newest rows of a thread, for a viewer."
   @spec latest_messages(Context.t(), String.t(), pos_integer()) ::
           [row()] | {:error, term()}
-  def latest_messages(%Context{} = ctx, conversation_id, n),
-    do: Conversations.latest_messages(ctx, conversation_id, n)
+  def latest_messages(%Context{} = ctx, thread_id, n),
+    do: Threads.latest_messages(ctx, thread_id, n)
 
-  @doc "The topic a conversation's rows are broadcast on."
+  @doc "The topic a thread's rows are broadcast on."
   @spec topic(Context.t(), String.t()) :: String.t()
-  def topic(%Context{} = ctx, conversation_id),
-    do: Cyfr.Topics.conversation(conversation_id, Context.athanor!(ctx))
+  def topic(%Context{} = ctx, thread_id),
+    do: Cyfr.Bus.thread(thread_id, Context.athanor!(ctx))
 
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
 
   # Durable rows reach viewers only after their transaction committed.
-  defp broadcast(ctx, conversation_id, event) do
+  defp broadcast(ctx, thread_id, event) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      topic(ctx, conversation_id),
-      {:conversation, conversation_id, event}
+      topic(ctx, thread_id),
+      {:thread, thread_id, event}
     )
 
     :ok
@@ -516,7 +516,7 @@ defmodule Aqua.Tape do
   defp same_send?(message, turn, attrs) do
     wanted = Map.get(attrs, :message, %{})
     wanted_turn = Map.get(attrs, :turn)
-    payload = Conversations.payload(message)
+    payload = Threads.payload(message)
 
     message.author == Map.get(wanted, :author) and
       message.content == (Map.get(wanted, :content) || "") and
