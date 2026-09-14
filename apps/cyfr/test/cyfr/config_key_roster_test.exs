@@ -39,6 +39,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
     tool_providers_lenient: :seam,
     thread_recovery: :seam,
     device_flow: :seam,
+    device_flow_endpoints: :seam,
     provisioning_inline: :seam,
     record_sink_inline: :seam,
 
