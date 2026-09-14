@@ -27,7 +27,7 @@ defmodule Arca.Schemas.Turn do
     field :root_execution_id, :string
     field :attempt, :string
     field :runner_id, :string
-    field :fence, :string
+    field :fence, :integer
     field :recovery_attempts, :integer, default: 0
     field :profile_id, :string
     field :consent_id, :string

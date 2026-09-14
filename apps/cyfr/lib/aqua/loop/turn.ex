@@ -279,7 +279,7 @@ defmodule Aqua.Loop.Turn do
 
     fn input ->
       task =
-        Task.Supervisor.async_nolink(Aqua.TaskSupervisor, fn ->
+        Aqua.Loop.Worker.async(fn ->
           Cyfr.Execution.run_child(authority, catalyst, nil, input,
             ctx: guest,
             parent_execution_id: turn.root_execution_id,

@@ -8,8 +8,9 @@ defmodule Opus.Emit do
   `cyfr:emit/events.emit` both answer through `emit/2`.
 
   An event is, in order: at most the node's `max_request_size` of JSON;
-  within the execution's emit budget (3000 a minute, separate from the
-  consented invocation rate limit, refused when it cannot be metered); a
+  within its root execution's emit budget (3000 a minute shared by every
+  execution under the root, separate from the consented invocation rate
+  limit, refused when it cannot be metered); a
   JSON object; attributed by the authority's emit transition, so a
   consumer can always tell a guest's event from the host's; masked of
   every credential the execution was handed (its preloaded vault fields
@@ -20,9 +21,10 @@ defmodule Opus.Emit do
 
   Streamed text is masked across event boundaries. Each logical stream —
   the answer's `text.delta` text, and each index's `tool_call.delta`
-  arguments — is held back by one less than the longest masked form of any
-  credential (`Opus.SecretMasker.max_length/1`), so a credential split over
-  two deltas is masked whole whatever events arrive between them. A
+  arguments — holds back only the tail that could begin a credential's
+  masked form (`Opus.SecretMasker.pending_prefix/2`), so a credential split
+  over two deltas is masked whole whatever events arrive between them, and
+  text that ends in no such prefix goes out at once. A
   stream's held text goes out when that stream ends: a call's arguments
   ahead of its own `tool_call.end`, and everything still held ahead of
   `stop` or `error`. An emitter closed before then drops it (the
@@ -39,11 +41,12 @@ defmodule Opus.Emit do
 
   @budget %{requests: 3000, window: "1m"}
 
-  @enforce_keys [:stream_id, :ctx, :authority, :held]
-  defstruct [:stream_id, :ctx, :authority, :held, :tracked_id, secrets: []]
+  @enforce_keys [:stream_id, :budget_id, :ctx, :authority, :held]
+  defstruct [:stream_id, :budget_id, :ctx, :authority, :held, :tracked_id, secrets: []]
 
   @type t :: %__MODULE__{
           stream_id: String.t(),
+          budget_id: String.t(),
           ctx: Sanctum.Context.t(),
           authority: Authority.t(),
           held: pid(),
@@ -53,9 +56,10 @@ defmodule Opus.Emit do
 
   @doc """
   Open an emitter for the stream of `stream_id`. `opts`: `:ctx` and
-  `:authority` (required); `:secrets`, the credential values preloaded
-  for the execution; `:tracked_id`, the execution whose dispensed OAuth
-  tokens are masked too.
+  `:authority` (required); `:budget_id`, the root execution whose emit
+  budget the events count against (default `stream_id`); `:secrets`, the
+  credential values preloaded for the execution; `:tracked_id`, the
+  execution whose dispensed OAuth tokens are masked too.
   """
   @spec open(String.t(), keyword()) :: t()
   def open(stream_id, opts) when is_binary(stream_id) do
@@ -67,6 +71,7 @@ defmodule Opus.Emit do
 
     %__MODULE__{
       stream_id: stream_id,
+      budget_id: Keyword.get(opts, :budget_id, stream_id),
       ctx: Keyword.fetch!(opts, :ctx),
       authority: Keyword.fetch!(opts, :authority),
       held: held,
@@ -113,7 +118,7 @@ defmodule Opus.Emit do
         encode_error(:resource_limit, "emit event exceeds the node's request size limit")
 
       {:error, :emit_rate_limited} ->
-        encode_error(:resource_limit, "emit rate limit exceeded for this execution")
+        encode_error(:resource_limit, "emit rate limit exceeded for this run")
 
       {:error, :invalid_event} ->
         encode_error(:invalid_request, "emit event must be a JSON object")
@@ -141,8 +146,7 @@ defmodule Opus.Emit do
 
   defp push(emitter, event, origin_opts) do
     secrets = emitter.secrets ++ OAuthTokenTracker.peek(emitter.tracked_id)
-    hold = max(SecretMasker.max_length(secrets) - 1, 0)
-    released = Agent.get_and_update(emitter.held, &release(&1, event, secrets, hold))
+    released = Agent.get_and_update(emitter.held, &release(&1, event, secrets))
 
     Enum.reduce_while(released, safe_encode(%{"ok" => true}), fn data, _answer ->
       case ExecutionEventBuffer.push(emitter.stream_id, data, emitter.ctx, origin_opts) do
@@ -159,33 +163,33 @@ defmodule Opus.Emit do
   # What an event releases, given the text held: a delta's masked text less
   # its held tail; the ending of a stream's held tail and then the event;
   # any other event alone, every stream still held.
-  defp release(held, %{"type" => "text.delta", "text" => text} = event, secrets, hold)
+  defp release(held, %{"type" => "text.delta", "text" => text} = event, secrets)
        when is_binary(text),
-       do: stream(held, :text, event, "text", text, secrets, hold)
+       do: stream(held, :text, event, "text", text, secrets)
 
   defp release(
          held,
          %{"type" => "tool_call.delta", "index" => index, "arguments" => arguments} = event,
-         secrets,
-         hold
+         secrets
        )
        when is_integer(index) and is_binary(arguments),
-       do: stream(held, {:arguments, index}, event, "arguments", arguments, secrets, hold)
+       do: stream(held, {:arguments, index}, event, "arguments", arguments, secrets)
 
-  defp release(held, %{"type" => "tool_call.end", "index" => index} = event, secrets, _hold) do
+  defp release(held, %{"type" => "tool_call.end", "index" => index} = event, secrets) do
     {ended, held} = Map.split(held, [{:arguments, index}])
     {tails(ended, secrets) ++ [SecretMasker.mask(event, secrets)], held}
   end
 
-  defp release(held, %{"type" => type} = event, secrets, _hold) when type in ["stop", "error"] do
+  defp release(held, %{"type" => type} = event, secrets) when type in ["stop", "error"] do
     {tails(held, secrets) ++ [SecretMasker.mask(event, secrets)], %{}}
   end
 
-  defp release(held, event, secrets, _hold), do: {[SecretMasker.mask(event, secrets)], held}
+  defp release(held, event, secrets), do: {[SecretMasker.mask(event, secrets)], held}
 
-  defp stream(held, key, event, field, text, secrets, hold) do
+  defp stream(held, key, event, field, text, secrets) do
     {template, pending} = Map.get(held, key, {event, ""})
-    {out, tail} = hold_back(SecretMasker.mask(pending <> text, secrets), hold)
+    masked = SecretMasker.mask(pending <> text, secrets)
+    {out, tail} = hold_back(masked, SecretMasker.pending_prefix(masked, secrets))
     held = if tail == "", do: Map.delete(held, key), else: Map.put(held, key, {template, tail})
 
     released =
@@ -194,8 +198,10 @@ defmodule Opus.Emit do
     {released, held}
   end
 
-  defp hold_back(text, 0), do: {text, ""}
-  defp hold_back(text, hold), do: String.split_at(text, -hold)
+  defp hold_back(text, hold) do
+    kept = byte_size(text) - hold
+    {binary_part(text, 0, kept), binary_part(text, kept, hold)}
+  end
 
   # Held tails as the deltas they finish, in stream order: the answer's
   # text, then each call's arguments by index.
@@ -218,8 +224,8 @@ defmodule Opus.Emit do
   defp check_size(json_event, max_size) when byte_size(json_event) <= max_size, do: :ok
   defp check_size(_json_event, _max_size), do: {:error, :event_too_large}
 
-  defp check_budget(%__MODULE__{ctx: ctx, stream_id: stream_id}) do
-    case Opus.RateLimiter.check(ctx.athanor_id, "emit:" <> stream_id, %{rate_limit: @budget}) do
+  defp check_budget(%__MODULE__{ctx: ctx, budget_id: budget_id}) do
+    case Opus.RateLimiter.check(ctx.athanor_id, "emit:" <> budget_id, %{rate_limit: @budget}) do
       {:ok, _remaining} -> :ok
       {:error, :rate_limited, _retry_after} -> {:error, :emit_rate_limited}
       {:error, :missing_tenant} -> {:error, :emit_rate_limited}

@@ -398,6 +398,10 @@ defmodule Aqua.Tape do
     end
   end
 
+  @doc "The open clone turns under `turn`, oldest first."
+  @spec open_clones(Context.t(), turn()) :: {:ok, [turn()]} | {:error, term()}
+  def open_clones(%Context{} = ctx, turn), do: TurnStorage.open_clones(ctx, turn.id)
+
   @doc "End a clone turn."
   @spec close_clone_turn(Context.t(), turn(), String.t(), map()) ::
           {:ok, turn()} | {:error, term()}

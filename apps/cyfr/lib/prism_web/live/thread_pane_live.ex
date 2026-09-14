@@ -212,6 +212,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused_reason, nil)
     |> assign(:queued, 0)
     |> assign(:turn_user, nil)
+    |> assign(:live_turn_id, nil)
     |> assign(:partials, Aqua.Loop.Stream.new())
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
@@ -229,6 +230,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused_reason, Map.get(live, :paused_reason))
     |> assign(:queued, Map.get(live, :queued, 0))
     |> assign(:turn_user, live.turn_user)
+    |> assign(:live_turn_id, if(live.running, do: live.turn_id))
     |> assign(:partials, live.partials)
     |> assign(:tool_activity, live.tool_activity)
     |> assign(:token_usage, live.usage)
@@ -644,8 +646,13 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp handle_thread_event(socket, {:queued, n}), do: assign(socket, :queued, n)
 
-  defp handle_thread_event(socket, {:turn_started, _eid}),
-    do: socket |> assign(:running, true) |> assign(:paused, false) |> assign(:paused_reason, nil)
+  defp handle_thread_event(socket, {:turn_started, turn_id}) do
+    socket
+    |> assign(:running, true)
+    |> assign(:paused, false)
+    |> assign(:paused_reason, nil)
+    |> assign(:live_turn_id, turn_id)
+  end
 
   # The turn stopped on a card, a launch, or a call whose outcome is
   # unknown; the sender it waits on stays named.
@@ -659,6 +666,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:running, false)
     |> assign(:paused, true)
     |> assign(:paused_reason, reason)
+    |> assign(:live_turn_id, nil)
     |> assign(:partials, Aqua.Loop.Stream.new())
     |> assign(:tool_activity, [])
   end
@@ -671,16 +679,31 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused, false)
     |> assign(:paused_reason, nil)
     |> assign(:turn_user, nil)
+    |> assign(:live_turn_id, nil)
     |> assign(:partials, Aqua.Loop.Stream.new())
     |> assign(:tool_activity, [])
     |> assign(:cancel_requested, false)
   end
 
-  defp handle_thread_event(socket, {:turn_generation, _turn_id, generation}),
-    do: assign(socket, :partials, Aqua.Loop.Stream.new(generation))
+  # Streamed text belongs to the running turn alone: an announcement or a
+  # delta for any other turn, or while none runs, is not kept.
+  defp handle_thread_event(
+         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         {:turn_fence, turn_id, fence}
+       ),
+       do: assign(socket, :partials, Aqua.Loop.Stream.advance(socket.assigns.partials, fence))
 
-  defp handle_thread_event(socket, {:delta, delta}),
-    do: assign(socket, :partials, Aqua.Loop.Stream.add(socket.assigns.partials, delta))
+  defp handle_thread_event(
+         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         {:delta_abandoned, %{turn_id: turn_id} = marker}
+       ),
+       do: assign(socket, :partials, Aqua.Loop.Stream.abandoned(socket.assigns.partials, marker))
+
+  defp handle_thread_event(
+         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         {:delta, %{turn_id: turn_id} = delta}
+       ),
+       do: assign(socket, :partials, Aqua.Loop.Stream.add(socket.assigns.partials, delta))
 
   defp handle_thread_event(socket, {:tool_activity, list}),
     do: assign(socket, :tool_activity, list)

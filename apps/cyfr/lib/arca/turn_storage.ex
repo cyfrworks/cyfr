@@ -15,7 +15,8 @@ defmodule Arca.TurnStorage do
   `takeover/3`, `pause_recovered/3`) is refused `{:error, :superseded}`
   before it reads or writes anything else, and one that names no fence is
   refused `{:error, :fence_required}`. A host transition that takes a turn
-  over compares the fence it read and mints the next one in one write.
+  over compares the fence it read and raises it by one in the same write,
+  so fences only grow.
   A step is proposed before its effect (`record_response/4`), flipped to
   `dispatched` in its own commit (`dispatch_step/3`), and closed with its
   result row, outcome and event together (`close_step/4`). Pause and
@@ -164,7 +165,7 @@ defmodule Arca.TurnStorage do
           requested_by: Map.get(attrs, :requested_by),
           model: Map.get(attrs, :model),
           options: encode(Map.get(attrs, :options)),
-          fence: new_fence(),
+          fence: 1,
           runner_id: Cyfr.Boot.id(),
           status: "accepted",
           accepted_at: now
@@ -486,10 +487,11 @@ defmodule Arca.TurnStorage do
   end
 
   @doc """
-  Renew the turn's fence and mark every dispatched step cancel-requested,
-  before its loop is stopped: a later write from the old fence and a
-  later admission of those steps are refused. `attrs`: `:fence`, the one
-  the caller read. Answers the turn with its new fence.
+  Raise the fence of the turn and of its open clones, and mark every step
+  either has dispatched cancel-requested, before the loop is stopped: a
+  later write from an old fence and a later admission of those steps are
+  refused. `attrs`: `:fence`, the one the caller read. Answers the turn
+  with its new fence.
   """
   @spec supersede(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
   def supersede(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
@@ -499,9 +501,12 @@ defmodule Arca.TurnStorage do
       Arca.Repo.transaction(fn ->
         _ = take!(athanor_id, turn_id, attrs)
         now = DateTime.utc_now()
+        clones = open_clone_ids(athanor_id, turn_id)
 
         from(s in TurnStep,
-          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
+          where:
+            s.athanor_id == ^athanor_id and
+              (s.turn_id == ^turn_id or s.turn_id in subquery(clones)),
           where: s.dispatch_state == "dispatched" and is_nil(s.cancel_requested_at)
         )
         |> Arca.Repo.update_all(set: [cancel_requested_at: now])
@@ -1380,7 +1385,7 @@ defmodule Arca.TurnStorage do
                 consent_id: Map.get(attrs, :consent_id),
                 agent_revision_digest: Map.get(attrs, :agent_revision_digest),
                 agent_capability_digest: Map.get(attrs, :agent_capability_digest),
-                fence: new_fence(),
+                fence: 1,
                 runner_id: Cyfr.Boot.id(),
                 status: "running",
                 accepted_at: now,
@@ -1402,6 +1407,23 @@ defmodule Arca.TurnStorage do
           %{turn: child, step: step, task: task}
         end)
       end)
+    end)
+  end
+
+  @doc "The open clone turns under `turn_id`, oldest first."
+  @spec open_clones(Context.t(), String.t()) :: {:ok, [Turn.t()]} | {:error, term()}
+  def open_clones(%Context{} = ctx, turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_clones", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      {:ok,
+       Arca.Repo.all(
+         from(t in Turn,
+           where: t.athanor_id == ^athanor_id and t.parent_turn_id == ^turn_id,
+           where: t.status in ^@open,
+           order_by: [asc: t.accepted_at, asc: t.id]
+         )
+       )}
     end)
   end
 
@@ -2006,8 +2028,11 @@ defmodule Arca.TurnStorage do
   end
 
   # A host transition that takes the turn from whoever held it: the fence
-  # the caller read is replaced by the next one in the same write, so of two
-  # transitions racing over one turn only the first lands.
+  # the caller read is raised by one in the same write, so of two
+  # transitions racing over one turn only the first lands; the fences of
+  # the turn's open clones rise with it, so no clone loop writes past the
+  # take. The turn row is locked before its clones', the order every
+  # transaction that touches both follows.
   # arca:db-raise-ok inside the caller's transaction
   defp take!(athanor_id, turn_id, attrs) do
     fence = held_fence!(attrs)
@@ -2015,15 +2040,29 @@ defmodule Arca.TurnStorage do
     case from(t in Turn,
            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.fence == ^fence
          )
-         |> Arca.Repo.update_all(set: [fence: new_fence()]) do
-      {1, _} -> turn!(athanor_id, turn_id)
-      {0, _} -> Arca.Repo.rollback(:superseded)
+         |> Arca.Repo.update_all(inc: [fence: 1]) do
+      {1, _} ->
+        from(t in Turn, where: t.id in subquery(open_clone_ids(athanor_id, turn_id)))
+        |> Arca.Repo.update_all(inc: [fence: 1])
+
+        turn!(athanor_id, turn_id)
+
+      {0, _} ->
+        Arca.Repo.rollback(:superseded)
     end
+  end
+
+  defp open_clone_ids(athanor_id, turn_id) do
+    from(t in Turn,
+      where: t.athanor_id == ^athanor_id and t.parent_turn_id == ^turn_id,
+      where: t.status in ^@open,
+      select: t.id
+    )
   end
 
   defp held_fence!(attrs) do
     case Map.get(attrs, :fence) do
-      fence when is_binary(fence) and fence != "" -> fence
+      fence when is_integer(fence) -> fence
       _ -> Arca.Repo.rollback(:fence_required)
     end
   end
@@ -2035,8 +2074,6 @@ defmodule Arca.TurnStorage do
       _ -> Arca.Repo.rollback(:turn_over)
     end
   end
-
-  defp new_fence, do: Cyfr.UUID7.generate_id("fnc")
 
   defp encode(nil), do: nil
   defp encode(value) when is_binary(value), do: value

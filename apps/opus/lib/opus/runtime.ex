@@ -346,6 +346,7 @@ defmodule Opus.Runtime do
     Opus.Emit.open(stream_id,
       ctx: ctx,
       authority: authority_info.authority,
+      budget_id: root_execution_id,
       secrets: Map.values(preloaded),
       tracked_id: execution_id
     )

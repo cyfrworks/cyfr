@@ -62,21 +62,33 @@ defmodule Opus.SecretMasker do
   # token bundle that carried a non-string), so they are filtered, not
   # trusted.
   @doc """
-  The longest form `mask/2` replaces for any of `secret_values`, in
-  bytes, or 0 when there is nothing to mask. A stream that holds back one
-  less than this many characters never releases part of a credential it
-  would have masked whole.
+  How many bytes at the end of `text` could begin a form `mask/2` replaces
+  without completing it: the longest tail of `text` that is a proper prefix
+  of one. A stream that holds those bytes back until more text arrives never
+  releases part of a credential it would have masked whole, and holds
+  nothing back when the text ends in no such prefix.
 
-      iex> Opus.SecretMasker.max_length(["abc", "sk-secret"])
-      18
+      iex> Opus.SecretMasker.pending_prefix("key: sk-se", ["sk-secret"])
+      5
+
+      iex> Opus.SecretMasker.pending_prefix("nothing to hold", ["sk-secret"])
+      0
   """
-  @spec max_length([String.t()]) :: non_neg_integer()
-  def max_length(secret_values) do
+  @spec pending_prefix(binary(), [String.t()]) :: non_neg_integer()
+  def pending_prefix(text, secret_values) when is_binary(text) do
     secret_values
     |> usable_secrets()
     |> Enum.flat_map(&forms/1)
-    |> Enum.map(&byte_size/1)
+    |> Enum.map(&open_prefix(text, &1))
     |> Enum.max(fn -> 0 end)
+  end
+
+  defp open_prefix(text, form) do
+    size = byte_size(text)
+
+    Enum.find(min(size, byte_size(form) - 1)..1//-1, 0, fn k ->
+      binary_part(text, size - k, k) == binary_part(form, 0, k)
+    end)
   end
 
   defp usable_secrets(values) when is_list(values),

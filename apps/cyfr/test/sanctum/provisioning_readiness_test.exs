@@ -185,6 +185,20 @@ defmodule Sanctum.ProvisioningReadinessTest do
     end
   end
 
+  test "a boot that does not own the control plane starts no fill", %{ctx: ctx, group: group} do
+    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+
+    Cyfr.ControlPlane.mark(:lost)
+    assert {:error, :not_provisioned} = Provisioning.ready(ctx)
+    {:ok, untouched} = Athanors.get(group.id)
+    refute untouched.provisioned_at || Athanors.provisioning_failure(untouched)
+
+    Cyfr.ControlPlane.mark(:unclaimed)
+    assert {:error, :not_provisioned} = Provisioning.ready(ctx)
+    {:ok, attempted} = Athanors.get(group.id)
+    assert attempted.provisioned_at || Athanors.provisioning_failure(attempted)
+  end
+
   test "a context with no athanor is never ready" do
     assert Provisioning.provisioned?(%Sanctum.Context{}) == false
     assert :ok = Provisioning.start_provisioning(%Sanctum.Context{})

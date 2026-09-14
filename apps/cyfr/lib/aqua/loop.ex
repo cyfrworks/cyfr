@@ -103,7 +103,7 @@ defmodule Aqua.Loop do
     with {:ok, turn} <- Tape.turn(ctx, Keyword.fetch!(opts, :turn_id)) do
       case claim_and_start(ctx, turn) do
         {:ok, state} ->
-          announce_generation(state.spec.guest, state.turn)
+          Aqua.Loop.Stream.announce_fence(state.spec.guest, state.turn)
           conclude(state, loop(state))
 
         {:error, {:after_claim, claim, turn, reason}} ->
@@ -185,7 +185,7 @@ defmodule Aqua.Loop do
         active_ms: turn.active_ms
       }
 
-      announce_generation(spec.guest, turn)
+      Aqua.Loop.Stream.announce_fence(spec.guest, turn)
 
       case settle(state) do
         {:continue, state} -> conclude(state, loop(state))
@@ -196,43 +196,50 @@ defmodule Aqua.Loop do
 
   @doc """
   Abort a turn from outside its process, before it is stopped: the fence
-  is renewed and the dispatched steps cancel-marked, every child execution
-  and every in-process catalog handler is cancelled, dispatched steps settle
-  by `Arca.Schemas.TurnStep.unresolved/1` — a call whose effect is unknown
-  is marked `uncertain`, since a cancel does not prove the effect never
-  happened — unstarted steps are skipped, and the aborted mark is written.
-  The caller then ends the turn.
+  of the turn and of its open clones is raised and their dispatched steps
+  cancel-marked, every child execution and every in-process catalog
+  handler is cancelled, dispatched steps settle by
+  `Arca.Schemas.TurnStep.unresolved/1` — a call whose effect is unknown is
+  marked `uncertain`, since a cancel does not prove the effect never
+  happened — unstarted steps are skipped, each open clone ends
+  `cancelled`, and the aborted mark is written. The caller then ends the
+  turn; stopping its process stops every worker and clone loop under it
+  (`Aqua.Loop.Worker`).
   """
   @spec abort(Context.t(), Tape.turn(), String.t()) :: {:ok, Tape.turn()} | {:error, term()}
   def abort(%Context{} = ctx, turn, reason) do
     guest = Context.enter_guest(ctx)
 
     with {:ok, superseded} <- Tape.supersede(guest, turn),
-         {:ok, steps} <- Tape.steps(guest, superseded) do
-      Enum.each(steps, fn
-        %{dispatch_state: "dispatched"} = step ->
-          if step.child_execution_id, do: Cyfr.Execution.cancel(ctx, step.child_execution_id)
-          Aqua.Ops.cancel_call(handle(superseded, step))
+         {:ok, clones} <- Tape.open_clones(guest, superseded) do
+      for clone <- clones do
+        settle_aborted(ctx, clone, reason)
+        _ = Tape.close_clone_turn(guest, clone, "cancelled", %{error: reason})
+      end
 
-          case TurnStep.unresolved(step) do
-            :uncertain ->
-              Tape.mark_uncertain(guest, superseded, step, reason)
-
-            :unknown ->
-              Tape.close_step(guest, superseded, step, "uncertain", %{error: reason})
-
-            _unanswered_or_replay ->
-              Tape.close_step(guest, superseded, step, "error", %{error: reason})
-          end
-
-        _ ->
-          :ok
-      end)
-
-      _ = Tape.skip_steps(guest, superseded, reason)
+      settle_aborted(ctx, superseded, reason)
       _ = Tape.append_aborted(guest, superseded, reason)
       {:ok, superseded}
     end
+  end
+
+  defp settle_aborted(ctx, turn, reason) do
+    guest = Context.enter_guest(ctx)
+
+    with {:ok, steps} <- Tape.steps(guest, turn) do
+      for %{dispatch_state: "dispatched"} = step <- steps do
+        if step.child_execution_id, do: Cyfr.Execution.cancel(ctx, step.child_execution_id)
+        Aqua.Ops.cancel_call(handle(turn, step))
+
+        case TurnStep.unresolved(step) do
+          :uncertain -> Tape.mark_uncertain(guest, turn, step, reason)
+          :unknown -> Tape.close_step(guest, turn, step, "uncertain", %{error: reason})
+          _unanswered_or_replay -> Tape.close_step(guest, turn, step, "error", %{error: reason})
+        end
+      end
+    end
+
+    _ = Tape.skip_steps(guest, turn, reason)
   end
 
   # ---------------------------------------------------------------------------
@@ -532,14 +539,16 @@ defmodule Aqua.Loop do
 
   # The catalyst runs as a child of the root, in a worker: the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
-  # worker's death. A chat step's text streams to the thread while it runs;
-  # a flush or a compaction streams nothing.
+  # worker's death. A chat step's text streams to the thread while it runs,
+  # and is withdrawn when the step lands no text row; a flush or a
+  # compaction streams nothing.
   defp model_call(%State{spec: spec} = state, step, request, retained) do
     input = %{"operation" => "chat", "params" => request}
     retained_input = retained && %{"operation" => "chat", "params" => retained}
     guest = guest(state)
     turn = state.turn
-    stream = open_stream(state, step)
+    streamed = stream_attrs(state, step)
+    stream = streamed && Aqua.Loop.Stream.open(guest, step.child_execution_id, streamed)
 
     answer =
       try do
@@ -565,42 +574,47 @@ defmodule Aqua.Loop do
         Aqua.Loop.Stream.close(stream)
       end
 
-    case answer do
-      {:ok, {:ok, %{output: output}}} -> Cyfr.Models.decode_envelope(output)
-      {:ok, {:ok, output}} -> Cyfr.Models.decode_envelope(output)
-      {:ok, {:error, reason}} -> {:error, reason}
-      {:exit, reason} -> {:exit, reason}
-    end
+    result =
+      case answer do
+        {:ok, {:ok, %{output: output}}} -> Cyfr.Models.decode_envelope(output)
+        {:ok, {:ok, output}} -> Cyfr.Models.decode_envelope(output)
+        {:ok, {:error, reason}} -> {:error, reason}
+        {:exit, reason} -> {:exit, reason}
+      end
+
+    if streamed && not lands_text?(result), do: Aqua.Loop.Stream.abandon(guest, streamed)
+    result
   end
 
-  # A clone's text streams under the soul's turn and generation, from its
-  # own turn and named by its role.
-  defp open_stream(%State{} = state, %{purpose: "chat"} = step) do
+  # A clone's text streams under the soul's turn and fence, from its own
+  # turn and named by its role.
+  defp stream_attrs(%State{} = state, %{purpose: "chat"} = step) do
     {soul, role} =
       if state.clone?,
         do: {state.parent.turn, state.spec.agent["name"]},
         else: {state.turn, nil}
 
-    Aqua.Loop.Stream.open(guest(state), step.child_execution_id, %{
+    %{
       thread_id: state.turn.thread_id,
       turn_id: soul.id,
-      generation: Aqua.Loop.Stream.generation(soul),
+      fence: soul.fence,
       source: state.turn.id,
       step_id: step.id,
       ordinal: state.steps,
       role: role
-    })
+    }
   end
 
-  defp open_stream(_state, _step), do: nil
+  defp stream_attrs(_state, _step), do: nil
 
-  defp announce_generation(guest, turn) do
-    Tape.announce(
-      guest,
-      turn.thread_id,
-      {:turn_generation, turn.id, Aqua.Loop.Stream.generation(turn)}
-    )
-  end
+  defp lands_text?({:ok, data}),
+    do:
+      Enum.any?(
+        List.wrap(data["content"]),
+        &(&1["type"] == "text" and &1["text"] not in [nil, ""])
+      )
+
+  defp lands_text?(_result), do: false
 
   # The whole response lands before any call runs.
   defp on_response(%State{} = state, step, data) do
@@ -971,7 +985,7 @@ defmodule Aqua.Loop do
 
   defp collect(state, pending, running, cap) when map_size(running) < cap and pending != [] do
     [item | rest] = pending
-    task = Task.Supervisor.async_nolink(Aqua.TaskSupervisor, fn -> run_one(state, item) end)
+    task = Aqua.Loop.Worker.async(fn -> run_one(state, item) end)
     deadline = System.monotonic_time(:millisecond) + @step_timeout_ms
 
     collect(
@@ -1675,12 +1689,17 @@ defmodule Aqua.Loop do
   @spec flush_room?(non_neg_integer(), boolean()) :: boolean()
   def flush_room?(steps, restricted?), do: not restricted? and steps + 3 <= @max_steps
 
+  # The flush keeps notes of the rows a summary is about to replace, so it
+  # is sent without the room excerpt: nothing of the room reaches it, and
+  # the request the store keeps is the one sent.
   defp flush_request(probe, policy) do
+    %{"messages" => messages} = Request.without_excerpt(probe)
+
     %{
       probe
       | "tools" => Request.catalog_tools(Map.take(policy, [@flush_key])),
         "provider_tools" => [],
-        "messages" => Request.instruct(probe["messages"], @flush_instruction)
+        "messages" => Request.instruct(messages, @flush_instruction)
     }
   end
 
@@ -2016,7 +2035,7 @@ defmodule Aqua.Loop do
     do: Tape.announce(guest(state), state.turn.thread_id, event)
 
   defp worker(fun, timeout) do
-    task = Task.Supervisor.async_nolink(Aqua.TaskSupervisor, fun)
+    task = Aqua.Loop.Worker.async(fun)
 
     case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> {:ok, result}

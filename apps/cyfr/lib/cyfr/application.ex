@@ -80,10 +80,12 @@ defmodule Cyfr.Application do
     infra_children = [
       # Arca storage layer
       Arca.Repo,
-      # The keyring this database was sealed with, against the one this boot
-      # resolved — before any worker can seal a row under a different key
-      # wearing the same label. Runs whether or not this boot migrated.
-      keyring_fingerprint_check(),
+      # The database is the one this release's schema built, its tenant
+      # roster covers the schema, and its keyring is the one this boot
+      # resolved — before any worker reads a row or seals one under a
+      # different key wearing the same label. Runs whether or not this boot
+      # migrated.
+      database_checks(),
       # Who owns this database's control plane — claimed right after the repo
       # is up, before anything that assumes it is the only one.
       control_plane_claim(),
@@ -273,7 +275,8 @@ defmodule Cyfr.Application do
 
   # Run migrations before the connection pool starts to avoid concurrent
   # DDL and database-lock errors. CYFR_AUTO_MIGRATE=false leaves migration
-  # to the operator via Cyfr.Release.migrate/0.
+  # to the operator via Cyfr.Release.migrate/0; either way the boot's
+  # database checks run once the pool is up.
   defp maybe_migrate_before_pool do
     if Application.get_env(:cyfr, :auto_migrate, true) do
       config = Application.get_env(:cyfr, Arca.Repo, [])
@@ -282,23 +285,17 @@ defmodule Cyfr.Application do
       {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 1))
       Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
       configure_database()
-      # Refuse a database built from a different schema before anything
-      # reads it as this release's.
-      Arca.SchemaFingerprint.verify!()
-      # Verify the tenant-table roster against the migrated schema.
-      # Refuse boot if an athanor-scoped table would escape tenant deletion.
-      Arca.TenantTables.verify_roster!()
       # Stop the temporary repo so the supervisor can start the real one
       Supervisor.stop(repo_pid)
     end
   end
 
-  # A one-shot check that reads the repo at boot, outside any test's
-  # sandbox; the suite turns it off and exercises `Cyfr.KeyringFingerprint`
-  # directly.
-  defp keyring_fingerprint_check do
-    if Application.get_env(:cyfr, :keyring_fingerprint_check_enabled, true),
-      do: [Cyfr.KeyringFingerprint.Check],
+  # One-shot checks that read the repo at boot, outside any test's
+  # sandbox; the suite turns them off and exercises `Arca.SchemaFingerprint`
+  # and `Cyfr.KeyringFingerprint` directly.
+  defp database_checks do
+    if Application.get_env(:cyfr, :database_checks_enabled, true),
+      do: [Arca.SchemaFingerprint.Check, Cyfr.KeyringFingerprint.Check],
       else: []
   end
 

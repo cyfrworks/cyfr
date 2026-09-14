@@ -36,14 +36,10 @@ defmodule Cyfr.Release do
 
   @doc """
   Run every pending migration, refuse a database built from a different
-  schema, then assert the tenant roster still covers the schema.
-
-  The roster check belongs here as much as at boot. `Cyfr.Application`
-  runs it only under `CYFR_AUTO_MIGRATE`, and an operator who migrates by
-  hand — the documented path, and the deployment most likely to be running
-  a schema its developer never booted — would otherwise never run it at
-  all. A table that carries `athanor_id` and is not in
-  `Arca.TenantTables` survives `destroy/1` silently.
+  schema, then assert the tenant roster still covers the schema — the
+  checks every boot runs, answered here before the server starts. A table
+  that carries `athanor_id` and is not in `Arca.TenantTables` would survive
+  `destroy/1` silently.
   """
   @spec migrate() :: :ok
   def migrate do
@@ -62,7 +58,13 @@ defmodule Cyfr.Release do
     :ok
   end
 
-  @doc "The migrations the repo has not run yet — `[]` when the schema is current."
+  @doc """
+  The migrations the repo has not run yet. A database built from another
+  version of the baseline records the baseline as run and answers `[]`
+  too: whether the schema is this release's is
+  `Arca.SchemaFingerprint.verify/0`'s answer, which `migrate/0` and every
+  boot give.
+  """
   @spec pending() :: [{integer(), String.t()}]
   def pending do
     load_app()

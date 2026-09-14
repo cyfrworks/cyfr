@@ -50,7 +50,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
     provisioning_boot_enabled: :default,
     retention_scheduler_enabled: :default,
     control_plane_claim_enabled: :default,
-    keyring_fingerprint_check_enabled: :default,
+    database_checks_enabled: :default,
     telemetry_console_enabled: :default,
 
     # Derived at boot from `:crypto_keyring_json`, which IS an operator

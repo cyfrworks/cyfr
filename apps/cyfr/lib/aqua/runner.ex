@@ -45,9 +45,10 @@ defmodule Aqua.Runner do
   `{:restart_prompt, text, user_id}`, `{:error, text}`; the loop
   announces `{:usage, _}`, `{:tool_activity, _}`, `{:intents, _, _}`,
   `{:consent_required, _, _}`, the running loop's
-  `{:turn_generation, turn_id, generation}` and a chat step's streamed
-  text as `{:delta, _}` (`Aqua.Loop.Stream`), which the runner keeps for
-  the running turn's current generation until each step's text row lands.
+  `{:turn_fence, turn_id, fence}`, a chat step's streamed text as
+  `{:delta, _}` and `{:delta_abandoned, marker}` (`Aqua.Loop.Stream`),
+  which the runner keeps for the running turn's current fence until each
+  step's answer lands or is withdrawn.
   """
 
   use GenServer, restart: :transient
@@ -545,7 +546,10 @@ defmodule Aqua.Runner do
     end
   end
 
+  # Viewers hear the turn start before the loop can announce anything of it.
   defp run(state, entry, fun) do
+    broadcast(state, {:turn_starting, entry.user_id})
+    broadcast(state, {:turn_started, entry.turn_id})
     task = Task.Supervisor.async_nolink(Aqua.TaskSupervisor, fun)
 
     state = %{
@@ -557,8 +561,6 @@ defmodule Aqua.Runner do
         partials: Aqua.Loop.Stream.new()
     }
 
-    broadcast(state, {:turn_starting, entry.user_id})
-    broadcast(state, {:turn_started, entry.turn_id})
     touch(state)
   end
 
@@ -612,10 +614,16 @@ defmodule Aqua.Runner do
     do: {:noreply, %{state | tool_activity: list}}
 
   def handle_info(
-        {:thread, _id, {:turn_generation, turn_id, generation}},
+        {:thread, _id, {:turn_fence, turn_id, fence}},
         %{live: %{turn_id: turn_id}} = state
       ),
-      do: {:noreply, %{state | partials: Aqua.Loop.Stream.new(generation)}}
+      do: {:noreply, %{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)}}
+
+  def handle_info(
+        {:thread, _id, {:delta_abandoned, %{turn_id: turn_id} = marker}},
+        %{live: %{turn_id: turn_id}} = state
+      ),
+      do: {:noreply, %{state | partials: Aqua.Loop.Stream.abandoned(state.partials, marker)}}
 
   def handle_info(
         {:thread, _id, {:delta, %{turn_id: turn_id} = delta}},

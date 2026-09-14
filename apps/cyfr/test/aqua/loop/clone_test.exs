@@ -310,6 +310,45 @@ defmodule Aqua.Loop.CloneTest do
     assert_receive {:thread, _, {:delta, %{text: "done", role: nil, turn_id: ^turn_id}}}, 5_000
   end
 
+  test "a turn cut while its clone works stops the clone, which writes nothing more", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    turn = accept!(ctx, thread, "@aqua plan this")
+
+    start_supervised!(
+      {ScriptedExecution,
+       ref: @model,
+       script: [
+         call("r1", "planner", %{"task" => "plan"}),
+         {:probe, self()},
+         reply("planned"),
+         reply("done")
+       ]}
+    )
+
+    loop = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+    assert_receive {:scripted_probe, worker, _}, 60_000
+    [clone] = clones_of(turn)
+    watched = Process.monitor(worker)
+
+    {:ok, running} = Tape.turn(ctx, turn.id)
+    assert {:ok, _} = Aqua.Loop.abort(ctx, running, "stopped")
+    Task.shutdown(loop, :brutal_kill)
+
+    assert_receive {:DOWN, ^watched, :process, _, _}, 5_000
+
+    assert [%{status: "cancelled", fence: fence}] = clones_of(turn)
+    assert fence > clone.fence
+
+    for owner <- [running, clone] do
+      {:ok, steps} = Tape.steps(ctx, owner)
+      refute Enum.any?(steps, &(&1.dispatch_state in ["proposed", "dispatched"]))
+    end
+
+    assert {:error, :superseded} = Tape.close_clone_turn(ctx, clone, "completed")
+  end
+
   test "a clone runs the bytes its row pinned, not the file as it is now", %{
     ctx: ctx,
     thread: thread

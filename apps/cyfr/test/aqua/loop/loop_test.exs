@@ -179,6 +179,16 @@ defmodule Aqua.LoopTest do
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
+  defp keep(events) do
+    Enum.reduce(events, Aqua.Loop.Stream.new(), fn
+      {:turn_fence, _, fence}, kept -> Aqua.Loop.Stream.advance(kept, fence)
+      {:delta, delta}, kept -> Aqua.Loop.Stream.add(kept, delta)
+      {:delta_abandoned, marker}, kept -> Aqua.Loop.Stream.abandoned(kept, marker)
+      {:message, row}, kept -> Aqua.Loop.Stream.landed(kept, row)
+      _event, kept -> kept
+    end)
+  end
+
   defp drain do
     receive do
       message -> [message | drain()]
@@ -794,7 +804,7 @@ defmodule Aqua.LoopTest do
     assert ref =~ @model and user == ctx.user_id
   end
 
-  test "a chat step's text streams to the thread in order, once, in its turn's generation, before its row lands",
+  test "a chat step's text streams to the thread in order, once, under its turn's fence, before its row lands",
        %{
          ctx: ctx,
          thread: thread
@@ -816,21 +826,21 @@ defmodule Aqua.LoopTest do
     assert :completed = Task.await(run(ctx, turn), 30_000)
     assert_receive {:thread, _, {:turn_finished}}, 5_000
 
-    {:ok, running} = Tape.turn(ctx, turn.id)
-    generation = Aqua.Loop.Stream.generation(running)
+    {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
 
     streamed =
       for {:thread, _, event} <- drain(),
-          match?({:turn_generation, _, _}, event) or match?({:delta, _}, event) or
+          match?({:turn_fence, _, _}, event) or match?({:delta, _}, event) or
+            match?({:delta_abandoned, _}, event) or
             match?({:message, %{kind: "text", author: "aqua"}}, event),
           do: event
 
     assert [
-             {:turn_generation, ^turn_id, ^generation},
+             {:turn_fence, ^turn_id, ^fence},
              {:delta,
               %{
                 turn_id: ^turn_id,
-                generation: ^generation,
+                fence: ^fence,
                 source: ^turn_id,
                 step_id: step_id,
                 text: "hi ",
@@ -845,7 +855,7 @@ defmodule Aqua.LoopTest do
     assert Tape.payload(row)["step_id"] == step_id
   end
 
-  test "a retried chat step's text replaces the refused step's, and the refused step's late text is dropped",
+  test "a refused chat step's text is withdrawn, and no earlier step's late text returns once the retry lands",
        %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua hello")
 
@@ -859,19 +869,23 @@ defmodule Aqua.LoopTest do
     assert :completed = Task.await(run(ctx, turn), 60_000)
 
     events = for {:thread, _, event} <- drain(), do: event
-    [{:turn_generation, _, generation}] = for {:turn_generation, _, _} = e <- events, do: e
     deltas = for {:delta, delta} <- events, do: delta
 
-    assert [%{text: "partial answer", ordinal: refused}, %{text: "the answer", ordinal: retried}] =
-             deltas
+    assert [
+             %{text: "partial answer", ordinal: refused} = first,
+             %{text: "the answer", ordinal: retried}
+           ] = deltas
 
     assert retried > refused
+    assert [%{step_id: abandoned}] = for({:delta_abandoned, marker} <- events, do: marker)
+    assert abandoned == first.step_id
 
-    [first | _] = deltas
-    kept = Enum.reduce(deltas, Aqua.Loop.Stream.new(generation), &Aqua.Loop.Stream.add(&2, &1))
-    late = Aqua.Loop.Stream.add(kept, %{first | seq: {99, 99}, text: " and more"})
+    kept = keep(events)
+    assert Aqua.Loop.Stream.texts(kept) == []
 
-    assert [%{text: "the answer"}] = Aqua.Loop.Stream.texts(late)
+    late = %{first | seq: {99, 99}, text: " and more"}
+    assert Aqua.Loop.Stream.texts(Aqua.Loop.Stream.add(kept, late)) == []
+    assert Aqua.Loop.Stream.texts(Aqua.Loop.Stream.add(kept, %{late | step_id: "older"})) == []
   end
 
   test "a model its catalyst does not know ends the turn before any request, and a missing key asks for setup",

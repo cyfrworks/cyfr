@@ -11,9 +11,8 @@ defmodule Aqua.Loop.Stream do
   execution before the call starts; each `text.delta` the execution streams
   is announced on the thread as `{:delta, delta}`:
 
-    * `turn_id` — the soul's turn; `generation` — that turn's generation
-      (`generation/1`), which changes whenever the turn is taken from its
-      holder;
+    * `turn_id` — the soul's turn; `fence` — that turn's fence, which rises
+      whenever a host transition takes the turn from its holder;
     * `source` — the turn that streams it (the soul's, or a clone's) and
       `role` — the clone's role, nil for the soul;
     * `step_id`, and `ordinal` — the step's place among its source's model
@@ -25,14 +24,19 @@ defmodule Aqua.Loop.Stream do
   is forwarded: tool-call fragments, usage and stop reach the thread as the
   rows the whole response writes. `close/1` returns once every event the
   execution published before it was forwarded; a forwarder never stops the
-  turn. The loop announces `{:turn_generation, turn_id, generation}` before
-  its first model step.
+  turn.
 
-  **Keeping.** A viewer holds a `t()` for the running turn: `new/1` at the
-  generation announced, `add/2` for each delta, `landed/2` for each row,
-  `texts/1` to show. It keeps one answer per source and never lets a stale
-  delta in: one of another generation, one older than its source's current
-  step, and one for a step whose text row already landed are all dropped.
+  The loop announces `{:turn_fence, turn_id, fence}` (`announce_fence/2`)
+  before its first model step, and `{:delta_abandoned, marker}`
+  (`abandon/2`) for a step that streamed but lands no text row — a failed
+  or retried request, or an answer of tool calls alone.
+
+  **Keeping.** A viewer holds a `t()` for the running turn: `advance/2` for
+  each fence announced, `add/2` for each delta, `landed/2` for each row,
+  `abandoned/2` for each abandoned step, `texts/1` to show. It keeps one
+  answer per source and never lets a stale delta in: one under another
+  fence, one older than the highest step its source has streamed, and one
+  for a step that landed or was abandoned are all dropped.
   """
 
   alias Aqua.Tape
@@ -41,13 +45,14 @@ defmodule Aqua.Loop.Stream do
   @subscribe_timeout_ms 5_000
   @close_timeout_ms 5_000
 
-  defstruct generation: nil, entries: %{}, landed: MapSet.new()
+  defstruct fence: nil, entries: %{}, ordinals: %{}, landed: %{}
 
   @typedoc "What a viewer keeps of the running turn's streamed answers."
   @type t :: %__MODULE__{
-          generation: String.t() | nil,
+          fence: pos_integer() | nil,
           entries: %{String.t() => entry()},
-          landed: MapSet.t(String.t())
+          ordinals: %{String.t() => non_neg_integer()},
+          landed: %{String.t() => true}
         }
 
   @typep entry :: %{
@@ -62,20 +67,22 @@ defmodule Aqua.Loop.Stream do
   @type attrs :: %{
           thread_id: String.t(),
           turn_id: String.t(),
-          generation: String.t(),
+          fence: pos_integer(),
           source: String.t(),
           step_id: String.t(),
           ordinal: non_neg_integer(),
           role: String.t() | nil
         }
 
-  @doc """
-  A turn's generation as deltas carry it: derived from the turn's fence, so
-  it changes whenever a host transition takes the turn from its holder, and
-  names no fence.
-  """
-  @spec generation(Tape.turn()) :: String.t()
-  def generation(turn), do: turn.fence |> Cyfr.Digest.sha256_hex() |> binary_part(0, 16)
+  @doc "Announce the fence `turn`'s streamed answers are kept under."
+  @spec announce_fence(Context.t(), Tape.turn()) :: :ok
+  def announce_fence(%Context{} = ctx, turn),
+    do: Tape.announce(ctx, turn.thread_id, {:turn_fence, turn.id, turn.fence})
+
+  @doc "Announce that the step `attrs` names lands no text row: what it streamed is withdrawn."
+  @spec abandon(Context.t(), attrs()) :: :ok
+  def abandon(%Context{} = ctx, attrs),
+    do: Tape.announce(ctx, attrs.thread_id, {:delta_abandoned, marker(attrs)})
 
   @doc "Start forwarding the text `execution_id` streams, subscribed before it answers."
   @spec open(Context.t(), String.t(), attrs()) :: pid() | nil
@@ -136,32 +143,47 @@ defmodule Aqua.Loop.Stream do
     :ok
   end
 
-  @doc "Nothing kept yet, for the generation named (nil until one is announced)."
-  @spec new(String.t() | nil) :: t()
-  def new(generation \\ nil), do: %__MODULE__{generation: generation}
+  @doc "Nothing kept yet, under the fence named (nil until one is announced)."
+  @spec new(pos_integer() | nil) :: t()
+  def new(fence \\ nil), do: %__MODULE__{fence: fence}
+
+  @doc """
+  What is kept once `fence` is announced: a higher fence starts over, the
+  same one changes nothing, and a lower one is obsolete and ignored.
+  """
+  @spec advance(t(), pos_integer()) :: t()
+  def advance(%__MODULE__{fence: current} = kept, fence) when is_integer(fence) do
+    if is_nil(current) or fence > current, do: new(fence), else: kept
+  end
 
   @doc """
   One delta kept, or dropped as stale: appended to its step's text when it
   is newer than the last delta there; a source's later step replaces its
-  earlier one, which ended without a text row.
+  earlier one. A source's highest step is remembered after its answer
+  leaves, so an earlier step's delayed delta never returns.
   """
   @spec add(t(), map()) :: t()
-  def add(%__MODULE__{generation: generation} = kept, %{generation: generation} = delta)
-      when is_binary(generation) do
+  def add(%__MODULE__{fence: fence} = kept, %{fence: fence} = delta) when is_integer(fence) do
     %{source: source, step_id: step_id, ordinal: ordinal, seq: seq, text: text} = delta
+    highest = Map.get(kept.ordinals, source, -1)
 
-    case {MapSet.member?(kept.landed, step_id), Map.fetch(kept.entries, source)} do
-      {true, _} ->
+    case Map.fetch(kept.entries, source) do
+      _ when ordinal < highest ->
         kept
 
-      {false, {:ok, %{step_id: ^step_id, seq: last} = entry}} when seq > last ->
+      _ when is_map_key(kept.landed, step_id) ->
+        kept
+
+      {:ok, %{step_id: ^step_id, seq: last} = entry} when seq > last ->
         put_entry(kept, source, %{entry | seq: seq, text: entry.text <> text})
 
-      {false, {:ok, %{ordinal: current}}} when ordinal <= current ->
+      {:ok, %{step_id: ^step_id}} ->
         kept
 
-      {false, _none_or_earlier} ->
-        put_entry(kept, source, %{
+      _none_or_earlier ->
+        kept
+        |> raise_ordinal(source, ordinal)
+        |> put_entry(source, %{
           step_id: step_id,
           ordinal: ordinal,
           role: Map.get(delta, :role),
@@ -178,19 +200,23 @@ defmodule Aqua.Loop.Stream do
   @spec landed(t(), Arca.Schemas.Message.t()) :: t()
   def landed(%__MODULE__{} = kept, %{kind: "text"} = row) do
     case Tape.payload(row)["step_id"] do
-      step_id when is_binary(step_id) ->
-        %{
-          kept
-          | landed: MapSet.put(kept.landed, step_id),
-            entries: Map.reject(kept.entries, fn {_source, entry} -> entry.step_id == step_id end)
-        }
-
-      _ ->
-        kept
+      step_id when is_binary(step_id) -> settle(kept, step_id)
+      _ -> kept
     end
   end
 
   def landed(%__MODULE__{} = kept, _row), do: kept
+
+  @doc "What is kept once a step of the kept fence is abandoned: its answer is withdrawn."
+  @spec abandoned(t(), map()) :: t()
+  def abandoned(%__MODULE__{fence: fence} = kept, %{fence: fence} = marker)
+      when is_integer(fence) do
+    kept
+    |> raise_ordinal(marker.source, marker.ordinal)
+    |> settle(marker.step_id)
+  end
+
+  def abandoned(%__MODULE__{} = kept, _stale), do: kept
 
   @doc "The answers streaming now, in the order they began, as `%{step_id, role, text}`."
   @spec texts(t()) :: [%{step_id: String.t(), role: String.t() | nil, text: String.t()}]
@@ -202,6 +228,19 @@ defmodule Aqua.Loop.Stream do
   end
 
   defp put_entry(kept, source, entry), do: %{kept | entries: Map.put(kept.entries, source, entry)}
+
+  defp raise_ordinal(kept, source, ordinal),
+    do: %{kept | ordinals: Map.update(kept.ordinals, source, ordinal, &max(&1, ordinal))}
+
+  defp settle(kept, step_id) do
+    %{
+      kept
+      | landed: Map.put(kept.landed, step_id, true),
+        entries: Map.reject(kept.entries, fn {_source, entry} -> entry.step_id == step_id end)
+    }
+  end
+
+  defp marker(attrs), do: Map.take(attrs, [:turn_id, :fence, :source, :step_id, :ordinal])
 
   defp forward(ctx, attrs, owner_monitor, last) do
     receive do
@@ -230,7 +269,7 @@ defmodule Aqua.Loop.Stream do
 
   defp delta(attrs, seq, text) do
     attrs
-    |> Map.take([:turn_id, :generation, :source, :step_id, :ordinal, :role])
+    |> Map.take([:turn_id, :fence, :source, :step_id, :ordinal, :role])
     |> Map.merge(%{seq: seq, text: text})
   end
 end

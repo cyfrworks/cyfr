@@ -122,6 +122,56 @@ defmodule Aqua.Loop.FlushTest do
     assert last["text"] =~ "notes.keep"
   end
 
+  test "a flush in the round that reads the room neither sends nor keeps the room's lines", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+
+    {:ok, room} = Threads.create(ctx)
+    {:ok, _} = Threads.append(ctx, room.id, %{author: ctx.user_id, content: "ROOM-ONLY-LINE"})
+
+    {:ok, _} =
+      Threads.append(ctx, thread.id, %{
+        author: ctx.user_id,
+        content: String.duplicate("lorem ipsum ", 7_000)
+      })
+
+    allow_keep!(ctx, thread)
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, content: "@aqua what did they say?"},
+        turn: %{
+          orchestrator: "aqua",
+          requested_by: ctx.user_id,
+          model: @model_id,
+          options: %{"room" => %{"athanor_id" => ctx.athanor_id, "thread_id" => room.id}}
+        }
+      })
+
+    script!([
+      flush_reply([keep("n1", "plan", "a note")]),
+      reply("the story so far"),
+      reply("They said hello.")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert ["flush", "compaction", "chat"] =
+             for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
+
+    [flush, _summary, chat] =
+      for %{input: %{"operation" => "chat"}} = call <- ScriptedExecution.calls(), do: call
+
+    refute Jason.encode!(flush.input) =~ "ROOM-ONLY-LINE"
+    assert Jason.encode!(chat.input) =~ "ROOM-ONLY-LINE"
+    assert {:ok, _record, kept} = Arca.ExecutionPayloads.get(ctx, flush.execution_id, "input")
+    refute kept =~ "ROOM-ONLY-LINE"
+  end
+
   test "when keeping a note asks, no flush request is made and the summary still lands", %{
     ctx: ctx,
     thread: thread

@@ -5,8 +5,10 @@ defmodule Opus.EmitTest do
   @moduledoc """
   A guest's events reach its stream masked of every credential the
   execution was handed, including one split across two streamed deltas;
-  what is held back goes out ahead of the next event of any other type;
-  an oversized or malformed event is refused without stopping anything.
+  only a tail that could begin a credential is held back, and it goes out
+  when its stream ends; every stream under one root shares one emit
+  budget; an oversized or malformed event is refused without stopping
+  anything.
   """
 
   use ExUnit.Case, async: false
@@ -129,6 +131,30 @@ defmodule Opus.EmitTest do
     assert [%{"text" => "Hel"}] = received()
   end
 
+  test "only a tail that could begin a credential is held back", %{ctx: ctx, stream_id: stream_id} do
+    emitter = open(ctx, stream_id, secrets: [@secret])
+
+    emit(emitter, %{"type" => "text.delta", "text" => "Hi"})
+    assert [%{"text" => "Hi"}] = received()
+
+    emit(emitter, %{"type" => "text.delta", "text" => " there sk-li"})
+    assert [%{"text" => " there "}] = received()
+
+    emit(emitter, %{"type" => "text.delta", "text" => "ne"})
+    assert [%{"text" => "sk-line"}] = received()
+  end
+
+  test "every stream under one root draws on one emit budget", %{ctx: ctx, stream_id: stream_id} do
+    root = "exec_root_#{System.unique_integer([:positive])}"
+    first = open(ctx, stream_id, budget_id: root)
+    second = open(ctx, "exec_sibling_#{System.unique_integer([:positive])}", budget_id: root)
+
+    for _ <- 1..2999, do: emit(first, %{"type" => "usage"})
+    assert %{"sequence" => _} = emit(second, %{"type" => "usage"})
+    assert %{"error" => %{"type" => "resource_limit"}} = emit(second, %{"type" => "usage"})
+    assert %{"error" => %{"type" => "resource_limit"}} = emit(first, %{"type" => "usage"})
+  end
+
   test "a token dispensed during the run is masked, and stays for the finalize drain",
        %{ctx: ctx, stream_id: stream_id} do
     execution_id = "exec_tracked_#{System.unique_integer([:positive])}"
@@ -156,7 +182,7 @@ defmodule Opus.EmitTest do
 
   test "closing an emitter drops what it still held", %{ctx: ctx, stream_id: stream_id} do
     emitter = open(ctx, stream_id, secrets: [@secret])
-    emit(emitter, %{"type" => "text.delta", "text" => "abc"})
+    emit(emitter, %{"type" => "text.delta", "text" => "sk-li"})
     assert :ok = Emit.close(emitter)
     refute Process.alive?(emitter.held)
     assert received() == []

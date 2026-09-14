@@ -422,31 +422,38 @@ defmodule Sanctum.Provisioning do
     :ok
   end
 
-  # Under test the sandbox owns the connection, so background work runs
-  # inline (the tests assert on rows right after the call).
+  # A fill runs only on the boot that owns the control plane; elsewhere it
+  # is not started, and the next read on the owner starts it. Under test
+  # the sandbox owns the connection, so background work runs inline (the
+  # tests assert on rows right after the call).
   defp in_background(fun) do
-    if Application.get_env(:cyfr, :provisioning_inline, false) do
-      fun.()
-      :ok
-    else
-      logger_metadata = Cyfr.LoggerContext.capture()
+    cond do
+      not Cyfr.ControlPlane.owner?() ->
+        :ok
 
-      task_fun = fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+      Application.get_env(:cyfr, :provisioning_inline, false) ->
         fun.()
-      end
+        :ok
 
-      case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, task_fun) do
-        {:ok, _pid} ->
-          :ok
+      true ->
+        logger_metadata = Cyfr.LoggerContext.capture()
 
-        {:error, reason} ->
-          # A retry the supervisor could not start is only a deferral: the
-          # next sign-in (or a member's athanor.provision) tries again.
-          Logger.error("[Provisioning] background provisioning not started: #{inspect(reason)}")
+        task_fun = fn ->
+          Cyfr.LoggerContext.restore(logger_metadata)
+          fun.()
+        end
 
-          :ok
-      end
+        case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, task_fun) do
+          {:ok, _pid} ->
+            :ok
+
+          {:error, reason} ->
+            # A retry the supervisor could not start is only a deferral: the
+            # next sign-in (or a member's athanor.provision) tries again.
+            Logger.error("[Provisioning] background provisioning not started: #{inspect(reason)}")
+
+            :ok
+        end
     end
   end
 

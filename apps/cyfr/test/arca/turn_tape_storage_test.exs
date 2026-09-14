@@ -215,7 +215,7 @@ defmodule Arca.TurnTapeStorageTest do
                })
 
       # A superseded fence writes nothing.
-      assert {:error, :superseded} = TurnStorage.pause(ctx, turn.id, %{fence: "fnc_old"})
+      assert {:error, :superseded} = TurnStorage.pause(ctx, turn.id, %{fence: turn.fence - 1})
       # A write that names no fence writes nothing either.
       assert {:error, :fence_required} = TurnStorage.pause(ctx, turn.id, %{})
     end
@@ -723,7 +723,10 @@ defmodule Arca.TurnTapeStorageTest do
                TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{generation: 0})
 
       assert {:error, :superseded} =
-               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{fence: "stale", generation: 0})
+               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{
+                 fence: turn.fence - 1,
+                 generation: 0
+               })
 
       assert {:error, :not_dispatched} =
                TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{

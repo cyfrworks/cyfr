@@ -142,9 +142,10 @@ config :cyfr, execution_sweeper_enabled: false
 # renewing a DB lease); `Cyfr.ControlPlane.Claim` is exercised directly.
 config :cyfr, control_plane_claim_enabled: false
 
-# The keyring fingerprint check reads and writes a server row at boot,
-# outside any sandbox; `Cyfr.KeyringFingerprint` is exercised directly.
-config :cyfr, keyring_fingerprint_check_enabled: false
+# The boot's database checks (schema fingerprint, tenant roster, keyring
+# fingerprint) read and write server rows outside any sandbox; the suite
+# verifies the schema before it starts and exercises each check directly.
+config :cyfr, database_checks_enabled: false
 
 # Default storage roots for tests (individual tests may override), two
 # throwaway SIBLING roots — the topology dev and prod use ("two trees, two

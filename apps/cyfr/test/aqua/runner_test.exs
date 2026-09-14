@@ -268,9 +268,9 @@ defmodule Aqua.RunnerTest do
       end
     end)
 
-    # A delta of another generation — a loop the turn was taken from — is
+    # A delta under an earlier fence — a loop the turn was taken from — is
     # not kept.
-    %{partials: %{generation: generation}} = Runner.state(thread.id, ctx.athanor_id)
+    %{partials: %{fence: fence}} = Runner.state(thread.id, ctx.athanor_id)
 
     [step_id] =
       for %{step_id: id} <-
@@ -283,7 +283,7 @@ defmodule Aqua.RunnerTest do
       {:delta,
        %{
          turn_id: turn_id,
-         generation: "not-" <> generation,
+         fence: fence - 1,
          source: turn_id,
          step_id: step_id,
          ordinal: 9,
