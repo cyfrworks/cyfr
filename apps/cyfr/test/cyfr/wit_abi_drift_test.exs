@@ -6,7 +6,7 @@ defmodule Cyfr.WitAbiDriftTest do
   The guest ABI is written down twice, and nothing bound the two together.
 
   `wit/` is the contract: `Compendium.WITSource` embeds it at compile time,
-  `Locus.Builder` copies it into the build sandbox, and `Compendium.Scaffold`
+  `Locus.Builder` copies it into the build sandbox, and `Cyfr.CargoToml`
   points a generated `Cargo.toml` at it — so a component is compiled against
   those interface names. The host side of the same contract is a set of
   string keys in `Opus`: the import map a component's world is instantiated
@@ -121,15 +121,15 @@ defmodule Cyfr.WitAbiDriftTest do
            """
   end
 
-  # `Compendium.Scaffold` hand-writes the catalyst WIT dependency table
+  # `Cyfr.CargoToml` hand-writes the catalyst WIT dependency table
   # into a generated Cargo.toml; the build sandbox materializes whatever
-  # sits under `wit/catalyst/deps/`. A new dep directory that the scaffold
+  # sits under `wit/catalyst/deps/`. A new dep directory that the template
   # never declares fails a build with a message about the world, not
   # about the missing declaration — this binds the two.
   test "the scaffold's Cargo.toml declares exactly the catalyst WIT deps" do
     declared =
       ~r/"(cyfr:[a-z-]+)" = \{ path = "wit\/deps\/(cyfr-[a-z-]+)" \}/
-      |> Regex.scan(Compendium.Scaffold.cargo_toml_for(:catalyst, include_oauth_wit: true))
+      |> Regex.scan(Cyfr.CargoToml.template(:catalyst, include_oauth_wit: true))
       |> Enum.map(fn [_, _pkg, dir] -> dir end)
       |> Enum.sort()
 

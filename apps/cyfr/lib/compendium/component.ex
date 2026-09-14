@@ -249,7 +249,7 @@ defmodule Compendium.Component do
     end)
   end
 
-  defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
+  defdelegate decode_manifest(value), to: Cyfr.Manifest, as: :decode
 
   # ============================================================================
   # Private — Setup Plan Helpers

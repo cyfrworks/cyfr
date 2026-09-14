@@ -108,7 +108,7 @@ defmodule Compendium.Cascade do
   defp targets?(nil, _name_ref), do: false
 
   defp targets?(target_ref, name_ref) when is_binary(target_ref) do
-    case Compendium.Activation.key_for_ref(target_ref) do
+    case Cyfr.ComponentRef.to_name_ref(target_ref) do
       {:ok, ^name_ref} -> true
       _ -> false
     end

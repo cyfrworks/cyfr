@@ -528,7 +528,7 @@ defmodule Sanctum.Consent.Commit do
   defp node_manifest(ctx, node_key) do
     with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
          {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-      {:ok, Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
+      {:ok, Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
     end
   end
 
@@ -576,7 +576,7 @@ defmodule Sanctum.Consent.Commit do
 
   defp declared_needs(component) do
     (Map.get(component, :manifest) || Map.get(component, "manifest"))
-    |> Compendium.Manifest.decode()
+    |> Cyfr.Manifest.decode()
     |> Compendium.Manifest.Needs.from_manifest()
   end
 

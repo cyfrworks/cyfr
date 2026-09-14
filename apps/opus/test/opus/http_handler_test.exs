@@ -137,32 +137,32 @@ defmodule Opus.HttpHandlerTest do
   end
 
   # ============================================================================
-  # private_ip?/1 delegation — the range policy lives in Cyfr.Network
+  # private_ip?/1 delegation — the range policy lives in Cyfr.Cidr
   # ============================================================================
 
-  describe "private_ip?/1 delegates to Cyfr.Network.private_ip?/1" do
-    test "RFC1918 denial passes through Cyfr.Network" do
-      assert Cyfr.Network.private_ip?({10, 0, 0, 1})
-      assert HttpHandler.private_ip?({10, 0, 0, 1}) == Cyfr.Network.private_ip?({10, 0, 0, 1})
+  describe "private_ip?/1 delegates to Cyfr.Cidr.private_ip?/1" do
+    test "RFC1918 denial passes through Cyfr.Cidr" do
+      assert Cyfr.Cidr.private_ip?({10, 0, 0, 1})
+      assert HttpHandler.private_ip?({10, 0, 0, 1}) == Cyfr.Cidr.private_ip?({10, 0, 0, 1})
     end
 
-    test "loopback denial passes through Cyfr.Network" do
-      assert Cyfr.Network.private_ip?({127, 0, 0, 1})
-      assert HttpHandler.private_ip?({127, 0, 0, 1}) == Cyfr.Network.private_ip?({127, 0, 0, 1})
+    test "loopback denial passes through Cyfr.Cidr" do
+      assert Cyfr.Cidr.private_ip?({127, 0, 0, 1})
+      assert HttpHandler.private_ip?({127, 0, 0, 1}) == Cyfr.Cidr.private_ip?({127, 0, 0, 1})
     end
 
-    test "link-local / metadata denial passes through Cyfr.Network" do
-      assert Cyfr.Network.private_ip?({169, 254, 169, 254})
+    test "link-local / metadata denial passes through Cyfr.Cidr" do
+      assert Cyfr.Cidr.private_ip?({169, 254, 169, 254})
 
       assert HttpHandler.private_ip?({169, 254, 169, 254}) ==
-               Cyfr.Network.private_ip?({169, 254, 169, 254})
+               Cyfr.Cidr.private_ip?({169, 254, 169, 254})
     end
 
-    test "IPv4-mapped IPv6 denial passes through Cyfr.Network" do
+    test "IPv4-mapped IPv6 denial passes through Cyfr.Cidr" do
       # ::ffff:10.0.0.1
       mapped = {0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001}
-      assert Cyfr.Network.private_ip?(mapped)
-      assert HttpHandler.private_ip?(mapped) == Cyfr.Network.private_ip?(mapped)
+      assert Cyfr.Cidr.private_ip?(mapped)
+      assert HttpHandler.private_ip?(mapped) == Cyfr.Cidr.private_ip?(mapped)
     end
   end
 

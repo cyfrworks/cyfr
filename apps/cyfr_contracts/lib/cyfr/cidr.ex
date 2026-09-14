@@ -3,14 +3,15 @@
 
 defmodule Cyfr.Cidr do
   @moduledoc """
-  Single source of truth for CIDR / IP-allowlist matching and link-local
-  detection.
+  Single source of truth for CIDR / IP-allowlist matching and for the
+  address classes outbound requests are held to: link-local and
+  private/reserved ranges.
 
   Matches IPv4 and IPv6 CIDRs with family-specific prefix bounds; invalid input fails closed.
 
-  `Cyfr.Network` keeps its own private/reserved-range SSRF *policy*
-  (`@private_ranges`) — a different question — and only delegates the
-  link-local arithmetic here.
+  `private_ip?/1` is the fixed SSRF range table — a different question from
+  allowlist matching. `Cyfr.Network` blocks what it answers true for unless
+  the caller's private policy admits the address.
 
   Fail-closed: any unparseable IP/CIDR, an out-of-range or cross-family
   prefix, or a family mismatch yields no match (never a collapsed mask that
@@ -18,6 +19,33 @@ defmodule Cyfr.Cidr do
   """
 
   import Bitwise
+
+  # Private/reserved IPv4 ranges (CIDR notation as {base, mask} tuples)
+  @private_ranges [
+    # 127.0.0.0/8 - loopback
+    {bsl(127, 24), 0xFF000000},
+    # 10.0.0.0/8 - private class A
+    {bsl(10, 24), 0xFF000000},
+    # 172.16.0.0/12 - private class B
+    {bsl(172, 24) + bsl(16, 16), 0xFFF00000},
+    # 192.168.0.0/16 - private class C
+    {bsl(192, 24) + bsl(168, 16), 0xFFFF0000},
+    # 169.254.0.0/16 - link-local / cloud metadata
+    {bsl(169, 24) + bsl(254, 16), 0xFFFF0000},
+    # 0.0.0.0/8 - current network
+    {0, 0xFF000000},
+    # 100.64.0.0/10 - CGNAT (RFC 6598); internal service ranges on several
+    # clouds and overlay networks
+    {bsl(100, 24) + bsl(64, 16), 0xFFC00000},
+    # 192.0.0.0/24 - IETF protocol assignments (RFC 6890)
+    {bsl(192, 24), 0xFFFFFF00},
+    # 198.18.0.0/15 - benchmarking (RFC 2544)
+    {bsl(198, 24) + bsl(18, 16), 0xFFFE0000},
+    # 224.0.0.0/4 - multicast
+    {bsl(224, 24), 0xF0000000},
+    # 240.0.0.0/4 - reserved, includes 255.255.255.255 broadcast
+    {bsl(240, 24), 0xF0000000}
+  ]
 
   @doc "Parse an IP string to an `:inet` address tuple."
   @spec parse_ip(String.t()) :: {:ok, :inet.ip_address()} | :error
@@ -129,6 +157,50 @@ defmodule Cyfr.Cidr do
     do: link_local?(unwrap_v4_mapped(ip))
 
   def link_local?(_), do: false
+
+  @doc """
+  Check if an IP tuple is in a private/reserved range.
+  """
+  @spec private_ip?(:inet.ip4_address() | :inet.ip6_address()) :: boolean()
+  def private_ip?({a, b, c, d}) do
+    ip_int = bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
+
+    Enum.any?(@private_ranges, fn {base, mask} ->
+      band(ip_int, mask) == base
+    end)
+  end
+
+  # IPv6 loopback ::1
+  def private_ip?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+
+  # IPv6 unspecified ::
+  def private_ip?({0, 0, 0, 0, 0, 0, 0, 0}), do: true
+
+  # IPv6 unique local fc00::/7
+  def private_ip?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFC00 and w1 <= 0xFDFF, do: true
+
+  # IPv6 link-local fe80::/10
+  def private_ip?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFE80 and w1 <= 0xFEBF, do: true
+
+  # IPv4-mapped IPv6 (::ffff:x.x.x.x) — delegate to IPv4 check
+  def private_ip?({0, 0, 0, 0, 0, 0xFFFF, ab, cd}) do
+    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
+  end
+
+  # NAT64 well-known prefix 64:ff9b::/96 (RFC 6052) — the embedded IPv4
+  # decides. Without this, 64:ff9b::a9fe:a9fe reaches 169.254.169.254
+  # through a NAT64 gateway.
+  def private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, ab, cd}) do
+    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
+  end
+
+  # 6to4 2002::/16 (RFC 3056) — the embedded IPv4 decides.
+  def private_ip?({0x2002, ab, cd, _, _, _, _, _}) do
+    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
+  end
+
+  # All other IPv6 addresses are considered public
+  def private_ip?({_, _, _, _, _, _, _, _}), do: false
 
   # ============================================================================
   # Internal

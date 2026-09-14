@@ -116,7 +116,7 @@ defmodule Sanctum.Consent.Plan do
 
   @doc false
   def name_ref(ref) do
-    case Compendium.Activation.key_for_ref(ref) do
+    case Cyfr.ComponentRef.to_name_ref(ref) do
       {:ok, name_ref} -> {:ok, name_ref}
       {:error, reason} -> {:error, {:invalid_ref, reason}}
     end
@@ -138,7 +138,7 @@ defmodule Sanctum.Consent.Plan do
   # ---------------------------------------------------------------------------
 
   defp decode_manifest(component) do
-    Compendium.Manifest.decode(Map.get(component, :manifest) || Map.get(component, "manifest"))
+    Cyfr.Manifest.decode(Map.get(component, :manifest) || Map.get(component, "manifest"))
   end
 
   # Declared needs become the sheet's rows — the operator sees each
@@ -219,7 +219,7 @@ defmodule Sanctum.Consent.Plan do
   defp node_manifest(ctx, node_key) do
     with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
          {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-      {:ok, Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
+      {:ok, Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
     end
   end
 

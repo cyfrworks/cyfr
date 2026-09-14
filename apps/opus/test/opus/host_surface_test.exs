@@ -62,12 +62,13 @@ defmodule Opus.HostSurfaceTest do
     "Emissary.PubSub",
 
     # The component catalogue: what to run, and whether it is what it says.
+    # The code identity an execution records, resolved from the athanor's
+    # component rows.
     "Compendium.Activation",
     # The agent that dispatched a child, named on the row as its parent:
     # what of the child's output is kept follows from it.
     "Compendium.AgentSource",
     "Compendium.Component",
-    "Compendium.Manifest",
     # The local-namespace trust policy: the storage boundary asks it before
     # a guest write lands in components/ — pulled components are
     # fork-to-modify, and the refusal sentence lives with the policy.
@@ -85,7 +86,8 @@ defmodule Opus.HostSurfaceTest do
     # nothing when it does not.
     "Cyfr.ControlPlane",
     "Cyfr.Execution",
-    "Cyfr.LoggerContext",
+    # Egress pinning: a guest request's host resolved and checked against
+    # its consented private policy before the connection is made.
     "Cyfr.Network",
     # The operation catalog: an in-chain tool call is dispatched through it.
     "Cyfr.Ops",

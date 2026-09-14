@@ -1385,7 +1385,7 @@ defmodule Compendium.MCP.ComponentTool do
     |> Map.put(:optional_missing, optional_missing)
   end
 
-  defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
+  defdelegate decode_manifest(value), to: Cyfr.Manifest, as: :decode
 
   # ============================================================================
   # Component Resolution
@@ -1581,14 +1581,14 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   # A component with no manifest is left alone rather than given one made of
-  # discovered media. Everything else goes through `Compendium.Manifest`,
+  # discovered media. Everything else goes through `Cyfr.Manifest`,
   # which owns manifest decoding — the strict form, because a manifest that
   # will not parse must also be left alone rather than replaced by a
   # media-only map.
   defp parse_manifest_for_enrichment(nil), do: :error
 
   defp parse_manifest_for_enrichment(raw) do
-    case Compendium.Manifest.decode_strict(raw) do
+    case Cyfr.Manifest.decode_strict(raw) do
       {:ok, manifest} -> {:ok, manifest}
       {:error, :malformed_manifest} -> :error
     end

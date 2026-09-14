@@ -227,7 +227,7 @@ defmodule Compendium.DependencyResolver do
 
     case result do
       {:ok, component} ->
-        manifest = Compendium.Manifest.decode(component.manifest)
+        manifest = Cyfr.Manifest.decode(component.manifest)
         {:ok, component.id, manifest}
 
       {:error, _} = err ->

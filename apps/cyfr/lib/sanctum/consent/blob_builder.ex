@@ -143,7 +143,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   defp build_node(ctx, graph, node_key, source_ref, vault_fn, edge_vault_fn, extras) do
     with {:ok, row} <- node_row(ctx, node_key),
          manifest =
-           Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest")),
+           Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest")),
          {:ok, resources, limits} <- node_grant(ctx, node_key, manifest) do
       vault = vault_fn.(node_key, row, manifest)
 
@@ -182,7 +182,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   defp edge_vault(edge_vault_fn, from, dep, ctx) do
     case node_row(ctx, dep) do
       {:ok, row} ->
-        manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+        manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
         edge_vault_fn.(from, dep, row, manifest)
 
       {:error, _} ->

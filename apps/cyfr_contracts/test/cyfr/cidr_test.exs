@@ -117,4 +117,93 @@ defmodule Cyfr.CidrTest do
       refute Cidr.link_local?({0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001})
     end
   end
+
+  describe "private_ip?/1" do
+    test "IPv4 private ranges" do
+      assert Cidr.private_ip?({127, 0, 0, 1})
+      assert Cidr.private_ip?({10, 0, 0, 1})
+      assert Cidr.private_ip?({10, 255, 255, 255})
+      assert Cidr.private_ip?({172, 16, 0, 1})
+      assert Cidr.private_ip?({172, 31, 255, 255})
+      assert Cidr.private_ip?({192, 168, 0, 1})
+      assert Cidr.private_ip?({192, 168, 255, 255})
+      assert Cidr.private_ip?({169, 254, 169, 254})
+      assert Cidr.private_ip?({0, 0, 0, 0})
+    end
+
+    test "IPv4 public ranges" do
+      refute Cidr.private_ip?({8, 8, 8, 8})
+      refute Cidr.private_ip?({1, 1, 1, 1})
+      refute Cidr.private_ip?({142, 250, 80, 46})
+      refute Cidr.private_ip?({172, 32, 0, 1})
+    end
+
+    test "IPv6 loopback" do
+      assert Cidr.private_ip?({0, 0, 0, 0, 0, 0, 0, 1})
+    end
+
+    test "IPv6 unspecified" do
+      assert Cidr.private_ip?({0, 0, 0, 0, 0, 0, 0, 0})
+    end
+
+    test "IPv6 unique local (fc00::/7)" do
+      assert Cidr.private_ip?({0xFC00, 0, 0, 0, 0, 0, 0, 1})
+      assert Cidr.private_ip?({0xFD00, 0, 0, 0, 0, 0, 0, 1})
+    end
+
+    test "IPv6 link-local (fe80::/10)" do
+      assert Cidr.private_ip?({0xFE80, 0, 0, 0, 0, 0, 0, 1})
+      assert Cidr.private_ip?({0xFEBF, 0, 0, 0, 0, 0, 0, 1})
+    end
+
+    test "IPv4-mapped IPv6 private" do
+      # ::ffff:10.0.0.1
+      assert Cidr.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001})
+      # ::ffff:169.254.169.254
+      assert Cidr.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0xA9FE})
+    end
+
+    test "IPv4 CGNAT (100.64.0.0/10, RFC 6598)" do
+      assert Cidr.private_ip?({100, 64, 0, 1})
+      assert Cidr.private_ip?({100, 127, 255, 255})
+      refute Cidr.private_ip?({100, 63, 255, 255})
+      refute Cidr.private_ip?({100, 128, 0, 0})
+    end
+
+    test "IPv4 reserved blocks" do
+      # 192.0.0.0/24 IETF protocol assignments
+      assert Cidr.private_ip?({192, 0, 0, 170})
+      refute Cidr.private_ip?({192, 0, 1, 1})
+      # 198.18.0.0/15 benchmarking
+      assert Cidr.private_ip?({198, 18, 0, 1})
+      assert Cidr.private_ip?({198, 19, 255, 255})
+      refute Cidr.private_ip?({198, 20, 0, 1})
+      # multicast + reserved + broadcast
+      assert Cidr.private_ip?({224, 0, 0, 251})
+      assert Cidr.private_ip?({239, 255, 255, 255})
+      assert Cidr.private_ip?({240, 0, 0, 1})
+      assert Cidr.private_ip?({255, 255, 255, 255})
+      refute Cidr.private_ip?({223, 255, 255, 255})
+    end
+
+    test "NAT64 well-known prefix embeds the IPv4 verdict (64:ff9b::/96)" do
+      # 64:ff9b::a9fe:a9fe ≡ 169.254.169.254 behind a NAT64 gateway
+      assert Cidr.private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, 0xA9FE, 0xA9FE})
+      # 64:ff9b::a00:1 ≡ 10.0.0.1
+      assert Cidr.private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 0x0001})
+      # 64:ff9b::808:808 ≡ 8.8.8.8 — public stays public
+      refute Cidr.private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, 0x0808, 0x0808})
+    end
+
+    test "6to4 embeds the IPv4 verdict (2002::/16)" do
+      # 2002:a9fe:a9fe:: ≡ 169.254.169.254
+      assert Cidr.private_ip?({0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 1})
+      # 2002:808:808:: ≡ 8.8.8.8
+      refute Cidr.private_ip?({0x2002, 0x0808, 0x0808, 0, 0, 0, 0, 1})
+    end
+
+    test "IPv6 public" do
+      refute Cidr.private_ip?({0x2607, 0xF8B0, 0x4004, 0x800, 0, 0, 0, 0x200E})
+    end
+  end
 end

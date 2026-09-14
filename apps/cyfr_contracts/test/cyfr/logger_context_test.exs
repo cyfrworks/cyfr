@@ -8,15 +8,7 @@ defmodule Cyfr.LoggerContextTest do
 
   describe "set_from_context/1" do
     test "sets correct Logger metadata" do
-      ctx =
-        Sanctum.Context.build(
-          user_id: "user_123",
-          athanor_id: "ath_abc",
-          permissions: [:execute],
-          auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
-        )
+      ctx = %{user_id: "user_123", athanor_id: "ath_abc", auth_method: :oidc}
 
       LoggerContext.set_from_context(ctx)
 
@@ -37,15 +29,11 @@ defmodule Cyfr.LoggerContextTest do
 
   describe "capture/0 and restore/1" do
     test "cross-process propagation" do
-      LoggerContext.set_from_context(
-        Sanctum.Context.build(
-          user_id: "parent_user",
-          permissions: [:execute],
-          auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
-        )
-      )
+      LoggerContext.set_from_context(%{
+        user_id: "parent_user",
+        athanor_id: nil,
+        auth_method: :oidc
+      })
 
       LoggerContext.set_request_id("req_parent")
 

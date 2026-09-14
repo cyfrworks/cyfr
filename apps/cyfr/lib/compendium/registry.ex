@@ -1284,7 +1284,7 @@ defmodule Compendium.Registry do
   # the input is always nil or a map — a malformed manifest is rejected
   # upstream instead of silently passing validation with zero declarations.
   defp decode_manifest_strict(manifest) do
-    case Compendium.Manifest.decode_strict(manifest) do
+    case Cyfr.Manifest.decode_strict(manifest) do
       {:ok, map} -> {:ok, map}
       {:error, :malformed_manifest} -> {:error, {:invalid_manifest, "manifest is not valid JSON"}}
     end

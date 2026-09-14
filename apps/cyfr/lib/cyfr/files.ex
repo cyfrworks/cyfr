@@ -494,7 +494,7 @@ defmodule Cyfr.Files do
   end
 
   defp valid_manifest(bytes, name) do
-    with {:ok, manifest} <- Compendium.Manifest.decode_strict(bytes),
+    with {:ok, manifest} <- Cyfr.Manifest.decode_strict(bytes),
          :ok <- Compendium.Manifest.validate(manifest) do
       :ok
     else

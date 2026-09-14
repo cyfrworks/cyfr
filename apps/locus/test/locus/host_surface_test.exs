@@ -6,9 +6,9 @@ defmodule Locus.HostSurfaceTest do
   What locus reaches for in cyfr, written down.
 
   Checks the builder release’s runtime isolation. It loads cyfr with
-  runtime: false; its standalone path may use only pure cyfr modules.
-  Locus.MCP runs in the server and has separate dependencies. The shared
-  contracts (`apps/cyfr_contracts`) are not cyfr and are not counted.
+  runtime: false; its standalone path reaches no cyfr module, only the
+  shared contracts (`apps/cyfr_contracts`), which are not cyfr and are not
+  counted. Locus.MCP runs in the server and has separate dependencies.
 
   Opus, Arca and Compendium each have a rostered surface for the same
   reason.
@@ -20,19 +20,9 @@ defmodule Locus.HostSurfaceTest do
   use ExUnit.Case, async: true
 
   @surface [
-    # ——— Build plane: pure, and safe in the builder release ———
-    # The Cargo.toml template, delegated here rather than forked.
-    "Compendium.Scaffold",
-    # The log-metadata roster — shared phrasing, not capability.
-    "Cyfr.LoggerContext",
-    # The builder client's outbound HTTP, classified separately from the
-    # pinned OCI path because it talks to an operator-configured sibling.
-    "Cyfr.Network",
-    # The operation catalog: an in-chain tool call is dispatched through it.
-    "Cyfr.Ops",
-    # Whether this server builds at all (`CYFR_BUILDS`): an application-env
-    # read, answered by a loaded cyfr as well as a started one.
-    "Cyfr.RuntimeConfig",
+    # ——— Build plane: nothing ———
+    # Every module but `Locus.MCP` reaches only the contracts, so the
+    # builder release runs no cyfr code.
 
     # ——— Product plane: `Locus.MCP` only, and needs a STARTED cyfr ———
     # These are why the builder release must never route MCP traffic: each
@@ -47,7 +37,13 @@ defmodule Locus.HostSurfaceTest do
     "Compendium.NamespacePolicy",
     "Compendium.Resolver",
     "Cyfr.BuildRecords",
+    # The operation catalog: `Locus.MCP` is a provider, and a compiled
+    # component is registered through it.
+    "Cyfr.Ops",
     "Cyfr.RateLimiter",
+    # Whether this server builds at all (`CYFR_BUILDS`): an application-env
+    # read, answered by a loaded cyfr as well as a started one.
+    "Cyfr.RuntimeConfig",
     "Cyfr.Bus",
     "Emissary.MCP",
     "Emissary.PubSub",

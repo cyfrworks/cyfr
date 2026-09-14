@@ -60,10 +60,9 @@ defmodule Cyfr.MixProject do
         ]
       ],
       # The builder container: the toolchain half of Locus and nothing
-      # else. The contracts are started; the cyfr app is LOADED (the
-      # modules Locus.Builder reaches beyond the contracts —
-      # Cyfr.LoggerContext and the Compendium.Scaffold template) but never
-      # STARTED: no endpoint, no repo, no tenant state.
+      # else. The contracts are started; the cyfr app is LOADED but never
+      # STARTED: no endpoint, no repo, no tenant state. The build path
+      # reaches only the contracts (`Locus.HostSurfaceTest`).
       builder: [
         applications: [
           cyfr_contracts: :permanent,

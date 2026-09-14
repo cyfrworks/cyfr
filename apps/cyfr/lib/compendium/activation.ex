@@ -29,7 +29,6 @@ defmodule Compendium.Activation do
   graph — and so the digest — changes with it.
   """
 
-  alias Cyfr.ComponentRef
   alias Sanctum.Context
   alias Cyfr.JCS
 
@@ -138,7 +137,7 @@ defmodule Compendium.Activation do
   end
 
   defp integrity(row) do
-    manifest = Compendium.Manifest.decode(field(row, :manifest))
+    manifest = Cyfr.Manifest.decode(field(row, :manifest))
 
     case Compendium.ReleaseDigest.compute(field(row, :digest), manifest) do
       {:ok, recomputed} ->
@@ -186,7 +185,7 @@ defmodule Compendium.Activation do
 
       true ->
         acc = Map.put(acc, key, component)
-        manifest = Compendium.Manifest.decode(field(component, :manifest))
+        manifest = Cyfr.Manifest.decode(field(component, :manifest))
 
         case Compendium.DependencyResolver.extract_from_manifest(manifest, key) do
           {:ok, deps} -> walk_deps(ctx, deps, acc, depth)
@@ -256,11 +255,4 @@ defmodule Compendium.Activation do
       {:error, reason} -> {:error, {:invalid_graph, reason}}
     end
   end
-
-  @doc """
-  The name-level ref of a parsed or string component reference — the same
-  spelling `node_key/1` produces from a row.
-  """
-  @spec key_for_ref(String.t()) :: {:ok, String.t()} | {:error, String.t()}
-  def key_for_ref(ref) when is_binary(ref), do: ComponentRef.to_name_ref(ref)
 end

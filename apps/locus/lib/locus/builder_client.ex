@@ -109,14 +109,14 @@ defmodule Locus.BuilderClient do
       compressed: false,
       decode_body: false,
       # The ceiling streams: a misbehaving builder cannot flood this node's
-      # heap before a post-hoc size check would run. `Cyfr.Network`'s
-      # collector is pure and compiled into the builder release too.
-      into: Cyfr.Network.bounded_collector(@max_response_bytes)
+      # heap before a post-hoc size check would run. The collector is a
+      # contracts module, so the builder release carries it.
+      into: Cyfr.BoundedBody.collector(@max_response_bytes)
     ]
 
     case Req.request(request) do
       {:ok, %Req.Response{status: status} = resp} ->
-        case Cyfr.Network.collected_body(resp, @max_response_bytes) do
+        case Cyfr.BoundedBody.read(resp, @max_response_bytes) do
           {:ok, raw} ->
             handle_response(status, decode_json_body(raw), on_progress)
 

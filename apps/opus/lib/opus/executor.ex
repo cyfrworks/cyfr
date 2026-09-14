@@ -1159,7 +1159,7 @@ defmodule Opus.Executor do
     if p.opts[:authority] do
       p.component[:manifest]
       |> Kernel.||(p.component["manifest"])
-      |> Compendium.Manifest.decode()
+      |> Cyfr.Manifest.decode()
       |> Map.get("needs", %{})
       |> Map.keys()
       |> Enum.sort()

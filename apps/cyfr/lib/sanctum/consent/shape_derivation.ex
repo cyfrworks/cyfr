@@ -93,7 +93,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   defp model_target(row) do
-    manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+    manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
     agent = manifest["agent"] || %{}
 
     case {manifest["type"], agent["catalyst"], agent["model"]} do
@@ -107,7 +107,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   defp tool_policy(row) do
-    manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+    manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
 
     case get_in(manifest, ["agent", "policy"]) do
       %{"auto" => auto, "ask" => ask} when is_list(auto) and is_list(ask) ->
@@ -180,7 +180,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   defp manifest_row(ctx, source_ref) do
     with {:ok, ref} <- Cyfr.ComponentRef.parse(source_ref),
          {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-      manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+      manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
       {:ok, row, Needs.from_manifest(manifest), Caps.from_manifest(manifest)}
     end
   end

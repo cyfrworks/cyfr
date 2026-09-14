@@ -34,7 +34,7 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   defp name_ref(ref) do
-    case Compendium.Activation.key_for_ref(ref) do
+    case Cyfr.ComponentRef.to_name_ref(ref) do
       {:ok, name_ref} -> {:ok, name_ref}
       _ -> :error
     end

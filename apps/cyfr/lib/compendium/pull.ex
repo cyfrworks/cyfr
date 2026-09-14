@@ -101,7 +101,7 @@ defmodule Compendium.Pull do
   """
   @spec missing_deps(Context.t(), map(), keyword()) :: [String.t()]
   def missing_deps(%Context{} = ctx, component, opts \\ []) when is_map(component) do
-    manifest = Compendium.Manifest.decode(Map.get(component, :manifest))
+    manifest = Cyfr.Manifest.decode(Map.get(component, :manifest))
 
     with {:ok, deps} <-
            DependencyResolver.extract_from_manifest(manifest, component_id(component)) do

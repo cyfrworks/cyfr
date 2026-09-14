@@ -27,17 +27,25 @@ defmodule Cyfr.LoggerContext do
   @spec keys() :: [atom()]
   def keys, do: @keys
 
+  @typedoc """
+  The caller a request runs as: any map carrying these keys, such as a
+  `Sanctum.Context`.
+  """
+  @type caller :: %{
+          :user_id => String.t() | nil,
+          :athanor_id => String.t() | nil,
+          :auth_method => atom(),
+          optional(atom()) => term()
+        }
+
   @doc """
-  Set Logger metadata from a Sanctum.Context struct.
+  Set Logger metadata from the request's caller.
 
   Call this at request entry points after building the context.
   """
-  def set_from_context(%Sanctum.Context{} = ctx) do
-    Logger.metadata(
-      user_id: ctx.user_id,
-      athanor_id: ctx.athanor_id,
-      auth_method: ctx.auth_method
-    )
+  @spec set_from_context(caller()) :: :ok
+  def set_from_context(%{user_id: user_id, athanor_id: athanor_id, auth_method: auth_method}) do
+    Logger.metadata(user_id: user_id, athanor_id: athanor_id, auth_method: auth_method)
   end
 
   @doc """

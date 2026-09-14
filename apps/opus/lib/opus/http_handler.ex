@@ -27,7 +27,7 @@ defmodule Opus.HttpHandler do
   calls synchronously. All edge checks happen before any network I/O via
   `Opus.HttpRequestValidation` — the single validation path shared with
   `Opus.HttpStreamHandler`. The private/reserved-IP range policy lives in
-  `Cyfr.Network.private_ip?/1`.
+  `Cyfr.Cidr.private_ip?/1`.
 
   ## Usage
 
@@ -215,11 +215,11 @@ defmodule Opus.HttpHandler do
   @doc """
   Check if an IP tuple is in a private/reserved range.
 
-  Delegates to `Cyfr.Network.private_ip?/1` — the single source of truth for
+  Delegates to `Cyfr.Cidr.private_ip?/1` — the single source of truth for
   the private/reserved-range egress policy. No range table lives in Opus.
   """
   @spec private_ip?(:inet.ip4_address() | :inet.ip6_address()) :: boolean()
-  defdelegate private_ip?(ip_tuple), to: Cyfr.Network
+  defdelegate private_ip?(ip_tuple), to: Cyfr.Cidr
 
   # ============================================================================
   # Private: HTTP Execution
@@ -237,13 +237,13 @@ defmodule Opus.HttpHandler do
     req_opts =
       request
       |> build_req_opts(limits)
-      |> Keyword.put(:into, Cyfr.Network.bounded_collector(max_bytes))
+      |> Keyword.put(:into, Cyfr.BoundedBody.collector(max_bytes))
 
     case Req.request(req_opts) do
       {:ok, response} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
 
-        case Cyfr.Network.collected_body(response, max_bytes) do
+        case Cyfr.BoundedBody.read(response, max_bytes) do
           {:ok, body} ->
             response_body = normalize_response_body(body)
 

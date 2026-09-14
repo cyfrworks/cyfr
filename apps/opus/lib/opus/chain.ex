@@ -346,7 +346,7 @@ defmodule Opus.Chain do
   end
 
   defp name_level(reference) do
-    case Compendium.Activation.key_for_ref(reference) do
+    case Cyfr.ComponentRef.to_name_ref(reference) do
       {:ok, name_ref} -> {:ok, name_ref}
       {:error, reason} -> {:error, {:invalid_reference, reason}}
     end

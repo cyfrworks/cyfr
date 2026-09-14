@@ -60,7 +60,7 @@ defmodule Cyfr.Test.ScriptedExecution do
       |> Keyword.fetch!(:ref)
       |> List.wrap()
       |> Enum.map(fn ref ->
-        {:ok, key} = Compendium.Activation.key_for_ref(ref)
+        {:ok, key} = Cyfr.ComponentRef.to_name_ref(ref)
         key
       end)
 
@@ -143,7 +143,7 @@ defmodule Cyfr.Test.ScriptedExecution do
 
   defp scripted?(reference) do
     with pid when is_pid(pid) <- Process.whereis(@agent),
-         {:ok, key} <- Compendium.Activation.key_for_ref(reference) do
+         {:ok, key} <- Cyfr.ComponentRef.to_name_ref(reference) do
       key in Agent.get(pid, & &1.refs)
     else
       _ -> false

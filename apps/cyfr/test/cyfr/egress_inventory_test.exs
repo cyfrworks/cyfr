@@ -22,8 +22,9 @@ defmodule Cyfr.EgressInventoryTest do
   use ExUnit.Case, async: true
 
   @allowed %{
-    # The one pinned transport: SSRF validation, hostname-preserving IP
-    # pinning, and streaming response caps live here.
+    # The one pinned transport: SSRF validation and hostname-preserving IP
+    # pinning live here; its response is bounded while it streams
+    # (`Cyfr.BoundedBody`).
     "apps/cyfr/lib/cyfr/network.ex" => :pinned_owner,
     # S3-compatible object store — operator-configured endpoint, SigV4.
     "apps/cyfr/lib/arca/adapters/s3.ex" => :object_store,
