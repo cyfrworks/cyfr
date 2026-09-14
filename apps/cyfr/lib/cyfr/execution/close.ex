@@ -194,13 +194,17 @@ defmodule Cyfr.Execution.Close do
   @doc """
   The sentence a vault setup refusal's reason is recorded as: a
   JSON-encodable value, since the typed payload crosses the error envelope.
+  A reason carrying detail is recorded by its shape alone — the vault
+  reader's details can quote the material that failed
+  (`{:invalid_payload, payload}`), and a row's message outlives the call.
   """
   @spec setup_reason(term()) :: atom() | String.t()
   def setup_reason({:entry_unavailable, status}), do: "vault_entry_#{status}"
   def setup_reason({:selection_unbound, _label}), do: "vault_selection_unbound"
   def setup_reason(:consent_moved), do: "consent_moved"
   def setup_reason(reason) when is_atom(reason), do: reason
-  def setup_reason(reason), do: inspect(reason)
+  def setup_reason(reason) when is_tuple(reason) and is_atom(elem(reason, 0)), do: elem(reason, 0)
+  def setup_reason(_reason), do: :vault_refused
 
   defp check_application_error(close, secrets, masked_output) do
     case application_error(masked_output) do
