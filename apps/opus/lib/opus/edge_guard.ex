@@ -30,32 +30,11 @@ defmodule Opus.EdgeGuard do
 
   @type edge :: Edge.t() | nil
 
-  # ============================================================================
-  # Edge accessors (nil edge / nil group => empty list => deny)
-  # ============================================================================
-
-  @doc "Allowed egress domains for an edge (empty = deny all)."
-  @spec domains(edge()) :: [String.t()]
-  def domains(edge), do: egress(edge, :domains)
-
-  # Internal accessors for the checks below — external callers use the
-  # check_* predicates, never the raw lists.
+  # Internal accessors for the checks below; the allowed lists themselves
+  # are `Cyfr.Authority.Blob.Edge`'s.
   defp methods(edge), do: egress(edge, :methods)
   defp schemes(edge), do: egress(edge, :schemes)
   defp private_ips(edge), do: egress(edge, :private_ips)
-
-  @doc "Allowed storage paths for an edge (empty = deny all)."
-  @spec paths(edge()) :: [String.t()]
-  def paths(edge), do: storage(edge, :paths)
-
-  @doc "Allowed storage actions for an edge (empty = deny all)."
-  @spec actions(edge()) :: [String.t()]
-  def actions(edge), do: storage(edge, :actions)
-
-  @doc "Granted tool actions for an edge (empty = deny all)."
-  @spec tools(edge()) :: [String.t()]
-  def tools(nil), do: []
-  def tools(%Edge{tools: tools}), do: tools
 
   # ============================================================================
   # Egress checks
@@ -69,7 +48,7 @@ defmodule Opus.EdgeGuard do
   """
   @spec check_domain(edge(), String.t()) :: :ok | {:error, String.t()}
   def check_domain(edge, domain) when is_binary(domain) do
-    allowed = domains(edge)
+    allowed = Edge.domains(edge)
 
     if Enum.any?(allowed, &domain_matches?(&1, domain)) do
       :ok
@@ -148,7 +127,7 @@ defmodule Opus.EdgeGuard do
   @spec allows_action?(edge(), String.t()) :: boolean()
   def allows_action?(edge, action) when is_binary(action) do
     down = String.downcase(action)
-    Enum.any?(actions(edge), &(String.downcase(&1) == down))
+    Enum.any?(Edge.actions(edge), &(String.downcase(&1) == down))
   end
 
   @doc """
@@ -162,7 +141,7 @@ defmodule Opus.EdgeGuard do
   """
   @spec allows_path?(edge(), String.t()) :: boolean()
   def allows_path?(edge, path) when is_binary(path) do
-    Enum.any?(paths(edge), fn
+    Enum.any?(Edge.paths(edge), fn
       "*" ->
         true
 
@@ -258,10 +237,6 @@ defmodule Opus.EdgeGuard do
   defp egress(nil, _key), do: []
   defp egress(%Edge{egress: nil}, _key), do: []
   defp egress(%Edge{egress: egress}, key), do: Map.get(egress, key, [])
-
-  defp storage(nil, _key), do: []
-  defp storage(%Edge{storage: nil}, _key), do: []
-  defp storage(%Edge{storage: storage}, key), do: Map.get(storage, key, [])
 
   defp domain_matches?(pattern, domain) when is_binary(pattern) and is_binary(domain) do
     cond do

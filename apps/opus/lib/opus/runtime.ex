@@ -59,7 +59,10 @@ defmodule Opus.Runtime do
     of executing (a WASM run always carries one; this is the final invariant
     guard). Pass `false` only for authority-free harness runs in tests.
   - `:step_spans` - The caller's `Cyfr.Execution.StepSpans` clock, marked
-    when the guest starts and when its emitter pushes a delta
+    when the guest starts
+  - `:execution_id` - The admitted execution: its open
+    `Cyfr.Execution.Attempt` answers the guest's `emit` and OAuth token
+    calls
 
   ## Examples
 
@@ -124,9 +127,7 @@ defmodule Opus.Runtime do
       activation_digest: activation_digest,
       # The attempt that owns this execution's row, for the lineage of
       # every call a formula makes.
-      attempt: Keyword.get(opts, :execution_attempt),
-      # The caller's clock, marked by each event the emitter pushes.
-      step_spans: step_spans
+      attempt: Keyword.get(opts, :execution_attempt)
     }
 
     # Build imports and collect cleanup refs
@@ -216,8 +217,6 @@ defmodule Opus.Runtime do
 
       if cleanup_refs.formula_tracker_pid,
         do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
-
-      if cleanup_refs.emitter, do: Opus.Emit.close(cleanup_refs.emitter)
     end
   end
 
@@ -273,34 +272,23 @@ defmodule Opus.Runtime do
         %{}
       end
 
-    # Require an execution id so every dispensed token can be tracked
-    # and redacted by SecretMasker.
+    # The execution's attempt dispenses every token, so each one is in its
+    # masking set before the guest has it.
     oauth_imports =
       if component_type == :catalyst && ctx && execution_id do
-        Opus.OAuthHandler.build_oauth_imports(
-          ctx,
-          component_ref,
-          execution_id,
-          [limits: limits] ++ oauth_resolver_opts(authority_info.authority, ctx)
-        )
+        Opus.OAuthHandler.build_oauth_imports(execution_id)
       else
         %{}
       end
 
     root_execution_id = root_execution_id || execution_id
 
-    emitter =
-      open_emitter(
-        component_type,
-        ctx,
-        execution_id,
-        root_execution_id,
-        authority_info,
-        preloaded_fields
-      )
-
     emit_imports =
-      if component_type == :catalyst && emitter, do: Opus.Emit.imports(emitter), else: %{}
+      if component_type == :catalyst && ctx && execution_id && authority_info.authority do
+        build_emit_imports(execution_id)
+      else
+        %{}
+      end
 
     {formula_imports, formula_tracker_pid} =
       if component_type == :formula && ctx && execution_id do
@@ -311,7 +299,6 @@ defmodule Opus.Runtime do
           authority: authority_info.authority,
           declared_needs: authority_info.declared_needs,
           activation_digest: authority_info.activation_digest,
-          emitter: emitter,
           # What this formula was started as and with: a child of the same
           # formula is admitted only as a delegate its roster lists, with
           # the roster's own configuration (`Opus.FormulaHandler`).
@@ -334,53 +321,31 @@ defmodule Opus.Runtime do
     cleanup_refs = %{
       stream_exec_ref: stream_exec_ref,
       formula_tracker_pid: formula_tracker_pid,
-      emitter: emitter,
       execution_id: execution_id
     }
 
     {all_imports, cleanup_refs}
   end
 
-  # A guest's events go on a stream: a formula's on its root's, which the
-  # caller watching the whole run subscribes to; a catalyst's on its own,
-  # which its caller subscribes to for the answer it streams.
-  defp open_emitter(type, ctx, execution_id, root_execution_id, authority_info, preloaded)
-       when type in [:formula, :catalyst] and not is_nil(ctx) and is_binary(execution_id) and
-              not is_nil(authority_info.authority) do
-    stream_id = if type == :formula, do: root_execution_id, else: execution_id
-
-    Opus.Emit.open(stream_id,
-      ctx: ctx,
-      authority: authority_info.authority,
-      budget_id: root_execution_id,
-      secrets: Map.values(preloaded),
-      tracked_id: execution_id,
-      step_spans: authority_info.step_spans
-    )
+  # A catalyst's `cyfr:emit/events` import: each event goes to the
+  # execution's attempt, which checks, masks and pushes it on the stream
+  # the attempt was opened on (`Cyfr.Execution.Attempt.emit/2`).
+  defp build_emit_imports(execution_id) do
+    %{
+      "cyfr:emit/events@0.1.0" => %{
+        "emit" =>
+          {:fn, fn json_event -> Cyfr.Execution.Attempt.emit(execution_id, json_event) end}
+      }
+    }
   end
 
-  defp open_emitter(_type, _ctx, _execution_id, _root, _authority_info, _preloaded), do: nil
-
-  # Under an authority, tokens come from the consent edge's vault resource
-  # through the vault reader — the callee-keyed lookup is unreachable. An
-  # authority execution without a vault edge resolves nothing, fail closed.
   # Public-profile storage rides explicit opts derived from the authority's
   # profile kind — never a flag a guest could influence.
   defp public_storage_opts(%Cyfr.Authority{profile_kind: :public}), do: [public?: true]
   defp public_storage_opts(_authority), do: []
 
-  defp oauth_resolver_opts(%Cyfr.Authority{resources: resources}, ctx) do
-    case resources do
-      %Cyfr.Authority.Blob.Edge{vault: %{} = vault} ->
-        [resolver: fn provider -> Sanctum.VaultReader.oauth_token(ctx, vault, provider) end]
-
-      _ ->
-        [resolver: fn _provider -> {:error, "no vault resource granted on this edge"} end]
-    end
-  end
-
   # Build secrets host functions for WASI import from pre-resolved secrets map.
-  # The map is built once per execution by the Executor, so each get() is a
+  # The map is unsealed once per execution at admission, so each get() is a
   # simple Map.get with no file I/O or PBKDF2 derivation.
   defp build_vault_imports(preloaded, component_ref) when is_map(preloaded) do
     %{

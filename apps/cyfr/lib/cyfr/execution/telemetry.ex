@@ -3,13 +3,14 @@
 
 defmodule Cyfr.Execution.Telemetry do
   @moduledoc """
-  The lifecycle telemetry of an execution: its start, its completion and
-  its failure.
+  The lifecycle telemetry of an execution — its start, its completion and
+  its failure — and the events its guest pushes to a stream.
 
-  These events are audit-bearing — `Arca.AuditHandler` and
+  The lifecycle events are audit-bearing — `Arca.AuditHandler` and
   `Prism.TelemetryBridge` consume them (`Cyfr.Telemetry.Catalog`) — and are
   distinct from the execution's persistent record (`Cyfr.Execution.Record`).
-  The guest-activity events a running component produces are
+  `[:cyfr, :opus, :emit]` is for operator metrics. The events a running
+  component's storage, tool and formula calls produce are
   `Opus.Telemetry`'s.
 
   ## Events
@@ -19,6 +20,7 @@ defmodule Cyfr.Execution.Telemetry do
   - `[:cyfr, :opus, :execute, :exception]` - an execution fails, or its row
     is failed from outside: a child by its parent's cascade, a lapsed row
     by the sweeper
+  - `[:cyfr, :opus, :emit]` - a guest's event is pushed to an execution's stream
 
   ## Measurements
 
@@ -32,7 +34,7 @@ defmodule Cyfr.Execution.Telemetry do
 
   ## Metadata
 
-  Every event this module emits carries:
+  Every lifecycle event carries:
   - `execution_id` - Unique execution identifier (exec_<uuid7>)
   - `component` - Component reference
   - `component_type` - :catalyst, :reagent, or :formula
@@ -164,6 +166,21 @@ defmodule Cyfr.Execution.Telemetry do
         error: error,
         duration_ms: duration_ms
       }
+    )
+  end
+
+  @doc """
+  Emit `[:cyfr, :opus, :emit]` when a guest's event is pushed to the stream
+  of `execution_id` under `sequence`.
+
+  Measurements: `system_time`, `sequence`. Metadata: `execution_id`.
+  """
+  @spec emit(String.t(), String.t()) :: :ok
+  def emit(execution_id, sequence) do
+    :telemetry.execute(
+      [:cyfr, :opus, :emit],
+      %{system_time: System.system_time(), sequence: sequence},
+      %{execution_id: execution_id}
     )
   end
 

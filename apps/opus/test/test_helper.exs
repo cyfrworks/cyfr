@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# Ensure the Opus application supervisor is running so GenServers
-# (SharedEngine, OAuthTokenTracker, etc.) are alive during tests.
+# Ensure the Opus application supervisor is running so its processes
+# (the shared engine and its task supervisor) are alive during tests.
 {:ok, _} = Application.ensure_all_started(:opus)
 
 # `:requires_locus` marks the tests that dispatch to the build tool. Locus is

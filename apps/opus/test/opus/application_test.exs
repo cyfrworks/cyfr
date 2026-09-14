@@ -10,16 +10,12 @@ defmodule Opus.ApplicationTest do
 
       ids = for {id, _pid, _type, _modules} <- Supervisor.which_children(Opus.Supervisor), do: id
 
-      for id <- [
-            Opus.SharedEngine,
-            Opus.TaskSupervisor,
-            Opus.OAuthTokenTracker
-          ] do
+      for id <- [Opus.SharedEngine, Opus.TaskSupervisor] do
         assert id in ids, "#{inspect(id)} is not a child of Opus.Supervisor"
       end
     end
 
-    test "the execution slots, rates, event streams, root tasks and sweeper are cyfr's, not the engine's" do
+    test "the execution slots, rates, event streams, attempts, root tasks and sweeper are cyfr's, not the engine's" do
       ids = for {id, _pid, _type, _modules} <- Supervisor.which_children(Opus.Supervisor), do: id
 
       for id <- [
@@ -33,6 +29,7 @@ defmodule Opus.ApplicationTest do
       end
 
       refute Cyfr.Execution.Sweeper in ids, "Cyfr.Execution.Sweeper is supervised by opus"
+      assert Process.whereis(Cyfr.Execution.Attempt.Supervisor) != nil
     end
   end
 

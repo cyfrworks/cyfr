@@ -18,10 +18,7 @@ defmodule Opus.Application do
       # Supervised fire-and-forget tasks: an in-chain streamed child
       # (`execution.run_stream` from a formula) and a guest's streaming HTTP
       # request.
-      Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000),
-      # Owns the :protected ETS table of OAuth tokens dispensed to guests (for
-      # SecretMasker); sweeps tokens from runs that never drained.
-      Opus.OAuthTokenTracker
+      Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000)
     ]
 
     opts = [strategy: :one_for_one, name: Opus.Supervisor, max_restarts: 10, max_seconds: 60]

@@ -3,11 +3,16 @@
 
 defmodule Opus.Executor do
   @moduledoc """
-  High-level execution facade for WASM components.
+  Runs an admitted WASM component.
 
-  This module provides a simplified API for executing WASM components,
-  handling reference resolution, signature verification, telemetry,
-  and crash-resilient record keeping.
+  CYFR admits the run and closes it: `Cyfr.Execution.Admission.admit/4`
+  resolves, enforces, fetches, writes the row, unseals and opens the run's
+  `Cyfr.Execution.Attempt`; `Cyfr.Execution.Attempt.complete/4` and
+  `fail/3` mask and write the terminal row. The executor only runs the
+  component in between: it holds an execution slot, runs the component in
+  a runner process under the consented wall-clock timeout, renews the
+  row's lease while it waits, and kills the runner on a timeout, a lost
+  lease, a cancel or the end of the attempt.
 
   ## Usage
 
@@ -38,9 +43,8 @@ defmodule Opus.Executor do
 
   require Logger
 
+  alias Cyfr.Execution.{Admission, Attempt, Cascade, Close, Record}
   alias Sanctum.Context
-  alias Cyfr.Execution.{Admission, Attestation, Cascade, Record, Telemetry}
-  alias Opus.ExecutionPipeline
 
   @doc """
   Execute a WASM component with the given input.
@@ -50,959 +54,59 @@ defmodule Opus.Executor do
   - `ctx` - Sanctum execution context
   - `reference` - Component reference string (e.g., "catalyst:local.claude:0.2.0")
   - `input` - Input data map to pass to the component
-  - `opts` - Execution options
-
-  ## Options
-
-  - `:type` - Component type: `:catalyst`, `:reagent`, or `:formula`. Defaults to `:reagent`.
-  - `:verify` - Optional verification requirements: `%{identity: string, issuer: string}`
-  - `:max_memory_bytes` - Memory limit for execution. Defaults to 64MB.
+  - `opts` - `Cyfr.Execution.Admission.admit/4`'s options, and `:class`
+    (`:background` for a run nobody waits on)
 
   ## Returns
 
   - `{:ok, result}` - Execution succeeded with result map
   - `{:error, reason}` - Execution failed with error message
   """
-  @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(%Context{} = ctx, reference, input, opts \\ [])
       when is_binary(reference) and is_map(input) do
-    # Every road into the engine — root, child, cron, webhook — passes here,
-    # so a boot that lost the control plane admits nothing.
-    case Cyfr.ControlPlane.assert_owner() do
-      :ok ->
-        admitted_run(ctx, reference, input, opts)
-
-      {:error, :control_plane_lost} ->
-        {:error,
-         "control plane ownership lost; execution refused until this node reclaims the database"}
+    with {:ok, admitted} <- Admission.admit(ctx, reference, input, opts) do
+      run_admitted(admitted, input, opts)
     end
   end
 
-  defp admitted_run(ctx, reference, input, opts) do
-    # Ensure request_id exists — MCP callers already have one from the catalog,
-    # but direct callers (tincture invoke, cron, etc.) may not.
-    ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Cyfr.UUID7.request_id()}
+  defp run_admitted(admitted, input, opts) do
+    id = admitted.execution_id
 
-    # Resolve flexible refs (version-less) to pinned refs before execution.
-    # The executor always works with exact-version references.
-    case Compendium.Resolver.resolve(ctx, reference) do
-      {:ok, pinned, %{was_resolved: true} = meta} ->
-        do_execute(
-          ctx,
-          pinned,
-          reference,
-          input,
-          Keyword.put(opts, :resolver_digest, meta[:digest])
-        )
-
-      {:ok, pinned, _metadata} ->
-        do_execute(ctx, pinned, nil, input, opts)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp do_execute(ctx, resolved_reference, resolved_from, input, opts) do
-    case Admission.inspect_component(ctx, resolved_reference) do
-      {:ok, component_ref, extracted_type, component} ->
-        case authoritative_type(extracted_type, opts[:type], resolved_reference) do
-          {:ok, component_type} ->
-            opts =
-              if resolved_from, do: Keyword.put(opts, :resolved_from, resolved_from), else: opts
-
-            do_run(ctx, resolved_reference, input, opts, component_type, component_ref, component)
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # The registry's type is authoritative — type selects WASI capabilities, so
-  # a caller-supplied :type may assert but never decide. A missing registry
-  # type or a mismatched assertion refuses.
-  defp authoritative_type(nil, _asserted, reference) do
-    {:error, "Component '#{reference}' has no registry type — re-register it"}
-  end
-
-  defp authoritative_type(extracted, asserted, reference) do
-    with {:ok, component_type} <- parse_component_type(extracted) do
-      case asserted && parse_component_type(asserted) do
-        nil ->
-          {:ok, component_type}
-
-        {:ok, ^component_type} ->
-          {:ok, component_type}
-
-        {:ok, other} ->
-          {:error,
-           "Requested type #{other} does not match the registry type " <>
-             "#{component_type} for '#{reference}'"}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
-  end
-
-  defp do_run(ctx, reference, input, opts, component_type, component_ref, component) do
-    # Create initial execution record
-    record_opts = [
-      component_type: component_type,
-      parent_execution_id: opts[:parent_execution_id],
-      root_execution_id: opts[:root_execution_id],
-      # Set by `Opus.Chain.run_root/5` only: a child walks its parent's
-      # authority and roots no profile of its own, so it records none.
-      profile_id: opts[:profile_id],
-      # The class the execution's payloads are kept under; a turn's own
-      # dispatches name `chat_step`, everything else derives its own.
-      retention_class: opts[:retention_class],
-      # What the payload store keeps as the input when the sent input
-      # carries transient content the caller excludes from retention.
-      retained_input: opts[:retained_input],
-      # The schedule a scheduled root runs for.
-      schedule_id: opts[:schedule_id]
-    ]
-
-    record_opts =
-      if opts[:execution_id],
-        do: [{:execution_id, opts[:execution_id]} | record_opts],
-        else: record_opts
-
-    # A root mints its invocation reservation at admission, from the
-    # budget its authority was minted with; a child charges its root's.
-    record_opts =
-      case {opts[:root_execution_id], opts[:authority]} do
-        {nil, %Cyfr.Authority{budget: %Cyfr.Authority.Budget{id: id, cap: cap}}} ->
-          [{:reservation, %{budget_id: id, cap: cap}} | record_opts]
-
-        _ ->
-          record_opts
-      end
-
-    record = Record.new(ctx, reference, input, record_opts)
-
-    record =
-      if opts[:resolved_from], do: %{record | resolved_from: opts[:resolved_from]}, else: record
-
-    record =
-      if opts[:resolver_digest],
-        do: %{record | resolver_digest: opts[:resolver_digest]},
-        else: record
-
-    record = stamp_activation(record, ctx, component, opts)
-
-    p = %ExecutionPipeline{
-      ctx: ctx,
-      reference: reference,
-      component: component,
-      component_ref: component_ref,
-      component_type: component_type,
-      record: record,
-      started_written: :atomics.new(1, signed: false),
-      opts: opts
-    }
-
-    Cyfr.LoggerContext.set_execution_id(record.id)
-
-    # Each stage answers `{:error, p, reason}` so the else arm binds the
-    # pipeline that failed rather than the outer one — `with` does not export
-    # its bindings to `else`, and the arm that read the outer `p` masked with
-    # `preloaded_fields: %{}` and spilled this execution's vault material into
-    # the row, the terminal event and the caller's error. `rescue` has the
-    # same blind spot and cannot be given a pattern, so the stages that run
-    # with unsealed material in hand carry their own.
-    try do
-      with {:ok, p} <- stage_enforce_policy(p, input),
-           {:ok, p, wasm_bytes} <- stage_fetch_and_verify(p),
-           {:ok, p} <- stage_record_start(p),
-           {:ok, p} <- stage_resolve_vault_fields(p) do
-        try do
-          case stage_execute(p, wasm_bytes, input) do
-            {:ok, p, output, exec_metadata} -> finalize_execution(p, output, exec_metadata)
-            {:error, p, reason} -> dispatch_failure(p, reason)
-          end
-        rescue
-          e -> handle_raise(p, e, __STACKTRACE__)
-        end
-      else
-        {:error, p, reason} -> dispatch_failure(p, reason)
-      end
-    rescue
-      e -> handle_raise(p, e, __STACKTRACE__)
-    end
-  end
-
-  # The one failure vocabulary for every stage: a crafted sentence, a typed
-  # setup/consent refusal that must reach the caller whole, or an internal
-  # term that gets rendered here and logged. `p` is always the pipeline the
-  # failing stage reached, so `handle_failure/2` masks with every credential
-  # dispensed so far.
-  defp dispatch_failure(%ExecutionPipeline{} = p, reason) when is_binary(reason) do
-    maybe_emit_setup_event(p.ctx, reason, p.opts)
-    handle_failure(p, reason)
-  end
-
-  defp dispatch_failure(%ExecutionPipeline{} = p, {tag, payload} = typed)
-       when tag in [:setup_required, :consent_required] and is_map(payload) do
-    # Record and stream the readable message, but return the typed term — the
-    # error envelope needs the structural payload, and callers already receive
-    # these tuples from consent loading.
-    maybe_emit_setup_event(p.ctx, typed, p.opts)
-    _ = handle_failure(p, failure_message(typed))
-    {:error, typed}
-  end
-
-  defp dispatch_failure(%ExecutionPipeline{} = p, reason) do
-    handle_failure(p, "Execution failed: #{client_reason(reason)}")
-  end
-
-  # A crafted raise (`raise "…"`) speaks for itself; any other exception's
-  # message can embed the very term that failed to match. The detail goes
-  # whole to the log; the caller gets a sentence — this string is persisted
-  # on the row, streamed as the terminal event, and handed back to MCP
-  # clients and parent formulas.
-  defp handle_raise(%ExecutionPipeline{} = p, e, stacktrace) do
-    msg =
-      case e do
-        # RuntimeError/ArgumentError messages are authored at the raise site
-        # (the house rule for host-side programmer error) — safe.
-        %RuntimeError{message: m} ->
-          m
-
-        %ArgumentError{message: m} ->
-          m
-
-        _ ->
-          Logger.error(
-            "[Opus.Executor] execution raised: " <> Exception.format(:error, e, stacktrace)
-          )
-
-          "the engine raised an internal error"
-      end
-
-    handle_failure(p, "Execution error: #{msg}")
-  end
-
-  # The render seam for failure reasons: a typed refusal gets its one
-  # sentence (`Cyfr.Ops.Error.render/1` — Unauthorized, the tool
-  # reasons, OCI errors, crafted binaries); an internal term goes to the
-  # log and never into a message that outlives this call.
-  defp client_reason(reason) do
-    case Cyfr.Ops.Error.render(reason) do
+    case Attempt.whereis(id) do
       nil ->
-        Logger.warning("[Opus.Executor] unrenderable failure reason: #{inspect(reason)}")
-        "internal error"
+        Close.lost(admitted.close)
 
-      msg ->
-        msg
-    end
-  end
+      attempt ->
+        attempt_ref = Process.monitor(attempt)
 
-  # Record which code actually ran. Root executions carry the full node ->
-  # release-digest map; a child's graph is a subgraph of its root's, so only
-  # the digest is worth repeating there — and a child cannot be told its
-  # root's activation over a channel the guest controls, so children stamp
-  # nothing until the authority chain carries it.
-  #
-  # Best-effort by construction: an activation that cannot be resolved (a
-  # component predating release digests, an uninstalled dependency) records
-  # nothing rather than recording a partial graph, and never fails a run.
-  defp stamp_activation(record, ctx, component, opts) do
-    cond do
-      # An authority-rooted execution already resolved and verified its
-      # activation in the consent loader; re-resolving here could disagree
-      # with what was authorized.
-      stamp = opts[:activation_stamp] ->
-        case Compendium.Activation.encode_graph(stamp.activation_graph) do
-          {:ok, encoded} ->
-            %{record | activation_digest: stamp.activation_digest, activation_graph: encoded}
-
-          {:error, _} ->
-            record
-        end
-
-      # A child under an authority carries its root's digest; its graph is a
-      # subgraph of the root's and is not repeated.
-      digest = opts[:activation_digest] ->
-        %{record | activation_digest: digest}
-
-      is_nil(opts[:parent_execution_id]) ->
-        case Compendium.Activation.resolve(ctx, component) do
-          {:ok, %{digest: digest, graph: graph}} ->
-            case Compendium.Activation.encode_graph(graph) do
-              {:ok, encoded} -> %{record | activation_digest: digest, activation_graph: encoded}
-              {:error, _} -> record
-            end
-
-          {:error, _reason} ->
-            record
-        end
-
-      true ->
-        record
-    end
-  rescue
-    e ->
-      Logger.debug("[Opus.Executor] activation not recorded: #{Exception.message(e)}")
-      record
-  end
-
-  # Every stage answers with the pipeline it reached — failures included.
-  # `with` does not export its bindings to `else`, so a failure arm that
-  # named the outer pipeline masked with `preloaded_fields: %{}` and spilled
-  # this execution's vault material. Binding the pipeline in the else
-  # *pattern* is what makes that structural instead of a thing each new stage
-  # has to remember.
-  defp staged(%ExecutionPipeline{} = p, result) do
-    case result do
-      {:error, reason} -> {:error, p, reason}
-      ok -> ok
-    end
-  end
-
-  # Stage 1: capability enforcement. Every execution roots under an
-  # authority — a missing one is a caller bug, and the raise names it
-  # rather than running with ambient permissions.
-  defp stage_enforce_policy(%ExecutionPipeline{} = p, input) do
-    case p.opts[:authority] do
-      %Cyfr.Authority{} = authority ->
-        staged(p, enforce_authority(p, authority, input))
-
-      other ->
-        raise ArgumentError,
-              "execution without an authority is not a thing: #{inspect(other)}"
-    end
-  end
-
-  # Under an authority, capability was computed once at consent time and
-  # frozen into the blob: limits come from the current node, resources from
-  # the current edge — nothing is re-resolved at execution time.
-  # Static-dependency satisfaction was already proven by the loader's
-  # all-or-nothing activation resolution.
-  defp enforce_authority(%ExecutionPipeline{} = p, authority, input) do
-    limits = Cyfr.Authority.limits(authority)
-    edge = edge_resources(authority)
-
-    # An unparseable consented timeout fails the execution rather than
-    # substituting a default — a fallback here would silently run the node
-    # under a ceiling nobody consented to (mirrors Cyfr.Limits.new/1).
-    with {:ok, timeout_ms} <- node_timeout_ms(limits, p.component_ref),
-         exec_opts = [
-           component_type: p.component_type,
-           timeout_ms: timeout_ms,
-           max_memory_bytes: limits.max_memory_bytes,
-           edge: edge,
-           limits: limits
-         ],
-         {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
-         :ok <- check_authority_rate_limit(p.ctx, p.component_ref, limits),
-         :ok <- check_public_rate_buckets(p, authority, limits) do
-      Opus.Host.enforce(
-        Map.merge(
-          %{
-            ctx: p.ctx,
-            component_ref: p.component_ref,
-            component_type: p.component_type,
-            event_type: :policy_consultation,
-            decision: :allowed,
-            execution_id: p.record.id,
-            host_policy_snapshot: build_host_policy_snapshot(exec_opts)
-          },
-          authority_audit(p, authority)
-        )
-      )
-
-      {:ok, %{p | exec_opts: exec_opts, edge: edge}}
-    end
-  end
-
-  defp node_timeout_ms(limits, component_ref) do
-    case Cyfr.Limits.timeout_ms(limits) do
-      {:ok, ms} -> {:ok, ms}
-      {:error, reason} -> {:error, "invalid consented timeout for #{component_ref}: #{reason}"}
-    end
-  end
-
-  # Store runtime facts and join attribution from immutable consent rows on read.
-  defp authority_audit(%ExecutionPipeline{} = p, %Cyfr.Authority{} = authority) do
-    %{
-      consent_id: authority.consent_id,
-      activation_digest: p.opts[:activation_digest],
-      dep_ref: p.opts[:dep_ref],
-      need: p.opts[:need],
-      cursor_state: cursor_state(authority.cursor),
-      chain: authority.chain,
-      value_source: value_source(authority.resources)
-    }
-  end
-
-  defp edge_resources(%Cyfr.Authority{resources: %Cyfr.Authority.Blob.Edge{} = edge}),
-    do: edge
-
-  defp edge_resources(%Cyfr.Authority{resources: :none}), do: nil
-
-  defp cursor_state({:bound, node}), do: "bound:" <> node
-  defp cursor_state(:unbound), do: "unbound"
-  defp cursor_state(_), do: nil
-
-  defp value_source(%Cyfr.Authority.Blob.Edge{vault: %{entry_id: entry_id}}),
-    do: Emissary.MCP.VaultRef.build(entry_id)
-
-  defp value_source(_resources), do: nil
-
-  # Stage 2: Fetch WASM bytes (verified against the registry digest on the
-  # way into the cache — a warm entry needs no second hash), then verify
-  # the signature.
-  defp stage_fetch_and_verify(%ExecutionPipeline{} = p) do
-    staged(
-      p,
-      with {:ok, wasm_bytes, component_digest} <-
-             fetch_component_bytes(p.ctx, p.component, p.reference),
-           host_policy = build_host_policy_snapshot(p.exec_opts),
-           record = %{p.record | component_digest: component_digest, host_policy: host_policy},
-           :ok <- verify_attestation(p) do
-        {:ok, %{p | record: record, component_digest: component_digest, host_policy: host_policy},
-         wasm_bytes}
-      end
-    )
-  end
-
-  # Stage 3: Write execution record and emit telemetry
-  defp stage_record_start(%ExecutionPipeline{} = p) do
-    staged(
-      p,
-      with :ok <- Opus.Host.record_start(p.record, admission_opts(p)) do
-        :atomics.put(p.started_written, 1, 1)
-        Telemetry.execute_start(p.record)
-        {:ok, p}
-      end
-    )
-  end
-
-  # The barriers admission performs inside its own transaction: the hold
-  # row a loop-dispatched child's charge names, the step on its
-  # generation, the schedule occurrence a scheduled root starts.
-  defp admission_opts(%ExecutionPipeline{} = p),
-    do: Keyword.take(p.opts, [:charge, :step, :occurrence_id])
-
-  # Stage 4: resolve credentials. The callee-keyed grant plane is never
-  # consulted: credentials come only from the current edge's vault
-  # resource, projected by the vault reader. No vault edge means no
-  # secrets — an ungranted read denies exactly as an empty resolution. A
-  # selection the loader could not resolve is a declared need unmet: the
-  # profile it names binds nothing usable yet.
-  defp stage_resolve_vault_fields(%ExecutionPipeline{} = p) do
-    staged(p, resolve_vault_fields(p))
-  end
-
-  defp resolve_vault_fields(%ExecutionPipeline{} = p) do
-    case p.opts[:authority] do
-      %Cyfr.Authority{resources: %Cyfr.Authority.Blob.Edge{vault: %{via: via}}} = authority ->
-        {:error,
-         {:setup_required,
-          %{
-            profile_id: authority.profile_id,
-            node_ref: p.component_ref,
-            need: p.opts[:need] || "",
-            reason: vault_setup_reason({:selection_unbound, via.label})
-          }}}
-
-      %Cyfr.Authority{resources: %Cyfr.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
-        if Sanctum.Consent.Loader.pinned_intact?(p.ctx, authority) do
-          case Opus.Host.unseal(p.ctx, vault) do
-            {:ok, secrets} ->
-              {:ok, %{p | preloaded_fields: secrets}}
-
-            {:error, reason} ->
-              # A consented vault edge that cannot produce material is a
-              # declared need unmet at run: a typed setup_required, so the
-              # error envelope and the parent-stream setup event carry the
-              # structural cause instead of flattened prose.
-              {:error,
-               {:setup_required,
-                %{
-                  profile_id: authority.profile_id,
-                  node_ref: p.component_ref,
-                  need: p.opts[:need] || "",
-                  reason: vault_setup_reason(reason)
-                }}}
+        outcome =
+          try do
+            execute_wasm(admitted.wasm_bytes, input, admitted.runtime, opts, attempt_ref)
+          rescue
+            e -> {:error, Close.exception_message(e, __STACKTRACE__)}
+          after
+            Process.demonitor(attempt_ref, [:flush])
           end
-        else
-          {:error,
-           {:setup_required,
-            %{
-              profile_id: authority.profile_id,
-              node_ref: p.component_ref,
-              need: p.opts[:need] || "",
-              reason: vault_setup_reason(:consent_moved)
-            }}}
-        end
 
-      _ ->
-        {:ok, %{p | preloaded_fields: %{}}}
-    end
-  end
+        closed =
+          case outcome do
+            {:ok, {output, metadata}} -> Attempt.complete(id, admitted.close, output, metadata)
+            {:error, reason} -> Attempt.fail(id, admitted.close, reason)
+          end
 
-  # Stage 6: Execute WASM with all accumulated state
-  defp stage_execute(%ExecutionPipeline{} = p, wasm_bytes, input) do
-    digest = p.component[:digest] || p.component["digest"]
-
-    exec_opts_final =
-      Keyword.merge(p.exec_opts,
-        preloaded_fields: p.preloaded_fields,
-        component_ref: p.component_ref,
-        ctx: p.ctx,
-        execution_id: p.record.id,
-        execution_attempt: p.record.attempt,
-        root_execution_id: p.opts[:root_execution_id],
-        reference: p.reference,
-        digest: digest,
-        # Resolver-supplied transition inputs for this node's own onward
-        # invocations — from the manifest the host fetched, never from the
-        # guest.
-        declared_needs: declared_needs(p),
-        activation_digest: p.opts[:activation_digest] || p.record.activation_digest
-      )
-
-    staged(
-      p,
-      with {:ok, {output, exec_metadata}} <-
-             execute_wasm(wasm_bytes, input, exec_opts_final, p.opts) do
-        {:ok, p, output, exec_metadata}
-      end
-    )
-  end
-
-  # ===========================================================================
-  # Finalization
-  # ===========================================================================
-
-  defp finalize_execution(%ExecutionPipeline{} = p, output, exec_metadata) do
-    masked_output = Cyfr.SecretMasker.mask(output, ExecutionPipeline.secrets(p))
-
-    with :ok <- check_application_error(p, masked_output),
-         :ok <- check_response_size(p, masked_output) do
-      completed_record = Record.complete(p.record, masked_output)
-      write_result = Opus.Host.record_complete(completed_record)
-      if write_result == :ok, do: Cyfr.Execution.StepSpans.completed(p.opts[:step_spans])
-
-      audit_error =
-        case write_result do
-          :ok ->
-            nil
-
-          {:error, :not_running} ->
-            # A cancel won the race for the row: not an audit fault, and
-            # handled below.
-            nil
-
-          {:error, {:result_lost, reason}} ->
-            # The row reads failed (result_lost): the run happened and its
-            # result was answered, but nothing retained it.
-            inspect(reason)
-
-          {:error, reason} ->
-            Logger.error(
-              "[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
-                "Audit trail is incomplete — this execution will appear as 'running' in logs."
-            )
-
-            :telemetry.execute(
-              [:cyfr, :opus, :audit_error],
-              %{system_time: System.system_time()},
-              # The reason travels as DATA, not as `inspect(reason)`.
-              # `Arca.AuditHandler` sanitizes this metadata by key on its way
-              # to the sinks, and key-based redaction cannot see inside a
-              # string — so flattening it here handed a credential-bearing
-              # reason to an operator's sink verbatim. The Console sink
-              # inspects what it renders, so nothing downstream needs it
-              # pre-flattened.
-              %{execution_id: completed_record.id, phase: :completed, reason: reason}
-            )
-
-            inspect(reason)
-        end
-
-      Telemetry.execute_stop(completed_record, exec_metadata)
-
-      # The terminal event is the row's, published by the record's write
-      # in the order the rows were numbered: nothing is pushed here.
-      case write_result do
-        {:error, :not_running} ->
-          # The row already reads `cancelled` and its terminal event is on
-          # the wire.
-          Logger.info(
-            "[Opus.Executor] execution #{completed_record.id} finished after cancel; " <>
-              "the cancelled row stands"
-          )
-
-        _ ->
-          :ok
-      end
-
-      metadata = %{
-        execution_id: completed_record.id,
-        duration_ms: completed_record.duration_ms,
-        component_type: p.component_type,
-        component_digest: p.component_digest,
-        user_id: p.ctx.user_id,
-        reference: p.reference,
-        policy_applied: p.host_policy,
-        signature_verified: p.component["signature_verified"] || false
-      }
-
-      metadata =
-        if completed_record.resolved_from,
-          do: Map.put(metadata, :resolved_from, completed_record.resolved_from),
-          else: metadata
-
-      metadata =
-        if completed_record.resolver_digest,
-          do: Map.put(metadata, :resolver_digest, completed_record.resolver_digest),
-          else: metadata
-
-      # The masked output is what leaves this module, not just what is
-      # recorded: the caller may be an MCP client, a parent formula (which
-      # hands it straight back into guest WASM), a tincture response or a
-      # webhook log. Redacting only the audit row would leave the credential
-      # readable everywhere a human or another component actually looks —
-      # and a public tincture's caller is anonymous by design.
-      result = %{
-        status: :completed,
-        output: masked_output,
-        metadata: metadata
-      }
-
-      result =
-        if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
-
-      # Successful parents leave asynchronous children running. Failure
-      # and cancellation cascade; lease expiry reaps abandoned children.
-      {:ok, result}
-    end
-  end
-
-  defp check_application_error(p, masked_output) do
-    case detect_application_error(masked_output) do
-      nil -> :ok
-      error -> handle_failure(p, error)
-    end
-  end
-
-  defp check_response_size(p, masked_output) do
-    # Limits ride exec_opts from enforce_authority; their absence here means
-    # the pipeline was bypassed — refuse rather than substitute a ceiling.
-    %Cyfr.Limits{max_response_size: max_response} = Keyword.fetch!(p.exec_opts, :limits)
-
-    case Jason.encode(masked_output) do
-      {:ok, output_json} ->
-        if byte_size(output_json) > max_response do
-          handle_failure(
-            p,
-            "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)"
-          )
-        else
-          :ok
-        end
-
-      {:error, _} ->
-        handle_failure(p, "Output could not be serialized to JSON")
-    end
-  end
-
-  # Detect application-level errors in component output.
-  # Returns error message string if output indicates failure, nil otherwise.
-  defp detect_application_error(output) when is_map(output) do
-    case output do
-      %{"error" => %{"message" => msg}} when is_binary(msg) -> msg
-      %{"error" => %{"message" => msg}} -> inspect(msg)
-      %{"error" => msg} when is_binary(msg) -> msg
-      %{"error" => err} when is_map(err) -> inspect(err)
-      _ -> nil
-    end
-  end
-
-  defp detect_application_error(_), do: nil
-
-  # ===========================================================================
-  # Private Helpers
-  # ===========================================================================
-
-  # Fetch WASM bytes from the Compendium blob store by the registry digest.
-  # Bytes are content-addressed and immutable; an entry is cached (10 min)
-  # only after its sha256 matched the registry, so a hit is verified by
-  # construction and is not hashed again. Returns `{:ok, bytes, digest}`.
-  defp fetch_component_bytes(ctx, component, reference) do
-    digest = component[:digest] || component["digest"]
-
-    Logger.debug(
-      "[fetch_component_bytes] digest=#{inspect(digest)}, component_keys=#{inspect(Map.keys(component))}"
-    )
-
-    cache_key = Arca.Cache.Keys.wasm_bytes(digest)
-
-    case digest && Arca.Cache.get(cache_key) do
-      {:ok, bytes} ->
-        emit_fetch(reference, false)
-        {:ok, bytes, digest}
-
-      _ ->
-        case Compendium.Component.get_blob(ctx, digest) do
-          {:ok, bytes} ->
-            actual = compute_digest(bytes)
-            emit_fetch(reference, true)
-
-            case verify_integrity(component, actual, reference) do
-              :ok ->
-                Arca.Cache.put(cache_key, bytes, :timer.minutes(10))
-                {:ok, bytes, actual}
-
-              {:error, _} = error ->
-                error
-            end
-
-          {:error, :blob_not_found} ->
-            {:error, "Failed to fetch component bytes: blob not found for #{digest}"}
-
-          {:error, reason} ->
-            {:error, "Failed to fetch component bytes: #{inspect(reason)}"}
+        # An attempt that ended before it closed took its masking set with
+        # it; the row is closed with a message that carries nothing the
+        # guest produced.
+        case closed do
+          :lost -> Close.lost(admitted.close)
+          {:ok, result} -> {:ok, result}
+          {:error, reason} -> {:error, reason}
         end
     end
   end
 
-  defp emit_fetch(reference, hashed?) do
-    :telemetry.execute([:cyfr, :opus, :fetch], %{count: 1}, %{
-      reference: reference,
-      hashed: hashed?
-    })
-  end
-
-  # Verify that fetched bytes match the digest from the registry.
-  defp verify_integrity(component, actual_digest, reference) do
-    expected_digest = component[:digest] || component["digest"]
-
-    cond do
-      is_nil(expected_digest) ->
-        # The registry column is NOT NULL, so a missing digest here means the
-        # cached component map lost its shape or bypassed registration — bytes
-        # without a pinned digest never reach the runtime.
-        {:error,
-         "No registry digest for #{reference} — refusing to execute unverified bytes. " <>
-           "Re-register the component."}
-
-      # Cyfr.Digest is the only producer, so both sides carry the same
-      # sha256:-prefixed spelling — one comparison, no format guessing.
-      actual_digest == expected_digest ->
-        :ok
-
-      true ->
-        {:error,
-         "Integrity check failed for #{reference}. " <>
-           "Expected: #{expected_digest}, Got: #{actual_digest}. " <>
-           "Component may have been modified. Re-register with `cyfr register`."}
-    end
-  end
-
-  # Validate input size against the node's limits.
-  # Returns {:ok, encoded_json} on success so callers can reuse the encoded form.
-  defp validate_input_size(input, exec_opts, ctx, component_ref) do
-    # Same posture as check_response_size: no limits, no execution.
-    %Cyfr.Limits{max_request_size: max_size} = Keyword.fetch!(exec_opts, :limits)
-
-    case Jason.encode(input) do
-      {:ok, input_json} ->
-        size = byte_size(input_json)
-
-        if size > max_size do
-          Opus.Host.enforce(%{
-            ctx: ctx,
-            component_ref: component_ref,
-            event_type: :request_size,
-            decision: :denied,
-            decision_reason: "input size #{size} bytes exceeds maximum #{max_size} bytes"
-          })
-
-          {:error, "Input size (#{size} bytes) exceeds maximum (#{max_size} bytes)"}
-        else
-          {:ok, input_json}
-        end
-
-      {:error, reason} ->
-        {:error, "Input encoding failed: #{inspect(reason)}. Input must be JSON-serializable."}
-    end
-  end
-
-  # Public profiles enforce both buckets: per caller IP for fairness, and
-  # per (profile, node) so an address-hopping crowd cannot multiply the
-  # credential and spend exposure. The transport per-IP plug stays beneath
-  # both. Owner profiles use the ordinary node bucket alone.
-  defp check_public_rate_buckets(%ExecutionPipeline{} = p, authority, limits) do
-    if authority.profile_kind == :public do
-      node = p.component_ref
-      ip = p.opts[:client_ip] || "unknown"
-      profile_bucket = "pub:#{authority.profile_id}:#{node}"
-      ip_bucket = "pub:#{authority.profile_id}:#{node}:#{ip}"
-
-      with :ok <- check_authority_rate_limit(p.ctx, profile_bucket, limits) do
-        check_authority_rate_limit(p.ctx, ip_bucket, limits)
-      end
-    else
-      :ok
-    end
-  end
-
-  # The authority variant never re-resolves: the blob's node limits are the
-  # policy. The limiter keys on {athanor, ref} either way, so buckets are
-  # continuous across the cutover.
-  defp check_authority_rate_limit(ctx, component_ref, %Cyfr.Limits{} = limits) do
-    case check_rate_limit(ctx, component_ref, limits) do
-      {:ok, _remaining} ->
-        :ok
-
-      {:error, :rate_limited, retry_after} ->
-        {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
-
-      {:error, reason} ->
-        {:error, "Rate limit check failed for #{component_ref}: #{inspect(reason)}."}
-    end
-  end
-
-  # The rate-limit chokepoint every authority execution goes through
-  # (node bucket and both public-profile buckets). Buckets key on the
-  # {athanor, ref} pair — a not-yet-resolved athanor is rejected by the
-  # limiter as :missing_tenant, and members of an athanor share the budget.
-  # A dead or
-  # unreachable limiter fails CLOSED — a configured limit must be
-  # enforceable, so unavailability denies rather than silently allowing
-  # unbounded requests. Every denial is audited here, after the try/catch,
-  # keeping the audit write's own failures out of the fail-closed handling.
-  defp check_rate_limit(ctx, component_ref, %Cyfr.Limits{} = limits) do
-    result =
-      try do
-        Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, %{
-          rate_limit: limits.rate_limit
-        })
-      catch
-        :exit, reason ->
-          Logger.error(
-            "[Opus.Executor] Cyfr.Execution.Rates unavailable (#{inspect(reason)}) — " <>
-              "failing CLOSED (denying) for #{component_ref}."
-          )
-
-          {:error, :rate_limited}
-      end
-
-    case result do
-      {:error, :rate_limited, retry_ms} ->
-        record_rate_limit_denial(
-          ctx,
-          component_ref,
-          "rate limit exceeded (retry in #{retry_ms}ms)"
-        )
-
-      {:error, :rate_limited} ->
-        record_rate_limit_denial(ctx, component_ref, "rate limiter unavailable (fail closed)")
-
-      _ ->
-        :ok
-    end
-
-    result
-  end
-
-  defp record_rate_limit_denial(ctx, component_ref, reason) do
-    Opus.Host.enforce(%{
-      ctx: ctx,
-      component_ref: component_ref,
-      event_type: :rate_limit,
-      decision: :denied,
-      decision_reason: reason
-    })
-  end
-
-  defp parse_component_type(type) when is_atom(type) and not is_nil(type) do
-    if Opus.ComponentType.valid?(type) do
-      {:ok, type}
-    else
-      {:error,
-       "Invalid component type: #{inspect(type)}. Must be one of: catalyst, reagent, formula"}
-    end
-  end
-
-  defp parse_component_type(type) when is_binary(type) do
-    Opus.ComponentType.parse(type)
-  end
-
-  defp compute_digest(wasm_bytes) when is_binary(wasm_bytes) do
-    Cyfr.Digest.sha256(wasm_bytes)
-  end
-
-  # Check recorded attestations for every execution. The signed-pulls
-  # setting controls unsigned OCI admission. Signer mismatches and
-  # unclassifiable sources always refuse.
-  defp verify_attestation(%ExecutionPipeline{} = p) do
-    {identity, issuer} = pinned_signer(p.opts[:verify])
-
-    case Attestation.attestation(p.component) do
-      :unsigned when not is_nil(identity) or not is_nil(issuer) ->
-        {:error,
-         "Signature verification failed: a signer was pinned for #{p.reference}, but the " <>
-           "component was pulled without signature verification"}
-
-      :unsigned ->
-        if Cyfr.RuntimeConfig.require_signed_pulls?() do
-          {:error,
-           "Signature verification failed: #{p.reference} was pulled without signature " <>
-             "verification and this server requires signed pulls (CYFR_REQUIRE_SIGNED_PULLS)"}
-        else
-          note_unsigned_execution(p)
-          :ok
-        end
-
-      attested when attested in [:trusted, :signed] ->
-        case Attestation.verify(p.component, identity, issuer) do
-          :ok -> :ok
-          {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
-        end
-
-      {:unknown_source, _} ->
-        case Attestation.verify(p.component, identity, issuer) do
-          :ok -> :ok
-          {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
-        end
-    end
-  end
-
-  defp pinned_signer(verify) when is_map(verify) do
-    {verify["identity"] || verify[:identity], verify["issuer"] || verify[:issuer]}
-  end
-
-  defp pinned_signer(_), do: {nil, nil}
-
-  # Running unsigned code is a posture, not a non-event: the operator chose
-  # it, and the choice should be visible in the same places a refusal would
-  # have been.
-  defp note_unsigned_execution(%ExecutionPipeline{} = p) do
-    Logger.warning(
-      "[Opus.Executor] executing #{p.reference} with no verified signature " <>
-        "(CYFR_REQUIRE_SIGNED_PULLS is off)"
-    )
-
-    :telemetry.execute(
-      [:cyfr, :opus, :execution, :unsigned],
-      %{count: 1},
-      %{reference: p.reference, athanor_id: p.ctx.athanor_id}
-    )
-
-    :ok
-  end
-
-  defp execute_wasm(wasm_bytes, input, exec_opts, opts) do
+  defp execute_wasm(wasm_bytes, input, exec_opts, opts, attempt_ref) do
     # What this execution is to the semaphore: a hop under a parent takes a
     # child slot (never tenant-capped, a reserve of its own); a schedule or
     # webhook waits in the background; everything else is a root someone
@@ -1016,8 +120,7 @@ defmodule Opus.Executor do
 
     # An execution that declared it must run under an authority may never fall
     # back to ambient permissions. Checked before the semaphore so nothing is
-    # consumed; the pipeline's rescue converts this into a failed execution
-    # with the message intact.
+    # consumed; the raise fails the execution with its message intact.
     if Keyword.get(opts, :authority_required, Keyword.get(exec_opts, :authority_required, true)) and
          is_nil(Keyword.get(opts, :authority, Keyword.get(exec_opts, :authority))) do
       raise ArgumentError,
@@ -1025,7 +128,7 @@ defmodule Opus.Executor do
               "#{inspect(Keyword.get(exec_opts, :reference))})"
     end
 
-    # The pipeline always derives timeout_ms from the consented limits; a
+    # Admission always derives timeout_ms from the consented limits; a
     # missing value means an opts filter dropped it — refuse rather than
     # substitute a ceiling nobody consented to.
     timeout_ms =
@@ -1045,9 +148,9 @@ defmodule Opus.Executor do
         try do
           runtime_opts = runtime_opts(exec_opts, opts)
 
-          # The plane flips exactly at the WASM boundary: pipeline stages ran
-          # with the caller's external-plane context, but a context captured
-          # into guest closures must never authorize an external-plane call
+          # The plane flips exactly at the WASM boundary: admission ran with
+          # the caller's external-plane context, but a context captured into
+          # guest closures must never authorize an external-plane call
           # again. One-way; there is no inverse.
           runtime_opts =
             with auth when not is_nil(auth) <- runtime_opts[:authority],
@@ -1057,7 +160,7 @@ defmodule Opus.Executor do
               _ -> runtime_opts
             end
 
-          execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
+          execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms, attempt_ref)
         after
           Cyfr.Execution.Slot.release(token)
         end
@@ -1093,16 +196,16 @@ defmodule Opus.Executor do
     :declared_needs,
     :activation_digest,
     # The caller's latency clock (`Cyfr.Execution.StepSpans`), marked when
-    # the guest starts and when it streams.
+    # the guest starts.
     :step_spans
   ]
 
   @doc false
-  # The options the runtime runs on. Caller opts fill in what the pipeline did
+  # The options the runtime runs on. Caller opts fill in what admission did
   # not settle; they never overwrite what it did — for any key, so `:ctx`
   # (the tenant every host import scopes on), `:preloaded_fields` (the
   # unsealed vault map), `:digest` (the compiled-component cache key) and
-  # `:execution_attempt` stay the pipeline's.
+  # `:execution_attempt` stay admission's.
   @spec runtime_opts(keyword(), keyword()) :: keyword()
   def runtime_opts(exec_opts, opts) do
     opts
@@ -1132,24 +235,11 @@ defmodule Opus.Executor do
 
   defp execution_id(exec_opts), do: Keyword.get(exec_opts, :execution_id)
 
-  # The needs a manifest declares name the component's own dependency roles
-  # — the caller's vocabulary, never the callee's. Sorted for stability.
-  defp declared_needs(%ExecutionPipeline{} = p) do
-    if p.opts[:authority] do
-      p.component[:manifest]
-      |> Kernel.||(p.component["manifest"])
-      |> Cyfr.Manifest.decode()
-      |> Map.get("needs", %{})
-      |> Map.keys()
-      |> Enum.sort()
-    end
-  end
-
   # Execute WASM with wall-clock timeout enforcement.
   # This ensures long-running or stuck executions are terminated.
   # Uses spawn-based execution to avoid crashes propagating to caller.
   # Returns {:ok, {output, metadata}} or {:error, reason}
-  defp execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms) do
+  defp execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms, attempt_ref) do
     caller = self()
     ref = make_ref()
     start_time = System.monotonic_time(:millisecond)
@@ -1193,10 +283,9 @@ defmodule Opus.Executor do
     # process does not: the runner traps exits (just above, so a Wasmex crash
     # is a message rather than a death), and a link-propagated exit is
     # trappable whatever its reason — `:killed` included. Only the direct
-    # `Process.exit(runner, :kill)` in `kill_running_process/1` is untrappable.
-    # Without this the guest kept running after a cancel: still fetching,
-    # still writing, still being handed OAuth tokens, with its slot released
-    # and its row already reading cancelled.
+    # `Process.exit(runner, :kill)` in `kill_running_process/1` is
+    # untrappable, and a runner left alive keeps fetching, writing and
+    # asking for OAuth tokens after its row reads cancelled.
     update_registry_meta(runtime_opts, &Map.put(&1, :runner_pid, pid))
 
     # Collect cleanup_refs sent by Runtime early in setup (before WASM execution starts).
@@ -1210,6 +299,7 @@ defmodule Opus.Executor do
         {:cleanup_refs, ^ref, refs} -> {:refs, refs}
         {^ref, {:ok, output, metadata}} -> {:early, {:ok, {output, metadata}}}
         {^ref, {:error, _} = error} -> {:early, error}
+        {:DOWN, ^attempt_ref, :process, _, _} -> :attempt_ended
       after
         timeout_ms -> nil
       end
@@ -1238,25 +328,27 @@ defmodule Opus.Executor do
     end
 
     remaining_ms = max(timeout_ms - (System.monotonic_time(:millisecond) - start_time), 0)
+    watch = lease_watch(runtime_opts)
 
-    with {:early, result} <- handshake do
-      result
-    else
-      # If we consumed the full timeout waiting for cleanup_refs, kill immediately
+    case handshake do
+      {:early, result} ->
+        result
+
+      # The full timeout passed waiting for cleanup_refs: kill at once.
       nil ->
         # The kill frees the BEAM process, not the component call's native
         # thread (no epoch interruption) — the semaphore records the
         # liability first, acknowledged, so the tenant's unreaped count
         # gates its next acquisition whatever order the release lands in.
-        charge_unreaped(tenant_of(runtime_opts), Keyword.get(runtime_opts, :execution_id))
-        # Unlink first so the :killed EXIT signal doesn't propagate back and
-        # terminate this process before handle_failure can write the DB record.
-        Process.unlink(pid)
-        Process.exit(pid, :kill)
+        kill_unreaped(pid, nil, watch)
         {:error, "Execution timeout after #{timeout_ms}ms"}
 
+      :attempt_ended ->
+        kill_unreaped(pid, nil, watch)
+        {:error, "Execution attempt ended"}
+
       {:refs, _} ->
-        await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, lease_watch(runtime_opts))
+        await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, watch, attempt_ref)
     end
   end
 
@@ -1269,7 +361,7 @@ defmodule Opus.Executor do
   # still good.
   @lease_tick_ms 60_000
 
-  # What `await_result/6` watches between ticks: the row, the attempt that
+  # What `await_result/7` watches between ticks: the row, the attempt that
   # owns it, the tenant to charge an unreaped kill to, and the expiry the
   # attempt last renewed to.
   defp lease_watch(runtime_opts) do
@@ -1294,7 +386,9 @@ defmodule Opus.Executor do
     end
   end
 
-  defp await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, watch) do
+  # The run's attempt ending stops the runner as a lost lease does: nothing
+  # the guest does after it can be masked, emitted or closed.
+  defp await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, watch, attempt_ref) do
     wait_ms = min(remaining_ms, @lease_tick_ms)
 
     receive do
@@ -1304,6 +398,10 @@ defmodule Opus.Executor do
 
       {^ref, {:error, _} = error} ->
         error
+
+      {:DOWN, ^attempt_ref, :process, _, _} ->
+        kill_unreaped(pid, cleanup_refs, watch)
+        {:error, "Execution attempt ended"}
     after
       wait_ms ->
         cond do
@@ -1312,12 +410,14 @@ defmodule Opus.Executor do
             {:error, "Execution timeout after #{timeout_ms}ms"}
 
           is_nil(watch) ->
-            await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, watch)
+            next = remaining_ms - wait_ms
+            await_result(ref, pid, cleanup_refs, next, timeout_ms, watch, attempt_ref)
 
           true ->
             case renew_watch(watch) do
               {:ok, watch} ->
-                await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, watch)
+                next = remaining_ms - wait_ms
+                await_result(ref, pid, cleanup_refs, next, timeout_ms, watch, attempt_ref)
 
               :lapsed ->
                 kill_unreaped(pid, cleanup_refs, watch)
@@ -1356,11 +456,8 @@ defmodule Opus.Executor do
   # A kill that leaves the component call's native thread running (no
   # epoch interruption). The liability is recorded and acknowledged
   # BEFORE the kill, then the resources the dead process cannot release
-  # are cleaned up. The dispensed OAuth tokens are NOT drained here: the
-  # error travels to `handle_failure/2`, which masks it with
-  # `ExecutionPipeline.secrets/1` — and that drains the tracker.
-  # Collecting first threw the tokens away (collect is collect-and-delete)
-  # and left the masker with an empty set for the rest of the execution.
+  # are cleaned up. The tokens dispensed to the run stay in its attempt's
+  # masking set, which masks the error when the attempt closes the run.
   defp kill_unreaped(pid, cleanup_refs, watch) do
     charge_unreaped(watch && watch.tenant, watch && watch.execution_id)
     Process.unlink(pid)
@@ -1375,113 +472,14 @@ defmodule Opus.Executor do
     :ok
   end
 
-  # Emit a setup_required event on the parent execution's event stream
-  # when a sub-execution fails due to a setup issue. This allows Prism/SSE
-  # subscribers to see it even if FormulaHandler can't detect it.
-  defp maybe_emit_setup_event(ctx, reason, opts) do
-    target_id = opts[:root_execution_id] || opts[:parent_execution_id]
-
-    if target_id do
-      case Opus.Remediation.analyze(reason) do
-        {:setup_required, remediation} ->
-          _ =
-            Cyfr.Execution.Events.push(
-              target_id,
-              %{
-                "kind" => "setup_required",
-                "component_ref" => remediation["component_ref"],
-                "issues" => remediation["issues"],
-                "setup_command" => remediation["setup_command"],
-                "message" => failure_message(reason)
-              },
-              ctx,
-              origin: "host"
-            )
-
-        :not_setup_error ->
-          :ok
-      end
-    end
-  end
-
-  defp failure_message({:setup_required, %{node_ref: node_ref, reason: reason}}),
-    do: "Setup required for #{node_ref}: #{vault_setup_reason(reason)}"
-
-  defp failure_message(reason), do: "Execution failed: #{client_reason(reason)}"
-
-  # The typed payload crosses the JSON error envelope, so its reason must
-  # be JSON-encodable — vault loader tuples are flattened here.
-  defp vault_setup_reason({:entry_unavailable, status}), do: "vault_entry_#{status}"
-  defp vault_setup_reason({:selection_unbound, _label}), do: "vault_selection_unbound"
-  defp vault_setup_reason(:consent_moved), do: "consent_moved"
-  defp vault_setup_reason(reason) when is_atom(reason), do: reason
-  defp vault_setup_reason(reason), do: inspect(reason)
-
-  # Mask failure messages with dispensed secrets before recording or
-  # broadcasting them. secrets/1 also drains the OAuth token tracker.
-  defp handle_failure(%ExecutionPipeline{} = p, error_msg) do
-    record = p.record
-    error_msg = Cyfr.SecretMasker.mask(error_msg, ExecutionPipeline.secrets(p))
-    failed_record = Record.fail(record, error_msg)
-
-    if :atomics.get(p.started_written, 1) == 0 do
-      case Opus.Host.record_start(record, admission_opts(p)) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.error(
-            "[Opus.Executor] Failed to write started record #{record.id}: #{inspect(reason)}. " <>
-              "Audit trail is incomplete — this execution will not appear in logs."
-          )
-      end
-
-      Telemetry.execute_start(record)
-    end
-
-    write_result = Opus.Host.record_failed(failed_record)
-
-    case write_result do
-      :ok ->
-        :ok
-
-      {:error, :not_running} ->
-        # A cancel won the race: the row reads `cancelled` and its terminal
-        # event is on the wire — handled below.
-        :ok
-
-      {:error, reason} ->
-        Logger.error(
-          "[Opus.Executor] Failed to write failed record #{record.id}: #{inspect(reason)}. " <>
-            "Audit trail is incomplete — this execution will appear as 'running' in logs."
-        )
-    end
-
-    Telemetry.execute_exception(failed_record, error_msg)
-
-    case write_result do
-      {:error, :not_running} ->
-        Logger.info(
-          "[Opus.Executor] execution #{record.id} failed after cancel; the cancelled row stands"
-        )
-
-      _ ->
-        # The terminal event is the row's, published by the record's write.
-        :ok
-    end
-
-    Cascade.fail_children(record)
-
-    {:error, error_msg}
-  end
-
   @doc """
   Cancel a running execution by killing its process.
 
   Looks up the execution's entry in `Cyfr.Execution.Registry` and kills what it
   names: the runner that is actually inside the component call, then the
   process driving it, then its AsyncTracker so spawned child tasks die too.
-  The semaphore auto-releases via its :DOWN monitor.
+  The semaphore auto-releases via its :DOWN monitor, and the run's attempt
+  stops when the driving process does.
 
   The runner is killed BY NAME rather than left to the link: it traps exits
   (so a Wasmex crash is a message, not a death), and a link-propagated exit
@@ -1570,8 +568,7 @@ defmodule Opus.Executor do
 
         # Same for an in-flight streaming fetch: the streaming task is
         # unlinked from the Wasmex process, so killing the runner does not
-        # stop it. The timeout path has always done this; cancel is the same
-        # kill and owes the same cleanup.
+        # stop it.
         if stream_exec_ref, do: Opus.HttpStreamHandler.cleanup_registry(stream_exec_ref)
 
         :ok
@@ -1587,29 +584,5 @@ defmodule Opus.Executor do
       %{duration: 0, system_time: System.system_time()},
       %{execution_id: execution_id, user_id: ctx.user_id, error: "cancelled", status: :cancelled}
     )
-  end
-
-  # Serialize the enforced edge + limits for forensic replay. The key names
-  # are stable serialization labels — audit consumers and tests pin them.
-  # Snapshot of the host policy enforced at execution time, for forensic
-  # replay of what an execution was allowed to do.
-  defp build_host_policy_snapshot(exec_opts) do
-    case Keyword.get(exec_opts, :limits) do
-      nil ->
-        nil
-
-      %Cyfr.Limits{} = limits ->
-        edge = Keyword.get(exec_opts, :edge)
-
-        %{
-          allowed_domains: Opus.EdgeGuard.domains(edge),
-          rate_limit: limits.rate_limit,
-          max_memory_bytes: limits.max_memory_bytes,
-          timeout: limits.timeout,
-          allowed_tools: Opus.EdgeGuard.tools(edge),
-          allowed_paths: Opus.EdgeGuard.paths(edge),
-          allowed_actions: Opus.EdgeGuard.actions(edge)
-        }
-    end
   end
 end

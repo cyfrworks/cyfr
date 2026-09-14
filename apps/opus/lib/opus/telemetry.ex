@@ -4,11 +4,11 @@
 defmodule Opus.Telemetry do
   @moduledoc """
   The operational telemetry of a running component: its storage and tool
-  calls, its formula concurrency and its stream events.
+  calls and its formula concurrency.
 
   These events are for operator metrics (`Cyfr.Telemetry.Catalog`); the
-  audit-bearing lifecycle of an execution — start, stop, exception — is
-  `Cyfr.Execution.Telemetry`'s.
+  audit-bearing lifecycle of an execution — start, stop, exception — and
+  the events a guest pushes to its stream are `Cyfr.Execution.Telemetry`'s.
 
   ## Events
 
@@ -17,7 +17,6 @@ defmodule Opus.Telemetry do
   - `[:cyfr, :opus, :formula, :await_all]` - Emitted when batch await completes (with count, timed_out count)
   - `[:cyfr, :opus, :formula, :await_any]` - Emitted when race completes (with winner task_id)
   - `[:cyfr, :opus, :formula, :cancel]` - Emitted when a spawned task is cancelled
-  - `[:cyfr, :opus, :emit]` - Emitted when a guest's `emit` pushes an event to an execution's stream
   - `[:cyfr, :opus, :mcp_tool, :call]` - Emitted when a formula calls an MCP tool via host function
   - `[:cyfr, :opus, :storage, :call]` - Emitted when a catalyst calls a storage operation via host function
   """
@@ -138,19 +137,6 @@ defmodule Opus.Telemetry do
         parent_execution_id: parent_execution_id,
         task_id: task_id
       }
-    )
-  end
-
-  @doc """
-  Emit `[:cyfr, :opus, :emit]` when a guest's `emit` pushes an event to
-  the stream of `execution_id`.
-  """
-  @spec emit(String.t(), String.t()) :: :ok
-  def emit(execution_id, sequence) do
-    :telemetry.execute(
-      [:cyfr, :opus, :emit],
-      %{system_time: System.system_time(), sequence: sequence},
-      %{execution_id: execution_id}
     )
   end
 

@@ -90,9 +90,8 @@ defmodule Opus.AuthorityPlumbingTest do
   test "a run without an authority fails closed, executing nothing", %{ctx: ctx} do
     attach_witness()
 
-    # The enforcement stage raises for a missing authority; the pipeline
-    # rescue converts that into a failed execution that never reached the
-    # runtime.
+    # Admission raises for a missing authority, and the raise closes the
+    # run failed before it reaches the runtime.
     assert {:error, message} =
              Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
 

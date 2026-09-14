@@ -105,6 +105,29 @@ defmodule Cyfr.GenServerCatchallTest do
     end
   end
 
+  describe "an execution's attempt" do
+    # One unnamed attempt per open execution, registered under its id, so
+    # it is probed on an instance of its own.
+    for message <- [@unexpected_msg, {:random, "payload"}] do
+      test "survives #{inspect(message)} and logs it" do
+        {:ok, pid} =
+          Cyfr.Execution.Attempt.open(
+            execution_id: "exec_catchall_#{System.unique_integer([:positive])}",
+            ctx: Sanctum.TestContext.local(),
+            authority: Cyfr.Authority.zero(),
+            component_ref: "catalyst:local.catchall:0.1.0"
+          )
+
+        assert capture_log(fn ->
+                 send(pid, unquote(Macro.escape(message)))
+                 :sys.get_state(pid)
+               end) =~ "unexpected message"
+
+        assert Process.alive?(pid)
+      end
+    end
+  end
+
   describe "the roster derives from the adopters" do
     # Static analysis over every lib file, like its sibling seam tests.
     # They read the whole tree concurrently under a full-suite run and the

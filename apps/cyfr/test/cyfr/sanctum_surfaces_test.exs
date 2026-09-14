@@ -55,14 +55,19 @@ defmodule Cyfr.SanctumSurfacesTest do
     # guard. Cyfr.Execution.Admission loads a root's authority from its
     # profile's consent (Sanctum.Consent) and steps a child's through the
     # transition relation (Sanctum.Authority); Cyfr.Execution.Charge gives
-    # a refused charge's slot back to the invoke-budget counter.
+    # a refused charge's slot back to the invoke-budget counter. Admitting a
+    # run records its policy consultation and its rate and size denials
+    # (Sanctum.Policy), checks its consent is still the profile's head
+    # (Sanctum.Consent) and unseals its vault edge (Sanctum.VaultReader);
+    # Cyfr.Execution.Attempt dispenses its OAuth tokens from that edge
+    # (Sanctum.VaultReader).
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
       Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth
-      Sanctum.Provisioning Sanctum.ProvisioningRegistry
+      Sanctum.Policy Sanctum.Provisioning Sanctum.ProvisioningRegistry
       Sanctum.ProvisioningSupervisor Sanctum.PubSub Sanctum.Session
       Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
-      Sanctum.UnauthorizedError
+      Sanctum.UnauthorizedError Sanctum.VaultReader
     ),
     # Aqua.Notes resolves personal notes through users.personal_athanor_id.
     "emissary" => ~w(

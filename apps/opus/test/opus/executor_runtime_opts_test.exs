@@ -12,7 +12,7 @@ defmodule Opus.ExecutorRuntimeOptsTest do
 
   alias Opus.Executor
 
-  # What enforce_authority/3 produces.
+  # What admission settles from the consent (`Cyfr.Execution.Admission.admit/4`).
   defp consented do
     [
       component_type: :reagent,
@@ -59,12 +59,12 @@ defmodule Opus.ExecutorRuntimeOptsTest do
     assert out[:limits] == %{max_concurrent_tasks: 1}
   end
 
-  test "the pipeline's own keys are protected too, not just the consented four" do
+  test "admission's own keys are protected too, not just the consented four" do
     # :ctx scopes every host import, :preloaded_fields is the unsealed
     # vault map, :digest keys the compiled-component cache — a caller
     # overwriting any of them would run under another tenant, other
     # secrets, or another component's compiled bytes.
-    pipeline =
+    admitted =
       consented() ++
         [
           preloaded_fields: %{"key" => "sealed"},
@@ -80,7 +80,7 @@ defmodule Opus.ExecutorRuntimeOptsTest do
       digest: "sha256:poisoned"
     ]
 
-    out = Executor.runtime_opts(pipeline, caller)
+    out = Executor.runtime_opts(admitted, caller)
 
     assert out[:ctx] == :a_context
     assert out[:preloaded_fields] == %{"key" => "sealed"}
@@ -99,7 +99,7 @@ defmodule Opus.ExecutorRuntimeOptsTest do
   end
 
   test "with no authority-derived value, the caller's is used" do
-    # A pipeline that never reached enforce_authority has nothing to protect,
+    # Options admission did not settle have nothing to protect,
     # so the guard must not turn into "the caller may never say".
     out = Executor.runtime_opts([ctx: :a_context], max_memory_bytes: 123, limits: %{a: 1})
 

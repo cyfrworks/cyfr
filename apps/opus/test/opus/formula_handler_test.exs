@@ -47,10 +47,22 @@ defmodule Opus.FormulaHandlerTest do
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
-  # Helper to build MCP-format requests
-  defp emitter(ctx, stream_id, opts \\ []),
-    do: Opus.Emit.open(stream_id, [ctx: ctx, authority: Cyfr.Authority.zero()] ++ opts)
+  # The formula's attempt, which answers its `emit` (`Cyfr.Execution.Attempt`).
+  defp open_attempt!(ctx, execution_id, opts \\ []) do
+    {:ok, _pid} =
+      Cyfr.Execution.Attempt.open(
+        [
+          execution_id: execution_id,
+          ctx: ctx,
+          authority: Cyfr.Authority.zero(),
+          component_ref: @fh_node <> ":0.1.0"
+        ] ++ opts
+      )
 
+    :ok
+  end
+
+  # Helper to build MCP-format requests
   defp mcp_request(tool, action, args \\ %{}) do
     Jason.encode!(%{"tool" => tool, "action" => action, "args" => args})
   end
@@ -134,7 +146,6 @@ defmodule Opus.FormulaHandlerTest do
           root_execution_id: parent_id,
           limits: Cyfr.Authority.limits(auth),
           authority: auth,
-          emitter: Opus.Emit.open(parent_id, ctx: Context.enter_guest(ctx), authority: auth),
           declared_needs: [],
           activation_digest: "sha256:act-fh"
         ],
@@ -154,8 +165,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, "exec_parent-123")
+          authority: Cyfr.Authority.zero()
         )
 
       assert is_map(imports)
@@ -186,8 +196,7 @@ defmodule Opus.FormulaHandlerTest do
     test "works without limits (defaults)", %{ctx: ctx} do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, "exec_parent-123")
+          authority: Cyfr.Authority.zero()
         )
 
       assert is_map(imports)
@@ -693,8 +702,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_cancel_check",
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, "exec_cancel_check")
+          authority: Cyfr.Authority.zero()
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -789,8 +797,7 @@ defmodule Opus.FormulaHandlerTest do
       {_imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_cleanup",
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, "exec_cleanup")
+          authority: Cyfr.Authority.zero()
         )
 
       assert Process.alive?(tracker_pid)
@@ -833,11 +840,12 @@ defmodule Opus.FormulaHandlerTest do
     test "emit returns ok with sequence number", %{ctx: ctx} do
       limits = Cyfr.Limits.defaults(:formula)
 
+      :ok = open_attempt!(ctx, "exec_emit_test")
+
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_test",
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, "exec_emit_test")
+          authority: Cyfr.Authority.zero()
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -856,11 +864,12 @@ defmodule Opus.FormulaHandlerTest do
     test "emit sequence increments across calls", %{ctx: ctx} do
       limits = Cyfr.Limits.defaults(:formula)
 
+      :ok = open_attempt!(ctx, "exec_emit_seq")
+
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_seq",
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, "exec_emit_seq")
+          authority: Cyfr.Authority.zero()
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -880,11 +889,12 @@ defmodule Opus.FormulaHandlerTest do
     test "emit handles invalid JSON gracefully", %{ctx: ctx} do
       limits = Cyfr.Limits.defaults(:formula)
 
+      :ok = open_attempt!(ctx, "exec_emit_bad")
+
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_bad",
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, "exec_emit_bad")
+          authority: Cyfr.Authority.zero()
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -904,11 +914,12 @@ defmodule Opus.FormulaHandlerTest do
       execution_id = "exec_emit_pubsub_#{:rand.uniform(100_000)}"
       limits = Cyfr.Limits.defaults(:formula)
 
+      :ok = open_attempt!(ctx, execution_id)
+
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, execution_id)
+          authority: Cyfr.Authority.zero()
         )
 
       # Subscribe to the execution events topic
@@ -934,11 +945,12 @@ defmodule Opus.FormulaHandlerTest do
       execution_id = "exec_emit_mask_#{:rand.uniform(100_000)}"
       limits = Cyfr.Limits.defaults(:formula)
 
+      :ok = open_attempt!(ctx, execution_id, secrets: %{"KEY" => "sk-super-secret-value"})
+
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, execution_id, secrets: ["sk-super-secret-value"])
+          authority: Cyfr.Authority.zero()
         )
 
       Cyfr.Execution.Events.subscribe(execution_id, ctx)
@@ -962,11 +974,12 @@ defmodule Opus.FormulaHandlerTest do
       execution_id = "exec_emit_buffer_#{:rand.uniform(100_000)}"
       limits = Cyfr.Limits.defaults(:formula)
 
+      :ok = open_attempt!(ctx, execution_id)
+
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, execution_id)
+          authority: Cyfr.Authority.zero()
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -1009,11 +1022,12 @@ defmodule Opus.FormulaHandlerTest do
 
       limits = Cyfr.Limits.defaults(:formula)
 
+      :ok = open_attempt!(ctx, execution_id)
+
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, execution_id)
+          authority: Cyfr.Authority.zero()
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -1034,19 +1048,20 @@ defmodule Opus.FormulaHandlerTest do
   # emit routes to root_execution_id
   # ============================================================================
 
-  describe "emit routes to the stream its emitter is opened on" do
-    test "a formula's emitter on its root delivers there, not to the formula's own stream",
+  describe "emit routes to the stream its attempt is opened on" do
+    test "a formula's attempt on its root delivers there, not to the formula's own stream",
          %{ctx: ctx} do
       root_id = "exec_root_#{:rand.uniform(100_000)}"
       parent_id = "exec_child_#{:rand.uniform(100_000)}"
       limits = Cyfr.Limits.defaults(:formula)
 
+      :ok = open_attempt!(ctx, parent_id, stream_id: root_id)
+
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, parent_id,
           root_execution_id: root_id,
           limits: limits,
-          authority: Cyfr.Authority.zero(),
-          emitter: emitter(ctx, root_id)
+          authority: Cyfr.Authority.zero()
         )
 
       # Subscribe to both root and parent
@@ -1141,7 +1156,7 @@ defmodule Opus.FormulaHandlerTest do
       assert parsed["error"]["type"] == "setup_required"
 
       # One remediation shape on the wire, whichever dispatch path failed —
-      # Opus.Remediation's, the one component-guide documents.
+      # Cyfr.Remediation's, the one component-guide documents.
       remediation = parsed["error"]["remediation"]
       assert remediation["component_ref"] == "catalyst:local.no-policy-test:0.1.0"
       assert remediation["setup_command"] =~ "profile grant"

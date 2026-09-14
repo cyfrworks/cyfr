@@ -3,22 +3,14 @@
 
 defmodule Opus.Host do
   @moduledoc """
-  The **consent and record plane**: the seams a running component crosses
-  into the platform — an in-chain tool call, a vault edge unsealed, a
-  policy decision recorded, an execution row opened and closed, an event
-  delivered.
+  The seams a running component's host functions cross into the
+  platform's consent plane: an in-chain tool call, whether the host runs
+  an action itself, and a policy decision recorded.
 
-  Delegates selected host operations within the combined Opus/CYFR release.
-  This module is not the complete dependency interface; Opus also calls
-  CYFR storage, policy, scheduling and utility modules directly.
-
-  The honest statement is narrower and still useful: **this is the plane a
-  component's execution crosses, and it is the one that would go over the
-  wire** (`Cyfr.Authority.to_wire/1`). The rest — storage, cache, the
-  row plane, network policy, the shared primitives under `Cyfr.` — is
-  infrastructure a worker would need a real client for, not a behaviour it
-  would implement. `Opus.HostSurfaceTest` keeps that list from growing
-  quietly.
+  A run's admission, its unsealed credentials, its events and its
+  terminal row are `Cyfr.Execution`'s (`Admission`, `Attempt`, `Close`).
+  Opus also calls CYFR storage, network and utility modules directly;
+  `Opus.HostSurfaceTest` keeps that list from growing quietly.
   """
 
   alias Sanctum.Context
@@ -34,34 +26,7 @@ defmodule Opus.Host do
   @spec host_intercepted?(String.t(), String.t() | nil) :: boolean()
   defdelegate host_intercepted?(name, action), to: Cyfr.Ops.Catalog
 
-  @doc "The material a consented vault edge projects for this execution."
-  @spec unseal(Context.t(), map()) :: {:ok, map()} | {:error, term()}
-  defdelegate unseal(ctx, vault_resource), to: Sanctum.VaultReader, as: :fetch
-
   @doc "Record a policy decision (allowed or denied) for the audit trail."
   @spec enforce(map()) :: :ok
   defdelegate enforce(attrs), to: Sanctum.Policy.Enforcement, as: :record
-
-  @doc """
-  Open an execution's row before it runs. `opts` carry the admission
-  barriers (`:charge`, `:step`, `:occurrence_id`) the record's own
-  admission performs in its transaction.
-  """
-  @spec record_start(Cyfr.Execution.Record.t(), keyword()) :: :ok | {:error, term()}
-  defdelegate record_start(record, opts \\ []), to: Cyfr.Execution.Record, as: :write_started
-
-  @doc "Close an execution's row as completed."
-  @spec record_complete(Cyfr.Execution.Record.t()) :: :ok | {:error, term()}
-  defdelegate record_complete(record), to: Cyfr.Execution.Record, as: :write_completed
-
-  @doc "Close an execution's row as failed or cancelled."
-  @spec record_failed(Cyfr.Execution.Record.t()) :: :ok | {:error, term()}
-  defdelegate record_failed(record), to: Cyfr.Execution.Record, as: :write_failed
-
-  @doc "Deliver a delta to an execution's subscribers and its replay buffer, numbered under the last durable event."
-  @spec broadcast(String.t(), map(), term(), keyword()) ::
-          {:ok, String.t()} | {:error, :missing_athanor}
-  defdelegate broadcast(execution_id, data, ctx, opts \\ []),
-    to: Cyfr.Execution.Events,
-    as: :push
 end

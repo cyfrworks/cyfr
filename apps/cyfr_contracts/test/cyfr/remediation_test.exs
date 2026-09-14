@@ -1,21 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.RemediationTypedTest do
+defmodule Cyfr.RemediationTest do
   # Typed consent errors produce remediation; string errors return :not_setup_error.
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias Opus.Remediation
-
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-
-    {:ok, ctx: Sanctum.TestContext.local()}
-  end
+  alias Cyfr.Remediation
 
   describe "setup_required" do
-    test "names the unbound need and points at the consent walk", %{ctx: ctx} do
+    test "names the unbound need and points at the consent walk" do
       payload = %{
         profile_id: "prof-x",
         node_ref: "catalyst:local.gmail",
@@ -35,7 +28,7 @@ defmodule Opus.RemediationTypedTest do
       assert fix["action"] == "plan"
     end
 
-    test "an activation-level miss carries no need but still remediates", %{ctx: ctx} do
+    test "an activation-level miss carries no need but still remediates" do
       payload = %{
         profile_id: "prof-y",
         node_ref: "formula:local.report",
@@ -51,7 +44,7 @@ defmodule Opus.RemediationTypedTest do
   end
 
   describe "consent_required" do
-    test "renders as an approve-to-continue remediation", %{ctx: ctx} do
+    test "renders as an approve-to-continue remediation" do
       payload = %{profile_id: "prof-z", current_revision: 3, shape_diff: []}
 
       assert {:setup_required, remediation} =
@@ -65,13 +58,13 @@ defmodule Opus.RemediationTypedTest do
   end
 
   describe "the envelope is unchanged" do
-    test "non-setup terms still report as such", %{ctx: ctx} do
+    test "non-setup terms still report as such" do
       assert :not_setup_error = Remediation.analyze("some unrelated failure")
       assert :not_setup_error = Remediation.analyze({:something_else, %{}})
       assert :not_setup_error = Remediation.analyze(nil)
     end
 
-    test "every typed remediation carries the keys the surfaces read", %{ctx: ctx} do
+    test "every typed remediation carries the keys the surfaces read" do
       for term <- [
             {:setup_required, %{profile_id: "p", node_ref: "r", need: "n", reason: :x}},
             {:consent_required, %{profile_id: "p", current_revision: 1, shape_diff: []}}

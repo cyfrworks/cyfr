@@ -10,7 +10,8 @@ defmodule Aqua.Loop.StreamOrderTest do
   returns, so a delta published after that is never forwarded. A
   credential the catalyst was handed that is split across two deltas, with
   a `tool_call.delta` between them, is never forwarded or streamed
-  unmasked.
+  unmasked. Text held back when the stream ends without a `stop` still
+  reaches the thread, before the step's row.
 
   The loop runs against the real root and a scripted model catalyst whose
   events go through the engine's emit path.
@@ -142,6 +143,32 @@ defmodule Aqua.Loop.StreamOrderTest do
            ] = emitted
 
     refute inspect(stream, limit: :infinity, printable_limit: :infinity) =~ secret
+  end
+
+  test "text held back when the stream ends without a stop reaches the thread before the step's row",
+       %{ctx: ctx, thread: thread} do
+    start_supervised!(
+      {ScriptedExecution,
+       ref: @model,
+       secrets: ["sk-live-0123456789"],
+       script: [
+         {:emit, [%{"type" => "text.delta", "text" => "almost done sk-li"}]},
+         reply("almost done sk-li")
+       ]}
+    )
+
+    turn = accept!(ctx, thread, "@aqua finish")
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    assert_receive {:thread, _, {:turn_finished}}, 5_000
+
+    events =
+      for {:thread, _, event} <- drain(),
+          match?({:delta, _}, event) or match?({:message, %{kind: "text", author: "aqua"}}, event),
+          do: event
+
+    {deltas, [{:message, row}]} = Enum.split_while(events, &match?({:delta, _}, &1))
+    assert Enum.map(deltas, fn {:delta, delta} -> delta.text end) == ["almost done ", "sk-li"]
+    assert row.content == "almost done sk-li"
   end
 
   defp accept!(ctx, thread, text) do

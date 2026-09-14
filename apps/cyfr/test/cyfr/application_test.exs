@@ -94,7 +94,7 @@ defmodule Cyfr.ApplicationTest do
       refute EmissaryWeb.Endpoint in ids
     end
 
-    test "execution rates, slots and event streams start under the infra tier after PubSub" do
+    test "execution rates, slots, event streams and attempts start under the infra tier after PubSub" do
       # `which_children/1` lists the most recently started child first.
       started = Cyfr.InfraSupervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
@@ -109,7 +109,9 @@ defmodule Cyfr.ApplicationTest do
                Cyfr.Execution.Registry,
                Cyfr.Execution.Events.Registry,
                Cyfr.Execution.Events.Sequence,
-               Cyfr.Execution.Events.Supervisor
+               Cyfr.Execution.Events.Supervisor,
+               Cyfr.Execution.Attempt.Registry,
+               Cyfr.Execution.Attempt.Supervisor
              ] = started_ids(Cyfr.Execution.Tree)
     end
 

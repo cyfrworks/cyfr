@@ -38,7 +38,6 @@
   {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},
   {"lib/opus.ex", :extra_range},
   {"lib/opus/component_cache.ex", :unknown_type},
-  {"lib/opus/executor.ex", :pattern_match_cov},
   {"lib/opus/formula_handler.ex", :missing_range},
   {"lib/opus/http_handler.ex", :pattern_match},
   {"lib/opus/http_handler.ex", :pattern_match_cov},
@@ -59,7 +58,7 @@
   {"lib/sanctum/session.ex", :extra_range},
   {"lib/sanctum/sign_in.ex", :missing_range},
   {"lib/sanctum/sign_in.ex", :pattern_match},
-  # Six opaque-term warnings dialyxir cannot classify: its own formatter
+  # Three opaque-term warnings dialyxir cannot classify: its own formatter
   # raises on them (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
   # dialyzer text, so a `{file, kind}` filter never sees a kind to match.
   # Matched by regex instead. Every one is a struct built in one module and
@@ -67,6 +66,5 @@
   # noise from the loose `%__MODULE__{}` schema types, not a defect.
   ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque},
   ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque},
-  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque},
-  ~r{lib/opus/executor\.ex:\d+:\d+:.*opaque}
+  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}
 ]

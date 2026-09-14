@@ -3,7 +3,8 @@
 
 defmodule Cyfr.Execution.Admission do
   @moduledoc """
-  The authority an execution runs under, decided before anything runs.
+  Whether and how an execution runs, decided before anything runs: the
+  authority it runs under, and the admission of one run under it.
 
   A root selects a profile for its reference and loads that profile's head
   consent into a `Cyfr.Authority`, fail-closed (`authority_for/4`,
@@ -19,10 +20,20 @@ defmodule Cyfr.Execution.Admission do
   digest, the calling node's declared needs — is derived here or passed in
   by the host-owned closure. Nothing in a guest request can influence
   them.
+
+  A run is admitted by `admit/4`: its reference resolved and typed, its
+  consented limits, rates and policy enforced, its bytes fetched and their
+  attestation checked, its row admitted, its vault edge unsealed and its
+  `Cyfr.Execution.Attempt` opened. A refusal at any stage after the row is
+  built closes the row failed (`Cyfr.Execution.Close`) before it answers.
   """
 
+  require Logger
+
   alias Cyfr.Authority
+  alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Authority.RootSelect
+  alias Cyfr.Execution.{Attempt, Attestation, Close, Record, Telemetry}
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
@@ -37,6 +48,19 @@ defmodule Cyfr.Execution.Admission do
 
   @typedoc "A loaded root: its authority, the activation stamp the loader verified and the profile selected."
   @type root :: %{authority: Authority.t(), stamp: map() | nil, profile: map()}
+
+  @typedoc """
+  An admitted run: its execution id, the verified component bytes, the
+  options the runtime runs them under (the consented limits and resources,
+  the unsealed fields, the run's identity and lineage) and the state its
+  close needs. Its attempt is open under `execution_id`.
+  """
+  @type admitted :: %{
+          execution_id: String.t(),
+          wasm_bytes: binary(),
+          runtime: keyword(),
+          close: Close.t()
+        }
 
   @doc """
   Load the root authority a reference would execute under, without
@@ -180,6 +204,643 @@ defmodule Cyfr.Execution.Admission do
             {:error, "Failed to resolve component '#{reference}': #{reason}"}
         end
     end
+  end
+
+  @doc """
+  Admit one run of `reference` with `input` in `ctx`, under
+  `opts[:authority]`.
+
+  In order: this boot must own the control plane; a version-less
+  reference is resolved to the pinned one; the registry row must type the
+  component, and a caller's `:type` may assert that type but never choose
+  it; the node's consented timeout must parse; the input must fit the
+  node's `max_request_size`; the node's rate bucket (and, for a public
+  profile, the profile's and the caller's address buckets) must have room;
+  the policy consultation is recorded; the bytes must match the registry
+  digest and their attestation must satisfy `opts[:verify]` and the
+  signed-pulls setting; the row is admitted with its barriers; the vault
+  edge is unsealed while its consent is still the profile's head; and the
+  attempt opens.
+
+  Options: `:authority` (required — admitting without one raises, and the
+  raise closes the row failed), `:type`, `:verify`, `:execution_id`,
+  `:parent_execution_id`, `:root_execution_id`, `:profile_id`,
+  `:retention_class`, `:retained_input`, `:schedule_id`,
+  `:activation_stamp`, `:activation_digest`, `:dep_ref`, `:need`,
+  `:client_ip`, the barriers `:charge`, `:step` and `:occurrence_id`, and
+  `:step_spans`.
+
+  Answers `{:ok, admitted}`. A reference that cannot be resolved or typed
+  answers `{:error, reason}` with no row; any later refusal closes the row
+  failed first and answers what `Cyfr.Execution.Close.fail/3` answers.
+  """
+  @spec admit(Context.t(), String.t(), map(), keyword()) :: {:ok, admitted()} | {:error, term()}
+  def admit(%Context{} = ctx, reference, input, opts)
+      when is_binary(reference) and is_map(input) and is_list(opts) do
+    # Every road into the engine — root, child, cron, webhook — is admitted
+    # here, so a boot that lost the control plane admits nothing.
+    case Cyfr.ControlPlane.assert_owner() do
+      :ok ->
+        ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Cyfr.UUID7.request_id()}
+        admit_owned(ctx, reference, input, opts)
+
+      {:error, :control_plane_lost} ->
+        {:error,
+         "control plane ownership lost; execution refused until this node reclaims the database"}
+    end
+  end
+
+  defp admit_owned(ctx, reference, input, opts) do
+    with {:ok, pinned, resolution} <- resolve(ctx, reference),
+         {:ok, component_ref, extracted_type, component} <- inspect_component(ctx, pinned),
+         {:ok, component_type} <- authoritative_type(extracted_type, opts[:type], pinned) do
+      record = new_record(ctx, pinned, input, opts, component_type, component, resolution)
+      Cyfr.LoggerContext.set_execution_id(record.id)
+
+      run = %{
+        ctx: ctx,
+        reference: pinned,
+        component: component,
+        component_ref: component_ref,
+        component_type: component_type,
+        opts: opts,
+        close: %Close{
+          ctx: ctx,
+          record: record,
+          step_spans: opts[:step_spans],
+          setup_stream: opts[:root_execution_id] || opts[:parent_execution_id],
+          signature_verified: component["signature_verified"] || false,
+          admission: Keyword.take(opts, [:charge, :step, :occurrence_id])
+        }
+      }
+
+      with {:ok, run} <- stage(run, &enforce_policy(&1, input)),
+           {:ok, run} <- stage(run, &fetch_and_verify/1),
+           {:ok, run} <- stage(run, &admit_row/1),
+           {:ok, run} <- stage(run, &unseal/1),
+           {:ok, admitted} <- stage(run, &open_attempt/1) do
+        {:ok, admitted}
+      else
+        {:error, run, reason} -> Close.fail(run.close, [], reason)
+      end
+    end
+  end
+
+  # Each stage answers its refusal with the run it was given, a raise
+  # included, so a refusal closes the row as far as the run got: admitted
+  # or not.
+  defp stage(run, fun) do
+    case fun.(run) do
+      {:error, reason} -> {:error, run, reason}
+      ok -> ok
+    end
+  rescue
+    exception -> {:error, run, Close.exception_message(exception, __STACKTRACE__)}
+  end
+
+  defp resolve(ctx, reference) do
+    case Compendium.Resolver.resolve(ctx, reference) do
+      {:ok, pinned, %{was_resolved: true} = meta} ->
+        {:ok, pinned, %{resolved_from: reference, resolver_digest: meta[:digest]}}
+
+      {:ok, pinned, _metadata} ->
+        {:ok, pinned, %{}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The registry's type is authoritative — type selects WASI capabilities, so
+  # a caller-supplied :type may assert but never decide. A missing registry
+  # type or a mismatched assertion refuses.
+  defp authoritative_type(nil, _asserted, reference) do
+    {:error, "Component '#{reference}' has no registry type — re-register it"}
+  end
+
+  defp authoritative_type(extracted, asserted, reference) do
+    with {:ok, component_type} <- parse_component_type(extracted) do
+      case asserted && parse_component_type(asserted) do
+        nil ->
+          {:ok, component_type}
+
+        {:ok, ^component_type} ->
+          {:ok, component_type}
+
+        {:ok, other} ->
+          {:error,
+           "Requested type #{other} does not match the registry type " <>
+             "#{component_type} for '#{reference}'"}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp parse_component_type(type) do
+    name = if is_atom(type), do: Atom.to_string(type), else: type
+
+    case is_binary(name) && Record.executable_type(name) do
+      {:ok, component_type} ->
+        {:ok, component_type}
+
+      _ ->
+        {:error,
+         "Invalid component type: #{inspect(type)}. " <>
+           "Must be one of: #{Enum.join(Cyfr.ComponentRef.executable_types(), ", ")}"}
+    end
+  end
+
+  defp new_record(ctx, reference, input, opts, component_type, component, resolution) do
+    record_opts =
+      [
+        component_type: component_type,
+        parent_execution_id: opts[:parent_execution_id],
+        root_execution_id: opts[:root_execution_id],
+        # A child walks its parent's authority and roots no profile of its
+        # own, so it records none.
+        profile_id: opts[:profile_id],
+        retention_class: opts[:retention_class],
+        retained_input: opts[:retained_input],
+        schedule_id: opts[:schedule_id]
+      ]
+      |> Arca.QueryHelpers.maybe_put(:execution_id, opts[:execution_id])
+      |> Arca.QueryHelpers.maybe_put(:reservation, reservation(opts))
+
+    ctx
+    |> Record.new(reference, input, record_opts)
+    |> Map.merge(resolution)
+    |> stamp_activation(ctx, component, opts)
+  end
+
+  # A root mints its invocation reservation at admission, from the budget
+  # its authority was minted with; a child charges its root's.
+  defp reservation(opts) do
+    case {opts[:root_execution_id], opts[:authority]} do
+      {nil, %Authority{budget: %Authority.Budget{id: id, cap: cap}}} -> %{budget_id: id, cap: cap}
+      _ -> nil
+    end
+  end
+
+  # The code that actually ran. A root records the full node ->
+  # release-digest map; a child's graph is a subgraph of its root's, so a
+  # child under an authority records only its root's digest, and any other
+  # child records nothing. An activation that cannot be resolved or encoded
+  # records nothing and never fails the run.
+  defp stamp_activation(record, ctx, component, opts) do
+    cond do
+      # An authority-rooted execution resolved and verified its activation
+      # in the consent loader; the row records what was authorized.
+      stamp = opts[:activation_stamp] ->
+        case Compendium.Activation.encode_graph(stamp.activation_graph) do
+          {:ok, encoded} ->
+            %{record | activation_digest: stamp.activation_digest, activation_graph: encoded}
+
+          {:error, _} ->
+            record
+        end
+
+      digest = opts[:activation_digest] ->
+        %{record | activation_digest: digest}
+
+      is_nil(opts[:parent_execution_id]) ->
+        with {:ok, %{digest: digest, graph: graph}} <-
+               Compendium.Activation.resolve(ctx, component),
+             {:ok, encoded} <- Compendium.Activation.encode_graph(graph) do
+          %{record | activation_digest: digest, activation_graph: encoded}
+        else
+          {:error, _reason} -> record
+        end
+
+      true ->
+        record
+    end
+  rescue
+    e ->
+      Logger.debug("[Cyfr.Execution.Admission] activation not recorded: #{Exception.message(e)}")
+      record
+  end
+
+  # Capability was computed once at consent time and frozen into the
+  # authority: limits come from the current node, resources from the
+  # current edge, and nothing is re-resolved here. A missing authority is
+  # a caller bug and raises rather than running with ambient permissions.
+  defp enforce_policy(run, input) do
+    case run.opts[:authority] do
+      %Authority{} = authority ->
+        enforce_authority(run, authority, input)
+
+      other ->
+        raise ArgumentError, "execution without an authority is not a thing: #{inspect(other)}"
+    end
+  end
+
+  defp enforce_authority(run, authority, input) do
+    limits = Authority.limits(authority)
+    edge = edge_resources(authority)
+
+    # An unparseable consented timeout refuses the run: a default would run
+    # the node under a ceiling nobody consented to.
+    with {:ok, timeout_ms} <- node_timeout_ms(limits, run.component_ref),
+         :ok <- check_input_size(run, input, limits),
+         :ok <- check_rate(run.ctx, run.component_ref, limits),
+         :ok <- check_public_rate_buckets(run, authority, limits) do
+      Sanctum.Policy.Enforcement.record(
+        Map.merge(
+          %{
+            ctx: run.ctx,
+            component_ref: run.component_ref,
+            component_type: run.component_type,
+            event_type: :policy_consultation,
+            decision: :allowed,
+            execution_id: run.close.record.id,
+            host_policy_snapshot: host_policy(edge, limits)
+          },
+          authority_audit(run, authority)
+        )
+      )
+
+      {:ok,
+       run
+       |> Map.merge(%{limits: limits, edge: edge, timeout_ms: timeout_ms})
+       |> put_in([:close, Access.key!(:limits)], limits)}
+    end
+  end
+
+  defp node_timeout_ms(limits, component_ref) do
+    case Cyfr.Limits.timeout_ms(limits) do
+      {:ok, ms} -> {:ok, ms}
+      {:error, reason} -> {:error, "invalid consented timeout for #{component_ref}: #{reason}"}
+    end
+  end
+
+  # Runtime facts; attribution is joined from the immutable consent rows on
+  # read.
+  defp authority_audit(run, %Authority{} = authority) do
+    %{
+      consent_id: authority.consent_id,
+      activation_digest: run.opts[:activation_digest],
+      dep_ref: run.opts[:dep_ref],
+      need: run.opts[:need],
+      cursor_state: cursor_state(authority.cursor),
+      chain: authority.chain,
+      value_source: value_source(authority.resources)
+    }
+  end
+
+  defp edge_resources(%Authority{resources: %Edge{} = edge}), do: edge
+  defp edge_resources(%Authority{resources: :none}), do: nil
+
+  defp cursor_state({:bound, node}), do: "bound:" <> node
+  defp cursor_state(:unbound), do: "unbound"
+
+  defp value_source(%Edge{vault: %{entry_id: entry_id}}),
+    do: Emissary.MCP.VaultRef.build(entry_id)
+
+  defp value_source(_resources), do: nil
+
+  # The enforced edge and limits, for forensic replay of what a run was
+  # allowed to do. The key names are stable serialization labels that audit
+  # consumers read.
+  defp host_policy(edge, %Cyfr.Limits{} = limits) do
+    %{
+      allowed_domains: Edge.domains(edge),
+      rate_limit: limits.rate_limit,
+      max_memory_bytes: limits.max_memory_bytes,
+      timeout: limits.timeout,
+      allowed_tools: Edge.tools(edge),
+      allowed_paths: Edge.paths(edge),
+      allowed_actions: Edge.actions(edge)
+    }
+  end
+
+  defp check_input_size(run, input, %Cyfr.Limits{max_request_size: max_size}) do
+    case Jason.encode(input) do
+      {:ok, input_json} when byte_size(input_json) > max_size ->
+        size = byte_size(input_json)
+
+        Sanctum.Policy.Enforcement.record(%{
+          ctx: run.ctx,
+          component_ref: run.component_ref,
+          event_type: :request_size,
+          decision: :denied,
+          decision_reason: "input size #{size} bytes exceeds maximum #{max_size} bytes"
+        })
+
+        {:error, "Input size (#{size} bytes) exceeds maximum (#{max_size} bytes)"}
+
+      {:ok, _input_json} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, "Input encoding failed: #{inspect(reason)}. Input must be JSON-serializable."}
+    end
+  end
+
+  # A public profile's run draws on two more buckets: per caller address for
+  # fairness, and per (profile, node) so an address-hopping crowd cannot
+  # multiply the credential and spend exposure. An owner profile's run
+  # draws on the node bucket alone.
+  defp check_public_rate_buckets(run, %Authority{profile_kind: :public} = authority, limits) do
+    node = run.component_ref
+    ip = run.opts[:client_ip] || "unknown"
+
+    with :ok <- check_rate(run.ctx, "pub:#{authority.profile_id}:#{node}", limits) do
+      check_rate(run.ctx, "pub:#{authority.profile_id}:#{node}:#{ip}", limits)
+    end
+  end
+
+  defp check_public_rate_buckets(_run, _authority, _limits), do: :ok
+
+  # Buckets key on the {athanor, bucket} pair, so members of an athanor
+  # share them. A limiter that cannot answer refuses: a configured limit
+  # must be enforceable. A refusal of the limit is recorded as a policy
+  # denial.
+  defp check_rate(ctx, bucket, %Cyfr.Limits{} = limits) do
+    result =
+      try do
+        Cyfr.Execution.Rates.check(ctx.athanor_id, bucket, %{rate_limit: limits.rate_limit})
+      catch
+        :exit, reason ->
+          Logger.error(
+            "[Cyfr.Execution.Admission] Cyfr.Execution.Rates unavailable (#{inspect(reason)}) — " <>
+              "failing CLOSED (denying) for #{bucket}."
+          )
+
+          {:error, :rate_limited}
+      end
+
+    case result do
+      {:ok, _remaining} ->
+        :ok
+
+      {:error, :rate_limited, retry_after} ->
+        record_rate_denial(ctx, bucket, "rate limit exceeded (retry in #{retry_after}ms)")
+        {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
+
+      {:error, reason} ->
+        if reason == :rate_limited,
+          do: record_rate_denial(ctx, bucket, "rate limiter unavailable (fail closed)")
+
+        {:error, "Rate limit check failed for #{bucket}: #{inspect(reason)}."}
+    end
+  end
+
+  defp record_rate_denial(ctx, bucket, reason) do
+    Sanctum.Policy.Enforcement.record(%{
+      ctx: ctx,
+      component_ref: bucket,
+      event_type: :rate_limit,
+      decision: :denied,
+      decision_reason: reason
+    })
+  end
+
+  # The bytes are fetched by the registry digest and verified on their way
+  # into the cache, then their attestation is checked.
+  defp fetch_and_verify(run) do
+    with {:ok, wasm_bytes, component_digest} <- fetch_component_bytes(run),
+         :ok <- verify_attestation(run) do
+      record = %{
+        run.close.record
+        | component_digest: component_digest,
+          host_policy: host_policy(run.edge, run.limits)
+      }
+
+      {:ok,
+       run
+       |> Map.put(:wasm_bytes, wasm_bytes)
+       |> put_in([:close, Access.key!(:record)], record)}
+    end
+  end
+
+  # Bytes are content-addressed and immutable; an entry is cached (10 min)
+  # only after its sha256 matched the registry, so a hit is verified by
+  # construction and is not hashed again.
+  defp fetch_component_bytes(run) do
+    digest = run.component["digest"]
+    cache_key = Arca.Cache.Keys.wasm_bytes(digest)
+
+    case digest && Arca.Cache.get(cache_key) do
+      {:ok, bytes} ->
+        emit_fetch(run.reference, false)
+        {:ok, bytes, digest}
+
+      _ ->
+        case Compendium.Component.get_blob(run.ctx, digest) do
+          {:ok, bytes} ->
+            actual = Cyfr.Digest.sha256(bytes)
+            emit_fetch(run.reference, true)
+
+            with :ok <- verify_integrity(digest, actual, run.reference) do
+              Arca.Cache.put(cache_key, bytes, :timer.minutes(10))
+              {:ok, bytes, actual}
+            end
+
+          {:error, :blob_not_found} ->
+            {:error, "Failed to fetch component bytes: blob not found for #{digest}"}
+
+          {:error, reason} ->
+            {:error, "Failed to fetch component bytes: #{inspect(reason)}"}
+        end
+    end
+  end
+
+  defp emit_fetch(reference, hashed?) do
+    :telemetry.execute([:cyfr, :opus, :fetch], %{count: 1}, %{
+      reference: reference,
+      hashed: hashed?
+    })
+  end
+
+  # `Cyfr.Digest` is the only producer of both digests, so they carry the
+  # same sha256:-prefixed spelling and one comparison decides.
+  defp verify_integrity(expected, expected, _reference), do: :ok
+
+  defp verify_integrity(expected, actual, reference) do
+    {:error,
+     "Integrity check failed for #{reference}. " <>
+       "Expected: #{expected}, Got: #{actual}. " <>
+       "Component may have been modified. Re-register with `cyfr register`."}
+  end
+
+  # Every run's recorded attestation is checked. The signed-pulls setting
+  # decides whether unsigned OCI code runs; a signer mismatch and an
+  # unclassifiable source always refuse.
+  defp verify_attestation(run) do
+    {identity, issuer} = pinned_signer(run.opts[:verify])
+
+    case Attestation.attestation(run.component) do
+      :unsigned when not is_nil(identity) or not is_nil(issuer) ->
+        {:error,
+         "Signature verification failed: a signer was pinned for #{run.reference}, but the " <>
+           "component was pulled without signature verification"}
+
+      :unsigned ->
+        if Cyfr.RuntimeConfig.require_signed_pulls?() do
+          {:error,
+           "Signature verification failed: #{run.reference} was pulled without signature " <>
+             "verification and this server requires signed pulls (CYFR_REQUIRE_SIGNED_PULLS)"}
+        else
+          note_unsigned_execution(run)
+        end
+
+      attested when attested in [:trusted, :signed] ->
+        verify_signer(run, identity, issuer)
+
+      {:unknown_source, _} ->
+        verify_signer(run, identity, issuer)
+    end
+  end
+
+  defp verify_signer(run, identity, issuer) do
+    case Attestation.verify(run.component, identity, issuer) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
+    end
+  end
+
+  defp pinned_signer(verify) when is_map(verify),
+    do: {verify["identity"] || verify[:identity], verify["issuer"] || verify[:issuer]}
+
+  defp pinned_signer(_), do: {nil, nil}
+
+  # Running unsigned code is the operator's posture, made visible where a
+  # refusal would have been.
+  defp note_unsigned_execution(run) do
+    Logger.warning(
+      "[Cyfr.Execution.Admission] executing #{run.reference} with no verified signature " <>
+        "(CYFR_REQUIRE_SIGNED_PULLS is off)"
+    )
+
+    :telemetry.execute(
+      [:cyfr, :opus, :execution, :unsigned],
+      %{count: 1},
+      %{reference: run.reference, athanor_id: run.ctx.athanor_id}
+    )
+
+    :ok
+  end
+
+  defp admit_row(run) do
+    with :ok <- Record.write_started(run.close.record, run.close.admission) do
+      Telemetry.execute_start(run.close.record)
+      {:ok, put_in(run, [:close, Access.key!(:started)], true)}
+    end
+  end
+
+  # Credentials come only from the current edge's vault resource, projected
+  # by the vault reader; no vault edge means no secrets. A selection the
+  # loader could not resolve, a consent that is no longer the profile's
+  # head, and an edge whose material cannot be produced are each a declared
+  # need unmet: a typed setup_required.
+  defp unseal(run) do
+    case run.opts[:authority] do
+      %Authority{resources: %Edge{vault: %{via: via}}} = authority ->
+        setup_required(run, authority, {:selection_unbound, via.label})
+
+      %Authority{resources: %Edge{vault: %{} = vault}} = authority ->
+        if Sanctum.Consent.Loader.pinned_intact?(run.ctx, authority) do
+          case Sanctum.VaultReader.fetch(run.ctx, vault) do
+            {:ok, secrets} -> {:ok, Map.put(run, :secrets, secrets)}
+            {:error, reason} -> setup_required(run, authority, reason)
+          end
+        else
+          setup_required(run, authority, :consent_moved)
+        end
+
+      _ ->
+        {:ok, Map.put(run, :secrets, %{})}
+    end
+  end
+
+  defp setup_required(run, authority, reason) do
+    {:error,
+     {:setup_required,
+      %{
+        profile_id: authority.profile_id,
+        node_ref: run.component_ref,
+        need: run.opts[:need] || "",
+        reason: Close.setup_reason(reason)
+      }}}
+  end
+
+  # The attempt opens last, once nothing after it can refuse the run.
+  defp open_attempt(run) do
+    record = run.close.record
+    root_execution_id = run.opts[:root_execution_id] || record.id
+    runtime = runtime_options(run)
+
+    opened =
+      Attempt.open(
+        execution_id: record.id,
+        attempt: record.attempt,
+        ctx: run.ctx,
+        authority: run.opts[:authority],
+        component_ref: run.component_ref,
+        limits: run.limits,
+        secrets: run.secrets,
+        # A formula's events go on its root's stream, which the caller
+        # watching the whole run subscribes to; any other component's go on
+        # its own.
+        stream_id: if(run.component_type == :formula, do: root_execution_id, else: record.id),
+        budget_id: root_execution_id,
+        step_spans: run.opts[:step_spans]
+      )
+
+    case opened do
+      {:ok, _pid} ->
+        {:ok,
+         %{
+           execution_id: record.id,
+           wasm_bytes: run.wasm_bytes,
+           runtime: runtime,
+           close: run.close
+         }}
+
+      {:error, reason} ->
+        Logger.error(
+          "[Cyfr.Execution.Admission] attempt of #{record.id} did not open: #{inspect(reason)}"
+        )
+
+        {:error, "the execution attempt could not open"}
+    end
+  end
+
+  # What the runtime runs the admitted bytes under. The declared needs and
+  # the activation digest are the resolver's, from the manifest the host
+  # fetched, never the guest's.
+  defp runtime_options(run) do
+    record = run.close.record
+
+    [
+      component_type: run.component_type,
+      timeout_ms: run.timeout_ms,
+      max_memory_bytes: run.limits.max_memory_bytes,
+      edge: run.edge,
+      limits: run.limits,
+      preloaded_fields: run.secrets,
+      component_ref: run.component_ref,
+      ctx: run.ctx,
+      execution_id: record.id,
+      execution_attempt: record.attempt,
+      root_execution_id: run.opts[:root_execution_id],
+      reference: run.reference,
+      digest: run.component["digest"],
+      declared_needs: declared_needs(run),
+      activation_digest: run.opts[:activation_digest] || record.activation_digest
+    ]
+  end
+
+  # The needs a manifest declares name the component's own dependency roles
+  # — the caller's vocabulary, never the callee's. Sorted for stability.
+  defp declared_needs(run) do
+    run.component["manifest"]
+    |> Cyfr.Manifest.decode()
+    |> Map.get("needs", %{})
+    |> Map.keys()
+    |> Enum.sort()
   end
 
   defp load(ctx, reference, select, opts) do

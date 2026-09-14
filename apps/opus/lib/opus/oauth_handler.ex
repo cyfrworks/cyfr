@@ -19,187 +19,26 @@ defmodule Opus.OAuthHandler do
 
   ## Architecture
 
-  Follows the same pattern as `Opus.HttpHandler` and `Opus.StorageHandler`.
-  Dispensed tokens are tracked by `Opus.OAuthTokenTracker`, a supervised
-  process owning a `:private` ETS table — the host-function closure (running
-  in the Wasmex process) records a token via a synchronous call, and
-  `finalize_execution` (in the executor process) drains it for masking.
+  Every token is dispensed by the execution's `Cyfr.Execution.Attempt`
+  (`dispense_oauth/2`): it meters the node's `oauth:` rate, resolves the
+  token from the consent edge's vault resource and adds it to the
+  execution's masking set before the guest has it. A refusal crosses the
+  WIT `result<string, string>` boundary as a sentence naming its shape,
+  never the material involved.
   """
-
-  alias Sanctum.Context
 
   @doc """
-  Build the WASI host function imports for OAuth token access.
-
-  Returns a map suitable for merging into the Wasmex imports.
-
-  ## Options
-
-  - `:resolver` (required) - `(provider -> {:ok, token} | {:error, term})`,
-    vault-reader-backed from the consent edge. A component whose edge
-    carries no vault binding gets a resolver that denies every request.
-  - `:limits` - the node's `Cyfr.Limits`; the consented rate limit meters
-    dispensing under its own bucket.
+  Build the WASI host function imports for OAuth token access by the
+  guest of `execution_id`, whose attempt is open. Returns a map suitable
+  for merging into the Wasmex imports.
   """
-  @spec build_oauth_imports(Context.t(), String.t(), String.t(), keyword()) :: map()
-  def build_oauth_imports(%Context{} = ctx, component_ref, execution_id, opts \\ []) do
-    # The resolver is edge-supplied (vault-reader-backed). Provider
-    # matching and endpoint integrity live behind it: the vault entry is
-    # provider-checked at dispense and its endpoints are covered by the
-    # consent's binding digest.
-    resolver = Keyword.fetch!(opts, :resolver)
-    limits = opts[:limits]
-
+  @spec build_oauth_imports(String.t()) :: map()
+  def build_oauth_imports(execution_id) when is_binary(execution_id) do
     %{
       "cyfr:oauth/token@0.1.0" => %{
         "get-access-token" =>
-          {:fn,
-           fn provider ->
-             case check_dispense_rate(ctx, component_ref, limits) do
-               :ok -> get_access_token(provider, resolver, component_ref, execution_id)
-               {:error, message} -> {:error, message}
-             end
-           end}
+          {:fn, fn provider -> Cyfr.Execution.Attempt.dispense_oauth(execution_id, provider) end}
       }
     }
   end
-
-  @doc """
-  Collect and delete all dispensed tokens for an execution.
-  Returns a list of token strings for use with SecretMasker.
-  Safe to call multiple times (second call returns empty list).
-  """
-  @spec collect_dispensed(String.t() | nil) :: [String.t()]
-  def collect_dispensed(execution_id), do: Opus.OAuthTokenTracker.collect(execution_id)
-
-  # ============================================================================
-  # Internal
-  # ============================================================================
-
-  # Meter token requests under their own oauth: bucket, independently
-  # of HTTP egress. Refuse dispensing when the limiter is unavailable.
-  defp check_dispense_rate(%Context{} = ctx, component_ref, %Cyfr.Limits{} = limits) do
-    case Cyfr.Execution.Rates.check(ctx.athanor_id, "oauth:" <> component_ref, %{
-           rate_limit: limits.rate_limit
-         }) do
-      {:ok, _remaining} ->
-        :ok
-
-      {:error, :rate_limited, retry_after} ->
-        {:error, "token dispense rate limit exceeded; retry in #{retry_after}ms"}
-
-      {:error, :missing_tenant} ->
-        {:error, "token dispense refused: no resolved athanor"}
-    end
-  catch
-    :exit, _reason ->
-      {:error, "token dispense refused: rate limiter unavailable"}
-  end
-
-  # No limits means no consented rate to enforce (the capability-scoped import
-  # is only built when the edge carries a vault binding; a nil here is a
-  # direct caller, not a consented run).
-  defp check_dispense_rate(_ctx, _component_ref, _limits), do: :ok
-
-  # WIT result<string, string> requires strings in both arms. Render typed
-  # vault errors by shape without inspecting potentially sensitive payloads.
-  # Neither arm may raise into the guest.
-  defp get_access_token(provider, resolver, component_ref, execution_id) do
-    provider = bound_provider(provider)
-    start_time = System.monotonic_time(:millisecond)
-
-    case safe_resolve(resolver, provider) do
-      {:ok, token} ->
-        case Opus.OAuthTokenTracker.put(execution_id, token) do
-          :ok ->
-            duration = System.monotonic_time(:millisecond) - start_time
-
-            :telemetry.execute(
-              [:cyfr, :opus, :oauth, :token_request],
-              %{duration_ms: duration},
-              %{component_ref: component_ref, provider: provider, status: :ok}
-            )
-
-            {:ok, token}
-
-          {:error, :untracked} ->
-            # A token the tracker never saw can never be masked out of the
-            # execution's output, events or audit rows — the dispense fails
-            # closed rather than handing the guest an unmaskable secret.
-            duration = System.monotonic_time(:millisecond) - start_time
-
-            :telemetry.execute(
-              [:cyfr, :opus, :oauth, :token_request],
-              %{duration_ms: duration},
-              %{
-                component_ref: component_ref,
-                provider: provider,
-                status: :error,
-                reason: "token tracking unavailable"
-              }
-            )
-
-            {:error, "the credential store is unavailable"}
-        end
-
-      {:error, reason} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-
-        :telemetry.execute(
-          [:cyfr, :opus, :oauth, :token_request],
-          %{duration_ms: duration},
-          %{
-            component_ref: component_ref,
-            provider: provider,
-            status: :error,
-            reason: String.slice(refusal_message(reason), 0, 100)
-          }
-        )
-
-        {:error, refusal_message(reason)}
-    end
-  end
-
-  # Guest input, and it reaches a telemetry tag and a log line. A provider
-  # name is a short identifier; nothing bounded it.
-  @provider_max 128
-
-  defp bound_provider(provider) when is_binary(provider),
-    do: binary_part(provider, 0, min(byte_size(provider), @provider_max))
-
-  defp bound_provider(other), do: other |> to_string() |> bound_provider()
-
-  defp safe_resolve(resolver, provider) do
-    resolver.(provider)
-  rescue
-    e -> {:error, {:resolver_raised, Exception.message(e)}}
-  catch
-    :exit, _reason -> {:error, :resolver_unavailable}
-    _kind, _value -> {:error, :resolver_unavailable}
-  end
-
-  # One sentence per shape. The vault reader's reasons name what went wrong
-  # and sometimes quote the material that did — `{:invalid_payload, payload}`
-  # carries the payload itself — so the guest is told the shape of the
-  # failure and never its contents.
-  defp refusal_message(reason) when is_binary(reason), do: reason
-  defp refusal_message(:anonymous_denied), do: "anonymous callers may not dispense tokens"
-  defp refusal_message(:binding_mismatch), do: "the credential no longer matches its consent"
-  defp refusal_message(:unseal_failed), do: "the credential could not be unsealed"
-  defp refusal_message(:no_oauth_material), do: "this credential carries no OAuth material"
-  defp refusal_message(:resolver_unavailable), do: "the credential store is unavailable"
-  defp refusal_message({:resolver_raised, _}), do: "the credential store is unavailable"
-  defp refusal_message({:entry_unavailable, status}), do: "the credential is #{status}"
-
-  defp refusal_message({:provider_mismatch, provider}),
-    do: "this credential is not for #{bound_provider(provider)}"
-
-  defp refusal_message({:scope_projection_unsatisfiable, _scopes}),
-    do: "the granted scopes do not cover this request"
-
-  defp refusal_message(reason) when is_atom(reason),
-    do: reason |> Atom.to_string() |> String.replace("_", " ")
-
-  defp refusal_message({tag, _detail}) when is_atom(tag), do: refusal_message(tag)
-  defp refusal_message(_other), do: "the token could not be dispensed"
 end

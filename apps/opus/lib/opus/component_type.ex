@@ -25,10 +25,9 @@ defmodule Opus.ComponentType do
   - **Reagent**: Pure compute — no HTTP, no secrets, no side effects
   - **Formula**: Orchestration — dispatches MCP tool calls via `cyfr:formula/invoke@0.1.0` host function.
     All capabilities (component execution, registry search, build, guides) are governed by the
-    consent edges its authority carries. Sub-invocations run through the full Executor pipeline
-    (edge check, rate limit, credentials, WASM, masking, record write, telemetry). Each gets its
-    own `exec_<uuid7>` ID and stores
-    `parent_execution_id` for lineage tracking.
+    consent edges its authority carries. Sub-invocations are admitted, run and closed like any
+    execution (edge check, rate limit, credentials, WASM, masking, record write, telemetry). Each
+    gets its own `exec_<uuid7>` ID and stores `parent_execution_id` for lineage tracking.
 
   ## Secrets Access
 

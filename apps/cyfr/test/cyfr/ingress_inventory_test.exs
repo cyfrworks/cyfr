@@ -53,6 +53,7 @@ defmodule Cyfr.IngressInventoryTest do
     "Opus.Chain.run_child(",
     "Opus.Chain.run_child_stream(",
     "Cyfr.Execution.Admission.step_invoke(",
+    "Cyfr.Execution.Admission.admit(",
     "Opus.Chain.execute_child(",
     "Opus.Executor.run("
   ]

@@ -210,14 +210,12 @@ defmodule Opus.ExecutorCascadeTest do
     test "only the abnormal endings cascade" do
       # Successful parents leave asynchronous children running. Failure and
       # cancellation cascade; abandoned children are reaped by lease expiry.
-      source =
-        [__DIR__, "../../lib/opus/executor.ex"]
-        |> Path.join()
-        |> Path.expand()
-        |> File.read!()
+      read = fn path -> [__DIR__, path] |> Path.join() |> Path.expand() |> File.read!() end
+      executor = read.("../../lib/opus/executor.ex")
+      close = read.("../../../cyfr/lib/cyfr/execution/close.ex")
 
       callers =
-        source
+        (executor <> "\n" <> close)
         |> String.split("\n")
         |> Enum.filter(&(String.trim(&1) =~ ~r/^Cascade\.fail_children(_of)?\(/))
         |> Enum.map(&String.trim/1)
@@ -226,9 +224,9 @@ defmodule Opus.ExecutorCascadeTest do
              "expected exactly the failure and cancel cascades, got: #{inspect(callers)}"
 
       # ...and the success path returns without one.
-      [_before, finalize] = String.split(source, "defp finalize_execution", parts: 2)
-      [finalize_body | _] = String.split(finalize, "\n  defp ", parts: 2)
-      refute finalize_body =~ "Cascade."
+      [_before, complete] = String.split(close, "def complete(", parts: 2)
+      [complete_body | _] = String.split(complete, ~r/\n  (@doc|def |defp )/, parts: 2)
+      refute complete_body =~ "Cascade."
     end
 
     test "a completed parent leaves a running child alone" do

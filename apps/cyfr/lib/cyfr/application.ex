@@ -142,15 +142,19 @@ defmodule Cyfr.Application do
          )},
       # Execution bookkeeping, after PubSub (the buffers broadcast on it):
       # the execution_id → driving-process registry, the per-execution
-      # event-buffer registry, the emit counter and the buffers. The counter
-      # comes before the buffers, so a restart of this group rebuilds the
-      # numbering source first and then the buffers that read it; a dead
-      # registry restarts the buffers that register in it.
+      # event-buffer registry, the emit counter, the buffers, and the open
+      # attempts' registry and supervisor. The counter comes before the
+      # buffers, so a restart of this group rebuilds the numbering source
+      # first and then the buffers that read it; the attempts, which push
+      # onto the buffers, come last; a dead registry restarts what
+      # registers in it.
       group(Cyfr.Execution.Tree, [
         {Registry, keys: :unique, name: Cyfr.Execution.Registry},
         {Registry, keys: :unique, name: Cyfr.Execution.Events.Registry},
         Cyfr.Execution.Events.Sequence,
-        {DynamicSupervisor, name: Cyfr.Execution.Events.Supervisor, strategy: :one_for_one}
+        {DynamicSupervisor, name: Cyfr.Execution.Events.Supervisor, strategy: :one_for_one},
+        {Registry, keys: :unique, name: Cyfr.Execution.Attempt.Registry},
+        {DynamicSupervisor, name: Cyfr.Execution.Attempt.Supervisor, strategy: :one_for_one}
       ]),
       # Roots run in the background (`execution.run_stream`), after the
       # registry each one registers in; shutdown waits up to 30 s for them.

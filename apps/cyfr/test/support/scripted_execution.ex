@@ -19,8 +19,9 @@ defmodule Cyfr.Test.ScriptedExecution do
   - `{:refuse, %{"type", "message"}}` — the child completes with the
     contract's typed refusal in its envelope.
   - `{:emit, events}` — push each event (a map) on the child's own event
-    stream through `Opus.Emit`, as a streaming catalyst does, before the
-    next item.
+    stream through `Cyfr.Execution.Emit`, as a streaming catalyst's attempt
+    does, before the next item. Text the emitter still holds goes out,
+    masked, before the child's terminal row.
   - `{:sleep, ms}` — wait before the next item.
   - `{:probe, pid}` — send `{:scripted_probe, self(), execution_id}` to
     `pid` and wait for `:continue` (5 s), so a test can inspect what the
@@ -41,6 +42,7 @@ defmodule Cyfr.Test.ScriptedExecution do
   @behaviour Cyfr.Execution
 
   alias Cyfr.Authority
+  alias Cyfr.Execution.Emit
 
   @agent __MODULE__
 
@@ -232,7 +234,8 @@ defmodule Cyfr.Test.ScriptedExecution do
             id: id,
             attempt: attempt,
             started_at: started_at,
-            authority: decision.authority
+            authority: decision.authority,
+            emit: Emit.new(id, ctx: ctx, authority: decision.authority)
           }
 
           try do
@@ -242,7 +245,7 @@ defmodule Cyfr.Test.ScriptedExecution do
           end
 
         {:error, refusal} ->
-          fail(ctx, id, attempt, started_at, refusal)
+          fail_row(ctx, id, attempt, started_at, refusal)
           {:error, refusal}
       end
     end
@@ -298,12 +301,11 @@ defmodule Cyfr.Test.ScriptedExecution do
   defp answer(call, crash_after?) do
     case take_item() do
       nil ->
-        fail(call.ctx, call.id, call.attempt, call.started_at, "script exhausted")
+        fail(call, "script exhausted")
         {:error, "script exhausted"}
 
       {:emit, events} ->
-        emit(call, events)
-        answer(call, crash_after?)
+        call |> emit(events) |> answer(crash_after?)
 
       {:sleep, ms} ->
         Process.sleep(ms)
@@ -330,7 +332,7 @@ defmodule Cyfr.Test.ScriptedExecution do
         Process.sleep(:infinity)
 
       {:error, message} ->
-        fail(call.ctx, call.id, call.attempt, call.started_at, message)
+        fail(call, message)
         {:error, message}
 
       {:refuse, %{"type" => _} = error} ->
@@ -349,34 +351,32 @@ defmodule Cyfr.Test.ScriptedExecution do
   defp described_model(_params), do: %{}
 
   defp emit(call, events) do
-    emitter =
-      emitter().open(call.id,
-        ctx: call.ctx,
-        authority: call.authority,
-        secrets: Agent.get(@agent, & &1.secrets)
-      )
+    secrets = secrets()
 
-    try do
-      Enum.each(events, &emitter().emit(emitter, Jason.encode!(&1)))
-    after
-      emitter().close(emitter)
-    end
+    emitter =
+      Enum.reduce(events, call.emit, fn event, emitter ->
+        {_answer, emitter} = Emit.emit(emitter, Jason.encode!(event), secrets)
+        emitter
+      end)
+
+    %{call | emit: emitter}
   end
+
+  # What the emitter still holds goes out, masked, before the terminal row.
+  defp flush(call), do: Emit.flush(call.emit, secrets())
+
+  defp secrets, do: Agent.get(@agent, & &1.secrets)
 
   # The catalyst's typed refusal: the run completes, the envelope refuses.
-  defp refuse(call, error) do
-    envelope = %{"status" => 429, "error" => error}
-    written(call.ctx, call.id, call.attempt, call.started_at, envelope)
-  end
+  defp refuse(call, error), do: written(call, %{"status" => 429, "error" => error})
 
-  defp complete(call, data) do
-    envelope = %{"status" => 200, "data" => data}
-    written(call.ctx, call.id, call.attempt, call.started_at, envelope)
-  end
+  defp complete(call, data), do: written(call, %{"status" => 200, "data" => data})
 
   # The terminal write; a row that is no longer running (a cancel, a
   # sweep, a test that ended) answers a refusal instead of a crash.
-  defp written(ctx, id, attempt, started_at, envelope) do
+  defp written(call, envelope) do
+    %{ctx: ctx, id: id, attempt: attempt, started_at: started_at} = call
+    flush(call)
     now = DateTime.utc_now()
 
     case Arca.Execution.record_end(
@@ -399,7 +399,12 @@ defmodule Cyfr.Test.ScriptedExecution do
     end
   end
 
-  defp fail(ctx, id, attempt, started_at, message) do
+  defp fail(call, message) do
+    flush(call)
+    fail_row(call.ctx, call.id, call.attempt, call.started_at, message)
+  end
+
+  defp fail_row(ctx, id, attempt, started_at, message) do
     now = DateTime.utc_now()
 
     Arca.Execution.record_end(
@@ -422,8 +427,7 @@ defmodule Cyfr.Test.ScriptedExecution do
     end)
   end
 
-  # Named at runtime: cyfr does not depend on opus, and these modules are
+  # Named at runtime: cyfr does not depend on opus, and the engine is
   # reachable only from the umbrella's own test run.
   defp engine, do: Module.concat([:Opus])
-  defp emitter, do: Module.concat([:Opus, :Emit])
 end

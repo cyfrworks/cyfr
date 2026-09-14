@@ -54,10 +54,10 @@ defmodule Opus.EdgeGuardTest do
 
   describe "an edge that grants nothing" do
     test "a nil edge denies every resource it guards" do
-      assert EdgeGuard.domains(nil) == []
-      assert EdgeGuard.paths(nil) == []
-      assert EdgeGuard.actions(nil) == []
-      assert EdgeGuard.tools(nil) == []
+      assert Edge.domains(nil) == []
+      assert Edge.paths(nil) == []
+      assert Edge.actions(nil) == []
+      assert Edge.tools(nil) == []
 
       assert {:error, _} = EdgeGuard.check_domain(nil, "example.com")
       assert {:error, _} = EdgeGuard.check_scheme(nil, "https")
@@ -73,12 +73,12 @@ defmodule Opus.EdgeGuardTest do
       # unrestricted just because the group is absent rather than empty.
       bare = edge(tools: ["component.list"])
 
-      assert EdgeGuard.domains(bare) == []
-      assert EdgeGuard.paths(bare) == []
+      assert Edge.domains(bare) == []
+      assert Edge.paths(bare) == []
       assert {:error, _} = EdgeGuard.check_domain(bare, "example.com")
       refute EdgeGuard.allows_path?(bare, "notes.md")
       refute EdgeGuard.allows_action?(bare, "read")
-      assert EdgeGuard.tools(bare) == ["component.list"]
+      assert Edge.tools(bare) == ["component.list"]
     end
 
     test "an empty allowlist denies, and says what was allowed" do

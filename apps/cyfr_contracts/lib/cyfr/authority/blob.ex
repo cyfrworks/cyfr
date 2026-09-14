@@ -81,6 +81,34 @@ defmodule Cyfr.Authority.Blob do
           }
 
     defstruct vault: nil, egress: nil, storage: nil, tools: [], tool_servers: []
+
+    # A nil edge (an authority with `resources: :none`) and a nil resource
+    # group read as empty lists, and an empty list grants nothing.
+
+    @doc "The egress domains the edge allows; empty for a nil edge or egress group."
+    @spec domains(t() | nil) :: [String.t()]
+    def domains(edge), do: egress(edge, :domains)
+
+    @doc "The storage paths the edge allows; empty for a nil edge or storage group."
+    @spec paths(t() | nil) :: [String.t()]
+    def paths(edge), do: storage(edge, :paths)
+
+    @doc "The storage actions the edge allows; empty for a nil edge or storage group."
+    @spec actions(t() | nil) :: [String.t()]
+    def actions(edge), do: storage(edge, :actions)
+
+    @doc "The tool actions the edge grants; empty for a nil edge."
+    @spec tools(t() | nil) :: [String.t()]
+    def tools(nil), do: []
+    def tools(%__MODULE__{tools: tools}), do: tools
+
+    defp egress(nil, _key), do: []
+    defp egress(%__MODULE__{egress: nil}, _key), do: []
+    defp egress(%__MODULE__{egress: egress}, key), do: Map.get(egress, key, [])
+
+    defp storage(nil, _key), do: []
+    defp storage(%__MODULE__{storage: nil}, _key), do: []
+    defp storage(%__MODULE__{storage: storage}, key), do: Map.get(storage, key, [])
   end
 
   defmodule Node do

@@ -180,6 +180,28 @@ defmodule Cyfr.Authority.BlobTest do
     end
   end
 
+  describe "an edge's allowed lists" do
+    test "name what the edge grants" do
+      {:ok, source} = Blob.lookup_edge(parse!(golden()), @formula, @catalyst, "source")
+
+      assert Edge.domains(source) == ["prod.supabase.co"]
+      assert Edge.paths(source) == []
+      assert Edge.actions(source) == []
+      assert Edge.tools(source) == ["storage.read"]
+    end
+
+    test "are empty for a nil edge and for an absent resource group" do
+      {:ok, dest} = Blob.lookup_edge(parse!(golden()), @formula, @catalyst, "dest")
+
+      for edge <- [nil, dest] do
+        assert Edge.domains(edge) == []
+        assert Edge.paths(edge) == []
+        assert Edge.actions(edge) == []
+        assert Edge.tools(edge) == []
+      end
+    end
+  end
+
   # ============================================================================
   # Clamp
   # ============================================================================

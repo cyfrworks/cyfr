@@ -19,20 +19,15 @@ defmodule Opus.HostSurfaceTest do
   # The cyfr namespaces opus reaches into, and what a remote worker would
   # have to do about each.
   @surface [
-    # The consent/record plane — `Opus.Host`'s delegates. These are
-    # the ones that would genuinely go over the wire.
     # `Sanctum.Authority` is the authority's live half: the invoke-budget
     # slot a spawned child holds and gives back — a worker on another node
     # would take and release it through a client. The authority as data is
     # `Cyfr.Authority`, in the contracts.
     "Sanctum.Authority",
-    # The pin check before a run's vault edges are unsealed: the consent
-    # the authority was loaded from is still its profile's head.
-    "Sanctum.Consent",
     "Sanctum.Context",
+    # A guest's egress denial recorded for the audit trail, through
+    # `Opus.Host.enforce/1`.
     "Sanctum.Policy",
-    "Sanctum.VaultReader",
-    "Emissary.MCP",
 
     # Infrastructure a worker would need a client for, not a behaviour it
     # would implement.
@@ -42,39 +37,27 @@ defmodule Opus.HostSurfaceTest do
     "Arca.Storage",
     "Arca.Usage",
 
-    # The component catalogue: what to run, and whether it is what it says.
-    # The code identity an execution records, resolved from the athanor's
-    # component rows.
-    "Compendium.Activation",
-    "Compendium.Component",
     # The local-namespace trust policy: the storage boundary asks it before
     # a guest write lands in components/ — pulled components are
     # fork-to-modify, and the refusal sentence lives with the policy.
     "Compendium.NamespacePolicy",
-    "Compendium.Resolver",
 
     # Shared primitives — glue, by construction available to any node.
-    # Whether this boot still owns the control plane — the engine admits
-    # nothing when it does not.
-    "Cyfr.ControlPlane",
-    # The execution port, and what CYFR owns of a run: the authority it is
-    # admitted under, its invoke charge row and its recorded signature
-    # attestation, the rate counters consented limits are checked against,
-    # the execution slots and the registry a cancel finds a run's processes
-    # through, the event stream a guest's events are pushed on, the
-    # execution row opened, renewed and closed, its lifecycle telemetry,
-    # and the cascade that fails a failed parent's children — a worker on
-    # another node would reach them through host calls.
+    # The execution port, and what CYFR owns of a run: its admission (the
+    # authority, the resolved and attested component, the consented limits,
+    # rates and policy, the admitted row and the unsealed fields), the
+    # attempt that dispenses OAuth tokens, masks and pushes the guest's
+    # events and closes the row, the invoke charge row, the rate counters a
+    # guest's egress is checked against, the execution slots and the
+    # registry a cancel finds a run's processes through, the lease renewed
+    # while it runs, and the cascade a cancel fails children through — a
+    # worker on another node would reach them through host calls.
     "Cyfr.Execution",
     # Egress pinning: a guest request's host resolved and checked against
     # its consented private policy before the connection is made.
     "Cyfr.Network",
     # The operation catalog: an in-chain tool call is dispatched through it.
-    "Cyfr.Ops",
-    # The signed-pulls posture, read at execution as well as at pull so a
-    # component stored before the knob was turned on cannot keep running. A
-    # worker would need this value from its client, not re-read it locally.
-    "Cyfr.RuntimeConfig"
+    "Cyfr.Ops"
   ]
 
   @namespace ~r/\b((?:Arca|Sanctum|Compendium|Emissary|Prism|Cyfr)(?:\.[A-Z]\w+)*)\b/
@@ -131,8 +114,8 @@ defmodule Opus.HostSurfaceTest do
 
            Add each with a line saying what a worker on another node would
            do about it — implement the behaviour, or need a client for the
-           infrastructure. `Opus.Host` is only the consent/record plane; it
-           is not the whole answer and no longer claims to be.
+           infrastructure. `Opus.Host` is only the consent plane a host
+           function crosses; it is not the whole answer.
            """
   end
 
@@ -143,18 +126,10 @@ defmodule Opus.HostSurfaceTest do
            "the surface names namespaces opus no longer uses: #{inspect(stale)}"
   end
 
-  test "Opus.Host covers the consent and record plane" do
+  test "Opus.Host covers the consent plane a host function crosses" do
     exports = Opus.Host.__info__(:functions) |> Keyword.keys() |> MapSet.new()
 
-    for name <- [
-          :tool_call,
-          :unseal,
-          :enforce,
-          :record_start,
-          :record_complete,
-          :record_failed,
-          :broadcast
-        ] do
+    for name <- [:tool_call, :host_intercepted?, :enforce] do
       assert MapSet.member?(exports, name),
              "Opus.Host no longer delegates #{name} — the plane it does cover must stay covered"
     end

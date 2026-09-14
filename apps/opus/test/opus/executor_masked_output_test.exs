@@ -7,16 +7,18 @@ defmodule Opus.ExecutorMaskedOutputTest do
   run unsealed and an OAuth token dispensed to it are masked in the output,
   a failure message, a timeout error, the events the guest streams, what a
   parent is handed of its child, the kept result payload, the lifecycle
-  events' data and the result the waiter receives.
+  events' data and the result the waiter receives. A run whose attempt ends
+  before it closes the run records none of them.
 
   The guest is the step-stub catalyst (`test_wasm/step_stub/` in the cyfr
   suite). Its `chat` reads its key, streams "The stub ", "answers ", "at ",
   "once." and answers their concatenation; an operation it does not know
   is refused with "the stub answers describe, models and chat". Each
   credential is text the stub writes, so what it writes is what must come
-  out masked — the key spans two deltas, and so does the token. The token
-  is put in the dispensed-token tracker under the run's id as the run
-  starts, where a guest's `cyfr:oauth` call puts one.
+  out masked — the key spans two deltas, and so does the token. The key's
+  vault entry also holds an OAuth bundle whose access token is the token,
+  and the token is dispensed through the run's attempt as the guest starts,
+  as a guest's `cyfr:oauth` call dispenses one.
   """
 
   use ExUnit.Case, async: false
@@ -172,6 +174,32 @@ defmodule Opus.ExecutorMaskedOutputTest do
     refute_unmasked(payload, secrets)
   end
 
+  test "a run whose attempt ends mid-run records nothing unmasked", %{ctx: ctx} do
+    secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
+    id = Cyfr.UUID7.execution_id()
+    :ok = Cyfr.Execution.subscribe_events(id, ctx)
+    await_entry!(id)
+
+    run = Task.async(fn -> Opus.run_root(ctx, :default, @stub, chat(), execution_id: id) end)
+    assert_receive {:entered, ^id, guest}, 30_000
+
+    attempt = Cyfr.Execution.Attempt.whereis(id)
+    ref = Process.monitor(attempt)
+    Process.exit(attempt, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^attempt, :killed}
+    send(guest, :continue)
+
+    assert {:error, message} = Task.await(run, 60_000)
+    assert message == "Execution attempt ended before it closed"
+
+    row = Arca.Repo.get!(Arca.Execution, id)
+    assert row.status == "failed" and row.error_message == message
+    refute_unmasked(row, secrets)
+    refute_unmasked(live_events(), secrets)
+    refute_unmasked(event_rows(ctx, id), secrets)
+    assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
+  end
+
   # ---------------------------------------------------------------------------
   # The estate
   # ---------------------------------------------------------------------------
@@ -229,14 +257,16 @@ defmodule Opus.ExecutorMaskedOutputTest do
     File.write!(Path.join(unit, "cyfr-manifest.json"), Jason.encode!(manifest))
   end
 
-  # Bind `key` as the component's vault field, and dispense `token` to every
-  # run of it as the run starts. Answers both, the credentials to look for.
+  # Bind `key` as the component's vault field, in an entry whose OAuth bundle
+  # holds `token`, and dispense `token` to every run of it as its guest
+  # starts. Answers both, the credentials to look for.
   defp arm!(ctx, ref, key: key, token: token) do
     {:ok, entry} =
       Sanctum.Vault.create(ctx, %{
         name: "#{ref} key",
         kind: "api_key",
-        fields: %{@key_field => key}
+        fields: %{@key_field => key},
+        oauth: %{"access_token" => token}
       })
 
     {:ok, plan} = Plan.plan(ctx, %{ref: ref})
@@ -257,10 +287,10 @@ defmodule Opus.ExecutorMaskedOutputTest do
     :ok =
       :telemetry.attach(
         handler,
-        [:cyfr, :opus, :execute, :start],
+        [:cyfr, :opus, :runtime, :authority_entered],
         fn _event, _measurements, %{execution_id: id, reference: reference}, _config ->
           if String.starts_with?(reference, ref <> ":"),
-            do: :ok = Opus.OAuthTokenTracker.put(id, token)
+            do: {:ok, ^token} = Cyfr.Execution.Attempt.dispense_oauth(id, "stub")
         end,
         nil
       )
@@ -279,6 +309,33 @@ defmodule Opus.ExecutorMaskedOutputTest do
         [:cyfr, :opus, :runtime, :authority_entered],
         fn _event, _measurements, metadata, _config ->
           if metadata.execution_id == id, do: Process.sleep(5_000)
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  # Hold the guest of `id` at its authority's entry until the test sends
+  # `:continue` to the process it names.
+  defp await_entry!(id) do
+    handler = "masked-output-entry-#{System.unique_integer([:positive])}"
+    test = self()
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :opus, :runtime, :authority_entered],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.execution_id == id do
+            send(test, {:entered, id, self()})
+
+            receive do
+              :continue -> :ok
+            after
+              30_000 -> :ok
+            end
+          end
         end,
         nil
       )

@@ -177,7 +177,6 @@ defmodule Opus.ChainTest do
           root_execution_id: parent_id,
           limits: Cyfr.Authority.limits(auth),
           authority: auth,
-          emitter: Opus.Emit.open(parent_id, ctx: Context.enter_guest(ctx), authority: auth),
           declared_needs: [],
           activation_digest: "sha256:root-act"
         ],
@@ -654,6 +653,15 @@ defmodule Opus.ChainTest do
     test "an oversized emit is refused by the node's own request limit", %{ctx: ctx} do
       auth = authority_with_edges(%{})
       parent_id = "exec_fork_emit_#{System.unique_integer([:positive])}"
+
+      # The formula's attempt answers its emit under the node's limits.
+      {:ok, _attempt} =
+        Cyfr.Execution.Attempt.open(
+          execution_id: parent_id,
+          ctx: ctx,
+          authority: auth,
+          component_ref: "formula:local.fork-emit:0.1.0"
+        )
 
       {imports, tracker} = fork_imports(ctx, auth, parent_id)
 

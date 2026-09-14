@@ -163,12 +163,6 @@ config :cyfr, :max_external_servers, 50
 config :cyfr, :external_server_max_in_flight, 8
 config :cyfr, :max_backends_per_server, 4
 
-# How long a dispensed OAuth token stays tracked for output masking
-# (`Opus.OAuthTokenTracker`), how long a returning sign-in waits on the
-# cyfr.run probe before proceeding without it (`Sanctum.SignIn`), and the
-# retention sweep interval (`Cyfr.RetentionScheduler`).
-config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
-
 # The deadline, in milliseconds, for one provisioning attempt's required
 # dependency pulls: the closure of every component the bundle cannot run
 # without, pulled when an athanor is first filled and at the seed sync
@@ -178,6 +172,10 @@ config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
 # waits up to two minutes per request and retries twice, so one stalled
 # blob can hold an attempt for several minutes within this bound.
 config :cyfr, :provisioning_required_pull_budget_ms, :timer.minutes(10)
+
+# How long a returning sign-in waits on the cyfr.run probe before
+# proceeding without it (`Sanctum.SignIn`), in milliseconds, and the
+# retention sweep interval (`Cyfr.RetentionScheduler`).
 config :cyfr, :returning_probe_ms, 5_000
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 

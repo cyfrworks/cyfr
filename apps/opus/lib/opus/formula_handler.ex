@@ -32,7 +32,7 @@ defmodule Opus.FormulaHandler do
   | `await-any` | Blocks until FIRST task completes |
   | `poll` | Non-blocking status check |
   | `cancel` | Cancel a spawned task |
-  | `emit` | Push a progress/UI event to the root execution's stream (`Opus.Emit`) |
+  | `emit` | Push a progress/UI event through the formula's attempt (`Cyfr.Execution.Attempt.emit/2`) |
 
   ## Architecture
 
@@ -63,14 +63,10 @@ defmodule Opus.FormulaHandler do
 
   ## Usage
 
-      emitter = Opus.Emit.open(root_execution_id, ctx: ctx, authority: authority)
-
       {imports, tracker_pid} = Opus.FormulaHandler.build_formula_imports(ctx, parent_execution_id,
-        root_execution_id: root_execution_id, limits: limits, authority: authority,
-        emitter: emitter)
+        root_execution_id: root_execution_id, limits: limits, authority: authority)
       # Merge imports and pass to Wasmex.Components.start_link
       # After execution: Opus.FormulaHandler.cleanup_registry(tracker_pid)
-      # and Opus.Emit.close(emitter)
   """
 
   require Logger
@@ -91,21 +87,21 @@ defmodule Opus.FormulaHandler do
   ## Parameters
 
   - `ctx` - The execution `Sanctum.Context` (shared with sub-executions)
-  - `parent_execution_id` - The formula's own execution ID for lineage tracking
+  - `parent_execution_id` - The formula's own execution ID for lineage
+    tracking; its open `Cyfr.Execution.Attempt` answers `emit`, on the
+    stream the attempt was opened on
 
   ## Options
 
-  - `:root_execution_id` - The top-level execution ID for routing emit events to the root SSE stream (falls back to `parent_execution_id`)
+  - `:root_execution_id` - The top-level execution ID: the root of the lineage the formula's calls carry, and the stream a setup refusal is announced on (falls back to `parent_execution_id`)
   - `:limits` - The node's `Cyfr.Limits` (batch timeout, max concurrent tasks)
   - `:authority` - The `Cyfr.Authority` the chain runs under (required).
     Execution dispatch goes through `Opus.Chain` and every other tool through
-    `Cyfr.Ops.Catalog.call_in_chain/5`. A formula run always carries one — the
-    executor raises before reaching here (`Opus.Executor.stage_enforce_policy`),
+    `Cyfr.Ops.Catalog.call_in_chain/5`. A formula run always carries one —
+    admission raises before reaching here (`Cyfr.Execution.Admission.admit/4`),
     and this fetch keeps a direct caller honest too.
   - `:declared_needs` / `:activation_digest` - host-derived transition inputs
     for this node's onward invocations
-  - `:emitter` - the `Opus.Emit` emitter `emit` answers through (required),
-    opened on the root execution's stream
   - `:attempt` - the attempt that owns this formula's row, stamped on the
     lineage of every call it makes
   """
@@ -114,7 +110,6 @@ defmodule Opus.FormulaHandler do
     authority = Keyword.fetch!(opts, :authority)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
     limits = opts[:limits]
-    emitter = Keyword.fetch!(opts, :emitter)
 
     batch_timeout_ms =
       case limits && Limits.batch_timeout_ms(limits) do
@@ -233,7 +228,7 @@ defmodule Opus.FormulaHandler do
           {:fn,
            fn json_event ->
              guarded(parent_execution_id, "emit", fn ->
-               Opus.Emit.emit(emitter, json_event)
+               Cyfr.Execution.Attempt.emit(parent_execution_id, json_event)
              end)
            end}
       }
@@ -522,8 +517,8 @@ defmodule Opus.FormulaHandler do
     do: encode_error(:invalid_request, "Invalid reference: #{guest_reason(reason)}")
 
   defp encode_child_error({:setup_required, payload} = reason) do
-    # Build the shared remediation payload through Opus.Remediation.
-    case Opus.Remediation.analyze(reason) do
+    # Build the shared remediation payload through Cyfr.Remediation.
+    case Cyfr.Remediation.analyze(reason) do
       {:setup_required, remediation} ->
         encode_error_with_remediation(
           :setup_required,
@@ -563,7 +558,7 @@ defmodule Opus.FormulaHandler do
 
             # Analyze the raw term: the typed setup/consent tuples carry the
             # structural cause, and stringifying first would hide it.
-            case Opus.Remediation.analyze(reason) do
+            case Cyfr.Remediation.analyze(reason) do
               {:setup_required, remediation} ->
                 maybe_emit_setup_event(root_execution_id, remediation, reason_str, ctx)
 
