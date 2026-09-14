@@ -1,38 +1,54 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Test framing, response correlation, and the backend lifecycle through the
-// spawner: spawn, exit, restart and release.
+// The bridge over HTTP with an in-process fake spawner: /control and /mcp
+// accept only requests signed for this lifetime, in order and within the
+// window; an owner runs exactly the backends its sync defined, at exactly its
+// version, while its lease lives; each owner sees only its own backends; what
+// leaves the bridge is masked; and stdio framing, crashes and release behave
+// through the spawner.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as auth from "../auth.mjs";
 import { createBridge } from "../server.mjs";
+import { Controller } from "../../../tests/bridge-image/controller.mjs";
 import { FakeSpawner } from "./fake-spawner.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(DIR, "..", "server.mjs");
 const CHILD = path.join(DIR, "fake-child.mjs");
-const TOKEN = "test-token";
-
-let dataDir;
-let spawner;
-let bridge;
-let base;
+const ROOT = randomBytes(32);
 
 // Generous: a loaded CI runner spawning node children can take seconds.
 const TIMEOUTS = { initTimeoutMs: 15_000, rpcTimeoutMs: 15_000 };
 
-async function startBridge(options) {
-  const instance = createBridge({ token: TOKEN, ...TIMEOUTS, ...options });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function eventually(check, what, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await check();
+    if (value) return value;
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+    await sleep(25);
+  }
+}
+
+async function startBridge(options = {}) {
+  const spawner = options.spawner || new FakeSpawner();
+  const instance = createBridge({ root: ROOT, ...TIMEOUTS, ...options, spawner });
   const server = await new Promise((resolve) => {
     const s = instance.app.listen(0, "127.0.0.1", () => resolve(s));
   });
-  return { instance, server, base: `http://127.0.0.1:${server.address().port}` };
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const controller = new Controller({ base, root: ROOT });
+  assert.equal((await controller.hello()).status, 200);
+  return { instance, server, base, spawner, controller };
 }
 
 async function stopBridge({ instance, server }) {
@@ -40,48 +56,9 @@ async function stopBridge({ instance, server }) {
   await new Promise((resolve) => server.close(() => resolve()));
 }
 
-const rpcAt = async (url, method, params) => {
-  const res = await fetch(`${url}/mcp`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${TOKEN}`,
-      "mcp-protocol-version": "2026-07-28",
-      "mcp-method": method,
-      ...(params?.name ? { "mcp-name": params.name } : {}),
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Math.floor(Math.random() * 1e6),
-      method,
-      params: {
-        ...params,
-        _meta: {
-          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-          "io.modelcontextprotocol/clientCapabilities": {},
-        },
-      },
-    }),
-  });
-
-  return { status: res.status, body: await res.json().catch(() => null) };
-};
-
-const rpc = (method, params) => rpcAt(base, method, params);
-
-const callTool = async (name, args = {}, url = base) => {
-  const { body } = await rpcAt(url, "tools/call", { name, arguments: args });
-  return body.result;
-};
-
-const addBackend = (name, mode, env) =>
-  callTool("add_backend", { name, command: `node ${CHILD} ${mode}`, ...(env ? { env } : {}) });
-
-const payload = (result) => JSON.parse(result.content[0].text);
-
-const listed = async (url = base) => payload(await callTool("list_backends", {}, url)).backends;
-
-const toolNames = async () => (await rpc("tools/list", {})).body.result.tools.map((t) => t.name);
+let n = 0;
+const newOwner = (e = 1) => ({ athanor: `ath_${++n}`, server: `mcp_${n}`, e });
+const backend = (mode, env = {}, name = "b") => ({ name, command: `node ${CHILD} ${mode}`, env });
 
 const alive = (pid) => {
   try {
@@ -92,231 +69,486 @@ const alive = (pid) => {
   }
 };
 
+let shared;
+let c;
+
 before(async () => {
-  dataDir = await mkdtemp(path.join(tmpdir(), "bridge-test-"));
-  spawner = new FakeSpawner();
-  const started = await startBridge({ spawner, persistPath: path.join(dataDir, "backends.json") });
-  bridge = started;
-  base = started.base;
+  shared = await startBridge();
+  c = shared.controller;
 });
 
 after(async () => {
-  await stopBridge(bridge);
-  await rm(dataDir, { recursive: true, force: true });
+  await stopBridge(shared);
 });
+
+async function synced(owner, backends, options) {
+  const answer = await c.sync({ ...owner, backends }, options);
+  assert.equal(answer.status, 200, JSON.stringify(answer.body));
+  return answer.body;
+}
+
+// ============================================================================
+// Authentication and ordering
+// ============================================================================
+
+test("/health answers without authentication, and every response names this lifetime", async () => {
+  const res = await fetch(`${shared.base}/health`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+  assert.match(res.headers.get("cyfr-bridge-boot"), /^bb_[0-9a-f]{32}$/);
+  assert.equal(res.headers.get("cyfr-bridge-boot"), shared.instance.boot);
+  assert.equal(c.boot, shared.instance.boot);
+});
+
+test("hello answers the lifetime and the pool", async () => {
+  const answer = await c.hello();
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.body.pool, { size: 32, free: 32 - shared.spawner.live() });
+  assert.equal(answer.boot, answer.body.boot);
+
+  const mismatch = await c.control({ type: "hello", g: 2, cyfr_boot: c.cyfrBoot });
+  assert.deepEqual([mismatch.status, mismatch.body], [400, { error: "bad_request" }]);
+});
+
+test("a control message that is unsigned, forged or outside the window is refused and moves nothing", async () => {
+  const unsigned = await fetch(`${shared.base}/control`, { method: "POST", body: JSON.stringify({ type: "hello" }) });
+  assert.equal(unsigned.status, 401);
+  assert.deepEqual(await unsigned.json(), { error: "unauthorized" });
+
+  const forged = await c.hello({ key: randomBytes(32), seq: 1_000_000 });
+  assert.deepEqual([forged.status, forged.body], [401, { error: "unauthorized" }]);
+
+  const late = await c.hello({ ts: Date.now() - 31_000, seq: 1_000_001 });
+  assert.deepEqual([late.status, late.body], [401, { error: "unauthorized" }]);
+  const early = await c.hello({ ts: Date.now() + 31_000, seq: 1_000_002 });
+  assert.equal(early.status, 401);
+
+  // None of the refused sequence numbers raised the high-water mark.
+  assert.equal((await c.hello()).status, 200);
+});
+
+test("a control message must name this lifetime, and hello must name none", async () => {
+  const hello = await c.hello({ boot: shared.instance.boot });
+  assert.deepEqual([hello.status, hello.body], [409, { error: "stale_boot" }]);
+
+  for (const boot of ["-", "bb_00000000000000000000000000000000"]) {
+    const renew = await c.renew([], 30_000, { boot });
+    assert.deepEqual([renew.status, renew.body], [409, { error: "stale_boot" }]);
+  }
+});
+
+test("a control message at or below the high-water mark is refused", async () => {
+  const { instance, server, controller } = await startBridge();
+  try {
+    assert.equal((await controller.renew([], 30_000, { seq: 10 })).status, 200);
+    for (const seq of [10, 9]) {
+      const again = await controller.renew([], 30_000, { seq });
+      assert.deepEqual([again.status, again.body], [409, { error: "stale_control" }]);
+    }
+    const olderGeneration = await controller.renew([], 30_000, { generation: 0, seq: 99 });
+    assert.deepEqual([olderGeneration.status, olderGeneration.body], [409, { error: "stale_control" }]);
+
+    // A higher generation starts its own sequence.
+    assert.equal((await controller.renew([], 30_000, { generation: 2, seq: 1 })).status, 200);
+    const previousGeneration = await controller.renew([], 30_000, { generation: 1, seq: 11 });
+    assert.equal(previousGeneration.status, 409);
+  } finally {
+    await stopBridge({ instance, server });
+  }
+});
+
+test("a control message with an unknown type or invalid fields is refused as a bad request", async () => {
+  const owner = newOwner();
+  const cases = [
+    { type: "launch" },
+    { type: "renew", owners: [{ athanor: "a b", server: "s", e: 1 }], lease_ms: 1000 },
+    { type: "renew", owners: [], lease_ms: 60_001 },
+    { type: "release", owners: [{ athanor: "a", server: "s", e: 0 }] },
+    { type: "reconcile", keep: "all" },
+  ];
+  for (const message of cases) {
+    const answer = await c.control(message);
+    assert.deepEqual([answer.status, answer.body], [400, { error: "bad_request" }], JSON.stringify(message));
+  }
+
+  const badBackends = [
+    [{ name: "Bad", command: "node x", env: {} }],
+    [{ name: "b", command: "node x --token vault:gh", env: {} }],
+    [{ name: "b", command: "", env: {} }],
+    [{ name: "b", command: "node x", env: { PATH: "/tmp" } }],
+    [{ name: "b", command: "node x", env: { CYFR_SECRET: "x" } }],
+    [{ name: "b", command: "node x", env: { MCP_BRIDGE_PORT: "1" } }],
+    [{ name: "b", command: "node x", env: { lower: "x" } }],
+    [backend("well-behaved"), backend("well-behaved")],
+    [],
+  ];
+  const before = shared.spawner.spawns.length;
+  for (const backends of badBackends) {
+    const answer = await c.sync({ ...owner, backends });
+    assert.deepEqual([answer.status, answer.body], [400, { error: "bad_request" }], JSON.stringify(backends));
+  }
+
+  // An environment sealed for another lifetime, another epoch or another owner does not open.
+  const env = Buffer.from(JSON.stringify({ b: {} }));
+  const target = { athanor: owner.athanor, server: owner.server, generation: 1, epoch: 1 };
+  for (const [sealedOwner, boot] of [
+    [target, "bb_00000000000000000000000000000000"],
+    [{ ...target, epoch: 2 }, c.boot],
+    [{ ...target, server: "mcp_other" }, c.boot],
+  ]) {
+    const sealed = auth.seal(auth.sealKey(ROOT), sealedOwner, boot, env, randomBytes(12));
+    const answer = await c.sync({ ...owner, backends: [backend("well-behaved")], sealed });
+    assert.deepEqual([answer.status, answer.body], [400, { error: "bad_request" }]);
+  }
+  assert.equal(shared.spawner.spawns.length, before, "a refused sync spawned something");
+});
+
+test("a sync's environment must name exactly its backends and their variables", async () => {
+  const owner = newOwner();
+  const definitions = { type: "sync", owner: { athanor: owner.athanor, server: owner.server }, e: 1, lease_ms: 30_000 };
+  const seal = (env) =>
+    auth.seal(
+      auth.sealKey(ROOT),
+      { athanor: owner.athanor, server: owner.server, generation: 1, epoch: 1 },
+      c.boot,
+      Buffer.from(JSON.stringify(env)),
+      randomBytes(12),
+    );
+  const backends = [{ name: "b", command: `node ${CHILD} well-behaved`, env_names: ["KEY"] }];
+  for (const env of [{}, { b: {} }, { b: { KEY: "v", OTHER: "w" } }, { b: { KEY: 1 } }, { b: { KEY: "v" }, c: {} }]) {
+    const answer = await c.control({ ...definitions, backends, sealed: seal(env) });
+    assert.deepEqual([answer.status, answer.body], [400, { error: "bad_request" }], JSON.stringify(env));
+  }
+  const good = await c.control({ ...definitions, backends, sealed: seal({ b: { KEY: "v" } }) });
+  assert.equal(good.status, 200, JSON.stringify(good.body));
+  await c.release([owner]);
+});
+
+// ============================================================================
+// Owners
+// ============================================================================
+
+test("a sync spawns each backend as `/bin/sh -c <command>` with its own env block and nothing else", async () => {
+  const owner = newOwner();
+  const body = await synced(owner, [backend("env-probe", { PROBE_OWN: "mine" })]);
+  assert.deepEqual(body, { status: "running", backends: [{ name: "b", status: "ready", tools: 1 }] });
+
+  const request = shared.spawner.spawns.at(-1);
+  assert.deepEqual(request.argv, ["/bin/sh", "-c", `node ${CHILD} env-probe`]);
+  assert.deepEqual(request.env, { PROBE_OWN: "mine" });
+
+  const seen = await c.tool(owner, "b__ping");
+  assert.equal(seen.own, "mine");
+  assert.deepEqual(seen.cyfr, []);
+  await c.release([owner]);
+});
+
+test("an owner sees only its own backends", async () => {
+  const one = newOwner();
+  const two = newOwner();
+  await synced(one, [backend("well-behaved", {}, "alpha")]);
+  await synced(two, [backend("well-behaved", {}, "beta"), backend("well-behaved", {}, "gamma")]);
+
+  const names = async (owner) => (await c.invoke(owner, "tools/list")).body.result.tools.map((t) => t.name);
+  assert.deepEqual(await names(one), ["alpha__ping"]);
+  assert.deepEqual(await names(two), ["beta__ping", "gamma__ping"]);
+
+  const across = await c.invoke(one, "tools/call", { name: "beta__ping", arguments: {} });
+  assert.equal(across.body.result.isError, true);
+  assert.match(across.body.result.content[0].text, /unknown tool/);
+  await c.release([one, two]);
+});
+
+test("an MCP request is refused unless signed for this lifetime, the owner's version and a fresh nonce", async () => {
+  const owner = newOwner(2);
+  await synced(owner, [backend("well-behaved")]);
+
+  const unsigned = await fetch(`${shared.base}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+  });
+  assert.equal(unsigned.status, 401);
+  assert.deepEqual(await unsigned.json(), { jsonrpc: "2.0", id: null, error: { code: -33001, message: "unauthorized" } });
+
+  const refused = async (options, status, body, target = owner) => {
+    const answer = await c.invoke(target, "tools/list", {}, options);
+    assert.deepEqual([answer.status, answer.body], [status, body], JSON.stringify(options));
+    return answer;
+  };
+  const unauthorized = { jsonrpc: "2.0", id: null, error: { code: -33001, message: "unauthorized" } };
+  await refused({ key: randomBytes(32) }, 401, unauthorized);
+  await refused({ ts: Date.now() - 31_000 }, 401, unauthorized);
+  await refused({ boot: "bb_ffffffffffffffffffffffffffffffff" }, 409, { error: "stale_boot" });
+  await refused({}, 409, { error: "unknown_owner" }, newOwner());
+  await refused({}, 409, { error: "stale_epoch" }, { ...owner, e: 1 });
+  await refused({ generation: 0 }, 409, { error: "stale_epoch" });
+  await refused({}, 409, { error: "epoch_ahead" }, { ...owner, e: 3 });
+  await refused({ generation: 2 }, 409, { error: "epoch_ahead" });
+
+  const first = await c.invoke(owner, "tools/list");
+  assert.equal(first.status, 200);
+  const replay = await c.resend(first.request);
+  assert.deepEqual([replay.status, replay.body], [409, { error: "replay" }]);
+
+  // A refused request records no nonce.
+  const forgedNonce = "n_forged";
+  await refused({ key: randomBytes(32), nonce: forgedNonce }, 401, unauthorized);
+  assert.equal((await c.invoke(owner, "tools/list", {}, { nonce: forgedNonce })).status, 200);
+  await c.release([owner]);
+});
+
+test("an owner whose lease lapses is retired, answering lapsed and then unknown_owner", async () => {
+  const { instance, server, controller, spawner } = await startBridge({ leaseCheckMs: 20 });
+  try {
+    const owner = newOwner();
+    const answer = await controller.sync({ ...owner, leaseMs: 300, backends: [backend("well-behaved")] });
+    assert.equal(answer.status, 200);
+    const { proc } = spawner.spawns.at(-1);
+
+    const lapsed = await eventually(async () => {
+      const r = await controller.invoke(owner, "tools/list");
+      return r.status === 409 ? r : null;
+    }, "the lease to lapse");
+    assert.ok(["lapsed", "unknown_owner"].includes(lapsed.body.error));
+    await eventually(() => proc.released, "the lapsed owner's spawn to be released");
+    await eventually(async () => (await controller.invoke(owner, "tools/list")).body.error === "unknown_owner", "the owner to be gone");
+
+    const renew = await controller.renew([owner]);
+    assert.deepEqual(renew.body, { renewed: [], unknown: [owner] });
+  } finally {
+    await stopBridge({ instance, server });
+  }
+});
+
+test("renew extends exactly the owners running at the version named", async () => {
+  const owner = newOwner(4);
+  await synced(owner, [backend("well-behaved")]);
+  const other = newOwner();
+
+  const answer = await c.renew([owner, { ...owner, e: 3 }, other], 45_000);
+  assert.deepEqual(answer.body, { renewed: [owner], unknown: [{ ...owner, e: 3 }, other] });
+  const [status] = (await c.status([owner])).body.owners;
+  assert.ok(status.lease_ms_left > 30_000 && status.lease_ms_left <= 45_000);
+  await c.release([owner]);
+});
+
+test("a sync at the same version extends the lease only; another definition at it conflicts; a lower one is stale", async () => {
+  const owner = newOwner(5);
+  const definition = [backend("well-behaved")];
+  await synced(owner, definition);
+  const spawned = shared.spawner.spawns.length;
+
+  const again = await synced(owner, definition);
+  assert.deepEqual(again, { status: "running", backends: [{ name: "b", status: "ready", tools: 1 }] });
+  assert.equal(shared.spawner.spawns.length, spawned, "a same-version sync spawned again");
+
+  const different = await c.sync({ ...owner, backends: [backend("rogue-request")] });
+  assert.deepEqual([different.status, different.body], [409, { error: "conflict" }]);
+
+  const lower = await c.sync({ ...owner, e: 4, backends: definition });
+  assert.deepEqual([lower.status, lower.body], [409, { error: "stale_epoch" }]);
+  await c.release([owner]);
+});
+
+test("a sync at a higher version retires the old spawns before it starts the new ones", async () => {
+  const owner = newOwner(1);
+  await synced(owner, [backend("well-behaved")]);
+  const index = shared.spawner.spawns.length;
+  const old = shared.spawner.spawns.at(-1).proc;
+
+  await synced({ ...owner, e: 2 }, [backend("well-behaved", {}, "renamed")]);
+  const events = shared.spawner.events;
+  assert.ok(events.indexOf(`released:${index}`) < events.indexOf(`spawn:${index + 1}`), events.join(" "));
+  assert.equal(alive(old.pid), false);
+
+  assert.equal((await c.invoke(owner, "tools/list")).body.error, "stale_epoch");
+  const listed = await c.invoke({ ...owner, e: 2 }, "tools/list");
+  assert.deepEqual(listed.body.result.tools.map((t) => t.name), ["renamed__ping"]);
+  await c.release([{ ...owner, e: 2 }]);
+});
+
+test("a sync the pool cannot hold spawns nothing, and one the spawner refuses part-way leaves nothing", async () => {
+  const { instance, server, controller, spawner } = await startBridge({ spawner: new FakeSpawner({ capacity: 1 }) });
+  try {
+    const full = await controller.sync({ ...newOwner(), backends: [backend("well-behaved", {}, "a"), backend("well-behaved", {}, "b")] });
+    assert.deepEqual([full.status, full.body], [409, { error: "capacity" }]);
+    assert.equal(spawner.spawns.length, 0);
+
+    // The pool reports room the spawner then does not have.
+    spawner.pool = async () => ({ size: 4, free: 4, quarantined: 0 });
+    const owner = newOwner();
+    const partial = await controller.sync({ ...owner, backends: [backend("well-behaved", {}, "a"), backend("well-behaved", {}, "b")] });
+    assert.deepEqual([partial.status, partial.body], [409, { error: "capacity" }]);
+    await eventually(() => spawner.live() === 0, "the spawn that started to be released");
+    assert.equal((await controller.invoke(owner, "tools/list")).body.error, "unknown_owner");
+    assert.deepEqual((await controller.status([owner])).body, { owners: [] });
+  } finally {
+    await stopBridge({ instance, server });
+  }
+});
+
+test("release retires an owner at or below the version named; reconcile retires every owner not kept", async () => {
+  const one = newOwner(3);
+  const two = newOwner(1);
+  const three = newOwner(1);
+  await synced(one, [backend("well-behaved")]);
+  const oneProc = shared.spawner.spawns.at(-1).proc;
+  await synced(two, [backend("well-behaved")]);
+  await synced(three, [backend("well-behaved")]);
+
+  assert.deepEqual((await c.release([{ ...one, e: 2 }])).body, { released: [] });
+  assert.deepEqual((await c.release([one])).body, { released: [{ athanor: one.athanor, server: one.server, g: 1, e: 3 }] });
+  assert.equal((await c.invoke(one, "tools/list")).body.error, "unknown_owner");
+  await eventually(() => oneProc.released && !alive(oneProc.pid), "the released owner's process to end");
+
+  const reconciled = await c.reconcile([{ ...two }, { ...three, e: 2 }]);
+  assert.deepEqual(
+    reconciled.body.released.map((r) => r.athanor),
+    [three.athanor],
+    "reconcile kept an owner at another epoch or released a kept one",
+  );
+  assert.equal((await c.invoke(two, "tools/list")).status, 200);
+
+  // A later generation keeps nothing of an earlier one it does not name at its own generation.
+  const { instance, server, controller } = await startBridge();
+  try {
+    const owner = newOwner();
+    assert.equal((await controller.sync({ ...owner, backends: [backend("well-behaved")] })).status, 200);
+    controller.generation = 2;
+    const next = await controller.reconcile([owner]);
+    assert.deepEqual(next.body.released, [{ athanor: owner.athanor, server: owner.server, g: 1, e: 1 }]);
+  } finally {
+    await stopBridge({ instance, server });
+  }
+  await c.release([two]);
+});
+
+// ============================================================================
+// Masking
+// ============================================================================
+
+test("results, errors, status and stderr are masked with the owner's credential values", async () => {
+  const secret = "sk-canary-0123456789";
+  const owner = newOwner();
+  await synced(owner, [
+    backend("echo-env", { PROBE_OWN: secret, SHORT: "tiny", NODE_ENV: "production", AUTH: `Bearer ${secret}-2` }, "echo"),
+    backend("error-env", { PROBE_OWN: secret }, "err"),
+    backend("stderr-env", { PROBE_OWN: secret }, "noisy"),
+  ]);
+
+  assert.deepEqual(await c.tool(owner, "echo__echo", { name: "PROBE_OWN" }), { value: "[REDACTED]" });
+  assert.deepEqual(await c.tool(owner, "echo__echo", { name: "AUTH" }), { value: "[REDACTED]" });
+  assert.deepEqual(await c.tool(owner, "echo__echo", { name: "SHORT" }), { value: "tiny" });
+  assert.deepEqual(await c.tool(owner, "echo__echo", { name: "NODE_ENV" }), { value: "production" });
+
+  const refused = await c.invoke(owner, "tools/call", { name: "err__ping", arguments: {} });
+  assert.equal(refused.body.result.isError, true);
+  assert.equal(refused.body.result.content[0].text, "refused with [REDACTED]");
+
+  const status = await eventually(async () => {
+    const [entry] = (await c.status([owner])).body.owners;
+    const noisy = entry.backends.find((b) => b.name === "noisy");
+    return noisy.stderr_tail.includes("starting with") ? entry : null;
+  }, "stderr to be kept");
+  const noisy = status.backends.find((b) => b.name === "noisy");
+  assert.equal(noisy.stderr_tail, "starting with [REDACTED]\n");
+  assert.ok(!JSON.stringify(status).includes(secret));
+  await c.release([owner]);
+});
+
+// ============================================================================
+// Stdio framing and backend lifecycle
+// ============================================================================
 
 test("a child's own request does not resolve the bridge's pending call", async () => {
-  // The child emits `{"id":1,"method":"roots/list"}` before answering
-  // `initialize` — which the bridge also sent as id 1. Matching on id
-  // alone resolved the handshake with `undefined`, leaving a backend
-  // marked ready with no tools and every later id off by one.
-  const added = payload(await addBackend("rogue", "rogue-request"));
-
-  assert.equal(added.status, "ready", `handshake did not complete: ${JSON.stringify(added)}`);
-  assert.equal(added.tool_count, 1, "the child's tools/list answer was lost to id confusion");
-});
-
-test("a call to a child that has died is refused, and the bridge keeps serving", async () => {
-  // The child exits 20ms after its handshake, so whether add_backend reads
-  // "ready" or already "crashed" is a race the test does not care about —
-  // only that the handshake happened and the bridge is still standing.
-  const added = payload(await addBackend("dying", "die-after-handshake"));
-  assert.ok(["ready", "crashed"].includes(added.status), `unexpected status ${added.status}`);
-
-  await new Promise((r) => setTimeout(r, 200));
-  const call = await rpc("tools/call", { name: "dying__ping", arguments: {} });
-
-  assert.equal(call.status, 200, "the call should be refused, not dropped");
-  assert.equal(call.body.result.isError, true);
-
-  const list = await rpc("tools/list", {});
-  assert.equal(list.status, 200, "the bridge stopped serving after a child died");
+  const owner = newOwner();
+  const body = await synced(owner, [backend("rogue-request")]);
+  assert.deepEqual(body.backends, [{ name: "b", status: "ready", tools: 1 }]);
+  await c.release([owner]);
 });
 
 test("a string-typed response id still matches its pending call", async () => {
-  assert.equal(payload(await addBackend("stringy", "well-behaved")).status, "ready");
-
-  const call = await rpc("tools/call", { name: "stringy__ping", arguments: {} });
-
+  const owner = newOwner();
+  await synced(owner, [backend("well-behaved")]);
+  const call = await c.invoke(owner, "tools/call", { name: "b__ping", arguments: {} });
   assert.equal(call.status, 200);
-  assert.ok(
-    JSON.stringify(call.body).includes("pong"),
-    `a "1" echoed for 1 was dropped and the call hung: ${JSON.stringify(call.body)}`,
-  );
+  assert.equal(call.body.result.content[0].text, "pong");
+  await c.release([owner]);
 });
 
-test("a backend is spawned as `/bin/sh -c <command>` with its own env block and nothing else", async () => {
-  const added = payload(await addBackend("envprobe", "env-probe", { PROBE_OWN: "mine" }));
-  assert.equal(added.status, "ready");
-
-  const request = spawner.spawns.at(-1);
-  assert.deepEqual(request.argv, ["/bin/sh", "-c", `node ${CHILD} env-probe`]);
-  assert.deepEqual(request.env, { PROBE_OWN: "mine" }, "the spawn request carried more than the backend's env block");
-
-  const seen = JSON.parse((await callTool("envprobe__ping")).content[0].text);
-  assert.equal(seen.own, "mine", "the backend's own env block was dropped");
-});
-
-test("removing a backend releases its spawn, ends its process and withdraws its tools", async () => {
-  assert.equal(payload(await addBackend("gone", "well-behaved")).status, "ready");
-  const { proc } = spawner.spawns.at(-1);
-  assert.ok((await toolNames()).includes("gone__ping"));
-
-  assert.deepEqual(payload(await callTool("remove_backend", { name: "gone" })), { removed: "gone" });
-
-  assert.equal(proc.released, true, "remove_backend answered before the spawn was released");
-  assert.equal(alive(proc.pid), false, "the backend's process outlived its removal");
-  assert.ok(!(await toolNames()).includes("gone__ping"));
-  assert.ok(!(await listed()).some((b) => b.name === "gone"));
-});
-
-test("a crashed backend is reported, and restarting it releases the old spawn before the new one", async () => {
-  assert.equal(payload(await addBackend("flaky", "die-on-call")).status, "ready");
-  const first = spawner.spawns.length;
-  const oldProc = spawner.spawns.at(-1).proc;
-
-  const call = await callTool("flaky__ping");
-  assert.equal(call.isError, true, "a call to a crashing backend was not refused");
-  await new Promise((r) => setTimeout(r, 100));
-  const crashed = (await listed()).find((b) => b.name === "flaky");
-  assert.equal(crashed.status, "crashed");
-  assert.match(crashed.error, /exited code=3/);
-  assert.equal(oldProc.released, true, "the crashed backend's spawn was not retired");
-
-  const restarted = payload(await callTool("restart_backend", { name: "flaky" }));
-  assert.equal(restarted.status, "ready");
-  assert.equal(spawner.spawns.length, first + 1);
-  const events = spawner.events;
-  assert.ok(
-    events.indexOf(`released:${first}`) < events.indexOf(`spawn:${first + 1}`),
-    `the new spawn started before the old one was released: ${events.join(" ")}`,
-  );
-});
-
-test("restarting a running backend waits for its release before spawning again", async () => {
-  assert.equal(payload(await addBackend("again", "well-behaved")).status, "ready");
-  const n = spawner.spawns.length;
-  const oldPid = spawner.spawns.at(-1).proc.pid;
-
-  assert.equal(payload(await callTool("restart_backend", { name: "again" })).status, "ready");
-
-  const events = spawner.events;
-  assert.ok(events.indexOf(`release:${n}`) < events.indexOf(`released:${n}`));
-  assert.ok(events.indexOf(`released:${n}`) < events.indexOf(`spawn:${n + 1}`), events.join(" "));
-  assert.equal(alive(oldPid), false);
-  assert.ok(JSON.stringify(await callTool("again__ping")).includes("pong"));
-});
-
-test("a spawn the spawner refuses fails add_backend and leaves nothing behind", async () => {
-  spawner.capacity = spawner.live();
+test("a backend that crashes is reported, restarts after its backoff, and fails after five crashes", async () => {
+  const { instance, server, controller, spawner } = await startBridge({ restartBackoffMs: [50, 50, 50, 50, 50] });
   try {
-    const result = await addBackend("overflow", "well-behaved");
-    assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /backend 'overflow' failed to start: spawn refused: capacity/);
-    assert.ok(!(await listed()).some((b) => b.name === "overflow"));
+    const owner = newOwner();
+    assert.equal((await controller.sync({ ...owner, backends: [backend("die-on-call")] })).status, 200);
+    const first = spawner.spawns.at(-1).proc;
+    const call = await controller.invoke(owner, "tools/call", { name: "b__ping", arguments: {} });
+    assert.equal(call.body.result.isError, true);
+
+    await eventually(() => first.released, "the crashed backend's spawn to be retired");
+    const restarted = await eventually(async () => {
+      const [entry] = (await controller.status([owner])).body.owners;
+      return entry.backends[0].status === "ready" && entry.backends[0].restarts === 1 ? entry : null;
+    }, "the backend to restart");
+    assert.equal(restarted.backends[0].error, null);
+
+    const failing = newOwner();
+    const sync = await controller.sync({ ...failing, backends: [backend("exit-at-start")] });
+    assert.equal(sync.status, 200);
+    const failed = await eventually(async () => {
+      const [entry] = (await controller.status([failing])).body.owners;
+      return entry.backends[0].status === "failed" ? entry.backends[0] : null;
+    }, "the backend to be marked failed");
+    assert.equal(failed.restarts, 4);
+    assert.match(failed.error, /exited code=4/);
+    assert.equal(failed.tools, 0);
+    await sleep(200);
+    assert.equal(spawner.spawns.filter((s) => s.argv[2].includes("exit-at-start")).length, 5, "a failed backend was restarted");
   } finally {
-    spawner.capacity = Infinity;
+    await stopBridge({ instance, server });
   }
 });
 
-test("persisted backends are revived through the spawner, and close releases them all", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "bridge-revive-"));
-  const persistPath = path.join(dir, "backends.json");
-  await writeFile(
-    persistPath,
-    JSON.stringify({
-      backends: [
-        { name: "one", command: `node ${CHILD} well-behaved` },
-        { name: "two", command: `node ${CHILD} well-behaved`, env: { KEY: "v" } },
-        { name: "bad__name", command: `node ${CHILD} well-behaved` },
-      ],
-    }),
-  );
-  const own = new FakeSpawner();
-  const revived = await startBridge({ spawner: own, persistPath });
-  try {
-    await revived.instance.revive();
-    assert.deepEqual(
-      own.spawns.map((s) => s.env),
-      [{}, { KEY: "v" }],
-      "a routing-ambiguous name was spawned, or an env block was altered",
-    );
-
-    for (let i = 0; i < 100; i++) {
-      const statuses = (await listed(revived.base)).map((b) => b.status);
-      if (statuses.every((s) => s === "ready")) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    assert.deepEqual((await listed(revived.base)).map((b) => b.status), ["ready", "ready"]);
-  } finally {
-    await stopBridge(revived);
-    await rm(dir, { recursive: true, force: true });
-  }
-  assert.ok(own.spawns.every(({ proc }) => proc.released), "close left a spawn unreleased");
-  assert.ok(own.spawns.every(({ proc }) => !alive(proc.pid)), "close left a backend process running");
+test("a call to a backend that has died is refused, and the bridge keeps serving", async () => {
+  const owner = newOwner();
+  await synced(owner, [backend("die-after-handshake")]);
+  await sleep(200);
+  const call = await c.invoke(owner, "tools/call", { name: "b__ping", arguments: {} });
+  assert.equal(call.status, 200);
+  assert.equal(call.body.result.isError, true);
+  assert.equal((await c.invoke(owner, "tools/list")).status, 200);
+  await c.release([owner]);
 });
 
-test("persistence neither follows a planted symlink nor revives one", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "bridge-persist-"));
-  const persistPath = path.join(dir, "backends.json");
-  const decoy = path.join(dir, "decoy.json");
-  await writeFile(decoy, JSON.stringify({ backends: [{ name: "planted", command: `node ${CHILD} well-behaved` }] }));
-  await symlink(decoy, persistPath);
-  const leak = path.join(dir, "leak");
-  await writeFile(leak, "");
-  await symlink(leak, `${persistPath}.tmp`);
+test("an explicit null id is a request, a notification is accepted, and GET is not allowed", async () => {
+  const owner = newOwner();
+  await synced(owner, [backend("well-behaved")]);
+  const nullId = await c.invoke(owner, "tools/list", {}, { id: null });
+  assert.equal(nullId.status, 200);
+  assert.equal(nullId.body.id, null);
 
-  const own = new FakeSpawner();
-  const started = await startBridge({ spawner: own, persistPath });
-  try {
-    await started.instance.revive();
-    assert.equal(own.spawns.length, 0, "a symlinked persistence file was revived");
+  const notification = await c.invoke(owner, "notifications/cancelled", {}, { notification: true });
+  assert.equal(notification.status, 202);
 
-    const added = await callTool("add_backend", { name: "kept", command: `node ${CHILD} well-behaved`, env: { KEY: "secret" } }, started.base);
-    assert.equal(payload(added).status, "ready");
-    assert.equal(await readFile(leak, "utf8"), "", "persist wrote through a planted symlink");
-    const saved = JSON.parse(await readFile(persistPath, "utf8"));
-    assert.deepEqual(saved.backends.map((b) => b.name), ["kept"]);
-    assert.equal((await lstat(persistPath)).isSymbolicLink(), false);
-  } finally {
-    await stopBridge(started);
-    await rm(dir, { recursive: true, force: true });
-  }
+  const get = await fetch(`${shared.base}/mcp`);
+  assert.equal(get.status, 405);
+  await c.release([owner]);
 });
 
-test("an explicit null id is a request, not a notification", async () => {
-  const res = await fetch(`${base}/mcp`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${TOKEN}`,
-      "mcp-protocol-version": "2026-07-28",
-      "mcp-method": "tools/list",
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", id: null, method: "tools/list", params: {} }),
-  });
-
-  assert.notEqual(res.status, 202, "an id:null request was answered as a notification and hung");
+test("close releases every owner's spawns and ends their processes", async () => {
+  const started = await startBridge();
+  await started.controller.sync({ ...newOwner(), backends: [backend("well-behaved", {}, "a"), backend("well-behaved", {}, "b")] });
+  await started.controller.sync({ ...newOwner(), backends: [backend("well-behaved")] });
+  await stopBridge(started);
+  assert.equal(started.spawner.spawns.length, 3);
+  assert.ok(started.spawner.spawns.every(({ proc }) => proc.released), "close left a spawn unreleased");
+  assert.ok(started.spawner.spawns.every(({ proc }) => !alive(proc.pid)), "close left a backend process running");
 });
 
-test("/mcp refuses a missing or wrong bearer and /health answers open", async () => {
-  const health = await fetch(`${base}/health`);
-  assert.equal(health.status, 200);
-
-  for (const authorization of [undefined, "Bearer wrong"]) {
-    const res = await fetch(`${base}/mcp`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(authorization ? { authorization } : {}),
-        "mcp-protocol-version": "2026-07-28",
-        "mcp-method": "tools/list",
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
-    });
-    assert.equal(res.status, 401);
-  }
-});
+// ============================================================================
+// Boot
+// ============================================================================
 
 function runServer(stdio, env) {
   return new Promise((resolve) => {
@@ -325,7 +557,7 @@ function runServer(stdio, env) {
       env: { PATH: process.env.PATH, MCP_BRIDGE_PORT: "0", ...env },
     });
     let stderr = "";
-    proc.stderr.on("data", (c) => (stderr += c));
+    proc.stderr.on("data", (chunk) => (stderr += chunk));
     const timer = setTimeout(() => proc.kill("SIGKILL"), 10_000);
     proc.on("exit", (code) => {
       clearTimeout(timer);
@@ -335,14 +567,16 @@ function runServer(stdio, env) {
 }
 
 test("server.mjs refuses to start unless fd 3 is the spawner's socket", async () => {
-  const { code, stderr } = await runServer(["ignore", "ignore", "pipe"], { MCP_BRIDGE_TOKEN: TOKEN });
+  const { code, stderr } = await runServer(["ignore", "ignore", "pipe"], { CYFR_MCP_BRIDGE_KEY: ROOT.toString("hex") });
   assert.equal(code, 1);
   assert.match(stderr, /fd 3 is not the spawner channel/);
 });
 
-test("server.mjs refuses to start without a token even with the spawner's socket", async () => {
+test("server.mjs refuses to start without a valid key even with the spawner's socket", async () => {
   // A 'pipe' at index 3 is a socketpair end in the child.
-  const { code, stderr } = await runServer(["ignore", "ignore", "pipe", "pipe"], { MCP_BRIDGE_TOKEN: "" });
-  assert.equal(code, 1);
-  assert.match(stderr, /MCP_BRIDGE_TOKEN is unset/);
+  for (const key of [undefined, "", "not-hex", ROOT.toString("base64")]) {
+    const { code, stderr } = await runServer(["ignore", "ignore", "pipe", "pipe"], key === undefined ? {} : { CYFR_MCP_BRIDGE_KEY: key });
+    assert.equal(code, 1, String(key));
+    assert.match(stderr, /CYFR_MCP_BRIDGE_KEY must be 64 hexadecimal digits/);
+  }
 });

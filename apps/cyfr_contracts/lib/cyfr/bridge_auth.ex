@@ -79,6 +79,16 @@ defmodule Cyfr.BridgeAuth do
           ts: non_neg_integer()
         }
 
+  @doc """
+  The root secret `CYFR_MCP_BRIDGE_KEY` spells: exactly 64 hexadecimal
+  digits, in either case. Anything else is `:error`.
+  """
+  @spec decode_root(term()) :: {:ok, binary()} | :error
+  def decode_root(text) when is_binary(text) and byte_size(text) == 64,
+    do: Base.decode16(text, case: :mixed)
+
+  def decode_root(_text), do: :error
+
   @doc "The key the controller signs control messages with."
   @spec control_key(binary()) :: binary()
   def control_key(root) when byte_size(root) == 32,
@@ -114,6 +124,24 @@ defmodule Cyfr.BridgeAuth do
 
   def canonical(:control, message, body) when is_binary(body),
     do: MacEnvelope.canonical(@control, message, body)
+
+  @doc """
+  An invoke's or control message's fields and MAC from its `Cyfr-Bridge-Auth`
+  header, or `{:error, :malformed}` for anything but exactly one well-formed
+  header of that kind.
+  """
+  @spec parse_header(:invoke | :control, term()) ::
+          {:ok, map(), String.t()} | {:error, :malformed}
+  def parse_header(:invoke, header), do: MacEnvelope.parse(@invoke, header)
+  def parse_header(:control, header), do: MacEnvelope.parse(@control, header)
+
+  @doc "Whether `mac` signs the message's fields and `body` with `key`, compared in constant time."
+  @spec verify(:invoke | :control, binary(), map(), String.t(), binary()) :: boolean()
+  def verify(:invoke, key, message, mac, body),
+    do: MacEnvelope.verify(@invoke, key, message, mac, body)
+
+  def verify(:control, key, message, mac, body),
+    do: MacEnvelope.verify(@control, key, message, mac, body)
 
   @doc """
   Seal a backend environment's JSON for one owner in one bridge lifetime.

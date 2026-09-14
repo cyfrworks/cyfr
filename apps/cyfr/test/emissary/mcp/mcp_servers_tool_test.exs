@@ -32,6 +32,7 @@ defmodule Emissary.MCP.McpServersToolTest do
       assert "refresh" in actions
       assert "enable" in actions
       assert "disable" in actions
+      assert "restart" in actions
     end
   end
 
@@ -118,7 +119,7 @@ defmodule Emissary.MCP.McpServersToolTest do
                })
     end
 
-    test "saves server config to storage", %{ctx: ctx} do
+    test "saves server config to storage and answers the row's id", %{ctx: ctx} do
       # The actual HTTP connection will fail, but the config should be saved
       result =
         McpServersTool.handle("mcp_servers", ctx, %{
@@ -127,10 +128,11 @@ defmodule Emissary.MCP.McpServersToolTest do
           "config" => %{"url" => "https://localhost:99999/mcp"}
         })
 
-      assert {:ok, %{name: "test-save"}} = result
+      assert {:ok, %{name: "test-save", id: id, transport: "http", epoch: 1}} = result
 
       # Verify it was persisted
       assert {:ok, server} = Arca.McpServerStorage.get(ctx, "test-save")
+      assert server.id == id
       assert server.url == "https://localhost:99999/mcp"
     end
   end
@@ -170,13 +172,17 @@ defmodule Emissary.MCP.McpServersToolTest do
                  "name" => "kept"
                })
 
-      assert {:ok, %{status: "disabled"}} =
+      {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(ctx, "kept")
+
+      assert {:ok, %{status: "disabled", epoch: new_epoch}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "update",
                  "name" => "kept",
+                 "epoch" => epoch,
                  "config" => %{"url" => "https://localhost:99998/mcp", "timeout_ms" => 5_000}
                })
 
+      assert new_epoch == epoch + 1
       assert {:ok, server} = Arca.McpServerStorage.get(ctx, "kept")
       assert server.id == id
       assert server.url == "https://localhost:99998/mcp"
@@ -184,11 +190,43 @@ defmodule Emissary.MCP.McpServersToolTest do
       assert Jason.decode!(server.config_json)["timeout_ms"] == 5_000
     end
 
+    test "update names the epoch it read, and is refused once the server has moved on",
+         %{ctx: ctx} do
+      {:ok, %{epoch: epoch}} =
+        Arca.McpServerStorage.insert(ctx, %{name: "kept", url: "https://localhost:99999/mcp"})
+
+      update = fn args ->
+        McpServersTool.handle(
+          "mcp_servers",
+          ctx,
+          Map.merge(
+            %{
+              "action" => "update",
+              "name" => "kept",
+              "config" => %{"url" => "https://localhost:99997/mcp"}
+            },
+            args
+          )
+        )
+      end
+
+      assert {:error, {:invalid_argument, "Missing required parameter: epoch" <> _}} =
+               update.(%{})
+
+      {:ok, _} =
+        McpServersTool.handle("mcp_servers", ctx, %{"action" => "disable", "name" => "kept"})
+
+      assert {:error, {:conflict, message}} = update.(%{"epoch" => epoch})
+      assert message =~ "changed since epoch #{epoch}"
+      assert {:ok, %{url: "https://localhost:99999/mcp"}} = Arca.McpServerStorage.get(ctx, "kept")
+    end
+
     test "update validates like create and finds only a server that exists", %{ctx: ctx} do
       assert {:error, {:not_found, "Server", "absent"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "update",
                  "name" => "absent",
+                 "epoch" => 1,
                  "config" => %{"url" => "https://localhost:99999/mcp"}
                })
 
@@ -196,8 +234,98 @@ defmodule Emissary.MCP.McpServersToolTest do
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "update",
                  "name" => "absent",
+                 "epoch" => 1,
                  "config" => %{"url" => "http://169.254.169.254/latest/meta-data/"}
                })
+    end
+  end
+
+  describe "handle/3 - stdio servers" do
+    @stdio_config %{
+      "transport" => "stdio",
+      "backends" => [
+        %{
+          "name" => "github",
+          "command" => "npx -y @modelcontextprotocol/server-github",
+          "env" => %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token"}
+        }
+      ]
+    }
+
+    test "are refused while no MCP bridge is configured", %{ctx: ctx} do
+      refute Emissary.MCP.Bridge.running?()
+
+      assert {:error, {:invalid_argument, message}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "create",
+                 "name" => "piped",
+                 "config" => @stdio_config
+               })
+
+      assert message =~ "CYFR_MCP_BRIDGE_KEY"
+      assert {:error, :not_found} = Arca.McpServerStorage.get(ctx, "piped")
+    end
+
+    test "carry no url or headers, and their backends are validated", %{ctx: ctx} do
+      for {config, fragment} <- [
+            {Map.put(@stdio_config, "url", "https://x/mcp"), "no url"},
+            {Map.put(@stdio_config, "headers", %{}), "no headers"},
+            {%{"url" => "https://x/mcp", "backends" => []}, "no backends"},
+            {Map.put(@stdio_config, "transport", "ws"), "Unknown transport"}
+          ] do
+        assert {:error, {:invalid_argument, message}} =
+                 McpServersTool.handle("mcp_servers", ctx, %{
+                   "action" => "create",
+                   "name" => "piped",
+                   "config" => config
+                 })
+
+        assert message =~ fragment
+      end
+    end
+
+    test "restart is for an enabled stdio server only", %{ctx: ctx} do
+      Arca.McpServerStorage.insert(ctx, %{name: "webby", url: "https://x.com/mcp"})
+
+      Arca.McpServerStorage.insert(ctx, %{
+        name: "sleepy",
+        transport: "stdio",
+        url: nil,
+        enabled: false,
+        config_json: Jason.encode!(@stdio_config)
+      })
+
+      assert {:error, {:invalid_argument, "Only a stdio server restarts" <> _}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "restart",
+                 "name" => "webby"
+               })
+
+      assert {:error, {:invalid_argument, "Server 'sleepy' is disabled" <> _}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "restart",
+                 "name" => "sleepy"
+               })
+
+      assert {:error, {:not_found, "Server", "nobody"}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "restart",
+                 "name" => "nobody"
+               })
+    end
+
+    test "list names the transport and the vault entries the env reads", %{ctx: ctx} do
+      Arca.McpServerStorage.insert(ctx, %{
+        name: "listed",
+        transport: "stdio",
+        url: nil,
+        config_json: Jason.encode!(@stdio_config)
+      })
+
+      assert {:ok, %{servers: [server]}} =
+               McpServersTool.handle("mcp_servers", ctx, %{"action" => "list"})
+
+      assert %{name: "listed", transport: "stdio", url: nil, vault_refs: ["gh-token"]} = server
     end
   end
 
@@ -208,15 +336,22 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "deletes existing server", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{name: "to-delete", url: "https://x.com/mcp"})
+      {:ok, %{id: id}} =
+        Arca.McpServerStorage.insert(ctx, %{name: "to-delete", url: "https://x.com/mcp"})
 
-      assert {:ok, %{deleted: "to-delete"}} =
+      assert {:ok, %{deleted: "to-delete", id: ^id}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "delete",
                  "name" => "to-delete"
                })
 
       assert {:error, :not_found} = Arca.McpServerStorage.get(ctx, "to-delete")
+
+      assert {:error, {:not_found, "Server", "to-delete"}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "delete",
+                 "name" => "to-delete"
+               })
     end
   end
 
@@ -371,7 +506,7 @@ defmodule Emissary.MCP.McpServersToolTest do
       config = Emissary.MCP.ExternalServers.server_config(first, ctx)
       {:ok, old_pid} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
 
-      :ok = Arca.McpServerStorage.delete(ctx, "reborn")
+      {:ok, _} = Arca.McpServerStorage.delete(ctx, "reborn")
       {:ok, second} = Arca.McpServerStorage.insert(ctx, attrs)
       refute second.id == first.id
 

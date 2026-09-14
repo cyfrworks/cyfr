@@ -3,10 +3,10 @@
 
 // An in-process spawner for the bridge's tests. It runs each backend as an
 // ordinary child process of the test, in a process group of its own, and
-// reproduces the spawner's contract: a refusal when the pool is full, `exit`
-// when the leader ends, and retirement (SIGTERM, grace, SIGKILL to the
-// group, then `released`) on release or on the leader's exit. It records
-// every spawn and release in order.
+// reproduces the spawner's contract: `pool()` counts, a refusal when the
+// pool is full, `exit` when the leader ends, and retirement (SIGTERM, grace,
+// SIGKILL to the group, then `released`) on release or on the leader's exit.
+// It records every spawn and release in order.
 
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
@@ -20,8 +20,13 @@ export class FakeSpawner {
   /** How many spawns may be live at once. */
   capacity;
 
-  constructor({ capacity = Infinity } = {}) {
+  constructor({ capacity = 32 } = {}) {
     this.capacity = capacity;
+  }
+
+  /** The pool's size and the spawns it has left, as the spawner answers `pool`. */
+  async pool() {
+    return { size: this.capacity, free: Math.max(0, this.capacity - this.live()), quarantined: 0 };
   }
 
   /** Spawns not yet released. */

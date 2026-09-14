@@ -1,8 +1,8 @@
 name: Node CI (mcp-bridge)
 
 # Test the MCP bridge and its process helper (cyfr-spawn), prove the image
-# isolates backends from each other and from the bridge, and report npm
-# dependency advisories.
+# isolates backends from each other and from the bridge and refuses every
+# request it cannot attribute, and report npm dependency advisories.
 
 on:
   push:
@@ -53,12 +53,15 @@ jobs:
 
       - name: Syntax check
         run: |
-          node --check server.mjs
-          node --check spawn-client.mjs
+          for module in server.mjs owners.mjs auth.mjs spawn-client.mjs ../../tests/bridge-image/*.mjs; do
+            node --check "$module"
+          done
 
-      # Framing, request correlation, auth, persistence and the backend
-      # lifecycle (spawn, exit, restart, release) through an in-process fake
-      # spawner; the spawner client against the shared protocol vectors.
+      # The signed control and MCP protocol (authentication, ordering,
+      # versions, leases, nonces, capacity), masking, stdio framing and the
+      # backend lifecycle (spawn, crash, restart, failure, release) through
+      # an in-process fake spawner; the authentication and spawner client
+      # against the shared vectors.
       - name: Unit tests
         run: npm test
 
@@ -67,7 +70,8 @@ jobs:
       - name: Refuses to start without the spawner
         run: |
           set -euo pipefail
-          if MCP_BRIDGE_TOKEN=ci node server.mjs 3<&- 2>"$RUNNER_TEMP/refusal.txt"; then
+          key="$(openssl rand -hex 32)"
+          if CYFR_MCP_BRIDGE_KEY="$key" node server.mjs 3<&- 2>"$RUNNER_TEMP/refusal.txt"; then
             echo "the bridge started without its spawner channel"
             exit 1
           fi
@@ -104,7 +108,7 @@ jobs:
         run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-spawn" .
 
   # Build the MCP bridge image shipped by Compose, run it as Compose does to
-  # prove backend isolation, and scan it.
+  # prove backend isolation and its refusals, and scan it.
   image:
     name: Build, isolate + scan image (mcp-bridge)
     runs-on: ubuntu-latest
@@ -118,18 +122,30 @@ jobs:
       - name: Build the image compose would build
         run: docker build -f Dockerfile.node --target mcp-bridge -t cyfr-mcp-bridge:ci .
 
-      # Two probe backends under the mcp-bridge service's own settings: each
-      # runs under its own pooled uid (never 0 or the bridge's), neither can
-      # read the other's home or /proc environ or signal it, the spawner holds
-      # exactly SETUID|SETGID|KILL (CapEff 0xe0) and no inet socket, the
-      # bridge holds no capability, and removing a backend leaves no process
-      # of its uid, a setsid daemon ignoring SIGTERM included, and no home.
-      # Also: the fail-closed boot without a token, the spawner's refusal of
-      # Docker's default capabilities, and retirement on loss and on stop.
+      # Two owners' probe backends under the mcp-bridge service's own
+      # settings, driven by requests signed as CYFR signs them
+      # (tests/bridge-image/controller.mjs): each runs under its own pooled
+      # uid (never 0 or the bridge's), neither can read the other's home or
+      # /proc environ or signal it, the spawner holds exactly
+      # SETUID|SETGID|KILL (CapEff 0xe0) and no inet socket, the bridge holds
+      # no capability, the root is read-only, and releasing an owner leaves no
+      # process of its uid, a setsid daemon ignoring SIGTERM included, and no
+      # home. Also: the refused boot without a valid key, the spawner's
+      # refusal of Docker's default capabilities, and retirement on loss and
+      # on stop.
       - name: Backend isolation
         env:
           BRIDGE_IMAGE: cyfr-mcp-bridge:ci
         run: node --test tests/bridge-image/isolation.test.mjs
+
+      # A forged MAC, a timestamp outside the window, a control message below
+      # the high-water mark, a stale or future epoch, a replayed nonce and a
+      # captured invoke sent again after `docker restart` are refused, and a
+      # sync the uid pool cannot hold spawns nothing.
+      - name: Refusals
+        env:
+          BRIDGE_IMAGE: cyfr-mcp-bridge:ci
+        run: node --test tests/bridge-image/refusals.test.mjs
 
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

@@ -129,8 +129,8 @@ func TestResolveAccountsRefusesSharedOrPrivilegedIdentities(t *testing.T) {
 }
 
 func TestClientEnvironDescribesTheClientUser(t *testing.T) {
-	got := ClientEnviron([]string{"PATH=/usr/bin", "HOME=/root", "USER=root", "MCP_BRIDGE_TOKEN=t", "LOGNAME=root"}, Account{Name: "cyfr-bridge", Home: "/nonexistent"})
-	want := []string{"PATH=/usr/bin", "MCP_BRIDGE_TOKEN=t", "HOME=/nonexistent", "USER=cyfr-bridge", "LOGNAME=cyfr-bridge"}
+	got := ClientEnviron([]string{"PATH=/usr/bin", "HOME=/root", "USER=root", "CYFR_MCP_BRIDGE_KEY=t", "LOGNAME=root"}, Account{Name: "cyfr-bridge", Home: "/nonexistent"})
+	want := []string{"PATH=/usr/bin", "CYFR_MCP_BRIDGE_KEY=t", "HOME=/nonexistent", "USER=cyfr-bridge", "LOGNAME=cyfr-bridge"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("environ %q", got)
 	}

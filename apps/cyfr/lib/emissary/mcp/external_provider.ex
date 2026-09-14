@@ -66,8 +66,8 @@ defmodule Emissary.MCP.ExternalProvider do
   `"console": true`. The wiring backstop still holds — the HTTP MCP
   router rejects any tool name it cannot find in the registered-tool
   cache, and proxied `server:tool` names are never cached there — but the
-  console's own dispatch path is in-process and needed the explicit gate,
-  or one dynamic tool name on a page would have reached `add_backend`.
+  console's own dispatch path is in-process, so without the explicit gate
+  one dynamic tool name on a page would reach any upstream tool.
 
   The opt-in is per server, self-set by whoever may create the server
   row: its job is stopping accidental or attacker-influenced dynamic

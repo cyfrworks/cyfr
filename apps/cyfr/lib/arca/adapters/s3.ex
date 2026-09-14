@@ -20,8 +20,7 @@ defmodule Arca.Adapters.S3 do
   and the globals `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`.
 
   An S3 deployment is not a whole-box backup: the bucket holds Arca
-  objects; the volume still holds the database and the sidecars'
-  files (`data/cyfr.db`, `data/mcp-bridge/`).
+  objects; the volume still holds the database (`data/cyfr.db`).
 
   The `athanors/` root keeps every tenant key disjoint from the global
   roots, so an athanor id that happens to equal a reserved root name can

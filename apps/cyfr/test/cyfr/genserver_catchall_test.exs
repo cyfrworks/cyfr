@@ -37,6 +37,7 @@ defmodule Cyfr.GenServerCatchallTest do
     Cyfr.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
     Cyfr.ControlPlane => "gated by :control_plane_claim_enabled",
     Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
+    Emissary.MCP.Bridge => "started only when an MCP bridge URL and key are configured",
     Emissary.MCP.RunningTasks => "probing would race real request tracking",
     Arca.Overlay.UnitLock => "holds live commit locks — a probe interleaves them",
     Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",

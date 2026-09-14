@@ -156,10 +156,13 @@ defmodule Cyfr.Application do
       # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
       # process, so a vanished client frees its slot without bookkeeping.
       {Registry, keys: :duplicate, name: Emissary.MCP.SubscriptionRegistry},
-      # Use :rest_for_one for the external-server registry, servers and
-      # reconciler. Registry failure restarts its dependents.
+      # Use :rest_for_one for the external-server registry, the MCP bridge
+      # controller, servers and reconciler. A failure restarts its
+      # dependents. The controller starts before the servers and stops after
+      # them, because a stopping stdio server releases its owner through it.
       group(Emissary.MCP.ExternalServerTree, [
         {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
+        Emissary.MCP.Bridge,
         {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
         Emissary.MCP.ExternalServerReconciler
       ]),

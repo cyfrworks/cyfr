@@ -4,13 +4,28 @@
 defmodule Emissary.MCP.McpServersTool do
   @moduledoc """
   The `mcp_servers` tool: the operator's external MCP server connections —
-  create, delete, list, get, test, refresh, enable, disable.
+  create, update, delete, list, get, test, refresh, enable, disable,
+  restart.
 
-  Connection config is shared infrastructure: a URL, a header map that may
-  name vault entries, and the tool patterns the server is allowed to
-  offer at all. Reads are open to any authenticated caller; every mutation
-  is `permission: :admin`, because it changes where this server sends
-  requests and which stored credential rides along.
+  A server has a transport:
+
+    * `http` — a URL and a header map that may name vault entries;
+    * `stdio` — backends (`Emissary.MCP.BackendDefinition`) the MCP bridge
+      runs, each a command and an env map whose credentials are vault
+      templates. Refused when this server runs no bridge controller
+      (`Emissary.MCP.Bridge`) or runs as a cluster.
+
+  Both carry the tool patterns the server is allowed to offer at all. Every
+  action but `list` is `permission: :admin`, because it reads or changes
+  where this server sends requests, what the bridge runs and which stored
+  credential rides along; the listing (names, transport, status and the
+  vault entries a server reads) is open to any authenticated caller.
+
+  Every write raises the row's epoch. `update` names the epoch it read and
+  is refused when the row has moved on. A write that changes what runs —
+  update, delete, disable, restart — stops the server's process, which
+  releases a stdio server's backends on the bridge; the next use starts it
+  again at the new epoch.
 
   A literal credential in a credential-shaped header is refused rather than
   sealed — `mcp_servers.config_json` is not an encrypted column, and a token
@@ -29,8 +44,10 @@ defmodule Emissary.MCP.McpServersTool do
   @impl true
   def service, do: "emissary"
 
+  alias Emissary.MCP.BackendDefinition
   alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.ExternalServers
+  alias Emissary.MCP.VaultRef
   alias Sanctum.Context
 
   @impl true
@@ -47,7 +64,10 @@ defmodule Emissary.MCP.McpServersTool do
       name: "mcp_servers",
       title: "MCP Servers",
       description:
-        "Manage external MCP server connections. Create, update, delete, enable/disable, and test connections to external MCP servers (e.g., Notion, GitHub, custom servers). External server tools appear in tools/list as server_name:tool_name.",
+        "Manage external MCP server connections: HTTP servers (Notion, GitHub, custom servers) " <>
+          "and stdio servers the MCP bridge runs (npx packages). Create, update, delete, " <>
+          "enable/disable, restart and test them. External server tools appear in tools/list " <>
+          "as server_name:tool_name.",
       annotations: %{
         readOnlyHint: false,
         destructiveHint: true,
@@ -55,17 +75,18 @@ defmodule Emissary.MCP.McpServersTool do
           "create" => %{kind: :write, planes: [:external], permission: :admin},
           "update" => %{kind: :write, planes: [:external], permission: :admin},
           "delete" => %{kind: :destructive, planes: [:external], permission: :admin},
-          # The listing (names, status, the vault entries a server reads) is
-          # open to any authenticated caller; a server's connection config is
-          # the operator's. Neither is a chain capability: a formula uses the
-          # connected servers' TOOLS through its authority grants, it never
-          # reads the wiring behind them.
+          # The listing (names, transport, status, the vault entries a server
+          # reads) is open to any authenticated caller; a server's connection
+          # config is the operator's. Neither is a chain capability: a
+          # formula uses the connected servers' TOOLS through its authority
+          # grants, it never reads the wiring behind them.
           "list" => %{kind: :read, planes: [:external]},
           "get" => %{kind: :read, planes: [:external], permission: :admin},
           "test" => %{kind: :execute, planes: [:external], permission: :admin},
           "refresh" => %{kind: :write, planes: [:external], permission: :admin},
           "enable" => %{kind: :write, planes: [:external], permission: :admin},
-          "disable" => %{kind: :write, planes: [:external], permission: :admin}
+          "disable" => %{kind: :write, planes: [:external], permission: :admin},
+          "restart" => %{kind: :write, planes: [:external], permission: :admin}
         }
       },
       input_schema: %{
@@ -82,31 +103,66 @@ defmodule Emissary.MCP.McpServersTool do
               "test",
               "refresh",
               "enable",
-              "disable"
+              "disable",
+              "restart"
             ],
             "description" => "Action to perform"
           },
           "name" => %{
             "type" => "string",
             "description" =>
-              "Server name (required for create/update/delete/get/test/enable/disable; " <>
-                "refresh without one refreshes every server)"
+              "Server name (required for every action but list; " <>
+                "refresh without one refreshes every enabled server)"
+          },
+          "epoch" => %{
+            "type" => "integer",
+            "description" =>
+              "The epoch the caller read with get (required for update; refused when " <>
+                "the server has changed since)"
           },
           "config" => %{
             "type" => "object",
             "properties" => %{
+              "transport" => %{
+                "type" => "string",
+                "enum" => ["http", "stdio"],
+                "description" => "http (default): a URL. stdio: backends the MCP bridge runs."
+              },
               "url" => %{
                 "type" => "string",
-                "description" => "MCP server endpoint URL"
+                "description" => "MCP server endpoint URL (http)"
               },
               "headers" => %{
                 "type" => "object",
                 "description" =>
-                  "HTTP headers. Use 'vault:ENTRY' to reference a single-field vault entry."
+                  "HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to " <>
+                    "reference a single-field vault entry."
+              },
+              "backends" => %{
+                "type" => "array",
+                "description" =>
+                  "The stdio backends, at most #{BackendDefinition.max_backends()}: " <>
+                    "{name, command, env}. A command never names a vault entry; every env " <>
+                    "value is 'vault:ENTRY' except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, " <>
+                    "NO_COLOR and DEBUG, which may be literals.",
+                "items" => %{
+                  "type" => "object",
+                  "properties" => %{
+                    "name" => %{"type" => "string"},
+                    "command" => %{"type" => "string"},
+                    "env" => %{"type" => "object"}
+                  },
+                  "required" => ["name", "command"]
+                }
               },
               "timeout_ms" => %{
                 "type" => "integer",
                 "description" => "Request timeout in milliseconds (default: 30000)"
+              },
+              "tool_patterns" => %{
+                "type" => "array",
+                "items" => %{"type" => "string"},
+                "description" => "The tools the server may offer (default: all)"
               },
               "console" => %{
                 "type" => "boolean",
@@ -125,11 +181,7 @@ defmodule Emissary.MCP.McpServersTool do
     }
   end
 
-  # Server management mutates an outbound HTTP endpoint that can reference
-  # stored secrets in its headers — the dispatcher enforces the :admin gate
-  # from these actions' annotations. Reads (list/get) stay open to any
-  # authenticated caller by annotation.
-  @admin_actions ~w(create update delete test refresh enable disable)
+  @admin_actions ~w(create update delete test refresh enable disable restart)
 
   def handle(%Context{} = ctx, %{"action" => action} = args)
       when action in @admin_actions do
@@ -159,14 +211,16 @@ defmodule Emissary.MCP.McpServersTool do
   defp dispatch_admin("refresh", ctx, args), do: handle_refresh(ctx, args)
   defp dispatch_admin("enable", ctx, args), do: handle_enable_disable(ctx, args, true)
   defp dispatch_admin("disable", ctx, args), do: handle_enable_disable(ctx, args, false)
+  defp dispatch_admin("restart", ctx, args), do: handle_restart(ctx, args)
+
   # ============================================================================
   # Action Handlers
   # ============================================================================
 
   defp handle_create(ctx, args) do
-    with {:ok, name, config} <- server_args(args),
+    with {:ok, name, attrs} <- server_args(args),
          :ok <- under_server_cap(ctx) do
-      case Arca.McpServerStorage.insert(ctx, server_attrs(name, config)) do
+      case Arca.McpServerStorage.insert(ctx, Map.put(attrs, :name, name)) do
         {:ok, server} ->
           {:ok, connect(ctx, server)}
 
@@ -180,23 +234,28 @@ defmodule Emissary.MCP.McpServersTool do
     end
   end
 
-  # The connection config is replaced whole; whether the server is enabled
-  # is kept.
+  # The connection config is replaced whole, at the epoch the caller read;
+  # whether the server is enabled is kept.
   defp handle_update(ctx, args) do
-    with {:ok, name, config} <- server_args(args) do
-      attrs = server_attrs(name, config)
-
-      case Arca.McpServerStorage.update(ctx, name, Map.take(attrs, [:url, :config_json])) do
+    with {:ok, name, attrs} <- server_args(args),
+         {:ok, epoch} <- epoch_arg(args) do
+      case Arca.McpServerStorage.update(ctx, name, attrs, epoch) do
         {:ok, %{enabled: true} = server} ->
+          stop_process(ctx, name)
           {:ok, connect(ctx, server)}
 
         {:ok, server} ->
-          ExternalProvider.invalidate_external_tools_cache(ctx)
-          broadcast_mcp_servers_changed(ctx)
-          {:ok, %{name: server.name, url: server.url, status: "disabled"}}
+          stop_process(ctx, name)
+          changed(ctx)
+          {:ok, summary(server, %{status: "disabled"})}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Server", name}}
+
+        {:error, :stale_epoch} ->
+          {:error,
+           {:conflict,
+            "Server '#{name}' changed since epoch #{epoch} — read it again with get and retry"}}
 
         {:error, reason} ->
           Logger.warning("[MCP.Servers] failed to update server config: #{inspect(reason)}")
@@ -204,6 +263,11 @@ defmodule Emissary.MCP.McpServersTool do
       end
     end
   end
+
+  defp epoch_arg(%{"epoch" => epoch}) when is_integer(epoch) and epoch > 0, do: {:ok, epoch}
+
+  defp epoch_arg(_args),
+    do: {:error, {:invalid_argument, "Missing required parameter: epoch (read it with get)"}}
 
   defp server_args(args) do
     name = args["name"]
@@ -217,15 +281,70 @@ defmodule Emissary.MCP.McpServersTool do
         {:error,
          {:invalid_argument, "Server name cannot contain ':' (reserved for tool namespacing)"}}
 
+      not is_map(config) ->
+        {:error, {:invalid_argument, "config must be an object"}}
+
+      true ->
+        with :ok <- validate_tool_patterns(config["tool_patterns"]),
+             {:ok, attrs} <- transport_args(config["transport"] || "http", config) do
+          {:ok, name, attrs}
+        end
+    end
+  end
+
+  defp transport_args("http", config) do
+    cond do
       is_nil(config["url"]) or config["url"] == "" ->
         {:error, {:invalid_argument, "Missing required parameter: config.url"}}
 
+      Map.has_key?(config, "backends") ->
+        {:error, {:invalid_argument, "An http server has no backends — use transport stdio"}}
+
       true ->
         with :ok <- validate_header_credentials(config["headers"]),
-             :ok <- validate_create_url(config["url"]),
-             :ok <- validate_tool_patterns(config["tool_patterns"]) do
-          {:ok, name, config}
+             :ok <- validate_create_url(config["url"]) do
+          base = %{"headers" => config["headers"] || %{}}
+
+          {:ok,
+           %{transport: "http", url: config["url"], config_json: stored_config(base, config)}}
         end
+    end
+  end
+
+  defp transport_args("stdio", config) do
+    cond do
+      Map.has_key?(config, "url") ->
+        {:error,
+         {:invalid_argument, "A stdio server has no url — its backends run on the bridge"}}
+
+      Map.has_key?(config, "headers") ->
+        {:error, {:invalid_argument, "A stdio server has no headers — use backend env"}}
+
+      true ->
+        with :ok <- stdio_available(),
+             {:ok, backends} <- BackendDefinition.validate(config["backends"]) do
+          base = %{"backends" => backends}
+          {:ok, %{transport: "stdio", url: nil, config_json: stored_config(base, config)}}
+        end
+    end
+  end
+
+  defp transport_args(other, _config),
+    do: {:error, {:invalid_argument, "Unknown transport #{inspect(other)} — use http or stdio"}}
+
+  defp stdio_available do
+    cond do
+      Application.get_env(:cyfr, :cluster, false) == true ->
+        {:error, {:invalid_argument, "stdio servers are not available while CYFR_CLUSTER is on"}}
+
+      not Emissary.MCP.Bridge.running?() ->
+        {:error,
+         {:invalid_argument,
+          "No MCP bridge is configured — set CYFR_MCP_BRIDGE_URL and CYFR_MCP_BRIDGE_KEY " <>
+            "to run stdio servers"}}
+
+      true ->
+        :ok
     end
   end
 
@@ -254,12 +373,12 @@ defmodule Emissary.MCP.McpServersTool do
   defp validate_header_credentials(headers) when is_map(headers) do
     Enum.find_value(headers, :ok, fn {key, value} ->
       cond do
-        Emissary.MCP.VaultRef.unresolved_ref?(value) ->
+        VaultRef.unresolved_ref?(value) ->
           {:error,
            "Header '#{key}' names a reference this server does not resolve — " <>
              "use \"vault:ENTRY\" (a single-field vault entry)"}
 
-        is_binary(value) and not Emissary.MCP.VaultRef.vault_ref?(value) and
+        is_binary(value) and not VaultRef.vault_ref?(value) and
             credential_shaped_header_name?(key) ->
           {:error,
            "Header '#{key}' looks like a credential and must reference a vault entry — " <>
@@ -290,39 +409,36 @@ defmodule Emissary.MCP.McpServersTool do
 
       bad ->
         {:error,
-         "Invalid tool_patterns #{inspect(bad)} — use \"*\", an exact tool name, " <>
-           "or a dot-boundary prefix like \"issues.*\""}
+         {:invalid_argument,
+          "Invalid tool_patterns #{inspect(bad)} — use \"*\", an exact tool name, " <>
+            "or a dot-boundary prefix like \"issues.*\""}}
     end
   end
 
   defp validate_tool_patterns(_),
     do: {:error, {:invalid_argument, "tool_patterns must be a list of strings"}}
 
-  defp server_attrs(name, config) do
-    base = %{
-      "headers" => config["headers"] || %{},
-      "timeout_ms" => config["timeout_ms"] || 30_000
-    }
-
-    base =
+  # The stored document: the transport's own keys, the timeout, the tool
+  # patterns when given, and console reachability only when set — absent
+  # means the in-chain default holds. `console` is not part of the consent
+  # digest (`Sanctum.ToolServerDigest`).
+  defp stored_config(base, config) do
+    base
+    |> Map.put("timeout_ms", config["timeout_ms"] || 30_000)
+    |> then(fn stored ->
       case config["tool_patterns"] do
-        nil -> base
-        patterns -> Map.put(base, "tool_patterns", patterns)
+        nil -> stored
+        patterns -> Map.put(stored, "tool_patterns", patterns)
       end
-
-    # Console reachability is opt-in and stored only when set — absent means
-    # the in-chain default holds. Deliberately not part of the consent
-    # digest (`Sanctum.ToolServerDigest`).
-    base = if config["console"] == true, do: Map.put(base, "console", true), else: base
-
-    %{name: name, url: config["url"], config_json: encode_config_json(base)}
+    end)
+    |> then(&if(config["console"] == true, do: Map.put(&1, "console", true), else: &1))
+    |> Jason.encode!()
   end
 
-  # The stored server started (or restarted, when its config moved) and its
-  # tools discovered, as the answer to a create or an update.
+  # The stored server started (or restarted, when its row moved) and its
+  # tools discovered, as the answer to a write that leaves it enabled.
   defp connect(ctx, server) do
-    ExternalProvider.invalidate_external_tools_cache(ctx)
-    broadcast_mcp_servers_changed(ctx)
+    changed(ctx)
 
     case Emissary.MCP.ExternalServerSupervisor.ensure_started(
            ExternalServers.server_config(server, ctx)
@@ -330,48 +446,93 @@ defmodule Emissary.MCP.McpServersTool do
       {:ok, _pid} ->
         case Emissary.MCP.ExternalServer.get_tools(server.name, ctx.athanor_id) do
           {:ok, tools} ->
-            %{
-              name: server.name,
-              url: server.url,
+            summary(server, %{
               status: "ready",
               tools_discovered: length(tools),
               tool_names: Enum.map(tools, & &1["name"])
-            }
+            })
 
           {:error, reason} ->
-            %{name: server.name, url: server.url, status: "error", error: inspect(reason)}
+            summary(server, %{status: "error", error: error_text(reason)})
         end
 
       {:error, reason} ->
-        %{
-          name: server.name,
-          url: server.url,
+        summary(server, %{
           status: "error",
           error: "Failed to start server process: #{inspect(reason)}"
-        }
+        })
     end
   end
 
+  defp summary(server, extra) do
+    Map.merge(
+      %{
+        id: server.id,
+        name: server.name,
+        transport: server.transport,
+        url: server.url,
+        epoch: server.epoch
+      },
+      extra
+    )
+  end
+
+  defp error_text(reason) when is_binary(reason), do: reason
+  defp error_text(reason), do: inspect(reason)
+
+  # The row is deleted first; stopping the process then releases what it
+  # ran.
   defp handle_delete(ctx, args) do
-    name = args["name"]
-
-    if is_nil(name) or name == "" do
-      {:error, {:invalid_argument, "Missing required parameter: name"}}
-    else
-      # Stop the running server process
-      Emissary.MCP.ExternalServerSupervisor.stop(
-        name,
-        ctx.athanor_id
-      )
-
+    with {:ok, name} <- name_arg(args) do
       case Arca.McpServerStorage.delete(ctx, name) do
-        :ok ->
-          ExternalProvider.invalidate_external_tools_cache(ctx)
-          broadcast_mcp_servers_changed(ctx)
-          {:ok, %{deleted: name}}
+        {:ok, server} ->
+          stop_process(ctx, name)
+          changed(ctx)
+          {:ok, %{deleted: name, id: server.id}}
+
+        {:error, :not_found} ->
+          {:error, {:not_found, "Server", name}}
 
         {:error, reason} ->
           Logger.warning("[MCP.Servers] failed to delete server: #{inspect(reason)}")
+          {:error, {:unavailable, "The server store"}}
+      end
+    end
+  end
+
+  # A stdio server's backends are released and the server started again at
+  # a new epoch.
+  defp handle_restart(ctx, args) do
+    with {:ok, name} <- name_arg(args) do
+      case Arca.McpServerStorage.get(ctx, name) do
+        {:ok, %{transport: transport}} when transport != "stdio" ->
+          {:error,
+           {:invalid_argument, "Only a stdio server restarts — '#{name}' is #{transport}"}}
+
+        {:ok, %{enabled: false}} ->
+          {:error, disabled(name)}
+
+        {:ok, server} ->
+          case Arca.McpServerStorage.bump_epoch(ctx, server.id, server.epoch) do
+            {:ok, restarted} ->
+              stop_process(ctx, name)
+              {:ok, ctx |> connect(restarted) |> Map.put(:action, "restarted")}
+
+            {:error, :stale_epoch} ->
+              {:error, {:conflict, "Server '#{name}' changed while restarting — retry"}}
+
+            {:error, :not_found} ->
+              {:error, {:not_found, "Server", name}}
+
+            {:error, _reason} ->
+              {:error, {:unavailable, "The server store"}}
+          end
+
+        {:error, :not_found} ->
+          {:error, {:not_found, "Server", name}}
+
+        {:error, reason} ->
+          Logger.warning("[MCP.Servers] failed to get server: #{inspect(reason)}")
           {:error, {:unavailable, "The server store"}}
       end
     end
@@ -385,21 +546,18 @@ defmodule Emissary.MCP.McpServersTool do
             # Listing reads; it does not connect. A server that has never
             # been used reports :disconnected here — invocation (and get,
             # which reports the live tool catalogue) starts it on demand.
-            status =
-              Emissary.MCP.ExternalServer.status(
-                server.name,
-                ctx.athanor_id
-              )
+            status = Emissary.MCP.ExternalServer.status(server.name, ctx.athanor_id)
 
             %{
               name: server.name,
+              transport: server.transport,
               url: server.url,
               enabled: server.enabled,
               status: format_status(status),
               tool_count: format_tool_count(status),
-              # The vault entries this server's headers draw on, by name only
-              # (`vault:<entry>` values) — so an entry can show who
-              # consumes it before someone revokes it out from under a server.
+              # The vault entries this server's headers and env draw on, by
+              # name only — so an entry can show who consumes it before
+              # someone revokes it out from under a server.
               vault_refs: vault_refs(server)
             }
           end)
@@ -413,11 +571,7 @@ defmodule Emissary.MCP.McpServersTool do
   end
 
   defp handle_get(ctx, args) do
-    name = args["name"]
-
-    if is_nil(name) or name == "" do
-      {:error, {:invalid_argument, "Missing required parameter: name"}}
-    else
+    with {:ok, name} <- name_arg(args) do
       case Arca.McpServerStorage.get(ctx, name) do
         {:ok, server} ->
           # Auto-start enabled servers so status reflects reality
@@ -426,37 +580,25 @@ defmodule Emissary.MCP.McpServersTool do
             Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config)
           end
 
-          status =
-            Emissary.MCP.ExternalServer.status(
-              name,
-              ctx.athanor_id
-            )
+          status = Emissary.MCP.ExternalServer.status(name, ctx.athanor_id)
 
           tools =
-            case status do
-              %{status: :ready} ->
-                case Emissary.MCP.ExternalServer.get_tools(
-                       name,
-                       ctx.athanor_id
-                     ) do
-                  {:ok, t} -> t
-                  {:error, _} -> []
-                end
-
-              _ ->
-                []
+            with %{status: :ready} <- status,
+                 {:ok, tools} <- Emissary.MCP.ExternalServer.get_tools(name, ctx.athanor_id) do
+              tools
+            else
+              _ -> []
             end
 
           {:ok,
-           %{
-             name: server.name,
-             url: server.url,
+           Map.merge(summary(server, %{}), %{
              enabled: server.enabled,
              config: readable_config(server),
              status: format_status(status),
              server_info: format_server_info(status),
-             tools: tools
-           }}
+             tools: tools,
+             backends: backend_status(ctx, server)
+           })}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Server", name}}
@@ -468,12 +610,20 @@ defmodule Emissary.MCP.McpServersTool do
     end
   end
 
-  defp handle_test(ctx, args) do
-    name = args["name"]
+  # What the bridge reports for a stdio server's backends: status, restarts,
+  # tool count and a masked stderr tail. Nil for an http server, or when the
+  # bridge runs nothing for it.
+  defp backend_status(ctx, %{transport: "stdio"} = server) do
+    case Emissary.MCP.Bridge.status(ctx.athanor_id, server.id) do
+      {:ok, %{"backends" => backends}} -> backends
+      _ -> nil
+    end
+  end
 
-    if is_nil(name) or name == "" do
-      {:error, {:invalid_argument, "Missing required parameter: name"}}
-    else
+  defp backend_status(_ctx, _server), do: nil
+
+  defp handle_test(ctx, args) do
+    with {:ok, name} <- name_arg(args) do
       case Arca.McpServerStorage.get(ctx, name) do
         {:ok, %{enabled: false}} ->
           {:error, disabled(name)}
@@ -483,16 +633,9 @@ defmodule Emissary.MCP.McpServersTool do
 
           case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
             {:ok, _pid} ->
-              case Emissary.MCP.ExternalServer.reinitialize(
-                     name,
-                     ctx.athanor_id
-                   ) do
+              case Emissary.MCP.ExternalServer.reinitialize(name, ctx.athanor_id) do
                 {:ok, _status} ->
-                  status =
-                    Emissary.MCP.ExternalServer.status(
-                      name,
-                      ctx.athanor_id
-                    )
+                  status = Emissary.MCP.ExternalServer.status(name, ctx.athanor_id)
 
                   {:ok,
                    %{
@@ -503,16 +646,11 @@ defmodule Emissary.MCP.McpServersTool do
                    }}
 
                 {:error, reason} ->
-                  {:ok, %{name: name, status: "error", error: inspect(reason)}}
+                  {:ok, %{name: name, status: "error", error: error_text(reason)}}
               end
 
             {:error, reason} ->
-              {:ok,
-               %{
-                 name: name,
-                 status: "error",
-                 error: "Failed to start: #{inspect(reason)}"
-               }}
+              {:ok, %{name: name, status: "error", error: "Failed to start: #{inspect(reason)}"}}
           end
 
         {:error, :not_found} ->
@@ -526,96 +664,94 @@ defmodule Emissary.MCP.McpServersTool do
   end
 
   defp handle_refresh(ctx, args) do
-    name = args["name"]
+    case args["name"] do
+      name when is_binary(name) and name != "" -> refresh_one(ctx, name)
+      _ -> refresh_all(ctx)
+    end
+  end
 
-    if name && name != "" do
-      # Refresh single server — verify tenant ownership first
-      case Arca.McpServerStorage.get(ctx, name) do
-        {:ok, %{enabled: false}} ->
-          {:error, disabled(name)}
+  defp refresh_one(ctx, name) do
+    case Arca.McpServerStorage.get(ctx, name) do
+      {:ok, %{enabled: false}} ->
+        {:error, disabled(name)}
 
-        {:ok, server} ->
-          server_config = ExternalServers.server_config(server, ctx)
+      {:ok, server} ->
+        server_config = ExternalServers.server_config(server, ctx)
 
-          case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
-            {:ok, _pid} ->
-              case Emissary.MCP.ExternalServer.reinitialize(
-                     name,
-                     ctx.athanor_id
-                   ) do
-                {:ok, _} ->
-                  ExternalProvider.invalidate_external_tools_cache(ctx)
-                  {:ok, %{refreshed: [name]}}
+        case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
+          {:ok, _pid} ->
+            case Emissary.MCP.ExternalServer.reinitialize(name, ctx.athanor_id) do
+              {:ok, _} ->
+                ExternalProvider.invalidate_external_tools_cache(ctx)
+                {:ok, %{refreshed: [name]}}
 
-                {:error, reason} ->
-                  {:error, "Failed to refresh #{name}: #{inspect(reason)}"}
-              end
-
-            {:error, reason} ->
-              {:error, "Failed to start server '#{name}': #{inspect(reason)}"}
-          end
-
-        {:error, :not_found} ->
-          {:error, {:not_found, "Server", name}}
-
-        {:error, reason} ->
-          Logger.warning("[MCP.Servers] failed to get server: #{inspect(reason)}")
-          {:error, {:unavailable, "The server store"}}
-      end
-    else
-      # Refresh every enabled server — parallel with concurrency limit
-      case Arca.McpServerStorage.list(ctx) do
-        {:ok, servers} ->
-          results =
-            servers
-            |> Enum.filter(& &1.enabled)
-            |> Task.async_stream(
-              fn server ->
-                server_config = ExternalServers.server_config(server, ctx)
-
-                result =
-                  case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
-                    {:ok, _pid} ->
-                      Emissary.MCP.ExternalServer.reinitialize(
-                        server.name,
-                        ctx.athanor_id
-                      )
-
-                    {:error, reason} ->
-                      {:error, reason}
-                  end
-
-                {server.name, result}
-              end,
-              max_concurrency: 10,
-              timeout: 30_000,
-              on_timeout: :kill_task,
-              ordered: false
-            )
-            |> Enum.map(fn
-              {:ok, {name, {:ok, _}}} -> {name, :ok}
-              {:ok, {name, {:error, reason}}} -> {name, {:error, reason}}
-              {:exit, reason} -> {"unknown", {:error, reason}}
-            end)
-
-          refreshed = for {name, :ok} <- results, do: name
-          # Client-visible, so it says what failed and not what the refusal
-          # was carrying — an OAuth refresh reason can quote the material it
-          # could not use.
-          failed =
-            for {name, {:error, r}} <- results do
-              Logger.warning("[MCP.Servers] refresh failed for #{name}: #{inspect(r)}")
-              %{name: name, error: Cyfr.Ops.Error.render(r) || "refresh failed"}
+              {:error, reason} ->
+                {:error, "Failed to refresh #{name}: #{inspect(reason)}"}
             end
 
-          if refreshed != [], do: ExternalProvider.invalidate_external_tools_cache(ctx)
+          {:error, reason} ->
+            {:error, "Failed to start server '#{name}': #{inspect(reason)}"}
+        end
 
-          {:ok, %{refreshed: refreshed, failed: failed}}
+      {:error, :not_found} ->
+        {:error, {:not_found, "Server", name}}
 
-        {:error, reason} ->
-          Logger.warning("[MCP.Servers] failed to list servers: #{inspect(reason)}")
-          {:error, {:unavailable, "The server store"}}
-      end
+      {:error, reason} ->
+        Logger.warning("[MCP.Servers] failed to get server: #{inspect(reason)}")
+        {:error, {:unavailable, "The server store"}}
+    end
+  end
+
+  # Every enabled server, in parallel with a concurrency limit.
+  defp refresh_all(ctx) do
+    case Arca.McpServerStorage.list(ctx) do
+      {:ok, servers} ->
+        results =
+          servers
+          |> Enum.filter(& &1.enabled)
+          |> Task.async_stream(
+            fn server ->
+              server_config = ExternalServers.server_config(server, ctx)
+
+              result =
+                case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
+                  {:ok, _pid} ->
+                    Emissary.MCP.ExternalServer.reinitialize(server.name, ctx.athanor_id)
+
+                  {:error, reason} ->
+                    {:error, reason}
+                end
+
+              {server.name, result}
+            end,
+            max_concurrency: 10,
+            timeout: 60_000,
+            on_timeout: :kill_task,
+            ordered: false
+          )
+          |> Enum.map(fn
+            {:ok, {name, {:ok, _}}} -> {name, :ok}
+            {:ok, {name, {:error, reason}}} -> {name, {:error, reason}}
+            {:exit, reason} -> {"unknown", {:error, reason}}
+          end)
+
+        refreshed = for {name, :ok} <- results, do: name
+        # Client-visible, so it says what failed and not what the refusal
+        # was carrying — an OAuth refresh reason can quote the material it
+        # could not use.
+        failed =
+          for {name, {:error, r}} <- results do
+            Logger.warning("[MCP.Servers] refresh failed for #{name}: #{inspect(r)}")
+            %{name: name, error: Cyfr.Ops.Error.render(r) || "refresh failed"}
+          end
+
+        if refreshed != [], do: ExternalProvider.invalidate_external_tools_cache(ctx)
+
+        {:ok, %{refreshed: refreshed, failed: failed}}
+
+      {:error, reason} ->
+        Logger.warning("[MCP.Servers] failed to list servers: #{inspect(reason)}")
+        {:error, {:unavailable, "The server store"}}
     end
   end
 
@@ -624,26 +760,23 @@ defmodule Emissary.MCP.McpServersTool do
     do: {:invalid_argument, "Server '#{name}' is disabled — enable it first"}
 
   defp handle_enable_disable(ctx, args, enabled) do
-    name = args["name"]
     action_name = if enabled, do: "enable", else: "disable"
 
-    if is_nil(name) or name == "" do
-      {:error, {:invalid_argument, "Missing required parameter: name"}}
-    else
+    with {:ok, name} <- name_arg(args) do
       case Arca.McpServerStorage.update(ctx, name, %{enabled: enabled}) do
         {:ok, server} ->
-          ExternalProvider.invalidate_external_tools_cache(ctx)
-          broadcast_mcp_servers_changed(ctx)
+          # The row's epoch moved either way, so a running process no longer
+          # matches it; a disabled server is not started again.
+          stop_process(ctx, name)
+          changed(ctx)
 
-          # Stop the process if disabling
-          unless enabled do
-            Emissary.MCP.ExternalServerSupervisor.stop(
-              name,
-              ctx.athanor_id
-            )
-          end
-
-          {:ok, %{name: server.name, enabled: server.enabled, action: "#{action_name}d"}}
+          {:ok,
+           %{
+             name: server.name,
+             enabled: server.enabled,
+             epoch: server.epoch,
+             action: "#{action_name}d"
+           }}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Server", name}}
@@ -654,16 +787,24 @@ defmodule Emissary.MCP.McpServersTool do
     end
   end
 
-  # The connection config as `get`/`list` may show it: everything except
-  # the literal value of a header.
-  #
-  # `config_json` is not an encrypted column, and create refuses a literal
-  # in a header whose NAME looks like a credential — but that check is a
-  # denylist, and "x-hub", "x-tenant", "x-signature" are not on it. A token
-  # written under one of those sits in plaintext, and `get` is annotated
-  # `kind: :read` with no permission, so every member of the athanor could
-  # read it back. Header names and `vault:` binding names are the part that
-  # is genuinely shared operator infrastructure; the values are not.
+  defp name_arg(%{"name" => name}) when is_binary(name) and name != "", do: {:ok, name}
+  defp name_arg(_args), do: {:error, {:invalid_argument, "Missing required parameter: name"}}
+
+  defp stop_process(ctx, name),
+    do: Emissary.MCP.ExternalServerSupervisor.stop(name, ctx.athanor_id)
+
+  defp changed(ctx) do
+    ExternalProvider.invalidate_external_tools_cache(ctx)
+    broadcast_mcp_servers_changed(ctx)
+  end
+
+  # The connection config as `get` shows it: everything except the literal
+  # value of a header. `config_json` is not an encrypted column, and create
+  # refuses a literal only in a header whose NAME looks like a credential — a
+  # denylist that "x-hub" and "x-signature" walk past. Header names and
+  # `vault:` binding names are the operator's wiring; literal values are not
+  # shown. Backend env values are vault templates or the non-secret literals
+  # `Emissary.MCP.BackendDefinition` allows, and are shown as stored.
   defp readable_config(server) do
     config = ExternalServers.config_map(server)
 
@@ -677,22 +818,22 @@ defmodule Emissary.MCP.McpServersTool do
   # needs to see; anything else is a literal and only its presence is
   # reported.
   defp redact_header({name, value}) do
-    if Emissary.MCP.VaultRef.vault_ref?(value), do: {name, value}, else: {name, "[set]"}
+    if VaultRef.vault_ref?(value), do: {name, value}, else: {name, "[set]"}
   end
 
-  # The vault entry names a server's header templates reference.
+  # The vault entry names a server's header and env templates reference.
   defp vault_refs(server) do
-    case ExternalServers.config_map(server) |> Map.get("headers") do
-      %{} = headers -> Emissary.MCP.VaultRef.names(headers)
-      _ -> []
-    end
-  end
+    config = ExternalServers.config_map(server)
 
-  defp encode_config_json(config) when is_map(config) do
-    case Jason.encode(config) do
-      {:ok, json} -> json
-      {:error, _} -> "{}"
-    end
+    headers =
+      case config["headers"] do
+        %{} = headers -> VaultRef.names(headers)
+        _ -> []
+      end
+
+    (headers ++ BackendDefinition.entry_names(config["backends"]))
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp format_status(%{status: status}), do: to_string(status)

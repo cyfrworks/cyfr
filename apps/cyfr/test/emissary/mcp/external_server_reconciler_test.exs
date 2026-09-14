@@ -119,6 +119,35 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
     assert_receive {:reconciled, %{server: "bearersrv"}}, 2_000
   end
 
+  test "a stdio server whose env template references the entry is matched and its epoch raised",
+       %{ctx: ctx} do
+    {:ok, entry} =
+      Vault.create(ctx, %{name: "env-token", kind: "api_key", fields: %{"token" => "t1"}})
+
+    {:ok, %{epoch: 1}} =
+      Arca.McpServerStorage.insert(ctx, %{
+        name: "envsrv",
+        transport: "stdio",
+        url: nil,
+        config_json:
+          Jason.encode!(%{
+            "backends" => [
+              %{
+                "name" => "gh",
+                "command" => "npx -y gh",
+                "env" => %{"TOKEN" => "vault:env-token"}
+              }
+            ]
+          })
+      })
+
+    {:ok, _} = Vault.revoke(ctx, entry.id)
+
+    sync_reconciler()
+    assert_receive {:reconciled, %{server: "envsrv"}}, 2_000
+    assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(ctx, "envsrv")
+  end
+
   test "a signal that names no entry stops every server whose templates reference one",
        %{ctx: ctx} do
     for {name, headers} <- [

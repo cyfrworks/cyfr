@@ -122,6 +122,7 @@ const (
 	McpServersGet           = "get"
 	McpServersList          = "list"
 	McpServersRefresh       = "refresh"
+	McpServersRestart       = "restart"
 	McpServersTest          = "test"
 	McpServersUpdate        = "update"
 	MemberAdd               = "add"
@@ -234,7 +235,7 @@ var Actions = map[string][]string{
 	"file":                {"delete", "list", "read", "write"},
 	"key":                 {"create", "get", "list", "revoke", "rotate"},
 	"mcp_log":             {"correlate", "fan_outs", "get", "list", "stats"},
-	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "test", "update"},
+	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "restart", "test", "update"},
 	"member":              {"add", "leave", "list", "remove"},
 	"notes":               {"forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},

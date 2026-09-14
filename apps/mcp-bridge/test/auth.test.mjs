@@ -2,8 +2,9 @@
 // Copyright 2026 CYFR Works Inc.
 
 // The bridge's half of the authentication reproduces every shared vector:
-// keys, canonical strings, headers and sealed values; a tampered body, key
-// or lifetime does not verify or open; an invalid field is refused.
+// root texts, keys, canonical strings, headers and sealed values; a tampered
+// body, key or lifetime does not verify or open; an invalid field or root
+// text is refused.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -25,6 +26,12 @@ const control = {
   boot: V.control.boot,
   ts: V.control.ts,
 };
+
+test("every valid root text decodes to the root, and every invalid one is refused", () => {
+  for (const text of V.root_text.valid) assert.deepEqual(auth.decodeRoot(text), root, text);
+  for (const text of V.root_text.invalid) assert.throws(() => auth.decodeRoot(text), auth.InvalidField, text);
+  assert.throws(() => auth.decodeRoot(undefined), auth.InvalidField);
+});
 
 test("keys derive as the vectors say", () => {
   assert.equal(auth.controlKey(root).toString("hex"), V.control_key_hex);

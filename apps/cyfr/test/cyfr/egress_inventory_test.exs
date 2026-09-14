@@ -14,9 +14,10 @@ defmodule Cyfr.EgressInventoryTest do
   it — the fail-closed direction.
 
   The JS bridge (`apps/mcp-bridge/server.mjs`) is its own egress arm: it
-  wraps stdio MCP backends and speaks HTTP only to the loopback backends
-  it spawned. It ships with the server, is scanned by nothing here, and
-  is called out so this inventory is honest about its edge.
+  runs stdio MCP backends, which reach the network as their commands do,
+  and speaks to them only over their stdio. It ships with the server, is
+  scanned by nothing here, and is called out so this inventory is honest
+  about its edge. CYFR reaches the bridge through `Cyfr.Network`.
   """
 
   use ExUnit.Case, async: true

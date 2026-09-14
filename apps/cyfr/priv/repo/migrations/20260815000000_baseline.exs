@@ -778,15 +778,33 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp registrations do
+    # An `http` server has a url; a `stdio` server has none and runs its
+    # backends (`config_json.backends`) on the MCP bridge. `epoch` is 1 on
+    # insert and rises in the same statement as every change to the row.
+    # SQLite takes a check only inside CREATE TABLE and Postgres only as a
+    # table constraint, so the one rule is spelled once per adapter.
+    transport_check = %{
+      name: "mcp_servers_transport_url",
+      expr: "(transport = 'http' AND url IS NOT NULL) OR (transport = 'stdio' AND url IS NULL)"
+    }
+
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
     create table(:mcp_servers, primary_key: false) do
       add :id, :string, primary_key: true
       add :name, :string, null: false
-      add :url, :string, null: false
-      add :config_json, :text, default: "{}"
+      add :transport, :string, null: false, check: if(sqlite?, do: transport_check)
+      add :url, :string
+      add :config_json, :text, null: false
       add :enabled, :boolean, default: true
+      add :epoch, :bigint, null: false
       add :athanor_id, :string, null: false
 
       timestamps(type: :utc_datetime_usec)
+    end
+
+    unless sqlite? do
+      create constraint(:mcp_servers, transport_check.name, check: transport_check.expr)
     end
 
     create unique_index(:mcp_servers, [:athanor_id, :name])

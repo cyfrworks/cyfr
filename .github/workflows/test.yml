@@ -584,12 +584,10 @@ jobs:
           }
           assert_spelling docker-compose.yml './data:/app/data'
           assert_spelling docker-compose.yml './aqua:/app/seed/aqua'
-          assert_spelling docker-compose.yml './data/mcp-bridge:/data'
           assert_spelling Dockerfile 'CYFR_SEED_PATH=/app/seed'
           assert_spelling Dockerfile 'COPY seed/components/'
           assert_spelling docker-entrypoint.sh '/app/seed/aqua'
           assert_spelling apps/codex/cmd/lifecycle.go '"data"'
-          assert_spelling apps/codex/cmd/lifecycle.go '"data/mcp-bridge"'
           assert_spelling apps/codex/cmd/lifecycle.go '"aqua"'
           assert_spelling scripts/scaffold-tarball.sh '-C seed aqua'
           exit $fail

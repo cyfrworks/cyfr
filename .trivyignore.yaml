@@ -14,7 +14,7 @@
 # the bridge launches its backends through `npx`, so npm is runtime code
 # here rather than build tooling.
 #
-# What reaches them is a package an operator names through `add_backend`,
+# What reaches them is a package a stdio server's backend command names,
 # and running that package is arbitrary execution by design; the bridge
 # exists to do it. A denial of service, or a parser disagreeing about an
 # address, sits below what that caller already commands.

@@ -5,7 +5,8 @@ defmodule Emissary.MCP.ExternalServers do
   @moduledoc """
   What a stored `mcp_servers` row means as a live connection.
 
-  One athanor's row is a name, a URL and a config document; a running
+  One athanor's row is a name, a transport, a URL (http) or backends
+  (stdio), an epoch and a config document; a running
   `Emissary.MCP.ExternalServer` needs resolved headers, a timeout and the
   athanor it belongs to. Turning one into the other is the only thing both
   halves of the external-server subsystem share — the `mcp_servers` tool
@@ -30,7 +31,8 @@ defmodule Emissary.MCP.ExternalServers do
 
   @doc """
   The keyword config `Emissary.MCP.ExternalServerSupervisor.ensure_started/1`
-  takes, from a stored row: its id, name, url, header templates and timeout.
+  takes, from a stored row: its id, name, transport, epoch, url, header
+  templates, backends and timeout.
   """
   @spec server_config(map(), Context.t()) :: keyword()
   def server_config(%{id: id, name: name, url: url} = server, %Context{} = ctx) do
@@ -39,12 +41,18 @@ defmodule Emissary.MCP.ExternalServers do
     [
       id: id,
       name: name,
+      transport: transport(server),
+      epoch: Map.get(server, :epoch),
       url: url,
       headers: config["headers"] || %{},
+      backends: config["backends"] || [],
       timeout_ms: config["timeout_ms"] || @default_timeout_ms,
       athanor_id: ctx.athanor_id
     ]
   end
+
+  defp transport(%{transport: "stdio"}), do: :stdio
+  defp transport(_server), do: :http
 
   @doc """
   Start the server if it is not running, and return its tool catalogue.

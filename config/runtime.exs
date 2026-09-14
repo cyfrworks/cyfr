@@ -89,6 +89,32 @@ if config_env() != :test do
     # (`Cyfr.ControlPlane`).
     config :cyfr, :cluster, env_bool.("CYFR_CLUSTER", false)
 
+    # The MCP bridge that runs stdio MCP servers (`Emissary.MCP.Bridge`):
+    # its base URL (compose: http://mcp-bridge:8001) and the root key this
+    # server and the bridge both derive their signing and sealing keys from
+    # — 32 random bytes as 64 hexadecimal digits, the same value in the
+    # bridge's environment (`cyfr init` generates it). With either unset,
+    # no stdio server can be created or started; a malformed key refuses
+    # the boot.
+    config :cyfr, :mcp_bridge_url, env_str.("CYFR_MCP_BRIDGE_URL", nil)
+
+    config :cyfr,
+           :mcp_bridge_key,
+           (case env_str.("CYFR_MCP_BRIDGE_KEY", nil) do
+              nil ->
+                nil
+
+              text ->
+                case Cyfr.BridgeAuth.decode_root(text) do
+                  {:ok, root} ->
+                    root
+
+                  :error ->
+                    raise "[Cyfr] FATAL: CYFR_MCP_BRIDGE_KEY must be exactly 64 hexadecimal " <>
+                            "digits (32 bytes); generate one with `openssl rand -hex 32`"
+                end
+            end)
+
     # Device label attached to registry credentials (unset = hostname).
     config :cyfr, :device_label, env_str.("CYFR_DEVICE_LABEL", nil)
 

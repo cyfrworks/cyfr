@@ -5,7 +5,8 @@
 // server's half is Cyfr.BridgeAuth (apps/cyfr_contracts), and
 // tests/fixtures/bridge_auth.json holds the vectors both must reproduce.
 //
-// One 32-byte root secret (CYFR_MCP_BRIDGE_KEY) is shared by both sides.
+// One 32-byte root secret (CYFR_MCP_BRIDGE_KEY, 64 hexadecimal digits) is
+// shared by both sides.
 // The control key, the seal key and each owner's key are HMAC-SHA256 of the
 // root over a label, so nothing but the root is configured or stored. A
 // signature is the unpadded base64url HMAC-SHA256 of a canonical string —
@@ -50,6 +51,15 @@ export class InvalidField extends Error {
 
 const derive = (root, label) => createHmac("sha256", root).update(label).digest();
 
+const ROOT_TEXT = /^[0-9a-fA-F]{64}$/;
+
+// The root secret from its configured text: exactly 64 hexadecimal digits,
+// in either case. Anything else throws InvalidField("root").
+export function decodeRoot(text) {
+  if (typeof text !== "string" || !ROOT_TEXT.test(text)) throw new InvalidField("root");
+  return Buffer.from(text, "hex");
+}
+
 function rootKey(root) {
   if (!Buffer.isBuffer(root) || root.length !== 32) throw new InvalidField("root");
   return root;
@@ -64,6 +74,9 @@ function field(message, name) {
 }
 
 const values = (message, names) => names.map((name) => field(message, name));
+
+/** Whether `value` is a valid string field: 1 to 256 bytes of printable ASCII without spaces. */
+export const validField = (value) => typeof value === "string" && FIELD.test(value);
 
 export const controlKey = (root) => derive(rootKey(root), "cyfr-bridge/v1/control");
 export const sealKey = (root) => derive(rootKey(root), "cyfr-bridge/v1/seal");

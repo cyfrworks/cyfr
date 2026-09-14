@@ -5,6 +5,12 @@
 
 const mode = process.argv[2] || "well-behaved";
 
+// `exit-at-start` ends before reading anything.
+if (mode === "exit-at-start") process.exit(4);
+
+// `stderr-env` writes its PROBE_OWN value to stderr as it starts.
+if (mode === "stderr-env") process.stderr.write(`starting with ${process.env.PROBE_OWN}\n`);
+
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
@@ -73,14 +79,30 @@ process.stdin.on("data", (chunk) => {
       // `die-on-call` crashes instead of answering.
       if (mode === "die-on-call") process.exit(3);
 
+      // `error-env` refuses the call with an error quoting its PROBE_OWN value.
+      if (mode === "error-env") {
+        send({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: `refused with ${process.env.PROBE_OWN}` } });
+        continue;
+      }
+
       // `env-probe` reports what this child can see of its environment —
       // the bridge's secrets must not be in it, its own `env` block must.
+      // `echo-env` answers with the environment variable its argument names.
+      if (mode === "echo-env" || mode === "stderr-env") {
+        const name = msg.params?.arguments?.name;
+        send({
+          jsonrpc: "2.0",
+          id: msg.id,
+          result: { content: [{ type: "text", text: JSON.stringify({ value: process.env[name] ?? null }) }] },
+        });
+        continue;
+      }
+
       const text =
         mode === "env-probe"
           ? JSON.stringify({
               keyring: process.env.CYFR_CRYPTO_KEYRING ?? null,
               dsn: process.env.CYFR_DATABASE_URL ?? null,
-              token: process.env.MCP_BRIDGE_TOKEN ?? null,
               // Every application variable, as a class: none may reach a child.
               cyfr: Object.keys(process.env).filter((k) => k.startsWith("CYFR_")),
               own: process.env.PROBE_OWN ?? null,

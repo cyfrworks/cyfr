@@ -65,6 +65,37 @@ defmodule Cyfr.BridgeAuthTest do
              BridgeAuth.control_header(BridgeAuth.control_key(root), control, v["body"])
   end
 
+  test "a header parses back to its fields and verifies over its own body and key only",
+       %{root: root, owner: owner} do
+    v = @vectors["invoke"]
+    {:ok, key} = BridgeAuth.owner_key(root, owner)
+
+    assert {:ok, fields, mac} = BridgeAuth.parse_header(:invoke, v["header"])
+    assert fields == Map.merge(owner, %{boot: v["boot"], ts: v["ts"], nonce: v["nonce"]})
+    assert BridgeAuth.verify(:invoke, key, fields, mac, v["body"])
+    refute BridgeAuth.verify(:invoke, key, fields, mac, v["body"] <> " ")
+    refute BridgeAuth.verify(:invoke, BridgeAuth.control_key(root), fields, mac, v["body"])
+
+    c = @vectors["control"]
+    control_key = BridgeAuth.control_key(root)
+    assert {:ok, control, control_mac} = BridgeAuth.parse_header(:control, c["header"])
+    assert BridgeAuth.verify(:control, control_key, control, control_mac, c["body"])
+    assert {:error, :malformed} = BridgeAuth.parse_header(:control, v["header"])
+  end
+
+  test "every valid root text decodes to the root, and every invalid one is refused",
+       %{root: root} do
+    for text <- @vectors["root_text"]["valid"] do
+      assert {:ok, ^root} = BridgeAuth.decode_root(text)
+    end
+
+    for text <- @vectors["root_text"]["invalid"] do
+      assert :error = BridgeAuth.decode_root(text), inspect(text)
+    end
+
+    assert :error = BridgeAuth.decode_root(nil)
+  end
+
   test "a sealed environment matches, and opens for its owner and lifetime only",
        %{root: root, owner: owner} do
     v = @vectors["seal"]

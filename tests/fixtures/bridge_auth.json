@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors binding Cyfr.BridgeAuth (Elixir) and apps/mcp-bridge/auth.mjs (Node): both suites derive every key, canonical string, header and sealed value here from the root and fields, and refuse every invalid field. Integers are written in decimal in canonical strings and headers.",
+  "comment": "The vectors binding Cyfr.BridgeAuth (Elixir) and apps/mcp-bridge/auth.mjs (Node): both suites derive every key, canonical string, header and sealed value here from the root and fields, decode every valid root text to the root, and refuse every invalid field and every invalid root text. Integers are written in decimal in canonical strings and headers.",
   "control": {
     "body": "{\"type\":\"renew\",\"owners\":[],\"lease_ms\":30000}",
     "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
@@ -49,6 +49,21 @@
   },
   "owner_key_hex": "29f6b9e98437c1b42f9ead398d1f5ddbdcb0afbd6f69e7e67f633b4c490b4947",
   "root_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "root_text": {
+    "valid": [
+      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+    ],
+    "invalid": [
+      "",
+      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1",
+      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0",
+      " 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1g",
+      "0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+    ]
+  },
   "seal": {
     "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
     "iv_hex": "a0a1a2a3a4a5a6a7a8a9aaab",

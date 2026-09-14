@@ -88,7 +88,7 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` and `CYFR_MCP_BRIDGE_KEY` are generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -318,7 +318,7 @@ CYFR is self-hosted as a small `docker compose` stack:
 | service | what it is |
 |---|---|
 | `cyfr` | the one endpoint on `:4000`: Prism (chat + console, a PWA), API, MCP, tinctures |
-| `mcp-bridge` | the HTTP MCP gateway. Wraps stdio/`npx` MCP servers (filesystem, github, …) behind one endpoint and surfaces their tools through cyfr. Built locally from `Dockerfile.node`; backends live in `./data/mcp-bridge/backends.json` |
+| `mcp-bridge` | runs the stdio/`npx` MCP servers (filesystem, github, …) an athanor adds, each backend under a uid of its own, and serves their tools to cyfr. Built locally from `Dockerfile.node`; it keeps no state |
 | `caddy` *(profile: `tls`)* | TLS terminator + reverse proxy in front of `cyfr:4000`. Started only when `CYFR_BEHIND_PROXY=true` in `.env` |
 
 Two modes:
@@ -372,17 +372,25 @@ Then open `https://<your-domain>/` (TLS) or `http://localhost:4000/` (direct), s
 
 **Upgrading.** `cyfr update` pulls the latest images, then `cyfr up`. From a source checkout: `docker compose pull && docker compose up -d` (add `--profile tls` if you're running with caddy). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server.
 
-### Wrapping stdio / npx MCP servers (filesystem, github, …)
+### Stdio / npx MCP servers (filesystem, github, …)
 
-CYFR can only register **HTTP** MCP servers. To use a stdio MCP server (anything that launches with `npx -y …`), the `mcp-bridge` container wraps it: it spawns the child process and exposes a single HTTP MCP endpoint that surfaces all the children's tools, prefixed by backend name.
+CYFR reaches an **http** MCP server at its URL. A **stdio** MCP server (anything that launches with `npx -y …`) runs on the `mcp-bridge` container instead: CYFR tells the bridge what to run and signs every message to it.
 
-Prism wires this up for you:
+Adding one from Prism:
 
-1. Open **MCP Servers** in the sidebar, click **+ Setup MCP Bridge**. That registers the gateway with CYFR (one external MCP entry named `bridge`, URL `http://mcp-bridge:8001/mcp` resolved inside the compose network — the browser never connects to it directly). The preset sets `"console": true` in the server's config, which is what lets this page call the bridge's admin tools: an external server's tools are otherwise reachable only from inside a running chain, so a manual registration that should be manageable from Prism needs the same flag.
-2. Below the server list, a **Bridge backends** section appears. Click **Add backend**, pick a name (e.g. `fs`) and a command (e.g. `npx -y @modelcontextprotocol/server-filesystem ./data`).
-3. The child boots, its tools surface as `bridge:fs__read_file`, `bridge:fs__write_file`, … on CYFR's tool list. AQUA can use them like any other external MCP tool.
+1. Open **MCP Servers** in the sidebar and click **Add stdio server**.
+2. Give the server a name (e.g. `github`), a backend name, the command (e.g. `npx -y @modelcontextprotocol/server-github`), and its env, one `NAME=value` per line. A credential is always a vault template — `GITHUB_PERSONAL_ACCESS_TOKEN=vault:github-token`, naming a single-field entry on the **Vault** page; only `NODE_ENV`, `LOG_LEVEL`, `TZ`, `LANG`, `LC_ALL`, `NO_COLOR` and `DEBUG` may hold a literal, and a command may never name a vault entry, because every process in the bridge can read command lines.
+3. On first use the bridge starts the backend and its tools surface as `github:github__search_repositories`, … on CYFR's tool list. AQUA uses them like any other external MCP tool.
 
-Backends persist to `./data/mcp-bridge/backends.json` so they survive container restarts. Remove or restart them from the same page.
+From the CLI or MCP, the same server is `cyfr mcp add github '{"transport":"stdio","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:github-token"}}]}'`; a server may define up to four backends.
+
+How it holds together:
+
+- **One key.** `CYFR_MCP_BRIDGE_KEY` (32 random bytes as 64 hex digits) is in `.env`; `cyfr init` generates it and compose gives it to both `cyfr` and `mcp-bridge`. The bridge refuses to start without it, and cyfr refuses stdio servers without it (and `CYFR_MCP_BRIDGE_URL`, which compose sets). It is the only setting the bridge needs.
+- **Nothing on disk.** The bridge persists nothing. CYFR sends a server's definition when the server is first used — its env resolved from the vault and sealed to that server and that bridge lifetime — and again for every running server when the bridge restarts. When CYFR restarts, the bridge releases what the previous boot ran, and each server starts again on its next use. Backends run only while CYFR keeps renewing their lease (30 s).
+- **Isolation.** Each backend runs under a pooled uid of its own with a private home, an environment built only from its server's env, and no capability; one athanor's backends hold at most a quarter of the pool. A server's requests reach only its own backends, and every result is masked with that server's credentials. Backends share the network, CPU and memory, and can see each other's command lines.
+- **Changes take effect at once.** Updating, disabling, deleting or restarting a server, or rotating, revoking or renaming a vault entry its env names, stops its backends before anything else can reach them; the next use starts them again with the new definition. `mcp_servers.get` shows each backend's status, restarts and a masked stderr tail; **Restart** on the expanded row starts a stdio server's backends afresh.
+- Stdio servers are not available when `CYFR_CLUSTER` is on.
 
 ### Operator notes for shared and open-door servers
 
@@ -569,8 +577,7 @@ CYFR_S3_SECRET_ACCESS_KEY=...
 All four required vars must be set or the server refuses to start.
 
 > On S3 the bucket holds the Arca objects only — the `data/` volume still
-> holds the database and the sidecars' files (`cyfr.db`, `mcp-bridge/`), so
-> backing up an S3 deployment means both.
+> holds the database (`cyfr.db`), so backing up an S3 deployment means both.
 
 ### Proxy trust and rate limits
 
@@ -593,7 +600,7 @@ What to back up depends on the backends you configured:
 
 | Backend | What holds state | Backup |
 |---|---|---|
-| SQLite (default) | `./data` (database, encrypted secrets, every athanor's components and files, caches, mcp-bridge config) | Stop the stack (`cyfr down`), copy `./data`, restart. Copying while running risks a torn SQLite snapshot. |
+| SQLite (default) | `./data` (database, encrypted secrets, every athanor's components and files, caches) | Stop the stack (`cyfr down`), copy `./data`, restart. Copying while running risks a torn SQLite snapshot. |
 | Postgres | your database + `./data` for files | `pg_dump` on your schedule + the `./data` copy above |
 | S3 | the bucket + the database | enable bucket versioning/replication; back the database up as above |
 

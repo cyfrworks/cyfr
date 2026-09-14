@@ -27,7 +27,10 @@ func init() {
 	mcpCmd.AddCommand(mcpEnableCmd)
 	mcpCmd.AddCommand(mcpDisableCmd)
 	mcpCmd.AddCommand(mcpRefreshCmd)
+	mcpCmd.AddCommand(mcpRestartCmd)
 
+	mcpUpdateCmd.Flags().Int64("epoch", 0, "The epoch `cyfr mcp get` showed (required)")
+	_ = mcpUpdateCmd.MarkFlagRequired("epoch")
 }
 
 var mcpCmd = &cobra.Command{
@@ -38,8 +41,12 @@ var mcpCmd = &cobra.Command{
 standard MCP protocol. External server tools appear alongside built-in
 tools in tools/list as server_name:tool_name.
 
-Config uses the same JSON format as mcp.json entries. Header values
-can reference a stored vault entry with the vault: prefix.`,
+An http server's config uses the same JSON format as mcp.json entries.
+Header values can reference a stored vault entry with the vault: prefix.
+
+A stdio server ({"transport":"stdio","backends":[...]}) runs its backends
+on the MCP bridge: each backend is a command and an env whose credentials
+are vault: templates.`,
 }
 
 var mcpAddCmd = &cobra.Command{
@@ -49,9 +56,13 @@ var mcpAddCmd = &cobra.Command{
 in the same format as an mcp.json server entry. The server is initialized
 immediately and its tools are discovered.
 
-Header values can reference a stored vault entry with the vault: prefix.`,
+Header values can reference a stored vault entry with the vault: prefix.
+A stdio server names "transport":"stdio" and its backends instead of a url;
+an env value is a vault: template, except NODE_ENV, LOG_LEVEL, TZ, LANG,
+LC_ALL, NO_COLOR and DEBUG, which may be literals.`,
 	Example: `  cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key"}}'
-  cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'`,
+  cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'
+  cyfr mcp add gh '{"transport":"stdio","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:gh-token"}}]}'`,
 	Args: cobra.RangeArgs(0, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
@@ -106,8 +117,8 @@ Header values can reference a stored vault entry with the vault: prefix.`,
 		if config == nil {
 			return errors.New("Config JSON is required.")
 		}
-		if _, ok := config["url"]; !ok {
-			return errors.New("Config must include a \"url\" field.")
+		if err := checkServerConfig(config); err != nil {
+			return err
 		}
 
 		client := newClient()
@@ -154,23 +165,31 @@ var mcpUpdateCmd = &cobra.Command{
 server keeps its enabled or disabled state; an enabled one reconnects with
 the new config and its tools are discovered again.
 
+--epoch is the epoch "cyfr mcp get" showed: the update is refused when the
+server has changed since.
+
 Header values can reference a stored vault entry with the vault: prefix.`,
-	Example: `  cyfr mcp update notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key-2"}}'`,
+	Example: `  cyfr mcp update notion --epoch 3 '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key-2"}}'`,
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
+		epoch, _ := cmd.Flags().GetInt64("epoch")
+		if epoch < 1 {
+			return errors.New("--epoch must be the epoch `cyfr mcp get` showed.")
+		}
 		var config map[string]any
 		if err := json.Unmarshal([]byte(args[1]), &config); err != nil {
 			return fmt.Errorf("Invalid JSON config: %w", err)
 		}
-		if _, ok := config["url"]; !ok {
-			return errors.New("Config must include a \"url\" field.")
+		if err := checkServerConfig(config); err != nil {
+			return err
 		}
 
 		client := newClient()
 		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
 			"action": ops.McpServersUpdate,
 			"name":   name,
+			"epoch":  epoch,
 			"config": config,
 		})
 		if err != nil {
@@ -405,6 +424,52 @@ var mcpRefreshCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+var mcpRestartCmd = &cobra.Command{
+	Use:     "restart <name>",
+	Short:   "Restart a stdio MCP server's backends",
+	Long:    "Release a stdio server's backends on the MCP bridge and start them again at the server's next epoch.",
+	Example: "  cyfr mcp restart gh",
+	Args:    cobra.RangeArgs(0, 1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, err := pickTarget(cmd.Context(), args, selector{
+			Title: "Select a server to restart",
+			Empty: "No MCP servers configured.",
+			Usage: "Usage: cyfr mcp restart <name>",
+			Fetch: fetchServerOptions,
+		})
+		if err != nil || name == "" {
+			return err
+		}
+
+		client := newClient()
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
+			"action": ops.McpServersRestart,
+			"name":   name,
+		})
+		if err != nil {
+			return handleToolError(err)
+		}
+		if flagJSON {
+			output.JSON(result)
+		} else {
+			fmt.Printf("Server '%s' restarted (%v, epoch %v).\n", name, result["status"], result["epoch"])
+		}
+		return nil
+	},
+}
+
+// checkServerConfig refuses a config that names neither an http url nor a
+// stdio transport; the server validates everything else.
+func checkServerConfig(config map[string]any) error {
+	if config["transport"] == "stdio" {
+		return nil
+	}
+	if _, ok := config["url"]; !ok {
+		return errors.New("Config must include a \"url\" field, or \"transport\":\"stdio\" and its \"backends\".")
+	}
+	return nil
 }
 
 // fetchServerOptions lists the configured MCP servers as picker options,

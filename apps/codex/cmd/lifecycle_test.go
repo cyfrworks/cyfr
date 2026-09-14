@@ -6,19 +6,20 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
 func TestRenderEnvFile(t *testing.T) {
-	tmpl := "CYFR_SECRET_KEY_BASE=\nMCP_BRIDGE_TOKEN=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
+	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_MCP_BRIDGE_KEY=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
 
 	// TLS mode: real hostname + allowed user + ACME email. tls=true flips
 	// CYFR_BEHIND_PROXY.
-	got := renderEnvFile(tmpl, "SEKRIT", "BRIDGETOK", "example.com", "me@example.com", "ops@example.com", true)
+	got := renderEnvFile(tmpl, "SEKRIT", "BRIDGEKEY", "example.com", "me@example.com", "ops@example.com", true)
 	for _, want := range []string{
 		"CYFR_SECRET_KEY_BASE=SEKRIT",
-		"MCP_BRIDGE_TOKEN=BRIDGETOK",
+		"CYFR_MCP_BRIDGE_KEY=BRIDGEKEY",
 		"CYFR_HOST=example.com",
 		"CYFR_BEHIND_PROXY=true",
 		"CADDY_ACME_EMAIL=ops@example.com",
@@ -32,13 +33,13 @@ func TestRenderEnvFile(t *testing.T) {
 	if strings.Contains(got, "# CYFR_PLATFORM_ADMIN_EMAILS=") {
 		t.Errorf("CYFR_PLATFORM_ADMIN_EMAILS should be uncommented:\n%s", got)
 	}
-	if strings.Contains(got, "# MCP_BRIDGE_TOKEN=") {
-		t.Errorf("MCP_BRIDGE_TOKEN should be uncommented:\n%s", got)
+	if strings.Contains(got, "# CYFR_MCP_BRIDGE_KEY=") {
+		t.Errorf("CYFR_MCP_BRIDGE_KEY should be uncommented:\n%s", got)
 	}
 
 	// Direct mode: localhost, no allowed user, no ACME, tls=false. Comment
 	// line untouched, ACME left blank, BEHIND_PROXY=false.
-	got = renderEnvFile(tmpl, "SEKRIT", "BRIDGETOK", "localhost", "", "", false)
+	got = renderEnvFile(tmpl, "SEKRIT", "BRIDGEKEY", "localhost", "", "", false)
 	if !strings.Contains(got, "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com") {
 		t.Errorf("CYFR_PLATFORM_ADMIN_EMAILS line should be untouched:\n%s", got)
 	}
@@ -52,11 +53,30 @@ func TestRenderEnvFile(t *testing.T) {
 		t.Errorf("no porta variable belongs in .env:\n%s", got)
 	}
 
-	// A template that ships the bridge token commented out is filled in the
+	// A template that ships the bridge key commented out is filled in the
 	// same way.
-	got = renderEnvFile("# MCP_BRIDGE_TOKEN=\n", "S", "BRIDGETOK", "localhost", "", "", false)
-	if !strings.Contains(got, "MCP_BRIDGE_TOKEN=BRIDGETOK") || strings.Contains(got, "# MCP_BRIDGE_TOKEN=") {
-		t.Errorf("commented MCP_BRIDGE_TOKEN not filled in:\n%s", got)
+	got = renderEnvFile("# CYFR_MCP_BRIDGE_KEY=\n", "S", "BRIDGEKEY", "localhost", "", "", false)
+	if !strings.Contains(got, "CYFR_MCP_BRIDGE_KEY=BRIDGEKEY") || strings.Contains(got, "# CYFR_MCP_BRIDGE_KEY=") {
+		t.Errorf("commented CYFR_MCP_BRIDGE_KEY not filled in:\n%s", got)
+	}
+}
+
+// The generated bridge key is 32 random bytes as 64 lowercase hexadecimal
+// digits, the form cyfr and the bridge both accept, and never repeats.
+func TestGenerateBridgeKey(t *testing.T) {
+	first, err := generateBridgeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := generateBridgeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(first) {
+		t.Errorf("bridge key %q is not 64 hexadecimal digits", first)
+	}
+	if first == second {
+		t.Error("two generated bridge keys are equal")
 	}
 }
 
@@ -68,10 +88,10 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 		t.Fatalf("read shipped .env.example: %v", err)
 	}
 
-	got := renderEnvFile(string(raw), "SEKRIT", "BRIDGETOK", "example.com", "me@example.com", "ops@example.com", true)
+	got := renderEnvFile(string(raw), "SEKRIT", "BRIDGEKEY", "example.com", "me@example.com", "ops@example.com", true)
 	for _, want := range []string{
 		"\nCYFR_SECRET_KEY_BASE=SEKRIT\n",
-		"\nMCP_BRIDGE_TOKEN=BRIDGETOK\n",
+		"\nCYFR_MCP_BRIDGE_KEY=BRIDGEKEY\n",
 		"\nCYFR_HOST=example.com\n",
 		"\nCYFR_BEHIND_PROXY=true\n",
 		"\nCADDY_ACME_EMAIL=ops@example.com\n",

@@ -204,7 +204,7 @@ func TestValidateCommandBounds(t *testing.T) {
 	if err := ValidateCommand([]string{"x"}, map[string]string{"V": strings.Repeat("x", MaxValueBytes+1)}); err == nil {
 		t.Error("an oversize value was accepted")
 	}
-	for _, name := range []string{"HOME", "TMPDIR", "CYFR_KEY", "MCP_BRIDGE_DATA", "1ABC", "", "A-B"} {
+	for _, name := range []string{"HOME", "TMPDIR", "CYFR_KEY", "MCP_BRIDGE_PORT", "1ABC", "", "A-B"} {
 		if err := ValidateEnvName(name); err == nil {
 			t.Errorf("env name %q accepted", name)
 		}

@@ -14,8 +14,9 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
   Start an external server process if not already running, restarting it
   when its stored configuration has changed.
 
-  Registers each server's configuration digest. A changed URL, header
-  template or timeout replaces the process before the next call.
+  Registers each server's configuration digest. A changed transport, URL,
+  header template, backend, epoch or timeout replaces the process before the
+  next call.
 
   Returns `{:ok, pid}` if started, already running, or restarted.
   """
@@ -51,14 +52,18 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
   end
 
   @doc """
-  Digest over the config a server process serves — the row it serves, the
-  raw header TEMPLATE (names and vault references, never resolved values),
-  url and timeout. Secret rotation does not change the digest
-  (`reinitialize` re-resolves values); editing the template, or a row
-  deleted and recreated under the same name, does.
+  Digest over the config a server process serves — the row it serves, its
+  transport and epoch, the raw header TEMPLATE and backend definitions
+  (names and vault references, never resolved values), url and timeout.
+  Every write to a row raises its epoch, so any change to the row, a row
+  deleted and recreated under the same name, or a stdio server restarted
+  changes the digest.
   """
   def config_digest(config) do
-    :erlang.phash2({config[:id], config[:url], config[:headers] || %{}, config[:timeout_ms]})
+    :erlang.phash2(
+      {config[:id], config[:transport], config[:epoch], config[:url], config[:headers] || %{},
+       config[:backends] || [], config[:timeout_ms]}
+    )
   end
 
   @doc "Stop every external server process serving `athanor_id`."
