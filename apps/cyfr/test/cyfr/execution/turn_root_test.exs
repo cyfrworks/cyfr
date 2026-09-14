@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.TurnRootTest do
+defmodule Cyfr.Execution.TurnRootTest do
   @moduledoc """
   A turn's logical root: claimed without a guest, with its row, attempt,
   reservation and a `:root` slot on the calling process; paused and
@@ -17,10 +17,10 @@ defmodule Opus.TurnRootTest do
 
   alias Arca.ExecutionAttempts
   alias Arca.TurnStorage
-  alias Cyfr.Execution.Semaphore
+  alias Cyfr.Execution.{LeaseWatch, Semaphore, TurnRoot}
   alias Sanctum.Consent.{Bootstrap, Source}
 
-  @seed_root Path.expand("../../../../seed", __DIR__)
+  @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
 
   setup do
@@ -75,7 +75,7 @@ defmodule Opus.TurnRootTest do
 
   defp claim!(ctx, turn, opts \\ []) do
     {:ok, claim} =
-      Cyfr.Execution.claim_turn_root(
+      TurnRoot.claim(
         ctx,
         @soul,
         [turn_id: turn.id, envelope: %{"task" => "go"}] ++ opts
@@ -125,7 +125,7 @@ defmodule Opus.TurnRootTest do
     assert is_nil(row.output)
 
     {:ok, _} = TurnStorage.finish(ctx, turn.id, "completed", %{fence: started.fence})
-    :ok = Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: claim)
+    :ok = TurnRoot.release(ctx, claim.execution_id, claim: claim)
     assert roots() == before
     refute Process.alive?(claim.keeper)
     assert execution(claim.execution_id).status == "completed"
@@ -139,7 +139,7 @@ defmodule Opus.TurnRootTest do
     {claim, started} = claim!(ctx, turn)
 
     assert {:ok, %{turn: paused}} =
-             Cyfr.Execution.pause_turn_root(ctx, claim.execution_id,
+             TurnRoot.pause(ctx, claim.execution_id,
                claim: claim,
                turn_id: turn.id,
                fence: started.fence,
@@ -172,14 +172,14 @@ defmodule Opus.TurnRootTest do
     task =
       Task.async(fn ->
         {:ok, resumed} =
-          Cyfr.Execution.resume_turn_root(ctx, claim.execution_id,
+          TurnRoot.resume(ctx, claim.execution_id,
             turn_id: turn.id,
             fence: started.fence
           )
 
         send(test_pid, {:resumed, resumed, Semaphore.status().root_active})
         receive do: (:done -> :ok)
-        Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: resumed)
+        TurnRoot.release(ctx, claim.execution_id, claim: resumed)
       end)
 
     assert_receive {:resumed, resumed, roots_while}, 5_000
@@ -229,7 +229,7 @@ defmodule Opus.TurnRootTest do
     {claim, started} = claim!(ctx, turn)
 
     {:ok, _} =
-      Cyfr.Execution.pause_turn_root(ctx, claim.execution_id,
+      TurnRoot.pause(ctx, claim.execution_id,
         claim: claim,
         turn_id: turn.id,
         fence: started.fence,
@@ -241,7 +241,7 @@ defmodule Opus.TurnRootTest do
     {holder, ref} =
       spawn_monitor(fn ->
         {:ok, resumed} =
-          Cyfr.Execution.resume_turn_root(ctx, claim.execution_id,
+          TurnRoot.resume(ctx, claim.execution_id,
             turn_id: turn.id,
             fence: started.fence,
             tick_ms: 50
@@ -271,7 +271,7 @@ defmodule Opus.TurnRootTest do
 
     pause = fn holding ->
       {:ok, %{turn: paused}} =
-        Cyfr.Execution.pause_turn_root(ctx, claim.execution_id,
+        TurnRoot.pause(ctx, claim.execution_id,
           claim: holding,
           turn_id: turn.id,
           fence: started.fence,
@@ -290,7 +290,7 @@ defmodule Opus.TurnRootTest do
       holder =
         Task.async(fn ->
           {:ok, resumed} =
-            Cyfr.Execution.resume_turn_root(ctx, claim.execution_id,
+            TurnRoot.resume(ctx, claim.execution_id,
               turn_id: turn.id,
               fence: started.fence
             )
@@ -309,7 +309,7 @@ defmodule Opus.TurnRootTest do
       assert {:error, _} =
                Task.await(
                  Task.async(fn ->
-                   Cyfr.Execution.resume_turn_root(ctx, claim.execution_id,
+                   TurnRoot.resume(ctx, claim.execution_id,
                      turn_id: turn.id,
                      fence: started.fence
                    )
@@ -349,7 +349,7 @@ defmodule Opus.TurnRootTest do
   } do
     before = roots()
     {claim, started} = claim!(ctx, turn)
-    Opus.TurnRoot.Lease.stop(claim.keeper)
+    LeaseWatch.stop(claim.keeper)
     Cyfr.Execution.Slot.release(claim.token)
 
     lapsed = DateTime.add(DateTime.utc_now(), -1, :second)
@@ -369,7 +369,7 @@ defmodule Opus.TurnRootTest do
     assert execution(claim.execution_id).status == "running"
 
     {:ok, adopted} =
-      Cyfr.Execution.adopt_turn_root(ctx, claim.execution_id, attempt: taken.attempt, tick_ms: 50)
+      TurnRoot.adopt(ctx, claim.execution_id, attempt: taken.attempt, tick_ms: 50)
 
     assert adopted.attempt == taken.attempt
     assert roots() == before + 1
@@ -380,7 +380,7 @@ defmodule Opus.TurnRootTest do
     assert Process.alive?(self())
 
     {:ok, _} = TurnStorage.finish(ctx, turn.id, "uncertain", %{fence: taken.fence})
-    :ok = Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: adopted)
+    :ok = TurnRoot.release(ctx, claim.execution_id, claim: adopted)
     assert roots() == before
     _ = started
   end

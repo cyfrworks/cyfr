@@ -39,7 +39,7 @@ defmodule Opus.Executor do
   require Logger
 
   alias Sanctum.Context
-  alias Cyfr.Execution.{Cascade, Record, Telemetry}
+  alias Cyfr.Execution.{Admission, Attestation, Cascade, Record, Telemetry}
   alias Opus.ExecutionPipeline
 
   @doc """
@@ -104,7 +104,7 @@ defmodule Opus.Executor do
   end
 
   defp do_execute(ctx, resolved_reference, resolved_from, input, opts) do
-    case inspect_component(ctx, resolved_reference) do
+    case Admission.inspect_component(ctx, resolved_reference) do
       {:ok, component_ref, extracted_type, component} ->
         case authoritative_type(extracted_type, opts[:type], resolved_reference) do
           {:ok, component_type} ->
@@ -733,30 +733,6 @@ defmodule Opus.Executor do
   # Private Helpers
   # ===========================================================================
 
-  # Resolve a component reference string via Compendium.
-  # Returns {:ok, component_ref, component_type, component_map}.
-  # Results are cached for 5 minutes to avoid repeated lookups.
-  # Public (undocumented) so Opus.Chain shares the same cache entries.
-  @doc false
-  def inspect_component(ctx, reference) do
-    cache_key = Arca.Cache.Keys.component_meta(ctx.athanor_id, reference)
-
-    case Arca.Cache.get(cache_key) do
-      {:ok, cached} ->
-        {:ok, cached["component_ref"], cached["type"], cached}
-
-      :miss ->
-        case Compendium.Component.inspect_component(ctx, reference) do
-          {:ok, component} ->
-            Arca.Cache.put(cache_key, component, :timer.minutes(5))
-            {:ok, component["component_ref"], component["type"], component}
-
-          {:error, reason} ->
-            {:error, "Failed to resolve component '#{reference}': #{reason}"}
-        end
-    end
-  end
-
   # Fetch WASM bytes from the Compendium blob store by the registry digest.
   # Bytes are content-addressed and immutable; an entry is cached (10 min)
   # only after its sha256 matched the registry, so a hit is verified by
@@ -972,7 +948,7 @@ defmodule Opus.Executor do
   defp verify_attestation(%ExecutionPipeline{} = p) do
     {identity, issuer} = pinned_signer(p.opts[:verify])
 
-    case Opus.SignatureAttestation.attestation(p.component) do
+    case Attestation.attestation(p.component) do
       :unsigned when not is_nil(identity) or not is_nil(issuer) ->
         {:error,
          "Signature verification failed: a signer was pinned for #{p.reference}, but the " <>
@@ -989,13 +965,13 @@ defmodule Opus.Executor do
         end
 
       attested when attested in [:trusted, :signed] ->
-        case Opus.SignatureAttestation.verify(p.component, identity, issuer) do
+        case Attestation.verify(p.component, identity, issuer) do
           :ok -> :ok
           {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
         end
 
       {:unknown_source, _} ->
-        case Opus.SignatureAttestation.verify(p.component, identity, issuer) do
+        case Attestation.verify(p.component, identity, issuer) do
           :ok -> :ok
           {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
         end

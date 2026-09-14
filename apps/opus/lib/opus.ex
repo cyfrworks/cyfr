@@ -69,12 +69,14 @@ defmodule Opus do
 
   @doc """
   Derive (without executing) the authority a `run_root` for this selector
-  and reference would run under. See `Opus.Chain.authority_for/4`.
+  and reference would run under. See
+  `Cyfr.Execution.Admission.authority_for/4`.
   """
   @spec authority_for(Context.t(), Cyfr.Authority.RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Cyfr.Authority.t()} | {:error, term()}
   @impl Cyfr.Execution
-  defdelegate authority_for(ctx, profile_selector, reference, opts \\ []), to: Opus.Chain
+  defdelegate authority_for(ctx, profile_selector, reference, opts \\ []),
+    to: Cyfr.Execution.Admission
 
   @doc """
   Subscribe the calling process to an execution's event stream. Pass the
@@ -154,15 +156,17 @@ defmodule Opus do
   defdelegate cancel(ctx, execution_id), to: Opus.Executor
 
   @impl Cyfr.Execution
-  defdelegate claim_turn_root(ctx, agent_ref, opts \\ []), to: Opus.TurnRoot, as: :claim
+  defdelegate claim_turn_root(ctx, agent_ref, opts \\ []), to: Cyfr.Execution.TurnRoot, as: :claim
   @impl Cyfr.Execution
-  defdelegate pause_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :pause
+  defdelegate pause_turn_root(ctx, execution_id, opts), to: Cyfr.Execution.TurnRoot, as: :pause
   @impl Cyfr.Execution
-  defdelegate resume_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :resume
+  defdelegate resume_turn_root(ctx, execution_id, opts), to: Cyfr.Execution.TurnRoot, as: :resume
   @impl Cyfr.Execution
-  defdelegate adopt_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :adopt
+  defdelegate adopt_turn_root(ctx, execution_id, opts), to: Cyfr.Execution.TurnRoot, as: :adopt
   @impl Cyfr.Execution
-  defdelegate release_turn_root(ctx, execution_id, opts), to: Opus.TurnRoot, as: :release
+  defdelegate release_turn_root(ctx, execution_id, opts),
+    to: Cyfr.Execution.TurnRoot,
+    as: :release
 
   @doc """
   Terminate a running execution because its consent changed underneath it.

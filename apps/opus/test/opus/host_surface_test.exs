@@ -19,13 +19,15 @@ defmodule Opus.HostSurfaceTest do
   # The cyfr namespaces opus reaches into, and what a remote worker would
   # have to do about each.
   @surface [
-    # The consent/record plane — `Opus.Host`'s eight delegates. These are
+    # The consent/record plane — `Opus.Host`'s delegates. These are
     # the ones that would genuinely go over the wire.
-    # `Sanctum.Authority` is the authority's live half: the spawn-charged
-    # transition and the invoke-budget slot a spawned child holds and gives
-    # back — a worker on another node would take and release it through a
-    # client. The authority as data is `Cyfr.Authority`, in the contracts.
+    # `Sanctum.Authority` is the authority's live half: the invoke-budget
+    # slot a spawned child holds and gives back — a worker on another node
+    # would take and release it through a client. The authority as data is
+    # `Cyfr.Authority`, in the contracts.
     "Sanctum.Authority",
+    # The pin check before a run's vault edges are unsealed: the consent
+    # the authority was loaded from is still its profile's head.
     "Sanctum.Consent",
     "Sanctum.Context",
     "Sanctum.Policy",
@@ -36,17 +38,8 @@ defmodule Opus.HostSurfaceTest do
     # would implement.
     "Arca",
     "Arca.Cache",
-    "Arca.Execution",
-    # The invoke budget's durable half: a spawn-shaped child's charge row,
-    # taken before it runs and given back after — a worker on another
-    # node would charge and release through a client.
-    "Arca.BudgetReservations",
     "Arca.QueryHelpers",
     "Arca.Storage",
-    # The turn a root belongs to: paused and resumed with the root's
-    # attempt in one transaction — a worker holding a turn root would
-    # move the rows through a client.
-    "Arca.TurnStorage",
     "Arca.Usage",
 
     # The component catalogue: what to run, and whether it is what it says.
@@ -59,19 +52,19 @@ defmodule Opus.HostSurfaceTest do
     # fork-to-modify, and the refusal sentence lives with the policy.
     "Compendium.NamespacePolicy",
     "Compendium.Resolver",
-    "Compendium.Source",
 
     # Shared primitives — glue, by construction available to any node.
     # Whether this boot still owns the control plane — the engine admits
     # nothing when it does not.
     "Cyfr.ControlPlane",
-    # The execution port, and what CYFR owns of a run: the rate counters
-    # consented limits are checked against, the execution slots and the
-    # registry a cancel finds a run's processes through, the event stream a
-    # guest's events are pushed on, the execution row opened, renewed and
-    # closed, its lifecycle telemetry, and the cascade that fails a failed
-    # parent's children — a worker on another node would reach them through
-    # host calls.
+    # The execution port, and what CYFR owns of a run: the authority it is
+    # admitted under, its invoke charge row and its recorded signature
+    # attestation, the rate counters consented limits are checked against,
+    # the execution slots and the registry a cancel finds a run's processes
+    # through, the event stream a guest's events are pushed on, the
+    # execution row opened, renewed and closed, its lifecycle telemetry,
+    # and the cascade that fails a failed parent's children — a worker on
+    # another node would reach them through host calls.
     "Cyfr.Execution",
     # Egress pinning: a guest request's host resolved and checked against
     # its consented private policy before the connection is made.
@@ -154,7 +147,6 @@ defmodule Opus.HostSurfaceTest do
     exports = Opus.Host.__info__(:functions) |> Keyword.keys() |> MapSet.new()
 
     for name <- [
-          :load_root,
           :tool_call,
           :unseal,
           :enforce,

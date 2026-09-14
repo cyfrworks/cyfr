@@ -139,7 +139,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "what a parent is handed of its child is masked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
     parent_id = Cyfr.UUID7.execution_id()
 
     request =

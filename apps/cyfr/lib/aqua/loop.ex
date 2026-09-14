@@ -1896,7 +1896,7 @@ defmodule Aqua.Loop do
   # branch, and a cap of nil looks exactly like a request that fits.
   # By name, without the version. The spec carries a versioned ref because
   # that is what resolved, but the consent graph keys every node by name —
-  # `Opus.Chain` steps to `name_level/1` and `Authority.limits/1` matches on
+  # `Cyfr.Execution.Admission` steps by name and `Authority.limits/1` matches on
   # that. A versioned key finds nothing, and a cap of nil is a check that
   # never fires.
   def catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do

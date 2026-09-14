@@ -9,8 +9,8 @@ defmodule Cyfr.IngressInventoryTest do
   test. Instead the source is scanned for callers of the run family and
   compared against a literal allowlist — so a NEW ingress fails here
   until someone classifies it, which is the fail-closed direction. The
-  second arm (`Opus.CredentialedIngressGateTest`) proves each classified
-  ingress yields no credentials without a profile.
+  second arm (`Cyfr.Execution.CredentialedIngressGateTest`) proves each
+  classified ingress yields no credentials without a profile.
   """
 
   use ExUnit.Case, async: true
@@ -52,7 +52,7 @@ defmodule Cyfr.IngressInventoryTest do
     "Opus.Chain.run_root_edge(",
     "Opus.Chain.run_child(",
     "Opus.Chain.run_child_stream(",
-    "Opus.Chain.step_invoke(",
+    "Cyfr.Execution.Admission.step_invoke(",
     "Opus.Chain.execute_child(",
     "Opus.Executor.run("
   ]
@@ -81,7 +81,7 @@ defmodule Cyfr.IngressInventoryTest do
 
     Every ingress must run under a consent-rooted authority. Add it to
     @allowed here AND to the per-ingress credential gate in
-    apps/opus/test/opus/credentialed_ingress_gate_test.exs.
+    apps/cyfr/test/cyfr/execution/credentialed_ingress_gate_test.exs.
     """
 
     assert MapSet.size(stale) == 0, """

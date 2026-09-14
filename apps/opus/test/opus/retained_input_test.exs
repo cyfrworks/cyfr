@@ -80,7 +80,7 @@ defmodule Opus.RetainedInputTest do
 
   test "the store keeps the retained form of a child run's input", %{ctx: ctx} do
     :ok = bind_claude!(ctx)
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
     id = Cyfr.UUID7.execution_id()
 
     sent = %{"operation" => "describe", "params" => %{"marker" => "SENT-ONLY"}}

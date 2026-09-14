@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.TurnRoot do
+defmodule Cyfr.Execution.TurnRoot do
   @moduledoc """
   The logical root a host loop holds for a turn: an `executions` row of
   kind `turn`, its attempt and reservation, and a `:root` slot on the
@@ -18,8 +18,7 @@ defmodule Opus.TurnRoot do
   once it holds one.
   """
 
-  alias Cyfr.Execution.Record
-  alias Opus.TurnRoot.Lease
+  alias Cyfr.Execution.{Admission, LeaseWatch, Record}
   alias Sanctum.Context
 
   @slot_wait_ms 30_000
@@ -46,7 +45,7 @@ defmodule Opus.TurnRoot do
   @spec claim(Context.t(), String.t(), keyword()) :: {:ok, claim()} | {:error, term()}
   def claim(%Context{} = ctx, agent_ref, opts \\ []) do
     with {:ok, %{authority: authority, stamp: stamp}} <-
-           Opus.Chain.authority_and_stamp_for(
+           Admission.authority_and_stamp_for(
              ctx,
              Keyword.get(opts, :profile, :default),
              agent_ref,
@@ -56,7 +55,7 @@ defmodule Opus.TurnRoot do
          :ok <- Record.write_started(record),
          {:ok, token} <- take_slot(ctx, record) do
       {:ok, keeper} =
-        Lease.start(self(), record.id, record.attempt, Keyword.take(opts, [:tick_ms]))
+        LeaseWatch.start(self(), record.id, record.attempt, Keyword.take(opts, [:tick_ms]))
 
       {:ok,
        %{
@@ -81,7 +80,7 @@ defmodule Opus.TurnRoot do
   @spec pause(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def pause(%Context{} = ctx, _execution_id, opts) do
     claim = Keyword.fetch!(opts, :claim)
-    Lease.stop(claim.keeper)
+    LeaseWatch.stop(claim.keeper)
     turn_id = Keyword.fetch!(opts, :turn_id)
 
     moved =
@@ -113,7 +112,7 @@ defmodule Opus.TurnRoot do
       {:error, _} = error ->
         # The rows did not move: the turn still runs and its lease must
         # keep being renewed.
-        {:ok, keeper} = Lease.start(self(), claim.execution_id, claim.attempt, [])
+        {:ok, keeper} = LeaseWatch.start(self(), claim.execution_id, claim.attempt, [])
         _ = keeper
         error
     end
@@ -142,7 +141,7 @@ defmodule Opus.TurnRoot do
            }) do
         {:ok, turn} ->
           {:ok, keeper} =
-            Lease.start(
+            LeaseWatch.start(
               self(),
               execution_id,
               turn.attempt,
@@ -183,7 +182,8 @@ defmodule Opus.TurnRoot do
              Keyword.get(opts, :timeout_ms, @slot_wait_ms),
              execution_id
            ) do
-      {:ok, keeper} = Lease.start(self(), execution_id, attempt, Keyword.take(opts, [:tick_ms]))
+      {:ok, keeper} =
+        LeaseWatch.start(self(), execution_id, attempt, Keyword.take(opts, [:tick_ms]))
 
       {:ok,
        %{
@@ -207,7 +207,7 @@ defmodule Opus.TurnRoot do
   def release(%Context{} = ctx, execution_id, opts) do
     case Keyword.get(opts, :claim) do
       %{keeper: keeper, token: token} = claim ->
-        Lease.stop(keeper)
+        LeaseWatch.stop(keeper)
 
         case Keyword.get(opts, :failed) do
           error when is_binary(error) -> fail_open_root(ctx, execution_id, claim.attempt, error)

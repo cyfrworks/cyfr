@@ -25,12 +25,12 @@ defmodule Cyfr.Execution.LeaseWatchTest do
   end
 
   # A holder blocked in a call, watched with a fast tick.
-  defp holder!(id, attempt) do
+  defp holder!(id, attempt, opts \\ []) do
     parent = self()
 
     {pid, ref} =
       spawn_monitor(fn ->
-        {:ok, watch} = LeaseWatch.start(self(), id, attempt, tick_ms: 20)
+        {:ok, watch} = LeaseWatch.start(self(), id, attempt, [tick_ms: 20] ++ opts)
         send(parent, {:watching, watch})
 
         receive do
@@ -69,6 +69,31 @@ defmodule Cyfr.Execution.LeaseWatchTest do
         attempt
       )
 
+    assert_receive {:DOWN, ^ref, :process, _, {:lease_lost, ^id}}, 2_000
+  end
+
+  # The keeper is no sandbox owner: once the shared connection is
+  # withdrawn, every renewal it attempts raises.
+  @tag :capture_log
+  test "a renewal that raises is tolerated inside the lease the attempt last held", %{
+    id: id,
+    attempt: attempt
+  } do
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
+    {pid, ref, _watch} = holder!(id, attempt)
+    Process.sleep(100)
+    refute_received {:DOWN, ^ref, :process, _, _}
+    assert Process.alive?(pid)
+    send(pid, :release)
+  end
+
+  @tag :capture_log
+  test "a renewal that raises past the lease the attempt last held exits the holder", %{
+    id: id,
+    attempt: attempt
+  } do
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
+    {_pid, ref, _watch} = holder!(id, attempt, until: DateTime.add(DateTime.utc_now(), -1))
     assert_receive {:DOWN, ^ref, :process, _, {:lease_lost, ^id}}, 2_000
   end
 

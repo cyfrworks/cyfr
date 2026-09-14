@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.ChainChargeIdentityTest do
+defmodule Cyfr.Execution.ChargeTest do
   @moduledoc """
   A spawn-shaped child under a known attempt charges the root's
   reservation row whether or not the caller named the charge: the
@@ -11,7 +11,7 @@ defmodule Opus.ChainChargeIdentityTest do
 
   use ExUnit.Case, async: false
 
-  alias Opus.Chain.Charge
+  alias Cyfr.Execution.Charge
   alias Cyfr.Test.AuthorityFixtures
 
   setup do
@@ -66,6 +66,7 @@ defmodule Opus.ChainChargeIdentityTest do
              Charge.identify(attempt: attempt, guest_fn: :call)
   end
 
+  @tag :requires_opus_modules
   test "a full reservation refuses an unnamed spawn before anything runs", %{
     ctx: ctx,
     auth: auth,
@@ -82,7 +83,7 @@ defmodule Opus.ChainChargeIdentityTest do
       )
 
     assert {:error, {:invoke_denied, :invoke_budget_exhausted}} =
-             Opus.Chain.run_child(auth, "reagent:local.ta:1.0.0", nil, %{},
+             Cyfr.Execution.run_child(auth, "reagent:local.ta:1.0.0", nil, %{},
                ctx: ctx,
                attempt: attempt,
                parent_execution_id: root_id,

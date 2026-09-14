@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.AgentAuthorityTest do
+defmodule Cyfr.Execution.AgentAuthorityTest do
   @moduledoc """
   The soul's authority, pinned as `agent:local.aqua`, runs its model
   catalyst as a child under this host: the edge selects the key bound on
@@ -10,9 +10,10 @@ defmodule Opus.AgentAuthorityTest do
 
   use ExUnit.Case, async: false
 
+  alias Cyfr.Execution.Admission
   alias Sanctum.Consent.{Bootstrap, Source}
 
-  @seed_root Path.expand("../../../../seed", __DIR__)
+  @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
 
   setup do
@@ -44,6 +45,7 @@ defmodule Opus.AgentAuthorityTest do
     {:ok, ctx: ctx}
   end
 
+  @tag :requires_opus
   test "the soul runs its model with the key bound on the model's own profile", %{ctx: ctx} do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted and "catalyst:local.claude" in minted
@@ -56,11 +58,11 @@ defmodule Opus.AgentAuthorityTest do
 
     describe = %{"operation" => "describe", "params" => %{}}
 
-    {:ok, unbound} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, unbound} = Admission.authority_for(ctx, :default, @soul)
     assert unbound.source_ref == @soul
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
-             Opus.run_child(unbound, "catalyst:local.claude", nil, describe, child_opts)
+             Cyfr.Execution.run_child(unbound, "catalyst:local.claude", nil, describe, child_opts)
 
     {:ok, entry} =
       Sanctum.Vault.create(ctx, %{
@@ -87,7 +89,7 @@ defmodule Opus.AgentAuthorityTest do
         expected_consent_revision: plan.expected_consent_revision
       })
 
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Admission.authority_for(ctx, :default, @soul)
     assert Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
 
     # A root pin whose profile row is missing is not intact: the loader
@@ -95,7 +97,13 @@ defmodule Opus.AgentAuthorityTest do
     refute Sanctum.Consent.Loader.pinned_intact?(ctx, %{authority | profile_id: "prof_missing"})
 
     assert {:ok, %{output: output}} =
-             Opus.run_child(authority, "catalyst:local.claude", nil, describe, child_opts)
+             Cyfr.Execution.run_child(
+               authority,
+               "catalyst:local.claude",
+               nil,
+               describe,
+               child_opts
+             )
 
     assert {:ok, %{"contracts" => ["model/chat@1"]}} = Cyfr.Models.decode_envelope(output)
 
@@ -104,11 +112,17 @@ defmodule Opus.AgentAuthorityTest do
     refute Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
 
     assert {:error, {:setup_required, %{reason: "consent_moved"}}} =
-             Opus.run_child(authority, "catalyst:local.claude", nil, describe, child_opts)
+             Cyfr.Execution.run_child(
+               authority,
+               "catalyst:local.claude",
+               nil,
+               describe,
+               child_opts
+             )
 
     # A role the soul may clone into loads as a source of its own, with its
     # edge into the http hand carrying the hand's egress.
-    {:ok, web} = Opus.Chain.authority_for(ctx, :default, "agent:local.web")
+    {:ok, web} = Admission.authority_for(ctx, :default, "agent:local.web")
     assert web.source_ref == "agent:local.web"
 
     {:ok, http_edge} =
@@ -151,7 +165,7 @@ defmodule Opus.AgentAuthorityTest do
         expected_consent_revision: plan.expected_consent_revision
       })
 
-    {:ok, soul} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Admission.authority_for(ctx, :default, @soul)
 
     {:ok, web_edge} =
       Cyfr.Authority.Blob.lookup_edge(

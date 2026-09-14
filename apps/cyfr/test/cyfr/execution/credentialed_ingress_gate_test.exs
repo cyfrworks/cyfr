@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.CredentialedIngressGateTest do
+defmodule Cyfr.Execution.CredentialedIngressGateTest do
   @moduledoc """
   Verifies that execution entry points require a grant before dispensing credentials.
 
@@ -128,8 +128,8 @@ defmodule Opus.CredentialedIngressGateTest do
   end
 
   describe "per-ingress classification" do
-    # Each classified ingress either routes through Opus.Chain (and so
-    # inherits the shared resolution above) or falls back to the legacy
+    # Each classified ingress either roots through a profile's consent (and
+    # so inherits the shared resolution above) or falls back to the legacy
     # path when no profile exists. This pins which is which, so a change
     # in routing has to be deliberate.
     # The console tincture surface shares the :tincture flag — one
@@ -144,7 +144,7 @@ defmodule Opus.CredentialedIngressGateTest do
     ]
 
     test "each ingress routes through the chain" do
-      root = Path.expand("../../../..", __DIR__)
+      root = Path.expand("../../../../..", __DIR__)
 
       for {_ingress, path, _fallback} <- @ingresses do
         source = File.read!(Path.join(root, path))
@@ -155,7 +155,7 @@ defmodule Opus.CredentialedIngressGateTest do
     end
 
     test "a bound registration never falls back to the legacy path" do
-      root = Path.expand("../../../..", __DIR__)
+      root = Path.expand("../../../../..", __DIR__)
 
       for {_ingress, path, :no_fallback_when_bound} <-
             Enum.filter(@ingresses, &(elem(&1, 2) == :no_fallback_when_bound)) do

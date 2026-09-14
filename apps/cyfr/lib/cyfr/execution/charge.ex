@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.Chain.Charge do
+defmodule Cyfr.Execution.Charge do
   @moduledoc """
   The durable side of a spawn-shaped child's invoke charge: the hold the
   transition charged in the root's budget is a `budget_charges` row too

@@ -620,13 +620,14 @@ defmodule Opus.FormulaHandler do
           ctx
           |> child_opts(opts)
           |> Keyword.put(:guest_fn, :spawn)
-          |> Opus.Chain.Charge.identify()
+          |> Cyfr.Execution.Charge.identify()
 
         need = Map.get(args, "need")
         input = Map.get(args, "input") || %{}
 
-        with {:ok, decision} <- Opus.Chain.step_invoke(authority, reference, need, child_opts),
-             :ok <- Opus.Chain.Charge.take(decision.authority, child_opts) do
+        with {:ok, decision} <-
+               Cyfr.Execution.Admission.step_invoke(authority, reference, need, child_opts),
+             :ok <- Cyfr.Execution.Charge.take(decision.authority, child_opts) do
           fun = fn ->
             # The task holds the charged slot from here on: the guard's
             # :DOWN compensation releases it if the task is brutally
@@ -649,7 +650,7 @@ defmodule Opus.FormulaHandler do
               end
             after
               Sanctum.Authority.release_invoke(decision.authority)
-              Opus.Chain.Charge.give_back(decision.authority, child_opts)
+              Cyfr.Execution.Charge.give_back(decision.authority, child_opts)
             end
           end
 
@@ -668,7 +669,7 @@ defmodule Opus.FormulaHandler do
               :exit, reason ->
                 unless match?({:timeout, _}, reason) do
                   Sanctum.Authority.release_invoke(decision.authority)
-                  Opus.Chain.Charge.give_back(decision.authority, child_opts)
+                  Cyfr.Execution.Charge.give_back(decision.authority, child_opts)
                 end
 
                 Logger.warning(
@@ -685,12 +686,12 @@ defmodule Opus.FormulaHandler do
 
             {:error, :max_tasks_exceeded} ->
               Sanctum.Authority.release_invoke(decision.authority)
-              Opus.Chain.Charge.give_back(decision.authority, child_opts)
+              Cyfr.Execution.Charge.give_back(decision.authority, child_opts)
               encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
 
             {:error, reason} ->
               Sanctum.Authority.release_invoke(decision.authority)
-              Opus.Chain.Charge.give_back(decision.authority, child_opts)
+              Cyfr.Execution.Charge.give_back(decision.authority, child_opts)
               encode_error(:spawn_failed, guest_reason(reason))
 
             :tracker_unreachable ->

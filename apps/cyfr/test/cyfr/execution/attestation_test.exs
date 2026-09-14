@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.SignatureAttestationTest do
+defmodule Cyfr.Execution.AttestationTest do
   use ExUnit.Case, async: true
 
-  alias Opus.SignatureAttestation
+  alias Cyfr.Execution.Attestation
 
   describe "attestation/1" do
     # `Opus.Executor` reads this instead of `verify/3` alone because only one
@@ -13,30 +13,30 @@ defmodule Opus.SignatureAttestationTest do
     # client's own MCP tool call — so children, schedules and tincture
     # ingress executed unsigned OCI code without reading the row at all.
     test "filesystem and published are trusted by ownership" do
-      assert :trusted = SignatureAttestation.attestation(%{source: "filesystem"})
-      assert :trusted = SignatureAttestation.attestation(%{source: "published"})
+      assert :trusted = Attestation.attestation(%{source: "filesystem"})
+      assert :trusted = Attestation.attestation(%{source: "published"})
     end
 
     test "a verified OCI pull is signed" do
       assert :signed =
-               SignatureAttestation.attestation(%{source: "oci", signature_verified: true})
+               Attestation.attestation(%{source: "oci", signature_verified: true})
     end
 
     test "an OCI pull that did not verify is unsigned, whatever the row says elsewhere" do
       assert :unsigned =
-               SignatureAttestation.attestation(%{source: "oci", signature_verified: false})
+               Attestation.attestation(%{source: "oci", signature_verified: false})
 
-      assert :unsigned = SignatureAttestation.attestation(%{source: "oci"})
+      assert :unsigned = Attestation.attestation(%{source: "oci"})
     end
 
     test "anything else is unclassified, and the caller must fail closed on it" do
-      assert {:unknown_source, nil} = SignatureAttestation.attestation(%{source: nil})
-      assert {:unknown_source, "hg"} = SignatureAttestation.attestation(%{source: "hg"})
+      assert {:unknown_source, nil} = Attestation.attestation(%{source: nil})
+      assert {:unknown_source, "hg"} = Attestation.attestation(%{source: "hg"})
     end
 
     test "reads string and atom keys alike — rows arrive both ways" do
       assert :signed =
-               SignatureAttestation.attestation(%{
+               Attestation.attestation(%{
                  "source" => "oci",
                  "signature_verified" => true
                })
@@ -46,12 +46,12 @@ defmodule Opus.SignatureAttestationTest do
   describe "verify/3 with local/filesystem components" do
     test "allows filesystem source without any verification" do
       component = %{source: "filesystem", signature_verified: false}
-      assert :ok = SignatureAttestation.verify(component, nil, nil)
+      assert :ok = Attestation.verify(component, nil, nil)
     end
 
     test "allows published source without any verification" do
       component = %{source: "published", signature_verified: false}
-      assert :ok = SignatureAttestation.verify(component, nil, nil)
+      assert :ok = Attestation.verify(component, nil, nil)
     end
 
     test "refuses a nil source — an unclassified value, not a legacy pass" do
@@ -59,7 +59,7 @@ defmodule Opus.SignatureAttestationTest do
       # here is a malformed caller, never a real row; the closed source
       # vocabulary fails closed on it like any other unknown value.
       component = %{source: nil, signature_verified: false}
-      assert {:error, message} = SignatureAttestation.verify(component, nil, nil)
+      assert {:error, message} = Attestation.verify(component, nil, nil)
       assert message =~ "signature policy undefined"
     end
 
@@ -67,7 +67,7 @@ defmodule Opus.SignatureAttestationTest do
       component = %{source: "filesystem", signature_verified: false}
 
       assert :ok =
-               SignatureAttestation.verify(
+               Attestation.verify(
                  component,
                  "dev@cyfr.run",
                  "https://accounts.google.com"
@@ -84,7 +84,7 @@ defmodule Opus.SignatureAttestationTest do
         signer_issuer: "https://accounts.google.com"
       }
 
-      assert :ok = SignatureAttestation.verify(component, nil, nil)
+      assert :ok = Attestation.verify(component, nil, nil)
     end
 
     test "allows verified OCI component with matching identity" do
@@ -95,7 +95,7 @@ defmodule Opus.SignatureAttestationTest do
         signer_issuer: "https://accounts.google.com"
       }
 
-      assert :ok = SignatureAttestation.verify(component, "dev@cyfr.run", nil)
+      assert :ok = Attestation.verify(component, "dev@cyfr.run", nil)
     end
 
     test "allows verified OCI component with matching issuer" do
@@ -106,7 +106,7 @@ defmodule Opus.SignatureAttestationTest do
         signer_issuer: "https://accounts.google.com"
       }
 
-      assert :ok = SignatureAttestation.verify(component, nil, "https://accounts.google.com")
+      assert :ok = Attestation.verify(component, nil, "https://accounts.google.com")
     end
 
     test "allows verified OCI component with matching identity and issuer" do
@@ -118,7 +118,7 @@ defmodule Opus.SignatureAttestationTest do
       }
 
       assert :ok =
-               SignatureAttestation.verify(
+               Attestation.verify(
                  component,
                  "dev@cyfr.run",
                  "https://accounts.google.com"
@@ -133,7 +133,7 @@ defmodule Opus.SignatureAttestationTest do
         signer_issuer: "https://accounts.google.com"
       }
 
-      {:error, msg} = SignatureAttestation.verify(component, "other@example.com", nil)
+      {:error, msg} = Attestation.verify(component, "other@example.com", nil)
       assert msg =~ "identity mismatch"
     end
 
@@ -146,7 +146,7 @@ defmodule Opus.SignatureAttestationTest do
       }
 
       {:error, msg} =
-        SignatureAttestation.verify(component, nil, "https://github.com/login/oauth")
+        Attestation.verify(component, nil, "https://github.com/login/oauth")
 
       assert msg =~ "issuer mismatch"
     end
@@ -159,7 +159,7 @@ defmodule Opus.SignatureAttestationTest do
         signer_issuer: nil
       }
 
-      {:error, msg} = SignatureAttestation.verify(component, "dev@cyfr.run", nil)
+      {:error, msg} = Attestation.verify(component, "dev@cyfr.run", nil)
       assert msg =~ "identity mismatch"
     end
   end
@@ -167,13 +167,13 @@ defmodule Opus.SignatureAttestationTest do
   describe "verify/3 with unverified OCI components" do
     test "rejects unverified OCI component" do
       component = %{source: "oci", signature_verified: false}
-      {:error, msg} = SignatureAttestation.verify(component, "dev@cyfr.run", nil)
+      {:error, msg} = Attestation.verify(component, "dev@cyfr.run", nil)
       assert msg =~ "without signature verification"
     end
 
     test "rejects OCI component with nil signature_verified" do
       component = %{source: "oci", signature_verified: nil}
-      {:error, msg} = SignatureAttestation.verify(component, "dev@cyfr.run", nil)
+      {:error, msg} = Attestation.verify(component, "dev@cyfr.run", nil)
       assert msg =~ "without signature verification"
     end
   end
@@ -188,7 +188,7 @@ defmodule Opus.SignatureAttestationTest do
       }
 
       assert :ok =
-               SignatureAttestation.verify(
+               Attestation.verify(
                  component,
                  "dev@cyfr.run",
                  "https://accounts.google.com"
@@ -197,14 +197,14 @@ defmodule Opus.SignatureAttestationTest do
 
     test "rejects string-keyed unverified OCI component" do
       component = %{"source" => "oci", "signature_verified" => false}
-      {:error, msg} = SignatureAttestation.verify(component, "dev@cyfr.run", nil)
+      {:error, msg} = Attestation.verify(component, "dev@cyfr.run", nil)
       assert msg =~ "without signature verification"
     end
   end
 
   describe "verify/3 with non-map input" do
     test "returns error for non-map component" do
-      {:error, msg} = SignatureAttestation.verify("not a map", nil, nil)
+      {:error, msg} = Attestation.verify("not a map", nil, nil)
       assert msg =~ "Invalid component data"
     end
   end

@@ -166,16 +166,16 @@ defmodule Cyfr.Test.ScriptedExecution do
   # invoke budget for a spawn, the guard releases it on :DOWN, and the
   # charge row is taken before the child runs and given back after.
   defp scripted_child(authority, reference, need, input, opts) do
-    with {:ok, decision} <- chain().step_invoke(authority, reference, need, opts) do
+    with {:ok, decision} <- Cyfr.Execution.Admission.step_invoke(authority, reference, need, opts) do
       if Keyword.get(opts, :guest_fn) == :spawn do
-        with :ok <- charge().take(decision.authority, opts) do
+        with :ok <- Cyfr.Execution.Charge.take(decision.authority, opts) do
           Sanctum.Authority.guard_invoke(decision.authority)
 
           try do
             run_scripted(decision, reference, input, opts)
           after
             Sanctum.Authority.release_invoke(decision.authority)
-            charge().give_back(decision.authority, opts)
+            Cyfr.Execution.Charge.give_back(decision.authority, opts)
           end
         end
       else
@@ -425,7 +425,5 @@ defmodule Cyfr.Test.ScriptedExecution do
   # Named at runtime: cyfr does not depend on opus, and these modules are
   # reachable only from the umbrella's own test run.
   defp engine, do: Module.concat([:Opus])
-  defp chain, do: Module.concat([:Opus, :Chain])
-  defp charge, do: Module.concat([:Opus, :Chain, :Charge])
   defp emitter, do: Module.concat([:Opus, :Emit])
 end

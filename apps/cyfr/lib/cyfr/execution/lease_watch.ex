@@ -3,18 +3,21 @@
 
 defmodule Cyfr.Execution.LeaseWatch do
   @moduledoc """
-  The lease keeper of an execution held outside the engine — an outbound
-  tool call in flight: a process linked to the holder that renews the
-  attempt's lease every tick and exits the holder when the lease is
-  lost.
+  The lease keeper of an execution held outside the engine — a turn root
+  (`Cyfr.Execution.TurnRoot`) or an outbound tool call in flight: a
+  process linked to the holder that renews the attempt's lease every tick
+  and exits the holder when the lease is lost.
 
   A caller blocked in a call cannot service a timer of its own, so the
-  keeper is a linked sibling with the rule the engine's watch applies: a
-  renewal the store refuses stops the holder at once
-  (`{:lease_lost, execution_id}`); a cancel asked of the attempt stops it
-  at once (`{:cancel_requested, execution_id}`); a store that cannot
-  answer is tolerated only inside the lease the attempt last held.
+  keeper is a linked sibling with the rule the engine's watch applies
+  (`Cyfr.Execution.Record.renew_lease/2`): a renewal the store refuses
+  stops the holder at once (`{:lease_lost, execution_id}`); a cancel asked
+  of the attempt stops it at once (`{:cancel_requested, execution_id}`); a
+  store that cannot answer, a renewal that raises included, is tolerated
+  only inside the lease the attempt last held.
   """
+
+  alias Cyfr.Execution.Record
 
   @tick_ms 60_000
 
@@ -27,7 +30,7 @@ defmodule Cyfr.Execution.LeaseWatch do
   def start(holder, execution_id, attempt, opts \\ [])
       when is_pid(holder) and is_binary(execution_id) and is_binary(attempt) do
     tick = Keyword.get(opts, :tick_ms, @tick_ms)
-    until = Keyword.get(opts, :until) || Arca.ExecutionAttempts.lease_until()
+    until = Keyword.get(opts, :until) || Record.lease_until()
 
     pid =
       spawn_link(fn ->
@@ -51,11 +54,11 @@ defmodule Cyfr.Execution.LeaseWatch do
   defp loop(holder, execution_id, attempt, tick, until) do
     Process.sleep(tick)
 
-    case Arca.ExecutionAttempts.renew(attempt, Arca.ExecutionAttempts.lease_until()) do
-      {:ok, renewed, false} ->
+    case Record.renew_lease(execution_id, attempt) do
+      {:ok, renewed} ->
         loop(holder, execution_id, attempt, tick, renewed)
 
-      {:ok, _renewed, true} ->
+      {:cancel_requested, _renewed} ->
         Process.exit(holder, {:cancel_requested, execution_id})
 
       :lost ->

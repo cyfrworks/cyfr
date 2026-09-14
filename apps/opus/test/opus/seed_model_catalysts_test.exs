@@ -187,7 +187,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
     input = %{"operation" => "nothing.here", "params" => %{}}
 
-    {:ok, before} = Opus.Chain.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, before} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{node_ref: "catalyst:local.claude:" <> _, reason: reason}}} =
              Opus.run_child(before, "catalyst:local.claude", nil, input, child_opts)
@@ -222,7 +222,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
     # The assistant's authority, loaded again, lends the key on its edge;
     # the child reads it and runs to its own refusal.
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, "Unknown operation: nothing.here"} =
              Opus.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
@@ -230,7 +230,7 @@ defmodule Opus.SeedModelCatalystsTest do
     # Revoking the catalyst's profile cuts the assistant off at the next load.
     {:ok, [claude_profile]} = Source.DB.profiles(ctx, "catalyst:local.claude")
     :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, claude_profile.id, "revoked")
-    {:ok, revoked} = Opus.Chain.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, revoked} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
              Opus.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)

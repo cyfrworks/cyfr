@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.SignatureAttestation do
+defmodule Cyfr.Execution.Attestation do
   @moduledoc """
   Reads the signature attestation recorded at pull time.
 
@@ -21,10 +21,10 @@ defmodule Opus.SignatureAttestation do
   ## Usage
 
       # Check a component's recorded attestation
-      :ok = SignatureAttestation.verify(component_map, nil, nil)
+      :ok = Attestation.verify(component_map, nil, nil)
 
       # Verify with identity/issuer requirements
-      :ok = SignatureAttestation.verify(component_map, "dev@cyfr.run", "https://accounts.google.com")
+      :ok = Attestation.verify(component_map, "dev@cyfr.run", "https://accounts.google.com")
   """
 
   @doc """

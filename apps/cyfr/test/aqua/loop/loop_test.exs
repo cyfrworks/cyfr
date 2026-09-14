@@ -65,13 +65,13 @@ defmodule Aqua.LoopTest do
   test "the catalyst's consented cap answers to a name, not to the ref the spec carries", %{
     ctx: ctx
   } do
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
 
     # What `Aqua.AgentConfig` resolves, and so what the spec holds.
     versioned = @model <> ":1.3.0"
     {:ok, name_ref} = Cyfr.ComponentRef.to_name_ref(versioned)
 
-    # The graph is keyed the way `Opus.Chain` steps: by name. Asking with
+    # The graph is keyed the way `Cyfr.Execution.Admission` steps: by name. Asking with
     # the version answers nothing, and a cap of nil is a size check that
     # never fires — which is what the loop did while it asked that way.
     assert {:error, :unknown_node} = Cyfr.Authority.node_limits(authority, versioned)
@@ -85,7 +85,7 @@ defmodule Aqua.LoopTest do
   test "the loop resolves a cap for the spec it actually holds", %{ctx: ctx, thread: thread} do
     start_supervised!({ScriptedExecution, ref: @model, script: []})
     turn = accept!(ctx, thread, "hello")
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
     {:ok, spec} = Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
 
     # The spec holds a versioned ref, and the graph is keyed by name. Asking
@@ -428,7 +428,7 @@ defmodule Aqua.LoopTest do
 
     # A spec is built on the pinned release alone, and only on one that
     # speaks the chat contract.
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
 
     for {ref, refusal} <- [
           {"catalyst:local.claude:0.0.1", :catalyst_not_in_estate},

@@ -52,7 +52,10 @@ defmodule Cyfr.SanctumSurfacesTest do
     # consent classes, the spawn-charged chain authority step and its
     # invoke budget, authorization rendering, and the Sanctum.Catalog port;
     # Cyfr.Application creates the invoke-budget counter and supervises its
-    # guard.
+    # guard. Cyfr.Execution.Admission loads a root's authority from its
+    # profile's consent (Sanctum.Consent) and steps a child's through the
+    # transition relation (Sanctum.Authority); Cyfr.Execution.Charge gives
+    # a refused charge's slot back to the invoke-budget counter.
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
       Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth

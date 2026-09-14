@@ -114,7 +114,7 @@ defmodule Cyfr.Execution.Record do
     # the record, opened at admission, named by every later write.
     :attempt,
     # What the row is (`component | turn | tool_call`) and the turn it
-    # belongs to; a turn root is admitted by `Opus.TurnRoot`.
+    # belongs to; a turn root is admitted by `Cyfr.Execution.TurnRoot`.
     :kind,
     :turn_id,
     # The schedule this root runs for (`Cyfr.Schedules`); nil otherwise.

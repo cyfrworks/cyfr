@@ -4,9 +4,9 @@
 defmodule Opus.Host do
   @moduledoc """
   The **consent and record plane**: the seams a running component crosses
-  into the platform — a root authority resolved from a consent, an in-chain
-  tool call, a vault edge unsealed, a policy decision recorded, an execution
-  row opened and closed, an event delivered.
+  into the platform — an in-chain tool call, a vault edge unsealed, a
+  policy decision recorded, an execution row opened and closed, an event
+  delivered.
 
   Delegates selected host operations within the combined Opus/CYFR release.
   This module is not the complete dependency interface; Opus also calls
@@ -22,10 +22,6 @@ defmodule Opus.Host do
   """
 
   alias Sanctum.Context
-
-  @doc "Resolve the root Authority a profile grants — the consent loader."
-  @spec load_root(Context.t(), map(), keyword()) :: {:ok, term(), term()} | {:error, term()}
-  defdelegate load_root(ctx, profile, opts), to: Sanctum.Consent.Loader
 
   @doc "An in-chain tool call under a running component's authority."
   @spec tool_call(String.t(), Context.t(), map(), Cyfr.Authority.t(), keyword()) ::
