@@ -5,8 +5,10 @@ defmodule Opus.SeedModelCatalystsTest do
   @moduledoc """
   The five model catalysts the seed ships run under this host: each
   instantiates against the host's catalyst world, declares and answers
-  `model/chat@1` (`describe` without a key, a chat request off the
-  contract refused before the key is read), reads the key its need binds
+  `model/chat@1` (`describe` without a key, streaming, and a named
+  model's window from its table or, taking the key, from the provider; a
+  chat request off the contract refused before the key is read), links
+  the host's `cyfr:emit/events`, reads the key its need binds
   through `cyfr:vault/read`, and answers the catalyst envelope. The
   operation asked for after the key is one no catalyst has, so the key is
   read and nothing is dialled.
@@ -18,12 +20,14 @@ defmodule Opus.SeedModelCatalystsTest do
   alias Sanctum.Consent.{Bootstrap, Source}
 
   @seed_root Path.expand("../../../../seed", __DIR__)
+  # Each catalyst's key field, and where a named model's window comes
+  # from: a table in the binary, or the provider's API behind the key.
   @models [
-    {"claude", "ANTHROPIC_API_KEY"},
-    {"openai", "OPENAI_API_KEY"},
-    {"gemini", "GEMINI_API_KEY"},
-    {"grok", "GROK_API_KEY"},
-    {"openrouter", "OPENROUTER_API_KEY"}
+    {"claude", "ANTHROPIC_API_KEY", :keyed},
+    {"openai", "OPENAI_API_KEY", {:table, "gpt-5", 400_000}},
+    {"gemini", "GEMINI_API_KEY", :keyed},
+    {"grok", "GROK_API_KEY", {:table, "grok-4", 256_000}},
+    {"openrouter", "OPENROUTER_API_KEY", :keyed}
   ]
 
   setup do
@@ -52,10 +56,11 @@ defmodule Opus.SeedModelCatalystsTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  for {name, field} <- @models do
+  for {name, field, window} <- @models do
     test "catalyst:local.#{name} runs under the host and reads its bound key", %{ctx: ctx} do
       name = unquote(name)
       field = unquote(field)
+      window = unquote(Macro.escape(window))
       ref = "catalyst:local.#{name}"
 
       # The shipped version, found rather than pinned, copied in as a fill
@@ -83,8 +88,30 @@ defmodule Opus.SeedModelCatalystsTest do
 
       assert {:ok, capabilities} = Cyfr.Models.decode_envelope(described)
       assert capabilities["contracts"] == [Cyfr.Models.chat_contract()]
-      assert capabilities["tools"] == true and capabilities["streaming"] == false
+      assert capabilities["tools"] == true and capabilities["streaming"] == true
       assert is_list(capabilities["provider_tools"]) and is_list(capabilities["media_types"])
+
+      describe_model = fn model ->
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"operation" => "describe", "params" => %{"model" => model}}
+        })
+      end
+
+      case window do
+        {:table, model, context_window} ->
+          assert {:ok, %{result: answer}} = describe_model.(model)
+
+          assert {:ok, %{"context_window" => ^context_window}} =
+                   Cyfr.Models.decode_envelope(answer)
+
+          assert {:error, message} = describe_model.("no-such-model")
+          assert message =~ "not a model"
+
+        :keyed ->
+          assert {:error, "Failed to read " <> _} = describe_model.("any-model")
+      end
 
       assert {:error, "'model' is required"} =
                MCP.handle("execution", ctx, %{

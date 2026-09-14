@@ -72,7 +72,7 @@ data/athanors/{athanor_id}/components/catalysts/local/my-api/0.1.0/
 | OAuth tokens | — | `cyfr:oauth/token` | — | — |
 | File storage | — | `cyfr:storage/files` | — | — |
 | Invoke sub-components | — | — | `cyfr:formula/invoke` | — |
-| Emit events (SSE/LiveView) | — | — | `invoke::emit` | — |
+| Emit events (SSE/LiveView) | — | `cyfr:emit/events` | `invoke::emit` | — |
 | MCP tool access | — | — | Via `invoke::call` | — |
 | Frontend UI | — | — | — | HTML/JS/CSS |
 | Backend component invoke | — | — | — | `cyfr.invoke()` |
@@ -166,7 +166,7 @@ interface compute { compute: func(input: string) -> string; }
 world reagent { export compute; }
 ```
 
-**Catalyst (HTTP + secrets)** — e.g. an API wrapper like claude, openai:
+**Catalyst (HTTP + secrets + streamed events)** — e.g. a model catalyst like claude, openai:
 ```wit
 package cyfr:catalyst@0.1.0;
 interface run { run: func(input: string) -> string; }
@@ -175,6 +175,7 @@ world catalyst {
     import cyfr:http/fetch@0.1.0;
     import cyfr:http/streaming@0.1.0;
     import cyfr:vault/read@0.1.0;
+    import cyfr:emit/events@0.1.0;
 }
 ```
 
@@ -728,10 +729,10 @@ Host enforces: domain allowlist, rate limits, SSRF prevention, private IP blocki
 ### `cyfr:http/streaming` — 3-step polling SSE
 ```
 request(json) -> string   // Same request format as fetch → returns {"handle": "..."}
-read(handle) -> string    // {"data": "...", "done": false} or {"data": "", "done": true}
+read(handle) -> string    // {"data": "...", "done": false, "status": 200} or {"data": "", "done": true, "status": 200}
 close(handle) -> string   // Clean up — always call when done
 ```
-Protocol: `request` → loop `read` until `done: true` → `close`. Same policy enforcement as fetch.
+Protocol: `request` → loop `read` until `done: true` → `close`. Same policy enforcement as fetch. A `read` waits up to 100 ms for a chunk and answers `"data": ""` when none arrived; `status` is the provider's HTTP status once its response began (a non-2xx body streams like any other), and a request that failed before any response answers `{"error": {"type": "request_failed", ...}}`.
 
 **Buffered SSE parsing** — the standard pattern used by all LLM catalysts (claude, openai, gemini):
 ```rust
@@ -791,12 +792,17 @@ streaming::close(handle);
 | Error | Cause |
 |-------|-------|
 | `stream_limit` | Max 3 concurrent streams per execution |
-| `timeout` | Stream exceeded 60s timeout |
+| `timeout` | The stream outlasted the node's consented `timeout`, or no data arrived for that long |
+| `request_failed` | The request failed before any response (connection refused, TLS, DNS) |
+| `stream_error` | The transport broke mid-stream |
 | `invalid_handle` | Unknown or already-closed handle |
 | `response_too_large` | Cumulative data exceeds `max_response_size` |
 
 ### `cyfr:vault/read` — `get(name) -> result<string, string>`
 Returns `Ok(value)` or `Err("access-denied: {name}")`. Values are served from the bound vault entry's material, projected to the `fields` the need declared — credentials live in host memory and never enter WASM at rest. Requires a granted profile whose vault-entry projection includes `name`.
+
+### `cyfr:emit/events` — `emit(json-event) -> string`
+Push one event (a JSON object) to the execution's event stream before `run` answers — what a caller subscribed to the execution sees as it happens. Answers `{"ok": true, "sequence": "N.n"}`, `{"ok": true}` when streamed text is held back to mask a credential across events, or `{"error": {...}}` (too large for the node's `max_request_size`, over the execution's budget of 3000 a minute, not an object). A refused event never stops the run. Model catalysts emit the `model/chat@1` stream events (see [Model catalysts](#model-catalysts-the-modelchat1-contract)).
 
 ### `cyfr:oauth/token` — `get-access-token(provider) -> result<string, string>`
 Returns `Ok(access_token)` or `Err("authorization_required: ...")`. The host manages the full OAuth lifecycle — client credentials, token exchange, and automatic refresh are handled transparently. WASM only sees short-lived access tokens (masked in output by SecretMasker).
@@ -932,9 +938,21 @@ The contract is three operations of the ordinary catalyst envelope (`{"operation
   "contracts": ["model/chat@1"], "provider": "anthropic",
   "tools": true, "provider_tools": ["web_search"],
   "media_types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"],
-  "streaming": false, "defaults": {"max_tokens": 16384}
+  "streaming": true, "defaults": {"max_tokens": 16384}
 }}
 ```
+
+With a `model`, the same answer carries that model's `context_window` and, where known, `max_output_tokens`:
+
+```json
+{"operation": "describe", "params": {"model": "claude-sonnet-4-6"}}
+```
+```json
+{"status": 200, "data": {"contracts": ["model/chat@1"], "streaming": true, "model": "claude-sonnet-4-6",
+  "context_window": 200000, "max_output_tokens": 64000, "...": "the capabilities above"}}
+```
+
+The window comes from the provider's models API where it reports one (claude, gemini, openrouter — this takes the key) and from a table in the catalyst otherwise (openai, grok). A model the catalyst does not know is refused as `unknown_model` (status 404). The assistant sizes every request against this answer, and a turn whose model cannot be described does not start.
 
 **`models`** — the models the bound key can reach, in one shape:
 
@@ -1002,9 +1020,21 @@ A refusal is typed, with the provider's own body beside it when the refusal is t
 {"status": 429, "error": {"type": "rate_limited", "message": "…", "provider": {"…": "the provider's body"}}}
 ```
 
-`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `unknown_operation`.
+`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `unknown_model`, `unknown_operation`.
 
-The catalyst world's `run` returns once, so `describe` reports `streaming: false` and a whole response is answered.
+**Streaming.** While `chat` runs, the catalyst streams the answer as events on its execution's event stream through `cyfr:emit/events.emit`, then answers the whole response as above:
+
+| Event | Fields |
+|-------|--------|
+| `text.delta` | `text` — visible answer text, in order |
+| `tool_call.start` | `index`, `id`, `name` — the call's id is the one the response carries |
+| `tool_call.delta` | `index`, `arguments` — a fragment of the call's JSON arguments |
+| `tool_call.end` | `index` |
+| `usage` | `usage` — as in the response |
+| `stop` | `stop_reason` — as in the response |
+| `error` | `error` — `type` and `message`, as the refusal answered |
+
+Deltas are batched: a batch goes out when it reaches 256 bytes, when it has been held 50 ms, when a read of the provider's stream finds nothing new, and before any other event. The host masks every credential the execution was handed out of each event, holding back the tail of streamed text so a credential split across two deltas is masked whole, and counts every event against the execution's emit budget (3000 a minute); a refused event never stops the run. The assistant shows a chat step's `text.delta` events as the answer arrives and keeps the whole response as the step's rows; tool-call fragments are not shown.
 
 To ship a model catalyst of your own: declare the contract, answer the three operations, and cover the mapping with host-target unit tests (`cargo test` in `src/`, as the bundled ones do). A request that does not parse is refused as `invalid_request` before any key is read; `describe` answers without a key; `chat` and `models` never answer provider-shaped data.
 

@@ -153,9 +153,9 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:operator],
       note: "formula concurrency activity, kept for operator metrics"
     },
-    [:cyfr, :opus, :formula, :emit] => %{
+    [:cyfr, :opus, :emit] => %{
       consumers: [:operator],
-      note: "formula concurrency activity, kept for operator metrics"
+      note: "guest stream events, kept for operator metrics"
     },
     [:cyfr, :opus, :formula, :cancel] => %{
       consumers: [:operator],

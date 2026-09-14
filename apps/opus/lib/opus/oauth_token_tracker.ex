@@ -78,6 +78,25 @@ defmodule Opus.OAuthTokenTracker do
       []
   end
 
+  @doc """
+  The tokens dispensed to an execution so far, left in place for the
+  drain. An unreachable tracker answers `[]`, logged.
+  """
+  @spec peek(String.t() | nil) :: [String.t()]
+  def peek(nil), do: []
+
+  def peek(execution_id) when is_binary(execution_id) do
+    GenServer.call(__MODULE__, {:peek, execution_id})
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[OAuthTokenTracker] peek unreachable (#{inspect(reason)}) — " <>
+          "dispensed tokens for #{execution_id} cannot be masked"
+      )
+
+      []
+  end
+
   @doc "Run one sweep synchronously and return the count deleted (test seam)."
   @spec sweep_now() :: non_neg_integer()
   def sweep_now, do: GenServer.call(__MODULE__, :sweep)
@@ -99,6 +118,10 @@ defmodule Opus.OAuthTokenTracker do
   def handle_call({:put, execution_id, token}, _from, state) do
     :ets.insert(@table, {execution_id, token, now_ms()})
     {:reply, :ok, state}
+  end
+
+  def handle_call({:peek, execution_id}, _from, state) do
+    {:reply, @table |> :ets.lookup(execution_id) |> Enum.map(&elem(&1, 1)), state}
   end
 
   def handle_call({:collect, execution_id}, _from, state) do

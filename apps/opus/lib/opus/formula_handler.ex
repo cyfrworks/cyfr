@@ -32,7 +32,7 @@ defmodule Opus.FormulaHandler do
   | `await-any` | Blocks until FIRST task completes |
   | `poll` | Non-blocking status check |
   | `cancel` | Cancel a spawned task |
-  | `emit` | Push a progress/UI event to the root execution's stream |
+  | `emit` | Push a progress/UI event to the root execution's stream (`Opus.Emit`) |
 
   ## Architecture
 
@@ -63,10 +63,14 @@ defmodule Opus.FormulaHandler do
 
   ## Usage
 
+      emitter = Opus.Emit.open(root_execution_id, ctx: ctx, authority: authority)
+
       {imports, tracker_pid} = Opus.FormulaHandler.build_formula_imports(ctx, parent_execution_id,
-        root_execution_id: root_execution_id, limits: limits)
+        root_execution_id: root_execution_id, limits: limits, authority: authority,
+        emitter: emitter)
       # Merge imports and pass to Wasmex.Components.start_link
-      # Call Opus.FormulaHandler.cleanup_registry(tracker_pid) after execution
+      # After execution: Opus.FormulaHandler.cleanup_registry(tracker_pid)
+      # and Opus.Emit.close(emitter)
   """
 
   require Logger
@@ -100,8 +104,8 @@ defmodule Opus.FormulaHandler do
     and this fetch keeps a direct caller honest too.
   - `:declared_needs` / `:activation_digest` - host-derived transition inputs
     for this node's onward invocations
-  - `:secrets` - credential values dispensed to this execution; emitted
-    events are masked with them before leaving the runtime
+  - `:emitter` - the `Opus.Emit` emitter `emit` answers through (required),
+    opened on the root execution's stream
   - `:attempt` - the attempt that owns this formula's row, stamped on the
     lineage of every call it makes
   """
@@ -110,7 +114,7 @@ defmodule Opus.FormulaHandler do
     authority = Keyword.fetch!(opts, :authority)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
     limits = opts[:limits]
-    secrets = Keyword.get(opts, :secrets, [])
+    emitter = Keyword.fetch!(opts, :emitter)
 
     batch_timeout_ms =
       case limits && Limits.batch_timeout_ms(limits) do
@@ -229,7 +233,7 @@ defmodule Opus.FormulaHandler do
           {:fn,
            fn json_event ->
              guarded(parent_execution_id, "emit", fn ->
-               handle_emit(json_event, root_execution_id, ctx, authority, secrets)
+               Opus.Emit.emit(emitter, json_event)
              end)
            end}
       }
@@ -980,93 +984,6 @@ defmodule Opus.FormulaHandler do
 
       {:error, reason} ->
         encode_error(:cancel_failed, guest_reason(reason))
-    end
-  end
-
-  # Guest text accumulates into buffers that trusted UI parses into
-  # pending cards, so every emit is transition-checked, size-capped by the
-  # node's own request limit, and attributed — the consumer can always tell
-  # a guest event from the host's. It is also an egress: the event reaches
-  # SSE/LiveView subscribers and the replay buffer, so a credential the
-  # guest was handed is masked before the event leaves the runtime.
-  defp handle_emit(
-         json_event,
-         execution_id,
-         ctx,
-         %Sanctum.Authority{} = authority,
-         secrets
-       ) do
-    limits = Sanctum.Authority.limits(authority)
-
-    with :ok <- check_emit_size(json_event, limits.max_request_size),
-         :ok <- check_emit_rate(execution_id, ctx),
-         {:ok, data} <- decode_emit_event(json_event),
-         {:allow_emit, attribution} <-
-           Sanctum.Authority.Transition.step(authority, :emit, {:event, data}) do
-      origin_opts =
-        case attribution do
-          {:attributed, node} -> [origin: "guest", node: node]
-          :untrusted -> [origin: "guest"]
-        end
-
-      data = Opus.SecretMasker.mask(data, secrets)
-
-      # Numbered under the root stream's last durable event, shared by
-      # every emitter under the root.
-      case Opus.ExecutionEventBuffer.push(execution_id, data, ctx, origin_opts) do
-        {:ok, seq} ->
-          Opus.Telemetry.formula_emit(execution_id, seq)
-          safe_encode(%{"ok" => true, "sequence" => seq})
-
-        {:error, :missing_athanor} ->
-          encode_error(:dispatch_error, "emit event could not be routed")
-      end
-    else
-      {:error, :event_too_large} ->
-        encode_error(:resource_limit, "emit event exceeds the node's request size limit")
-
-      {:error, :emit_rate_limited} ->
-        encode_error(:resource_limit, "emit rate limit exceeded for this execution")
-
-      {:error, :invalid_event} ->
-        encode_error(:invalid_request, "emit event must be a JSON object")
-
-      other ->
-        encode_error(:invalid_request, "emit refused: #{guest_reason(other)}")
-    end
-  end
-
-  defp check_emit_size(json_event, max_size) when byte_size(json_event) <= max_size, do: :ok
-  defp check_emit_size(_json_event, _max_size), do: {:error, :event_too_large}
-
-  # Use the platform per-execution emit budget, separately from the consented invocation rate limit.
-  defp check_emit_rate(execution_id, ctx) do
-    limit = %{requests: 3000, window: "1m"}
-
-    case Opus.RateLimiter.check(ctx.athanor_id, "emit:" <> execution_id, %{
-           rate_limit: limit
-         }) do
-      {:ok, _remaining} ->
-        :ok
-
-      {:error, :rate_limited, _retry_after} ->
-        {:error, :emit_rate_limited}
-
-      # Refuse emission when the context cannot be metered.
-      {:error, :missing_tenant} ->
-        {:error, :emit_rate_limited}
-    end
-  catch
-    # A dead or unreachable limiter fails CLOSED, same as the executor's
-    # invocation gate: a configured limit must be enforceable, so
-    # unavailability denies rather than allowing an unbounded stream.
-    :exit, _reason -> {:error, :emit_rate_limited}
-  end
-
-  defp decode_emit_event(json_event) do
-    case Jason.decode(json_event) do
-      {:ok, %{} = data} -> {:ok, data}
-      _ -> {:error, :invalid_event}
     end
   end
 

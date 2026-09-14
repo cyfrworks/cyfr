@@ -82,15 +82,25 @@ defmodule Aqua.Loop.FlushTest do
     allow_keep!(ctx, thread)
     turn = accept_large!(ctx, thread)
 
+    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+
     script!([
       round_one(),
       %{"entries" => []},
+      {:emit, [%{"type" => "text.delta", "text" => "Keeping a note."}]},
       flush_reply([keep("n1", "plan", "the plan is to ship")], "Keeping a note."),
+      {:emit, [%{"type" => "text.delta", "text" => "the story so far"}]},
       reply("the story so far"),
+      {:emit, [%{"type" => "text.delta", "text" => "done"}]},
       reply("done")
     ])
 
     assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    # Only the chat step's text streams; the flush and the summary say nothing.
+    assert_receive {:thread, _, {:delta, %{text: "done"}}}, 5_000
+    refute_received {:thread, _, {:delta, %{text: "Keeping a note."}}}
+    refute_received {:thread, _, {:delta, %{text: "the story so far"}}}
 
     {:ok, steps} = Tape.steps(ctx, turn)
 
@@ -301,10 +311,7 @@ defmodule Aqua.Loop.FlushTest do
 
   defp script!(items) do
     start_supervised!(
-      {ScriptedExecution,
-       ref: [@model, "catalyst:local.files"],
-       script: items,
-       models: [%{"id" => @model_id, "context_window" => @window}]}
+      {ScriptedExecution, ref: [@model, "catalyst:local.files"], script: items, window: @window}
     )
   end
 

@@ -48,6 +48,9 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # Helper to build MCP-format requests
+  defp emitter(ctx, stream_id, opts \\ []),
+    do: Opus.Emit.open(stream_id, [ctx: ctx, authority: Sanctum.Authority.zero()] ++ opts)
+
   defp mcp_request(tool, action, args \\ %{}) do
     Jason.encode!(%{"tool" => tool, "action" => action, "args" => args})
   end
@@ -129,6 +132,7 @@ defmodule Opus.FormulaHandlerTest do
           root_execution_id: parent_id,
           limits: Sanctum.Authority.limits(auth),
           authority: auth,
+          emitter: Opus.Emit.open(parent_id, ctx: Context.enter_guest(ctx), authority: auth),
           declared_needs: [],
           activation_digest: "sha256:act-fh"
         ],
@@ -148,7 +152,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, "exec_parent-123")
         )
 
       assert is_map(imports)
@@ -179,7 +184,8 @@ defmodule Opus.FormulaHandlerTest do
     test "works without limits (defaults)", %{ctx: ctx} do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, "exec_parent-123")
         )
 
       assert is_map(imports)
@@ -685,7 +691,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_cancel_check",
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, "exec_cancel_check")
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -780,7 +787,8 @@ defmodule Opus.FormulaHandlerTest do
       {_imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_cleanup",
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, "exec_cleanup")
         )
 
       assert Process.alive?(tracker_pid)
@@ -826,7 +834,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_test",
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, "exec_emit_test")
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -848,7 +857,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_seq",
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, "exec_emit_seq")
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -871,7 +881,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_bad",
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, "exec_emit_bad")
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -894,7 +905,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, execution_id)
         )
 
       # Subscribe to the execution events topic
@@ -924,7 +936,7 @@ defmodule Opus.FormulaHandlerTest do
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
           authority: Sanctum.Authority.zero(),
-          secrets: ["sk-super-secret-value"]
+          emitter: emitter(ctx, execution_id, secrets: ["sk-super-secret-value"])
         )
 
       Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
@@ -951,7 +963,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, execution_id)
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -985,9 +998,9 @@ defmodule Opus.FormulaHandlerTest do
 
       :telemetry.attach(
         "test-formula-emit",
-        [:cyfr, :opus, :formula, :emit],
+        [:cyfr, :opus, :emit],
         fn _event, measurements, metadata, _config ->
-          send(test_pid, {:formula_emit, metadata, measurements})
+          send(test_pid, {:emitted, metadata, measurements})
         end,
         nil
       )
@@ -997,7 +1010,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, execution_id)
         )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
@@ -1005,7 +1019,7 @@ defmodule Opus.FormulaHandlerTest do
 
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
-      assert_receive {:formula_emit, metadata, measurements}, 2000
+      assert_receive {:emitted, metadata, measurements}, 2000
       assert metadata.execution_id == execution_id
       assert measurements.sequence == "0.1"
 
@@ -1018,8 +1032,9 @@ defmodule Opus.FormulaHandlerTest do
   # emit routes to root_execution_id
   # ============================================================================
 
-  describe "emit routes to root_execution_id" do
-    test "emit delivers events to root execution buffer, not parent", %{ctx: ctx} do
+  describe "emit routes to the stream its emitter is opened on" do
+    test "a formula's emitter on its root delivers there, not to the formula's own stream",
+         %{ctx: ctx} do
       root_id = "exec_root_#{:rand.uniform(100_000)}"
       parent_id = "exec_child_#{:rand.uniform(100_000)}"
       limits = Sanctum.Limits.defaults(:formula)
@@ -1028,7 +1043,8 @@ defmodule Opus.FormulaHandlerTest do
         FormulaHandler.build_formula_imports(ctx, parent_id,
           root_execution_id: root_id,
           limits: limits,
-          authority: Sanctum.Authority.zero()
+          authority: Sanctum.Authority.zero(),
+          emitter: emitter(ctx, root_id)
         )
 
       # Subscribe to both root and parent

@@ -18,6 +18,9 @@ defmodule Cyfr.Test.ScriptedExecution do
   - `{:error, message}` — the child fails with `message`.
   - `{:refuse, %{"type", "message"}}` — the child completes with the
     contract's typed refusal in its envelope.
+  - `{:emit, events}` — push each event (a map) on the child's own event
+    stream through `Opus.Emit`, as a streaming catalyst does, before the
+    next item.
   - `{:sleep, ms}` — wait before the next item.
   - `{:probe, pid}` — send `{:scripted_probe, self(), execution_id}` to
     `pid` and wait for `:continue` (5 s), so a test can inspect what the
@@ -47,8 +50,9 @@ defmodule Cyfr.Test.ScriptedExecution do
 
   @doc """
   Start the script agent: `ref:` the scripted reference (or a list),
-  `script:` its items, `models:` what the `models` operation lists
-  (default none, so the window comes from `Cyfr.Models.Windows`).
+  `script:` its items, `window:` the context window `describe` answers
+  for any model (default 200_000), `describe:` `{:refuse, error}` to have
+  a described model refused instead.
   """
   def start_link(opts) do
     keys =
@@ -61,9 +65,11 @@ defmodule Cyfr.Test.ScriptedExecution do
       end)
 
     script = Keyword.get(opts, :script, [])
-    models = Keyword.get(opts, :models, [])
+    window = Keyword.get(opts, :window, 200_000)
+    describe = Keyword.get(opts, :describe, :answer)
 
-    Agent.start_link(fn -> %{refs: keys, script: script, models: models, calls: []} end,
+    Agent.start_link(
+      fn -> %{refs: keys, script: script, window: window, describe: describe, calls: []} end,
       name: @agent
     )
   end
@@ -209,8 +215,16 @@ defmodule Cyfr.Test.ScriptedExecution do
             %{state | calls: [call | state.calls]}
           end)
 
+          call = %{
+            ctx: ctx,
+            id: id,
+            attempt: attempt,
+            started_at: started_at,
+            authority: decision.authority
+          }
+
           try do
-            answer(ctx, id, attempt, started_at, false, input)
+            answer(call, false, input)
           after
             slot().release(token)
           end
@@ -242,36 +256,49 @@ defmodule Cyfr.Test.ScriptedExecution do
 
   # The catalyst's own answers about itself are not the script's: a
   # capability probe is answered the same way every time.
-  defp answer(ctx, id, attempt, started_at, _crash_after?, %{"operation" => "describe"}) do
-    complete(ctx, id, attempt, started_at, %{
-      "contracts" => ["model/chat@1"],
-      "provider" => "scripted",
-      "tools" => true,
-      "provider_tools" => [],
-      "media_types" => ["image/png"],
-      "streaming" => false,
-      "defaults" => %{}
-    })
+  defp answer(call, _crash_after?, %{"operation" => "describe", "params" => params}) do
+    case Agent.get(@agent, & &1.describe) do
+      {:refuse, error} -> refuse(call, error)
+      :answer -> described(call, params)
+    end
   end
 
-  defp answer(ctx, id, attempt, started_at, _crash_after?, %{"operation" => "models"}),
-    do: complete(ctx, id, attempt, started_at, %{"models" => Agent.get(@agent, & &1.models)})
+  defp answer(call, crash_after?, _input), do: answer(call, crash_after?)
 
-  defp answer(ctx, id, attempt, started_at, crash_after?, _input),
-    do: answer(ctx, id, attempt, started_at, crash_after?)
+  defp described(call, params) do
+    complete(
+      call,
+      Map.merge(
+        %{
+          "contracts" => ["model/chat@1"],
+          "provider" => "scripted",
+          "tools" => true,
+          "provider_tools" => [],
+          "media_types" => ["image/png"],
+          "streaming" => true,
+          "defaults" => %{}
+        },
+        described_model(params)
+      )
+    )
+  end
 
-  defp answer(ctx, id, attempt, started_at, crash_after?) do
+  defp answer(call, crash_after?) do
     case take_item() do
       nil ->
-        fail(ctx, id, attempt, started_at, "script exhausted")
+        fail(call.ctx, call.id, call.attempt, call.started_at, "script exhausted")
         {:error, "script exhausted"}
+
+      {:emit, events} ->
+        emit(call, events)
+        answer(call, crash_after?)
 
       {:sleep, ms} ->
         Process.sleep(ms)
-        answer(ctx, id, attempt, started_at, crash_after?)
+        answer(call, crash_after?)
 
       {:probe, pid} ->
-        send(pid, {:scripted_probe, self(), id})
+        send(pid, {:scripted_probe, self(), call.id})
 
         receive do
           :continue -> :ok
@@ -279,40 +306,55 @@ defmodule Cyfr.Test.ScriptedExecution do
           5_000 -> :ok
         end
 
-        answer(ctx, id, attempt, started_at, crash_after?)
+        answer(call, crash_after?)
 
       {:crash, :before_response} ->
         Process.exit(self(), :kill)
 
       {:crash, :after_persist} ->
-        answer(ctx, id, attempt, started_at, true)
+        answer(call, true)
 
       :hang ->
         Process.sleep(:infinity)
 
       {:error, message} ->
-        fail(ctx, id, attempt, started_at, message)
+        fail(call.ctx, call.id, call.attempt, call.started_at, message)
         {:error, message}
 
       {:refuse, %{"type" => _} = error} ->
-        refuse(ctx, id, attempt, started_at, error)
+        refuse(call, error)
 
       %{} = data ->
-        result = complete(ctx, id, attempt, started_at, data)
+        result = complete(call, data)
         if crash_after?, do: Process.exit(self(), :kill)
         result
     end
   end
 
-  # The catalyst's typed refusal: the run completes, the envelope refuses.
-  defp refuse(ctx, id, attempt, started_at, error) do
-    envelope = %{"status" => 429, "error" => error}
-    written(ctx, id, attempt, started_at, envelope)
+  defp described_model(%{"model" => model}) when is_binary(model),
+    do: %{"model" => model, "context_window" => Agent.get(@agent, & &1.window)}
+
+  defp described_model(_params), do: %{}
+
+  defp emit(call, events) do
+    emitter = emitter().open(call.id, ctx: call.ctx, authority: call.authority)
+
+    try do
+      Enum.each(events, &emitter().emit(emitter, Jason.encode!(&1)))
+    after
+      emitter().close(emitter)
+    end
   end
 
-  defp complete(ctx, id, attempt, started_at, data) do
+  # The catalyst's typed refusal: the run completes, the envelope refuses.
+  defp refuse(call, error) do
+    envelope = %{"status" => 429, "error" => error}
+    written(call.ctx, call.id, call.attempt, call.started_at, envelope)
+  end
+
+  defp complete(call, data) do
     envelope = %{"status" => 200, "data" => data}
-    written(ctx, id, attempt, started_at, envelope)
+    written(call.ctx, call.id, call.attempt, call.started_at, envelope)
   end
 
   # The terminal write; a row that is no longer running (a cancel, a
@@ -369,4 +411,5 @@ defmodule Cyfr.Test.ScriptedExecution do
   defp chain, do: Module.concat([:Opus, :Chain])
   defp charge, do: Module.concat([:Opus, :Chain, :Charge])
   defp slot, do: Module.concat([:Opus, :Slot])
+  defp emitter, do: Module.concat([:Opus, :Emit])
 end

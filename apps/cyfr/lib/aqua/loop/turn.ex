@@ -54,6 +54,12 @@ defmodule Aqua.Loop.Turn do
   `opts`: `:authority` (the turn's pinned authority, required),
   `:catalyst` and `:model` (a clone's fallbacks, the parent's),
   `:excerpt?` (read the room excerpt the turn's options name).
+
+  Refuses an agent that names no model (`:no_model`), a catalyst the
+  estate does not hold or that does not speak `model/chat@1`, and a
+  model its catalyst cannot describe (`Cyfr.Models.capabilities/5`; a
+  typed refusal is `{:model_refused, catalyst, error}`, and a catalyst
+  whose consent lacks its key `{:setup_required, catalyst}`).
   """
   @spec build(Context.t(), Tape.turn(), keyword()) :: {:ok, t()} | {:error, term()}
   def build(%Context{} = ctx, turn, opts) do
@@ -68,7 +74,8 @@ defmodule Aqua.Loop.Turn do
            Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
          policy =
            Aqua.ToolGrants.resolve(agent["tool_policy"] || %{}, grants[agent["name"]] || []),
-         {:ok, catalyst, model} <- model(ctx, turn, agent, opts) do
+         {:ok, catalyst, model} <- model(ctx, turn, agent, opts),
+         {:ok, capabilities} <- capabilities(ctx, authority, catalyst, model, turn) do
       options = decode(turn.options)
       several? = not Sanctum.Tenancy.Members.solo?(Context.athanor!(ctx))
 
@@ -84,10 +91,7 @@ defmodule Aqua.Loop.Turn do
         authority: authority,
         catalyst: catalyst,
         model: model,
-        capabilities:
-          Cyfr.Models.capabilities(ctx, catalyst, model, authority.consent_id,
-            run: capability_probe(ctx, authority, catalyst, turn)
-          ),
+        capabilities: capabilities,
         system:
           Aqua.Prompt.compose(ctx,
             agent: agent,
@@ -222,7 +226,7 @@ defmodule Aqua.Loop.Turn do
 
     with {:ok, catalyst, model} <- catalyst(listing, turn, agent, opts),
          :ok <- speaks_chat(listing, catalyst) do
-      {:ok, catalyst, model}
+      if is_binary(model), do: {:ok, catalyst, model}, else: {:error, :no_model}
     end
   end
 
@@ -254,6 +258,17 @@ defmodule Aqua.Loop.Turn do
     if Cyfr.Models.speaks_chat?(row["manifest"]),
       do: :ok,
       else: {:error, {:catalyst_not_chat, catalyst}}
+  end
+
+  defp capabilities(ctx, authority, catalyst, model, turn) do
+    case Cyfr.Models.capabilities(ctx, catalyst, model, authority.consent_id,
+           run: capability_probe(ctx, authority, catalyst, turn)
+         ) do
+      {:ok, capabilities} -> {:ok, capabilities}
+      {:error, {:model_refused, error}} -> {:error, {:model_refused, catalyst, error}}
+      {:error, {:describe_failed, {:setup_required, _}}} -> {:error, {:setup_required, catalyst}}
+      {:error, _} = error -> error
+    end
   end
 
   # The catalyst's own answers about itself, run as a child of the turn

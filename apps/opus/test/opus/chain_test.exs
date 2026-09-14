@@ -177,6 +177,7 @@ defmodule Opus.ChainTest do
           root_execution_id: parent_id,
           limits: Sanctum.Authority.limits(auth),
           authority: auth,
+          emitter: Opus.Emit.open(parent_id, ctx: Context.enter_guest(ctx), authority: auth),
           declared_needs: [],
           activation_digest: "sha256:root-act"
         ],

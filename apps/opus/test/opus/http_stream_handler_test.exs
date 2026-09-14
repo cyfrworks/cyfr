@@ -377,6 +377,146 @@ defmodule Opus.HttpStreamHandlerTest do
     end
   end
 
+  describe "what a read reports" do
+    setup do
+      edge =
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          Sanctum.TestContext.local(),
+          "test-read"
+        )
+
+      %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
+        imports["cyfr:http/streaming@0.1.0"]
+
+      %{request_fn: request_fn, read_fn: read_fn}
+    end
+
+    test "a read carries the provider's status once it answered, and a refusal's body streams",
+         %{request_fn: request_fn, read_fn: read_fn} do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+      body = ~s({"error":{"message":"slow down"}})
+
+      server =
+        spawn(fn ->
+          {:ok, sock} = :gen_tcp.accept(listen, 5_000)
+          _ = :gen_tcp.recv(sock, 0, 1_000)
+
+          :ok =
+            :gen_tcp.send(
+              sock,
+              "HTTP/1.1 429 Too Many Requests\r\ncontent-length: #{byte_size(body)}\r\n" <>
+                "connection: close\r\n\r\n" <> body
+            )
+
+          Process.sleep(200)
+          :gen_tcp.close(sock)
+        end)
+
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://localhost:#{port}/limited",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      reads = read_until_done(read_fn, handle, 100)
+      assert List.last(reads)["status"] == 429
+      assert reads |> Enum.filter(&(&1["data"] != "")) |> Enum.all?(&(&1["status"] == 429))
+      assert Enum.map_join(reads, & &1["data"]) == body
+
+      Process.exit(server, :kill)
+      :gen_tcp.close(listen)
+    end
+
+    test "a request that fails before any response answers request_failed",
+         %{request_fn: request_fn, read_fn: read_fn} do
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://localhost:1/refused",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      decoded = poll_for_error(read_fn, handle, 100)
+      assert decoded["error"]["type"] == "request_failed"
+    end
+
+    test "a read of an open stream with nothing new waits briefly, then answers empty" do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      server =
+        spawn(fn ->
+          {:ok, sock} = :gen_tcp.accept(listen, 5_000)
+          _ = :gen_tcp.recv(sock, 0, 1_000)
+
+          :ok =
+            :gen_tcp.send(
+              sock,
+              "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n"
+            )
+
+          Process.sleep(5_000)
+        end)
+
+      edge =
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+
+      {imports, exec_ref} =
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          Sanctum.TestContext.local(),
+          "test-wait"
+        )
+
+      %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
+        imports["cyfr:http/streaming@0.1.0"]
+
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://localhost:#{port}/slow",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      {micros, decoded} = :timer.tc(fn -> read_fn.(handle) |> Jason.decode!() end)
+      assert decoded["data"] == ""
+      assert decoded["done"] == false
+      assert micros >= 90_000
+
+      HttpStreamHandler.cleanup_registry(exec_ref)
+      Process.exit(server, :kill)
+      :gen_tcp.close(listen)
+    end
+  end
+
+  defp read_until_done(_read_fn, _handle, 0), do: flunk("stream never completed")
+
+  defp read_until_done(read_fn, handle, attempts) do
+    decoded = read_fn.(handle) |> Jason.decode!()
+    refute decoded["error"]
+
+    if decoded["done"],
+      do: [decoded],
+      else: [decoded | read_until_done(read_fn, handle, attempts - 1)]
+  end
+
   # Drain data frames until the stream surfaces an error; fail loudly if the
   # stream completes or the attempts run out first.
   defp poll_for_error(_read_fn, _handle, 0), do: flunk("stream never surfaced an error")

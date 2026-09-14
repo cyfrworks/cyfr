@@ -21,4 +21,5 @@ world catalyst {
     import cyfr:vault/read@0.1.0;
     import cyfr:storage/files@0.1.0;
     import cyfr:oauth/token@0.1.0;
+    import cyfr:emit/events@0.1.0;
 }

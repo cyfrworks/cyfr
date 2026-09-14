@@ -387,7 +387,8 @@ defmodule Compendium.Scaffold do
       [
         ~s("cyfr:vault" = { path = "wit/deps/cyfr-vault" }),
         ~s("cyfr:http" = { path = "wit/deps/cyfr-http" }),
-        ~s("cyfr:storage" = { path = "wit/deps/cyfr-storage" })
+        ~s("cyfr:storage" = { path = "wit/deps/cyfr-storage" }),
+        ~s("cyfr:emit" = { path = "wit/deps/cyfr-emit" })
       ] ++
         if Keyword.get(opts, :include_oauth_wit, true),
           do: [~s("cyfr:oauth" = { path = "wit/deps/cyfr-oauth" })],

@@ -243,6 +243,33 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "completed", orchestrator: "planner"}} = Tape.turn(ctx, second)
   end
 
+  test "a viewer joining mid-answer reads the text streamed so far, until the step's row lands",
+       %{ctx: ctx, thread: thread} do
+    script!([
+      {:emit,
+       [
+         %{"type" => "text.delta", "text" => "Hel"},
+         %{"type" => "text.delta", "text" => "lo"}
+       ]},
+      {:probe, self()},
+      reply("Hello")
+    ])
+
+    {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
+    assert_receive {:scripted_probe, worker, _}, 30_000
+
+    wait_until(fn ->
+      match?(
+        %{running: true, turn_id: ^turn_id, partials: [%{text: "Hello", role: nil}]},
+        Runner.state(thread.id, ctx.athanor_id)
+      )
+    end)
+
+    send(worker, :continue)
+    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert %{partials: []} = Runner.state(thread.id, ctx.athanor_id)
+  end
+
   test "a steer offered again is the same steer", %{ctx: ctx, thread: thread} do
     script!([{:probe, self()}, reply("done")])
 

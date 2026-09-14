@@ -43,8 +43,10 @@ defmodule Aqua.Runner do
   `{:approval_resolved, _}`), and from here `{:turn_starting, user_id}`,
   `{:turn_started, turn_id}`, `{:queued, n}`, `{:grants, set}`,
   `{:restart_prompt, text, user_id}`, `{:error, text}`; the loop
-  announces `{:usage, _}`, `{:tool_activity, _}`, `{:intents, _, _}`
-  and `{:consent_required, _, _}`.
+  announces `{:usage, _}`, `{:tool_activity, _}`, `{:intents, _, _}`,
+  `{:consent_required, _, _}` and a chat step's streamed text as
+  `{:delta, _}` (`Aqua.Loop.Stream`), which the runner keeps for the
+  running turn until each step's text row lands.
   """
 
   use GenServer, restart: :transient
@@ -266,6 +268,8 @@ defmodule Aqua.Runner do
           queue: [],
           usage: %{input: 0, output: 0},
           tool_activity: [],
+          # The running turn's partial answers (`Aqua.Loop.Stream.add/2`).
+          partials: [],
           grants: MapSet.new(),
           orchestrator: thread.orchestrator,
           idle_ref: nil
@@ -548,7 +552,8 @@ defmodule Aqua.Runner do
       | live: Map.merge(entry, %{task: task}),
         paused: nil,
         usage: %{input: 0, output: 0},
-        tool_activity: []
+        tool_activity: [],
+        partials: []
     }
 
     broadcast(state, {:turn_starting, entry.user_id})
@@ -604,6 +609,15 @@ defmodule Aqua.Runner do
 
   def handle_info({:thread, _id, {:tool_activity, list}}, state),
     do: {:noreply, %{state | tool_activity: list}}
+
+  def handle_info(
+        {:thread, _id, {:delta, %{turn_id: turn_id} = delta}},
+        %{live: %{turn_id: turn_id}} = state
+      ),
+      do: {:noreply, %{state | partials: Aqua.Loop.Stream.add(state.partials, delta)}}
+
+  def handle_info({:thread, _id, {:message, row}}, state),
+    do: {:noreply, %{state | partials: Aqua.Loop.Stream.landed(state.partials, row)}}
 
   def handle_info({:thread, _id, _event}, state), do: {:noreply, state}
 
@@ -928,7 +942,7 @@ defmodule Aqua.Runner do
       paused_reason: state.paused && state.paused.reason,
       athanor_id: state.athanor_id,
       turn_id: current && current.turn_id,
-      streaming_text: "",
+      partials: if(state.live, do: state.partials, else: []),
       tool_activity: state.tool_activity,
       usage: state.usage,
       grants: state.grants,

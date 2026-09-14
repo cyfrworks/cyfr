@@ -105,14 +105,8 @@ defmodule Aqua.Loop do
         {:ok, state} ->
           conclude(state, loop(state))
 
-        # The root is held but the turn never ran: ended with the actor's
-        # own context, since no spec was built to carry it, and the root
-        # closed by the release when the turn never came to carry it.
         {:error, {:after_claim, claim, turn, reason}} ->
-          error = describe(reason)
-          _ = Tape.finish(ctx, turn, "failed", %{error: error})
-          Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
-          {:failed, reason}
+          never_ran(ctx, claim, turn, reason)
 
         # The source has no consent to run under: the person is asked for it.
         {:error, :no_profile} ->
@@ -127,6 +121,36 @@ defmodule Aqua.Loop do
       end
     end
   end
+
+  # The root is held but the turn never ran: ended with the actor's own
+  # context, since no spec was built to carry it, and the root closed by
+  # the release when the turn never came to carry it. A model its catalyst
+  # could not describe for want of a key asks the person for the
+  # catalyst's consent.
+  defp never_ran(ctx, claim, turn, reason) do
+    case needs_setup(reason) do
+      nil ->
+        end_unrun(ctx, claim, turn, describe(reason))
+        {:failed, reason}
+
+      catalyst ->
+        end_unrun(ctx, claim, turn, "setup_required")
+        Tape.announce(ctx, turn.thread_id, {:consent_required, catalyst, ctx.user_id})
+        {:failed, :setup_required}
+    end
+  end
+
+  defp end_unrun(ctx, claim, turn, error) do
+    _ = Tape.finish(ctx, turn, "failed", %{error: error})
+    Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
+  end
+
+  defp needs_setup({:setup_required, catalyst}), do: catalyst
+
+  defp needs_setup({:model_refused, catalyst, %{"type" => type}}) when type in @setup,
+    do: catalyst
+
+  defp needs_setup(_reason), do: nil
 
   defp setup_required(ctx, turn) do
     _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
@@ -505,38 +529,63 @@ defmodule Aqua.Loop do
 
   # The catalyst runs as a child of the root, in a worker: the answer is
   # the contract's data, a typed refusal, the engine's refusal, or the
-  # worker's death.
+  # worker's death. A chat step's text streams to the thread while it runs;
+  # a flush or a compaction streams nothing.
   defp model_call(%State{spec: spec} = state, step, request, retained) do
     input = %{"operation" => "chat", "params" => request}
     retained_input = retained && %{"operation" => "chat", "params" => retained}
     guest = guest(state)
     turn = state.turn
+    stream = open_stream(state, step)
 
-    worker(
-      fn ->
-        Cyfr.Execution.run_child(spec.authority, spec.catalyst, nil, input,
-          ctx: guest,
-          execution_id: step.child_execution_id,
-          step_id: step.id,
-          parent_execution_id: turn.root_execution_id,
-          root_execution_id: turn.root_execution_id,
-          parent_reference: Compendium.AgentSource.ref(turn.orchestrator),
-          declared_needs: [],
-          retention_class: "chat_step",
-          retained_input: retained_input,
-          charge: Binding.charge(step, turn),
-          guest_fn: :spawn
+    answer =
+      try do
+        worker(
+          fn ->
+            Cyfr.Execution.run_child(spec.authority, spec.catalyst, nil, input,
+              ctx: guest,
+              execution_id: step.child_execution_id,
+              step_id: step.id,
+              parent_execution_id: turn.root_execution_id,
+              root_execution_id: turn.root_execution_id,
+              parent_reference: Compendium.AgentSource.ref(turn.orchestrator),
+              declared_needs: [],
+              retention_class: "chat_step",
+              retained_input: retained_input,
+              charge: Binding.charge(step, turn),
+              guest_fn: :spawn
+            )
+          end,
+          @model_timeout_ms
         )
-      end,
-      @model_timeout_ms
-    )
-    |> case do
+      after
+        Aqua.Loop.Stream.close(stream)
+      end
+
+    case answer do
       {:ok, {:ok, %{output: output}}} -> Cyfr.Models.decode_envelope(output)
       {:ok, {:ok, output}} -> Cyfr.Models.decode_envelope(output)
       {:ok, {:error, reason}} -> {:error, reason}
       {:exit, reason} -> {:exit, reason}
     end
   end
+
+  # A clone's text streams under the soul's turn, named by its role.
+  defp open_stream(%State{} = state, %{purpose: "chat"} = step) do
+    {turn_id, role} =
+      if state.clone?,
+        do: {state.parent.turn.id, state.spec.agent["name"]},
+        else: {state.turn.id, nil}
+
+    Aqua.Loop.Stream.open(guest(state), step.child_execution_id, %{
+      thread_id: state.turn.thread_id,
+      turn_id: turn_id,
+      step_id: step.id,
+      role: role
+    })
+  end
+
+  defp open_stream(_state, _step), do: nil
 
   # The whole response lands before any call runs.
   defp on_response(%State{} = state, step, data) do
@@ -1974,6 +2023,11 @@ defmodule Aqua.Loop do
     end
   end
 
+  defp describe({:model_refused, _catalyst, %{"message" => message}}) when is_binary(message),
+    do: "The model could not be described: #{message}"
+
+  defp describe({:unknown_model, model}), do: "#{model} is not a model its catalyst knows"
+  defp describe(:no_model), do: "The agent names no model"
   defp describe(reason) when is_binary(reason), do: reason
   defp describe(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp describe(reason), do: Aqua.Ops.render_refusal(reason)

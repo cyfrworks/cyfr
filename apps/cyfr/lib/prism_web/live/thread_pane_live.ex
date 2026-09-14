@@ -212,7 +212,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused_reason, nil)
     |> assign(:queued, 0)
     |> assign(:turn_user, nil)
-    |> assign(:streaming_text, "")
+    |> assign(:partials, [])
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
     |> assign(:grants, MapSet.new())
@@ -229,7 +229,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused_reason, Map.get(live, :paused_reason))
     |> assign(:queued, Map.get(live, :queued, 0))
     |> assign(:turn_user, live.turn_user)
-    |> assign(:streaming_text, live.streaming_text)
+    |> assign(:partials, live.partials)
     |> assign(:tool_activity, live.tool_activity)
     |> assign(:token_usage, live.usage)
     |> assign(:grants, live.grants)
@@ -618,7 +618,13 @@ defmodule PrismWeb.ThreadPaneLive do
   # Runner events
   # ---------------------------------------------------------------------------
 
-  defp handle_thread_event(socket, {:message, row}), do: upsert_message(socket, row)
+  # A step's text row replaces the answer that streamed for it.
+  defp handle_thread_event(socket, {:message, row}) do
+    socket
+    |> upsert_message(row)
+    |> assign(:partials, Aqua.Loop.Stream.landed(socket.assigns.partials, row))
+  end
+
   defp handle_thread_event(socket, {:message_updated, row}), do: upsert_message(socket, row)
 
   # A turn may start for a message queued earlier — the sender's draft of
@@ -631,7 +637,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused, false)
     |> assign(:paused_reason, nil)
     |> assign(:turn_user, user_id)
-    |> assign(:streaming_text, "")
+    |> assign(:partials, [])
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
   end
@@ -653,7 +659,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:running, false)
     |> assign(:paused, true)
     |> assign(:paused_reason, reason)
-    |> assign(:streaming_text, "")
+    |> assign(:partials, [])
     |> assign(:tool_activity, [])
   end
 
@@ -665,14 +671,15 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused, false)
     |> assign(:paused_reason, nil)
     |> assign(:turn_user, nil)
-    |> assign(:streaming_text, "")
+    |> assign(:partials, [])
     |> assign(:tool_activity, [])
     |> assign(:cancel_requested, false)
   end
 
-  defp handle_thread_event(socket, {:delta, chunk}) do
-    assign(socket, :streaming_text, socket.assigns.streaming_text <> chunk)
-  end
+  defp handle_thread_event(%{assigns: %{running: true}} = socket, {:delta, delta}),
+    do: assign(socket, :partials, Aqua.Loop.Stream.add(socket.assigns.partials, delta))
+
+  defp handle_thread_event(socket, {:delta, _delta}), do: socket
 
   defp handle_thread_event(socket, {:tool_activity, list}),
     do: assign(socket, :tool_activity, list)
@@ -1276,7 +1283,7 @@ defmodule PrismWeb.ThreadPaneLive do
         class="flex-1 overflow-y-auto px-4 py-3 space-y-3"
       >
         <div
-          :if={not @any_messages and @streaming_text == ""}
+          :if={not @any_messages and @partials == []}
           class="flex flex-col items-center justify-center h-full gap-2 text-sm text-gray-500"
         >
           <%= if @preparing? do %>
@@ -1427,14 +1434,15 @@ defmodule PrismWeb.ThreadPaneLive do
         </ul>
 
         <.message_bubble
-          :if={@streaming_text != ""}
-          id={@dom <> "-streaming"}
+          :for={partial <- @partials}
+          id={@dom <> "-streaming-" <> partial.step_id}
           role="assistant"
-          content={@streaming_text}
+          content={partial.text}
+          author={partial.role}
         />
 
         <div
-          :if={@running and @streaming_text == "" and @tool_activity == []}
+          :if={@running and @partials == [] and @tool_activity == []}
           class="flex items-center gap-2 text-xs text-gray-500"
         >
           <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />

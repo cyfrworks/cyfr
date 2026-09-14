@@ -280,6 +280,36 @@ defmodule Aqua.Loop.CloneTest do
              Clone.authority(moved, "planner", planner, roster)
   end
 
+  test "a clone's streamed text reaches the thread on the soul's turn under its role", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    turn = accept!(ctx, thread, "@aqua plan this")
+
+    start_supervised!(
+      {ScriptedExecution,
+       ref: @model,
+       script: [
+         call("r1", "planner", %{"task" => "plan"}),
+         {:emit, [%{"type" => "text.delta", "text" => "planning"}]},
+         reply("planned"),
+         {:emit, [%{"type" => "text.delta", "text" => "done"}]},
+         reply("done")
+       ]}
+    )
+
+    assert :completed = run!(ctx, turn)
+
+    turn_id = turn.id
+
+    assert_receive {:thread, _,
+                    {:delta, %{text: "planning", role: "planner", turn_id: ^turn_id}}},
+                   5_000
+
+    assert_receive {:thread, _, {:delta, %{text: "done", role: nil, turn_id: ^turn_id}}}, 5_000
+  end
+
   test "a clone runs the bytes its row pinned, not the file as it is now", %{
     ctx: ctx,
     thread: thread

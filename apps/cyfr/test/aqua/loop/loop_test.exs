@@ -68,7 +68,7 @@ defmodule Aqua.LoopTest do
     {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
 
     # What `Aqua.AgentConfig` resolves, and so what the spec holds.
-    versioned = @model <> ":1.2.0"
+    versioned = @model <> ":1.3.0"
     {:ok, name_ref} = Sanctum.ComponentRef.to_name_ref(versioned)
 
     # The graph is keyed the way `Opus.Chain` steps: by name. Asking with
@@ -83,6 +83,7 @@ defmodule Aqua.LoopTest do
   end
 
   test "the loop resolves a cap for the spec it actually holds", %{ctx: ctx, thread: thread} do
+    start_supervised!({ScriptedExecution, ref: @model, script: []})
     turn = accept!(ctx, thread, "hello")
     {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
     {:ok, spec} = Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
@@ -177,6 +178,14 @@ defmodule Aqua.LoopTest do
   end
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+
+  defp drain do
+    receive do
+      message -> [message | drain()]
+    after
+      0 -> []
+    end
+  end
 
   defp files_catalyst(ctx) do
     {:ok, listing} = Aqua.AgentConfig.catalyst_listing(ctx)
@@ -403,7 +412,7 @@ defmodule Aqua.LoopTest do
              Tape.turn(ctx, turn.id)
 
     assert {:error, :catalyst_pinned} =
-             Arca.TurnStorage.pin_catalyst(ctx, turn.id, "catalyst:local.openai:1.2.0", %{
+             Arca.TurnStorage.pin_catalyst(ctx, turn.id, "catalyst:local.openai:1.3.0", %{
                fence: paused.fence
              })
 
@@ -781,6 +790,72 @@ defmodule Aqua.LoopTest do
 
     assert {:failed, :setup_required} = result
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, other.id)
+    assert_receive {:thread, _, {:consent_required, ref, user}}, 5_000
+    assert ref =~ @model and user == ctx.user_id
+  end
+
+  test "a chat step's text streams to the thread in order, once, before its row lands", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    turn = accept!(ctx, thread, "@aqua hello")
+    turn_id = turn.id
+
+    script!([
+      {:emit,
+       [
+         %{"type" => "text.delta", "text" => "hi "},
+         %{"type" => "tool_call.delta", "index" => 0, "arguments" => "{}"},
+         %{"type" => "text.delta", "text" => "there"},
+         %{"type" => "stop", "stop_reason" => "end_turn"}
+       ]},
+      reply("hi there")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+    assert_receive {:thread, _, {:turn_finished}}, 5_000
+
+    streamed =
+      for {:thread, _, event} <- drain(),
+          match?({:delta, _}, event) or match?({:message, %{kind: "text", author: "aqua"}}, event),
+          do: event
+
+    assert [
+             {:delta, %{turn_id: ^turn_id, step_id: step_id, text: "hi ", role: nil, seq: first}},
+             {:delta, %{step_id: step_id, text: "there", seq: second}},
+             {:message, %{content: "hi there"} = row}
+           ] = streamed
+
+    assert second > first
+    assert Tape.payload(row)["step_id"] == step_id
+  end
+
+  test "a model its catalyst does not know ends the turn before any request, and a missing key asks for setup",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+
+    start_supervised!(
+      {ScriptedExecution,
+       ref: @model,
+       script: [],
+       describe: {:refuse, %{"type" => "unknown_model", "message" => "not a model"}}}
+    )
+
+    assert {:failed, {:unknown_model, _}} = Task.await(run(ctx, turn), 30_000)
+    assert {:ok, %{status: "failed"}} = Tape.turn(ctx, turn.id)
+    refute Enum.any?(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+
+    stop_supervised!(ScriptedExecution)
+
+    start_supervised!(
+      {ScriptedExecution,
+       ref: @model,
+       script: [],
+       describe: {:refuse, %{"type" => "secret_denied", "message" => "no key"}}}
+    )
+
+    other = accept!(ctx, thread, "@aqua again")
+    assert {:failed, :setup_required} = Task.await(run(ctx, other), 30_000)
     assert_receive {:thread, _, {:consent_required, ref, user}}, 5_000
     assert ref =~ @model and user == ctx.user_id
   end

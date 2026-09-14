@@ -177,11 +177,6 @@ config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
 # blob can hold an attempt for several minutes within this bound.
 config :cyfr, :provisioning_required_pull_budget_ms, :timer.minutes(10)
 config :cyfr, :returning_probe_ms, 5_000
-# The context window assumed for a model whose catalyst reports none and
-# whose catalyst name the host's table does not know, in tokens. The loop
-# compacts a thread against this when nothing better is reported.
-config :cyfr, :model_context_window_default, 128_000
-
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 
 # How long an approval card waits for a decision before it expires as a

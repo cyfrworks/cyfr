@@ -17,9 +17,16 @@ defmodule Opus.HttpStreamHandler do
   ## Flow
 
   1. WASM calls `stream.request(json)` — host starts async HTTP request, returns handle ID
-  2. WASM calls `stream.read(handle)` in a loop — returns `{"data": "...", "done": false}`
-  3. When stream ends: `{"data": "", "done": true}`
+  2. WASM calls `stream.read(handle)` in a loop — returns `{"data": "...", "done": false,
+     "status": 200}`, `status` being the provider's HTTP status once its response began.
+     A read waits up to 100 ms for a chunk and answers `"data": ""` when none arrived.
+  3. When stream ends: `{"data": "", "done": true, "status": 200}`
   4. WASM calls `stream.close(handle)` — host cleans up resources
+
+  A request that fails before a response, a stream that stops arriving
+  for the node's timeout, and a transport error each answer the read
+  after the last buffered chunk with `{"error": {"type", "message"}}`
+  (`request_failed`, `timeout`, `stream_error`).
 
   ## Security
 
@@ -50,6 +57,11 @@ defmodule Opus.HttpStreamHandler do
   # stream_read/3 — which stops the collector process and buffer agent — runs
   # instead of a bare cache expiry that would strand them.
   @stream_ttl_grace_ms 5_000
+
+  # How long a read waits for a chunk before answering empty, and how often
+  # it looks while it waits.
+  @read_wait_ms 100
+  @read_poll_ms 5
 
   # Fixed cap on open stream handles per execution. Deliberately not derived
   # from Limits.max_concurrent_tasks: that limit governs concurrent task
@@ -228,7 +240,7 @@ defmodule Opus.HttpStreamHandler do
     # abnormally if its own anonymous fn raises, which none here can.
     buffer =
       case Agent.start_link(fn ->
-             %{chunks: :queue.new(), done: false, total_bytes: 0, error: nil}
+             %{chunks: :queue.new(), done: false, total_bytes: 0, error: nil, status: nil}
            end) do
         {:ok, pid} -> pid
         {:error, reason} -> throw({:stream_start_failed, :buffer, reason})
@@ -256,14 +268,10 @@ defmodule Opus.HttpStreamHandler do
             Logger.warning(
               "[Opus.HttpStreamHandler] Streaming request crashed: #{Exception.message(e)}"
             )
+
+            park_error(buffer, :stream_error, "The streaming request failed.")
         after
-          try do
-            Agent.update(buffer, fn state -> %{state | done: true} end)
-          rescue
-            ArgumentError -> :ok
-          catch
-            :exit, _ -> :ok
-          end
+          update_buffer(buffer, &%{&1 | done: true})
         end
       end)
 
@@ -316,6 +324,8 @@ defmodule Opus.HttpStreamHandler do
 
     case Req.request(req_opts) do
       {:ok, response} ->
+        update_buffer(buffer, &%{&1 | status: response.status})
+
         # The stream path emits the same [:cyfr, :opus, :http, :request]
         # event the fetch path always did — it emitted nothing before, so
         # streamed egress was invisible to telemetry.
@@ -329,7 +339,7 @@ defmodule Opus.HttpStreamHandler do
         # Collect streaming chunks
         collect_stream_chunks(response, buffer, timeout_ms, max_response_size)
 
-      {:error, _exception} ->
+      {:error, exception} ->
         HttpHandler.emit_telemetry(
           component_ref,
           request,
@@ -337,7 +347,7 @@ defmodule Opus.HttpStreamHandler do
           System.monotonic_time(:millisecond) - start_time
         )
 
-        Agent.update(buffer, fn state -> %{state | done: true} end)
+        park_error(buffer, :request_failed, Exception.message(exception))
     end
   end
 
@@ -354,16 +364,16 @@ defmodule Opus.HttpStreamHandler do
                 append_chunk(buffer, data, max_response_size)
 
               :done ->
-                Agent.update(buffer, fn state -> %{state | done: true} end)
+                update_buffer(buffer, &%{&1 | done: true})
 
               _other ->
                 :ok
             end)
 
             cond do
-              # Over budget: stop collecting; this process exiting closes the
-              # connection, and stream_read surfaces the parked error.
-              Agent.get(buffer, & &1.error) != nil ->
+              # Over budget or closed: stop collecting; this process exiting
+              # closes the connection, and stream_read surfaces a parked error.
+              stopped?(buffer) ->
                 :ok
 
               Enum.member?(chunks, :done) ->
@@ -373,8 +383,8 @@ defmodule Opus.HttpStreamHandler do
                 collect_stream_chunks(response, buffer, timeout_ms, max_response_size)
             end
 
-          {:error, _reason} ->
-            Agent.update(buffer, fn state -> %{state | done: true} end)
+          {:error, reason} ->
+            park_error(buffer, :stream_error, "The stream broke: #{inspect(reason)}")
             :error
 
           :unknown ->
@@ -383,9 +393,30 @@ defmodule Opus.HttpStreamHandler do
         end
     after
       timeout_ms ->
-        Agent.update(buffer, fn state -> %{state | done: true} end)
+        park_error(buffer, :timeout, "No stream data for #{div(timeout_ms, 1000)}s")
         :timeout
     end
+  end
+
+  # The first error parked stands; the stream is done either way.
+  defp park_error(buffer, type, message) do
+    update_buffer(buffer, fn
+      %{error: nil} = state -> %{state | done: true, error: {type, message}}
+      state -> %{state | done: true}
+    end)
+  end
+
+  defp stopped?(buffer) do
+    Agent.get(buffer, & &1.error) != nil
+  catch
+    :exit, _ -> true
+  end
+
+  # A buffer a close already stopped has no reader left to tell.
+  defp update_buffer(buffer, fun) do
+    Agent.update(buffer, fun)
+  catch
+    :exit, _ -> :ok
   end
 
   # Append-time budget: the collector runs ahead of the guest's reads, so an
@@ -394,7 +425,7 @@ defmodule Opus.HttpStreamHandler do
   # stream_read surfaces it (same shape as the read-path debit) once the
   # already-buffered chunks drain.
   defp append_chunk(buffer, data, max_response_size) do
-    Agent.update(buffer, fn
+    update_buffer(buffer, fn
       %{error: error} = state when not is_nil(error) ->
         state
 
@@ -416,26 +447,18 @@ defmodule Opus.HttpStreamHandler do
   end
 
   defp read_from_stream(handle_id, stream_state, exec_ref, limits) do
-    # Atomically pop the first chunk to avoid race with the streaming process
-    # appending new chunks between a get and a separate update.
-    case Agent.get_and_update(stream_state.buffer, fn state ->
-           case :queue.out(state.chunks) do
-             {{:value, chunk}, rest} -> {{:chunk, chunk}, %{state | chunks: rest}}
-             {:empty, _} -> {{:empty, state.done, state.error}, state}
-           end
-         end) do
-      {:empty, _done, {type, message}} ->
+    deadline = System.monotonic_time(:millisecond) + @read_wait_ms
+
+    case next_chunk(stream_state.buffer, deadline) do
+      {:empty, _done, {type, message}, _status} ->
         cleanup_stream(stream_state)
         Arca.Cache.invalidate({:http_stream, exec_ref, handle_id})
         encode_error(type, message)
 
-      {:empty, true, nil} ->
-        safe_encode(%{"data" => "", "done" => true})
+      {:empty, done, nil, status} ->
+        read_answer("", done, status)
 
-      {:empty, false, nil} ->
-        safe_encode(%{"data" => "", "done" => false})
-
-      {:chunk, chunk} ->
+      {:chunk, chunk, status} ->
         # Track cumulative response size
         new_cumulative = stream_state.cumulative_size + byte_size(chunk)
 
@@ -457,10 +480,41 @@ defmodule Opus.HttpStreamHandler do
             stream_state.timeout_ms + @stream_ttl_grace_ms
           )
 
-          safe_encode(%{"data" => chunk, "done" => false})
+          read_answer(chunk, false, status)
         end
     end
   end
+
+  # Pop the first chunk atomically, so the collector cannot append between
+  # a look and a take; an empty, open stream is looked at again until
+  # `deadline`.
+  defp next_chunk(buffer, deadline) do
+    popped =
+      Agent.get_and_update(buffer, fn state ->
+        case :queue.out(state.chunks) do
+          {{:value, chunk}, rest} -> {{:chunk, chunk, state.status}, %{state | chunks: rest}}
+          {:empty, _} -> {{:empty, state.done, state.error, state.status}, state}
+        end
+      end)
+
+    case popped do
+      {:empty, false, nil, _status} ->
+        if System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(@read_poll_ms)
+          next_chunk(buffer, deadline)
+        else
+          popped
+        end
+
+      _ ->
+        popped
+    end
+  end
+
+  defp read_answer(data, done, nil), do: safe_encode(%{"data" => data, "done" => done})
+
+  defp read_answer(data, done, status),
+    do: safe_encode(%{"data" => data, "done" => done, "status" => status})
 
   defp cleanup_stream(stream_state) do
     # Stop the buffer agent

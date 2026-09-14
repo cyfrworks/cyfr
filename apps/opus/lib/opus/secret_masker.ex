@@ -61,6 +61,24 @@ defmodule Opus.SecretMasker do
   # Both shapes come from caller data (a vault field projected empty, a
   # token bundle that carried a non-string), so they are filtered, not
   # trusted.
+  @doc """
+  The longest form `mask/2` replaces for any of `secret_values`, in
+  bytes, or 0 when there is nothing to mask. A stream that holds back one
+  less than this many characters never releases part of a credential it
+  would have masked whole.
+
+      iex> Opus.SecretMasker.max_length(["abc", "sk-secret"])
+      18
+  """
+  @spec max_length([String.t()]) :: non_neg_integer()
+  def max_length(secret_values) do
+    secret_values
+    |> usable_secrets()
+    |> Enum.flat_map(&forms/1)
+    |> Enum.map(&byte_size/1)
+    |> Enum.max(fn -> 0 end)
+  end
+
   defp usable_secrets(values) when is_list(values),
     do: Enum.filter(values, &(is_binary(&1) and &1 != ""))
 
@@ -113,33 +131,26 @@ defmodule Opus.SecretMasker do
     |> Map.new()
   end
 
-  # Replace all occurrences of secrets in a string, including encoded variants.
-  # This is defense-in-depth: the primary control is domain restriction.
+  # Replace every form of every secret in a string.
   defp mask_in_string(str, secret_values) when is_binary(str) do
-    Enum.reduce(secret_values, str, fn secret, acc ->
-      acc = String.replace(acc, secret, @redacted)
-
-      # Only mask encoded variants for secrets >= 4 chars (short secrets
-      # produce encoded forms that are too likely to cause false positives)
-      if String.length(secret) >= 4 do
-        mask_encoded_variants(acc, secret)
-      else
-        acc
-      end
-    end)
+    secret_values
+    |> Enum.flat_map(&forms/1)
+    |> Enum.reduce(str, &String.replace(&2, &1, @redacted))
   end
 
-  # Mask base64 and hex-encoded variants of a secret value
-  defp mask_encoded_variants(str, secret) do
-    b64 = Base.encode64(secret)
-    b64_url = Base.url_encode64(secret)
-    hex_lower = Base.encode16(secret, case: :lower)
-    hex_upper = Base.encode16(secret, case: :upper)
-
-    str
-    |> String.replace(b64, @redacted)
-    |> String.replace(b64_url, @redacted)
-    |> String.replace(hex_lower, @redacted)
-    |> String.replace(hex_upper, @redacted)
+  # A secret and, for one of four or more characters, its base64 and hex
+  # encodings; a shorter secret's encodings match too much unrelated text.
+  defp forms(secret) do
+    if String.length(secret) >= 4 do
+      [
+        secret,
+        Base.encode64(secret),
+        Base.url_encode64(secret),
+        Base.encode16(secret, case: :lower),
+        Base.encode16(secret, case: :upper)
+      ]
+    else
+      [secret]
+    end
   end
 end

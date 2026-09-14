@@ -210,6 +210,8 @@ defmodule Opus.Runtime do
 
       if cleanup_refs.formula_tracker_pid,
         do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
+
+      if cleanup_refs.emitter, do: Opus.Emit.close(cleanup_refs.emitter)
     end
   end
 
@@ -279,9 +281,20 @@ defmodule Opus.Runtime do
         %{}
       end
 
-    # Route emits to root execution's event buffer so nested formula events
-    # reach the top-level SSE stream the UI is subscribed to
     root_execution_id = root_execution_id || execution_id
+
+    emitter =
+      open_emitter(
+        component_type,
+        ctx,
+        execution_id,
+        root_execution_id,
+        authority_info,
+        preloaded_fields
+      )
+
+    emit_imports =
+      if component_type == :catalyst && emitter, do: Opus.Emit.imports(emitter), else: %{}
 
     {formula_imports, formula_tracker_pid} =
       if component_type == :formula && ctx && execution_id do
@@ -292,7 +305,7 @@ defmodule Opus.Runtime do
           authority: authority_info.authority,
           declared_needs: authority_info.declared_needs,
           activation_digest: authority_info.activation_digest,
-          secrets: Map.values(preloaded_fields),
+          emitter: emitter,
           # What this formula was started as and with: a child of the same
           # formula is admitted only as a delegate its roster lists, with
           # the roster's own configuration (`Opus.FormulaHandler`).
@@ -309,16 +322,36 @@ defmodule Opus.Runtime do
       |> Map.merge(stream_imports)
       |> Map.merge(storage_imports)
       |> Map.merge(oauth_imports)
+      |> Map.merge(emit_imports)
       |> Map.merge(formula_imports)
 
     cleanup_refs = %{
       stream_exec_ref: stream_exec_ref,
       formula_tracker_pid: formula_tracker_pid,
+      emitter: emitter,
       execution_id: execution_id
     }
 
     {all_imports, cleanup_refs}
   end
+
+  # A guest's events go on a stream: a formula's on its root's, which the
+  # caller watching the whole run subscribes to; a catalyst's on its own,
+  # which its caller subscribes to for the answer it streams.
+  defp open_emitter(type, ctx, execution_id, root_execution_id, authority_info, preloaded)
+       when type in [:formula, :catalyst] and not is_nil(ctx) and is_binary(execution_id) and
+              not is_nil(authority_info.authority) do
+    stream_id = if type == :formula, do: root_execution_id, else: execution_id
+
+    Opus.Emit.open(stream_id,
+      ctx: ctx,
+      authority: authority_info.authority,
+      secrets: Map.values(preloaded),
+      tracked_id: execution_id
+    )
+  end
+
+  defp open_emitter(_type, _ctx, _execution_id, _root, _authority_info, _preloaded), do: nil
 
   # Under an authority, tokens come from the consent edge's vault resource
   # through the vault reader — the callee-keyed lookup is unreachable. An

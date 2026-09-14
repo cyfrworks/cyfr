@@ -21,13 +21,23 @@ defmodule Cyfr.Models do
       `cache_write_tokens`).
     * `describe` — what the catalyst can do, answered without a key:
       `contracts`, `provider`, `tools`, `provider_tools`, `media_types`,
-      `streaming`, `defaults`.
+      `streaming`, `defaults`. With `{"model": id}` it adds that model's
+      `context_window` and `max_output_tokens` (from the provider's models
+      API where it reports them, which may take the key), or refuses a
+      model the catalyst does not know as `unknown_model`.
     * `models` — what the bound key can reach: `models` as `{id, name,
       context_window?, max_output_tokens?}`.
 
+  While `chat` runs, the catalyst streams the answer on its execution's
+  event stream (`cyfr:emit/events`): `text.delta {text}`,
+  `tool_call.start {index, id, name}`, `tool_call.delta {index,
+  arguments}`, `tool_call.end {index}`, `usage {usage}`, `stop
+  {stop_reason}`, `error {error}` — and still answers the whole response.
+
   A refusal is `{"status": N, "error": {"type", "message", "provider"?}}`
   with `type` one of `invalid_request`, `secret_denied`, `authentication`,
-  `rate_limited`, `overloaded`, `provider_error`, `unknown_operation`.
+  `rate_limited`, `overloaded`, `provider_error`, `unknown_model`,
+  `unknown_operation`.
   The provider's HTTP call and the key stay in the catalyst; this module
   only names the contract, reads the envelope, and runs the listing the
   console shows.
@@ -46,9 +56,7 @@ defmodule Cyfr.Models do
   @typedoc """
   What a planner needs to size a request: the model's context window and
   output ceiling, the provider tools and media types the catalyst
-  offers, whether it streams, and its default `max_tokens`. `source`
-  says where the window came from: the catalyst's own listing, the host
-  table, or the configured default.
+  offers, whether it streams, and its default `max_tokens`.
   """
   @type capabilities :: %{
           context_window: pos_integer(),
@@ -56,88 +64,74 @@ defmodule Cyfr.Models do
           provider_tools: [String.t()],
           media_types: [String.t()],
           streaming: boolean(),
-          default_max_tokens: pos_integer() | nil,
-          source: :models | :table | :default
+          default_max_tokens: pos_integer() | nil
         }
 
   @doc """
-  The capabilities of `model` on `resolved_ref`, read through `run` — a
-  function the caller supplies that runs one contract operation on the
-  catalyst under the caller's own authority (`%{"operation" => op,
-  "params" => %{}}` → `{:ok, result} | {:error, _}`), so a guest-planed
-  loop reads through its pinned authority and a console through the
-  catalog. `describe` supplies the tools, media types, streaming and the
-  default `max_tokens`; `models` the window and output ceiling where the
-  provider reports them; `Cyfr.Models.Windows` the window otherwise.
-  Cached for a day under the resolved reference, the model and
-  `binding_digest` (the key the reading ran with).
+  The capabilities of `model` on `resolved_ref`: the catalyst's
+  `describe` of that model, run through `run` — a function the caller
+  supplies that runs one contract operation on the catalyst under the
+  caller's own authority (`%{"operation" => op, "params" => params}` →
+  `{:ok, result} | {:error, _}`), so a guest-planed loop reads through
+  its pinned authority. Cached for a day under the resolved reference,
+  the model and `binding_digest` (the key the reading ran with).
+
+  Errors: `{:unknown_model, model}` when the catalyst does not know the
+  model; `{:model_refused, error}` for any other typed refusal (the
+  error map, e.g. `secret_denied` when describing the model takes a key
+  that is not bound); `{:no_context_window, model}` when the answer
+  names no window; `{:describe_failed, reason}` when the run failed.
   """
-  @spec capabilities(Context.t(), String.t(), String.t() | nil, String.t() | nil, keyword()) ::
-          capabilities()
-  def capabilities(%Context{} = ctx, resolved_ref, model, binding_digest, opts) do
+  @spec capabilities(Context.t(), String.t(), String.t(), String.t() | nil, keyword()) ::
+          {:ok, capabilities()} | {:error, term()}
+  def capabilities(%Context{} = ctx, resolved_ref, model, binding_digest, opts)
+      when is_binary(model) do
     run = Keyword.fetch!(opts, :run)
     key = {:model_caps, Context.athanor!(ctx), resolved_ref, model, binding_digest}
 
     case Arca.Cache.get(key) do
       {:ok, caps} ->
-        caps
+        {:ok, caps}
 
       :miss ->
-        caps = read_capabilities(resolved_ref, model, run)
-        if caps.source != :default, do: Arca.Cache.put(key, caps, @capabilities_ttl_ms)
-        caps
+        with {:ok, caps} <- describe_model(model, run) do
+          Arca.Cache.put(key, caps, @capabilities_ttl_ms)
+          {:ok, caps}
+        end
     end
   end
 
-  defp read_capabilities(resolved_ref, model, run) do
-    described =
-      case run.(%{"operation" => "describe", "params" => %{}}) do
-        {:ok, result} ->
-          case decode_envelope(result) do
-            {:ok, data} when is_map(data) -> data
-            _ -> %{}
-          end
+  defp describe_model(model, run) do
+    with {:ok, result} <- ran(run.(%{"operation" => "describe", "params" => %{"model" => model}})),
+         {:ok, described} <- described(decode_envelope(result), model),
+         {:ok, window} <- window(described, model) do
+      {:ok,
+       %{
+         context_window: window,
+         max_output_tokens: positive(described["max_output_tokens"]),
+         provider_tools: list_of_strings(described["provider_tools"]),
+         media_types: list_of_strings(described["media_types"]),
+         streaming: described["streaming"] == true,
+         default_max_tokens: positive(get_in(described, ["defaults", "max_tokens"]))
+       }}
+    end
+  end
 
-        _ ->
-          %{}
-      end
+  defp ran({:ok, result}), do: {:ok, result}
+  defp ran({:error, reason}), do: {:error, {:describe_failed, reason}}
 
-    listed =
-      case run.(%{"operation" => "models", "params" => %{}}) do
-        {:ok, result} ->
-          case decode_envelope(result) do
-            {:ok, %{"models" => models}} when is_list(models) ->
-              Enum.find(models, %{}, &(is_map(&1) and &1["id"] == model))
+  defp described({:ok, data}, _model), do: {:ok, data}
 
-            _ ->
-              %{}
-          end
+  defp described({:error, %{"type" => "unknown_model"}}, model),
+    do: {:error, {:unknown_model, model}}
 
-        _ ->
-          %{}
-      end
+  defp described({:error, error}, _model), do: {:error, {:model_refused, error}}
 
-    {window, source} =
-      cond do
-        is_integer(listed["context_window"]) and listed["context_window"] > 0 ->
-          {listed["context_window"], :models}
-
-        window = Cyfr.Models.Windows.by_catalyst(resolved_ref) ->
-          {window, :table}
-
-        true ->
-          {Cyfr.Models.Windows.default(), :default}
-      end
-
-    %{
-      context_window: window,
-      max_output_tokens: positive(listed["max_output_tokens"]),
-      provider_tools: list_of_strings(described["provider_tools"]),
-      media_types: list_of_strings(described["media_types"]),
-      streaming: described["streaming"] == true,
-      default_max_tokens: positive(get_in(described, ["defaults", "max_tokens"])),
-      source: source
-    }
+  defp window(described, model) do
+    case positive(described["context_window"]) do
+      nil -> {:error, {:no_context_window, model}}
+      window -> {:ok, window}
+    end
   end
 
   defp positive(n) when is_integer(n) and n > 0, do: n
