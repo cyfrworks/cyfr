@@ -8,7 +8,7 @@ defmodule Locus.BuildLimiter do
   A `cargo component build` or npm bundle occupies a CPU core and hundreds
   of MB for minutes; nothing else bounds how many a node accepts at once.
   A caller past the cap is rejected, not queued — mirroring
-  `Opus.ExecutionSemaphore`'s per-tenant posture: a backlog of
+  `Cyfr.Execution.Semaphore`'s per-tenant posture: a backlog of
   multi-minute builds behind a synchronous tool call helps nobody.
 
   Slots are held by the acquiring process and released three ways, in
@@ -22,7 +22,7 @@ defmodule Locus.BuildLimiter do
   still ALIVE keeps its slot however long it has held it — reclaiming a
   live holder's slot admits a second build beside a first that is still
   burning a core, a silent 50% capacity breach at a cap of 2
-  (`Opus.ExecutionSemaphore.sweep_stale_holders/1` argues the same rule);
+  (`Cyfr.Execution.Semaphore.sweep_stale_holders/1` argues the same rule);
   the sweep warns about a live wedged holder instead. Without the
   monitor, two killed builds permanently exhausted the cap until the
   application restarted.

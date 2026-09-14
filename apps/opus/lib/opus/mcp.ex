@@ -499,7 +499,7 @@ defmodule Opus.MCP do
 
   # Status action - execution semaphore diagnostics
   def handle("execution", %Context{} = ctx, %{"action" => "status"}) do
-    {:ok, scoped_semaphore_status(ctx, Opus.ExecutionSemaphore.status())}
+    {:ok, scoped_semaphore_status(ctx, Cyfr.Execution.Semaphore.status())}
   end
 
   # Force release action - emergency semaphore recovery. Releasing EVERY
@@ -514,12 +514,12 @@ defmodule Opus.MCP do
       %{user_id: ctx.user_id, auth_method: ctx.auth_method}
     )
 
-    case Opus.ExecutionSemaphore.force_release_all() do
+    case Cyfr.Execution.Semaphore.force_release_all() do
       {:error, :semaphore_unavailable} ->
         {:error, "Execution semaphore is not running — nothing was released"}
 
       _released ->
-        status = scoped_semaphore_status(ctx, Opus.ExecutionSemaphore.status())
+        status = scoped_semaphore_status(ctx, Cyfr.Execution.Semaphore.status())
         {:ok, Map.put(status, :force_released, true)}
     end
   end
@@ -563,7 +563,7 @@ defmodule Opus.MCP do
     case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
            Cyfr.LoggerContext.restore(logger_metadata)
 
-           case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
+           case Registry.register(Cyfr.Execution.Registry, execution_id, :running) do
              {:ok, _} ->
                run_root_formatted(ctx, reference, input, opts, args)
 

@@ -79,7 +79,7 @@ defmodule Opus.OAuthHandler do
   # Meter token requests under their own oauth: bucket, independently
   # of HTTP egress. Refuse dispensing when the limiter is unavailable.
   defp check_dispense_rate(%Context{} = ctx, component_ref, %Cyfr.Limits{} = limits) do
-    case Opus.RateLimiter.check(ctx.athanor_id, "oauth:" <> component_ref, %{
+    case Cyfr.Execution.Rates.check(ctx.athanor_id, "oauth:" <> component_ref, %{
            rate_limit: limits.rate_limit
          }) do
       {:ok, _remaining} ->

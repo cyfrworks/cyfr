@@ -85,20 +85,20 @@ defmodule Opus do
   @spec subscribe_events(String.t(), Cyfr.Execution.event_scope()) :: :ok | {:error, term()}
   @impl Cyfr.Execution
   defdelegate subscribe_events(execution_id, ctx),
-    to: Opus.ExecutionEventBuffer,
+    to: Cyfr.Execution.Events,
     as: :subscribe
 
   @doc "Unsubscribe from an execution's event stream (same ctx as subscribe)."
   @spec unsubscribe_events(String.t(), Cyfr.Execution.event_scope()) :: :ok | {:error, term()}
   @impl Cyfr.Execution
   defdelegate unsubscribe_events(execution_id, ctx),
-    to: Opus.ExecutionEventBuffer,
+    to: Cyfr.Execution.Events,
     as: :unsubscribe
 
   @doc "The events after cursor `{durable, n}` for an execution of `athanor_id`: rows, then deltas, for replay on (re)connect."
   @impl Cyfr.Execution
   defdelegate events_since(execution_id, last_sequence, athanor_id),
-    to: Opus.ExecutionEventBuffer,
+    to: Cyfr.Execution.Events,
     as: :since
 
   @doc """
@@ -174,8 +174,11 @@ defmodule Opus do
   @impl Cyfr.Execution
   defdelegate cancel_for_restart(ctx, execution_id, payload), to: Opus.Executor
 
-  @doc "Whether the engine can admit work: its semaphore is up."
+  @doc "Whether the engine can admit work: the execution slots and its WASM engine are up."
   @impl Cyfr.Execution
   @spec ready?() :: boolean()
-  def ready?, do: is_pid(Process.whereis(Opus.ExecutionSemaphore))
+  def ready?,
+    do:
+      is_pid(Process.whereis(Cyfr.Execution.Semaphore)) and
+        is_pid(Process.whereis(Opus.SharedEngine))
 end

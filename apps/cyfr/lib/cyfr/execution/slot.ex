@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.Slot do
+defmodule Cyfr.Execution.Slot do
   @moduledoc """
   One execution slot for the calling process: the semaphore's slot and
   the registry entry that lets a cancel find the process, taken and
@@ -20,10 +20,10 @@ defmodule Opus.Slot do
   token `release/1` takes back, or the refusal sentence the semaphore's
   answer means.
   """
-  @spec acquire(Opus.ExecutionSemaphore.class(), String.t() | nil, timeout(), String.t() | nil) ::
+  @spec acquire(Cyfr.Execution.Semaphore.class(), String.t() | nil, timeout(), String.t() | nil) ::
           {:ok, token()} | {:error, String.t()}
   def acquire(class, tenant, timeout, execution_id) do
-    case Opus.ExecutionSemaphore.acquire(timeout, class, tenant) do
+    case Cyfr.Execution.Semaphore.acquire(timeout, class, tenant) do
       :ok ->
         {:ok, %{registered: register(execution_id), execution_id: execution_id}}
 
@@ -35,8 +35,8 @@ defmodule Opus.Slot do
   @doc "Give the slot back and drop the registration, from the acquiring process."
   @spec release(token()) :: :ok
   def release(%{registered: registered?, execution_id: execution_id}) do
-    Opus.ExecutionSemaphore.release()
-    if registered?, do: Registry.unregister(Opus.ExecutionRegistry, execution_id)
+    Cyfr.Execution.Semaphore.release()
+    if registered?, do: Registry.unregister(Cyfr.Execution.Registry, execution_id)
     :ok
   end
 
@@ -55,7 +55,7 @@ defmodule Opus.Slot do
   defp register(nil), do: false
 
   defp register(execution_id) do
-    case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
+    case Registry.register(Cyfr.Execution.Registry, execution_id, :running) do
       {:ok, _} -> true
       {:error, {:already_registered, _}} -> false
     end

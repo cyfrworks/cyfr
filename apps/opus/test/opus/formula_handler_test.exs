@@ -912,7 +912,7 @@ defmodule Opus.FormulaHandlerTest do
         )
 
       # Subscribe to the execution events topic
-      Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
+      Cyfr.Execution.Events.subscribe(execution_id, ctx)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -926,7 +926,7 @@ defmodule Opus.FormulaHandlerTest do
       assert event.data["kind"] == "turn_start"
       assert event.data["turn"] == 1
 
-      Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
+      Cyfr.Execution.Events.unsubscribe(execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
@@ -941,7 +941,7 @@ defmodule Opus.FormulaHandlerTest do
           emitter: emitter(ctx, execution_id, secrets: ["sk-super-secret-value"])
         )
 
-      Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
+      Cyfr.Execution.Events.subscribe(execution_id, ctx)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -954,7 +954,7 @@ defmodule Opus.FormulaHandlerTest do
       assert event.data["content"] == "key is [REDACTED]"
       refute inspect(event) =~ "sk-super-secret-value"
 
-      Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
+      Cyfr.Execution.Events.unsubscribe(execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
@@ -978,16 +978,16 @@ defmodule Opus.FormulaHandlerTest do
       emit_fn.(Jason.encode!(%{"kind" => "tool_use", "tool" => "read_file"}))
 
       # Flush pending buffer writes before reading
-      Opus.ExecutionEventBuffer.flush(execution_id)
+      Cyfr.Execution.Events.flush(execution_id)
 
       # Replay everything from the start
-      events = Opus.ExecutionEventBuffer.since(execution_id, {0, 0}, ctx.athanor_id)
+      events = Cyfr.Execution.Events.since(execution_id, {0, 0}, ctx.athanor_id)
       assert length(events) == 3
       assert Enum.map(events, & &1.sequence) == ["0.1", "0.2", "0.3"]
       assert Enum.map(events, & &1.data["kind"]) == ["turn_start", "text_delta", "tool_use"]
 
       # Replay only the deltas after 0.1
-      events_after_1 = Opus.ExecutionEventBuffer.since(execution_id, {0, 1}, ctx.athanor_id)
+      events_after_1 = Cyfr.Execution.Events.since(execution_id, {0, 1}, ctx.athanor_id)
       assert length(events_after_1) == 2
       assert Enum.map(events_after_1, & &1.sequence) == ["0.2", "0.3"]
 
@@ -1050,8 +1050,8 @@ defmodule Opus.FormulaHandlerTest do
         )
 
       # Subscribe to both root and parent
-      Opus.ExecutionEventBuffer.subscribe(root_id, ctx)
-      Opus.ExecutionEventBuffer.subscribe(parent_id, ctx)
+      Cyfr.Execution.Events.subscribe(root_id, ctx)
+      Cyfr.Execution.Events.subscribe(parent_id, ctx)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -1066,24 +1066,24 @@ defmodule Opus.FormulaHandlerTest do
       # Should NOT arrive on parent's buffer
       refute_receive {:execution_event, _}, 100
 
-      Opus.ExecutionEventBuffer.unsubscribe(root_id, ctx)
-      Opus.ExecutionEventBuffer.unsubscribe(parent_id, ctx)
+      Cyfr.Execution.Events.unsubscribe(root_id, ctx)
+      Cyfr.Execution.Events.unsubscribe(parent_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
   end
 
   # ============================================================================
-  # ExecutionEventBuffer durable events
+  # Cyfr.Execution.Events durable events
   # ============================================================================
 
-  describe "ExecutionEventBuffer durable events" do
+  describe "Cyfr.Execution.Events durable events" do
     test "a published lifecycle row reaches subscribers with its number", %{ctx: ctx} do
       execution_id = "exec_terminal_#{:rand.uniform(100_000)}"
 
-      Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
+      Cyfr.Execution.Events.subscribe(execution_id, ctx)
 
       :ok =
-        Opus.ExecutionEventBuffer.publish(execution_id, ctx, "execution.completed", 7, %{
+        Cyfr.Execution.Events.publish(execution_id, ctx, "execution.completed", 7, %{
           "status" => "completed",
           "duration_ms" => 1234
         })
@@ -1096,7 +1096,7 @@ defmodule Opus.FormulaHandlerTest do
       assert event.data["status"] == "completed"
       assert event.data["duration_ms"] == 1234
 
-      Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
+      Cyfr.Execution.Events.unsubscribe(execution_id, ctx)
     end
   end
 

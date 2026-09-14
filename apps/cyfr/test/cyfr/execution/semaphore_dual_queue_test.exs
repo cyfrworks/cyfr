@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.ExecutionSemaphoreDualQueueTest do
+defmodule Cyfr.Execution.SemaphoreDualQueueTest do
   use ExUnit.Case, async: false
 
   test "a queued child is served before a queued root" do
-    {:ok, sem} = GenServer.start_link(Opus.ExecutionSemaphore, {1, 16}, [])
+    {:ok, sem} = GenServer.start_link(Cyfr.Execution.Semaphore, {1, 16}, [])
 
     # Acquire the single slot (max 1 → no child reserve)
     :ok = GenServer.call(sem, {:acquire, :root, nil})
@@ -49,7 +49,7 @@ defmodule Opus.ExecutionSemaphoreDualQueueTest do
   end
 
   test "terminate/2 logs and demonitors cleanly" do
-    {:ok, sem} = GenServer.start_link(Opus.ExecutionSemaphore, {2, 16}, [])
+    {:ok, sem} = GenServer.start_link(Cyfr.Execution.Semaphore, {2, 16}, [])
     :ok = GenServer.call(sem, {:acquire, :root, nil})
 
     # Stopping should not raise

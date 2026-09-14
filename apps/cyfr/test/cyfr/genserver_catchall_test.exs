@@ -24,7 +24,10 @@ defmodule Cyfr.GenServerCatchallTest do
     {Arca.AuditHandler, "AuditHandler"},
     {Prism.TinctureRegistry, "TinctureRegistry"},
     {Cyfr.RecordSink, "RecordSink"},
-    {Cyfr.RateLimiter, "RateLimiter"}
+    {Cyfr.RateLimiter, "RateLimiter"},
+    {Cyfr.Execution.Rates, "Rates"},
+    {Cyfr.Execution.Semaphore, "Semaphore"},
+    {Cyfr.Execution.Events.Sequence, "Events.Sequence"}
   ]
 
   # Named adopters not probed live, each with the reason it cannot be:
@@ -70,6 +73,32 @@ defmodule Cyfr.GenServerCatchallTest do
 
         assert log =~ inspect(@unexpected_msg),
                "Expected log to contain #{inspect(@unexpected_msg)}, got: #{inspect(log)}"
+      end
+    end
+  end
+
+  describe "an execution's event buffer" do
+    # One unnamed buffer per execution, so it is probed on an instance of
+    # its own. It reads the execution's row for its durable prefix when it
+    # starts, so it needs the sandbox connection.
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      :ok
+    end
+
+    for message <- [@unexpected_msg, {:random, "payload"}] do
+      test "survives #{inspect(message)} and logs it" do
+        id = "exec_catchall_#{System.unique_integer([:positive])}"
+        {:ok, pid} = GenServer.start_link(Cyfr.Execution.Events, {id, "ath_catchall"}, [])
+
+        assert capture_log(fn ->
+                 send(pid, unquote(Macro.escape(message)))
+                 :sys.get_state(pid)
+               end) =~ "unexpected message"
+
+        assert Process.alive?(pid)
+        GenServer.stop(pid)
       end
     end
   end

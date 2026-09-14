@@ -7,7 +7,7 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
   @moduletag :requires_opus
 
   alias EmissaryWeb.ExecutionEventsController
-  alias Opus.ExecutionEventBuffer
+  alias Cyfr.Execution.Events
 
   setup %{conn: conn} do
     ctx = Sanctum.TestContext.local()
@@ -40,7 +40,7 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
   end
 
   defp publish!(exec, type, seq, data \\ %{}),
-    do: :ok = ExecutionEventBuffer.publish(exec.id, exec, type, seq, data)
+    do: :ok = Events.publish(exec.id, exec, type, seq, data)
 
   defp ids(body) do
     ~r/^id: (\S+)$/m |> Regex.scan(body) |> Enum.map(fn [_, id] -> id end)
@@ -62,10 +62,10 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
        %{conn: conn, exec: exec} do
     # 1 is execution.started (admission). Deltas under it, a step row, a
     # delta under that, the end.
-    {:ok, "1.1"} = ExecutionEventBuffer.push(exec.id, %{"i" => 1}, exec)
+    {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
     two = durable!(exec, "step.closed", %{"step" => "s"})
     publish!(exec, "step.closed", two)
-    {:ok, "2.1"} = ExecutionEventBuffer.push(exec.id, %{"i" => 2}, exec)
+    {:ok, "2.1"} = Events.push(exec.id, %{"i" => 2}, exec)
     three = durable!(exec, "execution.completed", %{"status" => "completed"})
     publish!(exec, "execution.completed", three)
     assert {two, three} == {2, 3}
@@ -104,10 +104,10 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
     task = Task.async(fn -> stream(conn, exec).resp_body end)
     Process.sleep(300)
 
-    {:ok, "1.1"} = ExecutionEventBuffer.push(exec.id, %{"i" => 1}, exec)
+    {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
     two = durable!(exec, "step.closed", %{"step" => "a"})
     publish!(exec, "step.closed", two)
-    {:ok, "2.1"} = ExecutionEventBuffer.push(exec.id, %{"i" => 2}, exec)
+    {:ok, "2.1"} = Events.push(exec.id, %{"i" => 2}, exec)
     three = durable!(exec, "execution.failed", %{"status" => "failed"})
     publish!(exec, "execution.failed", three)
 

@@ -13,7 +13,7 @@ defmodule Opus.SharedEngine do
   The engine is created once at startup; if creation fails, the application
   crashes (no silent fallback).
 
-  Must be started before `Opus.ExecutionSemaphore` in the supervisor tree.
+  The engine admits no work until this process is up (`Opus.ready?/0`).
 
   ## Fuel Enforcement
 
@@ -31,7 +31,7 @@ defmodule Opus.SharedEngine do
   component that never yields (e.g. a tight compute loop). Killing the
   waiting BEAM process frees the execution slot, but the native thread
   keeps spinning one CPU core until node restart. Mitigations: the
-  per-tenant cap in `Opus.ExecutionSemaphore` bounds how many such loops
+  per-tenant cap in `Cyfr.Execution.Semaphore` bounds how many such loops
   one tenant can start, and the container CPU quota (docker-compose
   `cpus:`) bounds aggregate damage. A real fix needs epoch interruption
   support in wasmex.

@@ -31,7 +31,7 @@ defmodule Opus.TurnRoot do
           activation_digest: String.t() | nil,
           lease_until: DateTime.t(),
           budget_id: String.t(),
-          token: Opus.Slot.token(),
+          token: Cyfr.Execution.Slot.token(),
           keeper: pid()
         }
 
@@ -107,7 +107,7 @@ defmodule Opus.TurnRoot do
 
     case moved do
       {:ok, %{turn: turn, aborted: aborted}} ->
-        Opus.Slot.release(claim.token)
+        Cyfr.Execution.Slot.release(claim.token)
         {:ok, %{turn: turn, execution_id: turn.root_execution_id, aborted: aborted}}
 
       {:error, _} = error ->
@@ -128,7 +128,7 @@ defmodule Opus.TurnRoot do
   @spec resume(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def resume(%Context{} = ctx, execution_id, opts) do
     with {:ok, token} <-
-           Opus.Slot.acquire(
+           Cyfr.Execution.Slot.acquire(
              :root,
              ctx.athanor_id,
              Keyword.get(opts, :timeout_ms, @slot_wait_ms),
@@ -160,7 +160,7 @@ defmodule Opus.TurnRoot do
            }}
 
         {:error, _} = error ->
-          Opus.Slot.release(token)
+          Cyfr.Execution.Slot.release(token)
           error
       end
     end
@@ -177,7 +177,7 @@ defmodule Opus.TurnRoot do
     attempt = Keyword.fetch!(opts, :attempt)
 
     with {:ok, token} <-
-           Opus.Slot.acquire(
+           Cyfr.Execution.Slot.acquire(
              :root,
              ctx.athanor_id,
              Keyword.get(opts, :timeout_ms, @slot_wait_ms),
@@ -214,7 +214,7 @@ defmodule Opus.TurnRoot do
           _ -> :ok
         end
 
-        Opus.Slot.release(token)
+        Cyfr.Execution.Slot.release(token)
 
       _ ->
         :ok
@@ -263,7 +263,7 @@ defmodule Opus.TurnRoot do
   # A refused slot fails the row it would have held: the claim is over
   # before it began, and the row says so.
   defp take_slot(ctx, record) do
-    case Opus.Slot.acquire(:root, ctx.athanor_id, @slot_wait_ms, record.id) do
+    case Cyfr.Execution.Slot.acquire(:root, ctx.athanor_id, @slot_wait_ms, record.id) do
       {:ok, token} ->
         {:ok, token}
 

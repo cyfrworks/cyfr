@@ -66,6 +66,6 @@ defmodule Opus.Host do
   @spec broadcast(String.t(), map(), term(), keyword()) ::
           {:ok, String.t()} | {:error, :missing_athanor}
   defdelegate broadcast(execution_id, data, ctx, opts \\ []),
-    to: Opus.ExecutionEventBuffer,
+    to: Cyfr.Execution.Events,
     as: :push
 end

@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.ExecutionEventBufferTest do
+defmodule Cyfr.Execution.EventsTest do
   use ExUnit.Case, async: false
 
-  alias Opus.ExecutionEventBuffer
-  alias Opus.ExecutionEventBuffer.Sequence
+  alias Cyfr.Execution.Events
+  alias Cyfr.Execution.Events.Sequence
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -29,7 +29,7 @@ defmodule Opus.ExecutionEventBufferTest do
 
   defp durable!(record, type, data \\ %{}) do
     {:ok, row} = Arca.ExecutionEvents.append(record.athanor_id, record.id, type, data: data)
-    :ok = ExecutionEventBuffer.publish(record.id, record, type, row.seq, data)
+    :ok = Events.publish(record.id, record, type, row.seq, data)
     row.seq
   end
 
@@ -39,10 +39,10 @@ defmodule Opus.ExecutionEventBufferTest do
 
   test "the record's athanor routes the broadcast and the replay", %{} do
     record = execution!("ath_evt_x")
-    ExecutionEventBuffer.subscribe(record.id, record)
+    Events.subscribe(record.id, record)
 
     seq = durable!(record, "execution.completed", %{"status" => "completed"})
-    ExecutionEventBuffer.flush(record.id)
+    Events.flush(record.id)
 
     id = record.id
     assert_receive {:execution_event, %{type: "execution.completed", execution_id: ^id}}
@@ -50,18 +50,18 @@ defmodule Opus.ExecutionEventBufferTest do
     # Replay under the record's athanor sees the events; another athanor's
     # key does not.
     assert [%{type: "execution.started"}, %{type: "execution.completed", durable: ^seq}] =
-             ExecutionEventBuffer.since(record.id, {0, 0}, "ath_evt_x")
+             Events.since(record.id, {0, 0}, "ath_evt_x")
 
-    assert [] = ExecutionEventBuffer.since(record.id, {0, 0}, "ath_other")
+    assert [] = Events.since(record.id, {0, 0}, "ath_other")
   end
 
   test "a Sanctum.Context routes identically to record coordinates" do
     record = execution!("ath_evt_x")
     ctx = %Sanctum.Context{athanor_id: "ath_evt_x"}
-    ExecutionEventBuffer.subscribe(record.id, ctx)
+    Events.subscribe(record.id, ctx)
 
-    assert {:ok, "1.1"} = ExecutionEventBuffer.push(record.id, %{"kind" => "text_delta"}, record)
-    ExecutionEventBuffer.flush(record.id)
+    assert {:ok, "1.1"} = Events.push(record.id, %{"kind" => "text_delta"}, record)
+    Events.flush(record.id)
 
     id = record.id
     assert_receive {:execution_event, %{type: "emit", execution_id: ^id, sequence: "1.1"}}
@@ -69,13 +69,13 @@ defmodule Opus.ExecutionEventBufferTest do
 
   test "an athanor-less producer is dropped, never routed into a default tenant" do
     record = execution!("ath_evt_x")
-    ExecutionEventBuffer.subscribe(record.id, record)
+    Events.subscribe(record.id, record)
 
     assert {:error, :missing_athanor} =
-             ExecutionEventBuffer.push(record.id, %{"kind" => "text_delta"}, nil)
+             Events.push(record.id, %{"kind" => "text_delta"}, nil)
 
     assert {:error, :missing_athanor} =
-             ExecutionEventBuffer.publish(record.id, nil, "execution.failed", 9, %{})
+             Events.publish(record.id, nil, "execution.failed", 9, %{})
 
     id = record.id
     refute_receive {:execution_event, %{execution_id: ^id}}, 100
@@ -84,32 +84,32 @@ defmodule Opus.ExecutionEventBufferTest do
   test "replay and topic refuse a missing athanor" do
     exec_id = "exec_evt_nil_#{System.unique_integer([:positive])}"
 
-    assert_raise ArgumentError, fn -> ExecutionEventBuffer.since(exec_id, {0, 0}, nil) end
-    assert_raise ArgumentError, fn -> ExecutionEventBuffer.topic(exec_id, %{}) end
+    assert_raise ArgumentError, fn -> Events.since(exec_id, {0, 0}, nil) end
+    assert_raise ArgumentError, fn -> Events.topic(exec_id, %{}) end
   end
 
   describe "numbering — durable rows and the deltas under them" do
     test "deltas ride the last durable event and restart at .1 after each new one" do
       record = execution!("ath_evt_x")
 
-      assert {:ok, "1.1"} = ExecutionEventBuffer.push(record.id, %{"i" => 1}, record)
-      assert {:ok, "1.2"} = ExecutionEventBuffer.push(record.id, %{"i" => 2}, record)
+      assert {:ok, "1.1"} = Events.push(record.id, %{"i" => 1}, record)
+      assert {:ok, "1.2"} = Events.push(record.id, %{"i" => 2}, record)
 
       two = durable!(record, "step.closed", %{"step" => "s1"})
       assert two == 2
-      assert {:ok, "2.1"} = ExecutionEventBuffer.push(record.id, %{"i" => 3}, record)
+      assert {:ok, "2.1"} = Events.push(record.id, %{"i" => 3}, record)
 
       # A publication for an older prefix, arriving late, does not touch the
       # counter of the prefix already emitted under.
-      :ok = ExecutionEventBuffer.publish(record.id, record, "step.closed", 1, %{"late" => true})
-      assert {:ok, "2.2"} = ExecutionEventBuffer.push(record.id, %{"i" => 4}, record)
-      ExecutionEventBuffer.flush(record.id)
+      :ok = Events.publish(record.id, record, "step.closed", 1, %{"late" => true})
+      assert {:ok, "2.2"} = Events.push(record.id, %{"i" => 4}, record)
+      Events.flush(record.id)
 
       # Replay from a cursor: the rows after it in order, each with the
       # deltas under it; from the tip, only the deltas not yet seen.
       ids = fn cursor ->
         record.id
-        |> ExecutionEventBuffer.since(cursor, "ath_evt_x")
+        |> Events.since(cursor, "ath_evt_x")
         |> Enum.map(& &1.sequence)
       end
 
@@ -149,9 +149,9 @@ defmodule Opus.ExecutionEventBufferTest do
   test "a buffer that restarts resumes the history and the numbering" do
     record = execution!("ath_evt_x")
 
-    assert {:ok, "1.1"} = ExecutionEventBuffer.push(record.id, %{"n" => 1}, record)
-    assert {:ok, "1.2"} = ExecutionEventBuffer.push(record.id, %{"n" => 2}, record)
-    ExecutionEventBuffer.flush(record.id)
+    assert {:ok, "1.1"} = Events.push(record.id, %{"n" => 1}, record)
+    assert {:ok, "1.2"} = Events.push(record.id, %{"n" => 2}, record)
+    Events.flush(record.id)
 
     idle_stop_buffer(record.id)
 
@@ -160,12 +160,12 @@ defmodule Opus.ExecutionEventBufferTest do
 
     # The next emit restarts the buffer, which floors the counter from
     # what the cache saw, and the stream continues.
-    assert {:ok, "1.3"} = ExecutionEventBuffer.push(record.id, %{"n" => 3}, record)
-    ExecutionEventBuffer.flush(record.id)
+    assert {:ok, "1.3"} = Events.push(record.id, %{"n" => 3}, record)
+    Events.flush(record.id)
 
     assert ["1.1", "1.2", "1.3"] =
              record.id
-             |> ExecutionEventBuffer.since({1, 0}, "ath_evt_x")
+             |> Events.since({1, 0}, "ath_evt_x")
              |> Enum.map(& &1.sequence)
   end
 
@@ -173,13 +173,13 @@ defmodule Opus.ExecutionEventBufferTest do
   # Registry entry is actually gone — the entry is cleaned asynchronously
   # after the DOWN, and a push in that window would cast into the dead pid.
   defp idle_stop_buffer(exec_id) do
-    [{pid, _}] = Registry.lookup(Opus.ExecutionEventBuffer.Registry, exec_id)
+    [{pid, _}] = Registry.lookup(Cyfr.Execution.Events.Registry, exec_id)
     ref = Process.monitor(pid)
     send(pid, :timeout)
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
 
     assert Enum.any?(1..200, fn _ ->
-             Registry.lookup(Opus.ExecutionEventBuffer.Registry, exec_id) == [] or
+             Registry.lookup(Cyfr.Execution.Events.Registry, exec_id) == [] or
                (Process.sleep(10) && false)
            end),
            "the idle-stopped buffer's registry entry never cleared"

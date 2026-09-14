@@ -348,21 +348,6 @@ defmodule Opus.Telemetry do
     )
   end
 
-  @doc """
-  Emit `[:cyfr, :opus, :execution, :unreaped_kill]` when a timeout or a
-  cancel kill leaves a native thread spinning (no epoch interruption in
-  wasmex). The semaphore counts these per tenant and refuses past a
-  threshold; the execution killed rides the metadata.
-  """
-  @spec unreaped_kill(term(), String.t() | nil, non_neg_integer()) :: :ok
-  def unreaped_kill(tenant, execution_id, unreaped_count) do
-    :telemetry.execute(
-      [:cyfr, :opus, :execution, :unreaped_kill],
-      %{system_time: System.system_time(), unreaped_count: unreaped_count},
-      %{tenant: tenant, execution_id: execution_id}
-    )
-  end
-
   # ===========================================================================
   # Private Helpers
   # ===========================================================================

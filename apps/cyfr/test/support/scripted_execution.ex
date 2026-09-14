@@ -52,7 +52,9 @@ defmodule Cyfr.Test.ScriptedExecution do
   Start the script agent: `ref:` the scripted reference (or a list),
   `script:` its items, `window:` the context window `describe` answers
   for any model (default 200_000), `describe:` `{:refuse, error}` to have
-  a described model refused instead.
+  a described model refused instead, `secrets:` the credential values the
+  child is handed, masked from the events it emits as a run's unsealed
+  fields are.
   """
   def start_link(opts) do
     keys =
@@ -67,9 +69,19 @@ defmodule Cyfr.Test.ScriptedExecution do
     script = Keyword.get(opts, :script, [])
     window = Keyword.get(opts, :window, 200_000)
     describe = Keyword.get(opts, :describe, :answer)
+    secrets = Keyword.get(opts, :secrets, [])
 
     Agent.start_link(
-      fn -> %{refs: keys, script: script, window: window, describe: describe, calls: []} end,
+      fn ->
+        %{
+          refs: keys,
+          script: script,
+          window: window,
+          describe: describe,
+          secrets: secrets,
+          calls: []
+        }
+      end,
       name: @agent
     )
   end
@@ -208,7 +220,7 @@ defmodule Cyfr.Test.ScriptedExecution do
     admission = [attempt: attempt, payloads: [staged]] ++ barrier_opts(decision.authority, opts)
 
     with {:ok, _} <- Arca.Execution.admit(attrs, admission) do
-      case slot().acquire(:child, ctx.athanor_id, 30_000, id) do
+      case Cyfr.Execution.Slot.acquire(:child, ctx.athanor_id, 30_000, id) do
         {:ok, token} ->
           Agent.update(@agent, fn state ->
             call = %{execution_id: id, input: input, authority: decision.authority}
@@ -226,7 +238,7 @@ defmodule Cyfr.Test.ScriptedExecution do
           try do
             answer(call, false, input)
           after
-            slot().release(token)
+            Cyfr.Execution.Slot.release(token)
           end
 
         {:error, refusal} ->
@@ -337,7 +349,12 @@ defmodule Cyfr.Test.ScriptedExecution do
   defp described_model(_params), do: %{}
 
   defp emit(call, events) do
-    emitter = emitter().open(call.id, ctx: call.ctx, authority: call.authority)
+    emitter =
+      emitter().open(call.id,
+        ctx: call.ctx,
+        authority: call.authority,
+        secrets: Agent.get(@agent, & &1.secrets)
+      )
 
     try do
       Enum.each(events, &emitter().emit(emitter, Jason.encode!(&1)))
@@ -410,6 +427,5 @@ defmodule Cyfr.Test.ScriptedExecution do
   defp engine, do: Module.concat([:Opus])
   defp chain, do: Module.concat([:Opus, :Chain])
   defp charge, do: Module.concat([:Opus, :Chain, :Charge])
-  defp slot, do: Module.concat([:Opus, :Slot])
   defp emitter, do: Module.concat([:Opus, :Emit])
 end

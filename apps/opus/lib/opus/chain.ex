@@ -189,7 +189,7 @@ defmodule Opus.Chain do
           # must exist before the pid is findable, or a kill in the gap
           # leaked the slot step_invoke charged.
           Sanctum.Authority.guard_invoke(decision.authority)
-          Registry.register(Opus.ExecutionRegistry, execution_id, :running)
+          Registry.register(Cyfr.Execution.Registry, execution_id, :running)
 
           try do
             execute_child(decision, input, opts)

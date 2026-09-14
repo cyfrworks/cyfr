@@ -21,15 +21,15 @@ defmodule Opus.EmitTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    case GenServer.whereis(Opus.RateLimiter) do
-      nil -> {:ok, _} = Opus.RateLimiter.start_link([])
+    case GenServer.whereis(Cyfr.Execution.Rates) do
+      nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
       _pid -> :ok
     end
 
     ctx = Sanctum.TestContext.local()
     stream_id = "exec_emit_#{System.unique_integer([:positive])}"
-    Opus.ExecutionEventBuffer.subscribe(stream_id, ctx)
-    on_exit(fn -> Opus.ExecutionEventBuffer.unsubscribe(stream_id, ctx) end)
+    Cyfr.Execution.Events.subscribe(stream_id, ctx)
+    on_exit(fn -> Cyfr.Execution.Events.unsubscribe(stream_id, ctx) end)
 
     {:ok, ctx: ctx, stream_id: stream_id}
   end

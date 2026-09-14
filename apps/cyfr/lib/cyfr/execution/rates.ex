@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.RateLimiter do
+defmodule Cyfr.Execution.Rates do
   @moduledoc """
   Rate limiting for WASM component executions.
 
@@ -27,7 +27,7 @@ defmodule Opus.RateLimiter do
   ## Usage
 
       # Check if request is allowed (rate limits are scoped per athanor)
-      case Opus.RateLimiter.check("ath_1", "stripe-catalyst", %{
+      case Cyfr.Execution.Rates.check("ath_1", "stripe-catalyst", %{
              rate_limit: %{requests: 50, window: "1m"}
            }) do
         {:ok, remaining} -> proceed_with_execution()
@@ -35,7 +35,7 @@ defmodule Opus.RateLimiter do
       end
 
       # Reset rate limit (for testing or administrative purposes)
-      :ok = Opus.RateLimiter.reset("ath_1", "stripe-catalyst")
+      :ok = Cyfr.Execution.Rates.reset("ath_1", "stripe-catalyst")
 
   ## Limit Source
 
@@ -49,7 +49,7 @@ defmodule Opus.RateLimiter do
 
   require Logger
 
-  @table :opus_rate_limiter
+  @table :cyfr_execution_rates
 
   @sweep_interval_ms 60_000
 
@@ -73,11 +73,11 @@ defmodule Opus.RateLimiter do
 
   ## Examples
 
-      iex> Opus.RateLimiter.check("ath_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
+      iex> Cyfr.Execution.Rates.check("ath_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:ok, 9}
 
       # After 10 requests...
-      iex> Opus.RateLimiter.check("ath_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
+      iex> Cyfr.Execution.Rates.check("ath_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:error, :rate_limited, 45000}
   """
   @spec check(String.t(), String.t(), map() | nil) ::
@@ -253,7 +253,7 @@ defmodule Opus.RateLimiter do
 
   defp reject_empty_athanor(athanor_id, operation) when athanor_id in [nil, ""] do
     Logger.warning(
-      "[RateLimiter] Empty athanor_id during #{operation} — rejecting to prevent " <>
+      "[Cyfr.Execution.Rates] Empty athanor_id during #{operation} — rejecting to prevent " <>
         "cross-tenant rate limit collision"
     )
 
@@ -289,7 +289,10 @@ defmodule Opus.RateLimiter do
         {:ok, ms}
 
       {:error, reason} ->
-        Logger.warning("[RateLimiter] invalid rate-limit window #{inspect(window)}: #{reason}")
+        Logger.warning(
+          "[Cyfr.Execution.Rates] invalid rate-limit window #{inspect(window)}: #{reason}"
+        )
+
         :error
     end
   end

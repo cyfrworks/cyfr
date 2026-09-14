@@ -23,7 +23,7 @@ defmodule Opus.ExecutionSweeper do
   use GenServer
   require Logger
 
-  alias Opus.ExecutionEventBuffer
+  alias Cyfr.Execution.Events
 
   @sweep_interval_ms 60_000
 
@@ -82,7 +82,7 @@ defmodule Opus.ExecutionSweeper do
       # checked against the live process — a running one just renews late.
       should_sweep =
         record.runner_id != me or
-          case Registry.lookup(Opus.ExecutionRegistry, record.id) do
+          case Registry.lookup(Cyfr.Execution.Registry, record.id) do
             [{pid, _}] -> not Process.alive?(pid)
             _ -> true
           end
@@ -149,7 +149,7 @@ defmodule Opus.ExecutionSweeper do
         }
       )
 
-      ExecutionEventBuffer.publish(record.id, record, "execution.lapsed", event_seq, %{
+      Events.publish(record.id, record, "execution.lapsed", event_seq, %{
         "status" => "failed",
         "error" => error_msg
       })

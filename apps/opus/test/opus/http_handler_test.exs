@@ -265,8 +265,8 @@ defmodule Opus.HttpHandlerTest do
   describe "execute/5 edge enforcement" do
     setup do
       # Start the rate limiter for this test.
-      case GenServer.whereis(Opus.RateLimiter) do
-        nil -> {:ok, _} = Opus.RateLimiter.start_link([])
+      case GenServer.whereis(Cyfr.Execution.Rates) do
+        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
         _pid -> :ok
       end
 
@@ -491,8 +491,8 @@ defmodule Opus.HttpHandlerTest do
 
   describe "execute/5 base64 body encoding" do
     setup do
-      case GenServer.whereis(Opus.RateLimiter) do
-        nil -> {:ok, _} = Opus.RateLimiter.start_link([])
+      case GenServer.whereis(Cyfr.Execution.Rates) do
+        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
         _pid -> :ok
       end
 
@@ -560,8 +560,8 @@ defmodule Opus.HttpHandlerTest do
 
   describe "execute/5 multipart" do
     setup do
-      case GenServer.whereis(Opus.RateLimiter) do
-        nil -> {:ok, _} = Opus.RateLimiter.start_link([])
+      case GenServer.whereis(Cyfr.Execution.Rates) do
+        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
         _pid -> :ok
       end
 
@@ -837,8 +837,8 @@ defmodule Opus.HttpHandlerTest do
 
   describe "execute/5 SSRF URL edge cases" do
     setup do
-      case GenServer.whereis(Opus.RateLimiter) do
-        nil -> {:ok, _} = Opus.RateLimiter.start_link([])
+      case GenServer.whereis(Cyfr.Execution.Rates) do
+        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
         _pid -> :ok
       end
 

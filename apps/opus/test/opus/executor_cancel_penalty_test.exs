@@ -8,7 +8,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
   use ExUnit.Case, async: false
 
   alias Arca.Execution
-  alias Opus.ExecutionSemaphore
+  alias Cyfr.Execution.Semaphore
   alias Opus.Executor
 
   setup do
@@ -19,8 +19,8 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     # The penalty box outlives a force-release: what this suite fills for
     # its tenant, it empties.
     on_exit(fn ->
-      ExecutionSemaphore.force_release_all()
-      ExecutionSemaphore.forgive_unreaped(ctx.athanor_id)
+      Semaphore.force_release_all()
+      Semaphore.forgive_unreaped(ctx.athanor_id)
     end)
 
     {:ok, ctx: ctx}
@@ -50,7 +50,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
 
     pid =
       spawn(fn ->
-        {:ok, _} = Registry.register(Opus.ExecutionRegistry, execution_id, :running)
+        {:ok, _} = Registry.register(Cyfr.Execution.Registry, execution_id, :running)
         send(parent, {:registered, execution_id})
         Process.sleep(:infinity)
       end)
@@ -60,7 +60,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
   end
 
   test "N cancels through the executor trip the tenant's penalty box", %{ctx: ctx} do
-    threshold = max(2, div(ExecutionSemaphore.status().tenant_max, 2))
+    threshold = max(2, div(Semaphore.status().tenant_max, 2))
 
     for _ <- 1..threshold do
       id = running!(ctx)
@@ -72,6 +72,6 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     end
 
     assert {:error, :tenant_unreaped_limit} =
-             ExecutionSemaphore.acquire(1_000, :root, ctx.athanor_id)
+             Semaphore.acquire(1_000, :root, ctx.athanor_id)
   end
 end

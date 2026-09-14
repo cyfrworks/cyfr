@@ -150,7 +150,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     assert run_result.status == :completed
 
     events =
-      Opus.ExecutionEventBuffer.since(run_result.metadata.execution_id, {0, 0}, ctx.athanor_id)
+      Cyfr.Execution.Events.since(run_result.metadata.execution_id, {0, 0}, ctx.athanor_id)
 
     emit = Enum.find(events, &(&1.type == "emit"))
 

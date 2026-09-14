@@ -376,14 +376,14 @@ defmodule Opus.ExecutorCascadeTest do
     end
   end
 
-  # Spawn a process that registers itself in the ExecutionRegistry under the
+  # Spawn a process that registers itself in Cyfr.Execution.Registry under the
   # given id (mimicking a live execution) and idles until killed.
   defp register_fake_execution(execution_id) do
     test_pid = self()
 
     target =
       spawn(fn ->
-        {:ok, _} = Registry.register(Opus.ExecutionRegistry, execution_id, %{})
+        {:ok, _} = Registry.register(Cyfr.Execution.Registry, execution_id, %{})
         send(test_pid, :registered)
         Process.sleep(:infinity)
       end)

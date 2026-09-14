@@ -117,7 +117,7 @@ defmodule Opus.HttpRequestValidation do
   # consented config); before DNS, so a denied caller cannot use the
   # resolver either. A dead limiter fails CLOSED, matching the executor.
   defp check_egress_rate(%Context{} = ctx, component_ref, %Limits{} = limits) do
-    case Opus.RateLimiter.check(ctx.athanor_id, "http:" <> component_ref, %{
+    case Cyfr.Execution.Rates.check(ctx.athanor_id, "http:" <> component_ref, %{
            rate_limit: limits.rate_limit
          }) do
       {:ok, _remaining} ->

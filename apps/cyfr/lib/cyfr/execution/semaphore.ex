@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.ExecutionSemaphore do
+defmodule Cyfr.Execution.Semaphore do
   @moduledoc """
   Counting semaphore that limits concurrent WASM executions.
 
@@ -62,11 +62,13 @@ defmodule Opus.ExecutionSemaphore do
   ## Unreaped kills
 
   Wasmex has no epoch interruption: a timeout kill may leave native work
-  running after the BEAM-side slot is released. `note_unreaped/0` records
+  running after the BEAM-side slot is released. `note_unreaped/2` records
   these kills, and excessive recent kills refuse new root/background slots
   with `{:error, :tenant_unreaped_limit}`. Entries expire after
   #{div(10 * 60 * 1000, 60_000)} minutes; native completion is not observable,
-  so expiry does not confirm that the work has stopped.
+  so expiry does not confirm that the work has stopped. Each noted kill
+  emits `[:cyfr, :opus, :execution, :unreaped_kill]` with the tenant's
+  live `unreaped_count` and the killed execution in the metadata.
   """
 
   use GenServer
@@ -127,7 +129,7 @@ defmodule Opus.ExecutionSemaphore do
 
     if footprint >= max do
       Logger.warning(
-        "[Opus.ExecutionSemaphore] one athanor can hold every slot on this node: " <>
+        "[Cyfr.Execution.Semaphore] one athanor can hold every slot on this node: " <>
           "#{tenant_max} roots x depth #{Cyfr.Authority.depth_cap()} = #{footprint} >= " <>
           "#{max} slots. Children are exempt from the per-tenant cap by design (a chain " <>
           "must be able to finish), so the cap bounds roots, not footprint. Lower " <>
@@ -308,7 +310,7 @@ defmodule Opus.ExecutionSemaphore do
     Process.flag(:trap_exit, true)
 
     Logger.info(
-      "[Opus.ExecutionSemaphore] Started with max_concurrent_executions=#{max}, " <>
+      "[Cyfr.Execution.Semaphore] Started with max_concurrent_executions=#{max}, " <>
         "per_tenant=#{tenant_max}, child_reserve=#{child_reserve(max)}"
     )
 
@@ -363,7 +365,7 @@ defmodule Opus.ExecutionSemaphore do
       # Children pass — their parent already holds a slot.
       class in [:root, :background] and tenant_unreaped_at_cap?(state, tenant) ->
         Logger.warning(
-          "[Opus.ExecutionSemaphore] Tenant #{inspect(tenant)} refused: " <>
+          "[Cyfr.Execution.Semaphore] Tenant #{inspect(tenant)} refused: " <>
             "#{live_unreaped(state, tenant)} unreaped timeout kills in the last " <>
             "#{div(@unreaped_ttl_ms, 60_000)}min (threshold #{state.unreaped_max})"
         )
@@ -372,7 +374,7 @@ defmodule Opus.ExecutionSemaphore do
 
       class == :root and tenant_at_cap?(state, tenant) ->
         Logger.warning(
-          "[Opus.ExecutionSemaphore] Tenant #{inspect(tenant)} at per-tenant cap " <>
+          "[Cyfr.Execution.Semaphore] Tenant #{inspect(tenant)} at per-tenant cap " <>
             "(#{state.tenant_max}), rejecting"
         )
 
@@ -432,7 +434,7 @@ defmodule Opus.ExecutionSemaphore do
 
     if holder_count > 0 or waiter_count > 0 do
       Logger.warning(
-        "[Opus.ExecutionSemaphore] Force-releasing #{holder_count} held slot(s) and " <>
+        "[Cyfr.Execution.Semaphore] Force-releasing #{holder_count} held slot(s) and " <>
           "#{waiter_count} queued waiter(s)"
       )
 
@@ -470,12 +472,16 @@ defmodule Opus.ExecutionSemaphore do
     entries = [expiry | prune_unreaped(Map.get(state.tenant_unreaped, tenant, []))]
 
     Logger.warning(
-      "[Opus.ExecutionSemaphore] Unreaped kill of #{inspect(execution_id)} noted for tenant " <>
+      "[Cyfr.Execution.Semaphore] Unreaped kill of #{inspect(execution_id)} noted for tenant " <>
         "#{inspect(tenant)} (#{length(entries)}/#{state.unreaped_max} " <>
         "in the decay window)"
     )
 
-    Opus.Telemetry.unreaped_kill(tenant, execution_id, length(entries))
+    :telemetry.execute(
+      [:cyfr, :opus, :execution, :unreaped_kill],
+      %{system_time: System.system_time(), unreaped_count: length(entries)},
+      %{tenant: tenant, execution_id: execution_id}
+    )
 
     {:reply, :ok, %{state | tenant_unreaped: Map.put(state.tenant_unreaped, tenant, entries)}}
   end
@@ -537,7 +543,7 @@ defmodule Opus.ExecutionSemaphore do
 
     if holder_count > 0 or waiter_count > 0 do
       Logger.info(
-        "[Opus.ExecutionSemaphore] Terminating with #{holder_count} holder(s) and " <>
+        "[Cyfr.Execution.Semaphore] Terminating with #{holder_count} holder(s) and " <>
           "#{waiter_count} waiter(s)"
       )
     end
@@ -566,7 +572,7 @@ defmodule Opus.ExecutionSemaphore do
     new_count = state.count + 1
 
     Logger.debug(
-      "[Opus.ExecutionSemaphore] Acquired #{class} slot for #{inspect(pid)} " <>
+      "[Cyfr.Execution.Semaphore] Acquired #{class} slot for #{inspect(pid)} " <>
         "(#{new_count}/#{state.max})"
     )
 
@@ -585,7 +591,7 @@ defmodule Opus.ExecutionSemaphore do
     GenServer.reply(from, :ok)
 
     Logger.debug(
-      "[Opus.ExecutionSemaphore] Transferred slot to queued #{class} #{inspect(waiter_pid)} " <>
+      "[Cyfr.Execution.Semaphore] Transferred slot to queued #{class} #{inspect(waiter_pid)} " <>
         "(#{state.count}/#{state.max})"
     )
 
@@ -603,14 +609,14 @@ defmodule Opus.ExecutionSemaphore do
     cond do
       waiter_count >= state.max_waiters ->
         Logger.warning(
-          "[Opus.ExecutionSemaphore] Queue full (#{waiter_count}/#{state.max_waiters}), rejecting"
+          "[Cyfr.Execution.Semaphore] Queue full (#{waiter_count}/#{state.max_waiters}), rejecting"
         )
 
         {:reply, {:error, :queue_full}, state}
 
       class == :background and background_queue_full?(state, tenant) ->
         Logger.warning(
-          "[Opus.ExecutionSemaphore] Background queue full for #{inspect(tenant)}, rejecting"
+          "[Cyfr.Execution.Semaphore] Background queue full for #{inspect(tenant)}, rejecting"
         )
 
         {:reply, {:error, :queue_full}, state}
@@ -627,7 +633,7 @@ defmodule Opus.ExecutionSemaphore do
         }
 
         Logger.debug(
-          "[Opus.ExecutionSemaphore] Queued #{inspect(caller_pid)} " <>
+          "[Cyfr.Execution.Semaphore] Queued #{inspect(caller_pid)} " <>
             "(class=#{class}, queue=#{waiter_count + 1})"
         )
 
@@ -698,7 +704,7 @@ defmodule Opus.ExecutionSemaphore do
       new_count = max(state.count - 1, 0)
 
       Logger.debug(
-        "[Opus.ExecutionSemaphore] Released slot for #{inspect(released_pid)} " <>
+        "[Cyfr.Execution.Semaphore] Released slot for #{inspect(released_pid)} " <>
           "(#{new_count}/#{state.max})"
       )
 
@@ -734,7 +740,7 @@ defmodule Opus.ExecutionSemaphore do
             GenServer.reply(from, {:error, :tenant_limit})
 
             Logger.warning(
-              "[Opus.ExecutionSemaphore] Skipping queued #{inspect(elem(from, 0))}: " <>
+              "[Cyfr.Execution.Semaphore] Skipping queued #{inspect(elem(from, 0))}: " <>
                 "tenant #{inspect(tenant)} at per-tenant cap"
             )
 
@@ -890,7 +896,7 @@ defmodule Opus.ExecutionSemaphore do
 
     if stale_pids != [] do
       Logger.warning(
-        "[Opus.ExecutionSemaphore] Sweeping #{length(stale_pids)} abandoned slot(s) whose " <>
+        "[Cyfr.Execution.Semaphore] Sweeping #{length(stale_pids)} abandoned slot(s) whose " <>
           "holder is gone and whose DOWN never arrived: #{inspect(stale_pids)}"
       )
     end

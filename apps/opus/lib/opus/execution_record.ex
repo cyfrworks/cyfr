@@ -373,7 +373,7 @@ defmodule Opus.ExecutionRecord do
   # The lifecycle row committed; its subscribers hear of it now, in the
   # order the rows were numbered.
   defp publish(%__MODULE__{} = record, type, seq, data) when is_integer(seq) do
-    _ = Opus.ExecutionEventBuffer.publish(record.id, record, type, seq, data)
+    _ = Cyfr.Execution.Events.publish(record.id, record, type, seq, data)
     :ok
   end
 

@@ -15,7 +15,7 @@ defmodule Opus.Emit do
   consumer can always tell a guest's event from the host's; masked of
   every credential the execution was handed (its preloaded vault fields
   and the OAuth tokens dispensed to it so far); and pushed with
-  `Opus.ExecutionEventBuffer.push/4`, numbered under the stream's last
+  `Cyfr.Execution.Events.push/4`, numbered under the stream's last
   durable event. A refusal is answered to the guest and never stops the
   run.
 
@@ -38,7 +38,8 @@ defmodule Opus.Emit do
 
   alias Cyfr.Authority
   alias Cyfr.SecretMasker
-  alias Opus.{ExecutionEventBuffer, OAuthTokenTracker}
+  alias Cyfr.Execution.Events
+  alias Opus.OAuthTokenTracker
 
   @budget %{requests: 3000, window: "1m"}
 
@@ -163,7 +164,7 @@ defmodule Opus.Emit do
     released = Agent.get_and_update(emitter.held, &release(&1, event, secrets))
 
     Enum.reduce_while(released, safe_encode(%{"ok" => true}), fn data, _answer ->
-      case ExecutionEventBuffer.push(emitter.stream_id, data, emitter.ctx, origin_opts) do
+      case Events.push(emitter.stream_id, data, emitter.ctx, origin_opts) do
         {:ok, seq} ->
           Opus.Telemetry.emit(emitter.stream_id, seq)
           Cyfr.Execution.StepSpans.pushed(emitter.step_spans, data)
@@ -240,7 +241,7 @@ defmodule Opus.Emit do
   defp check_size(_json_event, _max_size), do: {:error, :event_too_large}
 
   defp check_budget(%__MODULE__{ctx: ctx, budget_id: budget_id}) do
-    case Opus.RateLimiter.check(ctx.athanor_id, "emit:" <> budget_id, %{rate_limit: @budget}) do
+    case Cyfr.Execution.Rates.check(ctx.athanor_id, "emit:" <> budget_id, %{rate_limit: @budget}) do
       {:ok, _remaining} -> :ok
       {:error, :rate_limited, _retry_after} -> {:error, :emit_rate_limited}
       {:error, :missing_tenant} -> {:error, :emit_rate_limited}

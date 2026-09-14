@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.ExecutionEventBuffer do
+defmodule Cyfr.Execution.Events do
   @moduledoc """
   An execution's event stream: what is published to its subscribers,
   and the short-lived replay window a late client catches up from.
@@ -27,7 +27,7 @@ defmodule Opus.ExecutionEventBuffer do
 
   require Logger
 
-  alias Opus.ExecutionEventBuffer.Sequence
+  alias Cyfr.Execution.Events.Sequence
 
   @max_events 50
   @buffer_ttl_ms :timer.minutes(10)
@@ -168,7 +168,7 @@ defmodule Opus.ExecutionEventBuffer do
 
   defp dropped(execution_id, type) do
     Logger.error(
-      "[ExecutionEventBuffer] dropping #{type} event for #{execution_id}: " <>
+      "[Cyfr.Execution.Events] dropping #{type} event for #{execution_id}: " <>
         "producer carries no athanor_id"
     )
 
@@ -190,7 +190,7 @@ defmodule Opus.ExecutionEventBuffer do
 
       {:error, reason} ->
         Logger.error(
-          "[ExecutionEventBuffer] PubSub broadcast failed for #{execution_id}: #{inspect(reason)}"
+          "[Cyfr.Execution.Events] PubSub broadcast failed for #{execution_id}: #{inspect(reason)}"
         )
 
         :telemetry.execute([:cyfr, :opus, :execution_events, :broadcast_failure], %{count: 1}, %{
@@ -206,7 +206,7 @@ defmodule Opus.ExecutionEventBuffer do
   drained; kept for test use.
   """
   def flush(execution_id) do
-    case Registry.lookup(Opus.ExecutionEventBuffer.Registry, execution_id) do
+    case Registry.lookup(Cyfr.Execution.Events.Registry, execution_id) do
       [{pid, _}] -> GenServer.call(pid, :flush)
       [] -> :ok
     end
@@ -248,7 +248,7 @@ defmodule Opus.ExecutionEventBuffer do
 
   def since(execution_id, _cursor, athanor_id) do
     raise ArgumentError,
-          "Opus.ExecutionEventBuffer.since/3: a resolved athanor_id is required " <>
+          "Cyfr.Execution.Events.since/3: a resolved athanor_id is required " <>
             "for #{execution_id}, got #{inspect(athanor_id)}"
   end
 
@@ -301,7 +301,7 @@ defmodule Opus.ExecutionEventBuffer do
 
       :error ->
         raise ArgumentError,
-              "Opus.ExecutionEventBuffer.topic/2: a resolved athanor_id is required " <>
+              "Cyfr.Execution.Events.topic/2: a resolved athanor_id is required " <>
                 "for #{execution_id}, got #{inspect(ctx)}"
     end
   end
@@ -315,7 +315,7 @@ defmodule Opus.ExecutionEventBuffer do
   end
 
   defp via(execution_id) do
-    {:via, Registry, {Opus.ExecutionEventBuffer.Registry, execution_id}}
+    {:via, Registry, {Cyfr.Execution.Events.Registry, execution_id}}
   end
 
   @impl true
@@ -443,13 +443,13 @@ defmodule Opus.ExecutionEventBuffer do
   end
 
   defp ensure_buffer(execution_id, athanor_id) do
-    case Registry.lookup(Opus.ExecutionEventBuffer.Registry, execution_id) do
+    case Registry.lookup(Cyfr.Execution.Events.Registry, execution_id) do
       [{pid, _}] ->
         {:ok, pid}
 
       [] ->
         case DynamicSupervisor.start_child(
-               Opus.ExecutionEventBuffer.Supervisor,
+               Cyfr.Execution.Events.Supervisor,
                {__MODULE__, {execution_id, athanor_id}}
              ) do
           {:ok, pid} ->

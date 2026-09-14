@@ -124,6 +124,34 @@ defmodule Cyfr.Application do
       # Emissary web layer
       EmissaryWeb.Telemetry,
       {Phoenix.PubSub, name: Emissary.PubSub},
+      # Execution admission: the sliding-window counters consented rate
+      # limits are checked against, and the execution slots.
+      Cyfr.Execution.Rates,
+      {Cyfr.Execution.Semaphore,
+       max:
+         Application.get_env(
+           :cyfr,
+           :max_concurrent_executions,
+           Cyfr.Execution.Semaphore.default_slots()
+         ),
+       tenant_max:
+         Application.get_env(
+           :cyfr,
+           :max_concurrent_executions_per_tenant,
+           Cyfr.Execution.Semaphore.default_tenant_slots()
+         )},
+      # Execution bookkeeping, after PubSub (the buffers broadcast on it):
+      # the execution_id → driving-process registry, the per-execution
+      # event-buffer registry, the emit counter and the buffers. The counter
+      # comes before the buffers, so a restart of this group rebuilds the
+      # numbering source first and then the buffers that read it; a dead
+      # registry restarts the buffers that register in it.
+      group(Cyfr.Execution.Tree, [
+        {Registry, keys: :unique, name: Cyfr.Execution.Registry},
+        {Registry, keys: :unique, name: Cyfr.Execution.Events.Registry},
+        Cyfr.Execution.Events.Sequence,
+        {DynamicSupervisor, name: Cyfr.Execution.Events.Supervisor, strategy: :one_for_one}
+      ]),
       # subscriptions/listen stream slots — duplicate keys, one entry per open
       # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
       # process, so a vanished client frees its slot without bookkeeping.

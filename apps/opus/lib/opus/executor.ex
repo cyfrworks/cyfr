@@ -40,7 +40,7 @@ defmodule Opus.Executor do
 
   alias Sanctum.Context
   alias Opus.ExecutionRecord
-  alias Opus.ExecutionEventBuffer
+  alias Cyfr.Execution.Events
   alias Opus.ExecutionPipeline
 
   @doc """
@@ -909,13 +909,13 @@ defmodule Opus.Executor do
   defp check_rate_limit(ctx, component_ref, %Cyfr.Limits{} = limits) do
     result =
       try do
-        Opus.RateLimiter.check(ctx.athanor_id, component_ref, %{
+        Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, %{
           rate_limit: limits.rate_limit
         })
       catch
         :exit, reason ->
           Logger.error(
-            "[Opus.Executor] Opus.RateLimiter unavailable (#{inspect(reason)}) — " <>
+            "[Opus.Executor] Cyfr.Execution.Rates unavailable (#{inspect(reason)}) — " <>
               "failing CLOSED (denying) for #{component_ref}."
           )
 
@@ -1065,7 +1065,7 @@ defmodule Opus.Executor do
         _ -> nil
       end
 
-    case Opus.Slot.acquire(class, tenant, semaphore_timeout, execution_id(exec_opts)) do
+    case Cyfr.Execution.Slot.acquire(class, tenant, semaphore_timeout, execution_id(exec_opts)) do
       {:ok, token} ->
         try do
           runtime_opts = runtime_opts(exec_opts, opts)
@@ -1084,7 +1084,7 @@ defmodule Opus.Executor do
 
           execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
         after
-          Opus.Slot.release(token)
+          Cyfr.Execution.Slot.release(token)
         end
 
       {:error, sentence} ->
@@ -1146,7 +1146,7 @@ defmodule Opus.Executor do
         :ok
 
       execution_id ->
-        Registry.update_value(Opus.ExecutionRegistry, execution_id, fn
+        Registry.update_value(Cyfr.Execution.Registry, execution_id, fn
           meta when is_map(meta) -> fun.(meta)
           _atom -> fun.(%{status: :running})
         end)
@@ -1245,7 +1245,7 @@ defmodule Opus.Executor do
         _ -> nil
       end
 
-    # Store tracker PID in ExecutionRegistry so cancel can clean up AsyncTracker.
+    # Store tracker PID in Cyfr.Execution.Registry so cancel can clean up AsyncTracker.
     # Without this, cancelling a formula leaves child catalyst tasks running.
     if cleanup_refs[:formula_tracker_pid] do
       update_registry_meta(
@@ -1410,7 +1410,7 @@ defmodule Opus.Executor do
       case Opus.Remediation.analyze(reason) do
         {:setup_required, remediation} ->
           _ =
-            Opus.ExecutionEventBuffer.push(
+            Cyfr.Execution.Events.push(
               target_id,
               %{
                 "kind" => "setup_required",
@@ -1503,7 +1503,7 @@ defmodule Opus.Executor do
   @doc """
   Cancel a running execution by killing its process.
 
-  Looks up the execution's entry in the ExecutionRegistry and kills what it
+  Looks up the execution's entry in `Cyfr.Execution.Registry` and kills what it
   names: the runner that is actually inside the component call, then the
   process driving it, then its AsyncTracker so spawned child tasks die too.
   The semaphore auto-releases via its :DOWN monitor.
@@ -1550,7 +1550,7 @@ defmodule Opus.Executor do
   # not answer leaves the kill uncharged; that is said, by execution, never
   # dropped silently.
   defp charge_unreaped(tenant, execution_id) do
-    case Opus.ExecutionSemaphore.note_unreaped(tenant, execution_id) do
+    case Cyfr.Execution.Semaphore.note_unreaped(tenant, execution_id) do
       :ok ->
         :ok
 
@@ -1566,7 +1566,7 @@ defmodule Opus.Executor do
   # and tear down its async tracker so spawned child tasks die too. Only called
   # after the tenant-scoped cancel above has authorized the operation.
   defp kill_running_process(execution_id, tenant) do
-    case Registry.lookup(Opus.ExecutionRegistry, execution_id) do
+    case Registry.lookup(Cyfr.Execution.Registry, execution_id) do
       [{pid, meta}] ->
         # Extract tracker PID before killing — needed to stop child tasks.
         tracker_pid = if is_map(meta), do: meta[:tracker_pid], else: nil
@@ -1713,7 +1713,7 @@ defmodule Opus.Executor do
           }
         )
 
-        ExecutionEventBuffer.publish(child.id, child, "execution.failed", event_seq, %{
+        Events.publish(child.id, child, "execution.failed", event_seq, %{
           "status" => "failed",
           "error" => error_msg
         })

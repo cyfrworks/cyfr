@@ -106,7 +106,7 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
     assert charge_row.holder_execution_id == child_id
     assert %{state: "running"} = Arca.ExecutionAttempts.current(athanor_id, child_id)
 
-    status = Opus.ExecutionSemaphore.status()
+    status = Cyfr.Execution.Semaphore.status()
     assert status.child_active == 1
     assert Enum.any?(status.holders, &(&1.pid == inspect(worker) and &1.class == :child))
 
@@ -124,7 +124,7 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
              Arca.ExecutionAttempts.current(athanor_id, child_id)
 
     assert %{status: "completed"} = Arca.Repo.get(Arca.Execution, child_id)
-    assert Opus.ExecutionSemaphore.status().child_active == 0
+    assert Cyfr.Execution.Semaphore.status().child_active == 0
     assert [%{execution_id: ^child_id, input: %{"messages" => []}}] = ScriptedExecution.calls()
   end
 
@@ -145,7 +145,7 @@ defmodule Cyfr.Test.ScriptedExecutionTest do
     assert admitted_at != nil
 
     wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
-    wait_until(fn -> Opus.ExecutionSemaphore.status().child_active == 0 end)
+    wait_until(fn -> Cyfr.Execution.Semaphore.status().child_active == 0 end)
   end
 
   test "an exhausted script fails the child and releases everything", fx do

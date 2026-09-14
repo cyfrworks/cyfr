@@ -5,17 +5,19 @@ defmodule Opus.TurnRootTest do
   @moduledoc """
   A turn's logical root: claimed without a guest, with its row, attempt,
   reservation and a `:root` slot on the calling process; paused and
-  resumed with the turn, its attempt and its root moving together and the
-  slot let go in between; lost with its lease; adopted after a takeover.
+  resumed with the turn, its attempt and its root moving together, the
+  slot let go in between and held once while it runs; lost with its lease,
+  claimed or resumed; adopted after a takeover.
   """
 
   use ExUnit.Case, async: false
 
+  import Cyfr.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Arca.ExecutionAttempts
   alias Arca.TurnStorage
-  alias Opus.ExecutionSemaphore
+  alias Cyfr.Execution.Semaphore
   alias Sanctum.Consent.{Bootstrap, Source}
 
   @seed_root Path.expand("../../../../seed", __DIR__)
@@ -61,10 +63,13 @@ defmodule Opus.TurnRootTest do
     {:ok, ctx: ctx, turn: turn}
   end
 
-  defp roots, do: ExecutionSemaphore.status().root_active
+  defp roots, do: Semaphore.status().root_active
 
   defp me_holding?,
-    do: Enum.any?(ExecutionSemaphore.status().holders, &(&1.pid == inspect(self())))
+    do: Enum.any?(Semaphore.status().holders, &(&1.pid == inspect(self())))
+
+  defp holders(pid),
+    do: Enum.count(Semaphore.status().holders, &(&1.pid == inspect(pid)))
 
   defp execution(id), do: Arca.Repo.get!(Arca.Execution, id)
 
@@ -172,7 +177,7 @@ defmodule Opus.TurnRootTest do
             fence: started.fence
           )
 
-        send(test_pid, {:resumed, resumed, ExecutionSemaphore.status().root_active})
+        send(test_pid, {:resumed, resumed, Semaphore.status().root_active})
         receive do: (:done -> :ok)
         Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: resumed)
       end)
@@ -216,6 +221,113 @@ defmodule Opus.TurnRootTest do
     assert roots() == before
   end
 
+  test "a resumed root that loses its lease exits its holder, and its slot is released", %{
+    ctx: ctx,
+    turn: turn
+  } do
+    before = roots()
+    {claim, started} = claim!(ctx, turn)
+
+    {:ok, _} =
+      Cyfr.Execution.pause_turn_root(ctx, claim.execution_id,
+        claim: claim,
+        turn_id: turn.id,
+        fence: started.fence,
+        reason: "approval"
+      )
+
+    test_pid = self()
+
+    {holder, ref} =
+      spawn_monitor(fn ->
+        {:ok, resumed} =
+          Cyfr.Execution.resume_turn_root(ctx, claim.execution_id,
+            turn_id: turn.id,
+            fence: started.fence,
+            tick_ms: 50
+          )
+
+        send(test_pid, {:resumed, resumed})
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:resumed, resumed}, 10_000
+    assert roots() == before + 1
+
+    {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, resumed.attempt, "failed", "error")
+
+    assert_receive {:DOWN, ^ref, :process, ^holder, {:lease_lost, id}}, 5_000
+    assert id == claim.execution_id
+    wait_until(fn -> roots() == before end)
+    refute Process.alive?(resumed.keeper)
+  end
+
+  test "pause and resume, repeated from fresh holders, hold exactly one root slot while running",
+       %{ctx: ctx, turn: turn} do
+    before = roots()
+    active = Semaphore.status().active
+    {claim, started} = claim!(ctx, turn)
+    assert roots() == before + 1
+
+    pause = fn holding ->
+      {:ok, %{turn: paused}} =
+        Cyfr.Execution.pause_turn_root(ctx, claim.execution_id,
+          claim: holding,
+          turn_id: turn.id,
+          fence: started.fence,
+          reason: "approval"
+        )
+
+      paused
+    end
+
+    assert pause.(claim).status == "paused"
+    assert roots() == before
+
+    for _cycle <- 1..3 do
+      test_pid = self()
+
+      holder =
+        Task.async(fn ->
+          {:ok, resumed} =
+            Cyfr.Execution.resume_turn_root(ctx, claim.execution_id,
+              turn_id: turn.id,
+              fence: started.fence
+            )
+
+          send(test_pid, {:holding, self()})
+          receive do: (:pause -> :ok)
+          pause.(resumed)
+        end)
+
+      assert_receive {:holding, pid}, 10_000
+      assert roots() == before + 1
+      assert holders(pid) == 1
+
+      # A second resume while the root runs is refused, and gives back the
+      # slot it took before asking.
+      assert {:error, _} =
+               Task.await(
+                 Task.async(fn ->
+                   Cyfr.Execution.resume_turn_root(ctx, claim.execution_id,
+                     turn_id: turn.id,
+                     fence: started.fence
+                   )
+                 end)
+               )
+
+      wait_until(fn -> roots() == before + 1 end)
+
+      send(pid, :pause)
+      assert Task.await(holder).status == "paused"
+      wait_until(fn -> roots() == before end)
+      assert holders(pid) == 0
+    end
+
+    assert execution(claim.execution_id).status == "paused"
+    wait_until(fn -> Semaphore.status().active == active end)
+  end
+
   test "a cancel asked of the attempt exits the holder at the next tick", %{ctx: ctx, turn: turn} do
     test_pid = self()
 
@@ -238,7 +350,7 @@ defmodule Opus.TurnRootTest do
     before = roots()
     {claim, started} = claim!(ctx, turn)
     Opus.TurnRoot.Lease.stop(claim.keeper)
-    Opus.Slot.release(claim.token)
+    Cyfr.Execution.Slot.release(claim.token)
 
     lapsed = DateTime.add(DateTime.utc_now(), -1, :second)
 

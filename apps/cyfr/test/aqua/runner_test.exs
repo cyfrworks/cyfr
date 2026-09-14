@@ -590,7 +590,7 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, first)
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, second)
     assert %{running: false, queued: 0} = Runner.state(thread.id, ctx.athanor_id)
-    assert Opus.ExecutionSemaphore.status().root_active == 0
+    assert Cyfr.Execution.Semaphore.status().root_active == 0
   end
 
   test "a card pauses the turn, and the decision continues it", %{ctx: ctx, thread: thread} do

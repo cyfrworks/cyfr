@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.ExecutionEventBuffer.Sequence do
+defmodule Cyfr.Execution.Events.Sequence do
   @moduledoc """
   The delta counters of an execution stream, one per durable prefix.
 

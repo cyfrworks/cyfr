@@ -322,7 +322,7 @@ defmodule Opus.FormulaHandler do
 
   When a sub-component call fails due to a setup issue (missing consent,
   missing vault entry), the error is enriched with a `remediation` field
-  and a `setup_required` event is emitted to the ExecutionEventBuffer.
+  and a `setup_required` event is pushed on the root's event stream.
 
   ## Options
 
@@ -1056,7 +1056,7 @@ defmodule Opus.FormulaHandler do
 
   defp maybe_emit_setup_event(target_id, remediation, message, ctx) do
     _ =
-      Opus.ExecutionEventBuffer.push(
+      Cyfr.Execution.Events.push(
         target_id,
         %{
           "kind" => "setup_required",

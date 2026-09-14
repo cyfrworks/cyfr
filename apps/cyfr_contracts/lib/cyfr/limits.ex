@@ -363,7 +363,7 @@ defmodule Cyfr.Limits do
       not (is_integer(requests) and requests >= 0) ->
         {:error, "requests must be a non-negative integer, got: #{inspect(requests)}"}
 
-      # Strictly positive, not merely parseable. `Opus.RateLimiter` counts
+      # Strictly positive, not merely parseable. `Cyfr.Execution.Rates` counts
       # what falls after `now - window_ms`: at zero that window holds nothing
       # and a negative one starts in the future, so either spelling counts
       # nothing and the limit never fires — a limit that reads as configured

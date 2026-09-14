@@ -61,7 +61,7 @@ defmodule Opus.ExecutorRegistrationTest do
         execution_id: execution_id
       )
 
-    assert Registry.lookup(Opus.ExecutionRegistry, execution_id) == []
+    assert Registry.lookup(Cyfr.Execution.Registry, execution_id) == []
   end
 
   test "a pre-registered owner (the run_stream shape) keeps its entry", %{ctx: ctx} do
@@ -72,7 +72,7 @@ defmodule Opus.ExecutorRegistrationTest do
       spawn_link(fn ->
         # Mirrors Opus.MCP run_stream / cron: the task registers itself,
         # then drives the executor in the same process.
-        {:ok, _} = Registry.register(Opus.ExecutionRegistry, execution_id, :running)
+        {:ok, _} = Registry.register(Cyfr.Execution.Registry, execution_id, :running)
         send(parent, :registered)
 
         result =
@@ -93,7 +93,7 @@ defmodule Opus.ExecutorRegistrationTest do
 
     # The executor's own register/unregister must not steal or clear the
     # streaming task's entry — it stays until the owner process exits.
-    assert [{^owner, _}] = Registry.lookup(Opus.ExecutionRegistry, execution_id)
+    assert [{^owner, _}] = Registry.lookup(Cyfr.Execution.Registry, execution_id)
 
     send(owner, :stop)
   end
@@ -166,7 +166,7 @@ defmodule Opus.ExecutorRegistrationTest do
       owner =
         spawn(fn ->
           {:ok, _} =
-            Registry.register(Opus.ExecutionRegistry, record.id, %{
+            Registry.register(Cyfr.Execution.Registry, record.id, %{
               status: :running,
               runner_pid: runner
             })

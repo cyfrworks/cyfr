@@ -46,8 +46,8 @@ defmodule Opus.HttpStreamHandlerTest do
 
   describe "stream edge enforcement" do
     setup do
-      case GenServer.whereis(Opus.RateLimiter) do
-        nil -> {:ok, _} = Opus.RateLimiter.start_link([])
+      case GenServer.whereis(Cyfr.Execution.Rates) do
+        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
         _pid -> :ok
       end
 

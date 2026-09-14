@@ -46,10 +46,6 @@ defmodule Opus.HostSurfaceTest do
     # resumes — a worker on another node would renew and close its
     # attempt through a client.
     "Arca.ExecutionAttempts",
-    # The durable half of an execution's stream: the rows a replay reads
-    # and the counter a delta rides under — a worker on another node would
-    # read them through a client.
-    "Arca.ExecutionEvents",
     # An execution's result is kept as a payload once it completes.
     "Arca.ExecutionPayloads",
     "Arca.QueryHelpers",
@@ -59,7 +55,6 @@ defmodule Opus.HostSurfaceTest do
     # move the rows through a client.
     "Arca.TurnStorage",
     "Arca.Usage",
-    "Emissary.PubSub",
 
     # The component catalogue: what to run, and whether it is what it says.
     # The code identity an execution records, resolved from the athanor's
@@ -85,6 +80,11 @@ defmodule Opus.HostSurfaceTest do
     # Whether this boot still owns the control plane — the engine admits
     # nothing when it does not.
     "Cyfr.ControlPlane",
+    # The execution port, and what CYFR owns of a run: the rate counters
+    # consented limits are checked against, the execution slots and the
+    # registry a cancel finds a run's processes through, and the event
+    # stream a guest's events are pushed on and a lifecycle row published
+    # to — a worker on another node would reach them through host calls.
     "Cyfr.Execution",
     # Egress pinning: a guest request's host resolved and checked against
     # its consented private policy before the connection is made.
@@ -98,8 +98,7 @@ defmodule Opus.HostSurfaceTest do
     # The signed-pulls posture, read at execution as well as at pull so a
     # component stored before the knob was turned on cannot keep running. A
     # worker would need this value from its client, not re-read it locally.
-    "Cyfr.RuntimeConfig",
-    "Cyfr.Bus"
+    "Cyfr.RuntimeConfig"
   ]
 
   @namespace ~r/\b((?:Arca|Sanctum|Compendium|Emissary|Prism|Cyfr)(?:\.[A-Z]\w+)*)\b/

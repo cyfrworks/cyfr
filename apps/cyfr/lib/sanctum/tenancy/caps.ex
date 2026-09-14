@@ -151,7 +151,7 @@ defmodule Sanctum.Tenancy.Caps do
   # Read-then-write without a lock (the cached total, then the caller's
   # write): N concurrent writes can each pass before any lands, so the cap
   # can overshoot by at most (per-tenant execution slots × max write size)
-  # — bounded and accepted, the same call Opus.RateLimiter documents for
+  # — bounded and accepted, the same call Cyfr.Execution.Rates documents for
   # its window.
   def check_storage(%Sanctum.Context{} = ctx, incoming) when is_integer(incoming) do
     case get(:athanor_storage_bytes) do
