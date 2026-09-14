@@ -91,10 +91,16 @@ defmodule Arca.TurnTapeStorageTest do
   defp execution(id), do: Arca.Repo.get!(Arca.Execution, id)
 
   defp respond!(ctx, turn, calls) do
-    {:ok, step} = TurnStorage.put_step(ctx, turn.id, %{kind: "model", idempotency_key: "model:1"})
+    {:ok, step} =
+      TurnStorage.put_step(ctx, turn.id, %{
+        kind: "model",
+        idempotency_key: "model:1",
+        fence: turn.fence
+      })
 
     {:ok, recorded} =
       TurnStorage.record_response(ctx, turn.id, step.id, %{
+        fence: turn.fence,
         text: "On it.",
         usage: %{"input_tokens" => 10, "output_tokens" => 3},
         stop_reason: "tool_call",
@@ -166,6 +172,24 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:ok, [_]} = TurnStorage.open_turns(ctx, thread.id)
       assert TurnStorage.steer_pending?(ctx, turn.id)
     end
+
+    test "a steer to a turn that has ended is refused and writes no row", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
+      {turn, _root} = start!(ctx, turn)
+      {:ok, _} = TurnStorage.finish(ctx, turn.id, "completed", %{fence: turn.fence})
+      before = length(Threads.messages(ctx, thread.id))
+
+      assert {:error, :turn_over} =
+               TurnStorage.accept_message(ctx, thread.id, %{
+                 message: %{author: ctx.user_id, content: "too late"},
+                 steer_turn_id: turn.id
+               })
+
+      assert length(Threads.messages(ctx, thread.id)) == before
+    end
   end
 
   describe "start" do
@@ -185,10 +209,15 @@ defmodule Arca.TurnTapeStorageTest do
       assert started.window_upto_seq == message.seq
 
       assert {:error, :not_accepted} =
-               TurnStorage.start(ctx, turn.id, %{root_execution_id: root.execution.id})
+               TurnStorage.start(ctx, turn.id, %{
+                 root_execution_id: root.execution.id,
+                 fence: turn.fence
+               })
 
       # A superseded fence writes nothing.
       assert {:error, :superseded} = TurnStorage.pause(ctx, turn.id, %{fence: "fnc_old"})
+      # A write that names no fence writes nothing either.
+      assert {:error, :fence_required} = TurnStorage.pause(ctx, turn.id, %{})
     end
   end
 
@@ -219,7 +248,8 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:ok, %{dispatch_state: "dispatched", started_at: %DateTime{}}} =
                TurnStorage.dispatch_step(ctx, call_step.id, %{fence: turn.fence})
 
-      assert {:error, :not_proposed} = TurnStorage.dispatch_step(ctx, call_step.id)
+      assert {:error, :not_proposed} =
+               TurnStorage.dispatch_step(ctx, call_step.id, %{fence: turn.fence})
 
       assert {:ok, %{step: closed, result: result}} =
                TurnStorage.close_step(ctx, call_step.id, "ok", %{
@@ -230,7 +260,9 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert closed.outcome == "ok" and closed.result_message_id == result.id
       assert result.kind == "tool_result" and result.author == Message.system_author()
-      assert {:error, :not_open} = TurnStorage.close_step(ctx, call_step.id, "ok")
+
+      assert {:error, :not_open} =
+               TurnStorage.close_step(ctx, call_step.id, "ok", %{fence: turn.fence})
 
       assert {:ok, events} = Arca.ExecutionEvents.since(ctx.athanor_id, root.execution.id, 0)
 
@@ -257,19 +289,22 @@ defmodule Arca.TurnTapeStorageTest do
 
       # Proposed, not dispatched: refused.
       assert bind.(0, "exec_child_c") == 0
-      {:ok, _} = TurnStorage.dispatch_step(ctx, step.id)
+      {:ok, _} = TurnStorage.dispatch_step(ctx, step.id, %{fence: turn.fence})
       # The wrong child id and the wrong generation: refused.
       assert bind.(0, "exec_other") == 0
       assert bind.(1, "exec_child_c") == 0
       assert bind.(0, "exec_child_c") == 1
 
       # A cancel mark refuses a later admission.
-      {:ok, _} = TurnStorage.supersede(ctx, turn.id)
+      {:ok, superseded} = TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence})
       assert bind.(0, "exec_child_c") == 0
 
       # The next generation is a fresh child id, proposed again.
       assert {:ok, next} =
-               TurnStorage.next_generation(ctx, step.id, %{child_execution_id: "exec_child_c2"})
+               TurnStorage.next_generation(ctx, step.id, %{
+                 child_execution_id: "exec_child_c2",
+                 fence: superseded.fence
+               })
 
       assert next.generation == 1 and next.dispatch_state == "proposed"
       assert is_nil(next.cancel_requested_at)
@@ -289,13 +324,16 @@ defmodule Arca.TurnTapeStorageTest do
       {:ok, %{approval: approval, card: card}} =
         TurnStorage.open_approval(ctx, s2.id, %{
           proposal_digest: "sha256:b",
-          card: %{content: "Write a.txt?", payload: %{"intent" => %{}}}
+          card: %{content: "Write a.txt?", payload: %{"intent" => %{}}},
+          fence: turn.fence
         })
 
-      {:ok, _} = TurnStorage.dispatch_step(ctx, s1.id)
+      {:ok, _} = TurnStorage.dispatch_step(ctx, s1.id, %{fence: turn.fence})
 
       assert {:ok, [skipped]} =
-               TurnStorage.skip_steps(ctx, turn.id, "Skipped due to a new message")
+               TurnStorage.skip_steps(ctx, turn.id, "Skipped due to a new message", %{
+                 fence: turn.fence
+               })
 
       assert skipped.id == s2.id and skipped.outcome == "skipped"
       assert {:ok, %{status: "invalidated"}} = TurnStorage.approval(ctx, approval.id)
@@ -317,7 +355,8 @@ defmodule Arca.TurnTapeStorageTest do
       {:ok, %{approval: a1, card: card1}} =
         TurnStorage.open_approval(ctx, s1.id, %{
           proposal_digest: "sha256:a",
-          card: %{content: "a?"}
+          card: %{content: "a?"},
+          fence: turn.fence
         })
 
       assert card1.approval_id == a1.id and card1.status == "pending"
@@ -328,6 +367,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert {:ok, %{approval: %{status: "approved", decided_by: who}, step: step, card: card}} =
                TurnStorage.resolve_approval(ctx, a1.id, "approved", %{
+                 fence: turn.fence,
                  decided_by: ctx.user_id,
                  scope: "once",
                  resolution_kind: "continue",
@@ -338,16 +378,21 @@ defmodule Arca.TurnTapeStorageTest do
                card.status == "approved"
 
       assert {:error, {:already_resolved, %{status: "approved"}}} =
-               TurnStorage.resolve_approval(ctx, a1.id, "declined", %{decided_by: ctx.user_id})
+               TurnStorage.resolve_approval(ctx, a1.id, "declined", %{
+                 decided_by: ctx.user_id,
+                 fence: turn.fence
+               })
 
       {:ok, %{approval: a2}} =
         TurnStorage.open_approval(ctx, s2.id, %{
           proposal_digest: "sha256:b",
-          card: %{content: "b?"}
+          card: %{content: "b?"},
+          fence: turn.fence
         })
 
       assert {:ok, %{step: denied, approval: %{status: "declined"}}} =
                TurnStorage.resolve_approval(ctx, a2.id, "declined", %{
+                 fence: turn.fence,
                  decided_by: ctx.user_id,
                  resolution_kind: "denied",
                  reason: "no",
@@ -383,7 +428,7 @@ defmodule Arca.TurnTapeStorageTest do
                Arca.Execution.list_stale_running(DateTime.add(DateTime.utc_now(), 3600, :second))
 
       assert {:ok, []} = Arca.Execution.stale_ids(0, athanor_id: ctx.athanor_id)
-      assert {:error, :not_running} = TurnStorage.pause(ctx, turn.id)
+      assert {:error, :not_running} = TurnStorage.pause(ctx, turn.id, %{fence: turn.fence})
 
       assert {:ok, resumed} = TurnStorage.resume(ctx, turn.id, %{fence: turn.fence})
       assert resumed.status == "running" and is_nil(resumed.paused_reason)
@@ -411,18 +456,21 @@ defmodule Arca.TurnTapeStorageTest do
       assert %{released_at: %DateTime{}} =
                Arca.BudgetReservations.lookup(ctx.athanor_id, root.budget_id)
 
-      assert {:error, :already_finished} = TurnStorage.finish(ctx, turn.id, "failed")
+      assert {:error, :already_finished} =
+               TurnStorage.finish(ctx, turn.id, "failed", %{fence: turn.fence})
 
       # A turn that never started closes on its own.
       %{turn: queued} = accept_turn!(ctx, thread, "@aqua later")
-      assert {:ok, %{status: "cancelled"}} = TurnStorage.finish(ctx, queued.id, "cancelled")
+
+      assert {:ok, %{status: "cancelled"}} =
+               TurnStorage.finish(ctx, queued.id, "cancelled", %{fence: queued.fence})
 
       # An uncertain end fails the root and marks the attempt uncertain.
       %{turn: t3} = accept_turn!(ctx, thread, "@aqua again")
       {t3, root3} = start!(ctx, t3)
 
       assert {:ok, %{status: "uncertain"}} =
-               TurnStorage.finish(ctx, t3.id, "uncertain", %{error: "restart"})
+               TurnStorage.finish(ctx, t3.id, "uncertain", %{error: "restart", fence: t3.fence})
 
       assert %{state: "failed", outcome: "uncertain"} =
                ExecutionAttempts.get(ctx.athanor_id, root3.attempt.attempt)
@@ -447,7 +495,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       {:ok, _} = ExecutionAttempts.lapse(root.attempt.attempt, lapsed)
 
-      assert {:ok, taken} = TurnStorage.takeover(ctx, turn.id)
+      assert {:ok, taken} = TurnStorage.takeover(ctx, turn.id, %{fence: turn.fence})
       assert taken.fence != turn.fence
       assert taken.recovery_attempts == 1
       assert taken.attempt != root.attempt.attempt
@@ -458,10 +506,15 @@ defmodule Arca.TurnTapeStorageTest do
       # The old fence is refused everywhere.
       assert {:error, :superseded} = TurnStorage.pause(ctx, turn.id, %{fence: turn.fence})
 
-      {:ok, _} = TurnStorage.takeover(ctx, turn.id)
-      {:ok, third} = TurnStorage.takeover(ctx, turn.id)
+      # A takeover from a fence that already moved takes nothing.
+      assert {:error, :superseded} = TurnStorage.takeover(ctx, turn.id, %{fence: turn.fence})
+
+      {:ok, second} = TurnStorage.takeover(ctx, turn.id, %{fence: taken.fence})
+      {:ok, third} = TurnStorage.takeover(ctx, turn.id, %{fence: second.fence})
       assert third.recovery_attempts == 3
-      assert {:error, :recovery_exhausted} = TurnStorage.takeover(ctx, turn.id)
+
+      assert {:error, :recovery_exhausted} =
+               TurnStorage.takeover(ctx, turn.id, %{fence: third.fence})
     end
 
     test "superseding renews the fence and cancel-marks every dispatched step", %{
@@ -474,9 +527,9 @@ defmodule Arca.TurnTapeStorageTest do
       {_m, %{calls: [%{step: s1}, %{step: s2}]}} =
         respond!(ctx, turn, [{"a", "files", "read"}, {"b", "files", "read"}])
 
-      {:ok, _} = TurnStorage.dispatch_step(ctx, s1.id)
+      {:ok, _} = TurnStorage.dispatch_step(ctx, s1.id, %{fence: turn.fence})
 
-      assert {:ok, %{fence: fence}} = TurnStorage.supersede(ctx, turn.id)
+      assert {:ok, %{fence: fence}} = TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence})
       assert fence != turn.fence
       assert {:ok, %{cancel_requested_at: %DateTime{}}} = TurnStorage.step(ctx, s1.id)
       assert {:ok, %{cancel_requested_at: nil}} = TurnStorage.step(ctx, s2.id)
@@ -498,10 +551,10 @@ defmodule Arca.TurnTapeStorageTest do
       {_m, %{text: text, calls: [%{message: call, step: step}]}} =
         respond!(ctx, turn, [{"c", "files", "read"}])
 
-      {:ok, _} = TurnStorage.dispatch_step(ctx, step.id)
+      {:ok, _} = TurnStorage.dispatch_step(ctx, step.id, %{fence: turn.fence})
 
       {:ok, %{result: result}} =
-        TurnStorage.close_step(ctx, step.id, "ok", %{result: %{content: "ok"}})
+        TurnStorage.close_step(ctx, step.id, "ok", %{result: %{content: "ok"}, fence: turn.fence})
 
       # Another member queues a turn; a steer arrives from the actor.
       %{message: queued} = accept_turn!(ctx, thread, "@aqua me too", author: "usr_bob")
@@ -519,10 +572,10 @@ defmodule Arca.TurnTapeStorageTest do
       refute steer.id in ids
 
       assert TurnStorage.steer_pending?(ctx, turn.id)
-      assert {:ok, [drained]} = TurnStorage.drain_steer(ctx, turn.id)
+      assert {:ok, [drained]} = TurnStorage.drain_steer(ctx, turn.id, %{fence: turn.fence})
       assert drained.id == steer.id
       refute TurnStorage.steer_pending?(ctx, turn.id)
-      assert {:ok, []} = TurnStorage.drain_steer(ctx, turn.id)
+      assert {:ok, []} = TurnStorage.drain_steer(ctx, turn.id, %{fence: turn.fence})
 
       assert {:ok, rows} = TurnStorage.projection(ctx, turn.id)
 
@@ -550,12 +603,12 @@ defmodule Arca.TurnTapeStorageTest do
       %{message: c_message} = accept_turn!(ctx, thread, "@aqua third", author: "usr_carol")
 
       {_m, %{text: a_text, calls: [%{step: step}]}} = respond!(ctx, a, [{"c", "files", "read"}])
-      {:ok, _} = TurnStorage.dispatch_step(ctx, step.id)
+      {:ok, _} = TurnStorage.dispatch_step(ctx, step.id, %{fence: a.fence})
 
       {:ok, %{result: a_result}} =
-        TurnStorage.close_step(ctx, step.id, "ok", %{result: %{content: "ok"}})
+        TurnStorage.close_step(ctx, step.id, "ok", %{result: %{content: "ok"}, fence: a.fence})
 
-      {:ok, _} = TurnStorage.finish(ctx, a.id, "completed")
+      {:ok, _} = TurnStorage.finish(ctx, a.id, "completed", %{fence: a.fence})
 
       {b, _} = start!(ctx, b)
       assert b.window_upto_seq == max(b_message.seq, a_result.seq)
@@ -603,12 +656,17 @@ defmodule Arca.TurnTapeStorageTest do
       refute task.id in Enum.map(rows, & &1.id)
 
       assert {:error, :clone_depth} =
-               TurnStorage.open_clone_turn(ctx, clone.id, %{role: "web", task: "x"})
+               TurnStorage.open_clone_turn(ctx, clone.id, %{
+                 role: "web",
+                 task: "x",
+                 fence: clone.fence
+               })
 
       assert {:ok, %{status: "completed"}} =
-               TurnStorage.close_clone_turn(ctx, clone.id, "completed")
+               TurnStorage.close_clone_turn(ctx, clone.id, "completed", %{fence: clone.fence})
 
-      assert {:error, :not_a_clone} = TurnStorage.close_clone_turn(ctx, parent.id, "completed")
+      assert {:error, :not_a_clone} =
+               TurnStorage.close_clone_turn(ctx, parent.id, "completed", %{fence: parent.fence})
     end
   end
 
@@ -634,7 +692,7 @@ defmodule Arca.TurnTapeStorageTest do
       {turn, _root} = start!(ctx, turn)
       [step] = dispatched!(ctx, turn, ["c1"], 1)
 
-      assert {:error, :no_fence} =
+      assert {:error, :fence_required} =
                TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{generation: 0})
 
       assert {:error, :superseded} =
@@ -663,7 +721,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert c1.dispatch_state == "dispatched" and c2.dispatch_state == "dispatched"
       assert c3.dispatch_state == "proposed"
 
-      assert {:error, :no_fence} =
+      assert {:error, :fence_required} =
                TurnStorage.pause_uncertain(ctx, turn.id, %{step_id: c1.id, generation: 0})
 
       assert {:ok, %{turn: paused, aborted: row}} =
@@ -727,7 +785,7 @@ defmodule Arca.TurnTapeStorageTest do
       {turn, root} = start!(ctx, turn)
       [c1, c2] = dispatched!(ctx, turn, ["c1", "c2"], 2)
 
-      # A mark alone, as a legacy row or a sibling's, with no covering row.
+      # A mark alone, as a sibling's, with no covering row.
       {:ok, _} =
         TurnStorage.mark_step_uncertain(ctx, c1.id, "lost", %{fence: turn.fence, generation: 0})
 
@@ -746,7 +804,12 @@ defmodule Arca.TurnTapeStorageTest do
           set: [status: "failed"]
         )
 
-      assert {:ok, paused} = TurnStorage.pause_recovered(ctx, turn.id, %{content: "restarted"})
+      assert {:ok, paused} =
+               TurnStorage.pause_recovered(ctx, turn.id, %{
+                 content: "restarted",
+                 fence: turn.fence
+               })
+
       assert paused.status == "paused" and paused.paused_reason == "uncertain"
       assert paused.attempt != root.attempt.attempt and paused.fence != turn.fence
       assert paused.recovery_attempts == turn.recovery_attempts

@@ -252,7 +252,7 @@ defmodule Opus.TurnRootTest do
     assert execution(claim.execution_id).status == "failed"
     assert %{state: "lapsed"} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
 
-    {:ok, taken} = TurnStorage.takeover(ctx, turn.id)
+    {:ok, taken} = TurnStorage.takeover(ctx, turn.id, %{fence: started.fence})
     assert taken.attempt != claim.attempt
     assert execution(claim.execution_id).status == "running"
 

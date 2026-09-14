@@ -178,15 +178,17 @@ defmodule Aqua.Tape do
 
   @doc """
   Take over a turn another runner lost: the successor attempt, the new
-  fence and the recovery count (`TurnStorage.takeover/3`). Refused past
-  the cap.
+  fence and the recovery count (`TurnStorage.takeover/3`), from the fence
+  `turn` was read with. Refused past the cap.
   """
   @spec bump_recovery(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
-  def bump_recovery(%Context{} = ctx, turn), do: TurnStorage.takeover(ctx, turn.id)
+  def bump_recovery(%Context{} = ctx, turn),
+    do: TurnStorage.takeover(ctx, turn.id, %{fence: turn.fence})
 
   @doc "Renew the fence and cancel-mark the dispatched steps, before the loop is stopped."
   @spec supersede(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
-  def supersede(%Context{} = ctx, turn), do: TurnStorage.supersede(ctx, turn.id)
+  def supersede(%Context{} = ctx, turn),
+    do: TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence})
 
   # ---------------------------------------------------------------------------
   # Steps
@@ -272,7 +274,7 @@ defmodule Aqua.Tape do
   @doc "Set down a running turn a dead runner left with an unacknowledged uncertainty (`TurnStorage.pause_recovered/3`)."
   @spec pause_recovered(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
   def pause_recovered(%Context{} = ctx, turn, content) when is_binary(content),
-    do: TurnStorage.pause_recovered(ctx, turn.id, %{content: content})
+    do: TurnStorage.pause_recovered(ctx, turn.id, %{content: content, fence: turn.fence})
 
   @doc "Whether the turn holds an uncertainty its sender has not acknowledged."
   @spec unacknowledged_episode?(Context.t(), turn()) :: boolean()
@@ -297,14 +299,20 @@ defmodule Aqua.Tape do
   end
 
   @doc "Open the next generation of a replay-safe step with a fresh child id."
-  @spec next_generation(Context.t(), step(), String.t()) :: {:ok, step()} | {:error, term()}
-  def next_generation(%Context{} = ctx, step, child_execution_id),
-    do: TurnStorage.next_generation(ctx, step.id, %{child_execution_id: child_execution_id})
+  @spec next_generation(Context.t(), turn(), step(), String.t()) ::
+          {:ok, step()} | {:error, term()}
+  def next_generation(%Context{} = ctx, turn, step, child_execution_id),
+    do:
+      TurnStorage.next_generation(ctx, step.id, %{
+        child_execution_id: child_execution_id,
+        fence: turn.fence
+      })
 
   @doc "Record what a model request left out (`[\"room_excerpt\"]`) or its digest."
-  @spec mark_excluded(Context.t(), step(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def mark_excluded(%Context{} = ctx, step, attrs),
-    do: TurnStorage.update_step(ctx, step.id, attrs)
+  @spec mark_excluded(Context.t(), turn(), step(), map()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def mark_excluded(%Context{} = ctx, turn, step, attrs),
+    do: TurnStorage.update_step(ctx, step.id, Map.put(attrs, :fence, turn.fence))
 
   # ---------------------------------------------------------------------------
   # Approvals

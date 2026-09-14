@@ -7,10 +7,15 @@ defmodule Arca.TurnStorage do
   a turn writes and the events it records, each transition one
   transaction.
 
-  A turn is accepted with its message (`accept/3`), started once its root
-  execution and pins exist (`start/3`), and from then on every write is
-  fenced: the caller names the turn's `fence`, and a runner whose fence
-  moved (`supersede/2`, `takeover/3`) is refused `{:error, :superseded}`.
+  A turn is accepted with its message (`accept_message/3`), started once its
+  root execution and pins exist (`start/3`), and every runner-owned write
+  names the `fence` the runner holds: the transaction's first write is a
+  conditional update of the turn row on that fence, which takes the row's
+  lock, so a runner whose fence another process moved (`supersede/3`,
+  `takeover/3`, `pause_recovered/3`) is refused `{:error, :superseded}`
+  before it reads or writes anything else, and one that names no fence is
+  refused `{:error, :fence_required}`. A host transition that takes a turn
+  over compares the fence it read and mints the next one in one write.
   A step is proposed before its effect (`record_response/4`), flipped to
   `dispatched` in its own commit (`dispatch_step/3`), and closed with its
   result row, outcome and event together (`close_step/4`). Pause and
@@ -22,11 +27,9 @@ defmodule Arca.TurnStorage do
   the transaction and the whole transaction is retried, since a retry
   inside an aborted Postgres transaction cannot land.
 
-  The old `accept/2`, `close/4` and `list/3` serve the runner that keys
-  turns by execution until the loop replaces it.
   """
 
-  import Ecto.Query, only: [from: 2, where: 3]
+  import Ecto.Query, only: [from: 2]
 
   alias Arca.Schemas.{Approval, Thread, Message, Turn, TurnStep}
   alias Sanctum.Context
@@ -63,7 +66,8 @@ defmodule Arca.TurnStorage do
     and `:client_id` (the sender's retry identity).
   - `:turn` — `%{orchestrator, requested_by, model, options}` to open an
     `accepted` turn keyed by the message; `nil` for room content.
-  - `:steer_turn_id` — attach the message to a live turn instead.
+  - `:steer_turn_id` — attach the message to an open turn instead; a turn
+    that has ended answers `{:error, :turn_over}`.
 
   Answers `{:ok, %{message: row, turn: row | nil}}`. A `client_id` this
   thread already accepted answers `{:error, :duplicate_client_id}`,
@@ -94,7 +98,7 @@ defmodule Arca.TurnStorage do
               nil ->
                 case Map.get(attrs, :steer_turn_id) do
                   nil -> nil
-                  steer_id -> turn!(athanor_id, steer_id)
+                  steer_id -> open_turn_of!(athanor_id, steer_id)
                 end
 
               %{} = t ->
@@ -201,7 +205,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        turn = turn!(athanor_id, turn_id)
+        turn = own!(athanor_id, turn_id, attrs)
         window = boundary(athanor_id, turn)
 
         sets = [
@@ -221,7 +225,6 @@ defmodule Arca.TurnStorage do
           from(t in Turn,
             where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.status == "accepted"
           )
-          |> fenced(attrs)
           |> Arca.Repo.update_all(set: sets)
           |> elem(0)
 
@@ -245,8 +248,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        turn = turn!(athanor_id, turn_id)
-        check_fence!(turn, attrs)
+        turn = own!(athanor_id, turn_id, attrs)
         if turn.status != "running", do: Arca.Repo.rollback(:not_running)
 
         ran = Arca.ExecutionAttempts.pause!(athanor_id, turn.attempt) || 0
@@ -284,8 +286,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        turn = turn!(athanor_id, turn_id)
-        check_fence!(turn, attrs)
+        turn = own!(athanor_id, turn_id, attrs)
         if turn.status != "paused", do: Arca.Repo.rollback(:not_paused)
 
         until = Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
@@ -325,8 +326,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        turn = turn!(athanor_id, turn_id)
-        check_fence!(turn, attrs)
+        turn = own!(athanor_id, turn_id, attrs)
         thread = thread!(athanor_id, turn.thread_id)
 
         Arca.ThreadStorage.insert_message!(
@@ -353,8 +353,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        turn = turn!(athanor_id, turn_id)
-        check_fence!(turn, attrs)
+        turn = own!(athanor_id, turn_id, attrs)
         if turn.status in @terminal, do: Arca.Repo.rollback(:already_finished)
 
         ran =
@@ -402,10 +401,11 @@ defmodule Arca.TurnStorage do
 
   @doc """
   Take over a running turn another runner lost: the one place a
-  successor attempt is opened. The predecessor is retired, the successor
-  opened with the next fence and the pointer moved, the turn's `fence`
-  renewed, `recovery_attempts` counted and the predecessor's unaccounted
-  running interval added. Refused `{:error, :recovery_exhausted}` past
+  successor attempt is opened. `attrs`: `:fence` (the one the caller read)
+  and `:lease_until`. The turn's fence is compared and renewed first, then
+  the predecessor is retired, the successor opened with the next fence and
+  the pointer moved, `recovery_attempts` counted and the predecessor's
+  unaccounted running interval added. Refused `{:error, :recovery_exhausted}` past
   the cap and `{:error, :not_open}` for a turn that is over.
   """
   @spec takeover(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
@@ -414,7 +414,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        turn = turn!(athanor_id, turn_id)
+        turn = take!(athanor_id, turn_id, attrs)
         if turn.status not in ["running", "paused"], do: Arca.Repo.rollback(:not_open)
         if turn.recovery_attempts >= @recovery_cap, do: Arca.Repo.rollback(:recovery_exhausted)
         if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
@@ -438,7 +438,6 @@ defmodule Arca.TurnStorage do
             set: [
               status: "running",
               attempt: successor.attempt,
-              fence: new_fence(),
               runner_id: Cyfr.Boot.id(),
               recovery_attempts: turn.recovery_attempts + 1,
               active_ms: turn.active_ms + ran,
@@ -458,20 +457,17 @@ defmodule Arca.TurnStorage do
   @doc """
   Renew the turn's fence and mark every dispatched step cancel-requested,
   before its loop is stopped: a later write from the old fence and a
-  later admission of those steps are refused. Answers the turn with its
-  new fence.
+  later admission of those steps are refused. `attrs`: `:fence`, the one
+  the caller read. Answers the turn with its new fence.
   """
-  @spec supersede(Context.t(), String.t()) :: {:ok, Turn.t()} | {:error, term()}
-  def supersede(%Context{} = ctx, turn_id) do
+  @spec supersede(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def supersede(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.supersede", fn ->
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
+        _ = take!(athanor_id, turn_id, attrs)
         now = DateTime.utc_now()
-
-        {1, _} =
-          from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
-          |> Arca.Repo.update_all(set: [fence: new_fence()])
 
         from(s in TurnStep,
           where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
@@ -506,8 +502,7 @@ defmodule Arca.TurnStorage do
 
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
-          turn = turn!(athanor_id, turn_id)
-          require_fence!(turn, attrs)
+          turn = own!(athanor_id, turn_id, attrs)
           if turn.parent_turn_id, do: Arca.Repo.rollback(:clone)
           now = DateTime.utc_now()
           step = step!(athanor_id, Map.fetch!(attrs, :step_id))
@@ -569,16 +564,17 @@ defmodule Arca.TurnStorage do
   paused, without counting a recovery; every dispatched step is marked
   `uncertain`, every proposed step skipped, and — when any of them is
   not yet covered — a covering `turn_aborted` row appended and the
-  boundary moved to it. Answers the turn.
+  boundary moved to it. `attrs`: `:fence` (the one the caller read),
+  `:content`. Answers the turn.
   """
   @spec pause_recovered(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
-  def pause_recovered(%Context{} = ctx, turn_id, attrs \\ %{}) when is_map(attrs) do
+  def pause_recovered(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pause_recovered", fn ->
       athanor_id = Context.athanor!(ctx)
 
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
-          turn = turn!(athanor_id, turn_id)
+          turn = take!(athanor_id, turn_id, attrs)
           if turn.status != "running", do: Arca.Repo.rollback(:not_running)
           if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
           now = DateTime.utc_now()
@@ -622,7 +618,6 @@ defmodule Arca.TurnStorage do
               set: [
                 status: "paused",
                 attempt: successor.attempt,
-                fence: new_fence(),
                 runner_id: Cyfr.Boot.id(),
                 paused_at: now,
                 paused_reason: "uncertain",
@@ -749,14 +744,6 @@ defmodule Arca.TurnStorage do
     |> Enum.reject(&MapSet.member?(covered, &1))
   end
 
-  # arca:db-raise-ok inside the caller's transaction
-  defp require_fence!(%Turn{} = turn, attrs) do
-    case Map.get(attrs, :fence) do
-      nil -> Arca.Repo.rollback(:no_fence)
-      _ -> check_fence!(turn, attrs)
-    end
-  end
-
   # ---------------------------------------------------------------------------
   # Steps
   # ---------------------------------------------------------------------------
@@ -774,8 +761,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        turn = turn!(athanor_id, turn_id)
-        check_fence!(turn, attrs)
+        turn = own!(athanor_id, turn_id, attrs)
         insert_step!(athanor_id, turn, attrs)
       end)
     end)
@@ -799,8 +785,7 @@ defmodule Arca.TurnStorage do
 
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
-          turn = turn!(athanor_id, turn_id)
-          check_fence!(turn, response)
+          turn = own!(athanor_id, turn_id, response)
           thread = thread!(athanor_id, turn.thread_id)
           now = DateTime.utc_now()
 
@@ -902,9 +887,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        step = step!(athanor_id, step_id)
-        turn = turn!(athanor_id, step.turn_id)
-        check_fence!(turn, attrs)
+        _ = own_step!(athanor_id, step_id, attrs)
 
         {count, _} =
           from(s in TurnStep,
@@ -937,9 +920,8 @@ defmodule Arca.TurnStorage do
 
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
+          turn = own_step!(athanor_id, step_id, attrs)
           step = step!(athanor_id, step_id)
-          turn = turn!(athanor_id, step.turn_id)
-          check_fence!(turn, attrs)
           close_step!(ctx, athanor_id, turn, step, outcome, attrs)
         end)
       end)
@@ -960,9 +942,8 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
+        turn = own_step!(athanor_id, step_id, attrs)
         step = step!(athanor_id, step_id)
-        turn = turn!(athanor_id, step.turn_id)
-        require_fence!(turn, attrs)
         mark_uncertain!(athanor_id, turn, step, Map.fetch!(attrs, :generation), reason)
         step!(athanor_id, step_id)
       end)
@@ -1003,8 +984,7 @@ defmodule Arca.TurnStorage do
 
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
-          turn = turn!(athanor_id, turn_id)
-          check_fence!(turn, attrs)
+          turn = own!(athanor_id, turn_id, attrs)
           skip_proposed!(ctx, athanor_id, turn, reason)
         end)
       end)
@@ -1046,7 +1026,10 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "Rewrite a step's `excluded` list and other bookkeeping (`:excluded`, `:request_digest`, `:error`)."
+  @doc """
+  Rewrite a step's bookkeeping (`:excluded`, `:request_digest`, `:error`,
+  `:authority_digest`) under `:fence`. Answers the rows written.
+  """
   @spec update_step(Context.t(), String.t(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
   def update_step(%Context{} = ctx, step_id, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.update_step", fn ->
@@ -1060,11 +1043,13 @@ defmodule Arca.TurnStorage do
           other -> other
         end)
 
-      {count, _} =
+      Arca.Repo.transaction(fn ->
+        _ = own_step!(athanor_id, step_id, attrs)
+
         from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step_id)
         |> Arca.Repo.update_all(set: sets)
-
-      {:ok, count}
+        |> elem(0)
+      end)
     end)
   end
 
@@ -1092,7 +1077,7 @@ defmodule Arca.TurnStorage do
   Open the next generation of a step for a replay-safe re-dispatch: the
   old generation is cancel-marked so its late admission is refused, and
   the step returns to `proposed` with `generation + 1` and a fresh child
-  execution id. Answers the step.
+  execution id. `attrs`: `:child_execution_id`, `:fence`. Answers the step.
   """
   @spec next_generation(Context.t(), String.t(), map()) :: {:ok, TurnStep.t()} | {:error, term()}
   def next_generation(%Context{} = ctx, step_id, attrs) when is_map(attrs) do
@@ -1100,6 +1085,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
+        _ = own_step!(athanor_id, step_id, attrs)
         step = step!(athanor_id, step_id)
 
         {1, _} =
@@ -1139,9 +1125,8 @@ defmodule Arca.TurnStorage do
 
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
+          turn = own_step!(athanor_id, step_id, attrs)
           step = step!(athanor_id, step_id)
-          turn = turn!(athanor_id, step.turn_id)
-          check_fence!(turn, attrs)
           thread = thread!(athanor_id, turn.thread_id)
           card = Map.get(attrs, :card, %{})
           approval_id = Map.get(attrs, :id) || Cyfr.UUID7.generate_id("apr")
@@ -1210,9 +1195,9 @@ defmodule Arca.TurnStorage do
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           approval = approval!(athanor_id, approval_id)
+          turn = own!(athanor_id, approval.turn_id, attrs)
+          approval = approval!(athanor_id, approval_id)
           if approval.status != "pending", do: Arca.Repo.rollback({:already_resolved, approval})
-          turn = turn!(athanor_id, approval.turn_id)
-          check_fence!(turn, attrs)
           step = step!(athanor_id, approval.step_id)
           now = DateTime.utc_now()
           resolution_kind = Map.get(attrs, :resolution_kind)
@@ -1303,8 +1288,7 @@ defmodule Arca.TurnStorage do
 
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
-          parent = turn!(athanor_id, parent_turn_id)
-          check_fence!(parent, attrs)
+          parent = own!(athanor_id, parent_turn_id, attrs)
           if parent.status != "running", do: Arca.Repo.rollback(:parent_not_running)
           if parent.parent_turn_id, do: Arca.Repo.rollback(:clone_depth)
           thread = thread!(athanor_id, parent.thread_id)
@@ -1378,9 +1362,8 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        turn = turn!(athanor_id, turn_id)
+        turn = own!(athanor_id, turn_id, attrs)
         if is_nil(turn.parent_turn_id), do: Arca.Repo.rollback(:not_a_clone)
-        check_fence!(turn, attrs)
 
         {count, _} =
           from(t in Turn,
@@ -1411,8 +1394,7 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        turn = turn!(athanor_id, turn_id)
-        check_fence!(turn, attrs)
+        turn = own!(athanor_id, turn_id, attrs)
         rows = steer_rows(athanor_id, turn)
 
         case rows do
@@ -1936,18 +1918,64 @@ defmodule Arca.TurnStorage do
       Arca.Repo.rollback(:thread_not_found)
   end
 
-  defp check_fence!(%Turn{fence: fence}, attrs) do
-    case Map.get(attrs, :fence) do
-      nil -> :ok
-      ^fence -> :ok
-      _ -> Arca.Repo.rollback(:superseded)
+  # The first write of a runner-owned transaction: the turn row, updated on
+  # the fence the runner holds, which takes the row's lock for the rest of
+  # the transaction. A fence another process moved matches no row.
+  # arca:db-raise-ok inside the caller's transaction
+  defp own!(athanor_id, turn_id, attrs) do
+    fence = held_fence!(attrs)
+
+    case from(t in Turn,
+           where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.fence == ^fence
+         )
+         |> Arca.Repo.update_all(set: [fence: fence]) do
+      {1, _} -> turn!(athanor_id, turn_id)
+      {0, _} -> Arca.Repo.rollback(:superseded)
     end
   end
 
-  defp fenced(query, attrs) do
+  # `own!/3` for a write keyed by one of the turn's steps.
+  # arca:db-raise-ok inside the caller's transaction
+  defp own_step!(athanor_id, step_id, attrs) do
+    turn_id =
+      Arca.Repo.one(
+        from(s in TurnStep,
+          where: s.athanor_id == ^athanor_id and s.id == ^step_id,
+          select: s.turn_id
+        )
+      ) || Arca.Repo.rollback(:step_not_found)
+
+    own!(athanor_id, turn_id, attrs)
+  end
+
+  # A host transition that takes the turn from whoever held it: the fence
+  # the caller read is replaced by the next one in the same write, so of two
+  # transitions racing over one turn only the first lands.
+  # arca:db-raise-ok inside the caller's transaction
+  defp take!(athanor_id, turn_id, attrs) do
+    fence = held_fence!(attrs)
+
+    case from(t in Turn,
+           where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.fence == ^fence
+         )
+         |> Arca.Repo.update_all(set: [fence: new_fence()]) do
+      {1, _} -> turn!(athanor_id, turn_id)
+      {0, _} -> Arca.Repo.rollback(:superseded)
+    end
+  end
+
+  defp held_fence!(attrs) do
     case Map.get(attrs, :fence) do
-      nil -> query
-      fence -> where(query, [t], t.fence == ^fence)
+      fence when is_binary(fence) and fence != "" -> fence
+      _ -> Arca.Repo.rollback(:fence_required)
+    end
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp open_turn_of!(athanor_id, turn_id) do
+    case turn!(athanor_id, turn_id) do
+      %Turn{status: status} = turn when status in @open -> turn
+      _ -> Arca.Repo.rollback(:turn_over)
     end
   end
 

@@ -1021,7 +1021,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :root_execution_id, :string
       add :attempt, :string
       add :runner_id, :string
-      add :fence, :string, null: false, default: ""
+      add :fence, :string, null: false
       add :recovery_attempts, :integer, null: false, default: 0
       add :profile_id, :string
       add :consent_id, :string

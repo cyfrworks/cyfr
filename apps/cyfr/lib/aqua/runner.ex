@@ -354,7 +354,7 @@ defmodule Aqua.Runner do
         accept_turn(state, ctx, name, text, opts)
 
       steer?(state, ctx, name) ->
-        steer(state, ctx, text, opts)
+        steer(state, ctx, name, text, opts)
 
       Sanctum.Provisioning.ready(ctx) != :ok ->
         {:reply, {:error, :not_provisioned}, state}
@@ -405,12 +405,17 @@ defmodule Aqua.Runner do
   defp busy?(%{live: nil, paused: nil}), do: false
   defp busy?(_state), do: true
 
-  defp steer(state, ctx, text, opts) do
+  defp steer(state, ctx, name, text, opts) do
     %{turn_id: turn_id} = state.live || state.paused
 
     case Tape.accept(ctx, state.id, %{message: message(ctx, text, opts), steer_turn_id: turn_id}) do
       {:ok, %{message: row, replayed: replayed}} ->
         {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(acknowledge(state))}
+
+      # The turn ended before its end reached this process: the line opens
+      # the next turn, queued behind the end.
+      {:error, :turn_over} ->
+        accept_turn(state, ctx, name, text, opts)
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}

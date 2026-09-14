@@ -162,10 +162,11 @@ defmodule Aqua.Loop do
 
   @doc """
   Abort a turn from outside its process, before it is stopped: the fence
-  is renewed and the dispatched steps cancel-marked, every child is
-  cancelled, dispatched steps close `uncertain` (an aborted read that is
-  safe to replay closes `error`), unstarted steps are skipped, and the
-  aborted mark is written. The caller then ends the turn.
+  is renewed and the dispatched steps cancel-marked, every child execution
+  and every in-process catalog handler is cancelled, dispatched steps close
+  `uncertain` (an aborted read that is safe to replay closes `error`) — a
+  cancel does not prove the effect never happened — unstarted steps are
+  skipped, and the aborted mark is written. The caller then ends the turn.
   """
   @spec abort(Context.t(), Tape.turn(), String.t()) :: {:ok, Tape.turn()} | {:error, term()}
   def abort(%Context{} = ctx, turn, reason) do
@@ -176,6 +177,7 @@ defmodule Aqua.Loop do
       Enum.each(steps, fn
         %{dispatch_state: "dispatched"} = step ->
           if step.child_execution_id, do: Cyfr.Execution.cancel(ctx, step.child_execution_id)
+          Aqua.Ops.cancel_call(handle(superseded, step))
 
           if replay_safe_step?(step),
             do: Tape.close_step(guest, superseded, step, "error", %{error: reason}),
@@ -375,7 +377,7 @@ defmodule Aqua.Loop do
 
       if excerpt do
         _ =
-          Tape.mark_excluded(guest(planned), step, %{
+          Tape.mark_excluded(guest(planned), planned.turn, step, %{
             excluded: ["room_excerpt"],
             request_digest: digest(request)
           })
@@ -1243,7 +1245,8 @@ defmodule Aqua.Loop do
 
   # The caller-owned name of one in-chain call, for cancelling its
   # handler without the request id the loop does not hold.
-  defp handle(%State{} = state, step), do: {state.turn.id, step.id, step.generation}
+  defp handle(%State{} = state, step), do: handle(state.turn, step)
+  defp handle(%{id: turn_id}, step), do: {turn_id, step.id, step.generation}
 
   # ---------------------------------------------------------------------------
   # Launches: the root is let go around the application's own root
@@ -1390,7 +1393,7 @@ defmodule Aqua.Loop do
               do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
 
             if replay_safe_step?(step) do
-              _ = Tape.next_generation(guest, step, Cyfr.UUID7.execution_id())
+              _ = Tape.next_generation(guest, state.turn, step, Cyfr.UUID7.execution_id())
               open
             else
               [step | open]

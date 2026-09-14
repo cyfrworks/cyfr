@@ -101,11 +101,15 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
   :sqlite ->
     config :cyfr, :repo_adapter, Ecto.Adapters.SQLite3
 
+    # Every transaction takes the write lock at BEGIN. A deferred transaction
+    # that reads and then writes fails with SQLITE_BUSY_SNAPSHOT when another
+    # write committed in between, which would surface as a lost write.
     config :cyfr, Arca.Repo,
       database: Path.expand("data/cyfr.db"),
       pool_size: 20,
       journal_mode: :wal,
-      busy_timeout: 5_000
+      busy_timeout: 5_000,
+      default_transaction_mode: :immediate
 
   :postgres ->
     config :cyfr, :repo_adapter, Ecto.Adapters.Postgres
