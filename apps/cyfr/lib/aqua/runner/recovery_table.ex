@@ -43,23 +43,8 @@ defmodule Aqua.Runner.RecoveryTable do
 
   defp classify(ctx, %{status: "paused", paused_reason: "launch"} = turn) do
     case turn.launch_step_id && Tape.step(ctx, turn.launch_step_id) do
-      {:ok, %{dispatch_state: "dispatched"} = step} ->
-        # A launch is never replayed: whether the application started is
-        # not known from here, and the turn stops on it.
-        case Tape.pause_uncertain(ctx, turn, %{
-               step_id: step.id,
-               generation: step.generation,
-               reason: "the server stopped while the application was launched"
-             }) do
-          {:ok, %{turn: paused}} ->
-            classify(ctx, paused)
-
-          {:error, reason} ->
-            {:uncertain, turn, "the launch could not be settled: #{inspect(reason)}"}
-        end
-
-      _ ->
-        {:continue, turn}
+      {:ok, %{dispatch_state: "dispatched"} = step} -> settle_launch(ctx, turn, step)
+      _ -> {:continue, turn}
     end
   end
 
@@ -78,6 +63,27 @@ defmodule Aqua.Runner.RecoveryTable do
 
   defp classify(_ctx, turn),
     do: {:uncertain, turn, "the turn is in no state a runner can continue"}
+
+  # A launch is never replayed (`Arca.Schemas.TurnStep.unresolved/1`):
+  # whether the application started is not known from here, and the turn
+  # stops on it. The continuation settles any other open step.
+  defp settle_launch(ctx, turn, step) do
+    with :uncertain <- Arca.Schemas.TurnStep.unresolved(step),
+         {:ok, %{turn: paused}} <-
+           Tape.pause_uncertain(ctx, turn, %{
+             step_id: step.id,
+             generation: step.generation,
+             reason: "the server stopped while the application was launched"
+           }) do
+      classify(ctx, paused)
+    else
+      {:error, reason} ->
+        {:uncertain, turn, "the launch could not be settled: #{inspect(reason)}"}
+
+      _settled_on_continue ->
+        {:continue, turn}
+    end
+  end
 
   # Set down, never taken over: a takeover would open a running successor
   # and count a recovery for a turn a person has to continue.

@@ -177,23 +177,18 @@ defmodule Aqua.Loop.PlannerTest do
     assert Enum.all?(rows, &(&1.content == long))
   end
 
-  test "the summary request carries the previous summary, the rows and the instruction" do
+  test "the summary request carries the previous summary, the rows and the instruction, and no tools" do
     messages = [%{"role" => "user", "content" => [%{"type" => "text", "text" => "hi"}]}]
 
     request =
-      Planner.summary_request(messages,
-        model: "m",
-        previous_summary: "earlier",
-        tools: [%{"name" => "notes.keep"}]
-      )
+      Planner.summary_request(messages, model: "m", previous_summary: "earlier")
 
     assert request["model"] == "m"
     [first, second, last] = request["messages"]
     assert [%{"text" => "[Summary so far]\nearlier"}] = first["content"]
     assert second == hd(messages)
     assert hd(last["content"])["text"] =~ "handoff summary"
-    assert [%{"name" => "notes.keep"}] = request["tools"]
-    refute Map.has_key?(Planner.summary_request(messages, model: "m"), "tools")
+    refute Map.has_key?(request, "tools")
     assert Planner.estimate_tokens("abcdefgh") == 2
   end
 end

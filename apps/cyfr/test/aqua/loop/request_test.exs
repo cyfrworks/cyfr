@@ -75,6 +75,23 @@ defmodule Aqua.Loop.RequestTest do
     assert ext["description"] =~ "approval"
   end
 
+  test "catalog tools alone, and an instruction as the person's last word" do
+    assert [%{"name" => "notes"} = notes] = Request.catalog_tools(%{"notes.keep" => "auto"})
+    assert get_in(notes, ["parameters", "properties", "action", "enum"]) == ["keep"]
+    assert Request.catalog_tools(%{"files.read" => "auto", "notes.keep" => "deny"}) == []
+
+    user = %{"role" => "user", "content" => [%{"type" => "text", "text" => "hi"}]}
+    tool = %{"role" => "tool", "content" => [%{"type" => "tool_result", "tool_call_id" => "c"}]}
+
+    assert [%{"role" => "user", "content" => [_, %{"text" => "now"}]}] =
+             Request.instruct([user], "now")
+
+    assert [^tool, %{"role" => "user", "content" => [%{"text" => "now"}]}] =
+             Request.instruct([tool], "now")
+
+    assert [%{"role" => "user"}] = Request.instruct([], "now")
+  end
+
   test "the projection is shaped for the contract" do
     rows = [
       row(1, "text", "usr_a", "@aqua read a.txt"),

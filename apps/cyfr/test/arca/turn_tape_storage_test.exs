@@ -270,6 +270,33 @@ defmodule Arca.TurnTapeStorageTest do
                ["execution.started", "turn.started", "model.completed", "step.closed"]
     end
 
+    test "a call serves what the request that proposed it served; an unknown purpose is refused",
+         %{ctx: ctx, thread: thread} do
+      %{turn: turn} = accept_turn!(ctx, thread, "@aqua keep it")
+      {turn, _root} = start!(ctx, turn)
+
+      {:ok, flush} =
+        TurnStorage.put_step(ctx, turn.id, %{kind: "model", purpose: "flush", fence: turn.fence})
+
+      assert {:ok, %{calls: [%{step: call}]}} =
+               TurnStorage.record_response(ctx, turn.id, flush.id, %{
+                 fence: turn.fence,
+                 tool_calls: [%{tool_call_id: "n1", name: "notes", tool: "notes", action: "keep"}]
+               })
+
+      assert call.purpose == "flush"
+
+      assert {:ok, %{purpose: "chat"}} =
+               TurnStorage.put_step(ctx, turn.id, %{kind: "model", fence: turn.fence})
+
+      assert {:error, {:invalid_step_purpose, "summary"}} =
+               TurnStorage.put_step(ctx, turn.id, %{
+                 kind: "model",
+                 purpose: "summary",
+                 fence: turn.fence
+               })
+    end
+
     test "the step barrier binds only a dispatched, current, uncancelled generation", %{
       ctx: ctx,
       thread: thread
@@ -817,14 +844,15 @@ defmodule Arca.TurnTapeStorageTest do
       assert execution(root.execution.id).status == "paused"
 
       {:ok, steps} = TurnStorage.steps(ctx, turn.id)
-      assert %{dispatch_state: "uncertain"} = Enum.find(steps, &(&1.id == c2.id))
+      # A dispatched replay-safe read has nothing to judge: it closes, uncovered.
+      assert %{dispatch_state: "closed", outcome: "error"} = Enum.find(steps, &(&1.id == c2.id))
       [row] = Enum.filter(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
       assert paused.window_upto_seq == row.seq
 
       covered =
         row |> Threads.payload() |> Map.fetch!("covers") |> Enum.map(& &1["step_id"])
 
-      assert Enum.sort(covered) == Enum.sort([c1.id, c2.id])
+      assert covered == [c1.id]
 
       # Resumable: the successor attempt is the paused owner.
       assert {:ok, %{status: "running"}} =

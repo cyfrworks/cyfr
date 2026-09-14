@@ -1062,8 +1062,10 @@ defmodule Arca.Repo.Migrations.Baseline do
           null: false
 
       add :seq, :integer, null: false
-      # model | tool | approval | clone
+      # model | tool | ui | approval | clone | launch
       add :kind, :string, null: false
+      # chat | flush | compaction — what the step serves, set by the host
+      add :purpose, :string, null: false
       add :idempotency_key, :string
       add :tool, :string
       add :action, :string

@@ -101,7 +101,7 @@ defmodule Aqua.LoopTest do
     end
 
     test "a reply carrying no text is refused, so the boundary does not advance" do
-      # `summarize/5` filters the reply to text blocks and joins them, so a
+      # The loop filters the reply to text blocks and joins them, so a
       # reply of only tool calls — or of no content at all — arrives here as
       # "". Committing it would render an empty summary in place of every row
       # before `first_kept_seq`.

@@ -166,14 +166,6 @@ defmodule Aqua.Loop.Request do
         hand_tool(tool, actions, policy)
       end
 
-    catalog =
-      for {tool, actions} <- offered,
-          not Aqua.Hands.hand?(tool),
-          not String.contains?(tool, ":") do
-        catalog_tool(tool, actions, policy)
-      end
-      |> Enum.reject(&is_nil/1)
-
     roles =
       if Keyword.get(opts, :soul?, true) do
         for role <- Keyword.get(opts, :roles, []),
@@ -195,7 +187,39 @@ defmodule Aqua.Loop.Request do
       end
 
     hands ++
-      catalog ++ roles ++ external ++ [@ui_schema, hand_tool("request_setup", ["open"], policy)]
+      catalog_tools(policy) ++
+      roles ++ external ++ [@ui_schema, hand_tool("request_setup", ["open"], policy)]
+  end
+
+  @doc """
+  The catalog tools `policy` offers and nothing else: each tool whose
+  actions are `auto` or `ask`, its action enum narrowed to those.
+  """
+  @spec catalog_tools(map()) :: [tool()]
+  def catalog_tools(policy) when is_map(policy) do
+    for {tool, actions} <- offered_actions(policy),
+        not Aqua.Hands.hand?(tool),
+        not String.contains?(tool, ":"),
+        definition = catalog_tool(tool, actions, policy),
+        definition != nil,
+        do: definition
+  end
+
+  @doc """
+  `messages` with `text` as the person's last word: a text block on the
+  final user message, or a user message of its own after any other.
+  """
+  @spec instruct([map()], String.t()) :: [map()]
+  def instruct(messages, text) when is_list(messages) and is_binary(text) do
+    block = %{"type" => "text", "text" => text}
+
+    case List.last(messages) do
+      %{"role" => "user", "content" => content} = last ->
+        List.replace_at(messages, -1, %{last | "content" => List.wrap(content) ++ [block]})
+
+      _ ->
+        messages ++ [%{"role" => "user", "content" => [block]}]
+    end
   end
 
   @doc """

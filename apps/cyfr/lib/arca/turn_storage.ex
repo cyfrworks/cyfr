@@ -561,10 +561,10 @@ defmodule Arca.TurnStorage do
   uncertainty is set down as paused `uncertain`, resumable: the
   predecessor attempt is retired with its running interval bounded by
   its lease (as a takeover does) and a successor is opened already
-  paused, without counting a recovery; every dispatched step is marked
-  `uncertain`, every proposed step skipped, and — when any of them is
-  not yet covered — a covering `turn_aborted` row appended and the
-  boundary moved to it. `attrs`: `:fence` (the one the caller read),
+  paused, without counting a recovery; every dispatched step is settled
+  by `TurnStep.unresolved/1`, every proposed step skipped, and — when an
+  `uncertain` step is not yet covered — a covering `turn_aborted` row
+  appended and the boundary moved to it. `attrs`: `:fence` (the one the caller read),
   `:content`. Answers the turn.
   """
   @spec pause_recovered(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
@@ -596,19 +596,18 @@ defmodule Arca.TurnStorage do
 
           content = Map.get(attrs, :content, @aborted_content)
 
-          dispatched =
-            Arca.Repo.all(
-              from(s in TurnStep,
-                where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
-                where: s.dispatch_state == "dispatched"
-              )
+          Arca.Repo.all(
+            from(s in TurnStep,
+              where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
+              where: s.dispatch_state == "dispatched"
             )
+          )
+          |> Enum.each(&settle_unresolved!(ctx, athanor_id, turn, &1, content))
 
-          Enum.each(dispatched, &mark_uncertain!(athanor_id, turn, &1, &1.generation, content))
           _skipped = skip_proposed!(ctx, athanor_id, turn, content)
 
           window =
-            if dispatched != [] or uncovered_uncertain(athanor_id, turn) != [],
+            if uncovered_uncertain(athanor_id, turn) != [],
               do: aborted_row!(ctx, athanor_id, turn, content).seq,
               else: turn.window_upto_seq
 
@@ -750,7 +749,7 @@ defmodule Arca.TurnStorage do
 
   @doc """
   Record one step of a turn at the next `seq`. `attrs`: `:kind`,
-  `:tool`, `:action`, `:idempotency_key`, `:authority_digest`,
+  `:purpose` (default `chat`), `:tool`, `:action`, `:idempotency_key`, `:authority_digest`,
   `:request_digest`, `:proposal_digest`, `:recovery`, `:excluded` (a
   list), `:message_id`, `:child_execution_id`, `:dispatch_state`
   (default `proposed`), `:fence`.
@@ -823,6 +822,9 @@ defmodule Arca.TurnStorage do
               ]
             )
 
+          # A call serves what the request that proposed it served.
+          purpose = step!(athanor_id, model_step_id).purpose
+
           calls =
             response
             |> Map.get(:tool_calls, [])
@@ -851,6 +853,7 @@ defmodule Arca.TurnStorage do
               step =
                 insert_step!(athanor_id, turn, %{
                   kind: Map.get(call, :step_kind, "tool"),
+                  purpose: purpose,
                   tool: Map.get(call, :tool),
                   action: Map.get(call, :action),
                   idempotency_key: Map.get(call, :idempotency_key),
@@ -948,6 +951,18 @@ defmodule Arca.TurnStorage do
         step!(athanor_id, step_id)
       end)
     end)
+  end
+
+  # A dispatched step no runner will answer, by `TurnStep.unresolved/1`.
+  # A closed call with no result row reads to the model as an unknown
+  # outcome (`Aqua.Loop.Request`).
+  # arca:db-raise-ok inside the caller's transaction
+  defp settle_unresolved!(ctx, athanor_id, %Turn{} = turn, %TurnStep{} = step, reason) do
+    case TurnStep.unresolved(step) do
+      :uncertain -> mark_uncertain!(athanor_id, turn, step, step.generation, reason)
+      :unknown -> close_step!(ctx, athanor_id, turn, step, "uncertain", %{error: reason})
+      _unanswered_or_replay -> close_step!(ctx, athanor_id, turn, step, "error", %{error: reason})
+    end
   end
 
   # arca:db-raise-ok inside the caller's transaction
@@ -1767,6 +1782,10 @@ defmodule Arca.TurnStorage do
 
     kind = Map.get(attrs, :kind, "tool")
     if kind not in @step_kinds, do: Arca.Repo.rollback({:invalid_step_kind, kind})
+    purpose = Map.get(attrs, :purpose, "chat")
+
+    if purpose not in TurnStep.purposes(),
+      do: Arca.Repo.rollback({:invalid_step_purpose, purpose})
 
     Arca.Repo.insert!(%TurnStep{
       id: Map.get(attrs, :id) || Cyfr.UUID7.generate_id("stp"),
@@ -1774,6 +1793,7 @@ defmodule Arca.TurnStorage do
       turn_id: turn.id,
       seq: seq,
       kind: kind,
+      purpose: purpose,
       idempotency_key: Map.get(attrs, :idempotency_key),
       tool: Map.get(attrs, :tool),
       action: Map.get(attrs, :action),

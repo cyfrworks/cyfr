@@ -192,8 +192,7 @@ defmodule Aqua.Loop.Planner do
   The request that produces a compaction summary: the rows before the
   boundary, shaped as `messages`, with the previous summary first when
   there is one, and the instruction to hand the work over in a summary.
-  `opts`: `:model`, `:max_tokens`, `:tools` (offered when the flush is
-  granted), `:previous_summary`.
+  `opts`: `:model`, `:max_tokens`, `:previous_summary`.
   """
   @spec summary_request([map()], keyword()) :: map()
   def summary_request(messages, opts) when is_list(messages) do
@@ -233,7 +232,6 @@ defmodule Aqua.Loop.Planner do
           ],
       "max_tokens" => Keyword.get(opts, :max_tokens, 4_096)
     }
-    |> maybe_tools(Keyword.get(opts, :tools))
   end
 
   @doc "A quarter of the bytes, never less than one token."
@@ -328,11 +326,6 @@ defmodule Aqua.Loop.Planner do
   defp row_bytes(%Message{content: content, payload: payload}) do
     byte_size(content || "") + byte_size(if(is_binary(payload), do: payload, else: ""))
   end
-
-  defp maybe_tools(request, tools) when is_list(tools) and tools != [],
-    do: Map.put(request, "tools", tools)
-
-  defp maybe_tools(request, _), do: request
 
   defp summary_instruction do
     "You are compacting a long thread for the assistant that will continue it. " <>

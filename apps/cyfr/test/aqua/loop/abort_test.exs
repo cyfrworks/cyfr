@@ -4,9 +4,10 @@
 defmodule Aqua.Loop.AbortTest do
   @moduledoc """
   Aborting a turn from outside its process: the fence moves first, a
-  catalog handler still running for a dispatched call is stopped, and the
-  call is recorded `uncertain` — a cancel does not prove the effect never
-  happened.
+  catalog handler still running for a dispatched call is stopped, and each
+  dispatched step settles by `Arca.Schemas.TurnStep.unresolved/1` — an
+  ordinary call is recorded `uncertain`, since a cancel does not prove the
+  effect never happened.
   """
 
   use ExUnit.Case, async: false
@@ -56,5 +57,37 @@ defmodule Aqua.Loop.AbortTest do
     # The loop that held the old fence writes nothing more.
     assert {:error, :superseded} =
              TurnStorage.close_step(ctx, call.id, "ok", %{fence: turn.fence})
+  end
+
+  test "a model request closes as an error, and a flush's call closes with its outcome unknown",
+       %{
+         ctx: ctx,
+         turn: turn
+       } do
+    {:ok, flush} =
+      TurnStorage.put_step(ctx, turn.id, %{kind: "model", purpose: "flush", fence: turn.fence})
+
+    {:ok, %{calls: [%{step: note}]}} =
+      TurnStorage.record_response(ctx, turn.id, flush.id, %{
+        fence: turn.fence,
+        tool_calls: [%{tool_call_id: "n1", name: "notes", tool: "notes", action: "keep"}]
+      })
+
+    {:ok, _} = TurnStorage.dispatch_step(ctx, note.id, %{fence: turn.fence})
+
+    {:ok, model} =
+      TurnStorage.put_step(ctx, turn.id, %{
+        kind: "model",
+        dispatch_state: "dispatched",
+        fence: turn.fence
+      })
+
+    assert {:ok, _aborted} = Aqua.Loop.abort(ctx, turn, "stopped")
+
+    assert {:ok, %{dispatch_state: "closed", outcome: "uncertain"}} =
+             TurnStorage.step(ctx, note.id)
+
+    assert {:ok, %{dispatch_state: "closed", outcome: "error"}} = TurnStorage.step(ctx, model.id)
+    refute TurnStorage.restricted?(ctx, turn.id)
   end
 end

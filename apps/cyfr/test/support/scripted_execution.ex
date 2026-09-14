@@ -45,7 +45,11 @@ defmodule Cyfr.Test.ScriptedExecution do
     %{id: @agent, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
   end
 
-  @doc "Start the script agent: `ref:` the scripted reference (or a list), `script:` its items."
+  @doc """
+  Start the script agent: `ref:` the scripted reference (or a list),
+  `script:` its items, `models:` what the `models` operation lists
+  (default none, so the window comes from `Cyfr.Models.Windows`).
+  """
   def start_link(opts) do
     keys =
       opts
@@ -57,7 +61,11 @@ defmodule Cyfr.Test.ScriptedExecution do
       end)
 
     script = Keyword.get(opts, :script, [])
-    Agent.start_link(fn -> %{refs: keys, script: script, calls: []} end, name: @agent)
+    models = Keyword.get(opts, :models, [])
+
+    Agent.start_link(fn -> %{refs: keys, script: script, models: models, calls: []} end,
+      name: @agent
+    )
   end
 
   @doc "Replace the remaining script."
@@ -247,7 +255,7 @@ defmodule Cyfr.Test.ScriptedExecution do
   end
 
   defp answer(ctx, id, attempt, started_at, _crash_after?, %{"operation" => "models"}),
-    do: complete(ctx, id, attempt, started_at, %{"models" => []})
+    do: complete(ctx, id, attempt, started_at, %{"models" => Agent.get(@agent, & &1.models)})
 
   defp answer(ctx, id, attempt, started_at, crash_after?, _input),
     do: answer(ctx, id, attempt, started_at, crash_after?)
