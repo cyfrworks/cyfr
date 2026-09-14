@@ -50,13 +50,17 @@ defmodule Locus.BuilderClientTest do
       end
     end
 
-    test "keeps ordinary output paths" do
-      assert {:ok, %{output_files: files}} =
+    test "keeps ordinary output paths, digested as the file set registration digests" do
+      assert {:ok, %{output_files: files, digest: digest, size: 9}} =
                BuilderClient.decode_result(
-                 built(%{"output_files" => %{"index.html" => Base.encode64("<p>hi</p>")}})
+                 built(%{
+                   "output_files" => %{"index.html" => Base.encode64("<p>hi</p>")},
+                   "digest" => "sha256:" <> String.duplicate("f", 64)
+                 })
                )
 
       assert files == %{"index.html" => "<p>hi</p>"}
+      assert {^digest, 9} = Cyfr.Digest.file_set(files)
     end
 
     test "refuses malformed base64 instead of raising" do

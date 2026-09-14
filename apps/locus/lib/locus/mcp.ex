@@ -87,10 +87,18 @@ defmodule Locus.MCP do
   # Tool Handlers - Action-based dispatch
   # ============================================================================
 
-  # Intentionally public (no auth check): read-only introspection of available
-  # build toolchains. No user data or side effects.
+  # Intentionally public (no auth check): read-only introspection of the
+  # toolchains builds run with — the builder container's when one is
+  # configured. No user data or side effects.
   def handle("build", %Context{} = _ctx, %{"action" => "toolchains"}) do
-    {:ok, %{toolchains: Locus.Builder.available_toolchains()}}
+    if Locus.BuilderClient.enabled?() do
+      case Locus.BuilderClient.toolchains() do
+        {:ok, toolchains} -> {:ok, %{toolchains: toolchains}}
+        {:error, :builder_unreachable} -> {:error, {:unavailable, "The builder service"}}
+      end
+    else
+      {:ok, %{toolchains: Locus.Builder.available_toolchains()}}
+    end
   end
 
   # Intentionally public (no auth check): stateless WASM binary validation.
@@ -521,12 +529,9 @@ defmodule Locus.MCP do
     end
   end
 
-  defp language_for_type("tincture"), do: :javascript
-  defp language_for_type(_), do: :rust
-
   defp do_compile(source_files, type, on_progress) do
     target_type = String.to_existing_atom(type)
-    language = language_for_type(type)
+    language = Locus.Builder.language_for(target_type)
 
     build_opts = [target_type: target_type, on_progress: on_progress]
 

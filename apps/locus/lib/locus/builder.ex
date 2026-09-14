@@ -70,6 +70,15 @@ defmodule Locus.Builder do
   def languages, do: [:rust, :javascript]
 
   @doc """
+  The language a component type is built from: Rust for a reagent, a
+  catalyst or a formula, JavaScript for a tincture. A compile that pairs
+  them otherwise is refused as `{:language_mismatch, language, type}`.
+  """
+  @spec language_for(atom()) :: :rust | :javascript
+  def language_for(:tincture), do: :javascript
+  def language_for(type) when type in [:reagent, :catalyst, :formula], do: :rust
+
+  @doc """
   The total-source ceiling one compile may carry — the one bound the
   service's pre-decode check and the client's pre-ship check both derive
   from, so neither can admit what the compile itself will refuse.
@@ -109,10 +118,12 @@ defmodule Locus.Builder do
     do: {:error, :empty_source}
 
   def compile(%{} = source_files, language, opts) when is_atom(language) do
-    with :ok <- validate_source_files(source_files, language),
+    target_type = Keyword.get(opts, :target_type, :reagent)
+
+    with :ok <- paired(language, target_type),
+         :ok <- validate_source_files(source_files, language),
          :ok <- check_toolchain(language) do
       timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
-      target_type = Keyword.get(opts, :target_type, :reagent)
       on_progress = Keyword.get(opts, :on_progress, fn _phase, _message -> :ok end)
 
       do_compile(source_files, language, target_type, timeout_ms, on_progress)
@@ -157,6 +168,16 @@ defmodule Locus.Builder do
   # ============================================================================
   # Private: Source Validation
   # ============================================================================
+
+  # A language this builder does not speak is the toolchain check's to refuse.
+  defp paired(language, target_type) do
+    expected =
+      if target_type in [:reagent, :catalyst, :formula, :tincture], do: language_for(target_type)
+
+    if language in languages() and expected != language,
+      do: {:error, {:language_mismatch, language, target_type}},
+      else: :ok
+  end
 
   defp validate_source_files(source_files, :rust) do
     unless Map.has_key?(source_files, "src/lib.rs") do
@@ -261,7 +282,7 @@ defmodule Locus.Builder do
                on_progress.(:compiling, "Building tincture (npm install && npm run build)..."),
              {:ok, _exit_code, _output} <- run_js_build(tmp_dir, timeout_ms, on_progress),
              {:ok, output_files} <- collect_dist_files(tmp_dir) do
-          {digest, size} = compute_output_digest(output_files)
+          {digest, size} = Cyfr.Digest.file_set(output_files)
 
           on_progress.(
             :complete,
@@ -566,14 +587,6 @@ defmodule Locus.Builder do
       {:error, _} ->
         []
     end
-  end
-
-  defp compute_output_digest(output_files) do
-    sorted = Enum.sort_by(output_files, fn {path, _} -> path end)
-    total_size = Enum.reduce(sorted, 0, fn {_, content}, size -> size + byte_size(content) end)
-    chunks = Enum.flat_map(sorted, fn {path, content} -> [path, content] end)
-
-    {Cyfr.Digest.sha256_stream(chunks), total_size}
   end
 
   defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do

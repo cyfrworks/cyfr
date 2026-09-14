@@ -105,6 +105,21 @@ defmodule Locus.BuilderServiceTest do
     assert Jason.decode!(conn.resp_body)["error"] =~ "unknown language"
   end
 
+  test "a type is built only from its own language" do
+    for {language, type} <- [{"rust", "tincture"}, {"javascript", "reagent"}] do
+      body = %{
+        "source_files" => %{"src/lib.rs" => Base.encode64("fn main() {}")},
+        "language" => language,
+        "target_type" => type
+      }
+
+      conn = post_build(body, [{"authorization", "Bearer " <> @token}])
+
+      assert conn.status == 400, "#{language} + #{type} was not refused"
+      assert Jason.decode!(conn.resp_body)["error"] =~ "is not built from"
+    end
+  end
+
   test "sources that are not base64 are refused" do
     body = %{
       "source_files" => %{"src/lib.rs" => "not base64 !!!"},

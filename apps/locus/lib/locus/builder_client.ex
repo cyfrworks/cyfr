@@ -28,6 +28,41 @@ defmodule Locus.BuilderClient do
     is_binary(url()) and url() != ""
   end
 
+  @doc """
+  The toolchains the builder container reports on its `/health`, in the
+  shape of `Locus.Builder.available_toolchains/0`: every language this
+  node speaks, unavailable when the builder does not name it.
+  """
+  @spec toolchains() :: {:ok, map()} | {:error, :builder_unreachable}
+  def toolchains do
+    case Req.request(
+           method: :get,
+           url: url() <> "/health",
+           receive_timeout: 5_000,
+           max_retries: 0
+         ) do
+      {:ok, %Req.Response{status: 200, body: %{"toolchains" => reported}}}
+      when is_map(reported) ->
+        {:ok,
+         Map.new(Locus.Builder.languages(), fn language ->
+           {language, toolchain(reported[Atom.to_string(language)])}
+         end)}
+
+      other ->
+        Logger.error("[Locus.BuilderClient] builder health unreadable: #{inspect(other)}")
+        {:error, :builder_unreachable}
+    end
+  end
+
+  defp toolchain(%{"available" => available} = reported),
+    do: %{
+      available: available == true,
+      command: reported["command"],
+      description: reported["description"]
+    }
+
+  defp toolchain(_), do: %{available: false, command: nil, description: nil}
+
   @doc "Compile via the builder service. Same result shape as `Locus.Builder.compile/3`."
   @spec compile(map(), atom(), keyword()) :: {:ok, map()} | {:error, term()}
   def compile(source_files, language, opts) do
@@ -145,19 +180,10 @@ defmodule Locus.BuilderClient do
 
   def decode_result(%{"output_files" => files} = built) when is_map(files) do
     with {:ok, decoded} <- decode_output_files(files) do
-      # Derived from what was actually decoded — never the builder's claim,
-      # for the same reason the wasm branch re-validates. This is a content
-      # hash of the returned file set; the digest a tincture is REGISTERED
-      # under is derived again at registration from the stored bytes
-      # (`Compendium.TinctureValidator`).
-      digest =
-        decoded
-        |> Enum.sort()
-        |> Enum.map(fn {path, bytes} -> [path, 0, bytes] end)
-        |> IO.iodata_to_binary()
-        |> Cyfr.Digest.sha256()
-
-      size = decoded |> Map.values() |> Enum.map(&byte_size/1) |> Enum.sum()
+      # Derived from what was actually decoded, never the builder's claim,
+      # and the same file-set digest registration derives from the stored
+      # bytes.
+      {digest, size} = Cyfr.Digest.file_set(decoded)
 
       {:ok,
        %{

@@ -203,19 +203,31 @@ defmodule Locus.BuilderTest do
 
   describe "compile/3 - javascript validation" do
     test "rejects empty source" do
-      assert {:error, :empty_source} = Builder.compile(%{}, :javascript)
+      assert {:error, :empty_source} = Builder.compile(%{}, :javascript, target_type: :tincture)
     end
 
     test "rejects source without package.json" do
       assert {:error, :missing_package_json} =
-               Builder.compile(%{"src/main.jsx" => "export default function() {}"}, :javascript)
+               Builder.compile(%{"src/main.jsx" => "export default function() {}"}, :javascript,
+                 target_type: :tincture
+               )
     end
 
     test "rejects oversized source" do
       big = String.duplicate("x", 600_000)
 
       assert {:error, {:source_too_large, _, _}} =
-               Builder.compile(%{"package.json" => big, "src/app.jsx" => big}, :javascript)
+               Builder.compile(%{"package.json" => big, "src/app.jsx" => big}, :javascript,
+                 target_type: :tincture
+               )
+    end
+
+    test "a type is built only from its own language" do
+      assert {:error, {:language_mismatch, :javascript, :reagent}} =
+               Builder.compile(%{"package.json" => "{}"}, :javascript, target_type: :reagent)
+
+      assert {:error, {:language_mismatch, :rust, :tincture}} =
+               Builder.compile(%{"src/lib.rs" => ""}, :rust, target_type: :tincture)
     end
   end
 

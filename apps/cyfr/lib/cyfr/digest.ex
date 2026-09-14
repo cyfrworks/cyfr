@@ -46,4 +46,23 @@ defmodule Cyfr.Digest do
     |> :crypto.hash_final()
     |> then(&("sha256:" <> Base.encode16(&1, case: :lower)))
   end
+
+  @doc """
+  The digest of a set of files and their total size in bytes: SHA-256 over
+  each `{relative_path, bytes}` in path order, each framed as the path, a
+  NUL, the byte count in decimal, a NUL, then the bytes, so two different
+  sets never frame to the same stream. A tincture's digest is this, from
+  whichever producer computes it.
+  """
+  @spec file_set(Enumerable.t()) :: {String.t(), non_neg_integer()}
+  def file_set(files) do
+    sorted = Enum.sort_by(files, &elem(&1, 0))
+
+    chunks =
+      Enum.flat_map(sorted, fn {path, bytes} ->
+        [path, <<0>>, Integer.to_string(byte_size(bytes)), <<0>>, bytes]
+      end)
+
+    {sha256_stream(chunks), Enum.reduce(sorted, 0, &(byte_size(elem(&1, 1)) + &2))}
+  end
 end

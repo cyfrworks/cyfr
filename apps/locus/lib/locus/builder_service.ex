@@ -114,12 +114,21 @@ defmodule Locus.BuilderService do
          # refuse a fifth component kind the rest of the system had accepted.
          {:ok, target_type} <-
            known(target_type, Sanctum.ComponentRef.valid_types(), "target_type"),
+         language = String.to_existing_atom(language),
+         target_type = String.to_existing_atom(target_type),
+         :ok <- paired(language, target_type),
          {:ok, decoded} <- decode_sources(sources) do
-      {:ok, decoded, String.to_existing_atom(language), String.to_existing_atom(target_type)}
+      {:ok, decoded, language, target_type}
     end
   end
 
   defp decode_request(_), do: {:error, "source_files, language and target_type are required"}
+
+  defp paired(language, target_type) do
+    if Locus.Builder.language_for(target_type) == language,
+      do: :ok,
+      else: {:error, "a #{target_type} is not built from #{language}"}
+  end
 
   defp known(value, roster, field) do
     if value in roster, do: {:ok, value}, else: {:error, "unknown #{field}: #{value}"}
