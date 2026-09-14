@@ -753,11 +753,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :granted_at, :utc_datetime_usec, null: false
     end
 
-    # Named short on purpose: Ecto's default name for the thread-scope
-    # key is 73 bytes and Postgres truncates at 63, so the changeset could
-    # never match what the database reports. SQLite reports a violation by
-    # column, so `Arca.ToolGrantStorage` declares the constraint under both
-    # spellings.
+    # Each partial key is named for its scope, the name Postgres reports a
+    # violation under. SQLite reports a violation by column, so
+    # `Arca.ToolGrantStorage` declares each constraint under both spellings.
     create unique_index(
              :tool_grants,
              [:thread_id, :agent_name, :tool, :action],

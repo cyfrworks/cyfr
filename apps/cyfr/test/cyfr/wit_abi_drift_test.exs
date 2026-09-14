@@ -32,7 +32,7 @@ defmodule Cyfr.WitAbiDriftTest do
   defp opus_abi_names do
     @opus_lib
     |> Path.join("**/*.ex")
-    |> Path.wildcard()
+    |> Cyfr.Test.SourceTree.files!()
     |> Enum.flat_map(fn path ->
       ~r/"(cyfr:[a-z]+\/[a-z-]+@\d+\.\d+\.\d+)"/
       |> Regex.scan(File.read!(path))
@@ -47,7 +47,7 @@ defmodule Cyfr.WitAbiDriftTest do
   defp wit_abi_names do
     @wit_root
     |> Path.join("**/*.wit")
-    |> Path.wildcard()
+    |> Cyfr.Test.SourceTree.files!()
     |> Enum.flat_map(fn path ->
       source = File.read!(path)
 
@@ -98,7 +98,7 @@ defmodule Cyfr.WitAbiDriftTest do
     imported =
       @wit_root
       |> Path.join("*/world.wit")
-      |> Path.wildcard()
+      |> Cyfr.Test.SourceTree.files!()
       |> Enum.flat_map(fn path ->
         ~r/import\s+(cyfr:[a-z]+\/[a-z-]+@\d+\.\d+\.\d+)\s*;/
         |> Regex.scan(File.read!(path))

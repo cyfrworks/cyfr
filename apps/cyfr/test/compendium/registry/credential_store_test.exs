@@ -72,6 +72,18 @@ defmodule Compendium.Registry.CredentialStoreTest do
       assert retrieved.token == second.token
     end
 
+    test "a stored credential of any other type, or of a type that is not a string, is not found" do
+      for type <- [1, "session", nil] do
+        assert :ok =
+                 CredentialStore.put(@user, @reg, "alice", %{
+                   push_token_cred("alice")
+                   | type: type
+                 })
+
+        assert :not_found = CredentialStore.get(@user, @reg, "alice")
+      end
+    end
+
     test "returns :not_found for missing slot" do
       assert :not_found = CredentialStore.get(@user, @reg, "nonexistent")
     end

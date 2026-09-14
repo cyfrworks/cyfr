@@ -349,28 +349,9 @@ defmodule Sanctum.Vault.OAuthGrant do
 
       with {:ok, json} <- Payload.encode_material(fields, bundle),
            {:ok, sealed} <- seal(json, aad) do
-        case Arca.VaultStorage.rotate_payload(
-               entry.athanor_id,
-               entry.id,
-               entry.payload_rev,
-               sealed
-             ) do
-          :ok ->
-            with {:ok, rebound} <- maybe_rebind(entry, target) do
-              if entry.status == "needs_reauth" do
-                Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
-              end
-
-              broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
-
-              {:ok,
-               %{
-                 entry_id: entry.id,
-                 name: entry.name,
-                 provider: target.provider,
-                 rebound: rebound
-               }}
-            end
+        case commit_grant(entry, target, sealed) do
+          {:ok, rebound} ->
+            granted(pending, entry, target, rebound)
 
           {:error, :payload_conflict} ->
             # A concurrent material write landed between authorize and
@@ -396,41 +377,49 @@ defmodule Sanctum.Vault.OAuthGrant do
           aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
           with {:ok, json} <- Payload.encode_material(current_fields(entry), bundle),
-               {:ok, sealed} <- seal(json, aad) do
-            case Arca.VaultStorage.rotate_payload(
-                   entry.athanor_id,
-                   entry.id,
-                   entry.payload_rev,
-                   sealed
-                 ) do
-              :ok ->
-                with {:ok, rebound} <- maybe_rebind(entry, target) do
-                  # The same clear apply_grant does: a successful re-auth
-                  # must not leave the entry stuck at needs_reauth.
-                  if entry.status == "needs_reauth" do
-                    Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
-                  end
-
-                  broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
-
-                  {:ok,
-                   %{
-                     entry_id: entry.id,
-                     name: entry.name,
-                     provider: target.provider,
-                     rebound: rebound
-                   }}
-                end
-
-              {:error, reason} ->
-                {:error, reason}
-            end
+               {:ok, sealed} <- seal(json, aad),
+               {:ok, rebound} <- commit_grant(entry, target, sealed) do
+            granted(pending, entry, target, rebound)
           end
         end
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # The new material, a binding change and the entry's reactivation land in
+  # one transaction, the binding first: tokens granted for a new binding are
+  # never readable under a consent to the old one, and a binding that cannot
+  # move leaves the old material in place. `{:error, :payload_conflict}`
+  # when another material write landed since `entry` was read.
+  defp commit_grant(entry, target, sealed) do
+    Arca.Repo.transaction(fn ->
+      with {:ok, rebound} <- maybe_rebind(entry, target),
+           :ok <-
+             Arca.VaultStorage.rotate_payload(
+               entry.athanor_id,
+               entry.id,
+               entry.payload_rev,
+               sealed
+             ),
+           :ok <- reactivate(entry) do
+        rebound
+      else
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # A successful re-auth clears `needs_reauth`.
+  defp reactivate(%{status: "needs_reauth"} = entry),
+    do: Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
+
+  defp reactivate(_entry), do: :ok
+
+  defp granted(pending, entry, target, rebound) do
+    broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
+    {:ok, %{entry_id: entry.id, name: entry.name, provider: target.provider, rebound: rebound}}
   end
 
   defp still_living(%{status: "tombstoned"}), do: {:error, :not_found}

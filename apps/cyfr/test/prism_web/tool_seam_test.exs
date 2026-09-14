@@ -19,8 +19,9 @@ defmodule PrismWeb.ToolSeamTest do
 
   test "the console reaches the tool surface only through its seam" do
     offenders =
-      [Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")]
-      |> Enum.flat_map(&Path.wildcard/1)
+      root()
+      |> Path.join("apps/cyfr/lib/prism_web/**/*.ex")
+      |> Cyfr.Test.SourceTree.files!()
       |> Enum.reject(&String.ends_with?(&1, "/ops.ex"))
       |> Enum.flat_map(fn path ->
         path
@@ -143,8 +144,9 @@ defmodule PrismWeb.ToolSeamTest do
     allowed = MapSet.new(@console_owned)
 
     found =
-      [Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")]
-      |> Enum.flat_map(&Path.wildcard/1)
+      root()
+      |> Path.join("apps/cyfr/lib/prism_web/**/*.ex")
+      |> Cyfr.Test.SourceTree.files!()
       |> Enum.flat_map(fn path ->
         rel = Path.relative_to(path, root())
         source = Cyfr.Test.SourceTree.read(path)

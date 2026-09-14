@@ -221,7 +221,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Path.wildcard(match_dot: false)
+    |> Cyfr.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       target = Path.join(dest, Path.relative_to(src, @bundle))

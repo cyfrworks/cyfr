@@ -354,14 +354,23 @@ defmodule Aqua.Loop do
 
       _ ->
         {status, error} = terminal(result)
-        final = finished(state, ended, status, error, result)
-        release(ended)
-        final
+
+        case Tape.finish(ctx(state), ended.turn, status, %{error: error}) do
+          # A steer landed while the last answer was written: the turn goes
+          # on to answer it.
+          {:error, :steer_pending} ->
+            conclude(state, loop(ended))
+
+          finish ->
+            final = finished(ended, status, result, finish)
+            release(ended)
+            final
+        end
     end
   end
 
-  defp finished(%State{} = state, ended, status, error, result) do
-    case Tape.finish(ctx(state), ended.turn, status, %{error: error}) do
+  defp finished(ended, status, result, finish) do
+    case finish do
       {:ok, _} ->
         result
 

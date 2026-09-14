@@ -59,7 +59,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
   defp tool_modules do
     root()
     |> Cyfr.Test.SourceTree.app_libs()
-    |> Enum.flat_map(&Path.wildcard(Path.join([root(), &1, "**/*.ex"])))
+    |> Enum.flat_map(&Cyfr.Test.SourceTree.files!(Path.join([root(), &1, "**/*.ex"])))
     |> Enum.filter(fn path ->
       source = Cyfr.Test.SourceTree.read(path)
       String.contains?(source, "def definition") or String.contains?(source, "def handle(")

@@ -56,11 +56,11 @@ defmodule Opus.SeedModelCatalystsTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  for {name, field, window} <- @models do
+  for {name, field, _window} <- @models do
     test "catalyst:local.#{name} runs under the host and reads its bound key", %{ctx: ctx} do
       name = unquote(name)
       field = unquote(field)
-      window = unquote(Macro.escape(window))
+      {_name, _field, window} = List.keyfind(@models, name, 0)
       ref = "catalyst:local.#{name}"
 
       # The shipped version, found rather than pinned, copied in as a fill
@@ -238,7 +238,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
   defp newest_shipped(plural, name) do
     Path.join(@seed_root, "components/#{plural}/local/#{name}/*")
-    |> Path.wildcard()
+    |> Cyfr.Test.SourceTree.files!()
     |> Enum.map(&Path.basename/1)
     |> Compendium.Semver.sort_desc()
     |> hd()

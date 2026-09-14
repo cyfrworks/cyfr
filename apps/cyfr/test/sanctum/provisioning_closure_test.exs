@@ -14,7 +14,7 @@ defmodule Sanctum.ProvisioningClosureTest do
   """
   use ExUnit.Case, async: false
 
-  alias Sanctum.Consent.{Loader, Source}
+  alias Sanctum.Consent.Source
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
@@ -107,7 +107,7 @@ defmodule Sanctum.ProvisioningClosureTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Path.wildcard(match_dot: false)
+    |> Cyfr.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       rel = Path.relative_to(src, @bundle)

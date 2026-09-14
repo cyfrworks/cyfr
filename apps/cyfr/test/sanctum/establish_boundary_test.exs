@@ -53,7 +53,7 @@ defmodule Sanctum.EstablishBoundaryTest do
 
   defp lib_files do
     for dir <- Cyfr.Test.SourceTree.app_libs(@root),
-        file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
+        file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
         do:
           {Path.relative_to(file, @root),
            Cyfr.Test.CodeLines.lines(Cyfr.Test.SourceTree.read(file))}

@@ -7,11 +7,15 @@ defmodule Cyfr.Test.SourceTree do
 
   Shares source reads across roster and inventory tests.
 
+  `files!/2` is how a scan finds its files: a glob that matches nothing
+  raises, so a scan pointed at a moved or misspelled tree cannot pass by
+  reading nothing. It needs no table.
+
   `read/1` memoizes files in an ETS table owned by the test-runner process.
   `test_helper.exs` creates the table before tests start.
 
   Falls back to a plain read when the table is absent — the opus and locus
-  suites load this module through a `Code.require_file` shim and do not
+  suites reach this module through their `cyfr` dependency and do not
   create it.
   """
 
@@ -37,6 +41,20 @@ defmodule Cyfr.Test.SourceTree do
       |> Enum.sort()
 
     if libs == [], do: raise("no umbrella app lib directory under #{root}"), else: libs
+  end
+
+  @doc """
+  `Path.wildcard/2`, refusing an empty match.
+
+  Raises with `glob` in the message when it matches nothing. `opts` pass
+  through to `Path.wildcard/2`.
+  """
+  @spec files!(String.t(), keyword()) :: [String.t()]
+  def files!(glob, opts \\ []) do
+    case Path.wildcard(glob, opts) do
+      [] -> raise "no file matches #{glob}"
+      paths -> paths
+    end
   end
 
   @doc """
@@ -69,7 +87,7 @@ defmodule Cyfr.Test.SourceTree do
   @spec sources(String.t()) :: [{Path.t(), String.t()}]
   def sources(glob) do
     glob
-    |> Path.wildcard()
+    |> files!()
     |> Enum.map(&{&1, read(&1)})
   end
 end

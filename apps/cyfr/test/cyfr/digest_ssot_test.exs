@@ -28,8 +28,10 @@ defmodule Cyfr.DigestSSOTTest do
   @bare_hex ~r/:crypto\.hash\(:sha256.*(\n.*)?\|>\s*Base\.encode16|Base\.encode16\(\s*:crypto\.hash\(:sha256/
 
   defp scanned do
-    Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex")) ++
-      Path.wildcard(Path.join(@umbrella_root, "apps/cyfr/priv/repo/migrations/*.exs"))
+    Cyfr.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex")) ++
+      Cyfr.Test.SourceTree.files!(
+        Path.join(@umbrella_root, "apps/cyfr/priv/repo/migrations/*.exs")
+      )
   end
 
   test ~s(the "sha256:" spelling is constructed only in Cyfr.Digest) do

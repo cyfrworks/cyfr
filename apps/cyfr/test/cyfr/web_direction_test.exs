@@ -33,8 +33,8 @@ defmodule Cyfr.WebDirectionTest do
   # The namespace is a directory AND a sibling root module; `dir/**/*.ex`
   # matches only the first.
   defp sources do
-    Path.wildcard(Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")) ++
-      Path.wildcard(Path.join(root(), "apps/cyfr/lib/prism_web.ex"))
+    Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")) ++
+      Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/prism_web.ex"))
   end
 
   defp reached do

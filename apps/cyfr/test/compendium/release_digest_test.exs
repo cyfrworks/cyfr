@@ -96,7 +96,7 @@ defmodule Compendium.ReleaseDigestTest do
   # ============================================================================
 
   describe "bundled and vendored manifests" do
-    @manifests Path.wildcard(
+    @manifests Cyfr.Test.SourceTree.files!(
                  Path.join([__DIR__, "../../../../seed/components/**/cyfr-manifest.json"])
                )
 
@@ -104,8 +104,6 @@ defmodule Compendium.ReleaseDigestTest do
       # If this fails, some real manifest carries a float or null in a
       # security block and would be unpublishable — fix the manifest (or the
       # subset), never loosen the canonicalizer.
-      assert @manifests != [], "no manifests found — check the fixture glob"
-
       for path <- @manifests do
         manifest = path |> File.read!() |> Jason.decode!()
 

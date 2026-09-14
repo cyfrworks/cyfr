@@ -536,6 +536,43 @@ defmodule Aqua.LoopTest do
     assert {:ok, %{status: "approved"}} = Tape.approval(ctx, approval.id)
   end
 
+  test "a steer that lands while the last answer is written is answered before the turn completes",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+    script!([{:probe, self()}, reply("hello"), reply("and hi again")])
+
+    running = run(ctx, turn)
+    assert_receive {:scripted_probe, worker, _}, 30_000
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, content: "one more thing"},
+        steer_turn_id: turn.id
+      })
+
+    send(worker, :continue)
+    assert :completed = Task.await(running, 60_000)
+
+    [_first, %{input: %{"params" => %{"messages" => messages}}}] =
+      Enum.filter(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+
+    assert Jason.encode!(messages) =~ "one more thing"
+    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.content == "and hi again"))
+  end
+
+  test "a steer names an open turn of its own thread", %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+    {:ok, elsewhere} = Threads.create(ctx)
+
+    assert {:error, :turn_over} =
+             Tape.accept(ctx, elsewhere.id, %{
+               message: %{author: ctx.user_id, content: "wrong room"},
+               steer_turn_id: turn.id
+             })
+
+    assert Threads.messages(ctx, elsewhere.id) == []
+  end
+
   test "a policy refusal is the call's own result; a dead worker stops the turn, and the sender's next line continues it with reads only",
        %{ctx: ctx, thread: thread} do
     before = roots()

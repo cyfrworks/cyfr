@@ -61,7 +61,7 @@ defmodule Cyfr.IngressInventoryTest do
     root = Path.expand("../../../..", __DIR__)
 
     found =
-      Path.wildcard(Path.join(root, "apps/*/lib/**/*.ex"))
+      Cyfr.Test.SourceTree.files!(Path.join(root, "apps/*/lib/**/*.ex"))
       |> Enum.filter(fn path ->
         source = Cyfr.Test.SourceTree.read(path)
         Enum.any?(@patterns, &String.contains?(source, &1))

@@ -34,7 +34,7 @@ defmodule Cyfr.SeedWitDriftTest do
   defp seed_wit_files do
     [@root, "seed/components/*/local/*/*/src/wit/**/*.wit"]
     |> Path.join()
-    |> Path.wildcard()
+    |> Cyfr.Test.SourceTree.files!()
   end
 
   # "catalysts" | "formulas" | ... from the seed path → the canonical

@@ -20,7 +20,7 @@ defmodule Cyfr.TelemetryCatalogTest do
   @event_re ~r/\[:cyfr(?:,\s*:[a-z_0-9]+)+\]/
 
   defp source_events do
-    Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
+    Cyfr.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
     |> Enum.reject(&String.ends_with?(&1, "lib/cyfr/telemetry/catalog.ex"))
     |> Enum.flat_map(fn path ->
       # Collapse formatting so a list wrapped across lines still matches.

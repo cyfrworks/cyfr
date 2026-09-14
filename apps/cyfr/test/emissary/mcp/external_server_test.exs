@@ -254,6 +254,14 @@ defmodule Emissary.MCP.ExternalServerTest do
       assert message =~ "authorization"
       refute message =~ "EXT_MISSING"
     end
+
+    test "a reference this server does not resolve is refused, never sent as a literal" do
+      assert {:error, message} =
+               ExternalServer.resolve_headers(%{"x-client" => "secret:EXT_TOKEN"}, "ath_test")
+
+      assert message =~ "x-client"
+      refute message =~ "EXT_TOKEN"
+    end
   end
 
   describe "credential masking" do

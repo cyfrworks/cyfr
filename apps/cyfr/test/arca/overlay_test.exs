@@ -1158,10 +1158,9 @@ defmodule Arca.OverlayTest do
       root = Path.expand("../../../..", __DIR__)
 
       offenders =
-        [
-          Path.join(root, "apps/*/lib/**/*.ex")
-        ]
-        |> Enum.flat_map(&Path.wildcard/1)
+        root
+        |> Path.join("apps/*/lib/**/*.ex")
+        |> Cyfr.Test.SourceTree.files!()
         |> Enum.flat_map(fn path ->
           source = File.read!(path)
 

@@ -52,7 +52,7 @@ defmodule Cyfr.NamespaceDirectionTest do
       root()
       |> Path.join(dir)
       |> Path.join("**/*.ex")
-      |> Path.wildcard()
+      |> Cyfr.Test.SourceTree.files!()
     end)
     |> Enum.flat_map(fn path ->
       path
@@ -116,7 +116,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   # `{rel, module}` for every live domain→web reach, with its line.
   defp domain_web_reaches do
     for dir <- @domain_dirs,
-        path <- Path.wildcard(Path.join(root(), dir <> "/**/*.ex")),
+        path <- Cyfr.Test.SourceTree.files!(Path.join(root(), dir <> "/**/*.ex")),
         rel = Path.relative_to(path, root()),
         {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
         [module] <- Regex.scan(~r/\bEmissaryWeb\.[A-Z]\w+/, line, capture: :first),

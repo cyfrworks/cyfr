@@ -18,7 +18,7 @@ defmodule Sanctum.DoorPlacementTest do
 
   test "every Session.create/1 call site sits behind Sanctum.Door.admit_identity/2" do
     callers =
-      Path.wildcard(Path.join(@lib, "**/*.ex"))
+      Cyfr.Test.SourceTree.files!(Path.join(@lib, "**/*.ex"))
       |> Enum.reject(&String.ends_with?(&1, "sanctum/session.ex"))
       |> Enum.filter(&(Cyfr.Test.SourceTree.read(&1) =~ ~r/\bSession\.create\(/))
       |> Enum.map(&Path.relative_to(&1, @lib))
@@ -36,7 +36,7 @@ defmodule Sanctum.DoorPlacementTest do
     # the one producer of that option must be the browser callback, and the
     # callback must ask the door before it does.
     mint_handers =
-      Path.wildcard(Path.join(@lib, "**/*.ex"))
+      Cyfr.Test.SourceTree.files!(Path.join(@lib, "**/*.ex"))
       |> Enum.filter(&(Cyfr.Test.SourceTree.read(&1) =~ ~r/session: \{:mint,/))
       |> Enum.map(&Path.relative_to(&1, @lib))
       |> Enum.sort()

@@ -927,7 +927,11 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
-  defp resolve_value(value, _athanor_id) when is_binary(value), do: {:ok, value}
+  defp resolve_value(value, _athanor_id) when is_binary(value) do
+    if Emissary.MCP.VaultRef.unresolved_ref?(value),
+      do: {:error, :unresolved_ref},
+      else: {:ok, value}
+  end
 
   # ============================================================================
   # Credential masking

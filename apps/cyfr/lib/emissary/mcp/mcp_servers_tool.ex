@@ -254,6 +254,11 @@ defmodule Emissary.MCP.McpServersTool do
   defp validate_header_credentials(headers) when is_map(headers) do
     Enum.find_value(headers, :ok, fn {key, value} ->
       cond do
+        Emissary.MCP.VaultRef.unresolved_ref?(value) ->
+          {:error,
+           "Header '#{key}' names a reference this server does not resolve — " <>
+             "use \"vault:ENTRY\" (a single-field vault entry)"}
+
         is_binary(value) and not Emissary.MCP.VaultRef.vault_ref?(value) and
             credential_shaped_header_name?(key) ->
           {:error,

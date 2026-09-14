@@ -38,7 +38,7 @@ defmodule Arca.UnscopedQuerySeamTest do
   # wider glob costs nothing — and the first engine-side query would
   # otherwise escape the roster by construction.
   defp sources do
-    [@root, "apps/*/lib", "**/*.ex"] |> Path.join() |> Path.wildcard()
+    [@root, "apps/*/lib", "**/*.ex"] |> Path.join() |> Cyfr.Test.SourceTree.files!()
   end
 
   # Modules whose schema declares an athanor column — the tables a query can

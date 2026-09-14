@@ -11,7 +11,7 @@ defmodule Locus.HostSurfaceTest do
   contracts (`apps/cyfr_contracts`) are not cyfr and are not counted.
 
   Opus, Arca and Compendium each have a rostered surface for the same
-  reason. This is the one that was missing.
+  reason.
 
   Each entry says what it is and, where it matters, whether it needs a
   *started* cyfr — because that is the distinction the builder release
@@ -61,18 +61,25 @@ defmodule Locus.HostSurfaceTest do
   # The shared contracts are not cyfr: their modules are named where they
   # are defined, and a reach into them is not a reach into the control plane.
   defp contracts do
-    for path <- Path.wildcard(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
-        [_, module] <- Regex.scan(~r/^defmodule ([A-Z][\w.]*)/m, File.read!(path)),
-        into: MapSet.new(),
-        do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
+    modules =
+      for path <- Path.wildcard(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
+          [_, module] <- Regex.scan(~r/^defmodule ([A-Z][\w.]*)/m, File.read!(path)),
+          into: MapSet.new(),
+          do: module
+
+    if MapSet.size(modules) == 0, do: raise("no modules found under apps/cyfr_contracts/lib")
+    modules
   end
 
-  defp reached, do: MapSet.difference(reaches(), contracts())
+  # A reach counts unless it names a contracts module exactly, so a cyfr
+  # module that shares a contracts module's namespace is still counted.
+  defp reached do
+    contracts = contracts()
 
-  defp reaches do
     for path <- Path.wildcard(Path.join(root(), "apps/locus/lib/**/*.ex")),
         line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
         [_, module] <- Regex.scan(@namespace, line),
+        not MapSet.member?(contracts, module),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
   end

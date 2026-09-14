@@ -56,7 +56,7 @@ defmodule Cyfr.EgressInventoryTest do
 
   test "every outbound HTTP site is classified" do
     found =
-      Path.wildcard(Path.join(root(), "apps/*/lib/**/*.ex"))
+      Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
       |> Enum.filter(fn path ->
         source =
           path

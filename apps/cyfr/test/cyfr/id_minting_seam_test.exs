@@ -31,7 +31,7 @@ defmodule Cyfr.IdMintingSeamTest do
   test "bare UUID minting exists only at the enumerated exceptions" do
     found =
       for dir <- Cyfr.Test.SourceTree.app_libs(@root),
-          file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
+          file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
           count = length(Regex.scan(@bare_pattern, Cyfr.Test.SourceTree.read(file))),
           count > 0,
           into: %{} do

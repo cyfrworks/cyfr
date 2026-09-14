@@ -40,7 +40,7 @@ defmodule Cyfr.VocabularyDriftTest do
   # One walk of the tree serves every pin.
   setup_all do
     sources =
-      for path <- Path.wildcard(Path.join(@root, "apps/cyfr/lib/**/*.ex")) do
+      for path <- Cyfr.Test.SourceTree.files!(Path.join(@root, "apps/cyfr/lib/**/*.ex")) do
         {Path.relative_to(path, @root),
          path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines()}
       end
@@ -87,7 +87,7 @@ defmodule Cyfr.VocabularyDriftTest do
   test "the seed, the CLI, the guides and the manifest speak soul, role and scroll" do
     stale =
       for glob <- @product_files,
-          path <- Path.wildcard(Path.join(@root, glob)),
+          path <- Cyfr.Test.SourceTree.files!(Path.join(@root, glob)),
           not String.ends_with?(path, "_test.go"),
           {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
           line =~ @old_words,

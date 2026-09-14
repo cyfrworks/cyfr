@@ -53,7 +53,7 @@ defmodule Cyfr.ContextSwapTest do
       full = Path.join(root(), path)
 
       if File.dir?(full),
-        do: Path.wildcard(Path.join(full, "**/*.ex")),
+        do: Cyfr.Test.SourceTree.files!(Path.join(full, "**/*.ex")),
         else: [full]
     end)
   end

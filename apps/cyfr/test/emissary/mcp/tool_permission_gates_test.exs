@@ -124,6 +124,15 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                    "X-Client-Version" => "1.2.3"
                  })
                )
+
+      assert {:error, message} =
+               Emissary.MCP.McpServersTool.handle(
+                 "mcp_servers",
+                 ctx,
+                 create_args(%{"X-Client-Version" => "secret:my-token"})
+               )
+
+      assert message =~ "vault:ENTRY"
     end
   end
 

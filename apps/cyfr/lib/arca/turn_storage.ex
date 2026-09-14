@@ -67,8 +67,11 @@ defmodule Arca.TurnStorage do
     and `:client_id` (the sender's retry identity).
   - `:turn` — `%{orchestrator, requested_by, model, options}` to open an
     `accepted` turn keyed by the message; `nil` for room content.
-  - `:steer_turn_id` — attach the message to an open turn instead; a turn
-    that has ended answers `{:error, :turn_over}`.
+  - `:steer_turn_id` — attach the message to an open turn of the thread
+    instead; a turn that has ended answers `{:error, :turn_over}`. The
+    turn's row is locked before the message is written, so a steer and
+    the turn's terminal write serialize: the steer lands on a turn that
+    will answer it (`finish/4`), or is refused.
 
   Answers `{:ok, %{message: row, turn: row | nil}}`. A `client_id` this
   thread already accepted answers `{:error, :duplicate_client_id}`,
@@ -86,24 +89,19 @@ defmodule Arca.TurnStorage do
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           thread = thread!(athanor_id, thread_id)
+          steer_id = Map.get(attrs, :steer_turn_id)
+          opens = Map.get(attrs, :turn)
+
+          steered =
+            if is_nil(opens) and steer_id, do: hold_open_turn!(athanor_id, thread, steer_id)
 
           row =
-            Arca.ThreadStorage.insert_message!(
-              ctx,
-              thread,
-              Map.put(message, :turn_id, Map.get(attrs, :steer_turn_id))
-            )
+            Arca.ThreadStorage.insert_message!(ctx, thread, Map.put(message, :turn_id, steer_id))
 
           turn =
-            case Map.get(attrs, :turn) do
-              nil ->
-                case Map.get(attrs, :steer_turn_id) do
-                  nil -> nil
-                  steer_id -> open_turn_of!(athanor_id, steer_id)
-                end
-
-              %{} = t ->
-                open_turn!(athanor_id, thread, row, t)
+            case opens do
+              nil -> steered
+              %{} = t -> open_turn!(athanor_id, thread, row, t)
             end
 
           %{message: %{row | turn_id: turn && turn.id}, turn: turn}
@@ -377,7 +375,9 @@ defmodule Arca.TurnStorage do
   root execution leaves `running`/`paused`, the reservation is released
   and the open running interval is added to `active_ms`. A turn already
   over is answered `{:error, :already_finished}`; a turn with no root yet
-  (still `accepted`) closes on its own. Event `turn.<status>`.
+  (still `accepted`) closes on its own. A turn with a steer past its
+  boundary refuses `completed` with `{:error, :steer_pending}`: its loop
+  goes on to answer the steer. Event `turn.<status>`.
   """
   @spec finish(Context.t(), String.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
   def finish(%Context{} = ctx, turn_id, status, attrs \\ %{}) when status in @terminal do
@@ -387,6 +387,9 @@ defmodule Arca.TurnStorage do
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status in @terminal, do: Arca.Repo.rollback(:already_finished)
+
+        if status == "completed" and steer_rows(athanor_id, turn) != [],
+          do: Arca.Repo.rollback(:steer_pending)
 
         ran =
           if turn.attempt do
@@ -2067,11 +2070,21 @@ defmodule Arca.TurnStorage do
     end
   end
 
+  # A steer's turn, its row locked as the transaction's first write — the
+  # order every runner-owned write follows (turn, then thread).
   # arca:db-raise-ok inside the caller's transaction
-  defp open_turn_of!(athanor_id, turn_id) do
-    case turn!(athanor_id, turn_id) do
-      %Turn{status: status} = turn when status in @open -> turn
-      _ -> Arca.Repo.rollback(:turn_over)
+  defp hold_open_turn!(athanor_id, %Thread{id: thread_id}, turn_id) do
+    held =
+      from(t in Turn,
+        where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.thread_id == ^thread_id,
+        where: t.status in ^@open,
+        update: [set: [status: t.status]]
+      )
+      |> Arca.Repo.update_all([])
+
+    case held do
+      {1, _} -> turn!(athanor_id, turn_id)
+      {0, _} -> Arca.Repo.rollback(:turn_over)
     end
   end
 

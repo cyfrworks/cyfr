@@ -189,7 +189,7 @@ defmodule Aqua.RunnerTest do
     thread: thread
   } do
     other = second_member(ctx)
-    script!([{:probe, self()}, reply("first"), reply("second")])
+    script!([{:probe, self()}, reply("first"), reply("steered"), reply("second")])
 
     {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
     assert_receive {:scripted_probe, worker, _}, 30_000
@@ -215,9 +215,11 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, first)
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, second)
 
-    # The steer rode the first turn.
+    # The steer rode the first turn, which answered it before completing.
     rows = Threads.messages(ctx, thread.id)
     assert %{turn_id: ^first} = Enum.find(rows, &(&1.content == "@aqua also this"))
+    assert %{turn_id: ^first} = Enum.find(rows, &(&1.content == "steered"))
+    assert %{turn_id: ^second} = Enum.find(rows, &(&1.content == "second"))
   end
 
   test "the sender's line to another agent waits behind the running turn", %{

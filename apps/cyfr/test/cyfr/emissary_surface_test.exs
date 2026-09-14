@@ -31,7 +31,7 @@ defmodule Cyfr.EmissarySurfaceTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp reached do
-    for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/sanctum/**/*.ex")),
+    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/sanctum/**/*.ex")),
         line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new() do

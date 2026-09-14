@@ -30,7 +30,7 @@ defmodule Cyfr.WithElseScopeTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp source_files do
-    Path.wildcard(Path.join(root(), "apps/*/lib/**/*.ex"))
+    Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
   end
 
   # Every variable name appearing anywhere in an AST fragment. `_`-prefixed

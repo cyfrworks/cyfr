@@ -47,7 +47,7 @@ defmodule Cyfr.ComponentRefGrammarTest do
     offenders =
       root()
       |> Cyfr.Test.SourceTree.app_libs()
-      |> Enum.flat_map(&Path.wildcard(Path.join([root(), &1, "**/*.ex"])))
+      |> Enum.flat_map(&Cyfr.Test.SourceTree.files!(Path.join([root(), &1, "**/*.ex"])))
       |> Enum.reject(&String.ends_with?(&1, "component_ref.ex"))
       |> Enum.flat_map(fn path ->
         path
