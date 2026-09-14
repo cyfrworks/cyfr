@@ -42,9 +42,8 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
   end
 
   test "zero limits are strictly tighter than type defaults on three fields" do
-    # Guards against anyone "simplifying" the literals into a derivation:
-    # Limits.defaults/1 is looser on exactly these, so a derivation would
-    # silently widen what unconsented code gets.
+    # Limits.defaults/1 is looser on exactly these; zero limits never take
+    # them from it.
     zero = Authority.zero_limits()
     default = Sanctum.Limits.defaults(:reagent)
 
@@ -53,16 +52,14 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
     assert zero.max_concurrent_tasks == 1 and default.max_concurrent_tasks == 10
   end
 
-  test "zero byte ceilings equal the shared Limits defaults" do
-    # The doctrine keeps ZeroAuthority's numbers literal (never derived),
-    # but they are meant to be the SAME numbers Sanctum.Limits owns for
-    # everyone else. This pin turns a divergence — either side edited
-    # alone — into a red test instead of a silent split.
+  test "zero byte ceilings and rate limit are the shared Limits defaults" do
     zero = Authority.zero_limits()
 
     assert zero.max_request_size == Limits.default_max_request_size()
     assert zero.max_memory_bytes == Limits.default_max_memory_bytes()
     assert zero.max_response_size == Limits.default_max_response_size()
+    assert zero.rate_limit == Limits.default_rate_limit()
+    assert Limits.defaults(:reagent).rate_limit == Limits.default_rate_limit()
   end
 
   test "zero budget admits exactly one spawn" do

@@ -82,13 +82,11 @@ defmodule Sanctum.Limits do
   @spec default_max_response_size() :: pos_integer()
   def default_max_response_size, do: @default_max_response_size
 
-  # One spelling each of the other shared ceilings. The megabyte appeared
-  # as a literal at six sites and the 64 MiB memory bound at four; a
-  # change to one spelling silently desynchronized the rest. The
-  # ZeroAuthority doctrine keeps ITS copies literal on purpose
-  # (Sanctum.Authority) — a test pins them equal to these.
+  # One spelling each of the other shared defaults; `Sanctum.Authority`'s
+  # zero limits take their byte ceilings and rate limit from here.
   @default_max_request_size 1_048_576
   @default_max_memory_bytes 67_108_864
+  @default_rate_limit %{requests: 100, window: "1m"}
 
   @doc "The default per-call request-size ceiling (1 MiB)."
   @spec default_max_request_size() :: pos_integer()
@@ -98,13 +96,17 @@ defmodule Sanctum.Limits do
   @spec default_max_memory_bytes() :: pos_integer()
   def default_max_memory_bytes, do: @default_max_memory_bytes
 
+  @doc "The default invocation rate limit (100 per minute)."
+  @spec default_rate_limit() :: rate_limit()
+  def default_rate_limit, do: @default_rate_limit
+
   @type_defaults %{
     catalyst: %{
       timeout: "3m",
       max_memory_bytes: @default_max_memory_bytes,
       max_request_size: @default_max_request_size,
       max_response_size: @default_max_response_size,
-      rate_limit: %{requests: 100, window: "1m"},
+      rate_limit: @default_rate_limit,
       max_concurrent_tasks: 10,
       batch_timeout: "5m"
     },
@@ -113,7 +115,7 @@ defmodule Sanctum.Limits do
       max_memory_bytes: @default_max_memory_bytes,
       max_request_size: @default_max_request_size,
       max_response_size: @default_max_response_size,
-      rate_limit: %{requests: 100, window: "1m"},
+      rate_limit: @default_rate_limit,
       max_concurrent_tasks: 10,
       batch_timeout: "5m"
     },
@@ -122,7 +124,7 @@ defmodule Sanctum.Limits do
       max_memory_bytes: @default_max_memory_bytes,
       max_request_size: @default_max_request_size,
       max_response_size: @default_max_response_size,
-      rate_limit: %{requests: 100, window: "1m"},
+      rate_limit: @default_rate_limit,
       max_concurrent_tasks: 10,
       batch_timeout: "5m"
     },
@@ -131,7 +133,7 @@ defmodule Sanctum.Limits do
       max_memory_bytes: @default_max_memory_bytes,
       max_request_size: @default_max_request_size,
       max_response_size: @default_max_response_size,
-      rate_limit: %{requests: 100, window: "1m"},
+      rate_limit: @default_rate_limit,
       max_concurrent_tasks: 10,
       batch_timeout: "5m"
     },
@@ -142,7 +144,7 @@ defmodule Sanctum.Limits do
       max_memory_bytes: @default_max_memory_bytes,
       max_request_size: @default_max_request_size,
       max_response_size: @default_max_response_size,
-      rate_limit: %{requests: 100, window: "1m"},
+      rate_limit: @default_rate_limit,
       max_concurrent_tasks: 10,
       batch_timeout: "5m"
     }

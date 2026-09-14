@@ -24,10 +24,10 @@ defmodule Sanctum.Authority do
 
   `zero/0` is the authority of code with no applicable profile: no
   resources, no control-plane access, only inert invocation, under the
-  `zero_limits/0` constants. Those constants are deliberately literals —
-  `Sanctum.Limits.defaults/1` is looser on three of the seven fields
-  (timeout, batch_timeout, max_concurrent_tasks), so deriving them would
-  silently widen what unconsented code gets.
+  `zero_limits/0` constants. Their byte ceilings and rate limit are the
+  shared `Sanctum.Limits` defaults; the other three fields (timeout,
+  batch_timeout, max_concurrent_tasks) are deliberately tighter than
+  `Sanctum.Limits.defaults/1`, so they are never derived from it.
 
   ## Root budget
 
@@ -106,13 +106,14 @@ defmodule Sanctum.Authority do
   # self-deadlock a tenant. Asserted against live config in the opus suite.
   @depth_cap 8
 
-  # ZeroAuthority limits — absolute literal constants (see moduledoc).
+  # ZeroAuthority limits (see moduledoc): the timeouts and the task bound
+  # stay tighter than any type default.
   @zero_limits %Limits{
     timeout: "30s",
-    max_memory_bytes: 67_108_864,
-    max_request_size: 1_048_576,
-    max_response_size: 5_242_880,
-    rate_limit: %{requests: 100, window: "1m"},
+    max_memory_bytes: Limits.default_max_memory_bytes(),
+    max_request_size: Limits.default_max_request_size(),
+    max_response_size: Limits.default_max_response_size(),
+    rate_limit: Limits.default_rate_limit(),
     max_concurrent_tasks: 1,
     batch_timeout: "30s"
   }
