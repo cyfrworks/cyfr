@@ -212,7 +212,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused_reason, nil)
     |> assign(:queued, 0)
     |> assign(:turn_user, nil)
-    |> assign(:partials, [])
+    |> assign(:partials, Aqua.Loop.Stream.new())
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
     |> assign(:grants, MapSet.new())
@@ -637,7 +637,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused, false)
     |> assign(:paused_reason, nil)
     |> assign(:turn_user, user_id)
-    |> assign(:partials, [])
+    |> assign(:partials, Aqua.Loop.Stream.new())
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
   end
@@ -659,7 +659,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:running, false)
     |> assign(:paused, true)
     |> assign(:paused_reason, reason)
-    |> assign(:partials, [])
+    |> assign(:partials, Aqua.Loop.Stream.new())
     |> assign(:tool_activity, [])
   end
 
@@ -671,15 +671,16 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused, false)
     |> assign(:paused_reason, nil)
     |> assign(:turn_user, nil)
-    |> assign(:partials, [])
+    |> assign(:partials, Aqua.Loop.Stream.new())
     |> assign(:tool_activity, [])
     |> assign(:cancel_requested, false)
   end
 
-  defp handle_thread_event(%{assigns: %{running: true}} = socket, {:delta, delta}),
-    do: assign(socket, :partials, Aqua.Loop.Stream.add(socket.assigns.partials, delta))
+  defp handle_thread_event(socket, {:turn_generation, _turn_id, generation}),
+    do: assign(socket, :partials, Aqua.Loop.Stream.new(generation))
 
-  defp handle_thread_event(socket, {:delta, _delta}), do: socket
+  defp handle_thread_event(socket, {:delta, delta}),
+    do: assign(socket, :partials, Aqua.Loop.Stream.add(socket.assigns.partials, delta))
 
   defp handle_thread_event(socket, {:tool_activity, list}),
     do: assign(socket, :tool_activity, list)
@@ -1283,7 +1284,7 @@ defmodule PrismWeb.ThreadPaneLive do
         class="flex-1 overflow-y-auto px-4 py-3 space-y-3"
       >
         <div
-          :if={not @any_messages and @partials == []}
+          :if={not @any_messages and Aqua.Loop.Stream.texts(@partials) == []}
           class="flex flex-col items-center justify-center h-full gap-2 text-sm text-gray-500"
         >
           <%= if @preparing? do %>
@@ -1434,7 +1435,7 @@ defmodule PrismWeb.ThreadPaneLive do
         </ul>
 
         <.message_bubble
-          :for={partial <- @partials}
+          :for={partial <- Aqua.Loop.Stream.texts(@partials)}
           id={@dom <> "-streaming-" <> partial.step_id}
           role="assistant"
           content={partial.text}
@@ -1442,7 +1443,7 @@ defmodule PrismWeb.ThreadPaneLive do
         />
 
         <div
-          :if={@running and @partials == [] and @tool_activity == []}
+          :if={@running and Aqua.Loop.Stream.texts(@partials) == [] and @tool_activity == []}
           class="flex items-center gap-2 text-xs text-gray-500"
         >
           <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />

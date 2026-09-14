@@ -794,10 +794,11 @@ defmodule Aqua.LoopTest do
     assert ref =~ @model and user == ctx.user_id
   end
 
-  test "a chat step's text streams to the thread in order, once, before its row lands", %{
-    ctx: ctx,
-    thread: thread
-  } do
+  test "a chat step's text streams to the thread in order, once, in its turn's generation, before its row lands",
+       %{
+         ctx: ctx,
+         thread: thread
+       } do
     turn = accept!(ctx, thread, "@aqua hello")
     turn_id = turn.id
 
@@ -815,19 +816,62 @@ defmodule Aqua.LoopTest do
     assert :completed = Task.await(run(ctx, turn), 30_000)
     assert_receive {:thread, _, {:turn_finished}}, 5_000
 
+    {:ok, running} = Tape.turn(ctx, turn.id)
+    generation = Aqua.Loop.Stream.generation(running)
+
     streamed =
       for {:thread, _, event} <- drain(),
-          match?({:delta, _}, event) or match?({:message, %{kind: "text", author: "aqua"}}, event),
+          match?({:turn_generation, _, _}, event) or match?({:delta, _}, event) or
+            match?({:message, %{kind: "text", author: "aqua"}}, event),
           do: event
 
     assert [
-             {:delta, %{turn_id: ^turn_id, step_id: step_id, text: "hi ", role: nil, seq: first}},
+             {:turn_generation, ^turn_id, ^generation},
+             {:delta,
+              %{
+                turn_id: ^turn_id,
+                generation: ^generation,
+                source: ^turn_id,
+                step_id: step_id,
+                text: "hi ",
+                role: nil,
+                seq: first
+              }},
              {:delta, %{step_id: step_id, text: "there", seq: second}},
              {:message, %{content: "hi there"} = row}
            ] = streamed
 
     assert second > first
     assert Tape.payload(row)["step_id"] == step_id
+  end
+
+  test "a retried chat step's text replaces the refused step's, and the refused step's late text is dropped",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+
+    script!([
+      {:emit, [%{"type" => "text.delta", "text" => "partial answer"}]},
+      {:refuse, %{"type" => "rate_limited", "message" => "slow down"}},
+      {:emit, [%{"type" => "text.delta", "text" => "the answer"}]},
+      reply("the answer")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    events = for {:thread, _, event} <- drain(), do: event
+    [{:turn_generation, _, generation}] = for {:turn_generation, _, _} = e <- events, do: e
+    deltas = for {:delta, delta} <- events, do: delta
+
+    assert [%{text: "partial answer", ordinal: refused}, %{text: "the answer", ordinal: retried}] =
+             deltas
+
+    assert retried > refused
+
+    [first | _] = deltas
+    kept = Enum.reduce(deltas, Aqua.Loop.Stream.new(generation), &Aqua.Loop.Stream.add(&2, &1))
+    late = Aqua.Loop.Stream.add(kept, %{first | seq: {99, 99}, text: " and more"})
+
+    assert [%{text: "the answer"}] = Aqua.Loop.Stream.texts(late)
   end
 
   test "a model its catalyst does not know ends the turn before any request, and a missing key asks for setup",

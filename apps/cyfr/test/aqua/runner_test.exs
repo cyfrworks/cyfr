@@ -259,15 +259,46 @@ defmodule Aqua.RunnerTest do
     assert_receive {:scripted_probe, worker, _}, 30_000
 
     wait_until(fn ->
-      match?(
-        %{running: true, turn_id: ^turn_id, partials: [%{text: "Hello", role: nil}]},
-        Runner.state(thread.id, ctx.athanor_id)
-      )
+      case Runner.state(thread.id, ctx.athanor_id) do
+        %{running: true, turn_id: ^turn_id, partials: partials} ->
+          match?([%{text: "Hello", role: nil}], Aqua.Loop.Stream.texts(partials))
+
+        _ ->
+          false
+      end
     end)
+
+    # A delta of another generation — a loop the turn was taken from — is
+    # not kept.
+    %{partials: %{generation: generation}} = Runner.state(thread.id, ctx.athanor_id)
+
+    [step_id] =
+      for %{step_id: id} <-
+            Aqua.Loop.Stream.texts(Runner.state(thread.id, ctx.athanor_id).partials),
+          do: id
+
+    Aqua.Tape.announce(
+      ctx,
+      thread.id,
+      {:delta,
+       %{
+         turn_id: turn_id,
+         generation: "not-" <> generation,
+         source: turn_id,
+         step_id: step_id,
+         ordinal: 9,
+         seq: {9, 9},
+         text: " stale",
+         role: nil
+       }}
+    )
+
+    %{partials: partials} = Runner.state(thread.id, ctx.athanor_id)
+    assert [%{text: "Hello"}] = Aqua.Loop.Stream.texts(partials)
 
     send(worker, :continue)
     assert_receive {:thread, _, {:turn_finished}}, 60_000
-    assert %{partials: []} = Runner.state(thread.id, ctx.athanor_id)
+    assert Aqua.Loop.Stream.texts(Runner.state(thread.id, ctx.athanor_id).partials) == []
   end
 
   test "a steer offered again is the same steer", %{ctx: ctx, thread: thread} do

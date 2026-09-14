@@ -103,6 +103,7 @@ defmodule Aqua.Loop do
     with {:ok, turn} <- Tape.turn(ctx, Keyword.fetch!(opts, :turn_id)) do
       case claim_and_start(ctx, turn) do
         {:ok, state} ->
+          announce_generation(state.spec.guest, state.turn)
           conclude(state, loop(state))
 
         {:error, {:after_claim, claim, turn, reason}} ->
@@ -183,6 +184,8 @@ defmodule Aqua.Loop do
         since: now(),
         active_ms: turn.active_ms
       }
+
+      announce_generation(spec.guest, turn)
 
       case settle(state) do
         {:continue, state} -> conclude(state, loop(state))
@@ -570,22 +573,34 @@ defmodule Aqua.Loop do
     end
   end
 
-  # A clone's text streams under the soul's turn, named by its role.
+  # A clone's text streams under the soul's turn and generation, from its
+  # own turn and named by its role.
   defp open_stream(%State{} = state, %{purpose: "chat"} = step) do
-    {turn_id, role} =
+    {soul, role} =
       if state.clone?,
-        do: {state.parent.turn.id, state.spec.agent["name"]},
-        else: {state.turn.id, nil}
+        do: {state.parent.turn, state.spec.agent["name"]},
+        else: {state.turn, nil}
 
     Aqua.Loop.Stream.open(guest(state), step.child_execution_id, %{
       thread_id: state.turn.thread_id,
-      turn_id: turn_id,
+      turn_id: soul.id,
+      generation: Aqua.Loop.Stream.generation(soul),
+      source: state.turn.id,
       step_id: step.id,
+      ordinal: state.steps,
       role: role
     })
   end
 
   defp open_stream(_state, _step), do: nil
+
+  defp announce_generation(guest, turn) do
+    Tape.announce(
+      guest,
+      turn.thread_id,
+      {:turn_generation, turn.id, Aqua.Loop.Stream.generation(turn)}
+    )
+  end
 
   # The whole response lands before any call runs.
   defp on_response(%State{} = state, step, data) do

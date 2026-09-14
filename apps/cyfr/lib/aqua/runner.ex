@@ -44,9 +44,10 @@ defmodule Aqua.Runner do
   `{:turn_started, turn_id}`, `{:queued, n}`, `{:grants, set}`,
   `{:restart_prompt, text, user_id}`, `{:error, text}`; the loop
   announces `{:usage, _}`, `{:tool_activity, _}`, `{:intents, _, _}`,
-  `{:consent_required, _, _}` and a chat step's streamed text as
-  `{:delta, _}` (`Aqua.Loop.Stream`), which the runner keeps for the
-  running turn until each step's text row lands.
+  `{:consent_required, _, _}`, the running loop's
+  `{:turn_generation, turn_id, generation}` and a chat step's streamed
+  text as `{:delta, _}` (`Aqua.Loop.Stream`), which the runner keeps for
+  the running turn's current generation until each step's text row lands.
   """
 
   use GenServer, restart: :transient
@@ -268,8 +269,8 @@ defmodule Aqua.Runner do
           queue: [],
           usage: %{input: 0, output: 0},
           tool_activity: [],
-          # The running turn's partial answers (`Aqua.Loop.Stream.add/2`).
-          partials: [],
+          # The running turn's streamed answers (`Aqua.Loop.Stream`).
+          partials: Aqua.Loop.Stream.new(),
           grants: MapSet.new(),
           orchestrator: thread.orchestrator,
           idle_ref: nil
@@ -553,7 +554,7 @@ defmodule Aqua.Runner do
         paused: nil,
         usage: %{input: 0, output: 0},
         tool_activity: [],
-        partials: []
+        partials: Aqua.Loop.Stream.new()
     }
 
     broadcast(state, {:turn_starting, entry.user_id})
@@ -609,6 +610,12 @@ defmodule Aqua.Runner do
 
   def handle_info({:thread, _id, {:tool_activity, list}}, state),
     do: {:noreply, %{state | tool_activity: list}}
+
+  def handle_info(
+        {:thread, _id, {:turn_generation, turn_id, generation}},
+        %{live: %{turn_id: turn_id}} = state
+      ),
+      do: {:noreply, %{state | partials: Aqua.Loop.Stream.new(generation)}}
 
   def handle_info(
         {:thread, _id, {:delta, %{turn_id: turn_id} = delta}},
@@ -942,7 +949,7 @@ defmodule Aqua.Runner do
       paused_reason: state.paused && state.paused.reason,
       athanor_id: state.athanor_id,
       turn_id: current && current.turn_id,
-      partials: if(state.live, do: state.partials, else: []),
+      partials: if(state.live, do: state.partials, else: Aqua.Loop.Stream.new()),
       tool_activity: state.tool_activity,
       usage: state.usage,
       grants: state.grants,

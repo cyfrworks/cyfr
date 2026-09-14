@@ -18,14 +18,15 @@ defmodule Opus.Emit do
   durable event. A refusal is answered to the guest and never stops the
   run.
 
-  Streamed text is masked across event boundaries. The `text` of
-  `text.delta` events and the `arguments` of each index's
-  `tool_call.delta` events are held back by one less than the longest
-  masked form of any credential (`Opus.SecretMasker.max_length/1`), so a
-  credential split over two deltas is masked whole. What is held goes
-  out ahead of the next event of any other type; an emitter closed
-  without one drops it (the execution's output is masked whole when it
-  finalizes).
+  Streamed text is masked across event boundaries. Each logical stream —
+  the answer's `text.delta` text, and each index's `tool_call.delta`
+  arguments — is held back by one less than the longest masked form of any
+  credential (`Opus.SecretMasker.max_length/1`), so a credential split over
+  two deltas is masked whole whatever events arrive between them. A
+  stream's held text goes out when that stream ends: a call's arguments
+  ahead of its own `tool_call.end`, and everything still held ahead of
+  `stop` or `error`. An emitter closed before then drops it (the
+  execution's output is masked whole when it finalizes).
 
   An emitter holds that text in a process linked to the one that opens
   it; `close/1` stops it.
@@ -155,8 +156,9 @@ defmodule Opus.Emit do
     end)
   end
 
-  # What an event releases, given the text held: a delta's masked text
-  # less its held tail, or every held tail and then the event itself.
+  # What an event releases, given the text held: a delta's masked text less
+  # its held tail; the ending of a stream's held tail and then the event;
+  # any other event alone, every stream still held.
   defp release(held, %{"type" => "text.delta", "text" => text} = event, secrets, hold)
        when is_binary(text),
        do: stream(held, :text, event, "text", text, secrets, hold)
@@ -170,10 +172,16 @@ defmodule Opus.Emit do
        when is_integer(index) and is_binary(arguments),
        do: stream(held, {:arguments, index}, event, "arguments", arguments, secrets, hold)
 
-  defp release(held, event, secrets, _hold) do
-    {Enum.map(held_events(held), &SecretMasker.mask(&1, secrets)) ++
-       [SecretMasker.mask(event, secrets)], %{}}
+  defp release(held, %{"type" => "tool_call.end", "index" => index} = event, secrets, _hold) do
+    {ended, held} = Map.split(held, [{:arguments, index}])
+    {tails(ended, secrets) ++ [SecretMasker.mask(event, secrets)], held}
   end
+
+  defp release(held, %{"type" => type} = event, secrets, _hold) when type in ["stop", "error"] do
+    {tails(held, secrets) ++ [SecretMasker.mask(event, secrets)], %{}}
+  end
+
+  defp release(held, event, secrets, _hold), do: {[SecretMasker.mask(event, secrets)], held}
 
   defp stream(held, key, event, field, text, secrets, hold) do
     {template, pending} = Map.get(held, key, {event, ""})
@@ -189,9 +197,9 @@ defmodule Opus.Emit do
   defp hold_back(text, 0), do: {text, ""}
   defp hold_back(text, hold), do: String.split_at(text, -hold)
 
-  # Held text, in stream order: the answer's text, then each call's
-  # arguments by index.
-  defp held_events(held) do
+  # Held tails as the deltas they finish, in stream order: the answer's
+  # text, then each call's arguments by index.
+  defp tails(held, secrets) do
     held
     |> Enum.sort_by(fn
       {:text, _} -> {0, 0}
@@ -201,6 +209,7 @@ defmodule Opus.Emit do
       {:text, {template, tail}} -> Map.put(template, "text", tail)
       {{:arguments, _}, {template, tail}} -> Map.put(template, "arguments", tail)
     end)
+    |> Enum.map(&SecretMasker.mask(&1, secrets))
   end
 
   defp origin({:attributed, node}), do: [origin: "guest", node: node]

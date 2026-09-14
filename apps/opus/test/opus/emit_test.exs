@@ -62,27 +62,64 @@ defmodule Opus.EmitTest do
     assert List.last(events) == %{"type" => "stop", "stop_reason" => "end_turn"}
   end
 
-  test "tool-call arguments are held per index and flushed in order before the next event",
+  test "a credential split across text deltas stays masked whatever events arrive between them",
        %{ctx: ctx, stream_id: stream_id} do
     emitter = open(ctx, stream_id, secrets: [@secret])
+    {head, tail} = String.split_at(@secret, 10)
 
+    emit(emitter, %{"type" => "text.delta", "text" => "key: " <> head})
+    emit(emitter, %{"type" => "usage", "usage" => %{"input_tokens" => 3}})
+    emit(emitter, %{"type" => "tool_call.start", "index" => 0, "id" => "c1", "name" => "files"})
+    emit(emitter, %{"type" => "tool_call.end", "index" => 0})
+    emit(emitter, %{"type" => "text.delta", "text" => tail <> " done"})
+    emit(emitter, %{"type" => "stop", "stop_reason" => "end_turn"})
+
+    events = received()
+    refute inspect(events) =~ head
+    refute inspect(events) =~ tail
+    text = events |> Enum.filter(&(&1["type"] == "text.delta")) |> Enum.map_join(& &1["text"])
+    assert text == "key: [REDACTED] done"
+    assert List.last(events)["type"] == "stop"
+  end
+
+  test "each call's arguments are held until that call ends, not another's",
+       %{ctx: ctx, stream_id: stream_id} do
+    emitter = open(ctx, stream_id, secrets: [@secret])
+    {head, tail} = String.split_at(@secret, 10)
+
+    emit(emitter, %{"type" => "tool_call.delta", "index" => 0, "arguments" => ~s({"a":") <> head})
+    emit(emitter, %{"type" => "tool_call.start", "index" => 1, "id" => "c2", "name" => "notes"})
     emit(emitter, %{"type" => "tool_call.delta", "index" => 1, "arguments" => ~s({"b":1})})
-
-    emit(emitter, %{
-      "type" => "tool_call.delta",
-      "index" => 0,
-      "arguments" => ~s({"a":"#{@secret}"})
-    })
-
+    emit(emitter, %{"type" => "tool_call.end", "index" => 1})
+    emit(emitter, %{"type" => "tool_call.delta", "index" => 0, "arguments" => tail <> ~s("})})
     emit(emitter, %{"type" => "tool_call.end", "index" => 0})
 
     events = received()
-    refute inspect(events) =~ @secret
+    refute inspect(events) =~ head
+    refute inspect(events) =~ tail
 
-    assert Enum.map(events, &{&1["type"], &1["index"]}) ==
-             [{"tool_call.delta", 0}, {"tool_call.delta", 1}, {"tool_call.end", 0}]
+    arguments = fn index ->
+      events
+      |> Enum.filter(&(&1["type"] == "tool_call.delta" and &1["index"] == index))
+      |> Enum.map_join(& &1["arguments"])
+    end
 
-    assert Enum.at(events, 0)["arguments"] == ~s({"a":"[REDACTED]"})
+    assert arguments.(0) == ~s({"a":"[REDACTED]"})
+    assert arguments.(1) == ~s({"b":1})
+
+    assert events |> Enum.filter(&(&1["type"] == "tool_call.end")) |> Enum.map(& &1["index"]) ==
+             [1, 0]
+
+    # A call's held arguments go out ahead of its own end.
+    ends_at = Enum.find_index(events, &(&1["type"] == "tool_call.end" and &1["index"] == 0))
+
+    last_delta_at =
+      Enum.find_index(
+        Enum.reverse(events),
+        &(&1["index"] == 0 and &1["type"] == "tool_call.delta")
+      )
+
+    assert length(events) - 1 - last_delta_at < ends_at
   end
 
   test "without credentials nothing is held", %{ctx: ctx, stream_id: stream_id} do
