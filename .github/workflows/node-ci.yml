@@ -7,11 +7,15 @@ on:
     branches: [main]
     paths:
       - 'apps/mcp-bridge/**'
+      # The authentication vectors the bridge's suite reproduces.
+      - 'tests/fixtures/bridge_auth.json'
       - 'Dockerfile.node'
       - '.github/workflows/node-ci.yml'
   pull_request:
     paths:
       - 'apps/mcp-bridge/**'
+      # The authentication vectors the bridge's suite reproduces.
+      - 'tests/fixtures/bridge_auth.json'
       - 'Dockerfile.node'
       - '.github/workflows/node-ci.yml'
 
