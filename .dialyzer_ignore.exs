@@ -30,6 +30,9 @@
   {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
   {"lib/emissary_web/plugs/webhook_rate_limit.ex", :pattern_match},
   {"lib/emissary_web/sse.ex", :missing_range},
+  # The step bench's harness, `Cyfr.Test.StepBench`, is test support: it is
+  # compiled only under MIX_ENV=test, the one environment the task runs in.
+  {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},
   {"lib/opus.ex", :extra_range},
   {"lib/opus/component_cache.ex", :unknown_type},
   {"lib/opus/execution_event_buffer/sequence.ex", :missing_range},

@@ -15,6 +15,7 @@ defmodule Cyfr.Execution do
   """
 
   alias Cyfr.Authority.RootSelect
+  alias Cyfr.Execution.StepSpans
   alias Sanctum.Context
 
   @type impl :: module()
@@ -129,11 +130,21 @@ defmodule Cyfr.Execution do
   execution's input in place of `input`, for a request that carries
   transient content (the room excerpt); the row's `input_hash` and
   envelope still describe `input`, the bytes that were sent.
+
+  The call is timed (`Cyfr.Execution.StepSpans`): its clock rides to the
+  engine in `opts` as `:step_spans`, replacing any the caller set.
   """
   @spec run_child(Cyfr.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
           {:ok, map()} | {:error, term()}
-  def run_child(authority, reference, need, input, opts) when is_list(opts),
-    do: call(:run_child, [authority, reference, need, input, opts])
+  def run_child(authority, reference, need, input, opts) when is_list(opts) do
+    clock = StepSpans.start(reference, opts)
+
+    try do
+      call(:run_child, [authority, reference, need, input, Keyword.put(opts, :step_spans, clock)])
+    after
+      StepSpans.returned(clock)
+    end
+  end
 
   @doc """
   Claim a turn's logical root: the `kind: "turn"` execution, its attempt,

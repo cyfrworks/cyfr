@@ -17,6 +17,11 @@ defmodule Cyfr.MixProject do
     ]
   end
 
+  # The step bench builds its estate from test fixtures in the test database.
+  def cli do
+    [preferred_envs: ["cyfr.bench.step": :test]]
+  end
+
   defp deps do
     [
       {:dotenvy, "~> 0.9"},
@@ -45,6 +50,7 @@ defmodule Cyfr.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      "cyfr.bench.step": ["ecto.create --quiet", "ecto.migrate --quiet", "cyfr.bench.step"],
       "assets.deploy": ["tailwind prism --minify", "esbuild prism --minify", "phx.digest"]
     ]
   end

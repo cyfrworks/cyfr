@@ -58,6 +58,8 @@ defmodule Opus.Runtime do
   - `:authority_required` - Defaults to true: a nil `:authority` raises instead
     of executing (a WASM run always carries one; this is the final invariant
     guard). Pass `false` only for authority-free harness runs in tests.
+  - `:step_spans` - The caller's `Cyfr.Execution.StepSpans` clock, marked
+    when the guest starts and when its emitter pushes a delta
 
   ## Examples
 
@@ -87,6 +89,7 @@ defmodule Opus.Runtime do
     authority = Keyword.get(opts, :authority)
     declared_needs = Keyword.get(opts, :declared_needs)
     activation_digest = Keyword.get(opts, :activation_digest)
+    step_spans = Keyword.get(opts, :step_spans)
 
     # Second line of defense behind the executor's own check: if an opts
     # filter between the caller and here dropped :authority but kept the
@@ -121,7 +124,9 @@ defmodule Opus.Runtime do
       activation_digest: activation_digest,
       # The attempt that owns this execution's row, for the lineage of
       # every call a formula makes.
-      attempt: Keyword.get(opts, :execution_attempt)
+      attempt: Keyword.get(opts, :execution_attempt),
+      # The caller's clock, marked by each event the emitter pushes.
+      step_spans: step_spans
     }
 
     # Build imports and collect cleanup refs
@@ -182,6 +187,7 @@ defmodule Opus.Runtime do
                    ) do
                 {:ok, pid} ->
                   try do
+                    Cyfr.Execution.StepSpans.guest_started(step_spans)
                     result = execute_with_convention(pid, input, component_type: component_type)
                     GenServer.stop(pid, :normal)
                     add_execution_metadata(result, %{})
@@ -348,7 +354,8 @@ defmodule Opus.Runtime do
       authority: authority_info.authority,
       budget_id: root_execution_id,
       secrets: Map.values(preloaded),
-      tracked_id: execution_id
+      tracked_id: execution_id,
+      step_spans: authority_info.step_spans
     )
   end
 

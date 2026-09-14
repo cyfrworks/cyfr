@@ -324,6 +324,8 @@ defmodule Opus.Chain do
         # hold row its charge names, and the step on its generation.
         |> Arca.QueryHelpers.maybe_put(:charge, hold_of(decision.authority, opts))
         |> Arca.QueryHelpers.maybe_put(:step, step_of(opts))
+        # The port's clock (`Cyfr.Execution.StepSpans`), marked by the run.
+        |> Arca.QueryHelpers.maybe_put(:step_spans, Keyword.get(opts, :step_spans))
 
       Opus.Executor.run(ctx, decision.reference, input, exec_opts)
     end

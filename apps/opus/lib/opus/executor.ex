@@ -590,6 +590,7 @@ defmodule Opus.Executor do
          :ok <- check_response_size(p, masked_output) do
       completed_record = ExecutionRecord.complete(p.record, masked_output)
       write_result = Opus.Host.record_complete(completed_record)
+      if write_result == :ok, do: Cyfr.Execution.StepSpans.completed(p.opts[:step_spans])
 
       audit_error =
         case write_result do
@@ -1112,7 +1113,10 @@ defmodule Opus.Executor do
     :authority,
     :authority_required,
     :declared_needs,
-    :activation_digest
+    :activation_digest,
+    # The caller's latency clock (`Cyfr.Execution.StepSpans`), marked when
+    # the guest starts and when it streams.
+    :step_spans
   ]
 
   @doc false

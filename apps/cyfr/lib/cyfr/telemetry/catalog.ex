@@ -128,6 +128,30 @@ defmodule Cyfr.Telemetry.Catalog do
           "the one signal that a node is quietly losing cores; the semaphore refuses the " <>
           "tenant past a threshold"
     },
+    [:cyfr, :execution, :child, :admission] => %{
+      consumers: [:operator],
+      note:
+        "a child run's step span (`Cyfr.Execution.StepSpans`): the port's call to the " <>
+          "guest's start; `mix cyfr.bench.step` reads it for the per-step latency baseline"
+    },
+    [:cyfr, :execution, :child, :first_delta] => %{
+      consumers: [:operator],
+      note:
+        "a child run's step span (`Cyfr.Execution.StepSpans`): the guest's start to its " <>
+          "first streamed delta; `mix cyfr.bench.step` reads it for time to first delta"
+    },
+    [:cyfr, :execution, :child, :completion] => %{
+      consumers: [:operator],
+      note:
+        "a child run's step span (`Cyfr.Execution.StepSpans`): the guest's start to its " <>
+          "completed row; `mix cyfr.bench.step` reads it for the per-step latency baseline"
+    },
+    [:cyfr, :execution, :run_child] => %{
+      consumers: [:operator],
+      note:
+        "a child run's whole call as its caller waits on it (`Cyfr.Execution.StepSpans`); " <>
+          "`mix cyfr.bench.step` reads it for the per-step total"
+    },
     [:cyfr, :opus, :execution, :unsigned] => %{
       consumers: [:operator],
       note:

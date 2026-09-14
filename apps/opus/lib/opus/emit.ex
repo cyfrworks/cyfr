@@ -43,7 +43,16 @@ defmodule Opus.Emit do
   @budget %{requests: 3000, window: "1m"}
 
   @enforce_keys [:stream_id, :budget_id, :ctx, :authority, :held]
-  defstruct [:stream_id, :budget_id, :ctx, :authority, :held, :tracked_id, secrets: []]
+  defstruct [
+    :stream_id,
+    :budget_id,
+    :ctx,
+    :authority,
+    :held,
+    :tracked_id,
+    :step_spans,
+    secrets: []
+  ]
 
   @type t :: %__MODULE__{
           stream_id: String.t(),
@@ -52,6 +61,7 @@ defmodule Opus.Emit do
           authority: Authority.t(),
           held: pid(),
           tracked_id: String.t() | nil,
+          step_spans: Cyfr.Execution.StepSpans.t() | nil,
           secrets: [String.t()]
         }
 
@@ -60,7 +70,9 @@ defmodule Opus.Emit do
   `:authority` (required); `:budget_id`, the root execution whose emit
   budget the events count against (default `stream_id`); `:secrets`, the
   credential values preloaded for the execution; `:tracked_id`, the
-  execution whose dispensed OAuth tokens are masked too.
+  execution whose dispensed OAuth tokens are masked too; `:step_spans`, the
+  execution's `Cyfr.Execution.StepSpans` clock, marked with each event
+  pushed.
   """
   @spec open(String.t(), keyword()) :: t()
   def open(stream_id, opts) when is_binary(stream_id) do
@@ -77,6 +89,7 @@ defmodule Opus.Emit do
       authority: Keyword.fetch!(opts, :authority),
       held: held,
       tracked_id: Keyword.get(opts, :tracked_id),
+      step_spans: Keyword.get(opts, :step_spans),
       secrets: Keyword.get(opts, :secrets, [])
     }
   end
@@ -153,6 +166,7 @@ defmodule Opus.Emit do
       case ExecutionEventBuffer.push(emitter.stream_id, data, emitter.ctx, origin_opts) do
         {:ok, seq} ->
           Opus.Telemetry.emit(emitter.stream_id, seq)
+          Cyfr.Execution.StepSpans.pushed(emitter.step_spans, data)
           {:cont, safe_encode(%{"ok" => true, "sequence" => seq})}
 
         {:error, :missing_athanor} ->
