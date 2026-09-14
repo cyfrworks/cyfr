@@ -178,6 +178,12 @@ defmodule Aqua.LoopTest do
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
+  defp files_catalyst(ctx) do
+    {:ok, listing} = Aqua.AgentConfig.catalyst_listing(ctx)
+    {:ok, ref} = Aqua.AgentConfig.resolve_catalyst(listing, "catalyst:local.files")
+    ref
+  end
+
   defp roots, do: Opus.ExecutionSemaphore.status().root_active
 
   test "a reply lands as rows before the turn ends, and the root is let go", %{
@@ -381,6 +387,54 @@ defmodule Aqua.LoopTest do
 
     assert {:ok, %{dispatch_state: "closed", outcome: "denied"}} = Tape.step(ctx, keep.id)
     assert {:error, _} = Aqua.Notes.read(ctx, "n")
+  end
+
+  test "a turn pins the catalyst release it runs on; a resume runs only that release, and only one speaking model/chat@1",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua keep a note")
+
+    script!([
+      calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}])
+    ])
+
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+
+    assert {:ok, %{catalyst_ref: "catalyst:local.claude:" <> _ = pinned} = paused} =
+             Tape.turn(ctx, turn.id)
+
+    assert {:error, :catalyst_pinned} =
+             Arca.TurnStorage.pin_catalyst(ctx, turn.id, "catalyst:local.openai:1.2.0", %{
+               fence: paused.fence
+             })
+
+    # A spec is built on the pinned release alone, and only on one that
+    # speaks the chat contract.
+    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+
+    for {ref, refusal} <- [
+          {"catalyst:local.claude:0.0.1", :catalyst_not_in_estate},
+          {files_catalyst(ctx), :catalyst_not_chat}
+        ] do
+      assert {:error, {^refusal, ^ref}} =
+               Aqua.Loop.Turn.build(ctx, %{paused | catalyst_ref: ref},
+                 authority: authority,
+                 excerpt?: false
+               )
+    end
+
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :declined})
+    ScriptedExecution.script([reply("done")])
+
+    assert :completed =
+             Task.await(
+               Task.async(fn ->
+                 Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+               end),
+               60_000
+             )
+
+    assert {:ok, %{catalyst_ref: ^pinned}} = Tape.turn(ctx, turn.id)
   end
 
   test "a grant withdrawn while the model answers does not run the call it used to allow",

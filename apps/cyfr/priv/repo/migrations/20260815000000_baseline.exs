@@ -1033,6 +1033,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :agent_capability_digest, :string
       add :budget_id, :string
       add :model, :string
+      # The exact catalyst release the turn runs on, pinned at its first build.
+      add :catalyst_ref, :string
       add :options, :text
       # The consumption boundary: the transcript a turn reads.
       add :window_upto_seq, :integer

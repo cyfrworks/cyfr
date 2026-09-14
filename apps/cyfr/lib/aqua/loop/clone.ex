@@ -58,7 +58,7 @@ defmodule Aqua.Loop.Clone do
       state = %Aqua.Loop.State{
         spec: spec,
         claim: nil,
-        turn: clone,
+        turn: spec.turn,
         parent: parent,
         clone?: true,
         since: parent.since,
@@ -158,18 +158,20 @@ defmodule Aqua.Loop.Clone do
     end
   end
 
-  # The spec is built from the pinned row; a row that cannot carry a spec
-  # is closed before the refusal is answered.
+  # The spec is built from the pinned row and the release it resolves is
+  # pinned on the clone's row; a row that cannot carry a spec is closed
+  # before the refusal is answered.
   defp build(guest, ctx, clone, child, parent) do
-    case Turn.build(ctx, clone,
-           authority: child,
-           catalyst: parent.spec.catalyst,
-           model: parent.spec.model,
-           excerpt?: false
-         ) do
-      {:ok, spec} ->
-        {:ok, spec}
-
+    with {:ok, spec} <-
+           Turn.build(ctx, clone,
+             authority: child,
+             catalyst: parent.spec.catalyst,
+             model: parent.spec.model,
+             excerpt?: false
+           ),
+         {:ok, pinned} <- Tape.pin_catalyst(guest, clone, spec.catalyst) do
+      {:ok, Turn.with_turn(spec, pinned)}
+    else
       {:error, reason} ->
         _ = Tape.close_clone_turn(guest, clone, "failed", %{error: describe(reason)})
         {:error, reason}

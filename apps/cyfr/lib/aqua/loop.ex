@@ -148,7 +148,10 @@ defmodule Aqua.Loop do
     with {:ok, turn} <- Tape.turn(ctx, Keyword.fetch!(opts, :turn_id)),
          {:ok, claim, turn} <- reclaim(ctx, turn, mode),
          {:ok, authority} <- pinned_authority(ctx, turn),
-         {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false) do
+         {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false),
+         {:ok, turn} <- Tape.pin_catalyst(ctx, turn, spec.catalyst) do
+      spec = Turn.with_turn(spec, turn)
+
       state = %State{
         spec: spec,
         claim: claim,
@@ -161,13 +164,6 @@ defmodule Aqua.Loop do
         {:continue, state} -> conclude(state, loop(state))
         {:halt, result, state} -> conclude(state, {result, state})
       end
-    else
-      {:error, {:reclaimed, claim, turn, reason}} ->
-        state = %State{spec: nil, claim: claim, turn: turn}
-        conclude(state, {{:failed, reason}, state})
-
-      {:error, _} = error ->
-        error
     end
   end
 
@@ -235,10 +231,11 @@ defmodule Aqua.Loop do
                agent_revision_digest: snapshot.revision_digest,
                agent_capability_digest: snapshot.capability_digest
              }),
-           {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority) do
+           {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority),
+           {:ok, started} <- Tape.pin_catalyst(ctx, started, spec.catalyst) do
         {:ok,
          %State{
-           spec: spec,
+           spec: Turn.with_turn(spec, started),
            claim: claim,
            turn: started,
            since: now(),

@@ -185,6 +185,11 @@ defmodule Aqua.Tape do
   def bump_recovery(%Context{} = ctx, turn),
     do: TurnStorage.takeover(ctx, turn.id, %{fence: turn.fence})
 
+  @doc "Pin the exact catalyst release the turn runs on (`TurnStorage.pin_catalyst/4`)."
+  @spec pin_catalyst(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
+  def pin_catalyst(%Context{} = ctx, turn, catalyst_ref),
+    do: TurnStorage.pin_catalyst(ctx, turn.id, catalyst_ref, %{fence: turn.fence})
+
   @doc "Renew the fence and cancel-mark the dispatched steps, before the loop is stopped."
   @spec supersede(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def supersede(%Context{} = ctx, turn),

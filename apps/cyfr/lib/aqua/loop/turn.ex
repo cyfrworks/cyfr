@@ -209,9 +209,10 @@ defmodule Aqua.Loop.Turn do
   # The model
   # ---------------------------------------------------------------------------
 
-  # The agent's catalyst resolved against the working estate's listing; a
-  # clone falls back to the parent's. A named catalyst the estate does
-  # not hold refuses the turn.
+  # The catalyst release a turn runs on: once its row pins one, exactly
+  # that release; before, the agent's catalyst resolved against the working
+  # estate's listing, a clone falling back to the parent's. It must be
+  # installed and speak `model/chat@1`.
   defp model(ctx, turn, agent, opts) do
     listing =
       case Aqua.AgentConfig.catalyst_listing(ctx) do
@@ -219,19 +220,40 @@ defmodule Aqua.Loop.Turn do
         {:error, _} -> []
       end
 
-    fallback = {Keyword.get(opts, :catalyst), Keyword.get(opts, :model)}
+    with {:ok, catalyst, model} <- catalyst(listing, turn, agent, opts),
+         :ok <- speaks_chat(listing, catalyst) do
+      {:ok, catalyst, model}
+    end
+  end
+
+  defp catalyst(listing, %{catalyst_ref: pinned} = turn, agent, _opts) when is_binary(pinned) do
+    if Enum.any?(listing, &(&1["component_ref"] == pinned)),
+      do: {:ok, pinned, turn.model || agent["model"]},
+      else: {:error, {:catalyst_not_in_estate, pinned}}
+  end
+
+  defp catalyst(listing, turn, agent, opts) do
     model = turn.model || agent["model"]
 
-    case {Aqua.AgentConfig.resolve_catalyst(listing, agent["catalyst_ref"]), fallback} do
+    case {Aqua.AgentConfig.resolve_catalyst(listing, agent["catalyst_ref"]),
+          Keyword.get(opts, :catalyst)} do
       {{:ok, catalyst}, _} ->
         {:ok, catalyst, model}
 
-      {{:error, _}, {catalyst, parent_model}} when is_binary(catalyst) ->
-        {:ok, catalyst, model || parent_model}
+      {{:error, _}, parent} when is_binary(parent) ->
+        {:ok, parent, model || Keyword.get(opts, :model)}
 
       {{:error, _}, _} ->
         {:error, {:catalyst_not_in_estate, agent["catalyst_ref"]}}
     end
+  end
+
+  defp speaks_chat(listing, catalyst) do
+    row = Enum.find(listing, &(&1["component_ref"] == catalyst)) || %{}
+
+    if Cyfr.Models.speaks_chat?(row["manifest"]),
+      do: :ok,
+      else: {:error, {:catalyst_not_chat, catalyst}}
   end
 
   # The catalyst's own answers about itself, run as a child of the turn

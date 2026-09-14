@@ -237,6 +237,37 @@ defmodule Arca.TurnStorage do
   end
 
   @doc """
+  Pin the exact catalyst release the turn runs on, under `:fence`. A turn
+  pins once: pinning the release already pinned answers the turn, and a
+  different one is `{:error, :catalyst_pinned}`.
+  """
+  @spec pin_catalyst(Context.t(), String.t(), String.t(), map()) ::
+          {:ok, Turn.t()} | {:error, term()}
+  def pin_catalyst(%Context{} = ctx, turn_id, catalyst_ref, attrs)
+      when is_binary(catalyst_ref) and is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pin_catalyst", fn ->
+      athanor_id = Context.athanor!(ctx)
+
+      Arca.Repo.transaction(fn ->
+        case own!(athanor_id, turn_id, attrs) do
+          %Turn{catalyst_ref: nil} ->
+            {1, _} =
+              from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+              |> Arca.Repo.update_all(set: [catalyst_ref: catalyst_ref])
+
+            turn!(athanor_id, turn_id)
+
+          %Turn{catalyst_ref: ^catalyst_ref} = turn ->
+            turn
+
+          %Turn{} ->
+            Arca.Repo.rollback(:catalyst_pinned)
+        end
+      end)
+    end)
+  end
+
+  @doc """
   Pause a running turn: the turn, its root attempt and its root execution
   leave `running` together. `attrs`: `:fence`, `:reason`
   (`"approval" | "launch"`), `:launch_step_id`. The running interval is

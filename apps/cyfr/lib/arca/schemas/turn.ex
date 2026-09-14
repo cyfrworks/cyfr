@@ -35,6 +35,7 @@ defmodule Arca.Schemas.Turn do
     field :agent_capability_digest, :string
     field :budget_id, :string
     field :model, :string
+    field :catalyst_ref, :string
     field :options, :string
     field :window_upto_seq, :integer
     field :active_ms, :integer, default: 0
