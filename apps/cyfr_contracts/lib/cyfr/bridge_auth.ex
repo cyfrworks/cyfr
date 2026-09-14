@@ -6,6 +6,7 @@ defmodule Cyfr.BridgeAuth do
   How CYFR and the MCP bridge authenticate each other: the server's half.
   The bridge's half is `apps/mcp-bridge/auth.mjs`, and
   `tests/fixtures/bridge_auth.json` holds the vectors both must reproduce.
+  Both halves spell the construction `Cyfr.MacEnvelope` describes.
 
   One root secret of 32 bytes is shared by the server and the bridge
   (`CYFR_MCP_BRIDGE_KEY`). Every other key is derived from it with
@@ -19,8 +20,8 @@ defmodule Cyfr.BridgeAuth do
       the only key the owner's process holds.
 
   A signature is the unpadded base64url HMAC-SHA256 of a canonical string:
-  the message kind, then its fields and the hex SHA-256 of the raw body, one
-  per line. It travels in the `Cyfr-Bridge-Auth` header as
+  `cyfr-bridge/v1/<kind>`, then the message's fields and the hex SHA-256 of
+  the raw body, one per line. It travels in the `Cyfr-Bridge-Auth` header as
   `v1 kind=<kind>` followed by `name=value` pairs and `mac=`. Every field is
   1 to 256 bytes of printable ASCII without spaces, so neither the canonical
   string nor the header can be split ambiguously.
@@ -30,21 +31,24 @@ defmodule Cyfr.BridgeAuth do
   generation, epoch and bridge lifetime it was sealed for.
   """
 
-  @version "v1"
-  @field ~r/\A[\x21-\x7E]{1,256}\z/
+  alias Cyfr.MacEnvelope
 
-  @invoke_fields [:athanor, :server, :generation, :epoch, :boot, :ts, :nonce]
-  @control_fields [:generation, :seq, :cyfr_boot, :boot, :ts]
-  @header_names %{
-    athanor: "athanor",
-    server: "server",
-    generation: "gen",
-    epoch: "epoch",
-    boot: "boot",
-    ts: "ts",
-    nonce: "nonce",
-    seq: "seq",
-    cyfr_boot: "cyfr_boot"
+  @owner_fields [athanor: :string, server: :string, generation: :integer, epoch: :integer]
+  @seal_fields @owner_fields ++ [boot: :string]
+  @header_names %{generation: "gen"}
+
+  @invoke %MacEnvelope{
+    prefix: "cyfr-bridge/v1",
+    kind: "invoke",
+    fields: @owner_fields ++ [boot: :string, ts: :integer, nonce: :string],
+    header_names: @header_names
+  }
+
+  @control %MacEnvelope{
+    prefix: "cyfr-bridge/v1",
+    kind: "control",
+    fields: [generation: :integer, seq: :integer, cyfr_boot: :string, boot: :string, ts: :integer],
+    header_names: @header_names
   }
 
   @typedoc "The owner a key or a sealed environment is bound to."
@@ -77,45 +81,39 @@ defmodule Cyfr.BridgeAuth do
 
   @doc "The key the controller signs control messages with."
   @spec control_key(binary()) :: binary()
-  def control_key(root) when byte_size(root) == 32, do: derive(root, "cyfr-bridge/v1/control")
+  def control_key(root) when byte_size(root) == 32,
+    do: MacEnvelope.derive(root, "cyfr-bridge/v1/control")
 
   @doc "The key backend environment values are sealed with."
   @spec seal_key(binary()) :: binary()
-  def seal_key(root) when byte_size(root) == 32, do: derive(root, "cyfr-bridge/v1/seal")
+  def seal_key(root) when byte_size(root) == 32,
+    do: MacEnvelope.derive(root, "cyfr-bridge/v1/seal")
 
   @doc "The key one owner, at one generation and epoch, signs its requests with."
   @spec owner_key(binary(), owner()) :: {:ok, binary()} | {:error, {:invalid_field, atom()}}
-  def owner_key(root, owner) when byte_size(root) == 32 do
-    with {:ok, [athanor, server, generation, epoch]} <-
-           fields(owner, [:athanor, :server, :generation, :epoch]) do
-      label = Enum.join(["cyfr-bridge/v1/owner", athanor, server, generation, epoch], "\n")
-      {:ok, derive(root, label)}
-    end
-  end
+  def owner_key(root, owner) when byte_size(root) == 32,
+    do: MacEnvelope.derive(root, "cyfr-bridge/v1/owner", @owner_fields, owner)
 
   @doc "The `Cyfr-Bridge-Auth` header for an invoke of `body` signed with the owner's key."
   @spec invoke_header(binary(), invoke(), binary()) ::
           {:ok, String.t()} | {:error, {:invalid_field, atom()}}
   def invoke_header(owner_key, invoke, body) when is_binary(body),
-    do: header("invoke", owner_key, invoke, @invoke_fields, body)
+    do: MacEnvelope.header(@invoke, owner_key, invoke, body)
 
   @doc "The `Cyfr-Bridge-Auth` header for a control message of `body` signed with the control key."
   @spec control_header(binary(), control(), binary()) ::
           {:ok, String.t()} | {:error, {:invalid_field, atom()}}
   def control_header(control_key, control, body) when is_binary(body),
-    do: header("control", control_key, control, @control_fields, body)
+    do: MacEnvelope.header(@control, control_key, control, body)
 
   @doc "The canonical string a signature covers."
   @spec canonical(:invoke | :control, map(), binary()) ::
           {:ok, String.t()} | {:error, {:invalid_field, atom()}}
-  def canonical(kind, message, body) when kind in [:invoke, :control] and is_binary(body) do
-    names = if kind == :invoke, do: @invoke_fields, else: @control_fields
+  def canonical(:invoke, message, body) when is_binary(body),
+    do: MacEnvelope.canonical(@invoke, message, body)
 
-    with {:ok, values} <- fields(message, names) do
-      body_hash = Cyfr.Digest.sha256_hex(body)
-      {:ok, Enum.join(["cyfr-bridge/#{@version}/#{kind}" | values] ++ [body_hash], "\n")}
-    end
-  end
+  def canonical(:control, message, body) when is_binary(body),
+    do: MacEnvelope.canonical(@control, message, body)
 
   @doc """
   Seal a backend environment's JSON for one owner in one bridge lifetime.
@@ -125,67 +123,26 @@ defmodule Cyfr.BridgeAuth do
           {:ok, String.t()} | {:error, {:invalid_field, atom()}}
   def seal(seal_key, owner, boot, plaintext, iv \\ :crypto.strong_rand_bytes(12))
       when byte_size(iv) == 12 and is_binary(plaintext) do
-    with {:ok, aad} <- seal_aad(owner, boot) do
-      {ciphertext, tag} =
-        :crypto.crypto_one_time_aead(:aes_256_gcm, seal_key, iv, plaintext, aad, true)
-
-      {:ok, Base.url_encode64(iv <> tag <> ciphertext, padding: false)}
-    end
+    MacEnvelope.seal(
+      seal_key,
+      "cyfr-bridge/v1/seal",
+      @seal_fields,
+      Map.put(owner, :boot, boot),
+      plaintext,
+      iv
+    )
   end
 
   @doc "Open what `seal/5` sealed for the same owner and bridge lifetime."
   @spec open(binary(), owner(), String.t(), String.t()) ::
           {:ok, binary()} | {:error, :unsealable | {:invalid_field, atom()}}
-  def open(seal_key, owner, boot, sealed) when is_binary(sealed) do
-    with {:ok, aad} <- seal_aad(owner, boot),
-         {:ok, <<iv::binary-size(12), tag::binary-size(16), ciphertext::binary>>} <-
-           Base.url_decode64(sealed, padding: false),
-         plaintext when is_binary(plaintext) <-
-           :crypto.crypto_one_time_aead(:aes_256_gcm, seal_key, iv, ciphertext, aad, tag, false) do
-      {:ok, plaintext}
-    else
-      {:error, {:invalid_field, _}} = invalid -> invalid
-      _ -> {:error, :unsealable}
-    end
-  end
-
-  defp header(kind, key, message, names, body) do
-    with {:ok, canonical} <- canonical(String.to_existing_atom(kind), message, body),
-         {:ok, values} <- fields(message, names) do
-      pairs =
-        Enum.zip_with(names, values, fn name, value -> "#{@header_names[name]}=#{value}" end)
-
-      mac = :crypto.mac(:hmac, :sha256, key, canonical) |> Base.url_encode64(padding: false)
-      {:ok, Enum.join(["#{@version} kind=#{kind}" | pairs] ++ ["mac=#{mac}"], " ")}
-    end
-  end
-
-  defp seal_aad(owner, boot) do
-    with {:ok, values} <-
-           fields(Map.put(owner, :boot, boot), [:athanor, :server, :generation, :epoch, :boot]) do
-      {:ok, Enum.join(["cyfr-bridge/v1/seal" | values], "\n")}
-    end
-  end
-
-  defp fields(message, names) do
-    Enum.reduce_while(names, {:ok, []}, fn name, {:ok, acc} ->
-      case field(Map.get(message, name)) do
-        {:ok, value} -> {:cont, {:ok, [value | acc]}}
-        :error -> {:halt, {:error, {:invalid_field, name}}}
-      end
-    end)
-    |> case do
-      {:ok, values} -> {:ok, Enum.reverse(values)}
-      error -> error
-    end
-  end
-
-  defp field(value) when is_integer(value) and value >= 0, do: field(Integer.to_string(value))
-
-  defp field(value) when is_binary(value),
-    do: if(Regex.match?(@field, value), do: {:ok, value}, else: :error)
-
-  defp field(_value), do: :error
-
-  defp derive(root, label), do: :crypto.mac(:hmac, :sha256, root, label)
+  def open(seal_key, owner, boot, sealed) when is_binary(sealed),
+    do:
+      MacEnvelope.open(
+        seal_key,
+        "cyfr-bridge/v1/seal",
+        @seal_fields,
+        Map.put(owner, :boot, boot),
+        sealed
+      )
 end
