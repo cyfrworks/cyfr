@@ -31,7 +31,7 @@ defmodule Opus.HttpHandler do
 
   ## Usage
 
-      imports = Opus.HttpHandler.build_http_imports(edge, limits, ctx, "my-catalyst")
+      imports = Opus.HttpHandler.build_http_imports(edge, limits, ctx, host, "my-catalyst")
       # Merge with other imports and pass to Wasmex.Components.start_link
   """
 
@@ -41,6 +41,7 @@ defmodule Opus.HttpHandler do
   alias Sanctum.Context
   alias Cyfr.Limits
   alias Opus.EdgeGuard
+  alias Opus.HostClient
   alias Opus.HttpRequestValidation
 
   @request_timeout 30_000
@@ -61,20 +62,29 @@ defmodule Opus.HttpHandler do
   - `edge` - The `Cyfr.Authority.Blob.Edge` to enforce (nil = deny all egress)
   - `limits` - The node's `Cyfr.Limits` (sizes, timeout)
   - `ctx` - The execution `Sanctum.Context`
+  - `host` - The attached `Opus.HostClient` of the execution's attempt,
+    which takes each request from the consented rate
   - `component_ref` - Component reference string for telemetry/audit
 
   ## Returns
 
   A map with the `"cyfr:http/fetch"` namespace containing a `"request"` function.
   """
-  @spec build_http_imports(Edge.t() | nil, Limits.t(), Context.t(), String.t()) :: map()
-  def build_http_imports(edge, %Limits{} = limits, %Context{} = ctx, component_ref) do
+  @spec build_http_imports(Edge.t() | nil, Limits.t(), Context.t(), HostClient.t(), String.t()) ::
+          map()
+  def build_http_imports(
+        edge,
+        %Limits{} = limits,
+        %Context{} = ctx,
+        %HostClient{} = host,
+        component_ref
+      ) do
     %{
       "cyfr:http/fetch@0.1.0" => %{
         "request" =>
           {:fn,
            fn json_req ->
-             execute(json_req, edge, limits, ctx, component_ref)
+             execute(json_req, edge, limits, ctx, host, component_ref)
            end}
       }
     }
@@ -140,9 +150,17 @@ defmodule Opus.HttpHandler do
 
   All errors are returned as JSON strings (never raised).
   """
-  @spec execute(String.t(), Edge.t() | nil, Limits.t(), Context.t(), String.t()) :: String.t()
-  def execute(json_request, edge, %Limits{} = limits, %Context{} = ctx, component_ref) do
-    do_execute(json_request, edge, limits, ctx, component_ref)
+  @spec execute(String.t(), Edge.t() | nil, Limits.t(), Context.t(), HostClient.t(), String.t()) ::
+          String.t()
+  def execute(
+        json_request,
+        edge,
+        %Limits{} = limits,
+        %Context{} = ctx,
+        %HostClient{} = host,
+        component_ref
+      ) do
+    do_execute(json_request, edge, limits, ctx, host, component_ref)
   rescue
     # Keeps the moduledoc's "never raised" promise, the way
     # `Opus.StorageHandler.dispatch_caught/6` keeps it for its own boundary.
@@ -160,8 +178,8 @@ defmodule Opus.HttpHandler do
       encode_error(:invalid_request, "Malformed HTTP request.")
   end
 
-  defp do_execute(json_request, edge, limits, ctx, component_ref) do
-    case HttpRequestValidation.validate(json_request, edge, limits, ctx, component_ref) do
+  defp do_execute(json_request, edge, limits, ctx, host, component_ref) do
+    case HttpRequestValidation.validate(json_request, edge, limits, host, component_ref) do
       {:ok, request} ->
         perform_request(request, limits, component_ref, ctx)
 

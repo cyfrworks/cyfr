@@ -2,25 +2,33 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.HttpRequestValidationTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
+  alias Cyfr.Test.AttemptFixtures
   alias Opus.HttpRequestValidation
   alias Opus.Test.EdgeFixtures
 
-  # Every call goes through the full production entry with the rate-limit
-  # principals a real caller supplies; the default fixture's 100/1m budget
-  # never trips in a test's handful of calls.
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    :ok
+  end
+
+  # A real attached attempt's host client, which takes each request from the
+  # attempt's consented rate, and the component reference its bucket keys on.
+  defp attached_host(opts \\ []) do
+    attempt = AttemptFixtures.attached!(opts)
+    {Opus.HostClient.new(attempt, attempt.key, attempt.runner), attempt.component_ref}
+  end
+
+  # Every call goes through the full production entry with the host client a
+  # real caller supplies; the default limits' budget never trips in a test's
+  # handful of calls.
   defp validate(json, edge, limits, opts \\ []) do
-    HttpRequestValidation.validate(
-      json,
-      edge,
-      limits,
-      Sanctum.TestContext.local(),
-      "test:probe",
-      opts
-    )
+    {host, ref} = attached_host()
+    HttpRequestValidation.validate(json, edge, limits, host, ref, opts)
   end
 
   defp encode(overrides) do
@@ -227,18 +235,49 @@ defmodule Opus.HttpRequestValidationTest do
   end
 
   describe "egress rate limiting" do
-    test "the consented rate limit denies the wire-bound path itself" do
-      ctx = Sanctum.TestContext.local()
-      ref = "test:egress-#{System.unique_integer([:positive])}"
+    test "the attempt's consented rate limit denies the wire-bound path itself" do
       limits = EdgeFixtures.limits(rate_limit: %{requests: 1, window: "1m"})
+      {host, ref} = attached_host(limits: limits)
 
       assert {:ok, _} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, ctx, ref)
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, host, ref)
 
       assert {:error, :rate_limited, message} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, ctx, ref)
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, host, ref)
 
       assert message =~ "rate limit"
+    end
+
+    test "the rate is the attempt's: a wider limit passed by the runner grants nothing" do
+      {host, ref} =
+        attached_host(limits: EdgeFixtures.limits(rate_limit: %{requests: 1, window: "1m"}))
+
+      wide = EdgeFixtures.limits(rate_limit: %{requests: 1000, window: "1m"})
+
+      assert {:ok, _} =
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), wide, host, ref)
+
+      assert {:error, :rate_limited, _message} =
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), wide, host, ref)
+    end
+
+    test "a request is refused once its attempt is no longer open" do
+      attempt = AttemptFixtures.attached!()
+      host = Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+      ref = Process.monitor(attempt.pid)
+      Process.exit(attempt.pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, _, :killed}
+
+      assert {:error, :rate_limited, message} =
+               HttpRequestValidation.validate(
+                 encode(%{}),
+                 localhost_edge(),
+                 EdgeFixtures.limits(),
+                 host,
+                 attempt.component_ref
+               )
+
+      assert message =~ "not current"
     end
   end
 end

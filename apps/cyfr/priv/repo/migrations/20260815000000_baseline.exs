@@ -434,6 +434,9 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :fence, :integer, null: false
       add :runner_id, :string, null: false
+      # The runner that attached to the attempt; null until attach, and
+      # always null for a turn root.
+      add :claimed_by, :string
       add :lease_until, :utc_datetime_usec, null: false
       # running | paused | completed | failed | cancelled | lapsed
       add :state, :string, null: false
@@ -447,6 +450,8 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:execution_attempts, [:execution_id, :fence])
     create index(:execution_attempts, [:athanor_id, :state, :lease_until])
+    create index(:execution_attempts, [:claimed_by], where: "state = 'running'")
+    create index(:execution_attempts, [:runner_id], where: "state = 'running'")
 
     # Lifecycle and step outcomes, numbered from `executions.event_seq`.
     create table(:execution_events, primary_key: false) do

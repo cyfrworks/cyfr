@@ -6,8 +6,9 @@ defmodule Cyfr.Delta do
   One event a guest emitted, as its runner forwards it to CYFR through
   `c:Cyfr.HostAPI.push_deltas/2`.
 
-  `event` is the JSON object the guest emitted, unchecked and unmasked:
-  CYFR checks its size, charges the root's emit budget, runs the emit
+  `event` is the JSON text the guest emitted, exactly as the guest passed
+  it, unchecked and unmasked: CYFR checks its size, charges the root's emit
+  budget, decodes it (an event must be a JSON object), runs the emit
   transition, masks it and numbers it. A delta names the attempt that
   emitted it; one whose attempt is no longer current is dropped by its
   fence.
@@ -20,6 +21,6 @@ defmodule Cyfr.Delta do
           execution_id: String.t(),
           attempt: String.t(),
           fence: pos_integer(),
-          event: map()
+          event: String.t()
         }
 end

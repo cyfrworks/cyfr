@@ -19,26 +19,38 @@ defmodule Opus.OAuthHandler do
 
   ## Architecture
 
-  Every token is dispensed by the execution's `Cyfr.Execution.Attempt`
-  (`dispense_oauth/2`): it meters the node's `oauth:` rate, resolves the
-  token from the consent edge's vault resource and adds it to the
-  execution's masking set before the guest has it. A refusal crosses the
-  WIT `result<string, string>` boundary as a sentence naming its shape,
-  never the material involved.
+  Every token is an `oauth_token` host call of the execution's attempt
+  (`Opus.HostClient.oauth_token/2`): CYFR meters the node's `oauth:` rate,
+  resolves the token from the consent edge's vault resource and adds it to
+  the attempt's masking set before answering it. A refusal crosses the WIT
+  `result<string, string>` boundary as a sentence naming its shape, never
+  the material involved; a host call CYFR refuses crosses as the sentence
+  for an unavailable credential store.
   """
+
+  alias Opus.HostClient
 
   @doc """
   Build the WASI host function imports for OAuth token access by the
-  guest of `execution_id`, whose attempt is open. Returns a map suitable
-  for merging into the Wasmex imports.
+  guest whose attempt `host` is attached to. Returns a map suitable for
+  merging into the Wasmex imports.
   """
-  @spec build_oauth_imports(String.t()) :: map()
-  def build_oauth_imports(execution_id) when is_binary(execution_id) do
+  @spec build_oauth_imports(HostClient.t()) :: map()
+  def build_oauth_imports(%HostClient{} = host) do
     %{
       "cyfr:oauth/token@0.1.0" => %{
-        "get-access-token" =>
-          {:fn, fn provider -> Cyfr.Execution.Attempt.dispense_oauth(execution_id, provider) end}
+        "get-access-token" => {:fn, fn provider -> token(host, provider) end}
       }
     }
   end
+
+  defp token(host, provider) when is_binary(provider) do
+    case HostClient.oauth_token(host, provider) do
+      {:ok, token} -> {:ok, token}
+      {:error, {:guest_error, _type, message}} -> {:error, message}
+      {:error, _refusal} -> {:error, "the credential store is unavailable"}
+    end
+  end
+
+  defp token(_host, _provider), do: {:error, "the provider must be a string"}
 end

@@ -16,8 +16,10 @@ defmodule Cyfr.Application do
     # list — config files run before this module exists).
     Application.put_env(:phoenix, :filter_parameters, Cyfr.Sanitizer.filter_parameters())
 
-    # This boot's name, before any row can carry it.
+    # This boot's name, before any row can carry it, and the worker root
+    # every assignment and attempt key this boot issues derives from.
     Cyfr.Boot.mint()
+    Cyfr.Execution.Keys.mint()
 
     # Resolve the at-rest cipher keyring before the database opens: the
     # migration step below compares it with the keyring the database was

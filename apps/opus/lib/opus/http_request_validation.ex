@@ -18,6 +18,10 @@ defmodule Opus.HttpRequestValidation do
   policy is duplicated here or in the handlers; this module contributes
   only the consent policy (`egress.private_ips` via `Opus.EdgeGuard`).
 
+  The egress rate is taken through the attempt's host client
+  (`Opus.HostClient.take_rate/2`), so CYFR counts it against the consented
+  limit.
+
   `validate/6` returns a validated request map (including the pinned IP and
   the Req method atom) that each handler then executes its own way (buffered
   fetch vs. polling stream). Handlers own transport, response handling, and
@@ -27,8 +31,8 @@ defmodule Opus.HttpRequestValidation do
   require Logger
 
   alias Opus.EdgeGuard
+  alias Opus.HostClient
   alias Cyfr.Authority.Blob.Edge
-  alias Sanctum.Context
   alias Cyfr.Limits
 
   @valid_http_methods %{
@@ -57,7 +61,8 @@ defmodule Opus.HttpRequestValidation do
 
   @doc """
   Parse and validate a guest HTTP request against the consent edge and node
-  limits, resolving DNS once and pinning the validated IP.
+  limits, take it from the consented rate through `host`, and resolve DNS
+  once, pinning the validated IP.
 
   Returns `{:ok, validated_request}` with `:ip` (validated IP string) and
   `:method_atom` (Req method) added, or `{:error, type, message}`.
@@ -67,13 +72,13 @@ defmodule Opus.HttpRequestValidation do
     * `:allow_multipart` — `false` rejects requests carrying a `multipart`
       field (the streaming transport cannot send one). Defaults to `true`.
   """
-  @spec validate(String.t(), Edge.t() | nil, Limits.t(), Context.t(), String.t(), keyword()) ::
+  @spec validate(String.t(), Edge.t() | nil, Limits.t(), HostClient.t(), String.t(), keyword()) ::
           {:ok, validated_request()} | {:error, atom(), String.t()}
   def validate(
         json_request,
         edge,
         %Limits{} = limits,
-        %Context{} = ctx,
+        %HostClient{} = host,
         component_ref,
         opts \\ []
       ) do
@@ -85,7 +90,7 @@ defmodule Opus.HttpRequestValidation do
          :ok <- check_multipart_allowed(request, Keyword.get(opts, :allow_multipart, true)),
          {:ok, request} <- decode_request_body(request),
          :ok <- EdgeGuard.check_request_size(limits, request),
-         :ok <- check_egress_rate(ctx, component_ref, limits),
+         :ok <- check_egress_rate(host, component_ref),
          {:ok, pin} <- pin_url(request.url, edge),
          {:ok, method_atom} <- validated_method_atom(request.method) do
       {:ok,
@@ -109,29 +114,25 @@ defmodule Opus.HttpRequestValidation do
     end
   end
 
-  # The consented rate limit, on the wire-bound path itself — the WIT
+  # The consented rate limit, on the wire-bound path itself: the WIT
   # contract promises the host enforces rate limits before executing the
-  # request, and until this step only the per-invocation gate existed, so
-  # one invocation could issue unbounded egress. Keyed per component like
-  # the executor's gate (a distinct "http:" budget under the same
-  # consented config); before DNS, so a denied caller cannot use the
-  # resolver either. A dead limiter fails CLOSED, matching the executor.
-  defp check_egress_rate(%Context{} = ctx, component_ref, %Limits{} = limits) do
-    case Cyfr.Execution.Rates.check(ctx.athanor_id, "http:" <> component_ref, %{
-           rate_limit: limits.rate_limit
-         }) do
-      {:ok, _remaining} ->
+  # request. Keyed per component under the node's `http:` bucket, counted
+  # by CYFR through a `take_rate` host call; before DNS, so a denied caller
+  # cannot use the resolver either. A host call CYFR refuses fails CLOSED.
+  defp check_egress_rate(host, component_ref) do
+    case HostClient.take_rate(host, "http:" <> component_ref) do
+      :ok ->
         :ok
 
-      {:error, :rate_limited, retry_after} ->
-        {:error, :rate_limited, "HTTP egress rate limit exceeded; retry in #{retry_after}ms"}
+      {:error, {:guest_error, _type, message}} ->
+        {:error, :rate_limited, message}
 
-      {:error, :missing_tenant} ->
-        {:error, :rate_limited, "HTTP egress refused: no resolved athanor"}
+      {:error, :unavailable} ->
+        {:error, :rate_limited, "HTTP egress refused: rate limiter unavailable"}
+
+      {:error, _refusal} ->
+        {:error, :rate_limited, "HTTP egress refused: the execution attempt is not current"}
     end
-  catch
-    :exit, _reason ->
-      {:error, :rate_limited, "HTTP egress refused: rate limiter unavailable"}
   end
 
   @doc """

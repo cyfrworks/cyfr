@@ -23,9 +23,10 @@ defmodule Cyfr.Execution.Admission do
 
   A run is admitted by `admit/4`: its reference resolved and typed, its
   consented limits, rates and policy enforced, its bytes fetched and their
-  attestation checked, its row admitted, its vault edge unsealed and its
+  attestation checked, its row admitted, its assignment signed and its
   `Cyfr.Execution.Attempt` opened. A refusal at any stage after the row is
   built closes the row failed (`Cyfr.Execution.Close`) before it answers.
+  The run's vault edge is unsealed when its runner attaches.
   """
 
   require Logger
@@ -33,7 +34,7 @@ defmodule Cyfr.Execution.Admission do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Authority.RootSelect
-  alias Cyfr.Execution.{Attempt, Attestation, Close, Record, Telemetry}
+  alias Cyfr.Execution.{Assignments, Attempt, Attestation, Close, Record, Telemetry}
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
@@ -50,13 +51,17 @@ defmodule Cyfr.Execution.Admission do
   @type root :: %{authority: Authority.t(), stamp: map() | nil, profile: map()}
 
   @typedoc """
-  An admitted run: its execution id, the verified component bytes, the
-  options the runtime runs them under (the consented limits and resources,
-  the unsealed fields, the run's identity and lineage) and the state its
-  close needs. Its attempt is open under `execution_id`.
+  An admitted run: its execution id, its open attempt, the signed
+  assignment its runner attaches with and that attempt's key
+  (`t:Cyfr.Execution.Assignments.issued/0`), the verified component bytes,
+  the options the runtime runs them under (the consented limits and
+  resources, the run's identity and lineage) and the state its waiter
+  closes it lost with (`Cyfr.Execution.Attempt.await/2`).
   """
   @type admitted :: %{
           execution_id: String.t(),
+          attempt: pid(),
+          dispatch: Assignments.issued(),
           wasm_bytes: binary(),
           runtime: keyword(),
           close: Close.t()
@@ -218,9 +223,9 @@ defmodule Cyfr.Execution.Admission do
   profile, the profile's and the caller's address buckets) must have room;
   the policy consultation is recorded; the bytes must match the registry
   digest and their attestation must satisfy `opts[:verify]` and the
-  signed-pulls setting; the row is admitted with its barriers; the vault
-  edge is unsealed while its consent is still the profile's head; and the
-  attempt opens.
+  signed-pulls setting; the row is admitted with its barriers; its
+  assignment is signed; and the attempt opens, owned by the calling
+  process.
 
   Options: `:authority` (required — admitting without one raises, and the
   raise closes the row failed), `:type`, `:verify`, `:execution_id`,
@@ -277,7 +282,7 @@ defmodule Cyfr.Execution.Admission do
       with {:ok, run} <- stage(run, &enforce_policy(&1, input)),
            {:ok, run} <- stage(run, &fetch_and_verify/1),
            {:ok, run} <- stage(run, &admit_row/1),
-           {:ok, run} <- stage(run, &unseal/1),
+           {:ok, run} <- stage(run, &sign_assignment(&1, input)),
            {:ok, admitted} <- stage(run, &open_attempt/1) do
         {:ok, admitted}
       else
@@ -730,47 +735,44 @@ defmodule Cyfr.Execution.Admission do
     end
   end
 
-  # Credentials come only from the current edge's vault resource, projected
-  # by the vault reader; no vault edge means no secrets. A selection the
-  # loader could not resolve, a consent that is no longer the profile's
-  # head, and an edge whose material cannot be produced are each a declared
-  # need unmet: a typed setup_required.
-  defp unseal(run) do
-    case run.opts[:authority] do
-      %Authority{resources: %Edge{vault: %{via: via}}} = authority ->
-        setup_required(run, authority, {:selection_unbound, via.label})
+  defp sign_assignment(run, input) do
+    record = run.close.record
 
-      %Authority{resources: %Edge{vault: %{} = vault}} = authority ->
-        if Sanctum.Consent.Loader.pinned_intact?(run.ctx, authority) do
-          case Sanctum.VaultReader.fetch(run.ctx, vault) do
-            {:ok, secrets} -> {:ok, Map.put(run, :secrets, secrets)}
-            {:error, reason} -> setup_required(run, authority, reason)
-          end
-        else
-          setup_required(run, authority, :consent_moved)
-        end
+    issued =
+      Assignments.issue(%{
+        ctx: run.ctx,
+        record: record,
+        authority: run.opts[:authority],
+        component: %{
+          ref: run.component_ref,
+          type: Atom.to_string(run.component_type),
+          digest: run.component["digest"],
+          declared_needs: declared_needs(run),
+          activation_digest: activation_digest(run)
+        },
+        input: input,
+        timeout_ms: run.timeout_ms,
+        step: run.opts[:step]
+      })
 
-      _ ->
-        {:ok, Map.put(run, :secrets, %{})}
+    case issued do
+      {:ok, dispatch} ->
+        {:ok, Map.put(run, :dispatch, dispatch)}
+
+      {:error, reason} ->
+        Logger.error(
+          "[Cyfr.Execution.Admission] assignment of #{record.id} was not signed: " <>
+            inspect(reason)
+        )
+
+        {:error, "the execution assignment could not be signed"}
     end
-  end
-
-  defp setup_required(run, authority, reason) do
-    {:error,
-     {:setup_required,
-      %{
-        profile_id: authority.profile_id,
-        node_ref: run.component_ref,
-        need: run.opts[:need] || "",
-        reason: Close.setup_reason(reason)
-      }}}
   end
 
   # The attempt opens last, once nothing after it can refuse the run.
   defp open_attempt(run) do
     record = run.close.record
     root_execution_id = run.opts[:root_execution_id] || record.id
-    runtime = runtime_options(run)
 
     opened =
       Attempt.open(
@@ -779,8 +781,9 @@ defmodule Cyfr.Execution.Admission do
         ctx: run.ctx,
         authority: run.opts[:authority],
         component_ref: run.component_ref,
+        need: run.opts[:need],
         limits: run.limits,
-        secrets: run.secrets,
+        close: run.close,
         # A formula's events go on its root's stream, which the caller
         # watching the whole run subscribes to; any other component's go on
         # its own.
@@ -790,12 +793,14 @@ defmodule Cyfr.Execution.Admission do
       )
 
     case opened do
-      {:ok, _pid} ->
+      {:ok, pid} ->
         {:ok,
          %{
            execution_id: record.id,
+           attempt: pid,
+           dispatch: run.dispatch,
            wasm_bytes: run.wasm_bytes,
-           runtime: runtime,
+           runtime: runtime_options(run),
            close: run.close
          }}
 
@@ -820,7 +825,6 @@ defmodule Cyfr.Execution.Admission do
       max_memory_bytes: run.limits.max_memory_bytes,
       edge: run.edge,
       limits: run.limits,
-      preloaded_fields: run.secrets,
       component_ref: run.component_ref,
       ctx: run.ctx,
       execution_id: record.id,
@@ -829,9 +833,12 @@ defmodule Cyfr.Execution.Admission do
       reference: run.reference,
       digest: run.component["digest"],
       declared_needs: declared_needs(run),
-      activation_digest: run.opts[:activation_digest] || record.activation_digest
+      activation_digest: activation_digest(run)
     ]
   end
+
+  defp activation_digest(run),
+    do: run.opts[:activation_digest] || run.close.record.activation_digest
 
   # The needs a manifest declares name the component's own dependency roles
   # — the caller's vocabulary, never the callee's. Sorted for stability.

@@ -60,9 +60,9 @@ defmodule Opus.Runtime do
     guard). Pass `false` only for authority-free harness runs in tests.
   - `:step_spans` - The caller's `Cyfr.Execution.StepSpans` clock, marked
     when the guest starts
-  - `:execution_id` - The admitted execution: its open
-    `Cyfr.Execution.Attempt` answers the guest's `emit` and OAuth token
-    calls
+  - `:execution_id` - The admitted execution
+  - `:host` - The attached `Opus.HostClient` of the execution's attempt:
+    the guest's `emit`, OAuth token and HTTP rate checks are its host calls
 
   ## Examples
 
@@ -93,6 +93,7 @@ defmodule Opus.Runtime do
     declared_needs = Keyword.get(opts, :declared_needs)
     activation_digest = Keyword.get(opts, :activation_digest)
     step_spans = Keyword.get(opts, :step_spans)
+    host = Keyword.get(opts, :host)
 
     # Second line of defense behind the executor's own check: if an opts
     # filter between the caller and here dropped :authority but kept the
@@ -139,6 +140,7 @@ defmodule Opus.Runtime do
         edge,
         limits,
         ctx,
+        host,
         execution_id,
         root_execution_id,
         authority_info,
@@ -221,11 +223,11 @@ defmodule Opus.Runtime do
   end
 
   # Build all host function imports and collect cleanup refs. The node's
-  # limits are the presence signal for capability-scoped imports: they are
-  # always carried under an authority, while the edge itself may be nil
-  # (resources :none) — a nil edge builds the same imports with deny-all
-  # resource lists, so a guest's host call fails with a denial instead of
-  # a missing import.
+  # limits and the attempt's host client are the presence signal for
+  # capability-scoped imports: they are always carried under an admitted
+  # authority, while the edge itself may be nil (resources :none) — a nil
+  # edge builds the same imports with deny-all resource lists, so a guest's
+  # host call fails with a denial instead of a missing import.
   defp build_imports_and_cleanup(
          component_type,
          preloaded_fields,
@@ -233,6 +235,7 @@ defmodule Opus.Runtime do
          edge,
          limits,
          ctx,
+         host,
          execution_id,
          root_execution_id,
          authority_info,
@@ -246,15 +249,15 @@ defmodule Opus.Runtime do
       end
 
     http_imports =
-      if component_type == :catalyst && limits && ctx do
-        Opus.HttpHandler.build_http_imports(edge, limits, ctx, component_ref)
+      if component_type == :catalyst && limits && ctx && host do
+        Opus.HttpHandler.build_http_imports(edge, limits, ctx, host, component_ref)
       else
         %{}
       end
 
     {stream_imports, stream_exec_ref} =
-      if component_type == :catalyst && limits && ctx do
-        Opus.HttpStreamHandler.build_stream_imports(edge, limits, ctx, component_ref)
+      if component_type == :catalyst && limits && ctx && host do
+        Opus.HttpStreamHandler.build_stream_imports(edge, limits, ctx, host, component_ref)
       else
         {%{}, nil}
       end
@@ -275,8 +278,8 @@ defmodule Opus.Runtime do
     # The execution's attempt dispenses every token, so each one is in its
     # masking set before the guest has it.
     oauth_imports =
-      if component_type == :catalyst && ctx && execution_id do
-        Opus.OAuthHandler.build_oauth_imports(execution_id)
+      if component_type == :catalyst && host do
+        Opus.OAuthHandler.build_oauth_imports(host)
       else
         %{}
       end
@@ -284,8 +287,8 @@ defmodule Opus.Runtime do
     root_execution_id = root_execution_id || execution_id
 
     emit_imports =
-      if component_type == :catalyst && ctx && execution_id && authority_info.authority do
-        build_emit_imports(execution_id)
+      if component_type == :catalyst && host && authority_info.authority do
+        build_emit_imports(host)
       else
         %{}
       end
@@ -293,6 +296,7 @@ defmodule Opus.Runtime do
     {formula_imports, formula_tracker_pid} =
       if component_type == :formula && ctx && execution_id do
         Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
+          host: host,
           root_execution_id: root_execution_id,
           attempt: authority_info.attempt,
           limits: limits,
@@ -327,16 +331,35 @@ defmodule Opus.Runtime do
     {all_imports, cleanup_refs}
   end
 
-  # A catalyst's `cyfr:emit/events` import: each event goes to the
-  # execution's attempt, which checks, masks and pushes it on the stream
-  # the attempt was opened on (`Cyfr.Execution.Attempt.emit/2`).
-  defp build_emit_imports(execution_id) do
+  # A catalyst's `cyfr:emit/events` import: each event is a `push_deltas`
+  # host call, and CYFR checks, masks and pushes it on the stream the
+  # attempt was opened on.
+  defp build_emit_imports(host) do
     %{
       "cyfr:emit/events@0.1.0" => %{
-        "emit" =>
-          {:fn, fn json_event -> Cyfr.Execution.Attempt.emit(execution_id, json_event) end}
+        "emit" => {:fn, fn json_event -> emit(host, json_event) end}
       }
     }
+  end
+
+  @doc """
+  Deliver one guest event through the attempt's host client, answering the
+  JSON the guest's `emit` returns. A refused host call answers a
+  `dispatch_error`.
+  """
+  @spec emit(Opus.HostClient.t(), String.t()) :: String.t()
+  def emit(%Opus.HostClient{} = host, json_event) when is_binary(json_event) do
+    case Opus.HostClient.push_deltas(host, [json_event]) do
+      {:ok, [reply]} ->
+        reply
+
+      {:error, refusal} ->
+        Logger.warning(
+          "[Opus.Runtime] #{host.execution_id} emit refused by the host: #{inspect(refusal)}"
+        )
+
+        Cyfr.WitResponse.encode_error(:dispatch_error, "The emit call failed.")
+    end
   end
 
   # Public-profile storage rides explicit opts derived from the authority's
@@ -345,7 +368,7 @@ defmodule Opus.Runtime do
   defp public_storage_opts(_authority), do: []
 
   # Build secrets host functions for WASI import from pre-resolved secrets map.
-  # The map is unsealed once per execution at admission, so each get() is a
+  # The map is unsealed once per execution, at attach, so each get() is a
   # simple Map.get with no file I/O or PBKDF2 derivation.
   defp build_vault_imports(preloaded, component_ref) when is_map(preloaded) do
     %{

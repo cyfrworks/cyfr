@@ -16,7 +16,8 @@ defmodule Cyfr.Execution.Close do
   `secrets` passed in: the masking set of the run's
   `Cyfr.Execution.Attempt`, which calls these functions from its own
   process. A refusal before the attempt opens (`Cyfr.Execution.Admission`)
-  passes an empty set: nothing has been unsealed or dispensed yet.
+  or at attach passes an empty set: nothing has been unsealed or dispensed
+  yet.
 
   A close struct is data only: the row's record, the context the run was
   admitted in, the node's limits and whether the row has been admitted.
@@ -133,13 +134,40 @@ defmodule Cyfr.Execution.Close do
   end
 
   @doc """
-  Close a run whose attempt ended before it could close the run itself.
-  The message is fixed and carries nothing the guest produced, so it needs
-  no masking set.
+  Close a run whose attempt ended before it closed the run itself. The
+  message is fixed and carries nothing the guest produced, so it needs no
+  masking set.
+
+  The write is fenced on the run's attempt. When the row is no longer
+  running under it (the attempt wrote its terminal row before it ended, a
+  cancel closed the row, or another attempt took it over), nothing is
+  written, no failure telemetry fires and no child is failed, and the
+  answer is the row's: its result when it completed, its error when it
+  failed or was cancelled, and the fixed message otherwise.
   """
-  @spec lost(t()) :: {:error, String.t()}
-  def lost(%__MODULE__{} = close),
-    do: close_failed(close, [], "Execution attempt ended before it closed")
+  @spec lost(t()) :: {:ok, map()} | {:error, String.t()}
+  def lost(%__MODULE__{record: record} = close) do
+    message = "Execution attempt ended before it closed"
+    failed_record = Record.fail(record, message)
+
+    case Record.write_failed(failed_record) do
+      {:error, :not_running} -> closed_answer(close, message)
+      written -> ended_failed(failed_record, written, message)
+    end
+  end
+
+  defp closed_answer(%__MODULE__{record: record} = close, message) do
+    case Record.get(close.ctx, record.id) do
+      {:ok, %Record{status: :completed} = row} ->
+        {:ok, %{status: :completed, output: row.output, metadata: metadata(close, row)}}
+
+      {:ok, %Record{status: status, error: error}} when status in [:failed, :cancelled] ->
+        {:error, error || "Execution #{status}"}
+
+      _ ->
+        {:error, message}
+    end
+  end
 
   @doc """
   The failure message for an exception raised while admitting, running or
@@ -276,26 +304,32 @@ defmodule Cyfr.Execution.Close do
       Telemetry.execute_start(record)
     end
 
-    case Record.write_failed(failed_record) do
+    ended_failed(failed_record, Record.write_failed(failed_record), message)
+  end
+
+  # What follows a failure's terminal write, whatever it answered: the
+  # failure telemetry and the cascade to a formula's running children.
+  defp ended_failed(failed_record, written, message) do
+    case written do
       :ok ->
         :ok
 
       {:error, :not_running} ->
         Logger.info(
-          "[Cyfr.Execution.Close] execution #{record.id} failed after cancel; " <>
+          "[Cyfr.Execution.Close] execution #{failed_record.id} failed after cancel; " <>
             "the cancelled row stands"
         )
 
       {:error, reason} ->
         Logger.error(
-          "[Cyfr.Execution.Close] Failed to write failed record #{record.id}: " <>
+          "[Cyfr.Execution.Close] Failed to write failed record #{failed_record.id}: " <>
             "#{inspect(reason)}. Audit trail is incomplete — this execution will appear " <>
             "as 'running' in logs."
         )
     end
 
     Telemetry.execute_exception(failed_record, message)
-    Cascade.fail_children(record)
+    Cascade.fail_children(failed_record)
 
     {:error, message}
   end

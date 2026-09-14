@@ -6,13 +6,21 @@ defmodule Opus.Executor do
   Runs an admitted WASM component.
 
   CYFR admits the run and closes it: `Cyfr.Execution.Admission.admit/4`
-  resolves, enforces, fetches, writes the row, unseals and opens the run's
-  `Cyfr.Execution.Attempt`; `Cyfr.Execution.Attempt.complete/4` and
-  `fail/3` mask and write the terminal row. The executor only runs the
-  component in between: it holds an execution slot, runs the component in
-  a runner process under the consented wall-clock timeout, renews the
-  row's lease while it waits, and kills the runner on a timeout, a lost
-  lease, a cancel or the end of the attempt.
+  resolves, enforces, fetches, writes the row, signs the run's assignment
+  and opens its `Cyfr.Execution.Attempt`. The executor is then the client
+  of that attempt, reaching it only through host calls (`Opus.HostClient`):
+  it attaches with the assignment (the answer carries the run's unsealed
+  vault fields), holds an execution slot, runs the component in a runner
+  process under the consented wall-clock timeout, renews the lease while it
+  waits, kills the runner on a timeout, a lost lease, a cancel or the end
+  of the attempt, and closes the attempt with `complete` or `fail`. The
+  guest's emits, OAuth token requests and HTTP rate checks are host calls
+  of the same client.
+
+  The process that admitted the run waits for the attempt to close it
+  (`Cyfr.Execution.Attempt.await/2`) and answers what the close recorded;
+  an attempt the executor could not attach to or close is abandoned, and
+  the run is closed lost.
 
   ## Usage
 
@@ -43,7 +51,8 @@ defmodule Opus.Executor do
 
   require Logger
 
-  alias Cyfr.Execution.{Admission, Attempt, Cascade, Close, Record}
+  alias Cyfr.Execution.{Admission, Attempt, Cascade, Record}
+  alias Opus.HostClient
   alias Sanctum.Context
 
   @doc """
@@ -66,44 +75,90 @@ defmodule Opus.Executor do
   def run(%Context{} = ctx, reference, input, opts \\ [])
       when is_binary(reference) and is_map(input) do
     with {:ok, admitted} <- Admission.admit(ctx, reference, input, opts) do
-      run_admitted(admitted, input, opts)
+      case run_attempt(admitted, input, opts) do
+        :closed -> :ok
+        :abandoned -> Attempt.abandon(admitted.execution_id)
+      end
+
+      Attempt.await(admitted.attempt, admitted.close)
     end
   end
 
-  defp run_admitted(admitted, input, opts) do
-    id = admitted.execution_id
+  # The runner's half: attach, run the component and close the attempt.
+  # `:closed` once CYFR has closed the run — on a close, or on a refused
+  # attach it closed itself — and `:abandoned` when the attempt was left
+  # open.
+  defp run_attempt(admitted, input, opts) do
+    %{assignment: assignment, attempt: attempt, attempt_key: key} = admitted.dispatch
+    client = HostClient.new(attempt, key)
+    attempt_ref = Process.monitor(admitted.attempt)
 
-    case Attempt.whereis(id) do
-      nil ->
-        Close.lost(admitted.close)
+    try do
+      case HostClient.attach(client, assignment) do
+        {:ok, fields} ->
+          runtime = Keyword.merge(admitted.runtime, preloaded_fields: fields, host: client)
 
-      attempt ->
-        attempt_ref = Process.monitor(attempt)
+          outcome =
+            try do
+              execute_wasm(admitted.wasm_bytes, input, runtime, opts, attempt_ref)
+            rescue
+              e -> {:error, exception_message(e, __STACKTRACE__)}
+            end
 
-        outcome =
-          try do
-            execute_wasm(admitted.wasm_bytes, input, admitted.runtime, opts, attempt_ref)
-          rescue
-            e -> {:error, Close.exception_message(e, __STACKTRACE__)}
-          after
-            Process.demonitor(attempt_ref, [:flush])
-          end
+          close(client, outcome)
 
-        closed =
-          case outcome do
-            {:ok, {output, metadata}} -> Attempt.complete(id, admitted.close, output, metadata)
-            {:error, reason} -> Attempt.fail(id, admitted.close, reason)
-          end
+        {:error, {:setup_required, _payload}} ->
+          :closed
 
-        # An attempt that ended before it closed took its masking set with
-        # it; the row is closed with a message that carries nothing the
-        # guest produced.
-        case closed do
-          :lost -> Close.lost(admitted.close)
-          {:ok, result} -> {:ok, result}
-          {:error, reason} -> {:error, reason}
-        end
+        {:error, refusal} ->
+          Logger.warning(
+            "[Executor] attach of #{admitted.execution_id} refused: #{inspect(refusal)}"
+          )
+
+          :abandoned
+      end
+    after
+      Process.demonitor(attempt_ref, [:flush])
     end
+  end
+
+  defp close(client, {:ok, {output, _metadata}}) do
+    case HostClient.complete(client, output) do
+      {:ok, _recorded} -> :closed
+      {:error, {:failed, _message}} -> :closed
+      {:error, _refusal} -> :abandoned
+    end
+  end
+
+  defp close(client, {:error, reason}) do
+    case HostClient.fail(client, failure_message(reason)) do
+      :ok -> :closed
+      {:error, _refusal} -> :abandoned
+    end
+  end
+
+  defp failure_message(reason) when is_binary(reason), do: reason
+
+  defp failure_message(reason) do
+    Logger.warning("[Executor] unrenderable failure reason: #{inspect(reason)}")
+    "Execution failed: internal error"
+  end
+
+  # A `RuntimeError` or `ArgumentError` carries a sentence authored where it
+  # was raised; any other exception is logged and reported as an internal
+  # error.
+  defp exception_message(%RuntimeError{message: message}, _stacktrace),
+    do: "Execution error: #{message}"
+
+  defp exception_message(%ArgumentError{message: message}, _stacktrace),
+    do: "Execution error: #{message}"
+
+  defp exception_message(exception, stacktrace) do
+    Logger.error(
+      "[Executor] execution raised: " <> Exception.format(:error, exception, stacktrace)
+    )
+
+    "Execution error: the engine raised an internal error"
   end
 
   defp execute_wasm(wasm_bytes, input, exec_opts, opts, attempt_ref) do
@@ -177,6 +232,9 @@ defmodule Opus.Executor do
     :component_type,
     :max_memory_bytes,
     :preloaded_fields,
+    # The run's host client (`Opus.HostClient`): what the guest's emits,
+    # token requests and HTTP rate checks are host calls of.
+    :host,
     :component_ref,
     :edge,
     :limits,
@@ -204,8 +262,9 @@ defmodule Opus.Executor do
   # The options the runtime runs on. Caller opts fill in what admission did
   # not settle; they never overwrite what it did — for any key, so `:ctx`
   # (the tenant every host import scopes on), `:preloaded_fields` (the
-  # unsealed vault map), `:digest` (the compiled-component cache key) and
-  # `:execution_attempt` stay admission's.
+  # vault map attach answered), `:host` (the attached client), `:digest`
+  # (the compiled-component cache key) and `:execution_attempt` stay
+  # admission's.
   @spec runtime_opts(keyword(), keyword()) :: keyword()
   def runtime_opts(exec_opts, opts) do
     opts
@@ -352,30 +411,25 @@ defmodule Opus.Executor do
     end
   end
 
-  # Lease renewals while a long execution runs: every minute the row's
-  # lease is pushed out, so the sweeper knows a slow execution from a dead
-  # runner. A renewal the store refuses stops the runner at once: the row
-  # is another's (cancelled, swept, finished) and any result this attempt
-  # produced would be refused by the fence. A renewal the store cannot
-  # answer keeps the runner working only while the lease it LAST held is
-  # still good.
+  # Lease renewals while a long execution runs: every minute a `renew` host
+  # call pushes the row's lease out, so the sweeper knows a slow execution
+  # from a dead runner. A renewal CYFR answers `lost` stops the runner at
+  # once: the row is another's (cancelled, swept, finished, taken over)
+  # and any result this attempt produced would be refused by the fence. A
+  # renewal CYFR cannot answer keeps the runner working only while the
+  # lease it LAST held is still good.
   @lease_tick_ms 60_000
 
-  # What `await_result/7` watches between ticks: the row, the attempt that
-  # owns it, the tenant to charge an unreaped kill to, and the expiry the
-  # attempt last renewed to.
+  # What `await_result/7` watches between ticks: the attempt's host client,
+  # the tenant to charge an unreaped kill to, and the expiry the attempt
+  # last renewed to.
   defp lease_watch(runtime_opts) do
-    case Keyword.get(runtime_opts, :execution_id) do
+    case Keyword.get(runtime_opts, :host) do
       nil ->
         nil
 
-      execution_id ->
-        %{
-          execution_id: execution_id,
-          attempt: Keyword.get(runtime_opts, :execution_attempt),
-          tenant: tenant_of(runtime_opts),
-          until: Record.lease_until()
-        }
+      %HostClient{} = client ->
+        %{client: client, tenant: tenant_of(runtime_opts), until: Record.lease_until()}
     end
   end
 
@@ -433,23 +487,24 @@ defmodule Opus.Executor do
 
   @doc false
   @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed | :cancelled
-  def renew_watch(watch, now \\ DateTime.utc_now()) do
-    case Record.renew_lease(watch.execution_id, watch.attempt) do
-      {:ok, until} ->
-        {:ok, %{watch | until: until}}
+  def renew_watch(%{client: client} = watch, now \\ DateTime.utc_now()) do
+    case HostClient.renew(client, [client.attempt]) do
+      {:ok, renewals} ->
+        case Map.get(renewals, client.attempt, :lost) do
+          {:ok, until} -> {:ok, %{watch | until: DateTime.from_unix!(until, :millisecond)}}
+          :cancel -> :cancelled
+          :lost -> :lapsed
+        end
 
-      {:cancel_requested, _until} ->
-        :cancelled
-
-      :lost ->
-        :lapsed
-
-      :unavailable ->
+      {:error, :unavailable} ->
         # Still inside the lease this attempt last held: the store may
         # merely be slow, and the next tick asks again. Past it, stop.
         if DateTime.compare(now, watch.until) == :lt,
           do: {:ok, watch},
           else: :lapsed
+
+      {:error, _refusal} ->
+        :lapsed
     end
   end
 
@@ -459,7 +514,7 @@ defmodule Opus.Executor do
   # are cleaned up. The tokens dispensed to the run stay in its attempt's
   # masking set, which masks the error when the attempt closes the run.
   defp kill_unreaped(pid, cleanup_refs, watch) do
-    charge_unreaped(watch && watch.tenant, watch && watch.execution_id)
+    charge_unreaped(watch && watch.tenant, watch && watch.client.execution_id)
     Process.unlink(pid)
     Process.exit(pid, :kill)
 

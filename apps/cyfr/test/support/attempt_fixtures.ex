@@ -1,0 +1,241 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Cyfr.Test.AttemptFixtures do
+  @moduledoc """
+  A real execution attempt reached through host calls: an admitted row, its
+  `Cyfr.Execution.Attempt` open with the calling process as its waiter, a
+  signed assignment, and a runner attached through
+  `Cyfr.Execution.Host.call/2`.
+
+  The attached map carries what a runner's client needs (the attempt's
+  `athanor_id`, `execution_id`, `attempt`, `fence` and `generation`, the
+  `runner` and the attempt `key`) together with the row's `record`, its
+  `close` state, the attempt `pid`, the `ctx`, `authority` and
+  `component_ref` it runs under, the signed `assignment` and the `secrets`
+  attach answered.
+  """
+
+  import ExUnit.Assertions
+
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob.Edge
+  alias Cyfr.Execution.{Assignments, Attempt, Close, Keys, Record}
+
+  @doc """
+  Admit, open, sign and attach. Options:
+
+  - `:ctx` — the admission context (default `Sanctum.TestContext.local/0`);
+  - `:authority` — default `Cyfr.Authority.zero/0`;
+  - `:vault` — attributes of a vault entry to create
+    (`Sanctum.Vault.create/2`); the authority's edge is bound to it and
+    pinned to an active profile, so attach unseals its fields;
+  - `:component_ref` — default a reference of its own, so no two fixtures
+    share a rate bucket;
+  - `:component_type` — the row's type (default `:catalyst`);
+  - `:limits` — the node's limits (default the authority's);
+  - `:stream_id` — the stream its events go on (default the execution's);
+  - `:runner` — the attaching runner's id (default a fresh one);
+  - `:attach` — `false` to stop before attaching.
+  """
+  @spec attached!(keyword()) :: map()
+  def attached!(opts \\ []) do
+    ctx = Keyword.get_lazy(opts, :ctx, &Sanctum.TestContext.local/0)
+    {authority, entry} = authority(ctx, opts)
+
+    component_ref =
+      Keyword.get_lazy(opts, :component_ref, fn ->
+        "catalyst:local.attempt-fixture-#{System.unique_integer([:positive])}:0.1.0"
+      end)
+
+    limits = Keyword.get_lazy(opts, :limits, fn -> Authority.limits(authority) end)
+    input = %{"fixture" => true}
+
+    component_type = Keyword.get(opts, :component_type, :catalyst)
+    record = Record.new(ctx, component_ref, input, component_type: component_type)
+    :ok = Record.write_started(record)
+    close = %Close{ctx: ctx, record: record, limits: limits, started: true}
+
+    {:ok, pid} =
+      Attempt.open(
+        execution_id: record.id,
+        attempt: record.attempt,
+        ctx: ctx,
+        authority: authority,
+        component_ref: component_ref,
+        limits: limits,
+        close: close,
+        stream_id: Keyword.get(opts, :stream_id, record.id)
+      )
+
+    {:ok, issued} =
+      Assignments.issue(%{
+        ctx: ctx,
+        record: record,
+        authority: authority,
+        component: %{
+          ref: component_ref,
+          type: Atom.to_string(component_type),
+          digest: Cyfr.Digest.sha256(component_ref),
+          declared_needs: [],
+          activation_digest: nil
+        },
+        input: input,
+        timeout_ms: 60_000
+      })
+
+    fixture =
+      Map.merge(issued.attempt, %{
+        runner: Keyword.get_lazy(opts, :runner, fn -> Cyfr.UUID7.generate_id("runner") end),
+        key: issued.attempt_key,
+        assignment: issued.assignment,
+        record: record,
+        close: close,
+        pid: pid,
+        ctx: ctx,
+        authority: authority,
+        component_ref: component_ref,
+        entry: entry,
+        secrets: nil
+      })
+
+    if Keyword.get(opts, :attach, true) do
+      assert %{"ok" => secrets} = call(fixture, "attach", %{"assignment" => fixture.assignment})
+      %{fixture | secrets: secrets}
+    else
+      fixture
+    end
+  end
+
+  @doc """
+  Sign and send one host call for `fixture`'s attempt, answering the decoded
+  JSON. Options override the header's fields (`:runner`, `:nonce`, `:ts`,
+  `:generation`, `:fence`) or the `:key` it is signed with (default the
+  fixture's attempt key); `:body` sends that exact body.
+  """
+  @spec call(map(), String.t(), map(), keyword()) :: map()
+  def call(fixture, op, args, opts \\ []) do
+    body = Keyword.get_lazy(opts, :body, fn -> body(op, args) end)
+    fixture |> header(body, opts) |> Cyfr.Execution.Host.call(body) |> Jason.decode!()
+  end
+
+  @doc "The JSON body of a host call of `op` with `args`."
+  @spec body(String.t(), map()) :: String.t()
+  def body(op, args), do: Jason.encode!(%{"op" => op, "args" => args})
+
+  @doc "A signed header for `body` on `fixture`'s attempt; options as `call/4`'s."
+  @spec header(map(), String.t(), keyword()) :: String.t()
+  def header(fixture, body, opts \\ []) do
+    fields = %{
+      athanor_id: fixture.athanor_id,
+      execution_id: fixture.execution_id,
+      attempt: fixture.attempt,
+      fence: Keyword.get(opts, :fence, fixture.fence),
+      generation: Keyword.get(opts, :generation, fixture.generation),
+      runner: Keyword.get(opts, :runner, fixture.runner),
+      ts: Keyword.get_lazy(opts, :ts, fn -> System.system_time(:millisecond) end),
+      nonce: Keyword.get_lazy(opts, :nonce, &nonce/0)
+    }
+
+    key = Keyword.get(opts, :key, fixture.key)
+    {:ok, header} = Cyfr.WorkerAuth.host_call_header(key, fields, body)
+    header
+  end
+
+  @doc """
+  The host-call fields of the attempt that currently owns `execution_id`,
+  as its claimant presents them: usable with `call/4` from a process that
+  holds no client, such as a telemetry handler inside a run.
+  """
+  @spec current!(String.t(), String.t()) :: map()
+  def current!(athanor_id, execution_id) do
+    %Arca.Schemas.ExecutionAttempt{} =
+      row = Arca.ExecutionAttempts.current(athanor_id, execution_id)
+
+    attempt = %{
+      athanor_id: athanor_id,
+      execution_id: execution_id,
+      attempt: row.attempt,
+      fence: row.fence,
+      generation: Keys.generation()
+    }
+
+    Map.merge(attempt, %{runner: row.claimed_by, key: attempt_key!(attempt)})
+  end
+
+  @doc "A delta of `event` (JSON text) naming `fixture`'s attempt, as its wire map."
+  @spec delta(map(), String.t()) :: map()
+  def delta(fixture, event) do
+    %{
+      "execution_id" => fixture.execution_id,
+      "attempt" => fixture.attempt,
+      "fence" => fixture.fence,
+      "event" => event
+    }
+  end
+
+  @doc "An outcome wire map naming `fixture`'s attempt."
+  @spec outcome(map(), String.t(), map()) :: map()
+  def outcome(fixture, status, fields) do
+    Map.merge(fields, %{
+      "execution_id" => fixture.execution_id,
+      "attempt" => fixture.attempt,
+      "fence" => fixture.fence,
+      "status" => status
+    })
+  end
+
+  defp attempt_key!(fields) do
+    {:ok, key} = Keys.attempt_key(fields)
+    key
+  end
+
+  defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+
+  defp authority(ctx, opts) do
+    authority = Keyword.get(opts, :authority, Authority.zero())
+
+    case Keyword.get(opts, :vault) do
+      nil -> {authority, nil}
+      %{} = attrs -> vault_authority!(ctx, attrs, authority)
+    end
+  end
+
+  @doc """
+  `authority` with its edge bound to a new vault entry made from `attrs` in
+  `ctx`'s athanor, and pinned to an active profile at its head consent, so
+  an attach unseals the entry. Answers the authority and the entry.
+  """
+  @spec vault_authority!(Sanctum.Context.t(), map(), Authority.t()) ::
+          {Authority.t(), Arca.Schemas.VaultEntry.t()}
+  def vault_authority!(ctx, attrs, authority \\ Authority.zero()) do
+    {:ok, view} =
+      Sanctum.Vault.create(
+        ctx,
+        Map.put_new(attrs, :name, "attempt-fixture-#{System.unique_integer([:positive])}")
+      )
+
+    {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+    {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
+    consent_id = Cyfr.UUID7.generate_id("cons")
+
+    {:ok, profile} =
+      Arca.ProfileStorage.put(%{
+        athanor_id: ctx.athanor_id,
+        source_ref: "catalyst:local.attempt-fixture",
+        kind: "owner",
+        label: "fixture-#{System.unique_integer([:positive])}",
+        status: "active",
+        head_consent_id: consent_id
+      })
+
+    vault = %{entry_id: entry.id, binding_digest: digest, projection: nil}
+
+    {%{
+       authority
+       | profile_id: profile.id,
+         consent_id: consent_id,
+         resources: %Edge{vault: vault}
+     }, entry}
+  end
+end

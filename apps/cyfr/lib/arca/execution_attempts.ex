@@ -115,6 +115,65 @@ defmodule Arca.ExecutionAttempts do
     end
   end
 
+  @doc """
+  Claim a running attempt for the runner that attached to it: `claimed_by`
+  is set on the attempt at `fence` that owns its execution, is `running`
+  and is unclaimed.
+
+  Answers `:ok` when the attempt is now claimed by `runner`, including
+  when `runner` had already claimed it; `{:error, :replayed}` when another
+  runner holds the claim; `{:error, :lost}` when the attempt is not the
+  running owner at that fence; `{:error, :database_error}` when the store
+  cannot answer.
+  """
+  @spec claim(String.t(), String.t(), pos_integer(), String.t()) ::
+          :ok | {:error, :replayed | :lost | :database_error}
+  def claim(athanor_id, attempt, fence, runner)
+      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
+             is_binary(runner) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.claim", fn ->
+      Arca.Repo.transaction(fn ->
+        {count, _} =
+          from(a in running_owner(athanor_id, attempt, fence),
+            where: is_nil(a.claimed_by) or a.claimed_by == ^runner
+          )
+          |> Arca.Repo.update_all(set: [claimed_by: runner])
+
+        cond do
+          count == 1 ->
+            :ok
+
+          Arca.Repo.exists?(running_owner(athanor_id, attempt, fence)) ->
+            Arca.Repo.rollback(:replayed)
+
+          true ->
+            Arca.Repo.rollback(:lost)
+        end
+      end)
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Whether `runner` holds the attempt: it owns its execution, is `running`,
+  is at `fence` and is claimed by `runner`. One read. Answers
+  `{:error, :database_error}` when the store cannot answer.
+  """
+  @spec held?(String.t(), String.t(), pos_integer(), String.t()) ::
+          boolean() | {:error, :database_error}
+  def held?(athanor_id, attempt, fence, runner)
+      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
+             is_binary(runner) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.held?", fn ->
+      Arca.Repo.exists?(
+        from(a in running_owner(athanor_id, attempt, fence), where: a.claimed_by == ^runner)
+      )
+    end)
+  end
+
   @doc "Ask the execution's current attempt to stop at its next tick."
   @spec request_cancel(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def request_cancel(athanor_id, execution_id) when is_binary(athanor_id) do
@@ -424,6 +483,15 @@ defmodule Arca.ExecutionAttempts do
       on: a.execution_id == e.id,
       where: a.attempt == ^attempt,
       select: e.current_attempt
+    )
+  end
+
+  # The attempt at `fence` that owns its execution and is running.
+  defp running_owner(athanor_id, attempt, fence) do
+    from(a in ExecutionAttempt,
+      where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
+      where: a.fence == ^fence and a.state == "running",
+      where: a.attempt in subquery(owner(attempt))
     )
   end
 

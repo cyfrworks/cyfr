@@ -57,10 +57,10 @@ defmodule Cyfr.SanctumSurfacesTest do
     # transition relation (Sanctum.Authority); Cyfr.Execution.Charge gives
     # a refused charge's slot back to the invoke-budget counter. Admitting a
     # run records its policy consultation and its rate and size denials
-    # (Sanctum.Policy), checks its consent is still the profile's head
-    # (Sanctum.Consent) and unseals its vault edge (Sanctum.VaultReader);
-    # Cyfr.Execution.Attempt dispenses its OAuth tokens from that edge
-    # (Sanctum.VaultReader).
+    # (Sanctum.Policy). When its runner attaches, Cyfr.Execution.Attempt
+    # checks its consent is still the profile's head (Sanctum.Consent) and
+    # unseals its vault edge (Sanctum.VaultReader), and it dispenses the
+    # run's OAuth tokens from that edge (Sanctum.VaultReader).
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
       Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth

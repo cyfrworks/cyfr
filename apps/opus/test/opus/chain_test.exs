@@ -16,6 +16,10 @@ defmodule Opus.ChainTest do
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
+  # Activation digests as the resolver spells them; an assignment carries
+  # nothing else.
+  @root_act Cyfr.Digest.sha256("root-act")
+  @root_activation Cyfr.Digest.sha256("root-activation")
 
   setup do
     Arca.Cache.init()
@@ -178,7 +182,7 @@ defmodule Opus.ChainTest do
           limits: Cyfr.Authority.limits(auth),
           authority: auth,
           declared_needs: [],
-          activation_digest: "sha256:root-act"
+          activation_digest: @root_act
         ],
         overrides
       )
@@ -316,7 +320,7 @@ defmodule Opus.ChainTest do
           ctx: Context.enter_guest(ctx),
           parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
           root_execution_id: "exec_root_ref",
-          activation_digest: "sha256:root-activation"
+          activation_digest: @root_activation
         ],
         overrides
       )
@@ -370,7 +374,7 @@ defmodule Opus.ChainTest do
 
       row = Arca.Repo.get(Arca.Execution, execution_id)
       # A child carries its root's activation digest, no graph.
-      assert row.activation_digest == "sha256:root-activation"
+      assert row.activation_digest == @root_activation
       assert row.activation_graph == nil
       assert row.parent_execution_id != nil
     end
@@ -568,7 +572,7 @@ defmodule Opus.ChainTest do
 
       assert [row] = rows
       assert row.parent_execution_id == parent_id
-      assert row.activation_digest == "sha256:root-act"
+      assert row.activation_digest == @root_act
     end
 
     test "an omitted need is rejected when the closure declares needs", %{ctx: ctx} do
@@ -652,18 +656,18 @@ defmodule Opus.ChainTest do
 
     test "an oversized emit is refused by the node's own request limit", %{ctx: ctx} do
       auth = authority_with_edges(%{})
-      parent_id = "exec_fork_emit_#{System.unique_integer([:positive])}"
 
       # The formula's attempt answers its emit under the node's limits.
-      {:ok, _attempt} =
-        Cyfr.Execution.Attempt.open(
-          execution_id: parent_id,
+      attempt =
+        Cyfr.Test.AttemptFixtures.attached!(
           ctx: ctx,
           authority: auth,
-          component_ref: "formula:local.fork-emit:0.1.0"
+          component_ref: "formula:local.fork-emit:0.1.0",
+          component_type: :formula
         )
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+      host = Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+      {imports, tracker} = fork_imports(ctx, auth, attempt.execution_id, host: host)
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)

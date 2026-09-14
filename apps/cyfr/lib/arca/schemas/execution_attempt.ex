@@ -8,7 +8,9 @@ defmodule Arca.Schemas.ExecutionAttempt do
   owns it; `fence` increases with each successor. `state` walks
   `running | paused` to `completed | failed | cancelled | lapsed`, and
   `outcome` records what a terminal attempt established:
-  `ok | error | result_lost | cancelled | uncertain`. `running_since`
+  `ok | error | result_lost | cancelled | uncertain`. `claimed_by` names
+  the runner that attached to the attempt (`Arca.ExecutionAttempts.claim/4`)
+  and stays nil until then; a turn root is never claimed. `running_since`
   is set while the attempt runs and cleared when it pauses or ends, so
   running time is accounted once per interval. Owned by the athanor.
   """
@@ -24,6 +26,7 @@ defmodule Arca.Schemas.ExecutionAttempt do
     field :execution_id, :string
     field :fence, :integer
     field :runner_id, :string
+    field :claimed_by, :string
     field :lease_until, :utc_datetime_usec
     field :state, :string
     field :outcome, :string

@@ -17,8 +17,8 @@ defmodule Opus.ExecutorMaskedOutputTest do
   credential is text the stub writes, so what it writes is what must come
   out masked — the key spans two deltas, and so does the token. The key's
   vault entry also holds an OAuth bundle whose access token is the token,
-  and the token is dispensed through the run's attempt as the guest starts,
-  as a guest's `cyfr:oauth` call dispenses one.
+  and the token is dispensed by an `oauth_token` host call on the run's
+  attempt as the guest starts, as a guest's `cyfr:oauth` call dispenses one.
   """
 
   use ExUnit.Case, async: false
@@ -289,8 +289,12 @@ defmodule Opus.ExecutorMaskedOutputTest do
         handler,
         [:cyfr, :opus, :runtime, :authority_entered],
         fn _event, _measurements, %{execution_id: id, reference: reference}, _config ->
-          if String.starts_with?(reference, ref <> ":"),
-            do: {:ok, ^token} = Cyfr.Execution.Attempt.dispense_oauth(id, "stub")
+          if String.starts_with?(reference, ref <> ":") do
+            attempt = Cyfr.Test.AttemptFixtures.current!(ctx.athanor_id, id)
+
+            %{"ok" => ^token} =
+              Cyfr.Test.AttemptFixtures.call(attempt, "oauth_token", %{"provider" => "stub"})
+          end
         end,
         nil
       )

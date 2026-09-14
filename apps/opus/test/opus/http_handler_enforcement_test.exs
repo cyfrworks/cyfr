@@ -13,6 +13,12 @@ defmodule Opus.HttpHandlerEnforcementTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
+  # A real attached attempt's host client for `component_ref`.
+  defp host(component_ref) do
+    attempt = Cyfr.Test.AttemptFixtures.attached!(component_ref: component_ref)
+    Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+  end
+
   defp rows_for(ctx, component_ref) do
     [athanor_id: ctx.athanor_id, limit: 50]
     |> Arca.PolicyLog.list()
@@ -25,7 +31,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
     ref = "catalyst:local.audited-egress:1.0.0"
 
     request = Jason.encode!(%{"method" => "GET", "url" => "https://evil.example.net/data"})
-    result = HttpHandler.execute(request, edge, EdgeFixtures.limits(), ctx, ref)
+    result = HttpHandler.execute(request, edge, EdgeFixtures.limits(), ctx, host(ref), ref)
 
     assert %{"error" => %{"type" => "domain_blocked"}} = Jason.decode!(result)
 
@@ -40,7 +46,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
     ref = "catalyst:local.audited-method:1.0.0"
 
     request = Jason.encode!(%{"method" => "DELETE", "url" => "https://api.example.com/data"})
-    result = HttpHandler.execute(request, edge, EdgeFixtures.limits(), ctx, ref)
+    result = HttpHandler.execute(request, edge, EdgeFixtures.limits(), ctx, host(ref), ref)
 
     assert %{"error" => %{"type" => "method_blocked"}} = Jason.decode!(result)
 
@@ -56,7 +62,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
     request =
       Jason.encode!(%{"method" => "GET", "url" => "https://nonexistent.invalid/data"})
 
-    result = HttpHandler.execute(request, edge, EdgeFixtures.limits(), ctx, ref)
+    result = HttpHandler.execute(request, edge, EdgeFixtures.limits(), ctx, host(ref), ref)
 
     assert %{"error" => %{"type" => type}} = Jason.decode!(result)
     assert type in ["dns_error", "http_error"]

@@ -1391,6 +1391,22 @@ defmodule Cyfr.Ops.Catalog do
         do: "#{tool.name}.#{action}"
   end
 
+  @doc """
+  Every `tool.action` annotated `host: :intercepted`: the actions a
+  formula's host runs under the chain's authority rather than dispatching
+  through the catalog, sorted.
+  """
+  @spec host_intercepted_actions() :: [String.t()]
+  def host_intercepted_actions do
+    Enum.sort(
+      for module <- available_providers(),
+          tool <- module.tools(),
+          {action, _annotation} <- Annotations.actions_of(tool),
+          Annotations.host_intercepted?(tool, action),
+          do: "#{tool.name}.#{action}"
+    )
+  end
+
   # Every `tool.action` the loaded providers declare — what a consent
   # shape may name (`Sanctum.Catalog`).
   @impl Sanctum.Catalog

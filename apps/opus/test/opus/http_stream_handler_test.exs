@@ -2,16 +2,27 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.HttpStreamHandlerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
+  alias Cyfr.Test.AttemptFixtures
   alias Opus.HttpStreamHandler
   alias Opus.Test.EdgeFixtures
 
+  # A real attached attempt's host client for `component_ref`, taking each
+  # request from `limits`' consented rate.
+  defp attached_host(component_ref, limits) do
+    with :ok <- Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo),
+         do: Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    attempt = AttemptFixtures.attached!(component_ref: component_ref, limits: limits)
+    Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+  end
+
   # ============================================================================
-  # build_stream_imports/4
+  # build_stream_imports/5
   # ============================================================================
 
-  describe "build_stream_imports/4" do
+  describe "build_stream_imports/5" do
     test "returns {imports, exec_ref} tuple with correct Wasmex import shape" do
       edge = EdgeFixtures.edge()
       ctx = Sanctum.TestContext.local()
@@ -21,6 +32,7 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           ctx,
+          attached_host("local.test-component:1.0.0", EdgeFixtures.limits()),
           "local.test-component:1.0.0"
         )
 
@@ -57,7 +69,13 @@ defmodule Opus.HttpStreamHandlerTest do
       component_ref = "test-stream"
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, component_ref)
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          ctx,
+          attached_host(component_ref, EdgeFixtures.limits()),
+          component_ref
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
@@ -115,7 +133,13 @@ defmodule Opus.HttpStreamHandlerTest do
       ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          ctx,
+          attached_host("test", EdgeFixtures.limits()),
+          "test"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, func} = stream_ns["request"]
@@ -146,7 +170,13 @@ defmodule Opus.HttpStreamHandlerTest do
       ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          ctx,
+          attached_host("test", EdgeFixtures.limits()),
+          "test"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
@@ -184,7 +214,13 @@ defmodule Opus.HttpStreamHandlerTest do
       ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          ctx,
+          attached_host("test", EdgeFixtures.limits()),
+          "test"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
@@ -232,7 +268,13 @@ defmodule Opus.HttpStreamHandlerTest do
       ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, limits, ctx, "test-req-size")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          limits,
+          ctx,
+          attached_host("test-req-size", limits),
+          "test-req-size"
+        )
 
       {:fn, request_fn} = imports["cyfr:http/streaming@0.1.0"]["request"]
 
@@ -255,7 +297,13 @@ defmodule Opus.HttpStreamHandlerTest do
       ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test-mp")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          ctx,
+          attached_host("test-mp", EdgeFixtures.limits()),
+          "test-mp"
+        )
 
       {:fn, request_fn} = imports["cyfr:http/streaming@0.1.0"]["request"]
 
@@ -290,7 +338,13 @@ defmodule Opus.HttpStreamHandlerTest do
       ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, limits, ctx, "test-timeout")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          limits,
+          ctx,
+          attached_host("test-timeout", limits),
+          "test-timeout"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
@@ -351,7 +405,13 @@ defmodule Opus.HttpStreamHandlerTest do
       ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, limits, ctx, "test-collector-cap")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          limits,
+          ctx,
+          attached_host("test-collector-cap", limits),
+          "test-collector-cap"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
@@ -387,6 +447,7 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           Sanctum.TestContext.local(),
+          attached_host("test-read", EdgeFixtures.limits()),
           "test-read"
         )
 
@@ -479,6 +540,7 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           Sanctum.TestContext.local(),
+          attached_host("test-wait", EdgeFixtures.limits()),
           "test-wait"
         )
 
@@ -556,7 +618,13 @@ defmodule Opus.HttpStreamHandlerTest do
       # We can't access exec_ref directly, but we can verify
       # that build_stream_imports + cleanup_registry round-trips safely.
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test-cleanup")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          ctx,
+          attached_host("test-cleanup", EdgeFixtures.limits()),
+          "test-cleanup"
+        )
 
       _stream_ns = imports["cyfr:http/streaming@0.1.0"]
 

@@ -4,28 +4,30 @@
 defmodule Cyfr.Execution.AttemptMaskingTest do
   @moduledoc """
   A run's attempt is the one place its credentials are masked: the vault
-  field unsealed for it and every OAuth token it dispenses are masked in the
-  events its guest emits, in the text its emitter still holds when the run
-  closes — which goes out before the terminal row — and in the output, the
-  result payload, a failure message, the lifecycle events and the answer the
-  caller gets. A token asked for while the run closes is either masked or
-  never dispensed. An attempt that ends before it closes its run, or whose
-  opener exits, leaves nothing unmasked behind.
+  field unsealed for it at attach and every OAuth token it dispenses are
+  masked in the events its guest emits, in the text its emitter still holds
+  when the run closes — which goes out before the terminal row — and in the
+  output, the result payload, a failure message, the lifecycle events and
+  the answers the runner and the waiter get. A token asked for while the
+  run closes is either masked or never dispensed. An attempt that ends
+  before it closes its run, or whose opener exits, leaves nothing unmasked
+  behind.
 
-  The vault field begins with the token, so text that ends in the token is
-  held back as the possible start of the field until the token is
-  dispensed.
+  Every call reaches the attempt as its runner's does: a signed host call
+  (`Cyfr.Execution.Host`). The vault field begins with the token, so text
+  that ends in the token is held back as the possible start of the field
+  until the token is dispensed.
   """
 
   use ExUnit.Case, async: false
 
   import Cyfr.Test.Wait
 
-  alias Cyfr.Execution.{Attempt, Close, Record}
+  alias Cyfr.Execution.Attempt
+  alias Cyfr.Test.AttemptFixtures
 
   @token "ya29.token-0123456789"
   @field @token <> "-and-field"
-  @ref "catalyst:local.masking-probe:0.1.0"
   @redacted "[REDACTED]"
 
   setup do
@@ -33,29 +35,24 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = Sanctum.TestContext.local()
-    authority = oauth_authority!(ctx)
-    record = Record.new(ctx, @ref, %{"q" => 1}, component_type: :catalyst)
-    :ok = Record.write_started(record)
+    fixture = attached!()
+    :ok = Cyfr.Execution.Events.subscribe(fixture.execution_id, ctx)
 
-    close = %Close{
-      ctx: ctx,
-      record: record,
-      limits: Cyfr.Authority.limits(authority),
-      started: true
-    }
-
-    :ok = Cyfr.Execution.Events.subscribe(record.id, ctx)
-    {:ok, pid} = open(ctx, authority, record.id, attempt: record.attempt)
-
-    {:ok, ctx: ctx, authority: authority, id: record.id, close: close, attempt: pid}
+    {:ok, ctx: ctx, fixture: fixture, id: fixture.execution_id}
   end
 
-  test "a dispensed token and the vault field are masked in the events, output, row, payload and answer",
-       %{ctx: ctx, id: id, close: close} do
-    assert {:ok, @token} = Attempt.dispense_oauth(id, "google")
-    assert %{"sequence" => _} = emit!(id, %{"type" => "note", "text" => "#{@token} #{@field}"})
+  test "a dispensed token and the vault field are masked in the events, output, row, payload and answers",
+       %{ctx: ctx, fixture: fixture, id: id} do
+    assert fixture.secrets == %{"KEY" => @field}
+    assert %{"ok" => @token} = token(fixture)
 
-    assert {:ok, result} = Attempt.complete(id, close, %{"said" => "#{@token} / #{@field}"}, %{})
+    assert %{"sequence" => _} =
+             emit!(fixture, %{"type" => "note", "text" => "#{@token} #{@field}"})
+
+    assert %{"ok" => answered} = complete(fixture, %{"said" => "#{@token} / #{@field}"})
+    assert answered == %{"said" => "#{@redacted} / #{@redacted}"}
+
+    assert {:ok, result} = Attempt.await(fixture.pid, fixture.close)
     assert result.output == %{"said" => "#{@redacted} / #{@redacted}"}
     refute_unmasked(result)
 
@@ -73,11 +70,12 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
   end
 
   test "held text goes out masked with the set as it stands at close, before the terminal row",
-       %{ctx: ctx, id: id, close: close} do
-    emit!(id, %{"type" => "text.delta", "text" => "the token is " <> @token})
-    assert {:ok, @token} = Attempt.dispense_oauth(id, "google")
+       %{ctx: ctx, fixture: fixture, id: id} do
+    emit!(fixture, %{"type" => "text.delta", "text" => "the token is " <> @token})
+    assert %{"ok" => @token} = token(fixture)
 
-    assert {:ok, _result} = Attempt.complete(id, close, %{"said" => "done"}, %{})
+    assert %{"ok" => _output} = complete(fixture, %{"said" => "done"})
+    assert {:ok, _result} = Attempt.await(fixture.pid, fixture.close)
 
     live = live_events()
     assert Enum.map(emitted(live), & &1["text"]) == ["the token is ", @redacted]
@@ -91,10 +89,11 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
   end
 
   test "the last delta of a stream that never ends reaches the stream before a failed row",
-       %{id: id, close: close} do
-    emit!(id, %{"type" => "text.delta", "text" => "partial ya29.tok"})
+       %{fixture: fixture, id: id} do
+    emit!(fixture, %{"type" => "text.delta", "text" => "partial ya29.tok"})
 
-    assert {:error, "upstream failed"} = Attempt.fail(id, close, "upstream failed")
+    assert %{"ok" => true} = fail(fixture, "upstream failed")
+    assert {:error, "upstream failed"} = Attempt.await(fixture.pid, fixture.close)
 
     live = live_events()
     assert Enum.map(emitted(live), & &1["text"]) == ["partial ", "ya29.tok"]
@@ -103,10 +102,11 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
   end
 
   test "a failure message is masked in the row, its event and the answer",
-       %{ctx: ctx, id: id, close: close} do
-    assert {:ok, @token} = Attempt.dispense_oauth(id, "google")
+       %{ctx: ctx, fixture: fixture, id: id} do
+    assert %{"ok" => @token} = token(fixture)
 
-    assert {:error, message} = Attempt.fail(id, close, "upstream said #{@token} for #{@field}")
+    assert %{"ok" => true} = fail(fixture, "upstream said #{@token} for #{@field}")
+    assert {:error, message} = Attempt.await(fixture.pid, fixture.close)
     assert message == "upstream said #{@redacted} for #{@redacted}"
 
     row = Arca.Repo.get!(Arca.Execution, id)
@@ -120,41 +120,43 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
   end
 
   test "a token asked for while the run closes is masked, and one asked for after it is never dispensed",
-       %{id: id, close: close, attempt: attempt} do
+       %{fixture: fixture, id: id} do
+    attempt = fixture.pid
     :sys.suspend(attempt)
 
-    during = Task.async(fn -> Attempt.dispense_oauth(id, "google") end)
+    during = Task.async(fn -> token(fixture) end)
     wait_until(fn -> queued(attempt) == 1 end)
-    closing = Task.async(fn -> Attempt.complete(id, close, %{"said" => @token}, %{}) end)
+    closing = Task.async(fn -> complete(fixture, %{"said" => @token}) end)
     wait_until(fn -> queued(attempt) == 2 end)
-    after_close = Task.async(fn -> Attempt.dispense_oauth(id, "google") end)
+    after_close = Task.async(fn -> token(fixture) end)
     wait_until(fn -> queued(attempt) == 3 end)
 
     :sys.resume(attempt)
 
-    assert {:ok, @token} = Task.await(during)
-    assert {:ok, %{output: %{"said" => @redacted}}} = Task.await(closing)
-    assert {:error, "the credential store is unavailable"} = Task.await(after_close)
+    assert %{"ok" => @token} = Task.await(during)
+    assert %{"ok" => %{"said" => @redacted}} = Task.await(closing)
+    assert %{"error" => "lost"} = Task.await(after_close)
+    assert {:ok, %{output: %{"said" => @redacted}}} = Attempt.await(attempt, fixture.close)
     refute_unmasked(Arca.Repo.get!(Arca.Execution, id))
   end
 
   test "an attempt that ends before it closes its run leaves nothing unmasked",
-       %{ctx: ctx, id: id, close: close, attempt: attempt} do
-    assert {:ok, @token} = Attempt.dispense_oauth(id, "google")
-    emit!(id, %{"type" => "text.delta", "text" => "the key is " <> @token})
+       %{ctx: ctx, fixture: fixture, id: id} do
+    assert %{"ok" => @token} = token(fixture)
+    emit!(fixture, %{"type" => "text.delta", "text" => "the key is " <> @token})
 
+    attempt = fixture.pid
     ref = Process.monitor(attempt)
     Process.exit(attempt, :kill)
     assert_receive {:DOWN, ^ref, :process, ^attempt, :killed}
 
-    assert :lost = Attempt.complete(id, close, %{"said" => @token}, %{})
-    assert :lost = Attempt.fail(id, close, "failed with #{@token}")
-    assert {:error, _refused} = Attempt.dispense_oauth(id, "google")
+    assert %{"error" => "lost"} = complete(fixture, %{"said" => @token})
+    assert %{"error" => "lost"} = fail(fixture, "failed with #{@token}")
+    assert %{"error" => "lost"} = token(fixture)
+    assert %{"error" => "lost"} = push(fixture, %{"text" => @token})
 
-    assert %{"error" => %{"type" => "dispatch_error"}} =
-             Jason.decode!(Attempt.emit(id, Jason.encode!(%{"text" => @token})))
-
-    assert {:error, "Execution attempt ended before it closed"} = Close.lost(close)
+    assert {:error, "Execution attempt ended before it closed"} =
+             Attempt.await(attempt, fixture.close)
 
     row = Arca.Repo.get!(Arca.Execution, id)
     assert row.status == "failed"
@@ -164,58 +166,63 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
   end
 
-  test "an attempt whose opener exits stops, sending nothing it held",
-       %{ctx: ctx, authority: authority} do
-    id = "exec_orphan_#{System.unique_integer([:positive])}"
-    :ok = Cyfr.Execution.Events.subscribe(id, ctx)
+  test "an attempt whose opener exits stops, sending nothing it held", %{ctx: ctx} do
     test = self()
 
     {opener, ref} =
       spawn_monitor(fn ->
-        {:ok, attempt} = open(ctx, authority, id)
-        emit!(id, %{"type" => "text.delta", "text" => "held " <> @token})
-        send(test, {:opened, attempt})
+        fixture = attached!()
+        :ok = Cyfr.Execution.Events.subscribe(fixture.execution_id, ctx)
+        emit!(fixture, %{"type" => "text.delta", "text" => "held " <> @token})
+        send(test, {:opened, fixture})
+        send(test, {:live, live_events()})
       end)
 
-    assert_receive {:opened, attempt}
+    assert_receive {:opened, fixture}, 5_000
+    assert_receive {:live, live}, 5_000
     assert_receive {:DOWN, ^ref, :process, ^opener, :normal}
-    wait_until(fn -> not Process.alive?(attempt) end)
+    wait_until(fn -> not Process.alive?(fixture.pid) end)
 
-    assert Enum.map(emitted(live_events()), & &1["text"]) == ["held "]
+    assert Enum.map(emitted(live), & &1["text"]) == ["held "]
+    assert %{"error" => "lost"} = push(fixture, %{"type" => "note"})
+    assert Arca.Repo.get!(Arca.Execution, fixture.execution_id).status == "running"
   end
 
   # ---------------------------------------------------------------------------
 
-  defp open(ctx, authority, id, opts \\ []) do
-    Attempt.open(
-      [
-        execution_id: id,
-        ctx: ctx,
-        authority: authority,
-        component_ref: @ref,
-        secrets: %{"KEY" => @field}
-      ] ++ opts
+  # An attempt whose edge binds a vault entry holding the field and an OAuth
+  # bundle whose access token is the token.
+  defp attached! do
+    AttemptFixtures.attached!(
+      vault: %{kind: "oauth", fields: %{"KEY" => @field}, oauth: %{"access_token" => @token}}
     )
   end
 
-  # An authority whose edge binds a vault entry holding the field and an
-  # OAuth bundle whose access token is the token.
-  defp oauth_authority!(ctx) do
-    {:ok, view} =
-      Sanctum.Vault.create(ctx, %{
-        name: "masking-#{System.unique_integer([:positive])}",
-        kind: "oauth",
-        fields: %{"KEY" => @field},
-        oauth: %{"access_token" => @token, "token_type" => "bearer"}
-      })
+  defp token(fixture),
+    do: AttemptFixtures.call(fixture, "oauth_token", %{"provider" => "google"})
 
-    {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
-    {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
-    vault = %{entry_id: view.id, binding_digest: digest, projection: nil}
-    %{Cyfr.Authority.zero() | resources: %Cyfr.Authority.Blob.Edge{vault: vault}}
+  defp push(fixture, event) do
+    AttemptFixtures.call(fixture, "push_deltas", %{
+      "deltas" => [AttemptFixtures.delta(fixture, Jason.encode!(event))]
+    })
   end
 
-  defp emit!(id, event), do: id |> Attempt.emit(Jason.encode!(event)) |> Jason.decode!()
+  defp emit!(fixture, event) do
+    %{"ok" => [reply]} = push(fixture, event)
+    Jason.decode!(reply)
+  end
+
+  defp complete(fixture, output) do
+    AttemptFixtures.call(fixture, "complete", %{
+      "outcome" => AttemptFixtures.outcome(fixture, "completed", %{"output" => output})
+    })
+  end
+
+  defp fail(fixture, error) do
+    AttemptFixtures.call(fixture, "fail", %{
+      "outcome" => AttemptFixtures.outcome(fixture, "failed", %{"error" => error})
+    })
+  end
 
   defp queued(pid), do: pid |> Process.info(:message_queue_len) |> elem(1)
 

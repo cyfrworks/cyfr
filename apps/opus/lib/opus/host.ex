@@ -7,9 +7,10 @@ defmodule Opus.Host do
   platform's consent plane: an in-chain tool call, whether the host runs
   an action itself, and a policy decision recorded.
 
-  A run's admission, its unsealed credentials, its events and its
-  terminal row are `Cyfr.Execution`'s (`Admission`, `Attempt`, `Close`).
-  Opus also calls CYFR storage, network and utility modules directly;
+  A run's admission is `Cyfr.Execution.Admission`'s; its unsealed
+  credentials, its events, its OAuth tokens, its egress rate, its lease and
+  its terminal row are host calls of its attempt (`Opus.HostClient`). Opus
+  also calls CYFR storage, network and utility modules directly;
   `Opus.HostSurfaceTest` keeps that list from growing quietly.
   """
 

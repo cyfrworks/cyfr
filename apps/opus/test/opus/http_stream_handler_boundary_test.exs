@@ -6,7 +6,7 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
   The streaming imports keep the same promise as their siblings: a host
   function never raises into WASM.
 
-  `Opus.HttpHandler.execute/5` and `Opus.StorageHandler.dispatch_caught/6`
+  `Opus.HttpHandler.execute/6` and `Opus.StorageHandler.dispatch_caught/6`
   both rescue at their boundary and hand the guest a typed error; the
   streaming three did not, and two of them pattern-matched hard —
   `{:ok, buffer} = Agent.start_link(…)` and
@@ -19,12 +19,21 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
 
   alias Opus.HttpStreamHandler
 
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    :ok
+  end
+
   defp imports do
+    attempt = Cyfr.Test.AttemptFixtures.attached!(component_ref: "catalyst:local.streamer:0.1.0")
+
     {imports, exec_ref} =
       HttpStreamHandler.build_stream_imports(
         nil,
         Cyfr.Limits.defaults(:catalyst),
         Sanctum.TestContext.local(),
+        Opus.HostClient.new(attempt, attempt.key, attempt.runner),
         "catalyst:local.streamer:0.1.0"
       )
 

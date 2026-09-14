@@ -44,14 +44,14 @@ defmodule Opus.HostSurfaceTest do
 
     # Shared primitives — glue, by construction available to any node.
     # The execution port, and what CYFR owns of a run: its admission (the
-    # authority, the resolved and attested component, the consented limits,
-    # rates and policy, the admitted row and the unsealed fields), the
-    # attempt that dispenses OAuth tokens, masks and pushes the guest's
-    # events and closes the row, the invoke charge row, the rate counters a
-    # guest's egress is checked against, the execution slots and the
-    # registry a cancel finds a run's processes through, the lease renewed
-    # while it runs, and the cascade a cancel fails children through — a
-    # worker on another node would reach them through host calls.
+    # authority, the resolved and attested component, the consented limits
+    # and policy, the admitted row and its signed assignment), the waiter
+    # that awaits the run's attempt, the invoke charge row, the execution
+    # slots and the registry a cancel finds a run's processes through, the
+    # cascade a cancel fails children through, and the host calls of
+    # `Opus.HostClient` — attach, renew, complete, fail, emit, the OAuth
+    # dispense and the egress rate — which are the only way opus reaches a
+    # run's attempt (the test below).
     "Cyfr.Execution",
     # Egress pinning: a guest request's host resolved and checked against
     # its consented private policy before the connection is made.
@@ -124,6 +124,47 @@ defmodule Opus.HostSurfaceTest do
 
     assert stale == [],
            "the surface names namespaces opus no longer uses: #{inspect(stale)}"
+  end
+
+  # Code lines under apps/opus/lib, by file relative to the umbrella root.
+  defp opus_code do
+    for path <- Path.wildcard(Path.join(root(), "apps/opus/lib/**/*.ex")),
+        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
+        do: {Path.relative_to(path, root()), line}
+  end
+
+  test "opus reaches a run's attempt only through Opus.HostClient's host calls" do
+    code = opus_code()
+
+    transports =
+      for {path, line} <- code, line =~ "Cyfr.Execution.Host", uniq: true, do: path
+
+    assert transports == ["apps/opus/lib/opus/host_client.ex"],
+           "Cyfr.Execution.Host is reached outside Opus.HostClient: #{inspect(transports)}"
+
+    # The attempt's state (its masking set, emitter, rates, claim and
+    # close) and the lease are CYFR's: opus asks for them through host
+    # calls. What opus names of the attempt itself is the waiter's two
+    # calls, `await` and `abandon`.
+    reaches =
+      for {path, line} <- code,
+          pattern <- [
+            ~r/Cyfr\.Execution\.(Rates|Emit|Close|Keys|Assignments)\b/,
+            ~r/\b(Close|Rates|Emit)\.[a-z_]+\(/,
+            ~r/\brenew_lease\(/,
+            ~r/\bArca\.ExecutionAttempts\b/,
+            ~r/\bSanctum\.VaultReader\b/,
+            ~r/\bAttempt\.(?!await\(|abandon\()[a-z_]+/
+          ],
+          line =~ pattern,
+          do: "#{path}: #{String.trim(line)}"
+
+    assert reaches == [],
+           """
+           opus reaches an attempt's state other than through Opus.HostClient:
+
+           #{Enum.join(reaches, "\n")}
+           """
   end
 
   test "Opus.Host covers the consent plane a host function crosses" do

@@ -15,6 +15,7 @@ defmodule Opus.FormulaHandlerTest do
   @test_ref "reagent:local.test-math:0.1.0"
   @test_node "reagent:local.test-math"
   @fh_node "formula:local.fh-root"
+  @act_fh Cyfr.Digest.sha256("act-fh")
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "formula_handler_test_#{:rand.uniform(100_000)}")
@@ -47,19 +48,20 @@ defmodule Opus.FormulaHandlerTest do
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
-  # The formula's attempt, which answers its `emit` (`Cyfr.Execution.Attempt`).
-  defp open_attempt!(ctx, execution_id, opts \\ []) do
-    {:ok, _pid} =
-      Cyfr.Execution.Attempt.open(
+  # The host client of the formula's attached attempt, which answers its
+  # `emit` on the stream `stream_id` the attempt was opened on.
+  defp attached_host!(ctx, stream_id, opts \\ []) do
+    attempt =
+      Cyfr.Test.AttemptFixtures.attached!(
         [
-          execution_id: execution_id,
           ctx: ctx,
-          authority: Cyfr.Authority.zero(),
-          component_ref: @fh_node <> ":0.1.0"
+          component_ref: @fh_node <> ":0.1.0",
+          component_type: :formula,
+          stream_id: stream_id
         ] ++ opts
       )
 
-    :ok
+    Opus.HostClient.new(attempt, attempt.key, attempt.runner)
   end
 
   # Helper to build MCP-format requests
@@ -122,7 +124,7 @@ defmodule Opus.FormulaHandlerTest do
       source_ref: @fh_node,
       kind: if(invoke_mode == :edge_only, do: :public, else: :owner),
       invoke_mode: invoke_mode,
-      activation: %{@fh_node => "sha256:act-fh"}
+      activation: %{@fh_node => @act_fh}
     }
 
     {:ok, auth} =
@@ -147,7 +149,7 @@ defmodule Opus.FormulaHandlerTest do
           limits: Cyfr.Authority.limits(auth),
           authority: auth,
           declared_needs: [],
-          activation_digest: "sha256:act-fh"
+          activation_digest: @act_fh
         ],
         overrides
       )
@@ -840,10 +842,11 @@ defmodule Opus.FormulaHandlerTest do
     test "emit returns ok with sequence number", %{ctx: ctx} do
       limits = Cyfr.Limits.defaults(:formula)
 
-      :ok = open_attempt!(ctx, "exec_emit_test")
+      host = attached_host!(ctx, "exec_emit_test")
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_test",
+          host: host,
           limits: limits,
           authority: Cyfr.Authority.zero()
         )
@@ -864,10 +867,11 @@ defmodule Opus.FormulaHandlerTest do
     test "emit sequence increments across calls", %{ctx: ctx} do
       limits = Cyfr.Limits.defaults(:formula)
 
-      :ok = open_attempt!(ctx, "exec_emit_seq")
+      host = attached_host!(ctx, "exec_emit_seq")
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_seq",
+          host: host,
           limits: limits,
           authority: Cyfr.Authority.zero()
         )
@@ -889,10 +893,11 @@ defmodule Opus.FormulaHandlerTest do
     test "emit handles invalid JSON gracefully", %{ctx: ctx} do
       limits = Cyfr.Limits.defaults(:formula)
 
-      :ok = open_attempt!(ctx, "exec_emit_bad")
+      host = attached_host!(ctx, "exec_emit_bad")
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, "exec_emit_bad",
+          host: host,
           limits: limits,
           authority: Cyfr.Authority.zero()
         )
@@ -914,10 +919,11 @@ defmodule Opus.FormulaHandlerTest do
       execution_id = "exec_emit_pubsub_#{:rand.uniform(100_000)}"
       limits = Cyfr.Limits.defaults(:formula)
 
-      :ok = open_attempt!(ctx, execution_id)
+      host = attached_host!(ctx, execution_id)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
+          host: host,
           limits: limits,
           authority: Cyfr.Authority.zero()
         )
@@ -945,10 +951,14 @@ defmodule Opus.FormulaHandlerTest do
       execution_id = "exec_emit_mask_#{:rand.uniform(100_000)}"
       limits = Cyfr.Limits.defaults(:formula)
 
-      :ok = open_attempt!(ctx, execution_id, secrets: %{"KEY" => "sk-super-secret-value"})
+      host =
+        attached_host!(ctx, execution_id,
+          vault: %{kind: "api_key", fields: %{"KEY" => "sk-super-secret-value"}}
+        )
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
+          host: host,
           limits: limits,
           authority: Cyfr.Authority.zero()
         )
@@ -974,10 +984,11 @@ defmodule Opus.FormulaHandlerTest do
       execution_id = "exec_emit_buffer_#{:rand.uniform(100_000)}"
       limits = Cyfr.Limits.defaults(:formula)
 
-      :ok = open_attempt!(ctx, execution_id)
+      host = attached_host!(ctx, execution_id)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
+          host: host,
           limits: limits,
           authority: Cyfr.Authority.zero()
         )
@@ -1022,10 +1033,11 @@ defmodule Opus.FormulaHandlerTest do
 
       limits = Cyfr.Limits.defaults(:formula)
 
-      :ok = open_attempt!(ctx, execution_id)
+      host = attached_host!(ctx, execution_id)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, execution_id,
+          host: host,
           limits: limits,
           authority: Cyfr.Authority.zero()
         )
@@ -1055,10 +1067,11 @@ defmodule Opus.FormulaHandlerTest do
       parent_id = "exec_child_#{:rand.uniform(100_000)}"
       limits = Cyfr.Limits.defaults(:formula)
 
-      :ok = open_attempt!(ctx, parent_id, stream_id: root_id)
+      host = attached_host!(ctx, root_id)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, parent_id,
+          host: host,
           root_execution_id: root_id,
           limits: limits,
           authority: Cyfr.Authority.zero()

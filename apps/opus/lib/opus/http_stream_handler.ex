@@ -47,7 +47,7 @@ defmodule Opus.HttpStreamHandler do
   alias Cyfr.Authority.Blob.Edge
   alias Sanctum.Context
   alias Cyfr.Limits
-  alias Opus.{HttpHandler, HttpRequestValidation}
+  alias Opus.{HostClient, HttpHandler, HttpRequestValidation}
 
   # Fallback stream timeout, used only when the node limits carry an
   # unparseable duration (limits are validated when the blob parses).
@@ -75,11 +75,24 @@ defmodule Opus.HttpStreamHandler do
   @doc """
   Build Wasmex import map for the `cyfr:http/streaming` host functions.
 
-  Returns a map with `request`, `read`, and `close` functions.
+  Returns a map with `request`, `read`, and `close` functions. `host` is the
+  attached `Opus.HostClient` of the execution's attempt, which takes each
+  request from the consented rate.
   """
-  @spec build_stream_imports(Edge.t() | nil, Limits.t(), Context.t(), String.t()) ::
-          {map(), String.t()}
-  def build_stream_imports(edge, %Limits{} = limits, %Context{} = ctx, component_ref) do
+  @spec build_stream_imports(
+          Edge.t() | nil,
+          Limits.t(),
+          Context.t(),
+          HostClient.t(),
+          String.t()
+        ) :: {map(), String.t()}
+  def build_stream_imports(
+        edge,
+        %Limits{} = limits,
+        %Context{} = ctx,
+        %HostClient{} = host,
+        component_ref
+      ) do
     # Create a unique execution ref for cache-based stream tracking
     exec_ref = create_registry()
 
@@ -89,7 +102,7 @@ defmodule Opus.HttpStreamHandler do
           {:fn,
            fn json_req ->
              guarded(component_ref, "request", fn ->
-               stream_request(json_req, edge, limits, ctx, component_ref, exec_ref)
+               stream_request(json_req, edge, limits, ctx, host, component_ref, exec_ref)
              end)
            end},
         "read" =>
@@ -165,7 +178,7 @@ defmodule Opus.HttpStreamHandler do
       encode_error(:stream_error, "The streaming request could not be served.")
   end
 
-  defp stream_request(json_request, edge, limits, ctx, component_ref, exec_ref) do
+  defp stream_request(json_request, edge, limits, ctx, host, component_ref, exec_ref) do
     # Check concurrent stream limit
     stream_count =
       Arca.Cache.match({:http_stream, exec_ref, :_})
@@ -177,7 +190,7 @@ defmodule Opus.HttpStreamHandler do
         "Maximum concurrent streams (#{@max_concurrent_streams}) exceeded"
       )
     else
-      case HttpRequestValidation.validate(json_request, edge, limits, ctx, component_ref,
+      case HttpRequestValidation.validate(json_request, edge, limits, host, component_ref,
              allow_multipart: false
            ) do
         {:ok, request} ->

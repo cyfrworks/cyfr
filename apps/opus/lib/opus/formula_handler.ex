@@ -32,7 +32,7 @@ defmodule Opus.FormulaHandler do
   | `await-any` | Blocks until FIRST task completes |
   | `poll` | Non-blocking status check |
   | `cancel` | Cancel a spawned task |
-  | `emit` | Push a progress/UI event through the formula's attempt (`Cyfr.Execution.Attempt.emit/2`) |
+  | `emit` | Push a progress/UI event through the formula's attempt, a `push_deltas` host call (`Opus.Runtime.emit/2`) |
 
   ## Architecture
 
@@ -64,7 +64,7 @@ defmodule Opus.FormulaHandler do
   ## Usage
 
       {imports, tracker_pid} = Opus.FormulaHandler.build_formula_imports(ctx, parent_execution_id,
-        root_execution_id: root_execution_id, limits: limits, authority: authority)
+        host: host, root_execution_id: root_execution_id, limits: limits, authority: authority)
       # Merge imports and pass to Wasmex.Components.start_link
       # After execution: Opus.FormulaHandler.cleanup_registry(tracker_pid)
   """
@@ -88,11 +88,13 @@ defmodule Opus.FormulaHandler do
 
   - `ctx` - The execution `Sanctum.Context` (shared with sub-executions)
   - `parent_execution_id` - The formula's own execution ID for lineage
-    tracking; its open `Cyfr.Execution.Attempt` answers `emit`, on the
-    stream the attempt was opened on
+    tracking
 
   ## Options
 
+  - `:host` - The attached `Opus.HostClient` of the formula's attempt:
+    `emit` is its `push_deltas` host call, on the stream the attempt was
+    opened on. Without one, `emit` answers a `dispatch_error`.
   - `:root_execution_id` - The top-level execution ID: the root of the lineage the formula's calls carry, and the stream a setup refusal is announced on (falls back to `parent_execution_id`)
   - `:limits` - The node's `Cyfr.Limits` (batch timeout, max concurrent tasks)
   - `:authority` - The `Cyfr.Authority` the chain runs under (required).
@@ -108,6 +110,7 @@ defmodule Opus.FormulaHandler do
   @spec build_formula_imports(Context.t(), String.t(), keyword()) :: {map(), pid()}
   def build_formula_imports(%Context{} = ctx, parent_execution_id, opts \\ []) do
     authority = Keyword.fetch!(opts, :authority)
+    host = Keyword.get(opts, :host)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
     limits = opts[:limits]
 
@@ -228,7 +231,9 @@ defmodule Opus.FormulaHandler do
           {:fn,
            fn json_event ->
              guarded(parent_execution_id, "emit", fn ->
-               Cyfr.Execution.Attempt.emit(parent_execution_id, json_event)
+               if host,
+                 do: Opus.Runtime.emit(host, json_event),
+                 else: encode_error(:dispatch_error, "The emit call failed.")
              end)
            end}
       }

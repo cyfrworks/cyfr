@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Cyfr.Execution.Assignments do
+  @moduledoc """
+  The signed assignment of an admitted execution attempt, and the attempt
+  key its runner signs host calls with.
+
+  `issue/1` builds a `Cyfr.Assignment` from what admission settled and
+  signs it with the assign key (`Cyfr.Execution.Keys`). The runner presents
+  the token at attach (`Cyfr.Execution.Host`), which verifies it, checks
+  it names the attempt its header does and claims the attempt.
+
+  An assignment is issued under the current generation
+  (`Cyfr.Execution.Keys.generation/0`), to this boot as its audience, and
+  may be claimed for 30 seconds after it is issued. Its deadline is its
+  timeout from issue, and its lease runs one lease period from issue.
+  """
+
+  alias Cyfr.{Actor, Assignment, Authority}
+  alias Cyfr.Execution.{Keys, Record}
+  alias Sanctum.Context
+
+  @claim_window_ms 30_000
+
+  @typedoc """
+  What an assignment is built from: the admission context, the admitted
+  row, the run's authority, its component (`ref`, `type`, `digest`,
+  `declared_needs`, `activation_digest`), its input, its consented timeout
+  and the turn step that dispatched it (nil when none did).
+  """
+  @type admitted :: %{
+          required(:ctx) => Context.t(),
+          required(:record) => Record.t(),
+          required(:authority) => Authority.t(),
+          required(:component) => Assignment.component(),
+          required(:input) => map(),
+          required(:timeout_ms) => pos_integer(),
+          optional(:step) => Assignment.step() | nil
+        }
+
+  @typedoc """
+  An issued assignment: its token, the attempt it names as a host call
+  header carries it, and that attempt's key.
+  """
+  @type issued :: %{
+          assignment: Assignment.token(),
+          attempt: Cyfr.WorkerAuth.attempt(),
+          attempt_key: binary()
+        }
+
+  @doc """
+  Sign the assignment of the admitted attempt at fence 1. Answers
+  `{:error, reason}` when what admission settled is not a valid
+  assignment (`Cyfr.Assignment.sign/2`).
+  """
+  @spec issue(admitted()) :: {:ok, issued()} | {:error, term()}
+  def issue(%{record: %Record{} = record} = admitted) do
+    now = System.system_time(:millisecond)
+
+    attempt = %{
+      athanor_id: record.athanor_id,
+      execution_id: record.id,
+      attempt: record.attempt,
+      fence: 1,
+      generation: Keys.generation()
+    }
+
+    assignment = %Assignment{
+      generation: attempt.generation,
+      audience: Cyfr.Boot.id(),
+      issued_at: now,
+      claim_by: now + @claim_window_ms,
+      execution_id: record.id,
+      attempt: record.attempt,
+      fence: attempt.fence,
+      parent_execution_id: record.parent_execution_id,
+      root_execution_id: record.root_execution_id || record.id,
+      step: Map.get(admitted, :step),
+      athanor_id: record.athanor_id,
+      actor: actor(admitted.ctx),
+      authority: Authority.to_wire(admitted.authority),
+      component: admitted.component,
+      input_digest: Cyfr.Digest.sha256(Jason.encode!(admitted.input)),
+      timeout_ms: admitted.timeout_ms,
+      deadline: now + admitted.timeout_ms,
+      lease_until: now + Arca.ExecutionAttempts.lease_seconds() * 1000,
+      intercepted: Cyfr.Ops.Catalog.host_intercepted_actions()
+    }
+
+    with {:ok, token} <- Assignment.sign(assignment, Keys.assign_key()),
+         {:ok, key} <- Keys.attempt_key(attempt) do
+      {:ok, %{assignment: token, attempt: attempt, attempt_key: key}}
+    end
+  end
+
+  defp actor(%Context{} = ctx) do
+    %Actor{
+      user_id: present(ctx.user_id),
+      request_id: present(ctx.request_id),
+      authenticated: ctx.authenticated == true,
+      client_ip: present(ctx.client_ip)
+    }
+  end
+
+  defp present(value) when is_binary(value) and value != "", do: value
+  defp present(_value), do: nil
+end

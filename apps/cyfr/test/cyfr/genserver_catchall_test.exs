@@ -110,12 +110,17 @@ defmodule Cyfr.GenServerCatchallTest do
     # it is probed on an instance of its own.
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
+        ctx = Sanctum.TestContext.local()
+        record = Cyfr.Execution.Record.new(ctx, "catalyst:local.catchall:0.1.0", %{})
+
         {:ok, pid} =
           Cyfr.Execution.Attempt.open(
-            execution_id: "exec_catchall_#{System.unique_integer([:positive])}",
-            ctx: Sanctum.TestContext.local(),
+            execution_id: record.id,
+            attempt: record.attempt,
+            ctx: ctx,
             authority: Cyfr.Authority.zero(),
-            component_ref: "catalyst:local.catchall:0.1.0"
+            component_ref: "catalyst:local.catchall:0.1.0",
+            close: %Cyfr.Execution.Close{ctx: ctx, record: record}
           )
 
         assert capture_log(fn ->
