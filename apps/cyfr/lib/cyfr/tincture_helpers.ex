@@ -321,6 +321,10 @@ defmodule Cyfr.TinctureHelpers do
   Read an HTML entry file via Arca, inject the Cyfr SDK and a `<base>` tag,
   and serve it.
 
+  `base_href` is the tincture's root URL; the `<base>` names the entry's own
+  directory under it, so a built entry at `dist/index.html` resolves its
+  relative assets from `dist/`.
+
   The SDK is injected as an inline `<script nonce="...">` so tincture authors
   get `window.cyfr` automatically. A per-request nonce is generated and added
   to the CSP `script-src` directive to authorize the inline script without
@@ -335,12 +339,12 @@ defmodule Cyfr.TinctureHelpers do
           String.t()
         ) :: Plug.Conn.t()
   def serve_index(conn, %Sanctum.Context{} = ctx, version_segs, entry, base_href, csp) do
-    case Arca.get(ctx, version_segs ++ [entry]) do
+    case Arca.get(ctx, version_segs ++ Path.split(entry)) do
       {:ok, content} ->
         nonce = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
         csp = String.replace(csp, "script-src 'self'", "script-src 'self' 'nonce-#{nonce}'")
 
-        content = inject_head_tags(content, base_href, nonce)
+        content = inject_head_tags(content, base_href <> entry_dir(entry), nonce)
 
         conn
         |> put_resp_header("content-security-policy", csp)
@@ -354,6 +358,13 @@ defmodule Cyfr.TinctureHelpers do
 
       {:error, _} ->
         send_resp(conn, 404, "Not Found")
+    end
+  end
+
+  defp entry_dir(entry) do
+    case Path.dirname(entry) do
+      "." -> ""
+      dir -> dir <> "/"
     end
   end
 

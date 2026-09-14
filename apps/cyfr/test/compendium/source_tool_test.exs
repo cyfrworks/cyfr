@@ -3,11 +3,10 @@
 
 defmodule Compendium.MCP.SourceToolTest do
   @moduledoc """
-  The `source` tool: what the Builder and Artisan roles are told to do.
-
-  Their instructions author a component with `files(path: "components/…")`,
-  and every one of those calls was refused — the files catalyst grants
-  `data/` and nothing else. The path routes here now, host-side and scoped.
+  The `source` tool: an agent's `files(path: "components/…")` call routes
+  here, host-side, and reads and edits a local component version's own
+  source — never its version directory whole, its manifest's existence,
+  or what a build writes.
   """
   use ExUnit.Case, async: false
 
@@ -78,6 +77,84 @@ defmodule Compendium.MCP.SourceToolTest do
                })
 
       assert msg =~ "written by a build"
+    end
+
+    test "a tincture's dist/ is a build's output", %{ctx: ctx} do
+      assert {:error, {:invalid_argument, msg}} =
+               SourceTool.handle("source", ctx, %{
+                 "action" => "write",
+                 "path" => "components/tinctures/local/panel/0.1.0/dist/index.html",
+                 "content" => "nope"
+               })
+
+      assert msg =~ "build's output"
+    end
+
+    test "the version directory itself is never written, edited or deleted", %{ctx: ctx} do
+      for action <- ["write", "edit", "delete"] do
+        assert {:error, {:invalid_argument, msg}} =
+                 SourceTool.handle("source", ctx, %{
+                   "action" => action,
+                   "path" => @dir,
+                   "content" => "x",
+                   "edits" => [%{"action" => "delete", "start" => 1, "end" => 1}]
+                 })
+
+        assert msg =~ "created and deleted whole"
+      end
+
+      assert {:ok, %{files: [_ | _]}} =
+               SourceTool.handle("source", ctx, %{"action" => "tree", "path" => @dir})
+    end
+
+    test "the manifest is edited, never deleted", %{ctx: ctx} do
+      assert {:error, {:invalid_argument, msg}} =
+               SourceTool.handle("source", ctx, %{
+                 "action" => "delete",
+                 "path" => "#{@dir}/cyfr-manifest.json"
+               })
+
+      assert msg =~ "edit it instead"
+      assert {:ok, _} = Arca.get(ctx, String.split(@dir, "/") ++ ["cyfr-manifest.json"])
+    end
+
+    test "a manifest write must be a manifest", %{ctx: ctx} do
+      manifest = "#{@dir}/cyfr-manifest.json"
+
+      assert {:error, {:invalid_argument, msg}} =
+               SourceTool.handle("source", ctx, %{
+                 "action" => "write",
+                 "path" => manifest,
+                 "content" => "{not json"
+               })
+
+      assert msg =~ "not a JSON object"
+
+      assert {:error, {:invalid_argument, msg}} =
+               SourceTool.handle("source", ctx, %{
+                 "action" => "write",
+                 "path" => manifest,
+                 "content" => ~s({"name":"widget","surprise":true})
+               })
+
+      assert msg =~ "cyfr-manifest.json"
+
+      assert {:error, {:invalid_argument, _}} =
+               SourceTool.handle("source", ctx, %{
+                 "action" => "edit",
+                 "path" => manifest,
+                 "edits" => [%{"action" => "replace", "start" => 1, "end" => 1, "content" => "["}]
+               })
+
+      assert {:ok, ~s({"name":"widget"})} =
+               Arca.get(ctx, String.split(@dir, "/") ++ ["cyfr-manifest.json"])
+
+      assert {:ok, _} =
+               SourceTool.handle("source", ctx, %{
+                 "action" => "write",
+                 "path" => manifest,
+                 "content" => ~s({"name":"widget","description":"edited"})
+               })
     end
 
     test "a path outside a component version refuses in words", %{ctx: ctx} do
@@ -152,6 +229,54 @@ defmodule Compendium.MCP.SourceToolTest do
                })
 
       assert msg =~ "past the end"
+    end
+
+    test "edit works on text; a binary file is written whole", %{ctx: ctx} do
+      :ok = Arca.put(ctx, String.split(@dir, "/") ++ ["media", "icon.png"], <<137, 0, 1, 2>>)
+
+      assert {:error, {:invalid_argument, msg}} =
+               SourceTool.handle("source", ctx, %{
+                 "action" => "edit",
+                 "path" => "#{@dir}/media/icon.png",
+                 "edits" => [%{"action" => "delete", "start" => 1, "end" => 1}]
+               })
+
+      assert msg =~ "not text"
+    end
+
+    test "edits of one file serialize: none is lost to a concurrent one", %{ctx: ctx} do
+      :ok = Arca.put(ctx, String.split(@dir, "/") ++ ["src", "log.txt"], "start")
+      parent = self()
+
+      1..8
+      |> Enum.map(fn i ->
+        Task.async(fn ->
+          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, parent, self())
+
+          SourceTool.handle("source", ctx, %{
+            "action" => "edit",
+            "path" => "#{@dir}/src/log.txt",
+            "edits" => [%{"action" => "insert", "start" => 2, "content" => "line #{i}"}]
+          })
+        end)
+      end)
+      |> Enum.each(&assert({:ok, _} = Task.await(&1, 10_000)))
+
+      assert {:ok, %{content: content}} =
+               SourceTool.handle("source", ctx, %{
+                 "action" => "read",
+                 "path" => "#{@dir}/src/log.txt"
+               })
+
+      assert length(String.split(content, "\n")) == 9
+    end
+
+    test "source is the agent's: the wire does not serve it", %{ctx: ctx} do
+      assert {:error, {:unknown_action, "source.read"}} =
+               Cyfr.Ops.Catalog.call_external("source", ctx, %{
+                 "action" => "read",
+                 "path" => "#{@dir}/src/lib.rs"
+               })
     end
   end
 end

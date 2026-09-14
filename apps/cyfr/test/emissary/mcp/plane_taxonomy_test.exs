@@ -146,11 +146,38 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # ============================================================================
 
   describe "derivation" do
-    test "every registered action is externally reachable" do
-      # Every registered tool is served over the MCP HTTP surface; nothing
-      # here is in-chain-only today.
-      for {tool, verb, %{planes: planes}} <- annotated_actions() do
-        assert :external in planes, "#{tool}.#{verb} is not externally reachable"
+    test "the in-chain-only set is pinned, and the wire neither lists nor serves it" do
+      in_chain_only =
+        MapSet.new(
+          for {tool, verb, %{planes: planes}} <- annotated_actions(),
+              :external not in planes,
+              do: "#{tool}.#{verb}"
+        )
+
+      assert in_chain_only == MapSet.new(~w(source.tree source.read source.grep
+                                            source.write source.edit source.delete))
+
+      external = MapSet.new(Catalog.external_tool_actions())
+      assert MapSet.disjoint?(in_chain_only, external)
+
+      ctx = Sanctum.TestContext.local()
+
+      listed =
+        for tool_def <- Cyfr.Ops.Visibility.filter_for_context(Catalog.list_tools(), ctx),
+            verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
+            do: "#{tool_def["name"]}.#{verb}"
+
+      assert MapSet.disjoint?(in_chain_only, MapSet.new(listed))
+
+      for pair <- in_chain_only do
+        [tool, verb] = String.split(pair, ".")
+        {:ok, {_module, meta}} = Catalog.lookup(tool)
+
+        assert {:error, {:unknown_action, ^pair}} =
+                 Catalog.authorize_annotated_action(tool, meta, ctx, %{"action" => verb})
+
+        assert :ok =
+                 Catalog.authorize_annotated_action(tool, meta, ctx, %{"action" => verb}, true)
       end
     end
   end

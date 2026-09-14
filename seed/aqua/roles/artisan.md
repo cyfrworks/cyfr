@@ -183,6 +183,7 @@ gateway with input validation and tool access control.
 ```
 
 - Omit `tincture.build` for vanilla tinctures (no build step)
+- With `"build": {"tool": "vite"}`, the build writes `dist/` and `entry` is `"dist/index.html"`
 - Add `"connect": ["*.supabase.co"]` inside `tincture` for external service access
 - `dependencies.static` is the invoke allowlist
 

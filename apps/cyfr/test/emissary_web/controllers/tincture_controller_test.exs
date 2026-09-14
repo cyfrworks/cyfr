@@ -94,11 +94,35 @@ defmodule EmissaryWeb.TinctureControllerTest do
     File.write!(Path.join(nl_dir, "cyfr-manifest.json"), Jason.encode!(nl_manifest))
     File.write!(Path.join(nl_dir, "index.html"), "<html><head></head><body>NL</body></html>")
 
+    # A built tincture: its entry and assets live in the build's dist/.
+    built_manifest =
+      public_manifest
+      |> Map.put("name", "built-dash")
+      |> put_in(["tincture", "entry"], "dist/index.html")
+      |> put_in(["tincture", "build"], %{"tool" => "vite"})
+
+    built_dir = tincture_dir("built-dash")
+    File.mkdir_p!(Path.join([built_dir, "dist", "assets"]))
+    File.write!(Path.join(built_dir, "cyfr-manifest.json"), Jason.encode!(built_manifest))
+
+    File.write!(
+      Path.join(built_dir, "index.html"),
+      "<html><head></head><body>Source</body></html>"
+    )
+
+    File.write!(
+      Path.join([built_dir, "dist", "index.html"]),
+      ~s(<html><head></head><body>Built<script src="./assets/app.js"></script></body></html>)
+    )
+
+    File.write!(Path.join([built_dir, "dist", "assets", "app.js"]), "// built")
+
     for {name, manifest} <- [
           {"auth-dash", private_manifest},
           {"pub-dash", public_manifest},
           {"rl-dash", rl_manifest},
-          {"nl-dash", nl_manifest}
+          {"nl-dash", nl_manifest},
+          {"built-dash", built_manifest}
         ] do
       {:ok, _} =
         Arca.ComponentStorage.put_component(ctx, %{
@@ -137,7 +161,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     original_source = Application.get_env(:cyfr, :consent_source)
     Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
 
-    for name <- ["pub-dash", "rl-dash", "nl-dash"] do
+    for name <- ["pub-dash", "rl-dash", "nl-dash", "built-dash"] do
       {:ok, _} =
         Arca.ProfileStorage.put(%{
           id: "prof_#{name}_#{:rand.uniform(1_000_000)}",
@@ -366,6 +390,18 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn = get(conn, "/t/test/local/pub-dash")
       assert conn.resp_body =~ ~s(<base href="/t/test/local/pub-dash/">)
       refute conn.resp_body =~ "_s/"
+    end
+
+    test "a built entry is served from dist/, and its relative assets resolve there",
+         %{conn: conn} do
+      page = get(conn, "/t/test/local/built-dash")
+      assert page.status == 200
+      assert page.resp_body =~ "Built"
+      assert page.resp_body =~ ~s(<base href="/t/test/local/built-dash/dist/">)
+
+      asset = get(build_conn(), "/t/test/local/built-dash/dist/assets/app.js")
+      assert asset.status == 200
+      assert asset.resp_body == "// built"
     end
 
     test "returns 404 for nonexistent tincture (indistinguishable from private)", %{conn: conn} do

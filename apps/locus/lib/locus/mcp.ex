@@ -577,8 +577,10 @@ defmodule Locus.MCP do
     end
   end
 
-  # Exclude tincture dist/ and data.db in addition to shared build artifacts.
-  @tincture_excluded ~w(dist data.db)
+  # A tincture's build output lands under `dist/` and its `data.db` is data;
+  # neither is build input.
+  @dist "dist"
+  @tincture_excluded [@dist, "data.db"]
 
   defp collect_tincture_source(ctx, base) do
     case Arca.read_subtree(ctx, base) do
@@ -596,12 +598,13 @@ defmodule Locus.MCP do
   end
 
   @doc """
-  Save a tincture build into its version directory: the unit as it stands
-  with the build laid over it, the manifest riding as the sentinel.
+  Save a tincture build into its version directory: the build replaces the
+  unit's `dist/` whole, under the unit's lock, and the rest of the unit —
+  its manifest, its source and its own `data.db` — is not touched.
 
   Public because the toolchain half and the storage half fail
   independently. A test that drives `npm` proves the build; this proves the
-  save, which is where every JS tincture used to stop.
+  save.
   """
   @spec store_tincture_output(
           Sanctum.Context.t(),
@@ -612,60 +615,11 @@ defmodule Locus.MCP do
           %{String.t() => binary()} | [{String.t(), binary()}]
         ) :: :ok | {:error, term()}
   def store_tincture_output(ctx, type, publisher, name, version, output_files) do
-    base = Compendium.ComponentPath.version_dir(type, publisher, name, version)
-    sentinel = Compendium.ComponentPath.manifest_name()
+    unit = Compendium.ComponentPath.version_dir(type, publisher, name, version)
+    files = Enum.map(output_files, fn {rel, content} -> {Path.split(rel), content} end)
+    total_bytes = Enum.reduce(files, 0, fn {_segs, content}, acc -> acc + byte_size(content) end)
 
-    # One unit commit, like every other writer of this unit shape
-    # (Registry, Fork): sentinel-last, rollback on failure — a file-by-file
-    # loop once halted mid-way and left a partially-written version
-    # directory behind. Cap-CHECKED like the WASM save above — the old
-    # blanket exemption let repeated tincture builds walk an athanor past
-    # its storage quota 64 MiB at a time (only the builder's per-build
-    # ceilings applied).
-    #
-    # The build answers with `dist/`-relative paths, and the unit's
-    # completion file is its `cyfr-manifest.json`, which no `dist/` holds —
-    # so committing the build alone resolved no sentinel and saved nothing.
-    # Committing it alone would also have been wrong the moment it worked:
-    # `commit_unit` clears the unit first, and the unit is where the SOURCE
-    # lives — `package.json`, `vite.config.ts`, `src/`, `public/`, the
-    # tincture's own `data.db`. The commit is therefore the unit as it
-    # stands with the build laid over it, and the manifest rides as the
-    # sentinel rather than as a file the build was expected to produce.
-    with {:ok, manifest} <- Arca.get(ctx, base ++ [sentinel]),
-         {:ok, kept} <- unit_files(ctx, base, sentinel) do
-      built = Map.new(output_files, fn {rel, content} -> {Path.split(rel), content} end)
-      files = kept |> Map.merge(built) |> Enum.to_list()
-
-      total_bytes =
-        Enum.reduce(files, 0, fn {_segs, content}, acc -> acc + byte_size(content) end)
-
-      case Arca.Overlay.commit_unit(ctx, base, {:files, files},
-             cap: {:checked, total_bytes},
-             sentinel: manifest
-           ) do
-        {:ok, _written} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
-
-  # What the unit already holds, keyed by segments relative to the version
-  # directory, as `commit_unit`'s `{:files, …}` wants them. The manifest is
-  # excluded: it rides as the sentinel, which the commit writes last and by
-  # itself.
-  #
-  # This reads the whole unit — a tincture's own `data.db` included — because
-  # the commit clears the unit before it writes, so anything not handed back
-  # is lost. Phase 5's draft-and-revision model is what removes the read.
-  defp unit_files(ctx, base, sentinel) do
-    case Arca.read_subtree(ctx, base) do
-      {:ok, entries} ->
-        {:ok, entries |> Enum.reject(fn {segs, _} -> segs == [sentinel] end) |> Map.new()}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    Arca.Overlay.replace_subtree(ctx, unit, [@dist], files, cap: {:checked, total_bytes})
   end
 
   defp build_progress_callback(build_id, ctx, build_meta) do

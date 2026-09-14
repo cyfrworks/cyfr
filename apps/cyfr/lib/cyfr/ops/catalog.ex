@@ -732,6 +732,10 @@ defmodule Cyfr.Ops.Catalog do
         # this refuses the in-process callers.
         {:error, {:unknown_action, "#{name}.#{action}"}}
 
+      not in_chain? and :external not in Annotations.planes(meta, action) ->
+        # An action a running chain alone may call is not served outside one.
+        {:error, {:unknown_action, "#{name}.#{action}"}}
+
       true ->
         with :ok <- check_auth(name, ctx, annotation),
              :ok <- check_scope(ctx, annotation),
@@ -1391,6 +1395,19 @@ defmodule Cyfr.Ops.Catalog do
       [] -> :ok
       missing -> {:error, missing}
     end
+  end
+
+  @doc """
+  Every `tool.action` served outside a running chain: the declared
+  actions whose planes include `:external`.
+  """
+  @spec external_tool_actions() :: [String.t()]
+  def external_tool_actions do
+    for module <- available_providers(),
+        tool <- module.tools(),
+        {action, annotation} <- Annotations.actions_of(tool),
+        :external in Map.get(annotation, :planes, []),
+        do: "#{tool.name}.#{action}"
   end
 
   # Every `tool.action` the loaded providers declare — what a consent

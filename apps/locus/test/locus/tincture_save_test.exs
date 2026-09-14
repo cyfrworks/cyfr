@@ -3,13 +3,9 @@
 
 defmodule Locus.TinctureSaveTest do
   @moduledoc """
-  Saving a tincture build: the unit keeps what the build did not produce.
-
-  The builder answers with `dist/`-relative paths, and the unit's completion
-  file is its `cyfr-manifest.json`, which no `dist/` holds. Committing the
-  build alone resolved no sentinel and saved nothing — and would have wiped
-  the source the moment it worked, because a unit commit clears the unit
-  before it writes.
+  Saving a tincture build: the build replaces the unit's `dist/` whole, and
+  everything else the unit holds — its source, its manifest and its own
+  `data.db` — is kept.
   """
   use ExUnit.Case, async: false
 
@@ -21,7 +17,7 @@ defmodule Locus.TinctureSaveTest do
               "name" => "saver",
               "version" => "0.1.0",
               "type" => "tincture",
-              "tincture" => %{"entry" => "index.html"}
+              "tincture" => %{"entry" => "dist/index.html", "build" => %{"tool" => "vite"}}
             })
 
   setup do
@@ -44,43 +40,57 @@ defmodule Locus.TinctureSaveTest do
     # tincture's own data beside them.
     :ok = Arca.put(ctx, @base ++ ["cyfr-manifest.json"], @manifest)
     :ok = Arca.put(ctx, @base ++ ["package.json"], ~s({"name":"saver"}))
-    :ok = Arca.put(ctx, @base ++ ["vite.config.ts"], "export default {}")
+    :ok = Arca.put(ctx, @base ++ ["index.html"], "<html>source</html>")
     :ok = Arca.put(ctx, @base ++ ["src", "main.tsx"], "console.log('source')")
     :ok = Arca.put(ctx, @base ++ ["data.db"], "rows")
 
     {:ok, ctx: ctx}
   end
 
-  test "the build lands, and the source it was built from is still there", %{ctx: ctx} do
+  test "the build lands under dist/, and the source it was built from is kept", %{ctx: ctx} do
     build = %{"index.html" => "<html>built</html>", "assets/app-abc.js" => "console.log(1)"}
 
     assert :ok = MCP.store_tincture_output(ctx, "tincture", "local", "saver", "0.1.0", build)
 
-    assert {:ok, "<html>built</html>"} = Arca.get(ctx, @base ++ ["index.html"])
-    assert {:ok, "console.log(1)"} = Arca.get(ctx, @base ++ ["assets", "app-abc.js"])
+    assert {:ok, "<html>built</html>"} = Arca.get(ctx, @base ++ ["dist", "index.html"])
+    assert {:ok, "console.log(1)"} = Arca.get(ctx, @base ++ ["dist", "assets", "app-abc.js"])
 
-    # What the build did not produce survives it — this is the half that
-    # would have been silently deleted.
+    assert {:ok, "<html>source</html>"} = Arca.get(ctx, @base ++ ["index.html"])
     assert {:ok, ~s({"name":"saver"})} = Arca.get(ctx, @base ++ ["package.json"])
-    assert {:ok, "export default {}"} = Arca.get(ctx, @base ++ ["vite.config.ts"])
     assert {:ok, "console.log('source')"} = Arca.get(ctx, @base ++ ["src", "main.tsx"])
     assert {:ok, "rows"} = Arca.get(ctx, @base ++ ["data.db"])
     assert {:ok, @manifest} = Arca.get(ctx, @base ++ ["cyfr-manifest.json"])
   end
 
-  test "a second build replaces the output and still leaves the source", %{ctx: ctx} do
+  test "a rebuild replaces dist/ whole: an asset the new build did not produce is gone",
+       %{ctx: ctx} do
     assert :ok =
              MCP.store_tincture_output(ctx, "tincture", "local", "saver", "0.1.0", %{
-               "index.html" => "<html>one</html>"
+               "index.html" => "<html>one</html>",
+               "assets/app-one.js" => "one"
              })
 
     assert :ok =
              MCP.store_tincture_output(ctx, "tincture", "local", "saver", "0.1.0", %{
-               "index.html" => "<html>two</html>"
+               "index.html" => "<html>two</html>",
+               "assets/app-two.js" => "two"
              })
 
-    assert {:ok, "<html>two</html>"} = Arca.get(ctx, @base ++ ["index.html"])
+    assert {:ok, "<html>two</html>"} = Arca.get(ctx, @base ++ ["dist", "index.html"])
+    assert {:ok, "two"} = Arca.get(ctx, @base ++ ["dist", "assets", "app-two.js"])
+    assert {:error, :not_found} = Arca.get(ctx, @base ++ ["dist", "assets", "app-one.js"])
+
     assert {:ok, "console.log('source')"} = Arca.get(ctx, @base ++ ["src", "main.tsx"])
     assert {:ok, "rows"} = Arca.get(ctx, @base ++ ["data.db"])
+  end
+
+  test "a build for a version with no manifest saves nothing", %{ctx: ctx} do
+    assert {:error, :not_found} =
+             MCP.store_tincture_output(ctx, "tincture", "local", "absent", "0.1.0", %{
+               "index.html" => "<html>orphan</html>"
+             })
+
+    absent = ComponentPath.version_dir("tincture", "local", "absent", "0.1.0")
+    refute Arca.exists?(ctx, absent ++ ["dist", "index.html"])
   end
 end

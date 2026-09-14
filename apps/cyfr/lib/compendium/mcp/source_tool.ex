@@ -3,34 +3,28 @@
 
 defmodule Compendium.MCP.SourceTool do
   @moduledoc """
-  The `source` tool: a component's own source, for the agent authoring it.
+  The `source` tool: an agent's hands on the source of a `local` component.
 
-  The Builder and Artisan roles are told to scaffold a component and then
-  edit its files. They could not: `files.*` runs `catalyst:local.files`
-  under the agent's edge, and that catalyst grants `caps.storage.paths:
-  ["data/"]` and nothing else, so every documented `files(path:
-  "components/…")` call was refused. Only `component.create` worked,
-  because it writes host-side.
+  Paths are `components/{type}s/local/{name}/{version}/…`. The tool reads,
+  searches and edits the files inside a version directory, through
+  `Cyfr.Files`, so the tier rules, the storage cap, manifest validation and
+  the component's re-registration are the ones the Files page applies. It
+  refuses:
 
-  Widening the files catalyst is the wrong fix: its grant is copied onto
-  every agent's edge, so the soul would gain it too, and a guest holding a
-  `components/` storage grant can overwrite any local component's compiled
-  artifact. This tool is host-side instead, and narrower than the catalyst
-  would be:
+    * another publisher's component — a pulled component is forked, not
+      rewritten;
+    * the version directory itself — a component version is made and
+      removed whole by the component verbs;
+    * deleting `cyfr-manifest.json`, which is what makes the directory a
+      component;
+    * the compiled artifact (`{type}.wasm`) and a tincture's `dist/`, which
+      a build writes.
 
-    * only `components/…` under the `local` publisher — a component another
-      publisher shipped is read, never written;
-    * only inside a version directory, never the shaped folders above it;
-    * never the compiled artifact (`catalyst.wasm` and its siblings) or a
-      tincture's built output — those are what a build writes, and hand-editing
-      them makes the unit lie about its own source.
-
-  Its actions are their own policy keys, so `files.write: auto` for `data/`
-  cannot auto-approve a rewrite of component code: an agent authoring
-  components is granted `source.write` deliberately, and the soul is not.
-  Because the calls carry `path`, `Aqua.Loop.Policy.touched_refs/1` sees
-  them, and the rule that asks for a card before running what this turn just
-  wrote still holds.
+  The tool is in-chain only; a person edits through Files. Its actions are
+  their own policy keys, so a grant for `files.write` on `data/` never
+  covers component code. Every call carries `path`, so
+  `Aqua.Loop.Policy.touched_refs/1` counts the component as touched and a
+  run of it later in the turn asks for a card.
   """
 
   @behaviour Cyfr.Ops.Provider
@@ -40,6 +34,8 @@ defmodule Compendium.MCP.SourceTool do
 
   @max_grep_matches 200
   @max_tree_entries 500
+  @mutations ~w(write edit delete)
+  @manifest Compendium.ComponentPath.manifest_name()
 
   @impl true
   def service, do: "source"
@@ -62,35 +58,35 @@ defmodule Compendium.MCP.SourceTool do
         actions: %{
           "tree" => %{
             kind: :read,
-            planes: [:external, :in_chain],
+            planes: [:in_chain],
             permission: :storage_read,
             recovery: :replay_safe
           },
           "read" => %{
             kind: :read,
-            planes: [:external, :in_chain],
+            planes: [:in_chain],
             permission: :storage_read,
             recovery: :replay_safe
           },
           "grep" => %{
             kind: :read,
-            planes: [:external, :in_chain],
+            planes: [:in_chain],
             permission: :storage_read,
             recovery: :replay_safe
           },
           "write" => %{
             kind: :write,
-            planes: [:external, :in_chain],
+            planes: [:in_chain],
             permission: :storage_write
           },
           "edit" => %{
             kind: :write,
-            planes: [:external, :in_chain],
+            planes: [:in_chain],
             permission: :storage_write
           },
           "delete" => %{
             kind: :destructive,
-            planes: [:external, :in_chain],
+            planes: [:in_chain],
             permission: :storage_write
           }
         }
@@ -139,25 +135,18 @@ defmodule Compendium.MCP.SourceTool do
   # Scope
   # ---------------------------------------------------------------------------
 
-  # A version directory under the local publisher, and not the artifact a
-  # build owns. Everything else this tool refuses in words, so an agent is
-  # told what it may edit rather than being handed a storage error.
+  # Refusals are worded, so an agent is told what it may edit rather than
+  # being handed a storage error.
   defp scoped(path, action) when is_binary(path) do
-    segments = path |> String.split("/", trim: true)
-
-    case segments do
-      ["components", plural, publisher, name, version | rest] ->
+    case String.split(path, "/", trim: true) do
+      ["components", plural, publisher, _name, _version | rest] = segments ->
         with :ok <- local_publisher(publisher),
-             :ok <- not_built_artifact(plural, rest) do
-          {:ok, Enum.join(["components", plural, publisher, name, version | rest], "/")}
+             :ok <- source_file(plural, rest, action) do
+          {:ok, Enum.join(segments, "/")}
         end
 
-      ["components", plural, publisher, name] when action == "tree" ->
-        # A tree of every version of one component is a read, and useful:
-        # the roles look before they edit.
-        with :ok <- local_publisher(publisher) do
-          {:ok, Enum.join(["components", plural, publisher, name], "/")}
-        end
+      ["components", _plural, publisher, _name] = segments when action == "tree" ->
+        with :ok <- local_publisher(publisher), do: {:ok, Enum.join(segments, "/")}
 
       _ ->
         {:error,
@@ -179,9 +168,21 @@ defmodule Compendium.MCP.SourceTool do
           "'#{publisher}' is another publisher's component — its source is not yours to edit"}}
   end
 
-  defp not_built_artifact(plural, rest) do
-    type = String.trim_trailing(plural, "s")
-    artifact = Compendium.ComponentPath.wasm_name(type)
+  defp source_file(_plural, [], action) when action in @mutations,
+    do:
+      {:error,
+       {:invalid_argument,
+        "a component version is created and deleted whole, not through its source — " <>
+          "name a file inside it"}}
+
+  defp source_file(_plural, [@manifest], "delete"),
+    do:
+      {:error,
+       {:invalid_argument,
+        "#{@manifest} is what makes this directory a component — edit it instead"}}
+
+  defp source_file(plural, rest, _action) do
+    artifact = plural |> String.trim_trailing("s") |> Compendium.ComponentPath.wasm_name()
 
     cond do
       rest == [artifact] ->
@@ -240,16 +241,12 @@ defmodule Compendium.MCP.SourceTool do
   end
 
   defp dispatch("edit", ctx, path, args) do
-    with {:ok, edits} <- edit_list(Map.get(args, "edits")),
-         {:ok, %{content: content, encoding: "utf8"}} <- Files.read(ctx, path),
-         {:ok, edited} <- apply_edits(String.split(content, "\n"), edits) do
-      Files.write(ctx, path, Enum.join(edited, "\n"))
-    else
-      {:ok, %{encoding: _}} ->
-        {:error, {:invalid_argument, "#{path} is not text — edit works on text files"}}
-
-      error ->
-        error
+    with {:ok, edits} <- edit_list(Map.get(args, "edits")) do
+      Files.update(ctx, path, fn content ->
+        with {:ok, edited} <- apply_edits(String.split(content, "\n"), edits) do
+          {:ok, Enum.join(edited, "\n")}
+        end
+      end)
     end
   end
 

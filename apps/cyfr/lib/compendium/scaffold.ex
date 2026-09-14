@@ -612,12 +612,7 @@ defmodule Compendium.Scaffold do
       {base_path ++ ["package.json"], react_package_json(name)},
       {base_path ++ ["tsconfig.json"], react_tsconfig()},
       {base_path ++ ["vite.config.ts"], react_vite_config()},
-      # The source entry lives under `src/`, not at the version root. A
-      # build writes its own `index.html` at the root — that is what the
-      # tincture serves — so a source entry beside it is overwritten by the
-      # first successful build, and the next build has no entry to start
-      # from. Vite is pointed at `src/` and told to emit back up to `dist/`.
-      {base_path ++ ["src", "index.html"], react_index_html(name)},
+      {base_path ++ ["index.html"], react_index_html(name)},
       {base_path ++ ["src", "main.tsx"], react_main_tsx()},
       {base_path ++ ["src", "App.tsx"], react_app_tsx(name)},
       {base_path ++ ["src", "index.css"], tincture_style_css()},
@@ -634,7 +629,7 @@ defmodule Compendium.Scaffold do
       publisher: Compendium.ComponentPath.default_publisher(),
       description: "TODO: Describe your tincture",
       tincture: %{
-        entry: "index.html",
+        entry: "dist/index.html",
         icon: "palette",
         build: %{tool: "vite"},
         window: %{width: 800, height: 600, resizable: true}
@@ -695,13 +690,8 @@ defmodule Compendium.Scaffold do
     export default defineConfig({
       plugins: [react()],
       base: "./",
-      // The entry is src/index.html; the build lands in dist/ at the
-      // version root, which is what the tincture serves. Keeping them
-      // apart is what lets a tincture be rebuilt more than once.
-      root: "src",
-      publicDir: "../public",
       build: {
-        outDir: "../dist",
+        outDir: "dist",
         emptyOutDir: true,
         target: "esnext",
         minify: "esbuild",
@@ -721,7 +711,7 @@ defmodule Compendium.Scaffold do
     </head>
     <body>
       <div id="root"></div>
-      <script type="module" src="./main.tsx"></script>
+      <script type="module" src="/src/main.tsx"></script>
     </body>
     </html>
     """

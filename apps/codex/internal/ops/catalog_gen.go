@@ -31,7 +31,6 @@ const (
 	Retention          = "retention"
 	Schedule           = "schedule"
 	Session            = "session"
-	Source             = "source"
 	System             = "system"
 	Thread             = "thread"
 	TinctureVisibility = "tincture_visibility"
@@ -186,12 +185,6 @@ const (
 	SessionLogout           = "logout"
 	SessionUse              = "use"
 	SessionWhoami           = "whoami"
-	SourceDelete            = "delete"
-	SourceEdit              = "edit"
-	SourceGrep              = "grep"
-	SourceRead              = "read"
-	SourceTree              = "tree"
-	SourceWrite             = "write"
 	SystemNotify            = "notify"
 	SystemStatus            = "status"
 	ThreadAloud             = "aloud"
@@ -251,7 +244,6 @@ var Actions = map[string][]string{
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
 	"session":             {"device_init", "device_poll", "login", "logout", "use", "whoami"},
-	"source":              {"delete", "edit", "grep", "read", "tree", "write"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
 	"tincture_visibility": {"get"},

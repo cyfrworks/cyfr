@@ -1040,6 +1040,111 @@ defmodule Arca.OverlayTest do
     end
   end
 
+  describe "replace_subtree/5 — one subtree of a unit, under its lock" do
+    @built ["components", "tinctures", "local", "built", "1.0.0"]
+
+    setup %{ctx: ctx} do
+      {:ok, _} =
+        Arca.Overlay.commit_unit(
+          ctx,
+          @built,
+          {:files,
+           [
+             {["cyfr-manifest.json"], ~s({"type":"tincture"})},
+             {["src", "main.tsx"], "source"},
+             {["dist", "index.html"], "one"},
+             {["dist", "assets", "old.js"], "old"}
+           ]},
+          cap: :exempt
+        )
+
+      :ok
+    end
+
+    test "the subtree is replaced whole and the rest of the unit is untouched", %{ctx: ctx} do
+      assert :ok =
+               Arca.Overlay.replace_subtree(
+                 ctx,
+                 @built,
+                 ["dist"],
+                 [{["index.html"], "two"}, {["assets", "new.js"], "new"}],
+                 cap: {:checked, 6}
+               )
+
+      assert {:ok, "two"} = Arca.get(ctx, @built ++ ["dist", "index.html"])
+      assert {:ok, "new"} = Arca.get(ctx, @built ++ ["dist", "assets", "new.js"])
+      assert {:error, :not_found} = Arca.get(ctx, @built ++ ["dist", "assets", "old.js"])
+      assert {:ok, "source"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
+      assert {:ok, ~s({"type":"tincture"})} = Arca.get(ctx, @built ++ ["cyfr-manifest.json"])
+    end
+
+    test "an incomplete unit has nothing to lay a subtree into", %{ctx: ctx} do
+      :ok = Arca.delete_tree(ctx, @built)
+      :ok = Arca.put(ctx, @built ++ ["src", "main.tsx"], "orphan")
+
+      assert {:error, :not_found} =
+               Arca.Overlay.replace_subtree(ctx, @built, ["dist"], [{["index.html"], "x"}],
+                 cap: :exempt
+               )
+
+      refute Arca.exists?(ctx, @built ++ ["dist", "index.html"])
+    end
+
+    test "the sentinel is not a subtree" do
+      assert_raise ArgumentError, fn ->
+        Arca.Overlay.replace_subtree(
+          Sanctum.TestContext.local(),
+          @built,
+          ["cyfr-manifest.json"],
+          [],
+          cap: :exempt
+        )
+      end
+    end
+
+    test "a writer to the same unit waits for the whole replacement", %{ctx: ctx} do
+      test_pid = self()
+
+      replacing =
+        Task.async(fn ->
+          Arca.Overlay.replace_subtree(
+            ctx,
+            @built,
+            ["dist"],
+            [
+              {["index.html"],
+               fn ->
+                 send(test_pid, {:writing, self()})
+
+                 receive do
+                   :proceed -> {:ok, "two"}
+                 end
+               end}
+            ],
+            cap: :exempt
+          )
+        end)
+
+      assert_receive {:writing, replacer}, 5_000
+
+      writer = Task.async(fn -> Arca.put(ctx, @built ++ ["src", "main.tsx"], "edited") end)
+
+      wait_until(
+        fn -> queued_on_unit_lock?() end,
+        5_000,
+        "the writer to queue behind the replacement on the unit lock"
+      )
+
+      assert {:ok, "source"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
+
+      send(replacer, :proceed)
+      assert :ok = Task.await(replacing, 30_000)
+      assert :ok = Task.await(writer, 30_000)
+      assert {:ok, "edited"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
+      assert {:ok, "two"} = Arca.get(ctx, @built ++ ["dist", "index.html"])
+    end
+  end
+
   describe "commit_unit/4 — the one way a unit lands" do
     @own_dir ["components", "catalysts", "local", "committed", "1.0.0"]
 

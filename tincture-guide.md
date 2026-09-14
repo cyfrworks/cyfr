@@ -44,14 +44,11 @@ data/athanors/{athanor_id}/components/tinctures/local/stock-dashboard/1.0.0/
 
 ```
 data/athanors/{athanor_id}/components/tinctures/local/stock-dashboard/1.0.0/
-├── cyfr-manifest.json    ← type: "tincture", tincture.build.tool: "vite"
+├── cyfr-manifest.json    ← type: "tincture", tincture.build.tool: "vite", tincture.entry: "dist/index.html"
 ├── package.json          ← React + Vite + TypeScript dependencies
 ├── tsconfig.json         ← TypeScript config (strict mode)
-├── vite.config.ts        ← Vite config (base: "./")
-├── index.html            ← built entry point (from dist/, overwrites Vite source index.html)
-├── assets/               ← built JS/CSS bundles with content hashes
-│   ├── index-abc123.js
-│   └── index-def456.css
+├── vite.config.ts        ← Vite config (base: "./", build.outDir: "dist")
+├── index.html            ← Vite's source entry
 ├── public/
 │   └── media/
 │       ├── icon.svg          ← shown in the Prism tincture picker (auto-discovered)
@@ -60,6 +57,9 @@ data/athanors/{athanor_id}/components/tinctures/local/stock-dashboard/1.0.0/
 │   ├── main.tsx
 │   ├── App.tsx
 │   └── index.css
+└── dist/                 ← the build's output, replaced whole by each build
+    ├── index.html            ← served entry point
+    └── assets/               ← JS/CSS bundles with content hashes
 ```
 
 ---
@@ -89,7 +89,7 @@ Vanilla tinctures have no compile step — edit files directly and reload.
 6. Iterate     Edit source → recompile → reload
 ```
 
-React tinctures use TypeScript + Vite and require a build step. The build runs `npm install && npm run build` (which runs `tsc` then `vite build`) in a sandboxed temp directory, then writes the `dist/` output (static HTML/JS/CSS) back to the tincture's version directory. The served output is identical to a vanilla tincture — no JS runtime at serve-time.
+React tinctures use TypeScript + Vite and require a build step. The build runs `npm install && npm run build` (which runs `tsc` then `vite build`) in a sandboxed temp directory, then replaces the version directory's `dist/` with its output (static HTML/JS/CSS); the source beside it is kept. The manifest's `entry` names the built page, `dist/index.html`, and its relative asset URLs resolve inside `dist/`. The served output is static, like a vanilla tincture — no JS runtime at serve-time.
 
 Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injected at serve time). Declare backend dependencies in the manifest's `dependencies.static` section.
 
@@ -129,7 +129,7 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `entry` | string | `"index.html"` | Entry point file |
+| `entry` | string | `"index.html"` | Entry point file, relative to the version directory. A built tincture serves `"dist/index.html"`; relative URLs in the entry resolve from its own directory |
 | `icon` | string | `"palette"` | Glyph fallback used by the picker when no `public/media/icon.{svg,png}` exists. Accepts an emoji (e.g. `"🎮"`) or a Lucide icon name (e.g. `"palette"`) |
 | `tagline` | string | — | Short one-line tagline shown under the title in the tincture picker. Distinct from `description`, which is used as the card title |
 | `public` | boolean | `false` | Metadata hint. Actual public access is an active public consent profile — published with `profile.publish` |

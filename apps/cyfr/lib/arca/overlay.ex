@@ -30,14 +30,16 @@ defmodule Arca.Overlay do
 
   "Completed" is a fact the tree itself records: every valid directory
   unit carries its sentinel file, and `commit_unit/4` — the one way a
-  unit lands, for scaffold, fork, the tincture store, publish, OCI pull
-  and the shipped copy alike — writes it LAST. A crash or failure
+  unit lands, for scaffold, fork, publish, OCI pull and the shipped copy
+  alike — writes it LAST. A crash or failure
   mid-commit leaves the unit without its sentinel, so it keeps reading
   as incomplete, and an error return rolls the partial back; the next
   commit replaces whatever remains wholesale. No hidden marker file: the
   sentinel is an ordinary, digest-counted member of the unit. A file
   unit is atomic by construction — a single put — and counts as
-  completed when the tenant file exists.
+  completed when the tenant file exists. A build's output replaces one
+  subtree of a completed unit (`replace_subtree/5`) and never touches its
+  sentinel.
 
   ## Whose unit it is
 
@@ -477,8 +479,8 @@ defmodule Arca.Overlay do
   @doc """
   Land one whole unit: refuse-or-replace, write the non-sentinel files,
   sentinel LAST — and on any error, delete the partial. Every ingress
-  that lays a unit (scaffold, fork, the tincture store, publish, OCI
-  pull, the shipped copy) commits through here, so sentinel-last,
+  that lays a unit (scaffold, fork, publish, OCI pull, the shipped copy)
+  commits through here, so sentinel-last,
   rollback, cap policy and usage accounting are one implementation, not
   a discipline each caller re-spells.
 
@@ -557,6 +559,57 @@ defmodule Arca.Overlay do
           end
         end)
     end
+  end
+
+  @doc """
+  Replace one subtree of a complete directory unit with `files`, under one
+  hold of the unit's lock. `subtree` is relative to the unit and `files`
+  relative to the subtree: the subtree is cleared, the files are written,
+  and nothing else in the unit — its sentinel included — is touched. A
+  concurrent writer to the unit waits for the whole replacement. A failure
+  part-way leaves the subtree incomplete and the rest of the unit as it
+  was; the next replacement lays the subtree whole.
+
+  `cap:` (required) is `commit_unit/4`'s, checked before any write.
+  `{:error, :not_found}` when the unit is not complete.
+  """
+  @spec replace_subtree(
+          Context.t(),
+          Arca.Storage.path(),
+          Arca.Storage.path(),
+          [{Arca.Storage.path(), binary() | (-> {:ok, binary()} | {:error, term()})}],
+          keyword()
+        ) :: :ok | {:error, term()}
+  def replace_subtree(%Context{} = ctx, unit, [top | _] = subtree, files, opts)
+      when is_list(files) do
+    cap = Keyword.fetch!(opts, :cap)
+
+    case Arca.Storage.locate(unit) do
+      {:dir, ^unit, sentinel} when top != sentinel ->
+        with_unit_lock_at(ctx, unit, fn ->
+          internal = internal_ctx(ctx)
+
+          with :ok <- complete_unit(internal, unit, sentinel),
+               :ok <- check_commit_cap(ctx, cap) do
+            with_internal_writes(fn ->
+              with :ok <- clean_slate(internal, unit ++ subtree),
+                   {:ok, _written} <-
+                     write_source(internal, unit ++ subtree, sentinel, {:files, files}) do
+                :ok
+              end
+            end)
+          end
+        end)
+
+      other ->
+        raise ArgumentError,
+              "replace_subtree needs a directory unit and a subtree other than its sentinel; " <>
+                "#{inspect(unit)} locates to #{inspect(other)}"
+    end
+  end
+
+  defp complete_unit(ctx, unit, sentinel) do
+    if Arca.exists?(ctx, unit ++ [sentinel]), do: :ok, else: {:error, :not_found}
   end
 
   # A file unit's completing write IS the caller's one atomic put: no
