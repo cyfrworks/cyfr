@@ -6,7 +6,7 @@ defmodule Opus.TimeoutTest do
 
   alias Opus.Executor
 
-  alias Opus.MCP
+  alias Cyfr.Execution.MCP
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"

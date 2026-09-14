@@ -113,6 +113,18 @@ defmodule Cyfr.ApplicationTest do
              ] = started_ids(Cyfr.Execution.Tree)
     end
 
+    test "background roots and the stale-execution sweeper start after the execution group" do
+      started = Cyfr.InfraSupervisor |> started_ids()
+      at = fn id -> Enum.find_index(started, &(&1 == id)) end
+
+      # The sweeper is a child even where `:execution_sweeper_enabled` is off
+      # and it did not start.
+      for id <- [Cyfr.Execution.TaskSupervisor, Cyfr.Execution.Sweeper] do
+        assert is_integer(at.(id)) and at.(id) > at.(Cyfr.Execution.Tree),
+               "#{inspect(id)} must start under the infra tier after Cyfr.Execution.Tree"
+      end
+    end
+
     test "the endpoint lives under the web tier" do
       ids =
         Cyfr.WebSupervisor

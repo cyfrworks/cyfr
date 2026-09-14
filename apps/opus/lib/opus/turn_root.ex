@@ -18,7 +18,7 @@ defmodule Opus.TurnRoot do
   once it holds one.
   """
 
-  alias Opus.ExecutionRecord
+  alias Cyfr.Execution.Record
   alias Opus.TurnRoot.Lease
   alias Sanctum.Context
 
@@ -53,7 +53,7 @@ defmodule Opus.TurnRoot do
              Keyword.take(opts, [:consent_source, :ceiling, :live_shape_digest])
            ),
          record = build_record(ctx, agent_ref, authority, stamp, opts),
-         :ok <- ExecutionRecord.write_started(record),
+         :ok <- Record.write_started(record),
          {:ok, token} <- take_slot(ctx, record) do
       {:ok, keeper} =
         Lease.start(self(), record.id, record.attempt, Keyword.take(opts, [:tick_ms]))
@@ -64,7 +64,7 @@ defmodule Opus.TurnRoot do
          attempt: record.attempt,
          authority: authority,
          activation_digest: record.activation_digest,
-         lease_until: ExecutionRecord.lease_until(),
+         lease_until: Record.lease_until(),
          budget_id: authority.budget.id,
          token: token,
          keeper: keeper
@@ -134,7 +134,7 @@ defmodule Opus.TurnRoot do
              Keyword.get(opts, :timeout_ms, @slot_wait_ms),
              execution_id
            ) do
-      until = ExecutionRecord.lease_until()
+      until = Record.lease_until()
 
       case Arca.TurnStorage.resume(ctx, Keyword.fetch!(opts, :turn_id), %{
              fence: Keyword.get(opts, :fence),
@@ -189,7 +189,7 @@ defmodule Opus.TurnRoot do
        %{
          execution_id: execution_id,
          attempt: attempt,
-         lease_until: ExecutionRecord.lease_until(),
+         lease_until: Record.lease_until(),
          token: token,
          keeper: keeper
        }}
@@ -239,7 +239,7 @@ defmodule Opus.TurnRoot do
 
   defp build_record(ctx, agent_ref, authority, stamp, opts) do
     record =
-      ExecutionRecord.new(ctx, agent_ref, Keyword.get(opts, :envelope, %{}),
+      Record.new(ctx, agent_ref, Keyword.get(opts, :envelope, %{}),
         component_type: :agent,
         kind: "turn",
         turn_id: Keyword.get(opts, :turn_id),
@@ -268,7 +268,7 @@ defmodule Opus.TurnRoot do
         {:ok, token}
 
       {:error, sentence} ->
-        _ = ExecutionRecord.write_failed(ExecutionRecord.fail(record, sentence))
+        _ = Record.write_failed(Record.fail(record, sentence))
         {:error, {:slot_refused, sentence}}
     end
   end

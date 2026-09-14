@@ -649,7 +649,7 @@ defmodule Arca.Execution do
 
   System-internal: the `id` originates from trusted runtime state — the
   cancellation cascade (`list_running_children/1`, already tenant-scoped)
-  or the `Opus.ExecutionSweeper`'s own scan — never from caller-supplied
+  or the `Cyfr.Execution.Sweeper`'s own scan — never from caller-supplied
   input. `fence`: `attempt:` names the attempt being retired (the row's
   current one when absent); `lease_until:` is the lease the sweeper
   observed, and the attempt lapses only if that exact lease still stands,
@@ -856,7 +856,7 @@ defmodule Arca.Execution do
   `now` (the sweep), each as the row's map with the attempt's `attempt`,
   `runner_id` and `lease_until` beside it.
 
-  Intentionally spans all tenants: the `Opus.ExecutionSweeper` GC must reap
+  Intentionally spans all tenants: the `Cyfr.Execution.Sweeper` GC must reap
   orphaned rows left by a crashed runner — this node's or another
   node's — when no tenant context can be reconstructed. System-internal
   only — not reachable from a tenant request.

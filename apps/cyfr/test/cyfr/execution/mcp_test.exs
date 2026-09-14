@@ -1,18 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.MCPTest do
+defmodule Cyfr.Execution.MCPTest do
   use ExUnit.Case, async: false
 
-  alias Opus.MCP
+  # Runs and cancels reach the engine through the execution port.
+  @moduletag :requires_opus
+
+  alias Cyfr.Execution.MCP
   alias Sanctum.Context
 
-  @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
+  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
 
   setup do
     # Use a test-specific base path to avoid state leaking between tests
-    test_path = Path.join(System.tmp_dir!(), "opus_mcp_test_#{:rand.uniform(100_000)}")
+    test_path = Path.join(System.tmp_dir!(), "execution_mcp_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 

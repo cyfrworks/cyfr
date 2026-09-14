@@ -41,13 +41,6 @@ defmodule Opus.HostSurfaceTest do
     # taken before it runs and given back after — a worker on another
     # node would charge and release through a client.
     "Arca.BudgetReservations",
-    # The attempt that owns an execution: renewed, cancelled and closed by
-    # the runner that holds it, and the turn root a host loop pauses and
-    # resumes — a worker on another node would renew and close its
-    # attempt through a client.
-    "Arca.ExecutionAttempts",
-    # An execution's result is kept as a payload once it completes.
-    "Arca.ExecutionPayloads",
     "Arca.QueryHelpers",
     "Arca.Storage",
     # The turn a root belongs to: paused and resumed with the root's
@@ -60,9 +53,6 @@ defmodule Opus.HostSurfaceTest do
     # The code identity an execution records, resolved from the athanor's
     # component rows.
     "Compendium.Activation",
-    # The agent that dispatched a child, named on the row as its parent:
-    # what of the child's output is kept follows from it.
-    "Compendium.AgentSource",
     "Compendium.Component",
     # The local-namespace trust policy: the storage boundary asks it before
     # a guest write lands in components/ — pulled components are
@@ -71,30 +61,23 @@ defmodule Opus.HostSurfaceTest do
     "Compendium.Resolver",
     "Compendium.Source",
 
-    # Policy and vocabulary that travel with a request.
-    "Sanctum",
-
     # Shared primitives — glue, by construction available to any node.
-    # This boot's name on every execution row (the lease's runner id).
-    "Cyfr.Boot",
     # Whether this boot still owns the control plane — the engine admits
     # nothing when it does not.
     "Cyfr.ControlPlane",
     # The execution port, and what CYFR owns of a run: the rate counters
     # consented limits are checked against, the execution slots and the
-    # registry a cancel finds a run's processes through, and the event
-    # stream a guest's events are pushed on and a lifecycle row published
-    # to — a worker on another node would reach them through host calls.
+    # registry a cancel finds a run's processes through, the event stream a
+    # guest's events are pushed on, the execution row opened, renewed and
+    # closed, its lifecycle telemetry, and the cascade that fails a failed
+    # parent's children — a worker on another node would reach them through
+    # host calls.
     "Cyfr.Execution",
     # Egress pinning: a guest request's host resolved and checked against
     # its consented private policy before the connection is made.
     "Cyfr.Network",
     # The operation catalog: an in-chain tool call is dispatched through it.
     "Cyfr.Ops",
-    # The class an execution's payloads are kept under when its caller
-    # names none — a worker on another node would take it from its
-    # assignment, which names the retention class with the input.
-    "Cyfr.Retention",
     # The signed-pulls posture, read at execution as well as at pull so a
     # component stored before the knob was turned on cannot keep running. A
     # worker would need this value from its client, not re-read it locally.

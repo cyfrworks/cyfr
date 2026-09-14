@@ -6,7 +6,7 @@ defmodule Opus.SecurityTest do
 
   alias Opus.ComponentType
 
-  alias Opus.MCP
+  alias Cyfr.Execution.MCP
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
@@ -204,8 +204,8 @@ defmodule Opus.SecurityTest do
 
     test "execution cancellation is tenant-scoped", %{ctx: ctx} do
       # Create a running execution record directly (no WASM needed)
-      record = Opus.ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = Opus.ExecutionRecord.write_started(record)
+      record = Cyfr.Execution.Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Cyfr.Execution.Record.write_started(record)
 
       # A different tenant cannot cancel (tenant boundary enforced)
       other_ctx =

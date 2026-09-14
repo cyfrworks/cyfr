@@ -326,7 +326,7 @@ defmodule Opus.FormulaHandlerMcpTest do
 
   describe "host interception" do
     test "the host has an arm for exactly the execution actions the catalog intercepts" do
-      execution = Enum.find(Opus.MCP.tools(), &(&1.name == "execution"))
+      execution = Enum.find(Cyfr.Execution.MCP.tools(), &(&1.name == "execution"))
       actions = execution |> Cyfr.Ops.Annotations.actions_of() |> Map.keys()
 
       assert Enum.any?(actions, &Cyfr.Ops.Annotations.host_intercepted?(execution, &1))

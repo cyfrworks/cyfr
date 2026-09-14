@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.ExecutionSweeper do
+defmodule Cyfr.Execution.Sweeper do
   @moduledoc """
   Periodic sweep to mark stale "running" executions as failed.
 
@@ -12,18 +12,22 @@ defmodule Opus.ExecutionSweeper do
   crashed, or a whole node gone. This handles:
 
   - Process crashes that bypass cleanup code
-  - BEAM restarts (replaces the one-shot startup sweep)
+  - BEAM restarts
   - Another node's crash, when several nodes share the database
-  - Edge cases where `handle_failure` couldn't complete
+  - Edge cases where a runner's failure handling couldn't complete
 
   A lapsed lease held by *this* node is double-checked against the local
   execution registry — a live process is left alone (it will renew).
+
+  A tick sweeps only while this boot owns the control plane
+  (`Cyfr.ControlPlane.when_owner/1`). The process starts only when
+  `config :cyfr, :execution_sweeper_enabled` is true (the default).
   """
 
   use GenServer
   require Logger
 
-  alias Cyfr.Execution.Events
+  alias Cyfr.Execution.{Cascade, Events, Record, Telemetry}
 
   @sweep_interval_ms 60_000
 
@@ -69,13 +73,13 @@ defmodule Opus.ExecutionSweeper do
       rescue
         e ->
           Logger.error(
-            "[Opus.ExecutionSweeper] Failed to query stale executions: #{Exception.message(e)}"
+            "[Cyfr.Execution.Sweeper] Failed to query stale executions: #{Exception.message(e)}"
           )
 
           []
       end
 
-    me = Opus.ExecutionRecord.runner_id()
+    me = Record.runner_id()
 
     for record <- stale do
       # Another node's lapsed lease is that node's crash; our own is
@@ -93,7 +97,7 @@ defmodule Opus.ExecutionSweeper do
         rescue
           e ->
             Logger.error(
-              "[Opus.ExecutionSweeper] Failed to mark #{record.id} as failed: #{Exception.message(e)}"
+              "[Cyfr.Execution.Sweeper] Failed to mark #{record.id} as failed: #{Exception.message(e)}"
             )
         end
       end
@@ -122,32 +126,10 @@ defmodule Opus.ExecutionSweeper do
 
     if count > 0 do
       Logger.info(
-        "[Opus.ExecutionSweeper] Marked #{record.id} as failed (stale #{duration_ms}ms)"
+        "[Cyfr.Execution.Sweeper] Marked #{record.id} as failed (stale #{duration_ms}ms)"
       )
 
-      component_type =
-        case Opus.ComponentType.parse(record.component_type) do
-          {:ok, t} -> t
-          _ -> :reagent
-        end
-
-      # Emit telemetry so TelemetryBridge broadcasts to PubSub → LiveView
-      :telemetry.execute(
-        [:cyfr, :opus, :execute, :exception],
-        %{duration: duration_ms * 1_000_000, system_time: System.system_time()},
-        %{
-          execution_id: record.id,
-          request_id: record.request_id,
-          component: record.reference,
-          reference: record.reference,
-          component_type: component_type,
-          user_id: record.user_id,
-          athanor_id: record.athanor_id,
-          outcome: :failure,
-          error: error_msg,
-          duration_ms: duration_ms
-        }
-      )
+      Telemetry.row_failed(record, error_msg, duration_ms)
 
       Events.publish(record.id, record, "execution.lapsed", event_seq, %{
         "status" => "failed",
@@ -157,7 +139,7 @@ defmodule Opus.ExecutionSweeper do
       # Cascade to children for executions that run children: formulas
       # and turn roots.
       if record.component_type in ["formula", "agent"] do
-        Opus.Executor.cascade_children_failure_by_id(record.id)
+        Cascade.fail_children_of(record.id)
       end
     end
   end

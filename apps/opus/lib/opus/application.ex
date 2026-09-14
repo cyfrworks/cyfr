@@ -15,10 +15,10 @@ defmodule Opus.Application do
       # Shared Wasmex engine for compile-once/instantiate-many. The engine
       # admits work only once it is up (`Opus.ready?/0`).
       Opus.SharedEngine,
-      # Supervised fire-and-forget tasks (run_stream)
+      # Supervised fire-and-forget tasks: an in-chain streamed child
+      # (`execution.run_stream` from a formula) and a guest's streaming HTTP
+      # request.
       Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000),
-      # Periodic sweep that marks stale "running" executions failed.
-      Opus.ExecutionSweeper,
       # Owns the :protected ETS table of OAuth tokens dispensed to guests (for
       # SecretMasker); sweeps tokens from runs that never drained.
       Opus.OAuthTokenTracker

@@ -31,7 +31,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     # own refusal, a sentence about the value offered.
     "apps/cyfr/lib/cyfr/schedules/provider.ex" => 20,
     "apps/cyfr/lib/sanctum/mcp/webhook_tool.ex" => 18,
-    "apps/opus/lib/opus/mcp.ex" => 14,
+    "apps/cyfr/lib/cyfr/execution/mcp.ex" => 14,
     "apps/cyfr/lib/emissary/mcp/tools/system_provider.ex" => 12,
     "apps/cyfr/lib/sanctum/mcp/key_tool.ex" => 11,
     # The tenth is the CYFR_BUILDS=false refusal: a configuration this

@@ -152,6 +152,14 @@ defmodule Cyfr.Application do
         Cyfr.Execution.Events.Sequence,
         {DynamicSupervisor, name: Cyfr.Execution.Events.Supervisor, strategy: :one_for_one}
       ]),
+      # Roots run in the background (`execution.run_stream`), after the
+      # registry each one registers in; shutdown waits up to 30 s for them.
+      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Execution.TaskSupervisor},
+        shutdown: 30_000
+      ),
+      # Periodic sweep that fails running executions whose lease lapsed;
+      # started only when `:execution_sweeper_enabled`.
+      Cyfr.Execution.Sweeper,
       # subscriptions/listen stream slots — duplicate keys, one entry per open
       # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
       # process, so a vanished client frees its slot without bookkeeping.

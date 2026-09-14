@@ -25,7 +25,7 @@ defmodule Opus.TurnRoot.Lease do
   @spec start(pid(), String.t(), String.t(), keyword()) :: {:ok, pid()}
   def start(holder, execution_id, attempt, opts \\ []) when is_pid(holder) do
     tick = Keyword.get(opts, :tick_ms, @tick_ms)
-    until = Keyword.get(opts, :until) || Opus.ExecutionRecord.lease_until()
+    until = Keyword.get(opts, :until) || Cyfr.Execution.Record.lease_until()
 
     pid =
       spawn_link(fn ->
@@ -49,7 +49,7 @@ defmodule Opus.TurnRoot.Lease do
   defp loop(holder, execution_id, attempt, tick, until) do
     Process.sleep(tick)
 
-    case Opus.ExecutionRecord.renew_lease(execution_id, attempt) do
+    case Cyfr.Execution.Record.renew_lease(execution_id, attempt) do
       {:ok, renewed} ->
         loop(holder, execution_id, attempt, tick, renewed)
 

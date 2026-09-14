@@ -8,7 +8,7 @@ defmodule Opus.LeaseWatchTest do
   use ExUnit.Case, async: false
 
   alias Arca.Execution
-  alias Opus.ExecutionRecord
+  alias Cyfr.Execution.Record
   alias Opus.Executor
 
   setup do
@@ -30,7 +30,7 @@ defmodule Opus.LeaseWatchTest do
           component_type: "catalyst"
         },
         attempt: attempt,
-        runner_id: ExecutionRecord.runner_id()
+        runner_id: Record.runner_id()
       )
 
     id
@@ -57,21 +57,21 @@ defmodule Opus.LeaseWatchTest do
         "att_1"
       )
 
-    assert :lost = ExecutionRecord.renew_lease(id, "att_1")
+    assert :lost = Record.renew_lease(id, "att_1")
     assert :lapsed = Executor.renew_watch(watch(id, "att_1", far()))
   end
 
   test "a cancel asked of the attempt reaches the watch at its next tick" do
     id = running!("att_c")
     {:ok, 1} = Arca.ExecutionAttempts.request_cancel(Sanctum.TestContext.athanor_id(), id)
-    assert {:cancel_requested, _} = ExecutionRecord.renew_lease(id, "att_c")
+    assert {:cancel_requested, _} = Record.renew_lease(id, "att_c")
     assert :cancelled = Executor.renew_watch(watch(id, "att_c", far()))
   end
 
   test "another attempt's renewal is refused, not tolerated" do
     id = running!("att_1")
 
-    assert :lost = ExecutionRecord.renew_lease(id, "att_2")
+    assert :lost = Record.renew_lease(id, "att_2")
     assert :lapsed = Executor.renew_watch(watch(id, "att_2", far()))
   end
 
@@ -79,7 +79,7 @@ defmodule Opus.LeaseWatchTest do
     id = running!("att_1")
     drop_executions!()
 
-    assert :unavailable = ExecutionRecord.renew_lease(id, "att_1")
+    assert :unavailable = Record.renew_lease(id, "att_1")
 
     now = DateTime.utc_now()
     inside = watch(id, "att_1", DateTime.add(now, 60, :second))

@@ -26,7 +26,7 @@ defmodule Opus.ExecutorCascadeTest do
     record
   end
 
-  describe "cascade_children_failure via handle_failure" do
+  describe "Cyfr.Execution.Cascade.fail_children/1" do
     test "parent formula failure cascades to running children" do
       parent_id = "exec_cascade_#{System.unique_integer([:positive])}"
       child1_id = "exec_child1_#{System.unique_integer([:positive])}"
@@ -54,8 +54,7 @@ defmodule Opus.ExecutorCascadeTest do
         started_at: started_at
       })
 
-      # Build a minimal ExecutionRecord struct to call cascade
-      record = %Opus.ExecutionRecord{
+      record = %Cyfr.Execution.Record{
         id: parent_id,
         reference: "formula:local.agent:0.9.0",
         component_type: :formula,
@@ -65,25 +64,8 @@ defmodule Opus.ExecutorCascadeTest do
         error: "Execution timeout after 300000ms"
       }
 
-      # Invoke the cascade directly via the module's private function exposed through handle_failure path.
-      # We test by directly calling the Arca.Execution functions since cascade is private.
-      children = Execution.list_running_children(parent_id)
-      assert length(children) == 2
-
-      # Simulate what cascade_children_failure does
-      for child <- children do
-        now = DateTime.utc_now()
-        duration_ms = DateTime.diff(now, child.started_at, :millisecond)
-
-        {count, _} =
-          Execution.mark_failed_if_running(child.id, %{
-            completed_at: now,
-            duration_ms: duration_ms,
-            error_message: "Parent execution (#{record.id}) terminated"
-          })
-
-        assert count == 1
-      end
+      assert length(Execution.list_running_children(parent_id)) == 2
+      assert :ok = Cyfr.Execution.Cascade.fail_children(record)
 
       # Verify children are now failed
       assert Execution.list_running_children(parent_id) == []
@@ -237,7 +219,7 @@ defmodule Opus.ExecutorCascadeTest do
       callers =
         source
         |> String.split("\n")
-        |> Enum.filter(&(String.trim(&1) =~ ~r/^cascade_children_failure(_by_id)?\(/))
+        |> Enum.filter(&(String.trim(&1) =~ ~r/^Cascade\.fail_children(_of)?\(/))
         |> Enum.map(&String.trim/1)
 
       assert length(callers) == 2,
@@ -246,7 +228,7 @@ defmodule Opus.ExecutorCascadeTest do
       # ...and the success path returns without one.
       [_before, finalize] = String.split(source, "defp finalize_execution", parts: 2)
       [finalize_body | _] = String.split(finalize, "\n  defp ", parts: 2)
-      refute finalize_body =~ "cascade_children_failure"
+      refute finalize_body =~ "Cascade."
     end
 
     test "a completed parent leaves a running child alone" do

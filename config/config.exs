@@ -37,7 +37,7 @@ config :cyfr,
     # would widen it for every agent.
     Compendium.MCP.SourceTool,
     # Domain services
-    Opus.MCP,
+    Cyfr.Execution.MCP,
     Cyfr.Schedules.Provider,
     Locus.MCP,
     Compendium.MCP,

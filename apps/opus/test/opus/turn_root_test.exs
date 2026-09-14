@@ -161,7 +161,7 @@ defmodule Opus.TurnRootTest do
       )
 
     assert [] = Arca.Execution.list_stale_running(DateTime.utc_now())
-    :ok = Opus.ExecutionSweeper.sweep()
+    :ok = Cyfr.Execution.Sweeper.sweep()
     assert execution(claim.execution_id).status == "paused"
     assert {:ok, []} = Arca.Execution.stale_ids(0, athanor_id: ctx.athanor_id)
 
@@ -360,7 +360,7 @@ defmodule Opus.TurnRootTest do
         set: [lease_until: lapsed]
       )
 
-    :ok = Opus.ExecutionSweeper.sweep()
+    :ok = Cyfr.Execution.Sweeper.sweep()
     assert execution(claim.execution_id).status == "failed"
     assert %{state: "lapsed"} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
 

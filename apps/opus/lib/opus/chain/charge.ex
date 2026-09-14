@@ -32,7 +32,7 @@ defmodule Opus.Chain.Charge do
         opts
 
       {nil, attempt, :spawn} when is_binary(attempt) ->
-        execution_id = Keyword.get(opts, :execution_id) || Opus.ExecutionRecord.generate_id()
+        execution_id = Keyword.get(opts, :execution_id) || Cyfr.Execution.Record.generate_id()
 
         opts
         |> Keyword.put(:execution_id, execution_id)

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.ExecutionRecordTest do
+defmodule Cyfr.Execution.RecordTest do
   use ExUnit.Case, async: false
 
-  alias Opus.ExecutionRecord
+  alias Cyfr.Execution.Record
   alias Sanctum.Context
 
   setup do
@@ -49,7 +49,7 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "new/4" do
     test "creates a record with UUID execution_id", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
 
       assert String.starts_with?(record.id, "exec_")
       uuid_part = String.replace_prefix(record.id, "exec_", "")
@@ -63,74 +63,72 @@ defmodule Opus.ExecutionRecordTest do
 
     test "captures request_id from context", %{ctx: ctx} do
       ctx_with_request = %{ctx | request_id: "req_test-123"}
-      record = ExecutionRecord.new(ctx_with_request, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx_with_request, "reagent:local.test:0.1.0", %{})
 
       assert record.request_id == "req_test-123"
     end
 
     test "captures user_id from context", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
 
       assert record.user_id == ctx.user_id
     end
 
     test "defaults to :reagent component type", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
 
       assert record.component_type == :reagent
     end
 
     test "accepts :catalyst component type", %{ctx: ctx} do
       record =
-        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
+        Record.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
 
       assert record.component_type == :catalyst
     end
 
     test "accepts :formula component type", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :formula)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :formula)
 
       assert record.component_type == :formula
     end
 
     test "accepts component_digest option", %{ctx: ctx} do
       digest = "sha256:abc123"
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_digest: digest)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{}, component_digest: digest)
 
       assert record.component_digest == digest
     end
 
     test "accepts host_policy option", %{ctx: ctx} do
       policy = %{allowed_domains: ["api.example.com"], timeout: 30_000}
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, host_policy: policy)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{}, host_policy: policy)
 
       assert record.host_policy == policy
     end
 
     test "accepts parent_execution_id option", %{ctx: ctx} do
       record =
-        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{},
-          parent_execution_id: "exec_parent-123"
-        )
+        Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: "exec_parent-123")
 
       assert record.parent_execution_id == "exec_parent-123"
     end
 
     test "parent_execution_id defaults to nil", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
 
       assert record.parent_execution_id == nil
     end
 
     test "sets status to :running", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
 
       assert record.status == :running
     end
 
     test "captures started_at timestamp", %{ctx: ctx} do
       before = DateTime.utc_now()
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       after_time = DateTime.utc_now()
 
       assert DateTime.compare(record.started_at, before) in [:gt, :eq]
@@ -144,33 +142,33 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "complete/3" do
     test "sets status to :completed", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      completed = ExecutionRecord.complete(record, %{"result" => 42})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      completed = Record.complete(record, %{"result" => 42})
 
       assert completed.status == :completed
     end
 
     test "captures output", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       output = %{"result" => 42, "data" => [1, 2, 3]}
-      completed = ExecutionRecord.complete(record, output)
+      completed = Record.complete(record, output)
 
       assert completed.output == output
     end
 
     test "sets completed_at timestamp", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :timer.sleep(1)
-      completed = ExecutionRecord.complete(record, %{})
+      completed = Record.complete(record, %{})
 
       assert %DateTime{} = completed.completed_at
       assert DateTime.compare(completed.completed_at, record.started_at) in [:gt, :eq]
     end
 
     test "calculates duration_ms", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :timer.sleep(10)
-      completed = ExecutionRecord.complete(record, %{})
+      completed = Record.complete(record, %{})
 
       assert completed.duration_ms >= 10
     end
@@ -178,31 +176,31 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "fail/3" do
     test "sets status to :failed", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      failed = ExecutionRecord.fail(record, "Something went wrong")
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      failed = Record.fail(record, "Something went wrong")
 
       assert failed.status == :failed
     end
 
     test "captures error message", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      failed = ExecutionRecord.fail(record, "Component crashed")
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      failed = Record.fail(record, "Component crashed")
 
       assert failed.error == "Component crashed"
     end
 
     test "sets completed_at timestamp", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :timer.sleep(1)
-      failed = ExecutionRecord.fail(record, "error")
+      failed = Record.fail(record, "error")
 
       assert %DateTime{} = failed.completed_at
     end
 
     test "calculates duration_ms", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :timer.sleep(10)
-      failed = ExecutionRecord.fail(record, "error")
+      failed = Record.fail(record, "error")
 
       assert failed.duration_ms >= 10
     end
@@ -214,8 +212,8 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "write_started/1" do
     test "writes execution start to SQLite", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      :ok = Record.write_started(record)
 
       # Verify record exists in SQLite
       db_record = Arca.Repo.get(Arca.Execution, record.id)
@@ -243,14 +241,14 @@ defmodule Opus.ExecutionRecordTest do
       data = Base.encode64("secret bytes")
 
       record =
-        ExecutionRecord.new(ctx, "formula:local.demo:1.0.0", %{
+        Record.new(ctx, "formula:local.demo:1.0.0", %{
           "task" => "look at this",
           "attachments" => [
             %{"filename" => "a.txt", "media_type" => "text/plain", "data" => data}
           ]
         })
 
-      :ok = ExecutionRecord.write_started(record)
+      :ok = Record.write_started(record)
       {:ok, input} = Jason.decode(Arca.Repo.get(Arca.Execution, record.id).input)
 
       assert [%{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => _, "digest" => _}] =
@@ -263,26 +261,26 @@ defmodule Opus.ExecutionRecordTest do
     test "every output is an envelope on the row and bytes in the payload store, read back joined",
          %{ctx: ctx} do
       root =
-        ExecutionRecord.new(ctx, "agent:local.aqua", %{"turn" => "trn_1"},
+        Record.new(ctx, "agent:local.aqua", %{"turn" => "trn_1"},
           kind: "turn",
           component_type: :agent,
           retention_class: "chat_step"
         )
 
       child =
-        ExecutionRecord.new(ctx, "catalyst:moonmoon69.claude:1.0.0", %{"messages" => []},
+        Record.new(ctx, "catalyst:moonmoon69.claude:1.0.0", %{"messages" => []},
           parent_execution_id: root.id,
           retention_class: "chat_step"
         )
 
-      :ok = ExecutionRecord.write_started(child)
+      :ok = Record.write_started(child)
 
       reply = %{
         "content" => [%{"type" => "text", "text" => "the reply"}],
         "usage" => %{"input_tokens" => 9}
       }
 
-      :ok = ExecutionRecord.write_completed(ExecutionRecord.complete(child, reply))
+      :ok = Record.write_completed(Record.complete(child, reply))
       {:ok, output} = Jason.decode(Arca.Repo.get(Arca.Execution, child.id).output)
 
       assert output["envelope"] == "v1"
@@ -301,18 +299,18 @@ defmodule Opus.ExecutionRecordTest do
       assert Jason.decode!(input) == %{"messages" => []}
 
       # A read joins them back; swept, the envelope alone answers.
-      assert {:ok, %{output: ^reply}} = ExecutionRecord.get(ctx, child.id)
+      assert {:ok, %{output: ^reply}} = Record.get(ctx, child.id)
       old = DateTime.add(DateTime.utc_now(), -2 * 86_400, :second)
       {2, _} = Arca.Repo.update_all(Arca.Schemas.ExecutionPayload, set: [inserted_at: old])
       {:ok, 2} = Arca.ExecutionPayloads.delete_older_than_days(ctx, 1, ["chat_step"])
-      assert {:ok, %{output: %{"envelope" => "v1"}}} = ExecutionRecord.get(ctx, child.id)
+      assert {:ok, %{output: %{"envelope" => "v1"}}} = Record.get(ctx, child.id)
     end
 
     test "any other component's output is the same shape, under its own class", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
       assert record.retention_class == "api"
-      :ok = ExecutionRecord.write_started(record)
-      :ok = ExecutionRecord.write_completed(ExecutionRecord.complete(record, %{"sum" => 2}))
+      :ok = Record.write_started(record)
+      :ok = Record.write_completed(Record.complete(record, %{"sum" => 2}))
 
       assert {:ok, %{"envelope" => "v1"}} =
                Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
@@ -321,19 +319,19 @@ defmodule Opus.ExecutionRecordTest do
                Arca.ExecutionPayloads.get(ctx, record.id, "result")
 
       assert Jason.decode!(bytes) == %{"sum" => 2}
-      assert {:ok, %{output: %{"sum" => 2}}} = ExecutionRecord.get(ctx, record.id)
+      assert {:ok, %{output: %{"sum" => 2}}} = Record.get(ctx, record.id)
     end
 
     test "a result that cannot be kept closes the attempt result_lost, never as completed",
          %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      :ok = Record.write_started(record)
 
       Application.put_env(:cyfr, :execution_payload_store, __MODULE__.RefusingStore)
       on_exit(fn -> Application.delete_env(:cyfr, :execution_payload_store) end)
 
       assert {:error, {:result_lost, :disk_full}} =
-               ExecutionRecord.write_completed(ExecutionRecord.complete(record, %{"sum" => 2}))
+               Record.write_completed(Record.complete(record, %{"sum" => 2}))
 
       row = Arca.Repo.get(Arca.Execution, record.id)
       assert row.status == "failed"
@@ -343,16 +341,16 @@ defmodule Opus.ExecutionRecordTest do
                Arca.ExecutionAttempts.current(ctx.athanor_id, record.id)
 
       # An input that cannot be kept admits nothing.
-      other = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"b" => 2})
-      assert {:error, {:payload_not_retained, :disk_full}} = ExecutionRecord.write_started(other)
+      other = Record.new(ctx, "reagent:local.test:0.1.0", %{"b" => 2})
+      assert {:error, {:payload_not_retained, :disk_full}} = Record.write_started(other)
       assert Arca.Repo.get(Arca.Execution, other.id) == nil
     end
 
     test "includes component_type in record", %{ctx: ctx} do
       record =
-        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
+        Record.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
 
-      :ok = ExecutionRecord.write_started(record)
+      :ok = Record.write_started(record)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.component_type == "catalyst"
@@ -360,8 +358,8 @@ defmodule Opus.ExecutionRecordTest do
 
     test "includes component_digest in record", %{ctx: ctx} do
       digest = "sha256:abc123def456"
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_digest: digest)
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{}, component_digest: digest)
+      :ok = Record.write_started(record)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.component_digest == digest
@@ -369,19 +367,17 @@ defmodule Opus.ExecutionRecordTest do
 
     test "includes parent_execution_id in record", %{ctx: ctx} do
       record =
-        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{},
-          parent_execution_id: "exec_parent-456"
-        )
+        Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: "exec_parent-456")
 
-      :ok = ExecutionRecord.write_started(record)
+      :ok = Record.write_started(record)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.parent_execution_id == "exec_parent-456"
     end
 
     test "parent_execution_id nil when not set", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.parent_execution_id == nil
@@ -391,19 +387,19 @@ defmodule Opus.ExecutionRecordTest do
   describe "the read round-trip" do
     test "get/2 restores the stamped activation graph; list/2 omits payloads by design",
          %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
       graph = ~s({"canonical":"jcs-1","nodes":{}})
       record = %{record | activation_graph: graph}
 
-      :ok = ExecutionRecord.write_started(record)
+      :ok = Record.write_started(record)
 
       # The declared struct field must survive a database read.
-      assert {:ok, read} = ExecutionRecord.get(ctx, record.id)
+      assert {:ok, read} = Record.get(ctx, record.id)
       assert read.activation_graph == graph
 
       # The list select omits payload columns (input, output, host_policy,
       # the graph) — list rows are summaries, get/2 is the full read.
-      assert {:ok, [row]} = ExecutionRecord.list(ctx, limit: 5)
+      assert {:ok, [row]} = Record.list(ctx, limit: 5)
       assert row.activation_graph == nil
     end
   end
@@ -422,11 +418,11 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "write_completed/1" do
     test "updates record with completion data", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
-      completed = ExecutionRecord.complete(record, %{"result" => 42})
-      :ok = ExecutionRecord.write_completed(completed)
+      completed = Record.complete(record, %{"result" => 42})
+      :ok = Record.write_completed(completed)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.status == "completed"
@@ -438,8 +434,8 @@ defmodule Opus.ExecutionRecordTest do
     end
 
     test "rejects non-completed records", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      result = ExecutionRecord.write_completed(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      result = Record.write_completed(record)
 
       assert {:error, _} = result
     end
@@ -447,11 +443,11 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "write_failed/1" do
     test "updates record with failure data", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
-      failed = ExecutionRecord.fail(record, "Component crashed")
-      :ok = ExecutionRecord.write_failed(failed)
+      failed = Record.fail(record, "Component crashed")
+      :ok = Record.write_failed(failed)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.status == "failed"
@@ -459,10 +455,10 @@ defmodule Opus.ExecutionRecordTest do
     end
 
     test "updates record with cancelled status", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
-      {:ok, cancelled} = ExecutionRecord.cancel(ctx, record.id)
+      {:ok, cancelled} = Record.cancel(ctx, record.id)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.status == "cancelled"
@@ -470,8 +466,8 @@ defmodule Opus.ExecutionRecordTest do
     end
 
     test "rejects non-failed/cancelled records", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      result = ExecutionRecord.write_failed(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      result = Record.write_failed(record)
 
       assert {:error, _} = result
     end
@@ -484,58 +480,58 @@ defmodule Opus.ExecutionRecordTest do
   describe "parent_execution_id roundtrip" do
     test "write_started and get roundtrip preserves parent_execution_id", %{ctx: ctx} do
       record =
-        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{},
+        Record.new(ctx, "reagent:local.test:0.1.0", %{},
           parent_execution_id: "exec_roundtrip-789"
         )
 
-      :ok = ExecutionRecord.write_started(record)
+      :ok = Record.write_started(record)
 
-      {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
+      {:ok, loaded} = Record.get(ctx, record.id)
       assert loaded.parent_execution_id == "exec_roundtrip-789"
     end
 
     test "nil parent_execution_id roundtrips correctly", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
-      {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
+      {:ok, loaded} = Record.get(ctx, record.id)
       assert loaded.parent_execution_id == nil
     end
   end
 
   describe "crash detection" do
     test "record with only started has :running status", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
       # Load record - should show as running (crashed/interrupted)
-      {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
+      {:ok, loaded} = Record.get(ctx, record.id)
 
       assert loaded.status == :running
       assert loaded.completed_at == nil
     end
 
     test "record with started and completed has :completed status", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
-      completed = ExecutionRecord.complete(record, %{"result" => 42})
-      :ok = ExecutionRecord.write_completed(completed)
+      completed = Record.complete(record, %{"result" => 42})
+      :ok = Record.write_completed(completed)
 
-      {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
+      {:ok, loaded} = Record.get(ctx, record.id)
 
       assert loaded.status == :completed
       assert loaded.output == %{"result" => 42}
     end
 
     test "record with started and failed has :failed status", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
-      failed = ExecutionRecord.fail(record, "boom")
-      :ok = ExecutionRecord.write_failed(failed)
+      failed = Record.fail(record, "boom")
+      :ok = Record.write_failed(failed)
 
-      {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
+      {:ok, loaded} = Record.get(ctx, record.id)
 
       assert loaded.status == :failed
       assert loaded.error == "boom"
@@ -550,7 +546,7 @@ defmodule Opus.ExecutionRecordTest do
     test "multiple concurrent executions have unique IDs", %{ctx: ctx} do
       records =
         for _ <- 1..10 do
-          ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+          Record.new(ctx, "reagent:local.test:0.1.0", %{})
         end
 
       ids = Enum.map(records, & &1.id)
@@ -562,14 +558,14 @@ defmodule Opus.ExecutionRecordTest do
     test "concurrent writes don't conflict", %{ctx: ctx} do
       records =
         for i <- 1..5 do
-          ExecutionRecord.new(ctx, "reagent:local.test-#{i}:0.1.0", %{"i" => i})
+          Record.new(ctx, "reagent:local.test-#{i}:0.1.0", %{"i" => i})
         end
 
       # Write all started records concurrently
       tasks =
         for record <- records do
           Task.async(fn ->
-            ExecutionRecord.write_started(record)
+            Record.write_started(record)
           end)
         end
 
@@ -578,7 +574,7 @@ defmodule Opus.ExecutionRecordTest do
 
       # Verify all can be loaded
       for record <- records do
-        {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
+        {:ok, loaded} = Record.get(ctx, record.id)
         assert loaded.id == record.id
       end
     end
@@ -590,7 +586,7 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "list/2" do
     test "returns empty list when no executions", %{ctx: ctx} do
-      {:ok, records} = ExecutionRecord.list(ctx)
+      {:ok, records} = Record.list(ctx)
 
       assert records == []
     end
@@ -599,13 +595,13 @@ defmodule Opus.ExecutionRecordTest do
       # Create records with small delays to ensure different timestamps
       records =
         for i <- 1..3 do
-          record = ExecutionRecord.new(ctx, "reagent:local.test-#{i}:0.1.0", %{})
-          :ok = ExecutionRecord.write_started(record)
+          record = Record.new(ctx, "reagent:local.test-#{i}:0.1.0", %{})
+          :ok = Record.write_started(record)
           :timer.sleep(10)
           record
         end
 
-      {:ok, loaded} = ExecutionRecord.list(ctx)
+      {:ok, loaded} = Record.list(ctx)
 
       # Most recent first
       assert length(loaded) == 3
@@ -614,32 +610,32 @@ defmodule Opus.ExecutionRecordTest do
 
     test "respects limit option", %{ctx: ctx} do
       for i <- 1..5 do
-        record = ExecutionRecord.new(ctx, "reagent:local.test-#{i}:0.1.0", %{})
-        :ok = ExecutionRecord.write_started(record)
+        record = Record.new(ctx, "reagent:local.test-#{i}:0.1.0", %{})
+        :ok = Record.write_started(record)
       end
 
-      {:ok, loaded} = ExecutionRecord.list(ctx, limit: 2)
+      {:ok, loaded} = Record.list(ctx, limit: 2)
 
       assert length(loaded) == 2
     end
 
     test "filters by status", %{ctx: ctx} do
       # Create one running and one completed
-      running = ExecutionRecord.new(ctx, "reagent:local.running:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(running)
+      running = Record.new(ctx, "reagent:local.running:0.1.0", %{})
+      :ok = Record.write_started(running)
 
-      completed_record = ExecutionRecord.new(ctx, "reagent:local.completed:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(completed_record)
-      completed = ExecutionRecord.complete(completed_record, %{})
-      :ok = ExecutionRecord.write_completed(completed)
+      completed_record = Record.new(ctx, "reagent:local.completed:0.1.0", %{})
+      :ok = Record.write_started(completed_record)
+      completed = Record.complete(completed_record, %{})
+      :ok = Record.write_completed(completed)
 
       # Filter by running
-      {:ok, running_list} = ExecutionRecord.list(ctx, status: :running)
+      {:ok, running_list} = Record.list(ctx, status: :running)
       assert length(running_list) == 1
       assert hd(running_list).status == :running
 
       # Filter by completed
-      {:ok, completed_list} = ExecutionRecord.list(ctx, status: :completed)
+      {:ok, completed_list} = Record.list(ctx, status: :completed)
       assert length(completed_list) == 1
       assert hd(completed_list).status == :completed
     end
@@ -652,9 +648,9 @@ defmodule Opus.ExecutionRecordTest do
   describe "lifecycle events" do
     test "every write appends its row, numbered in order, and a lost result is its own kind",
          %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
-      :ok = ExecutionRecord.write_started(record)
-      :ok = ExecutionRecord.write_completed(ExecutionRecord.complete(record, %{"sum" => 2}))
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      :ok = Record.write_started(record)
+      :ok = Record.write_completed(Record.complete(record, %{"sum" => 2}))
 
       {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, record.id, 0)
 
@@ -667,33 +663,33 @@ defmodule Opus.ExecutionRecordTest do
       assert attempt == record.attempt
       assert %{"status" => "completed"} = Arca.ExecutionEvents.data(List.last(rows))
 
-      failed = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(failed)
-      :ok = ExecutionRecord.write_failed(ExecutionRecord.fail(failed, "boom"))
+      failed = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(failed)
+      :ok = Record.write_failed(Record.fail(failed, "boom"))
 
       assert {:ok, [_, %{type: "execution.failed"} = row]} =
                Arca.ExecutionEvents.since(ctx.athanor_id, failed.id, 0)
 
       assert %{"error" => "boom"} = Arca.ExecutionEvents.data(row)
 
-      lost = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(lost)
+      lost = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(lost)
       Application.put_env(:cyfr, :execution_payload_store, __MODULE__.RefusingStore)
       on_exit(fn -> Application.delete_env(:cyfr, :execution_payload_store) end)
 
       {:error, {:result_lost, _}} =
-        ExecutionRecord.write_completed(ExecutionRecord.complete(lost, %{"sum" => 2}))
+        Record.write_completed(Record.complete(lost, %{"sum" => 2}))
 
       assert {:ok, [_, %{type: "execution.result_lost"}]} =
                Arca.ExecutionEvents.since(ctx.athanor_id, lost.id, 0)
     end
 
     test "a cancel that asks for a restart says so on its event", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
       {:ok, _} =
-        ExecutionRecord.cancel(ctx, record.id, restart_required: %{"profile_id" => "prof_1"})
+        Record.cancel(ctx, record.id, restart_required: %{"profile_id" => "prof_1"})
 
       assert {:ok, [_, %{type: "execution.cancelled"} = row]} =
                Arca.ExecutionEvents.since(ctx.athanor_id, record.id, 0)
@@ -705,27 +701,27 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "cancel/2" do
     test "cancels a running execution", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
 
-      {:ok, cancelled} = ExecutionRecord.cancel(ctx, record.id)
+      {:ok, cancelled} = Record.cancel(ctx, record.id)
 
       assert cancelled.status == :cancelled
     end
 
     test "returns error for completed execution", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = ExecutionRecord.write_started(record)
-      completed = ExecutionRecord.complete(record, %{})
-      :ok = ExecutionRecord.write_completed(completed)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
+      completed = Record.complete(record, %{})
+      :ok = Record.write_completed(completed)
 
-      result = ExecutionRecord.cancel(ctx, record.id)
+      result = Record.cancel(ctx, record.id)
 
       assert {:error, :not_cancellable} = result
     end
 
     test "returns error for non-existent execution", %{ctx: ctx} do
-      result = ExecutionRecord.cancel(ctx, "exec_nonexistent")
+      result = Record.cancel(ctx, "exec_nonexistent")
 
       assert {:error, :not_found} = result
     end
@@ -738,8 +734,8 @@ defmodule Opus.ExecutionRecordTest do
   describe "reference normalization" do
     test "string reference is stored as-is", %{ctx: ctx} do
       ref = "catalyst:local.gemini:0.1.0"
-      record = ExecutionRecord.new(ctx, ref, %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, ref, %{})
+      :ok = Record.write_started(record)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.reference == "catalyst:local.gemini:0.1.0"
@@ -747,11 +743,36 @@ defmodule Opus.ExecutionRecordTest do
 
     test "string reference roundtrips through parse_reference", %{ctx: ctx} do
       ref = "formula:local.list-models:0.1.0"
-      record = ExecutionRecord.new(ctx, ref, %{})
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, ref, %{})
+      :ok = Record.write_started(record)
 
-      {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
+      {:ok, loaded} = Record.get(ctx, record.id)
       assert loaded.reference == "formula:local.list-models:0.1.0"
+    end
+  end
+
+  describe "executable_type/1" do
+    test "names each executable type by its atom" do
+      for type <- Cyfr.ComponentRef.executable_types() do
+        assert {:ok, atom} = Record.executable_type(type)
+        assert Atom.to_string(atom) == type
+      end
+    end
+
+    test "is :error for a turn root, a tincture, an unknown type and an empty column" do
+      for type <- ["agent", "tincture", "widget", nil, :catalyst] do
+        assert Record.executable_type(type) == :error
+      end
+    end
+
+    test "a read-back row carries its executable type, a turn root :agent", %{ctx: ctx} do
+      formula = Record.new(ctx, "formula:local.demo:1.0.0", %{}, component_type: :formula)
+      :ok = Record.write_started(formula)
+      assert {:ok, %{component_type: :formula}} = Record.get(ctx, formula.id)
+
+      root = Record.new(ctx, "agent:local.aqua", %{}, component_type: :agent, kind: "turn")
+      :ok = Record.write_started(root)
+      assert {:ok, %{component_type: :agent}} = Record.get(ctx, root.id)
     end
   end
 
@@ -761,7 +782,7 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "correlation ID format" do
     test "execution_id follows exec_<uuid> format", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
 
       assert String.starts_with?(record.id, "exec_")
 
@@ -774,8 +795,8 @@ defmodule Opus.ExecutionRecordTest do
     end
 
     test "execution IDs are unique", %{ctx: ctx} do
-      record1 = ExecutionRecord.new(ctx, "reagent:local.test1:0.1.0", %{})
-      record2 = ExecutionRecord.new(ctx, "reagent:local.test2:0.1.0", %{})
+      record1 = Record.new(ctx, "reagent:local.test1:0.1.0", %{})
+      record2 = Record.new(ctx, "reagent:local.test2:0.1.0", %{})
 
       assert record1.id != record2.id
     end
@@ -799,8 +820,8 @@ defmodule Opus.ExecutionRecordTest do
       sent = %{"operation" => "chat", "params" => %{"text" => "hello", "transient" => "ROOM"}}
       kept = %{"operation" => "chat", "params" => %{"text" => "hello"}}
 
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", sent, retained_input: kept)
-      :ok = ExecutionRecord.write_started(record)
+      record = Record.new(ctx, "reagent:local.test:0.1.0", sent, retained_input: kept)
+      :ok = Record.write_started(record)
 
       assert {:ok, _payload, bytes} = Arca.ExecutionPayloads.get(ctx, record.id, "input")
       assert Jason.decode!(bytes) == kept

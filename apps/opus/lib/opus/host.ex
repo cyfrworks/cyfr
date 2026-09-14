@@ -51,16 +51,16 @@ defmodule Opus.Host do
   barriers (`:charge`, `:step`, `:occurrence_id`) the record's own
   admission performs in its transaction.
   """
-  @spec record_start(Opus.ExecutionRecord.t(), keyword()) :: :ok | {:error, term()}
-  defdelegate record_start(record, opts \\ []), to: Opus.ExecutionRecord, as: :write_started
+  @spec record_start(Cyfr.Execution.Record.t(), keyword()) :: :ok | {:error, term()}
+  defdelegate record_start(record, opts \\ []), to: Cyfr.Execution.Record, as: :write_started
 
   @doc "Close an execution's row as completed."
-  @spec record_complete(Opus.ExecutionRecord.t()) :: :ok | {:error, term()}
-  defdelegate record_complete(record), to: Opus.ExecutionRecord, as: :write_completed
+  @spec record_complete(Cyfr.Execution.Record.t()) :: :ok | {:error, term()}
+  defdelegate record_complete(record), to: Cyfr.Execution.Record, as: :write_completed
 
   @doc "Close an execution's row as failed or cancelled."
-  @spec record_failed(Opus.ExecutionRecord.t()) :: :ok | {:error, term()}
-  defdelegate record_failed(record), to: Opus.ExecutionRecord, as: :write_failed
+  @spec record_failed(Cyfr.Execution.Record.t()) :: :ok | {:error, term()}
+  defdelegate record_failed(record), to: Cyfr.Execution.Record, as: :write_failed
 
   @doc "Deliver a delta to an execution's subscribers and its replay buffer, numbered under the last durable event."
   @spec broadcast(String.t(), map(), term(), keyword()) ::

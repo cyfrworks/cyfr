@@ -13,7 +13,7 @@ defmodule Opus.ExecutionPipelineTest do
 
       p = %ExecutionPipeline{
         preloaded_fields: %{"api_key" => "vault-value-xyz"},
-        record: %Opus.ExecutionRecord{id: execution_id}
+        record: %Cyfr.Execution.Record{id: execution_id}
       }
 
       assert Enum.sort(ExecutionPipeline.secrets(p)) ==

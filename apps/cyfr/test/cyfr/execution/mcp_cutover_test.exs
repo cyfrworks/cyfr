@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.MCPCutoverTest do
+defmodule Cyfr.Execution.MCPCutoverTest do
   # The CLI/MCP ingress is data-driven: a profile roots the execution
   # under its consent, no profile refuses with consent guidance (nothing
   # runs), and selection never guesses.
   use ExUnit.Case, async: false
 
+  # A rooted run reaches the engine through the execution port.
+  @moduletag :requires_opus
+
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
-  @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
+  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
   @node "reagent:local.cutover-math"
 
@@ -119,7 +122,7 @@ defmodule Opus.MCPCutoverTest do
   end
 
   defp run(ctx, args) do
-    Opus.MCP.handle(
+    Cyfr.Execution.MCP.handle(
       "execution",
       ctx,
       Map.merge(%{"action" => "run", "reference" => "#{@node}:0.1.0", "input" => %{}}, args)
@@ -187,7 +190,7 @@ defmodule Opus.MCPCutoverTest do
     seed_profile(ctx, component)
 
     assert {:ok, %{execution_id: _, stream_url: _}} =
-             Opus.MCP.handle("execution", ctx, %{
+             Cyfr.Execution.MCP.handle("execution", ctx, %{
                "action" => "run_stream",
                "reference" => "#{@node}:0.1.0",
                "input" => %{}

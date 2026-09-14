@@ -24,7 +24,7 @@ defmodule Cyfr.IngressInventoryTest do
     "apps/opus/lib/opus/executor.ex" => :internal,
     "apps/opus/lib/opus.ex" => :facade,
     # Ingresses proper.
-    "apps/opus/lib/opus/mcp.ex" => :mcp,
+    "apps/cyfr/lib/cyfr/execution/mcp.ex" => :mcp,
     "apps/cyfr/lib/cyfr/schedules/scheduler.ex" => :cron,
     "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex" => :webhook,
     # One implementation behind two tincture surfaces (the HTTP controller
@@ -92,13 +92,11 @@ defmodule Cyfr.IngressInventoryTest do
   end
 
   # Which ingresses go through `Cyfr.Execution` rather than naming the
-  # engine. The port exists so cyfr has no compile-time path into Opus —
-  # but two ingresses that ship INSIDE opus called `Opus.run_root/5`
-  # directly, so a stubbed `:execution_impl` intercepted neither, and
-  # neither passed the readiness gate. Being in the same app is not a
-  # reason to skip the door; it is only a reason it was easy to.
+  # engine. The port exists so cyfr has no compile-time path into Opus; an
+  # ingress that names the engine is intercepted by no stubbed
+  # `:execution_impl` and passes no readiness gate.
   @ingress_files ~w(
-    apps/opus/lib/opus/mcp.ex
+    apps/cyfr/lib/cyfr/execution/mcp.ex
     apps/cyfr/lib/cyfr/schedules/scheduler.ex
     apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex
     apps/cyfr/lib/emissary/tincture/invoke.ex

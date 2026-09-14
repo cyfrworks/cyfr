@@ -9,7 +9,7 @@ excludes =
   [:s3_integration] ++
     Enum.concat(
       if(is_nil(Application.spec(:opus)), do: [:requires_opus], else: []),
-      if(Code.ensure_loaded?(Opus.MCP), do: [], else: [:requires_opus_modules])
+      if(Code.ensure_loaded?(Opus.Runtime), do: [], else: [:requires_opus_modules])
     ) ++
     if File.exists?(Path.expand("../../../CLAUDE.md", __DIR__)),
       do: [],

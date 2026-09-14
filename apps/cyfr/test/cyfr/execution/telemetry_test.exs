@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.TelemetryTest do
+defmodule Cyfr.Execution.TelemetryTest do
   use ExUnit.Case, async: false
 
-  alias Opus.Telemetry
-  alias Opus.ExecutionRecord
+  alias Cyfr.Execution.Telemetry
+  alias Cyfr.Execution.Record
 
   setup do
     test_pid = self()
@@ -40,7 +40,7 @@ defmodule Opus.TelemetryTest do
 
   describe "execute_start/1" do
     test "emits [:cyfr, :opus, :execute, :start] event", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test-123:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test-123:0.1.0", %{})
 
       Telemetry.execute_start(record)
 
@@ -54,7 +54,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "formats registry reference correctly", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "catalyst:cyfr.calculator:1.0.0", %{})
+      record = Record.new(ctx, "catalyst:cyfr.calculator:1.0.0", %{})
 
       Telemetry.execute_start(record)
 
@@ -63,7 +63,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "formats local reference correctly", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.my-component:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.my-component:0.1.0", %{})
 
       Telemetry.execute_start(record)
 
@@ -72,7 +72,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "formats formula reference correctly", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "formula:local.my-tool:1.0.0", %{})
+      record = Record.new(ctx, "formula:local.my-tool:1.0.0", %{})
 
       Telemetry.execute_start(record)
 
@@ -82,7 +82,7 @@ defmodule Opus.TelemetryTest do
 
     test "includes correct component_type", %{ctx: ctx} do
       catalyst_record =
-        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
+        Record.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
 
       Telemetry.execute_start(catalyst_record)
 
@@ -97,8 +97,8 @@ defmodule Opus.TelemetryTest do
 
   describe "execute_stop/2" do
     test "emits [:cyfr, :opus, :execute, :stop] event", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      completed = ExecutionRecord.complete(record, %{"result" => 42})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      completed = Record.complete(record, %{"result" => 42})
 
       Telemetry.execute_stop(completed)
 
@@ -110,9 +110,9 @@ defmodule Opus.TelemetryTest do
     end
 
     test "includes duration from record", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :timer.sleep(10)
-      completed = ExecutionRecord.complete(record, %{})
+      completed = Record.complete(record, %{})
 
       Telemetry.execute_stop(completed)
 
@@ -123,8 +123,8 @@ defmodule Opus.TelemetryTest do
     end
 
     test "accepts memory_bytes measurement", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      completed = ExecutionRecord.complete(record, %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      completed = Record.complete(record, %{})
 
       Telemetry.execute_stop(completed, %{memory_bytes: 1024 * 1024})
 
@@ -133,8 +133,8 @@ defmodule Opus.TelemetryTest do
     end
 
     test "omits memory_bytes when the runtime reports none", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      completed = ExecutionRecord.complete(record, %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      completed = Record.complete(record, %{})
 
       Telemetry.execute_stop(completed)
 
@@ -145,9 +145,9 @@ defmodule Opus.TelemetryTest do
 
     test "includes all required metadata", %{ctx: ctx} do
       record =
-        ExecutionRecord.new(ctx, "formula:local.test-456:0.1.0", %{}, component_type: :formula)
+        Record.new(ctx, "formula:local.test-456:0.1.0", %{}, component_type: :formula)
 
-      completed = ExecutionRecord.complete(record, %{})
+      completed = Record.complete(record, %{})
 
       Telemetry.execute_stop(completed)
 
@@ -167,8 +167,8 @@ defmodule Opus.TelemetryTest do
 
   describe "execute_exception/2" do
     test "emits [:cyfr, :opus, :execute, :exception] event", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      failed = ExecutionRecord.fail(record, "Something went wrong")
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      failed = Record.fail(record, "Something went wrong")
 
       Telemetry.execute_exception(failed, "Something went wrong")
 
@@ -181,9 +181,9 @@ defmodule Opus.TelemetryTest do
     end
 
     test "includes duration from record", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :timer.sleep(10)
-      failed = ExecutionRecord.fail(record, "timeout")
+      failed = Record.fail(record, "timeout")
 
       Telemetry.execute_exception(failed, "timeout")
 
@@ -194,8 +194,8 @@ defmodule Opus.TelemetryTest do
     end
 
     test "formats non-string errors", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      failed = ExecutionRecord.fail(record, "error")
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      failed = Record.fail(record, "error")
 
       Telemetry.execute_exception(failed, {:badmatch, :unexpected})
 
@@ -207,9 +207,9 @@ defmodule Opus.TelemetryTest do
 
     test "includes all required metadata", %{ctx: ctx} do
       record =
-        ExecutionRecord.new(ctx, "catalyst:cyfr.myapp:2.0.0", %{}, component_type: :catalyst)
+        Record.new(ctx, "catalyst:cyfr.myapp:2.0.0", %{}, component_type: :catalyst)
 
-      failed = ExecutionRecord.fail(record, "Network timeout")
+      failed = Record.fail(record, "Network timeout")
 
       Telemetry.execute_exception(failed, "Network timeout")
 
@@ -226,18 +226,67 @@ defmodule Opus.TelemetryTest do
   end
 
   # ============================================================================
+  # row_failed/3
+  # ============================================================================
+
+  describe "row_failed/3" do
+    defp row(component_type) do
+      %{
+        id: "exec_row_failed",
+        request_id: "req_row_failed",
+        reference: "formula:local.parent:1.0.0",
+        component_type: component_type,
+        user_id: "user_row_failed",
+        athanor_id: "ath_row_failed"
+      }
+    end
+
+    test "reports a row failed from outside with its stored type as an atom" do
+      Telemetry.row_failed(row("formula"), "Parent execution (exec_p) terminated", 12)
+
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], measurements,
+                      metadata}
+
+      assert measurements.duration == 12 * 1_000_000
+      assert is_integer(measurements.system_time)
+
+      assert metadata == %{
+               execution_id: "exec_row_failed",
+               request_id: "req_row_failed",
+               component: "formula:local.parent:1.0.0",
+               reference: "formula:local.parent:1.0.0",
+               component_type: :formula,
+               user_id: "user_row_failed",
+               athanor_id: "ath_row_failed",
+               outcome: :failure,
+               error: "Parent execution (exec_p) terminated",
+               duration_ms: 12
+             }
+    end
+
+    test "reports a type that names no executable type as a reagent" do
+      for type <- ["agent", nil, "tincture"] do
+        Telemetry.row_failed(row(type), "Execution terminated", 0)
+
+        assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _,
+                        %{component_type: :reagent}}
+      end
+    end
+  end
+
+  # ============================================================================
   # Event Ordering
   # ============================================================================
 
   describe "event ordering" do
     test "start event precedes stop event in typical flow", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
 
       Telemetry.execute_start(record)
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _start_measurements, _}
 
       :timer.sleep(5)
-      completed = ExecutionRecord.complete(record, %{})
+      completed = Record.complete(record, %{})
       Telemetry.execute_stop(completed)
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :stop], stop_measurements, _}
 
@@ -246,13 +295,13 @@ defmodule Opus.TelemetryTest do
     end
 
     test "start event precedes exception event in error flow", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
 
       Telemetry.execute_start(record)
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _, _}
 
       :timer.sleep(5)
-      failed = ExecutionRecord.fail(record, "error")
+      failed = Record.fail(record, "error")
       Telemetry.execute_exception(failed, "error")
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception],

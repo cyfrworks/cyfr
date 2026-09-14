@@ -29,8 +29,8 @@ defmodule Aqua.SeedContractTest do
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
 
-  # The `execution.*` and `schedule.*` entries come from Opus' providers;
-  # an app-scoped run has no Opus modules and cannot expand them.
+  # The `build.*` entries come from Locus's provider; an app-scoped run has
+  # no sibling app's modules and cannot expand them.
   @moduletag :requires_opus_modules
 
   test "every action the seed may call is granted by the manifest and reachable in-chain" do

@@ -13,20 +13,26 @@ defmodule Opus.ApplicationTest do
       for id <- [
             Opus.SharedEngine,
             Opus.TaskSupervisor,
-            Opus.ExecutionSweeper,
             Opus.OAuthTokenTracker
           ] do
         assert id in ids, "#{inspect(id)} is not a child of Opus.Supervisor"
       end
     end
 
-    test "the execution slots, rates and event streams are cyfr's, not the engine's" do
+    test "the execution slots, rates, event streams, root tasks and sweeper are cyfr's, not the engine's" do
       ids = for {id, _pid, _type, _modules} <- Supervisor.which_children(Opus.Supervisor), do: id
 
-      for id <- [Cyfr.Execution.Rates, Cyfr.Execution.Semaphore, Cyfr.Execution.Tree] do
+      for id <- [
+            Cyfr.Execution.Rates,
+            Cyfr.Execution.Semaphore,
+            Cyfr.Execution.Tree,
+            Cyfr.Execution.TaskSupervisor
+          ] do
         refute id in ids, "#{inspect(id)} is supervised by opus"
         assert Process.whereis(id) != nil, "#{inspect(id)} is not running"
       end
+
+      refute Cyfr.Execution.Sweeper in ids, "Cyfr.Execution.Sweeper is supervised by opus"
     end
   end
 

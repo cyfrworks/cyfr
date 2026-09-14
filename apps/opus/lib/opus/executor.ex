@@ -39,8 +39,7 @@ defmodule Opus.Executor do
   require Logger
 
   alias Sanctum.Context
-  alias Opus.ExecutionRecord
-  alias Cyfr.Execution.Events
+  alias Cyfr.Execution.{Cascade, Record, Telemetry}
   alias Opus.ExecutionPipeline
 
   @doc """
@@ -185,7 +184,7 @@ defmodule Opus.Executor do
           record_opts
       end
 
-    record = ExecutionRecord.new(ctx, reference, input, record_opts)
+    record = Record.new(ctx, reference, input, record_opts)
 
     record =
       if opts[:resolved_from], do: %{record | resolved_from: opts[:resolved_from]}, else: record
@@ -479,7 +478,7 @@ defmodule Opus.Executor do
       p,
       with :ok <- Opus.Host.record_start(p.record, admission_opts(p)) do
         :atomics.put(p.started_written, 1, 1)
-        Opus.Telemetry.execute_start(p.record)
+        Telemetry.execute_start(p.record)
         {:ok, p}
       end
     )
@@ -588,7 +587,7 @@ defmodule Opus.Executor do
 
     with :ok <- check_application_error(p, masked_output),
          :ok <- check_response_size(p, masked_output) do
-      completed_record = ExecutionRecord.complete(p.record, masked_output)
+      completed_record = Record.complete(p.record, masked_output)
       write_result = Opus.Host.record_complete(completed_record)
       if write_result == :ok, do: Cyfr.Execution.StepSpans.completed(p.opts[:step_spans])
 
@@ -629,7 +628,7 @@ defmodule Opus.Executor do
             inspect(reason)
         end
 
-      Opus.Telemetry.execute_stop(completed_record, exec_metadata)
+      Telemetry.execute_stop(completed_record, exec_metadata)
 
       # The terminal event is the row's, published by the record's write
       # in the order the rows were numbered: nothing is pushed here.
@@ -1307,7 +1306,7 @@ defmodule Opus.Executor do
           execution_id: execution_id,
           attempt: Keyword.get(runtime_opts, :execution_attempt),
           tenant: tenant_of(runtime_opts),
-          until: Opus.ExecutionRecord.lease_until()
+          until: Record.lease_until()
         }
     end
   end
@@ -1359,7 +1358,7 @@ defmodule Opus.Executor do
   @doc false
   @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed | :cancelled
   def renew_watch(watch, now \\ DateTime.utc_now()) do
-    case Opus.ExecutionRecord.renew_lease(watch.execution_id, watch.attempt) do
+    case Record.renew_lease(watch.execution_id, watch.attempt) do
       {:ok, until} ->
         {:ok, %{watch | until: until}}
 
@@ -1447,7 +1446,7 @@ defmodule Opus.Executor do
   defp handle_failure(%ExecutionPipeline{} = p, error_msg) do
     record = p.record
     error_msg = Cyfr.SecretMasker.mask(error_msg, ExecutionPipeline.secrets(p))
-    failed_record = ExecutionRecord.fail(record, error_msg)
+    failed_record = Record.fail(record, error_msg)
 
     if :atomics.get(p.started_written, 1) == 0 do
       case Opus.Host.record_start(record, admission_opts(p)) do
@@ -1461,7 +1460,7 @@ defmodule Opus.Executor do
           )
       end
 
-      Opus.Telemetry.execute_start(record)
+      Telemetry.execute_start(record)
     end
 
     write_result = Opus.Host.record_failed(failed_record)
@@ -1482,7 +1481,7 @@ defmodule Opus.Executor do
         )
     end
 
-    Opus.Telemetry.execute_exception(failed_record, error_msg)
+    Telemetry.execute_exception(failed_record, error_msg)
 
     case write_result do
       {:error, :not_running} ->
@@ -1495,7 +1494,7 @@ defmodule Opus.Executor do
         :ok
     end
 
-    cascade_children_failure(record)
+    Cascade.fail_children(record)
 
     {:error, error_msg}
   end
@@ -1522,11 +1521,11 @@ defmodule Opus.Executor do
     # before we touch the global, id-keyed process registry — otherwise a caller
     # could kill another tenant's execution just by knowing its id. (Same
     # authorize-before-act ordering the SSE read path uses.)
-    case ExecutionRecord.cancel(ctx, execution_id, Keyword.take(opts, [:restart_required])) do
+    case Record.cancel(ctx, execution_id, Keyword.take(opts, [:restart_required])) do
       {:ok, record} ->
         kill_running_process(execution_id, record.athanor_id)
         emit_cancel_telemetry(ctx, execution_id)
-        cascade_children_failure_by_id(execution_id)
+        Cascade.fail_children_of(execution_id)
         {:ok, %{cancelled: true, execution_id: execution_id}}
 
       error ->
@@ -1635,89 +1634,6 @@ defmodule Opus.Executor do
           allowed_paths: Opus.EdgeGuard.paths(edge),
           allowed_actions: Opus.EdgeGuard.actions(edge)
         }
-    end
-  end
-
-  # ===========================================================================
-  # Cascade failure to orphaned children
-  # ===========================================================================
-
-  # When a formula execution ends (success, failure, or cancel), mark any
-  # children still stuck at "running" as failed. This handles the case where
-  # :kill signals bypass the child's try/rescue, leaving orphaned DB records.
-  # Only for a parent that ended ABNORMALLY — `handle_failure/2` and
-  # `cancel/3`. A normal completion leaves its children alone; see
-  # `finalize_execution/3`.
-  defp cascade_children_failure(%ExecutionRecord{component_type: :formula} = record) do
-    do_cascade_children(record.id)
-  end
-
-  # No-op for non-formula types (catalysts/reagents don't spawn children)
-  defp cascade_children_failure(_record), do: :ok
-
-  @doc false
-  def cascade_children_failure_by_id(execution_id) do
-    children = Arca.Execution.list_running_children(execution_id)
-
-    if children != [] do
-      do_cascade_children_list(execution_id, children)
-    end
-
-    :ok
-  end
-
-  defp do_cascade_children(parent_id) do
-    children = Arca.Execution.list_running_children(parent_id)
-
-    if children != [] do
-      do_cascade_children_list(parent_id, children)
-    end
-
-    :ok
-  end
-
-  defp do_cascade_children_list(parent_id, children) do
-    for child <- children do
-      now = DateTime.utc_now()
-      duration_ms = DateTime.diff(now, child.started_at, :millisecond)
-      error_msg = "Parent execution (#{parent_id}) terminated"
-
-      {count, event_seq} =
-        Arca.Execution.mark_failed_if_running(
-          child.id,
-          %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
-          attempt: child.current_attempt
-        )
-
-      if count > 0 do
-        component_type =
-          case Opus.ComponentType.parse(child.component_type) do
-            {:ok, t} -> t
-            _ -> :reagent
-          end
-
-        :telemetry.execute(
-          [:cyfr, :opus, :execute, :exception],
-          %{duration: duration_ms * 1_000_000, system_time: System.system_time()},
-          %{
-            execution_id: child.id,
-            request_id: child.request_id,
-            component: child.reference,
-            reference: child.reference,
-            component_type: component_type,
-            user_id: child.user_id,
-            athanor_id: child.athanor_id,
-            outcome: :failure,
-            error: error_msg,
-            duration_ms: duration_ms
-          }
-        )
-
-        Events.publish(child.id, child, "execution.failed", event_seq, %{
-          "status" => "failed",
-          "error" => error_msg
-        })
-      end
     end
   end
 end

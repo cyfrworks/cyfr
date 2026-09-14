@@ -8,7 +8,7 @@ defmodule Opus.ChainScopeTest do
   # of an athanor are interchangeable there by design.
   use ExUnit.Case, async: false
 
-  alias Opus.ExecutionRecord
+  alias Cyfr.Execution.Record
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -18,8 +18,8 @@ defmodule Opus.ChainScopeTest do
   end
 
   defp record!(ctx, opts) do
-    record = ExecutionRecord.new(ctx, "reagent:local.scoped:1.0.0", %{}, opts)
-    :ok = ExecutionRecord.write_started(record)
+    record = Record.new(ctx, "reagent:local.scoped:1.0.0", %{}, opts)
+    :ok = Record.write_started(record)
     record
   end
 
@@ -34,7 +34,7 @@ defmodule Opus.ChainScopeTest do
       assert child.root_execution_id == root.id
       refute child.id == root.id
 
-      {:ok, reloaded} = ExecutionRecord.get(ctx, child.id)
+      {:ok, reloaded} = Record.get(ctx, child.id)
       assert reloaded.root_execution_id == root.id
     end
   end
@@ -53,7 +53,7 @@ defmodule Opus.ChainScopeTest do
       lineage = %{"root_execution_id" => root.id}
 
       assert {:ok, %{execution_id: id}} =
-               Opus.MCP.handle(
+               Cyfr.Execution.MCP.handle(
                  "execution",
                  ctx,
                  Map.merge(%{"action" => "logs", "execution_id" => child.id}, lineage)
@@ -63,14 +63,14 @@ defmodule Opus.ChainScopeTest do
 
       # The root itself is in its own chain.
       assert {:ok, _} =
-               Opus.MCP.handle(
+               Cyfr.Execution.MCP.handle(
                  "execution",
                  ctx,
                  Map.merge(%{"action" => "logs", "execution_id" => root.id}, lineage)
                )
 
       assert {:error, message} =
-               Opus.MCP.handle(
+               Cyfr.Execution.MCP.handle(
                  "execution",
                  ctx,
                  Map.merge(%{"action" => "logs", "execution_id" => stranger.id}, lineage)
@@ -81,7 +81,7 @@ defmodule Opus.ChainScopeTest do
 
     test "cancel refuses a stranger's execution", %{ctx: ctx, root: root, stranger: stranger} do
       assert {:error, message} =
-               Opus.MCP.handle("execution", ctx, %{
+               Cyfr.Execution.MCP.handle("execution", ctx, %{
                  "action" => "cancel",
                  "execution_id" => stranger.id,
                  "root_execution_id" => root.id
@@ -89,14 +89,14 @@ defmodule Opus.ChainScopeTest do
 
       assert message =~ "not found in this chain"
 
-      {:ok, untouched} = ExecutionRecord.get(ctx, stranger.id)
+      {:ok, untouched} = Record.get(ctx, stranger.id)
       assert untouched.status == :running
     end
 
     test "list is filtered to the caller's subtree",
          %{ctx: ctx, root: root, child: child, stranger: stranger} do
       {:ok, %{executions: scoped}} =
-        Opus.MCP.handle("execution", ctx, %{
+        Cyfr.Execution.MCP.handle("execution", ctx, %{
           "action" => "list",
           "root_execution_id" => root.id
         })
@@ -119,7 +119,7 @@ defmodule Opus.ChainScopeTest do
       )
 
       assert {:error, message} =
-               Opus.MCP.handle("execution", ctx, %{
+               Cyfr.Execution.MCP.handle("execution", ctx, %{
                  "action" => "logs",
                  "execution_id" => legacy.id,
                  "root_execution_id" => root.id
@@ -135,12 +135,14 @@ defmodule Opus.ChainScopeTest do
       stranger = record!(ctx, component_type: :formula)
 
       assert {:ok, _} =
-               Opus.MCP.handle("execution", ctx, %{
+               Cyfr.Execution.MCP.handle("execution", ctx, %{
                  "action" => "logs",
                  "execution_id" => stranger.id
                })
 
-      {:ok, %{executions: all}} = Opus.MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, %{executions: all}} =
+        Cyfr.Execution.MCP.handle("execution", ctx, %{"action" => "list"})
+
       ids = Enum.map(all, & &1.execution_id)
       assert root.id in ids
       assert stranger.id in ids
@@ -237,7 +239,7 @@ defmodule Opus.ChainScopeTest do
     for action <- ["run", "run_stream"] do
       test "execution.#{action} is refused for a guest-planed context", %{guest: guest} do
         assert {:error, message} =
-                 Opus.MCP.handle(
+                 Cyfr.Execution.MCP.handle(
                    "execution",
                    guest,
                    %{"action" => unquote(action), "reference" => "reagent:local.x:1.0.0"}
@@ -251,7 +253,7 @@ defmodule Opus.ChainScopeTest do
       # The guard is scoped to the two authority-rooting actions; a chain-scoped
       # read still resolves normally (here: no such execution).
       assert {:error, _} =
-               Opus.MCP.handle(
+               Cyfr.Execution.MCP.handle(
                  "execution",
                  guest,
                  %{"action" => "logs", "execution_id" => "exec_missing"}

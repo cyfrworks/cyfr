@@ -174,7 +174,7 @@ defmodule Opus.Chain do
     opts = Keyword.put(opts, :guest_fn, :spawn)
 
     with {:ok, decision} <- step_invoke(authority, reference, need, opts) do
-      execution_id = Keyword.get(opts, :execution_id) || Opus.ExecutionRecord.generate_id()
+      execution_id = Keyword.get(opts, :execution_id) || Cyfr.Execution.Record.generate_id()
       opts = Keyword.put(opts, :execution_id, execution_id)
 
       logger_metadata = Cyfr.LoggerContext.capture()

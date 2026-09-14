@@ -16,7 +16,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
   use ExUnit.Case, async: false
 
-  alias Opus.MCP
+  alias Cyfr.Execution.MCP
   alias Sanctum.Consent.{Bootstrap, Source}
 
   @seed_root Path.expand("../../../../seed", __DIR__)

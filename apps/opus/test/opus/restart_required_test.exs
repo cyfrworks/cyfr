@@ -5,7 +5,7 @@ defmodule Opus.RestartRequiredTest do
   # Runtime consent ends the current execution with restart_required; only a new root uses the revision.
   use ExUnit.Case, async: false
 
-  alias Opus.ExecutionRecord
+  alias Cyfr.Execution.Record
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -16,9 +16,9 @@ defmodule Opus.RestartRequiredTest do
 
   defp running!(ctx) do
     record =
-      ExecutionRecord.new(ctx, "formula:local.restarter:1.0.0", %{}, component_type: :formula)
+      Record.new(ctx, "formula:local.restarter:1.0.0", %{}, component_type: :formula)
 
-    :ok = ExecutionRecord.write_started(record)
+    :ok = Record.write_started(record)
     record
   end
 
@@ -57,7 +57,7 @@ defmodule Opus.RestartRequiredTest do
 
     {:ok, _} = Opus.Executor.cancel_for_restart(ctx, record.id, @payload)
 
-    {:ok, reloaded} = ExecutionRecord.get(ctx, record.id)
+    {:ok, reloaded} = Record.get(ctx, record.id)
     assert reloaded.status == :cancelled
 
     # And it cannot be restarted in place — a re-run is a new execution.

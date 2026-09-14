@@ -70,7 +70,7 @@ defmodule Opus.ExecutorRegistrationTest do
 
     owner =
       spawn_link(fn ->
-        # Mirrors Opus.MCP run_stream / cron: the task registers itself,
+        # Mirrors Cyfr.Execution.MCP run_stream / cron: the task registers itself,
         # then drives the executor in the same process.
         {:ok, _} = Registry.register(Cyfr.Execution.Registry, execution_id, :running)
         send(parent, :registered)
@@ -145,11 +145,11 @@ defmodule Opus.ExecutorRegistrationTest do
       admin = Sanctum.TestContext.local()
 
       record =
-        Opus.ExecutionRecord.new(admin, "reagent:local.cancel-me:0.1.0", %{},
+        Cyfr.Execution.Record.new(admin, "reagent:local.cancel-me:0.1.0", %{},
           component_type: :reagent
         )
 
-      :ok = Opus.ExecutionRecord.write_started(record)
+      :ok = Cyfr.Execution.Record.write_started(record)
 
       parent = self()
 

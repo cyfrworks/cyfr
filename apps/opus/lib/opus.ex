@@ -39,7 +39,7 @@ defmodule Opus do
   @behaviour Cyfr.Execution
 
   alias Sanctum.Context
-  alias Opus.ExecutionRecord
+  alias Cyfr.Execution.Record
 
   @doc """
   Root an execution chain under a profile's consent — the external-ingress
@@ -123,9 +123,9 @@ defmodule Opus do
       ctx = Sanctum.TestContext.local()
       {:ok, records} = Opus.list(ctx, limit: 10)
   """
-  @spec list(Context.t(), keyword()) :: {:ok, [ExecutionRecord.t()]} | {:error, term()}
+  @spec list(Context.t(), keyword()) :: {:ok, [Record.t()]} | {:error, term()}
   @impl Cyfr.Execution
-  defdelegate list(ctx, opts \\ []), to: ExecutionRecord
+  defdelegate list(ctx, opts \\ []), to: Record
 
   @doc """
   Get an execution record by ID.
@@ -135,9 +135,9 @@ defmodule Opus do
       ctx = Sanctum.TestContext.local()
       {:ok, record} = Opus.get(ctx, "exec_abc123")
   """
-  @spec get(Context.t(), String.t()) :: {:ok, ExecutionRecord.t()} | {:error, term()}
+  @spec get(Context.t(), String.t()) :: {:ok, Record.t()} | {:error, term()}
   @impl Cyfr.Execution
-  defdelegate get(ctx, execution_id), to: ExecutionRecord
+  defdelegate get(ctx, execution_id), to: Record
 
   @doc """
   Cancel a running execution.

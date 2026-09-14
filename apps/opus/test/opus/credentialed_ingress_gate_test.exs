@@ -136,7 +136,7 @@ defmodule Opus.CredentialedIngressGateTest do
     # ingress, two transports, and since the extraction ONE implementation
     # (Emissary.Tincture.Invoke), so one kill switch and one row here.
     @ingresses [
-      {:mcp, "apps/opus/lib/opus/mcp.ex", :falls_back},
+      {:mcp, "apps/cyfr/lib/cyfr/execution/mcp.ex", :falls_back},
       {:cron, "apps/cyfr/lib/cyfr/schedules/scheduler.ex", :no_fallback_when_bound},
       {:webhook, "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex",
        :no_fallback_when_bound},

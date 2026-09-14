@@ -147,7 +147,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # silently stops being explained (Go) or stops crossing the boundary —
     # this pins every roster.
     consent = read!("apps/cyfr/lib/sanctum/consent.ex")
-    opus_mcp = read!("apps/opus/lib/opus/mcp.ex")
+    execution_mcp = read!("apps/cyfr/lib/cyfr/execution/mcp.ex")
     signal = read!("apps/cyfr/lib/emissary/mcp/consent_signal.ex")
     message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
     root_go = read!("apps/codex/cmd/root.go")
@@ -183,10 +183,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert signal =~ ~s("tag") and signal =~ ~s("payload")
     assert client_go =~ ~s(data["tag"]) and client_go =~ ~s(data["payload"])
 
-    # Opus.MCP spells the roster once, as the guard on format_root_result/1.
-    assert opus_mcp =~
+    # Cyfr.Execution.MCP spells the roster once, as the guard on format_root_result/1.
+    assert execution_mcp =~
              "tag in [:setup_required, :consent_required, :consent_conflict, :restart_required]",
-           "opus/mcp.ex guard roster must include the four consent signal tags"
+           "execution/mcp.ex guard roster must include the four consent signal tags"
 
     # The payload keys Consent documents as normative are the ones the CLI
     # formatter reads — a renamed key degrades every explanation to the

@@ -914,7 +914,7 @@ defmodule Cyfr.Execution.Semaphore do
   # over-admits past both the global cap and its tenant's, and its own
   # release then finds nothing to give back.
   #
-  # `Opus.ExecutionSweeper` draws the same distinction for execution rows:
+  # `Cyfr.Execution.Sweeper` draws the same distinction for execution rows:
   # a lapsed lease is only swept once the process behind it is gone.
   defp sweep_stale_holders(state) do
     now = System.monotonic_time(:millisecond)

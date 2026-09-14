@@ -12,7 +12,7 @@ defmodule Opus.ExecutionPipeline do
   """
 
   alias Sanctum.Context
-  alias Opus.ExecutionRecord
+  alias Cyfr.Execution.Record
 
   @type t :: %__MODULE__{
           ctx: Context.t(),
@@ -21,7 +21,7 @@ defmodule Opus.ExecutionPipeline do
           component_ref: String.t() | nil,
           component_type: atom() | nil,
           component_digest: String.t() | nil,
-          record: ExecutionRecord.t() | nil,
+          record: Record.t() | nil,
           exec_opts: keyword(),
           host_policy: map() | nil,
           edge: Cyfr.Authority.Blob.Edge.t() | nil,

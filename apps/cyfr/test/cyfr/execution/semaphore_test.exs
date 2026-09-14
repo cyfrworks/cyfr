@@ -718,7 +718,7 @@ defmodule Cyfr.Execution.SemaphoreTest do
 
   describe "status/0 when the semaphore is unavailable" do
     # The fallback exists so a down semaphore does not take the caller with
-    # it — but it dropped `:tenants`, and Opus.MCP reads `status.tenants` to
+    # it — but it dropped `:tenants`, and Cyfr.Execution.MCP reads `status.tenants` to
     # show a member their own athanor's count. A member asking for status at
     # exactly the wrong moment got a KeyError out of the clause meant to
     # save them.

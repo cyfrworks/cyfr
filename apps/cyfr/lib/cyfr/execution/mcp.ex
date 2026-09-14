@@ -1,21 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.MCP do
+defmodule Cyfr.Execution.MCP do
   @moduledoc """
-  MCP tool provider for Opus execution engine.
+  MCP tool provider for executions.
 
   Provides a single `execution` tool with action-based dispatch:
   - `run` - Execute a Catalyst, Reagent, or Formula
+  - `run_stream` - Start one in the background and answer its event stream
   - `list` - List execution instances
   - `logs` - Retrieve execution record and logs
   - `cancel` - Cancel a running execution
+  - `status` - Execution slot diagnostics
+  - `force_release` - Release every athanor's execution slots (operator only)
 
-  ## Architecture Note
-
-  This module lives in the `opus` app, keeping tool definitions
-  close to their implementation. WASM execution is implemented
-  via Wasmex (Wasmtime backend).
+  Runs and cancels go through the execution port (`Cyfr.Execution`); reads
+  come from the execution records (`Cyfr.Execution.Record`). Its service
+  name is `"opus"` and its resources are `opus://executions/…`.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
   which is validated at runtime by Cyfr.Ops.Catalog.
@@ -33,6 +34,7 @@ defmodule Opus.MCP do
 
   require Logger
 
+  alias Cyfr.Execution.Record
   alias Sanctum.Context
 
   # ============================================================================
@@ -44,7 +46,7 @@ defmodule Opus.MCP do
   end
 
   @doc """
-  Returns Opus resource templates (RFC 6570 URI templates).
+  Returns the execution resource templates (RFC 6570 URI templates).
   """
   def resource_templates do
     [
@@ -71,7 +73,7 @@ defmodule Opus.MCP do
   def read(%Context{} = ctx, "opus://executions/" <> rest) do
     # Resources have no annotation chokepoint — the router delegates
     # authorization to each handler, so the `:storage_read` the execution
-    # record tools declare is enforced here; `Opus.ExecutionRecord.get/2`
+    # record tools declare is enforced here; `Cyfr.Execution.Record.get/2`
     # supplies the tenant scoping.
     with :ok <- Context.require_permission(ctx, :storage_read) do
       case parse_execution_uri(rest) do
@@ -109,7 +111,7 @@ defmodule Opus.MCP do
 
   # Get execution state as JSON resource
   defp get_execution_resource(ctx, exec_id) do
-    case Opus.ExecutionRecord.get(ctx, exec_id) do
+    case Record.get(ctx, exec_id) do
       {:ok, record} ->
         content = %{
           execution_id: record.id,
@@ -131,7 +133,10 @@ defmodule Opus.MCP do
             {:ok, json}
 
           {:error, err} ->
-            Logger.error("[Opus.MCP] Failed to encode execution record: #{inspect(err)}")
+            Logger.error(
+              "[Cyfr.Execution.MCP] Failed to encode execution record: #{inspect(err)}"
+            )
+
             {:error, "Failed to encode execution record"}
         end
 
@@ -142,7 +147,7 @@ defmodule Opus.MCP do
 
   # Get execution logs as text resource
   defp get_execution_logs_resource(ctx, exec_id) do
-    case Opus.ExecutionRecord.get(ctx, exec_id) do
+    case Record.get(ctx, exec_id) do
       {:ok, record} ->
         # Format execution record as logs.
         # In the future, this will also include component-emitted debug
@@ -175,7 +180,7 @@ defmodule Opus.MCP do
   defp check_chain_scope(ctx, execution_id, args) do
     case args["root_execution_id"] do
       root when is_binary(root) and root != "" ->
-        case Opus.ExecutionRecord.get(ctx, execution_id) do
+        case Record.get(ctx, execution_id) do
           {:ok, record} ->
             if in_caller_chain?(record, args),
               do: :ok,
@@ -258,7 +263,7 @@ defmodule Opus.MCP do
             # External-plane only, and `host: :intercepted`: a running
             # component's execution request never reaches the catalog — the
             # formula host intercepts it and runs it as a CHILD of the
-            # chain's authority (`Opus.Chain.run_child/5`), and an approved
+            # chain's authority (`Cyfr.Execution.run_child/5`), and an approved
             # card's is run the same way by the assistant. The annotation
             # says so, and every surface that offers actions to a chain
             # reads it from here.
@@ -390,7 +395,7 @@ defmodule Opus.MCP do
     limit = min(args["limit"] || 20, 1000)
     status_filter = parse_status_filter(args["status"])
 
-    {:ok, records} = Opus.ExecutionRecord.list(ctx, limit: limit, status: status_filter)
+    {:ok, records} = Record.list(ctx, limit: limit, status: status_filter)
 
     # In-chain listings are subtree-scoped for the same reason cancel
     # and logs are: the caller has no business enumerating the tenant.
@@ -425,7 +430,7 @@ defmodule Opus.MCP do
         %Context{} = ctx,
         %{"action" => "logs", "execution_id" => execution_id} = args
       ) do
-    case Opus.ExecutionRecord.get(ctx, execution_id) do
+    case Record.get(ctx, execution_id) do
       {:ok, record} ->
         if not in_caller_chain?(record, args) do
           chain_scoped_refusal(execution_id)
@@ -472,10 +477,8 @@ defmodule Opus.MCP do
     with :ok <- check_chain_scope(ctx, execution_id, args) do
       # Through the port for the same two reasons run/run_stream go through
       # it (a stubbed :execution_impl must intercept, available?/0 must
-      # gate) — Opus delegates cancel straight back to the executor, so
-      # this is one dispatch hop, not a behavior change. status and
-      # force_release stay engine-direct: the port is the execution plane,
-      # not a general engine facade (Opus.Host says why).
+      # gate). status and force_release read the execution slots directly:
+      # the port is the execution plane, not a general engine facade.
       case Cyfr.Execution.cancel(ctx, execution_id) do
         {:ok, result} ->
           {:ok, result}
@@ -487,7 +490,7 @@ defmodule Opus.MCP do
           {:error, "Execution already completed, failed, or cancelled"}
 
         {:error, reason} ->
-          Logger.error("[Opus.MCP] Failed to cancel execution: #{inspect(reason)}")
+          Logger.error("[Cyfr.Execution.MCP] Failed to cancel execution: #{inspect(reason)}")
           {:error, "Failed to cancel execution"}
       end
     end
@@ -506,7 +509,7 @@ defmodule Opus.MCP do
   # athanor's slots is a server-wide side effect; the `scope: :platform`
   # annotation admits operators alone before this arm is reached.
   def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
-    Logger.warning("[Opus.MCP] Force release triggered by user=#{ctx.user_id}")
+    Logger.warning("[Cyfr.Execution.MCP] Force release triggered by user=#{ctx.user_id}")
 
     :telemetry.execute(
       [:cyfr, :opus, :force_release],
@@ -544,7 +547,7 @@ defmodule Opus.MCP do
     reference = args["reference"] || ""
     input = args["input"] || %{}
 
-    execution_id = Opus.ExecutionRecord.generate_id()
+    execution_id = Record.generate_id()
 
     opts = build_run_opts(args)
     opts = [{:execution_id, execution_id} | opts]
@@ -560,7 +563,7 @@ defmodule Opus.MCP do
     # Spawn execution in background, registering PID for cancellation
     logger_metadata = Cyfr.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+    case Task.Supervisor.start_child(Cyfr.Execution.TaskSupervisor, fn ->
            Cyfr.LoggerContext.restore(logger_metadata)
 
            case Registry.register(Cyfr.Execution.Registry, execution_id, :running) do
@@ -569,7 +572,7 @@ defmodule Opus.MCP do
 
              {:error, reason} ->
                Logger.error(
-                 "[Opus.MCP] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
+                 "[Cyfr.Execution.MCP] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
                )
            end
          end) do
@@ -581,18 +584,21 @@ defmodule Opus.MCP do
          }}
 
       {:error, reason} ->
-        Logger.error("[Opus.MCP] Failed to spawn execution #{execution_id}: #{inspect(reason)}")
+        Logger.error(
+          "[Cyfr.Execution.MCP] Failed to spawn execution #{execution_id}: #{inspect(reason)}"
+        )
+
         {:error, "execution_spawn_failed"}
     end
   end
 
-  # Run the component to completion through `Opus.run/4`; an optional
+  # Run the component to completion through the port; an optional
   # `parent_execution_id` records the formula lineage.
   defp start_root("run", ctx, args) do
     reference = args["reference"] || ""
     input = args["input"] || %{}
 
-    # Build options for Opus.run/4
+    # Build options for the root run
     opts = build_run_opts(args)
 
     # Thread parent_execution_id for formula→component lineage
@@ -627,10 +633,9 @@ defmodule Opus.MCP do
   defp run_root_formatted(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
-    # Through the port, not straight into the engine beside it. Every
-    # ingress starts a root the same way — a stub `:execution_impl`
-    # intercepts this one too, and the readiness gate applies — even
-    # though this module ships inside the engine it is calling.
+    # Through the port, as every ingress starts a root: a stub
+    # `:execution_impl` intercepts this one too, and the readiness gate
+    # applies.
     case Cyfr.Execution.run_root(ctx, selector, reference, input, opts) do
       {:error, :no_profile} when selector == :default ->
         {:error,
@@ -682,7 +687,7 @@ defmodule Opus.MCP do
     # without returning them to the client.
     case Cyfr.Ops.Error.render(reason) do
       nil ->
-        Logger.warning("[Opus.MCP] unrenderable authority error: #{inspect(reason)}")
+        Logger.warning("[Cyfr.Execution.MCP] unrenderable authority error: #{inspect(reason)}")
         {:error, "authority_error: the request could not be authorized"}
 
       msg ->
@@ -706,7 +711,7 @@ defmodule Opus.MCP do
     |> Map.put(:tenant_active, Map.get(status.tenants, ctx.athanor_id, 0))
   end
 
-  # Build options for Opus.run/4 from MCP args
+  # Build the root run's options from MCP args
   defp build_run_opts(args) do
     opts = []
 
@@ -719,7 +724,7 @@ defmodule Opus.MCP do
     opts
   end
 
-  # Format the result from Opus.run/4 for MCP response
+  # Format the root run's result for the MCP response
   # Converts atoms to strings for JSON serialization
   defp format_run_result(result, reference) do
     meta = result.metadata

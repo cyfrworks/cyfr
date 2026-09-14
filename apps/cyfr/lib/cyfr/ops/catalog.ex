@@ -16,8 +16,8 @@ defmodule Cyfr.Ops.Catalog do
   │  Cyfr.Ops.Catalog (GenServer)                          │
   │  ├── Arca.Cache keys: {:mcp_tool, name}                         │
   │  │   └── {:mcp_tool, "retention"} => {Emissary.MCP.Tools.RecordsProvider, %{desc, ...}}   │
-  │  │   └── {:mcp_tool, "execution"} => {Opus.MCP, %{...}}        │
-  │  └── Providers: [Emissary.MCP.Tools.RecordsProvider, Opus.MCP, ...]                       │
+  │  │   └── {:mcp_tool, "execution"} => {Cyfr.Execution.MCP, %{...}}        │
+  │  └── Providers: [Emissary.MCP.Tools.RecordsProvider, Cyfr.Execution.MCP, ...]                       │
   └─────────────────────────────────────────────────────────────────┘
   ```
 

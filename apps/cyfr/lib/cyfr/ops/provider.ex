@@ -41,7 +41,7 @@ defmodule Cyfr.Ops.Provider do
       config :cyfr, :tool_providers, [
         Emissary.MCP.Tools.RecordsProvider,
         Sanctum.MCP,
-        Opus.MCP,
+        Cyfr.Execution.MCP,
         Compendium.MCP
       ]
 
