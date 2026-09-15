@@ -136,7 +136,14 @@ jobs:
       # target; the shipped binaries are not rebuilt here.
       - name: Test the model catalysts
         run: |
-          for chat in seed/components/catalysts/local/*/*/src/src/chat.rs; do
+          shopt -s nullglob
+          chats=(seed/components/catalysts/local/*/*/src/src/chat.rs)
+          # A glob that matches nothing would test nothing; refuse it.
+          if [ "${#chats[@]}" -eq 0 ]; then
+            echo "::error::no model catalyst source matched — the step would test nothing"
+            exit 1
+          fi
+          for chat in "${chats[@]}"; do
             src="$(dirname "$(dirname "$chat")")"
             (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/catalyst-guest-target")
           done
@@ -145,7 +152,13 @@ jobs:
       # guest edit without a rebuild fails here, toolchain or not.
       - name: Every stamped seed guest is built from its source
         run: |
-          for stamp in seed/components/*/local/*/*/src/build.stamp; do
+          shopt -s nullglob
+          stamps=(seed/components/*/local/*/*/src/build.stamp)
+          if [ "${#stamps[@]}" -eq 0 ]; then
+            echo "::error::no seed build stamp matched — the step would check nothing"
+            exit 1
+          fi
+          for stamp in "${stamps[@]}"; do
             scripts/build-seed-guest.sh "$(dirname "$(dirname "$stamp")")" --check
           done
       # The loop above only visits directories that already carry a stamp, so
@@ -155,11 +168,19 @@ jobs:
       - name: Every seed guest carries a stamp, and its crate version is its own
         run: |
           set -uo pipefail
+          shopt -s nullglob
           bad=""
-          for manifest in seed/components/*/local/*/*/cyfr-manifest.json; do
+          guests=0
+          manifests=(seed/components/*/local/*/*/cyfr-manifest.json)
+          if [ "${#manifests[@]}" -eq 0 ]; then
+            echo "::error::no seed component manifest matched — the step would check nothing"
+            exit 1
+          fi
+          for manifest in "${manifests[@]}"; do
             vdir="$(dirname "$manifest")"
             # A guest is a directory with Rust sources; tinctures have none.
             [ -f "$vdir/src/Cargo.toml" ] || continue
+            guests=$((guests + 1))
             version="$(basename "$vdir")"
             if [ ! -f "$vdir/src/build.stamp" ]; then
               bad="$bad"$'\n'"$vdir: no src/build.stamp"
@@ -169,6 +190,10 @@ jobs:
               bad="$bad"$'\n'"$vdir: Cargo.toml says $crate"
             fi
           done
+          if [ "$guests" -eq 0 ]; then
+            echo "::error::no seed guest has Rust sources — the step would check nothing"
+            exit 1
+          fi
           bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
           if [ -n "$bad" ]; then
             echo "::error::seed guests must carry a build stamp and a crate version equal to their directory"

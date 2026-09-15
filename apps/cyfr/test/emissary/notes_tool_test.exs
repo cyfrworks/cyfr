@@ -534,8 +534,8 @@ defmodule Emissary.MCP.NotesToolTest do
 
     names =
       roles
-      |> File.ls!()
-      |> Enum.filter(&String.ends_with?(&1, ".md"))
+      |> Path.join("*.md")
+      |> Cyfr.Test.SourceTree.files!()
       |> Enum.map(&Path.basename(&1, ".md"))
 
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(seed, "aqua.md")))

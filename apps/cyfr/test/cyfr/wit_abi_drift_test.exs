@@ -136,7 +136,7 @@ defmodule Cyfr.WitAbiDriftTest do
     on_disk =
       @wit_root
       |> Path.join("catalyst/deps/*")
-      |> Path.wildcard()
+      |> Cyfr.Test.SourceTree.files!()
       |> Enum.map(&Path.basename/1)
       |> Enum.sort()
 

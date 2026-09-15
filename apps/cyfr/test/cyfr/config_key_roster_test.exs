@@ -83,7 +83,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
   # comments so a key named in prose is not mistaken for a read.
   defp keys_read do
     for lib <- Cyfr.Test.SourceTree.app_libs(root()),
-        path <- Path.wildcard(Path.join([root(), lib, "**/*.ex"])),
+        path <- Cyfr.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
         source = Cyfr.Test.SourceTree.read(path),
         code = source |> Cyfr.Test.CodeLines.lines() |> Enum.join("\n"),
         [_, key] <-
@@ -97,7 +97,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
 
   # `config :cyfr, :key, …` and the multi-key `config :cyfr,\n  key: …` form.
   defp keys_declared do
-    for path <- Path.wildcard(Path.join(root(), "config/*.exs")),
+    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "config/*.exs")),
         source = File.read!(path),
         key <- single_keys(source) ++ block_keys(source),
         reduce: %{} do

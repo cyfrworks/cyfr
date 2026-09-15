@@ -58,7 +58,8 @@ defmodule Locus.HostSurfaceTest do
   # are defined, and a reach into them is not a reach into the control plane.
   defp contracts do
     modules =
-      for path <- Path.wildcard(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
+      for path <-
+            Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
           module <- defined_modules(File.read!(path)),
           into: MapSet.new(),
           do: module
@@ -85,7 +86,7 @@ defmodule Locus.HostSurfaceTest do
   defp reached do
     contracts = contracts()
 
-    for path <- Path.wildcard(Path.join(root(), "apps/locus/lib/**/*.ex")),
+    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/locus/lib/**/*.ex")),
         line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
         [_, module] <- Regex.scan(@namespace, line),
         not MapSet.member?(contracts, module),

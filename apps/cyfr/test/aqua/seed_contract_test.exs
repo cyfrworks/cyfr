@@ -210,11 +210,7 @@ defmodule Aqua.SeedContractTest do
     roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
 
     files =
-      [Path.join(@seed, "aqua.md")] ++
-        (roles
-         |> File.ls!()
-         |> Enum.filter(&String.ends_with?(&1, ".md"))
-         |> Enum.map(&Path.join(roles, &1)))
+      [Path.join(@seed, "aqua.md") | Cyfr.Test.SourceTree.files!(Path.join(roles, "*.md"))]
 
     for path <- files,
         name = Path.basename(path, ".md"),
