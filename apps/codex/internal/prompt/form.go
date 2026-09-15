@@ -45,12 +45,10 @@ func RunKeyCreateForm() (*KeyCreateForm, error) {
 				Options(
 					huh.NewOption("execute", "execute"),
 					huh.NewOption("vault_read", "vault_read"),
-					huh.NewOption("vault_write", "vault_write"),
 					huh.NewOption("component_read", "component_read"),
 					huh.NewOption("component_manage", "component_manage"),
 					huh.NewOption("storage_read", "storage_read"),
 					huh.NewOption("storage_write", "storage_write"),
-					huh.NewOption("execution_write", "execution_write"),
 					huh.NewOption("admin", "admin"),
 				).
 				Value(&f.Scopes),

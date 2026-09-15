@@ -256,7 +256,7 @@ defmodule Arca.ExecutionTest do
         Sanctum.Context.build(
           user_id: "user_test",
           athanor_id: @athanor,
-          permissions: [:execution_write],
+          permissions: [],
           scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
@@ -339,7 +339,7 @@ defmodule Arca.ExecutionTest do
         Sanctum.Context.build(
           user_id: "user_test",
           athanor_id: @athanor,
-          permissions: [:execution_write],
+          permissions: [],
           scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",

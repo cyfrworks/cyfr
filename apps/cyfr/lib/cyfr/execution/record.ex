@@ -854,7 +854,7 @@ defmodule Cyfr.Execution.Record do
     Sanctum.internal_context(
       user_id: record.user_id,
       athanor_id: record.athanor_id,
-      permissions: [:execution_write],
+      permissions: [],
       scope: :athanor
     )
   end

@@ -74,14 +74,12 @@ defmodule Sanctum.ApiKey do
     service: [
       "execute",
       "vault_read",
-      "vault_write",
       "component_read",
       "component_manage",
       "storage_read",
-      "storage_write",
-      "execution_write"
+      "storage_write"
     ],
-    admin: ["vault_read", "vault_write", "admin", "*"]
+    admin: ["vault_read", "admin", "*"]
   }
 
   @doc false

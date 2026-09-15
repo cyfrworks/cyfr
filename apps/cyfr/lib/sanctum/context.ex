@@ -134,7 +134,7 @@ defmodule Sanctum.Context do
       athanor_id: Keyword.fetch!(opts, :athanor_id),
       scope: :athanor,
       auth_method: :scheduled,
-      permissions: [:execute, :storage_read, :storage_write, :execution_write]
+      permissions: [:execute, :storage_read, :storage_write]
     )
   end
 
@@ -301,7 +301,7 @@ defmodule Sanctum.Context do
     * `:namespace`      — default `nil`
     * `:athanor_id`     — default `nil`; a task that touches one athanor's
       rows or files passes it, together with `scope: :athanor`
-    * `:permissions`    — default `[:execute, :storage_read, :execution_write, :storage_write]`
+    * `:permissions`    — default `[:execute, :storage_read, :storage_write]`
     * `:scope`          — default `:platform`
     * `:auth_method`    — default `:system`; cron passes `:scheduled`
 
@@ -323,7 +323,6 @@ defmodule Sanctum.Context do
         Keyword.get(opts, :permissions, [
           :execute,
           :storage_read,
-          :execution_write,
           :storage_write
         ]),
       scope: Keyword.get(opts, :scope, :platform),

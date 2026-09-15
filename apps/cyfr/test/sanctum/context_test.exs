@@ -616,7 +616,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "user_1",
           athanor_id: "ath_1",
-          permissions: [:execute, :storage_read, :execution_write, :storage_write],
+          permissions: [:execute, :storage_read, :storage_write],
           scope: :athanor,
           auth_method: :scheduled,
           namespace: "testns",
@@ -649,14 +649,14 @@ defmodule Sanctum.ContextTest do
           namespace: "alice",
           scope: :athanor,
           athanor_id: "ath_o1",
-          permissions: [:execution_write]
+          permissions: [:storage_read]
         )
 
       assert ctx.auth_method == :system
       assert ctx.scope == :athanor
       assert ctx.namespace == "alice"
       assert ctx.athanor_id == "ath_o1"
-      assert ctx.permissions == MapSet.new([:execution_write])
+      assert ctx.permissions == MapSet.new([:storage_read])
       assert ctx.authenticated
     end
 

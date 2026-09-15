@@ -88,7 +88,7 @@ cyfr key create --name "react-app" --type application
 cyfr key create --name "node-backend" --type service
 
 # Service key with extra scope
-cyfr key create --name "node-backend-rw" --type service --scope "vault_read,vault_write"
+cyfr key create --name "node-backend-rw" --type service --scope "vault_read,component_manage"
 
 # Admin key (CI/CD) with IP allowlist — defaults to * (all scopes)
 cyfr key create --name "github-actions" --type admin --ip-allowlist "140.82.112.0/20"
@@ -130,12 +130,10 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 |-------|----------------|
 | `execute` | Run components, manage schedules, compile builds |
 | `vault_read` | Read stored credential metadata (vault entries; material never leaves the vault) |
-| `vault_write` | Store/replace provider credentials (e.g. `oauth set_client`) |
 | `component_read` | Get component blobs, discover components |
 | `component_manage` | Pull, push, register, remove, scaffold components |
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
 | `storage_write` | Set retention policies |
-| `execution_write` | Service-level execution management |
 | `admin` | API key management, retention cleanup, session operations, force-release, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
 | `*` | Wildcard — all permissions |
 
@@ -146,8 +144,8 @@ Each key type has default scopes (applied when none are specified) and a ceiling
 | Type | Default Scopes | Allowed Scopes (Ceiling) |
 |------|---------------|--------------------------|
 | **Application** | `["execute", "component_read", "storage_read"]` | `["execute", "vault_read", "component_read", "storage_read"]` |
-| **Service** | `["execute", "vault_read", "component_read", "storage_read", "storage_write"]` | `["execute", "vault_read", "vault_write", "component_read", "component_manage", "storage_read", "storage_write", "execution_write"]` |
-| **Admin** | `["*"]` (all) | `["vault_read", "vault_write", "admin", "*"]` |
+| **Service** | `["execute", "vault_read", "component_read", "storage_read", "storage_write"]` | `["execute", "vault_read", "component_read", "component_manage", "storage_read", "storage_write"]` |
+| **Admin** | `["*"]` (all) | `["vault_read", "admin", "*"]` |
 
 ### Rate Limiting
 

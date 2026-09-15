@@ -110,7 +110,7 @@ defmodule Opus.ExecutorCascadeTest do
         Sanctum.Context.build(
           user_id: "user_cascade_test",
           athanor_id: Sanctum.TestContext.athanor_id(),
-          permissions: [:execution_write],
+          permissions: [],
           scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",

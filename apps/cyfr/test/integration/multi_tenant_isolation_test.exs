@@ -18,7 +18,7 @@ defmodule MultiTenantIsolationTest do
 
   alias Sanctum.Tenancy.Athanors
 
-  @permissions [:execute, :storage_read, :storage_write, :vault_read, :vault_write, :admin]
+  @permissions [:execute, :storage_read, :storage_write, :vault_read, :admin]
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -299,7 +299,7 @@ defmodule MultiTenantIsolationTest do
          Sanctum.Context.build(
            user_id: "u1",
            namespace: "u1",
-           permissions: [:vault_read, :vault_write],
+           permissions: [:vault_read],
            authenticated: true
          )}
     end
