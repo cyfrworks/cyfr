@@ -60,7 +60,9 @@ defmodule Cyfr.Schedules.Scheduler do
   @impl true
   def init(_opts) do
     Process.flag(:trap_exit, true)
-    {:ok, %{timers: %{}, tasks: %{}, load_retry_count: 0}, {:continue, :load_schedules}}
+
+    {:ok, %{timers: %{}, tasks: %{}, load_retry_count: 0, recovery_ref: nil},
+     {:continue, :load_schedules}}
   end
 
   @impl true
@@ -96,20 +98,33 @@ defmodule Cyfr.Schedules.Scheduler do
     end
   end
 
-  def handle_info(:recover_occurrences, state), do: {:noreply, recover_when_owner(state)}
+  def handle_info(:recover_occurrences, state) do
+    if state.recovery_ref, do: Process.cancel_timer(state.recovery_ref)
+    {:noreply, recover_when_owner(%{state | recovery_ref: nil})}
+  end
 
   def handle_info({:recheck, schedule_id}, state) do
     state = %{state | timers: Map.delete(state.timers, schedule_id)}
-    {:noreply, schedule_timer(schedule_id, state)}
+
+    case Cyfr.ControlPlane.when_owner(fn -> schedule_timer(schedule_id, state) end) do
+      :not_owner -> {:noreply, recheck_later(schedule_id, state)}
+      scheduled -> {:noreply, scheduled}
+    end
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     case Enum.find(state.tasks, fn {_id, task} -> task.ref == ref end) do
       {schedule_id, task} ->
         state = %{state | tasks: Map.delete(state.tasks, schedule_id)}
-        if failed_run?(reason), do: runner_died(schedule_id, task, reason)
-        broadcast_update(task.ctx)
-        {:noreply, schedule_timer(schedule_id, state)}
+
+        case Cyfr.ControlPlane.when_owner(task.generation, fn ->
+               if failed_run?(reason), do: runner_died(schedule_id, task, reason)
+               broadcast_update(task.ctx)
+               schedule_timer(schedule_id, state)
+             end) do
+          :not_owner -> {:noreply, defer_occurrence(schedule_id, state)}
+          scheduled -> {:noreply, scheduled}
+        end
 
       nil ->
         {:noreply, state}
@@ -143,6 +158,7 @@ defmodule Cyfr.Schedules.Scheduler do
   @impl true
   def terminate(_reason, state) do
     Enum.each(state.timers, fn {_id, ref} -> Process.cancel_timer(ref) end)
+    if state.recovery_ref, do: Process.cancel_timer(state.recovery_ref)
 
     if map_size(state.tasks) > 0 do
       ids = state.tasks |> Map.keys() |> Enum.join(", ")
@@ -228,39 +244,54 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   defp recover_when_owner(state) do
-    case Cyfr.ControlPlane.when_owner(fn -> recover_occurrences(state) end) do
+    generation = Cyfr.ControlPlane.generation()
+
+    case Cyfr.ControlPlane.when_owner(generation, fn -> recover_occurrences(state, generation) end) do
       :not_owner ->
-        Process.send_after(self(), :recover_occurrences, @recheck_ms)
-        state
+        recover_later(state)
 
       recovered ->
         recovered
     end
   end
 
+  defp recover_later(%{recovery_ref: ref} = state) when is_reference(ref), do: state
+
+  defp recover_later(state),
+    do: %{state | recovery_ref: Process.send_after(self(), :recover_occurrences, @recheck_ms)}
+
+  defp defer_occurrence(schedule_id, state), do: recheck_later(schedule_id, recover_later(state))
+
   # What the last scheduler left open: a claimed occurrence was never
   # invoked and runs once; a started one whose execution is gone is
   # uncertain.
-  defp recover_occurrences(state) do
+  defp recover_occurrences(state, generation) do
     case ScheduleOccurrences.recoverable() do
       {:ok, %{never_invoked: never_invoked, lapsed: lapsed}} ->
-        Enum.each(lapsed, fn occurrence ->
-          Logger.warning(
-            "[Schedules] occurrence #{occurrence.id} of #{occurrence.schedule_id} started " <>
-              "and its execution ended without it: uncertain"
-          )
+        state =
+          Enum.reduce(lapsed, state, fn occurrence, acc ->
+            case Cyfr.ControlPlane.when_owner(generation, fn ->
+                   Logger.warning(
+                     "[Schedules] occurrence #{occurrence.id} of #{occurrence.schedule_id} started " <>
+                       "and its execution ended without it: uncertain"
+                   )
 
-          ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "uncertain")
-        end)
+                   ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "uncertain")
+                 end) do
+              :not_owner -> recover_later(acc)
+              {:error, :database_error} -> recover_later(acc)
+              _ -> acc
+            end
+          end)
 
         Enum.reduce(never_invoked, state, fn occurrence, acc ->
           if Map.has_key?(acc.tasks, occurrence.schedule_id),
             do: acc,
-            else: rerun_claimed(occurrence, acc)
+            else: rerun_claimed(occurrence, acc, generation)
         end)
 
       {:error, :database_error} ->
-        state
+        recover_later(state)
     end
   rescue
     e in @db_load_errors ->
@@ -272,7 +303,7 @@ defmodule Cyfr.Schedules.Scheduler do
       state
   end
 
-  defp rerun_claimed(occurrence, state) do
+  defp rerun_claimed(occurrence, state, generation) do
     with {:ok, %{status: "active"} = schedule} <-
            CronSchedule.get_for_daemon(occurrence.schedule_id),
          {:ok, exec_reference, input} <- runnable(schedule) do
@@ -282,10 +313,16 @@ defmodule Cyfr.Schedules.Scheduler do
         "[Schedules] occurrence #{occurrence.id} of #{schedule.id} claimed and never run: running it"
       )
 
-      run_occurrence(schedule, occurrence, ctx, exec_reference, input, state)
+      run_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation)
     else
+      {:error, :database_error} ->
+        recover_later(state)
+
       _ ->
-        _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "failed")
+        Cyfr.ControlPlane.when_owner(generation, fn ->
+          ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "failed")
+        end)
+
         state
     end
   end
@@ -415,42 +452,68 @@ defmodule Cyfr.Schedules.Scheduler do
     end
   end
 
-  defp run_occurrence(schedule, occurrence, ctx, exec_reference, input, state) do
+  defp run_occurrence(
+         schedule,
+         occurrence,
+         ctx,
+         exec_reference,
+         input,
+         state,
+         generation \\ Cyfr.ControlPlane.generation()
+       ) do
+    case Cyfr.ControlPlane.when_owner(generation, fn ->
+           start_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation)
+         end) do
+      :not_owner -> defer_occurrence(schedule.id, state)
+      started -> started
+    end
+  end
+
+  defp start_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation) do
     logger_metadata = Cyfr.LoggerContext.capture()
 
     case Task.Supervisor.start_child(Cyfr.Schedules.TaskSupervisor, fn ->
            Cyfr.LoggerContext.restore(logger_metadata)
-           run(schedule, occurrence, ctx, exec_reference, input)
+
+           Cyfr.ControlPlane.when_owner(generation, fn ->
+             run(schedule, occurrence, ctx, exec_reference, input, generation)
+           end)
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
-        broadcast_update(ctx)
+        Cyfr.ControlPlane.when_owner(generation, fn -> broadcast_update(ctx) end)
 
         task = %{
           ref: ref,
           occurrence_id: occurrence.id,
           athanor_id: occurrence.athanor_id,
+          generation: generation,
           ctx: ctx
         }
 
         %{state | tasks: Map.put(state.tasks, schedule.id, task)}
 
       {:error, reason} ->
-        Logger.error(
-          "[Schedules] failed to spawn task for schedule #{schedule.id}: #{inspect(reason)}"
-        )
+        case Cyfr.ControlPlane.when_owner(generation, fn ->
+               Logger.error(
+                 "[Schedules] failed to spawn task for schedule #{schedule.id}: #{inspect(reason)}"
+               )
 
-        _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "failed")
-        emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
-        record_error(ctx, schedule.id, "spawn_failed: #{inspect(reason)}")
-        schedule_timer(schedule.id, state)
+               _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "failed")
+               emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
+               record_error(ctx, schedule.id, "spawn_failed: #{inspect(reason)}")
+               schedule_timer(schedule.id, state)
+             end) do
+          :not_owner -> defer_occurrence(schedule.id, state)
+          failed -> failed
+        end
     end
   end
 
   # One root run, the occurrence joined to
   # the execution by its admission; the occurrence closes with the
   # answer, whichever it is.
-  defp run(schedule, occurrence, ctx, exec_reference, input) do
+  defp run(schedule, occurrence, ctx, exec_reference, input, generation) do
     request_id = Cyfr.UUID7.request_id()
     ctx = %{ctx | request_id: request_id}
     execution_id = Cyfr.UUID7.execution_id()
@@ -492,56 +555,58 @@ defmodule Cyfr.Schedules.Scheduler do
     duration_ms =
       System.convert_time_unit(System.monotonic_time() - start_native, :native, :millisecond)
 
-    case run_result do
-      {:ok, result} ->
-        output = Map.get(result, :output, result)
-        _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "completed")
-        record_run(ctx, schedule.id, execution_id)
+    Cyfr.ControlPlane.when_owner(generation, fn ->
+      case run_result do
+        {:ok, result} ->
+          output = Map.get(result, :output, result)
+          _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "completed")
+          record_run(ctx, schedule.id, execution_id)
 
-        Emissary.MCP.RequestLog.safe_log_completed(ctx, request_id, %{
-          output: output,
-          duration_ms: duration_ms,
-          routed_to: "opus"
-        })
-
-        # What `:fired` carried, plus the outcome and the row's own
-        # metadata as stored — a consumer that keeps the outcome
-        # (`Cyfr.ScheduleNotes`) reads `keep_outcome` off it without a
-        # second read of the row.
-        :telemetry.execute(
-          [:cyfr, :schedules, :completed],
-          %{system_time: System.system_time(), duration_ms: duration_ms},
-          %{
-            request_id: request_id,
-            schedule_id: schedule.id,
-            occurrence_id: occurrence.id,
-            reference: exec_reference,
-            execution_id: execution_id,
-            athanor_id: ctx.athanor_id,
-            user_id: ctx.user_id,
+          Emissary.MCP.RequestLog.safe_log_completed(ctx, request_id, %{
             output: output,
-            metadata: schedule.metadata
-          }
-        )
+            duration_ms: duration_ms,
+            routed_to: "opus"
+          })
 
-        Logger.debug("[Schedules] schedule #{schedule.id} completed (#{execution_id})")
+          # What `:fired` carried, plus the outcome and the row's own
+          # metadata as stored — a consumer that keeps the outcome
+          # (`Cyfr.ScheduleNotes`) reads `keep_outcome` off it without a
+          # second read of the row.
+          :telemetry.execute(
+            [:cyfr, :schedules, :completed],
+            %{system_time: System.system_time(), duration_ms: duration_ms},
+            %{
+              request_id: request_id,
+              schedule_id: schedule.id,
+              occurrence_id: occurrence.id,
+              reference: exec_reference,
+              execution_id: execution_id,
+              athanor_id: ctx.athanor_id,
+              user_id: ctx.user_id,
+              output: output,
+              metadata: schedule.metadata
+            }
+          )
 
-      {:error, reason} ->
-        # An admission that failed left the occurrence claimed; a run
-        # that failed left it started. Either way it ends failed, and
-        # nothing was invoked twice.
-        _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "failed")
+          Logger.debug("[Schedules] schedule #{schedule.id} completed (#{execution_id})")
 
-        Emissary.MCP.RequestLog.safe_log_failed(ctx, request_id, %{
-          error: inspect(reason),
-          duration_ms: duration_ms,
-          routed_to: "opus"
-        })
+        {:error, reason} ->
+          # An admission that failed left the occurrence claimed; a run
+          # that failed left it started. Either way it ends failed, and
+          # nothing was invoked twice.
+          _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "failed")
 
-        Logger.warning("[Schedules] schedule #{schedule.id} failed: #{inspect(reason)}")
-        emit_schedule_failed(schedule.id, ctx, reason, execution_id)
-        record_error(ctx, schedule.id, inspect(reason))
-    end
+          Emissary.MCP.RequestLog.safe_log_failed(ctx, request_id, %{
+            error: inspect(reason),
+            duration_ms: duration_ms,
+            routed_to: "opus"
+          })
+
+          Logger.warning("[Schedules] schedule #{schedule.id} failed: #{inspect(reason)}")
+          emit_schedule_failed(schedule.id, ctx, reason, execution_id)
+          record_error(ctx, schedule.id, inspect(reason))
+      end
+    end)
   end
 
   # The runner died without answering: the occurrence it held ends as

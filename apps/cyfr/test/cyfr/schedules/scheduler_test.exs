@@ -6,6 +6,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
   import ExUnit.CaptureLog
   import Ecto.Query, only: [from: 2]
+  import Cyfr.Test.Wait
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Cyfr.Schedules.Scheduler
@@ -18,8 +19,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
   setup do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "scheduler_#{System.unique_integer([:positive])}")
     keys = [:cron_scheduler_enabled, :workers, :base_path]
@@ -39,6 +39,8 @@ defmodule Cyfr.Schedules.SchedulerTest do
           else: Application.delete_env(:cyfr, key)
       end
     end)
+
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     Sanctum.Test.ConsentFixtures.start_source!()
     consented!(ctx)
@@ -130,13 +132,113 @@ defmodule Cyfr.Schedules.SchedulerTest do
     rows
   end
 
-  defp wait_until(fun, timeout \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
+  defp lose_ownership(loss) do
+    value =
+      if loss == :lost, do: :lost, else: {:held, DateTime.add(DateTime.utc_now(), -1, :second)}
 
-    unless fun.() do
-      if System.monotonic_time(:millisecond) > deadline, do: flunk("condition not met in time")
-      Process.sleep(25)
-      wait_until(fun, timeout)
+    Cyfr.ControlPlane.mark(value)
+    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+  end
+
+  defp running_task do
+    [pid] =
+      for {_, pid, _, _} <- DynamicSupervisor.which_children(Cyfr.Schedules.TaskSupervisor),
+          is_pid(pid),
+          do: pid
+
+    pid
+  end
+
+  defp watch_outcomes do
+    id = {__MODULE__, make_ref()}
+
+    :telemetry.attach_many(
+      id,
+      [[:cyfr, :schedules, :completed], [:cyfr, :schedules, :failed]],
+      fn event, _measurements, _metadata, test -> send(test, {:schedule_outcome, event}) end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+  end
+
+  for loss <- [:lost, :expired], event <- [:completion, :death] do
+    @tag :ownership_loss
+    test "a scheduled #{event} after ownership is #{loss} leaves the occurrence and counters unchanged",
+         %{ctx: ctx} do
+      script!([{:probe, self()}, %{"ran" => true}])
+      schedule = due!(create_schedule(ctx))
+      scheduler = scheduler!()
+      assert_receive {:scripted_probe, worker, execution_id}, 10_000
+      _ = :sys.get_state(scheduler)
+      task = running_task()
+      ref = Process.monitor(task)
+      watch_outcomes()
+
+      if unquote(event) == :completion do
+        true = :erlang.suspend_process(task)
+
+        on_exit(fn ->
+          if Process.alive?(task), do: :erlang.resume_process(task)
+        end)
+
+        send(worker, :continue)
+
+        wait_until(fn ->
+          match?(%{status: "completed"}, Arca.Execution.get_tenant(ctx, execution_id))
+        end)
+      end
+
+      before = {CronSchedule.get_for_daemon(schedule.id), occurrences(ctx, schedule)}
+      lose_ownership(unquote(loss))
+
+      if unquote(event) == :completion,
+        do: :erlang.resume_process(task),
+        else: Process.exit(task, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^task, _}, 10_000
+      state = :sys.get_state(scheduler)
+      assert is_integer(Process.read_timer(state.recovery_ref))
+      assert Map.has_key?(state.timers, schedule.id)
+      assert {CronSchedule.get_for_daemon(schedule.id), occurrences(ctx, schedule)} == before
+      refute_received {:schedule_outcome, _}
+
+      if unquote(event) == :completion do
+        Cyfr.ControlPlane.mark(:unclaimed)
+        send(scheduler, :recover_occurrences)
+        wait_until(fn -> match?([%{state: "uncertain"}], occurrences(ctx, schedule)) end)
+        assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
+      end
+    end
+  end
+
+  for loss <- [:lost, :expired] do
+    @tag :ownership_loss
+    test "a claimed occurrence starts no execution and is not failed after ownership is #{loss}",
+         %{ctx: ctx} do
+      script!([%{"ran" => true}])
+      schedule = due!(create_schedule(ctx))
+      :ok = :sys.suspend(Cyfr.Schedules.TaskSupervisor)
+      on_exit(fn -> :sys.resume(Cyfr.Schedules.TaskSupervisor) end)
+      scheduler = scheduler!()
+      wait_until(fn -> match?([%{state: "claimed"}], occurrences(ctx, schedule)) end)
+      before = {CronSchedule.get_for_daemon(schedule.id), occurrences(ctx, schedule)}
+      watch_outcomes()
+      lose_ownership(unquote(loss))
+      :ok = :sys.resume(Cyfr.Schedules.TaskSupervisor)
+      wait_until(fn -> :sys.get_state(scheduler).tasks == %{} end)
+      state = :sys.get_state(scheduler)
+      assert is_integer(Process.read_timer(state.recovery_ref))
+      assert Map.has_key?(state.timers, schedule.id)
+      assert {CronSchedule.get_for_daemon(schedule.id), occurrences(ctx, schedule)} == before
+      assert ScriptedWorker.calls() == []
+      refute_received {:schedule_outcome, _}
+
+      Cyfr.ControlPlane.mark(:unclaimed)
+      send(scheduler, :recover_occurrences)
+      wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
+      assert [_] = ScriptedWorker.calls()
     end
   end
 
@@ -316,10 +418,11 @@ defmodule Cyfr.Schedules.SchedulerTest do
   test "a missed occurrence fires once", %{ctx: ctx} do
     script!([%{"ran" => true}])
     schedule = due!(create_schedule(ctx), 7_200)
-    scheduler!()
+    scheduler = scheduler!()
 
     wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
-    Process.sleep(200)
+    send(scheduler, {:fire, schedule.id})
+    _ = :sys.get_state(scheduler)
     assert [_] = occurrences(ctx, schedule)
     assert [_] = ScriptedWorker.calls()
   end

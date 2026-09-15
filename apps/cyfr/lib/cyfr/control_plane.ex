@@ -78,6 +78,18 @@ defmodule Cyfr.ControlPlane do
   @spec when_owner((-> result)) :: result | :not_owner when result: var
   def when_owner(fun) when is_function(fun, 0), do: if(owner?(), do: fun.(), else: :not_owner)
 
+  @doc "Run work only while this boot still owns the generation captured when it started."
+  @spec when_owner({:ok, pos_integer()} | :none | {:error, :unavailable}, (-> result)) ::
+          result | :not_owner
+        when result: var
+  def when_owner(expected, fun) when is_function(fun, 0) do
+    valid = expected == :none or match?({:ok, n} when is_integer(n) and n > 0, expected)
+
+    if valid and owner?() and generation() == expected,
+      do: fun.(),
+      else: :not_owner
+  end
+
   @doc "`:ok` to admit work, `{:error, :control_plane_lost}` to refuse it."
   @spec assert_owner() :: :ok | {:error, :control_plane_lost}
   def assert_owner, do: if(owner?(), do: :ok, else: {:error, :control_plane_lost})

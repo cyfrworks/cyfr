@@ -31,6 +31,23 @@ defmodule Cyfr.ControlPlaneWorkersTest do
     assert ControlPlane.when_owner(fn -> :ran end) == :not_owner
   end
 
+  test "a captured generation must still match before work runs" do
+    stamp = ControlPlane.generation()
+    assert ControlPlane.when_owner(stamp, fn -> :ran end) == :ran
+    assert ControlPlane.when_owner({:ok, 999_999}, fn -> :ran end) == :not_owner
+    ControlPlane.mark(:lost)
+    assert ControlPlane.when_owner(stamp, fn -> :ran end) == :not_owner
+  end
+
+  test "an unavailable generation cannot authorize work even if ownership is marked held" do
+    previous = Application.fetch_env!(:cyfr, :control_plane_claim_enabled)
+    Application.put_env(:cyfr, :control_plane_claim_enabled, true)
+    on_exit(fn -> Application.put_env(:cyfr, :control_plane_claim_enabled, previous) end)
+    ControlPlane.mark({:held, :forever})
+    assert {:error, :unavailable} = ControlPlane.generation()
+    assert ControlPlane.when_owner(ControlPlane.generation(), fn -> :ran end) == :not_owner
+  end
+
   test "the retention tick deletes nothing without ownership, and sweeps once it is regained" do
     hash = :crypto.hash(:sha256, "expired-#{System.unique_integer([:positive])}")
 
