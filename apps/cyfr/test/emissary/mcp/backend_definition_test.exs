@@ -83,7 +83,11 @@ defmodule Emissary.MCP.BackendDefinitionTest do
     assert refused([backend(%{"env" => %{"API_KEY" => "sk-literal"}})]) =~
              "must reference a vault entry"
 
-    assert refused([backend(%{"env" => %{"API_KEY" => "secret:x"}})]) =~ "does not resolve"
+    for unresolved <- ["secret:x", "Token secret:x", "vault:"] do
+      assert refused([backend(%{"env" => %{"API_KEY" => unresolved}})]) =~ "does not resolve"
+      assert refused([backend(%{"env" => %{"NODE_ENV" => unresolved}})]) =~ "does not resolve"
+    end
+
     assert refused([backend(%{"env" => %{"API_KEY" => 42}})]) =~ "string value"
 
     for name <- BackendDefinition.literal_names() do

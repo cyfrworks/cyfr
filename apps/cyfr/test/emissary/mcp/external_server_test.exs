@@ -300,11 +300,13 @@ defmodule Emissary.MCP.ExternalServerTest do
     end
 
     test "a reference this server does not resolve is refused, never sent as a literal" do
-      assert {:error, message} =
-               ExternalServer.resolve_headers(%{"x-client" => "secret:EXT_TOKEN"}, "ath_test")
+      for unresolved <- ["secret:EXT_TOKEN", "Token secret:EXT_TOKEN"] do
+        assert {:error, message} =
+                 ExternalServer.resolve_headers(%{"x-client" => unresolved}, "ath_test")
 
-      assert message =~ "x-client"
-      refute message =~ "EXT_TOKEN"
+        assert message =~ "x-client"
+        refute message =~ "EXT_TOKEN"
+      end
     end
   end
 

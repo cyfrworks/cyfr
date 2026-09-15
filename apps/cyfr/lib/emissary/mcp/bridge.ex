@@ -787,10 +787,11 @@ defmodule Emissary.MCP.Bridge do
   end
 
   # A template resolves to its single-field entry's value after its scheme;
-  # a literal (only the names BackendDefinition allows) is itself.
+  # a literal (only the names BackendDefinition allows) is itself; a
+  # reference this server does not resolve resolves to nothing.
   defp resolve_value(athanor_id, value) do
-    case VaultRef.template(value) do
-      {:ok, %{name: entry} = template} ->
+    case VaultRef.classify(value) do
+      {:vault, %{name: entry} = template} ->
         case Sanctum.VaultReader.unseal_by_name(athanor_id, entry) do
           {:ok, fields} when map_size(fields) == 1 ->
             {:ok, VaultRef.render(template, fields |> Map.values() |> hd())}
@@ -799,7 +800,10 @@ defmodule Emissary.MCP.Bridge do
             :error
         end
 
-      :error ->
+      :unresolved ->
+        :error
+
+      :literal ->
         {:ok, value}
     end
   end

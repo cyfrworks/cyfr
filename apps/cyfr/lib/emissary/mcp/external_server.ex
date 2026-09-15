@@ -1169,21 +1169,14 @@ defmodule Emissary.MCP.ExternalServer do
   # wrong credential into the wrong header. Errors stay opaque outward, like
   # secrets.
   defp resolve_value(value, athanor_id) when is_binary(value) do
-    cond do
-      Emissary.MCP.VaultRef.unresolved_ref?(value) ->
-        {:error, :unresolved_ref}
-
-      match?({:ok, _}, Emissary.MCP.VaultRef.template(value)) ->
-        resolve_template(value, athanor_id)
-
-      true ->
-        {:ok, value}
+    case Emissary.MCP.VaultRef.classify(value) do
+      {:vault, template} -> resolve_template(template, athanor_id)
+      :unresolved -> {:error, :unresolved_ref}
+      :literal -> {:ok, value}
     end
   end
 
-  defp resolve_template(value, athanor_id) do
-    {:ok, %{name: entry_name} = template} = Emissary.MCP.VaultRef.template(value)
-
+  defp resolve_template(%{name: entry_name} = template, athanor_id) do
     case Sanctum.VaultReader.unseal_by_name(athanor_id, entry_name) do
       {:ok, fields} ->
         case Map.values(fields) do

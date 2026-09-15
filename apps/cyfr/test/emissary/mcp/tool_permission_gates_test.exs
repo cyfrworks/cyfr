@@ -125,14 +125,17 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                  })
                )
 
-      assert {:error, message} =
-               Emissary.MCP.McpServersTool.handle(
-                 "mcp_servers",
-                 ctx,
-                 create_args(%{"X-Client-Version" => "secret:my-token"})
-               )
+      for unresolved <- ["secret:my-token", "Token secret:my-token", "Bearer vault:"] do
+        assert {:error, message} =
+                 Emissary.MCP.McpServersTool.handle(
+                   "mcp_servers",
+                   ctx,
+                   create_args(%{"X-Client-Version" => unresolved})
+                 )
 
-      assert message =~ "vault:ENTRY"
+        assert message =~ "does not resolve"
+        assert message =~ "vault:ENTRY"
+      end
     end
   end
 
