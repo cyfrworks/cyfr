@@ -13,7 +13,8 @@ defmodule Emissary.MCP.BridgeTest do
   the owner; renewal fences each owner against its row; a restarted bridge
   and a new generation are greeted and live owners synced again; nothing
   is sent without the control plane; refusals of a call are answered as
-  their kind requires; an athanor holds at most a quarter of the pool.
+  their kind requires; an athanor, and the person who created the rows,
+  each hold at most a quarter of the pool.
   """
   use ExUnit.Case, async: false
 
@@ -769,6 +770,32 @@ defmodule Emissary.MCP.BridgeTest do
              Bridge.sync(%{athanor_id: ctx.athanor_id, server_id: second.id, epoch: 1})
 
     refute_receive {:control, "sync", _sync, _fields}, 200
+  end
+
+  test "the rows one person created hold at most a quarter of the pool across every athanor",
+       %{ctx: ctx, fake: fake} do
+    FakeBridge.set(fake, :pool, 8)
+    start_bridge(fake)
+    literal = %{"NODE_ENV" => "production"}
+
+    for athanor <- ["ath_test", "ath_a"] do
+      in_athanor = %{ctx | athanor_id: athanor}
+      connect(in_athanor, stdio_row(in_athanor, "mine", literal))
+      assert_receive {:control, "sync", _sync, _fields}, 2_000
+    end
+
+    in_third = %{ctx | athanor_id: "ath_b"}
+    third = stdio_row(in_third, "mine", literal)
+
+    assert {:error, {:person_share, 2}} =
+             Bridge.sync(%{athanor_id: "ath_b", server_id: third.id, epoch: 1})
+
+    refute_receive {:control, "sync", _sync, _fields}, 200
+
+    # Another person's row in that athanor fits.
+    someone = %{in_third | user_id: "usr_someone_else"}
+    connect(someone, stdio_row(someone, "theirs", literal))
+    assert_receive {:control, "sync", _sync, _fields}, 2_000
   end
 
   test "an env template that does not resolve refuses the sync and sends nothing", %{

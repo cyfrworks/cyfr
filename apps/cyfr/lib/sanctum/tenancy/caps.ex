@@ -19,8 +19,8 @@ defmodule Sanctum.Tenancy.Caps do
   operator exposing the box sets `CYFR_ATHANOR_STORAGE_BYTES`
   deliberately.
 
-  The pair cap and the thread cap ship on: `config/runtime.exs`
-  defaults them to 200 and 1000 (`0` turns either off). A thread is
+  The group, pair and thread caps ship on: `config/runtime.exs` defaults
+  them to 50, 200 and 1000 (`0` turns any of them off). A thread is
   a row any member — or any headless client of theirs — can mint from the
   wire (`thread.create`), each with a follow row of its own, so an
   estate's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone

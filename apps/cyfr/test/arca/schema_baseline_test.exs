@@ -141,11 +141,12 @@ defmodule Arca.SchemaBaselineTest do
     assert "turn_seq" in Enum.map(columns("threads"), & &1.name)
   end
 
-  test "an MCP server row has a transport and an epoch, and a url exactly when it is http" do
+  test "an MCP server row has a transport, an epoch and a creator, and a url exactly when it is http" do
     columns = Map.new(columns("mcp_servers"), &{&1.name, &1})
 
     assert columns["transport"].not_null?
     assert columns["epoch"].not_null?
+    assert columns["created_by"].not_null?
     refute columns["url"].not_null?
 
     assert :ok = insert_server("stdio", nil)
@@ -258,6 +259,7 @@ defmodule Arca.SchemaBaselineTest do
       url: url,
       config_json: "{}",
       epoch: 1,
+      created_by: "usr_schema",
       athanor_id: "ath_schema",
       inserted_at: now,
       updated_at: now

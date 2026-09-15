@@ -23,6 +23,16 @@ defmodule Arca.McpServerStorageTest do
       assert server.enabled == true
     end
 
+    test "records the context's user as the row's creator, whatever the attrs say", %{ctx: ctx} do
+      attrs = %{name: "created", url: "https://a.com/mcp", created_by: "usr_someone_else"}
+
+      assert {:ok, %{created_by: creator}} = McpServerStorage.insert(ctx, attrs)
+      assert creator == ctx.user_id
+
+      {:ok, updated} = McpServerStorage.update(ctx, "created", %{enabled: false})
+      assert updated.created_by == ctx.user_id
+    end
+
     test "stores config_json verbatim (caller serializes)", %{ctx: ctx} do
       json = ~s({"headers":{"Authorization":"vault:GH_TOKEN"},"timeout_ms":15000})
 

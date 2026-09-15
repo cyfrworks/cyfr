@@ -746,6 +746,11 @@ defmodule Emissary.MCP.ExternalServer do
   defp bridge_reason({:pool_share, limit}),
     do: "this athanor already runs its share of the MCP bridge (#{limit} backends)"
 
+  defp bridge_reason({:person_share, limit}),
+    do:
+      "the member who created this server already runs their share of the MCP bridge " <>
+        "(#{limit} backends, across every athanor)"
+
   defp bridge_reason({:control_too_large, limit}),
     do: "this server's backends and their env exceed what one sync may carry (#{limit} bytes)"
 

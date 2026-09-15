@@ -20,6 +20,7 @@ defmodule Arca.McpServerStorage do
   - config_json: JSON text with headers, timeout_ms, backends, etc.
   - enabled: Whether the server is active
   - epoch: 1 on insert, one higher after every write to the row
+  - created_by: the id of the person whose context created the row
   - athanor_id: the owning athanor
   - inserted_at/updated_at: Timestamps
 
@@ -111,11 +112,12 @@ defmodule Arca.McpServerStorage do
 
   Attrs must include `:name`, and `:url` unless `:transport` is `"stdio"`
   (`"http"` when absent). `:config_json` is the raw JSON string (the caller
-  serializes; Arca stores it verbatim). Optional: `:enabled`.
+  serializes; Arca stores it verbatim). Optional: `:enabled`. The row's
+  `created_by` is the context's user.
   """
   @spec insert(Context.t(), map()) :: {:ok, McpServer.t()} | {:error, term()}
   # arca:unscoped-ok the context's athanor is stamped onto the row below before the write.
-  def insert(%Context{} = ctx, attrs) when is_map(attrs) do
+  def insert(%Context{user_id: user_id} = ctx, attrs) when is_binary(user_id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.insert", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -126,6 +128,7 @@ defmodule Arca.McpServerStorage do
         |> Map.put_new(:enabled, true)
         |> Map.put_new(:config_json, "{}")
         |> Map.put(:epoch, 1)
+        |> Map.put(:created_by, user_id)
         |> then(&Arca.QueryHelpers.stamp_tenant!(ctx, &1))
         |> Map.put_new(:inserted_at, now)
         |> Map.put(:updated_at, now)

@@ -7,7 +7,8 @@ defmodule Arca.Schemas.McpServer do
 
   `transport` is `"http"` (the server is reached at `url`) or `"stdio"` (its
   backends, in `config_json`, run on the MCP bridge and `url` is nil).
-  `epoch` rises with every change to the row.
+  `epoch` rises with every change to the row. `created_by` is the id of the
+  person who created it, set once.
   """
 
   use Ecto.Schema
@@ -23,6 +24,7 @@ defmodule Arca.Schemas.McpServer do
     field :config_json, :string
     field :enabled, :boolean
     field :epoch, :integer
+    field :created_by, :string
     field :athanor_id, :string
     timestamps(type: :utc_datetime_usec)
   end

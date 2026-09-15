@@ -391,7 +391,7 @@ How it holds together:
 - **One key.** `CYFR_MCP_BRIDGE_KEY` (32 random bytes as 64 hex digits) is in `.env`; `cyfr init` generates it and compose gives it to both `cyfr` and `mcp-bridge`. The bridge refuses to start without it, and cyfr refuses stdio servers without it (and `CYFR_MCP_BRIDGE_URL`, which compose sets). It is the only setting the bridge needs.
 - **Nothing on disk.** The bridge persists nothing. CYFR sends a server's definition when the server is first used — its env resolved from the vault and sealed to that server and that bridge lifetime — and again for every running server when the bridge restarts. When CYFR restarts, the bridge releases what the previous boot ran, and each server starts again on its next use. Backends run only while CYFR keeps renewing their lease (30 s; `CYFR_MCP_BRIDGE_LEASE_MS` sets it); a server whose backends are slow to start never delays another server's renewal.
 - **Idle backends stop.** A backend with no tool call for 15 minutes (`CYFR_MCP_BRIDGE_IDLE_MS` sets it) is stopped and its pool slot freed; its tools stay listed, and the next call starts it again — for an `npx -y` package, downloading it again.
-- **Isolation.** Each backend runs under a pooled uid of its own with a private home, an environment built only from its server's env, and no capability; one athanor's backends hold at most a quarter of the pool. A server's requests reach only its own backends, and every result is masked with that server's credentials. Backends share the network, CPU and memory, and can see each other's command lines.
+- **Isolation.** Each backend runs under a pooled uid of its own with a private home, an environment built only from its server's env, and no capability. One athanor's backends hold at most a quarter of the pool, and so do the backends of every server one person created, across all their athanors. A server's requests reach only its own backends, and every result is masked with that server's credentials. Backends share the network, CPU and memory, and can see each other's command lines.
 - **Changes take effect at once.** Updating, disabling, deleting or restarting a server, or rotating, revoking or renaming a vault entry its env names, stops its backends before anything else can reach them; the next use starts them again with the new definition. `mcp_servers.get` shows each backend's status, restarts and a masked stderr tail; **Restart** on the expanded row starts a stdio server's backends afresh.
 - Stdio servers are not available when `CYFR_CLUSTER` is on.
 
@@ -489,15 +489,15 @@ restored, a member adds them again.
 
 `cyfr admin allow '*'` admits any identity your provider authenticates —
 that is the public-hosting configuration, and it is the one where the limits
-matter. They are all optional and **off unless set** — except the DM cap,
-which ships at 200 and is turned off with `0`; a private box needs none of
-the others.
+matter. They are all optional and **off unless set** — except the group,
+DM and thread caps, which ship at 50, 200 and 1000 and are each turned off
+with `0`; a private box needs none of the others.
 
 | Variable | Bounds |
 |---|---|
 | `CYFR_MAX_ATHANORS` | athanors on this server, active ones only — an archived furnace frees its place |
 | `CYFR_MINT_PER_HOUR` | personal athanors minted per hour, i.e. how fast strangers can arrive |
-| `CYFR_MAX_GROUPS_PER_PERSON` | groups one person may **create** (they may belong to more) |
+| `CYFR_MAX_GROUPS_PER_PERSON` | groups one person may **create** (default 50; they may belong to more) |
 | `CYFR_MAX_PAIRS_PER_PERSON` | DMs one person may hold open (default 200). A DM is minted for two, so either person at the ceiling refuses it; an ended DM frees its place |
 | `CYFR_MAX_MEMBERS_PER_GROUP` | seats in one group, invitations included |
 | `CYFR_MAX_THREADS_PER_ATHANOR` | threads one estate may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |

@@ -69,8 +69,10 @@ defmodule Emissary.MCP.Bridge do
 
   ## Shares
 
-  One athanor's live owners run at most a quarter of the bridge's pool of
-  backends; a sync past that share is refused.
+  Every live owner of one athanor together, and every live owner whose row
+  one person created (`mcp_servers.created_by`) together, run at most a
+  quarter of the bridge's pool of backends; a sync past either share is
+  refused.
   """
 
   use GenServer
@@ -172,9 +174,9 @@ defmodule Emissary.MCP.Bridge do
   Ask the bridge to run `owner` for the calling server process, and answer
   its grant once its backends are ready or failed, or the readiness wait
   passed. Refused with a reason when the row no longer passes the fence, an
-  env template does not resolve, the athanor would hold more than its share
-  of the pool, the pool is full, this boot does not own the control plane,
-  or the bridge cannot be reached.
+  env template does not resolve, the athanor or the row's creator would
+  hold more than their share of the pool, the pool is full, this boot does
+  not own the control plane, or the bridge cannot be reached.
   """
   @spec sync(owner()) :: {:ok, grant()} | {:error, term()}
   def sync(owner),
@@ -421,6 +423,7 @@ defmodule Emissary.MCP.Bridge do
           epoch: epoch,
           generation: nil,
           live?: false,
+          person: nil,
           names: [],
           backends: 0,
           waiters: [from],
@@ -491,12 +494,17 @@ defmodule Emissary.MCP.Bridge do
         do: key
   end
 
-  # The backends every other live owner of `key`'s athanor holds.
-  defp athanor_backends(state, {athanor_id, _server} = key) do
-    for {{^athanor_id, _} = other, %{live?: true, backends: count}} <- state.owners,
+  # The backends every other live owner holds: in `key`'s athanor, and per
+  # person who created an owner's row.
+  defp held_by_others(state, {athanor_id, _server} = key) do
+    for {{other_athanor, _} = other, %{live?: true} = entry} <- state.owners,
         other != key,
-        reduce: 0,
-        do: (acc -> acc + count)
+        reduce: {0, %{}} do
+      {athanor, people} ->
+        athanor = if other_athanor == athanor_id, do: athanor + entry.backends, else: athanor
+        people = Map.update(people, entry.person, entry.backends, &(&1 + entry.backends))
+        {athanor, people}
+    end
   end
 
   # ============================================================================
@@ -772,6 +780,7 @@ defmodule Emissary.MCP.Bridge do
 
       entry ->
         {athanor_id, server_id} = key
+        {athanor_backends, person_backends} = held_by_others(state, key)
 
         spec =
           state
@@ -783,7 +792,8 @@ defmodule Emissary.MCP.Bridge do
             seal_key: state.seal_key,
             idle_ms: state.idle_ms,
             share: share(state),
-            athanor_backends: athanor_backends(state, key)
+            athanor_backends: athanor_backends,
+            person_backends: person_backends
           })
 
         {:send, spec}
@@ -824,7 +834,7 @@ defmodule Emissary.MCP.Bridge do
     {:send, state |> base_spec(:status) |> Map.put(:body, body)}
   end
 
-  # The most backends one athanor's owners may run.
+  # The most backends one athanor's owners, or one person's, may run.
   defp share(%State{pool_size: size}) when is_integer(size), do: max(div(size, 4), 1)
   defp share(_state), do: nil
 
@@ -846,7 +856,7 @@ defmodule Emissary.MCP.Bridge do
     with {:ok, row} <- fence_one(owner),
          config = Arca.McpServerStorage.config(row),
          {:ok, backends} <- BackendDefinition.validate(config["backends"]),
-         :ok <- within_share(spec, length(backends)),
+         :ok <- within_shares(spec, row.created_by, length(backends)),
          {:ok, sealed} <- seal_env(spec, backends) do
       body = %{
         "type" => "sync",
@@ -860,7 +870,8 @@ defmodule Emissary.MCP.Bridge do
 
       case post(spec, body) do
         {:http, _status, _boot, _body} = answer ->
-          {:synced, answer, BackendDefinition.entry_names(backends), length(backends)}
+          {:synced, answer, BackendDefinition.entry_names(backends), length(backends),
+           row.created_by}
 
         error ->
           error
@@ -933,12 +944,19 @@ defmodule Emissary.MCP.Bridge do
 
   defp passes_fence?(fenced, epoch), do: match?({:ok, _row}, fence_verdict(fenced, epoch))
 
-  defp within_share(%{share: nil}, _count), do: :ok
+  defp within_shares(%{share: nil}, _person, _count), do: :ok
 
-  defp within_share(spec, count) do
-    if spec.athanor_backends + count <= spec.share,
-      do: :ok,
-      else: {:error, {:pool_share, spec.share}}
+  defp within_shares(spec, person, count) do
+    cond do
+      spec.athanor_backends + count > spec.share ->
+        {:error, {:pool_share, spec.share}}
+
+      Map.get(spec.person_backends, person, 0) + count > spec.share ->
+        {:error, {:person_share, spec.share}}
+
+      true ->
+        :ok
+    end
   end
 
   defp seal_env(spec, backends) do
@@ -1055,7 +1073,7 @@ defmodule Emissary.MCP.Bridge do
   end
 
   defp answer_boot({:http, _status, boot, _body}), do: boot
-  defp answer_boot({:synced, answer, _names, _count}), do: answer_boot(answer)
+  defp answer_boot({:synced, answer, _names, _count, _person}), do: answer_boot(answer)
   defp answer_boot({:renewed, answer, _fenced_out}), do: answer_boot(answer)
   defp answer_boot(_result), do: nil
 
@@ -1105,7 +1123,7 @@ defmodule Emissary.MCP.Bridge do
          state,
          {:sync, key},
          spec,
-         {:synced, {:http, 200, _boot, body}, names, count}
+         {:synced, {:http, 200, _boot, body}, names, count, person}
        ) do
     case state.owners[key] do
       %{epoch: epoch} = entry when epoch == spec.epoch ->
@@ -1115,6 +1133,7 @@ defmodule Emissary.MCP.Bridge do
             generation: spec.generation,
             names: names,
             backends: count,
+            person: person,
             rev: body["rev"],
             running?: body["status"] == "running",
             ready_by: System.monotonic_time(:millisecond) + state.ready_wait_ms
@@ -1280,7 +1299,7 @@ defmodule Emissary.MCP.Bridge do
     "unavailable" => :bridge_unavailable
   }
 
-  defp refusal({:synced, answer, _names, _count}), do: refusal(answer)
+  defp refusal({:synced, answer, _names, _count, _person}), do: refusal(answer)
   defp refusal({:renewed, answer, _fenced_out}), do: refusal(answer)
   defp refusal({:http, 401, _boot, _body}), do: :bridge_refused_signature
 

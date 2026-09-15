@@ -617,10 +617,11 @@ if config_env() != :test do
 
     config :cyfr, :platform_admin_emails, platform_admins
 
-    # Account caps: unset disables limits except pairs (200) and threads (1000); 0 disables those defaults.
+    # Account caps: unset disables limits except groups (50 per person),
+    # pairs (200) and threads (1000); 0 disables those defaults.
     config :cyfr, :caps,
       max_athanors: env_int.("CYFR_MAX_ATHANORS", nil),
-      max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", nil),
+      max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", 50),
       max_pairs_per_person: env_int.("CYFR_MAX_PAIRS_PER_PERSON", 200),
       max_members_per_group: env_int.("CYFR_MAX_MEMBERS_PER_GROUP", nil),
       max_threads_per_athanor: env_int.("CYFR_MAX_THREADS_PER_ATHANOR", 1000),
