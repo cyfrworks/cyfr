@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +100,8 @@ export function processes(target) {
  */
 export function buildCanary() {
   const dir = mkdtempSync(path.join(tmpdir(), "cyfr-canary-"));
+  // The read-only fixture mount must be traversable by pooled backend UIDs.
+  chmodSync(dir, 0o755);
   run("docker", [
     "run", "--rm",
     "-v", `${path.join(ROOT_DIR, "tests", "fixtures")}:/src:ro`,

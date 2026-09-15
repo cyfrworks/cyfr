@@ -105,7 +105,13 @@ const handlers = {
   },
   run({ argv }) {
     const result = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 10_000 });
-    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      signal: result.signal,
+      error: result.error?.code,
+    };
   },
 };
 

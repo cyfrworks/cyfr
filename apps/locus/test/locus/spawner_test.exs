@@ -84,7 +84,8 @@ defmodule Locus.SpawnerTest do
 
   test "a run past its deadline releases the spawn with no grace", %{name: name, fake: fake} do
     started = System.monotonic_time(:millisecond)
-    {result, _lines} = run(name, "sleep 30", timeout_ms: 300)
+    # The fake kills the command's PID; exec avoids a shell-owned child.
+    {result, _lines} = run(name, "exec sleep 30", timeout_ms: 300)
 
     assert result == {:error, :timeout}
     assert System.monotonic_time(:millisecond) - started < 10_000
@@ -99,7 +100,7 @@ defmodule Locus.SpawnerTest do
   end
 
   test "a caller that dies has its spawn released", %{name: name, fake: fake} do
-    caller = spawn(fn -> run(name, "sleep 30") end)
+    caller = spawn(fn -> run(name, "exec sleep 30") end)
     wait_until(fn -> Enum.any?(FakeSpawner.requests(fake), &(&1["type"] == "spawn")) end)
     Process.sleep(200)
     Process.exit(caller, :kill)
@@ -128,7 +129,7 @@ defmodule Locus.SpawnerTest do
     client: client
   } do
     ref = Process.monitor(client)
-    task = Task.async(fn -> run(name, "sleep 30") end)
+    task = Task.async(fn -> run(name, "exec sleep 30") end)
     wait_until(fn -> Enum.any?(FakeSpawner.requests(fake), &(&1["type"] == "spawn")) end)
 
     :ok = FakeSpawner.close(fake)

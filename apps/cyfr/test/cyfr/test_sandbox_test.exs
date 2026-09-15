@@ -13,7 +13,7 @@ defmodule Cyfr.Test.SandboxTest do
 
   alias Cyfr.Test.Sandbox
 
-  @repo_root Path.expand("../../../..", __DIR__)
+  @apps_root Path.expand("../../..", __DIR__) <> "/"
 
   test "every dynamic supervisor the repository's running applications start is swept" do
     running = repository_dynamic_supervisors()
@@ -88,7 +88,7 @@ defmodule Cyfr.Test.SandboxTest do
     for {app, _description, _vsn} <- Application.started_applications(),
         {module, _args} <- [Application.spec(app, :mod)],
         source = Keyword.get(module.module_info(:compile), :source),
-        source && String.starts_with?(List.to_string(source), @repo_root),
+        source && String.starts_with?(List.to_string(source), @apps_root),
         {:ok, top} <- [:application.get_supervisor(app)],
         pid <- dynamic_supervisors(top) do
       case Process.info(pid, :registered_name) do

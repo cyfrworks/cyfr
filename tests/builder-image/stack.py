@@ -45,6 +45,8 @@ def expect(condition, message, detail=None):
 def build_canary():
     """Builds tests/fixtures/residue-canary.go for Linux on this host's architecture."""
     out = tempfile.mkdtemp(prefix="cyfr-canary-")
+    # The read-only fixture mount must be traversable by pooled build UIDs.
+    os.chmod(out, 0o755)
     run(
         "docker", "run", "--rm",
         "-v", f"{os.path.join(ROOT, 'tests', 'fixtures')}:/src:ro", "-v", f"{out}:/out",
