@@ -957,14 +957,15 @@ defmodule Aqua.LoopTest do
     events = for {:thread, _, event} <- drain(), do: event
     deltas = for {:delta, delta} <- events, do: delta
 
-    assert [
-             %{text: "the ans", step_id: cut_step, ordinal: cut_ordinal},
-             %{text: "the ", step_id: retry_step, ordinal: retry_ordinal},
-             %{text: "answer", step_id: retry_step}
-           ] = deltas
+    # The attempt's masking holdback may re-chunk a step's text; each step's
+    # deltas arrive together, the cut step's first.
+    assert [{cut_step, cut_deltas}, {retry_step, retry_deltas}] =
+             Enum.chunk_by(deltas, & &1.step_id) |> Enum.map(&{hd(&1).step_id, &1})
 
+    assert Enum.map_join(cut_deltas, & &1.text) == "the ans"
+    assert Enum.map_join(retry_deltas, & &1.text) == "the answer"
     assert cut_step == cut.id and retry_step == retried.id
-    assert retry_ordinal > cut_ordinal
+    assert hd(retry_deltas).ordinal > hd(cut_deltas).ordinal
     assert [%{step_id: ^cut_step}] = for({:delta_abandoned, marker} <- events, do: marker)
 
     # A viewer following the thread keeps only the retry's answer while it
