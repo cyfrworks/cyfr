@@ -36,7 +36,9 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/cyfr/lib/sanctum/mcp/key_tool.ex" => 11,
     # The tenth is the CYFR_BUILDS=false refusal: a configuration this
     # server chose, not a resource that is missing, invalid or briefly away.
-    "apps/locus/lib/locus/mcp.ex" => 10,
+    # The eleventh is a builder of another protocol or release, named with
+    # both sides' versions so an operator can match the images.
+    "apps/locus/lib/locus/mcp.ex" => 11,
     "apps/cyfr/lib/sanctum/mcp/profile_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp/component_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp.ex" => 7,

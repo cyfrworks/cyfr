@@ -104,8 +104,8 @@ defmodule Locus.MCP do
         {:error, :builder_unreachable} ->
           {:error, {:unavailable, "The builder service"}}
 
-        {:error, {:builder_protocol_mismatch, protocol, release}} ->
-          {:error, "Builder: " <> Locus.BuilderProtocol.mismatch(protocol, release)}
+        {:error, {:builder_protocol_mismatch, _protocol, _release} = mismatch} ->
+          builder_mismatch(mismatch)
       end
     else
       {:ok, %{toolchains: Locus.Builder.available_toolchains()}}
@@ -596,8 +596,8 @@ defmodule Locus.MCP do
       {:error, {:builder_failed, message}} ->
         {:error, "Builder: #{message}"}
 
-      {:error, {:builder_protocol_mismatch, protocol, release}} ->
-        {:error, "Builder: " <> Locus.BuilderProtocol.mismatch(protocol, release)}
+      {:error, {:builder_protocol_mismatch, _protocol, _release} = mismatch} ->
+        builder_mismatch(mismatch)
 
       {:error, :builder_unreachable} ->
         Logger.warning(
@@ -690,4 +690,9 @@ defmodule Locus.MCP do
       :ok
     end
   end
+
+  # Operator prose naming both sides' protocol and release: the remedy is
+  # to run a builder image of this server's release.
+  defp builder_mismatch({:builder_protocol_mismatch, protocol, release}),
+    do: {:error, "Builder: " <> Locus.BuilderProtocol.mismatch(protocol, release)}
 end
