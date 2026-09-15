@@ -156,8 +156,10 @@ defmodule Cyfr.Execution.Close do
     end
   end
 
+  # The row is read with the host-side context of its own terminal writes:
+  # a child admitted on the guest plane cannot read it with its own.
   defp closed_answer(%__MODULE__{record: record} = close, message) do
-    case Record.get(close.ctx, record.id) do
+    case Record.reread(record) do
       {:ok, %Record{status: :completed} = row} ->
         {:ok, %{status: :completed, output: row.output, metadata: metadata(close, row)}}
 

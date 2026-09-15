@@ -195,6 +195,86 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert roots() == before
   end
 
+  describe "a pause whose rows did not move" do
+    setup %{ctx: ctx, turn: turn} do
+      # A keeper that outlived its claim would exit this process with
+      # `{:lease_lost, _}` once the root's lease is no longer renewable.
+      Process.flag(:trap_exit, true)
+      before = roots()
+      {claim, started} = claim!(ctx, turn, tick_ms: 50)
+      assert keepers() == [claim.keeper]
+
+      assert {:error, _} =
+               TurnRoot.pause(ctx, claim.execution_id,
+                 claim: claim,
+                 turn_id: turn.id,
+                 fence: started.fence + 1,
+                 reason: "approval"
+               )
+
+      {:ok, before: before, claim: claim, started: started}
+    end
+
+    test "keeps the claim's own keeper renewing, and a retried pause stops it", %{
+      ctx: ctx,
+      turn: turn,
+      before: before,
+      claim: claim,
+      started: started
+    } do
+      assert keepers() == [claim.keeper]
+      assert roots() == before + 1
+      assert execution(claim.execution_id).status == "running"
+
+      %{lease_until: seen} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+
+      wait_until(fn ->
+        %{lease_until: now} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+        DateTime.compare(now, seen) == :gt
+      end)
+
+      assert {:ok, %{turn: %{status: "paused"}}} =
+               TurnRoot.pause(ctx, claim.execution_id,
+                 claim: claim,
+                 turn_id: turn.id,
+                 fence: started.fence,
+                 reason: "approval"
+               )
+
+      refute Process.alive?(claim.keeper)
+      assert keepers() == []
+      assert roots() == before
+      refute_receive {:EXIT, _, {:lease_lost, _}}, 300
+    end
+
+    test "leaves exactly the claim's keeper for the release to stop", %{
+      ctx: ctx,
+      turn: turn,
+      before: before,
+      claim: claim,
+      started: started
+    } do
+      {:ok, _} = TurnStorage.finish(ctx, turn.id, "completed", %{fence: started.fence})
+      :ok = TurnRoot.release(ctx, claim.execution_id, claim: claim)
+
+      refute Process.alive?(claim.keeper)
+      assert keepers() == []
+      assert roots() == before
+      refute_receive {:EXIT, _, {:lease_lost, _}}, 300
+    end
+  end
+
+  # The lease keepers linked to this process.
+  defp keepers do
+    {:links, links} = Process.info(self(), :links)
+
+    for pid <- links,
+        is_pid(pid),
+        {:current_stacktrace, frames} <- [Process.info(pid, :current_stacktrace)],
+        Enum.any?(frames, &(elem(&1, 0) == LeaseWatch)),
+        do: pid
+  end
+
   test "a lost lease exits the holder, and the semaphore's monitor releases the slot", %{
     ctx: ctx,
     turn: turn

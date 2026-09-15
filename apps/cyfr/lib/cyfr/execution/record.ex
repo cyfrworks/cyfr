@@ -587,6 +587,25 @@ defmodule Cyfr.Execution.Record do
   end
 
   @doc """
+  The row `record` was admitted as, as it stands now: read in the record's
+  own athanor with a host-side context, whatever plane the run was
+  admitted on. The context a run was admitted with is never widened for
+  it.
+  """
+  @spec reread(t()) :: {:ok, t()} | {:error, term()}
+  def reread(%__MODULE__{} = record) do
+    ctx =
+      Sanctum.internal_context(
+        user_id: record.user_id,
+        athanor_id: record.athanor_id,
+        permissions: [:storage_read],
+        scope: :athanor
+      )
+
+    get(ctx, record.id)
+  end
+
+  @doc """
   List execution records for the context's athanor.
 
   Members of an athanor are interchangeable, so this returns the athanor's

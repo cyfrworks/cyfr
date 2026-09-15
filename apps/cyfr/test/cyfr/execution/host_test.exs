@@ -471,6 +471,18 @@ defmodule Cyfr.Execution.HostTest do
       assert message == "Parent execution (#{fixture.execution_id}) terminated"
     end
 
+    test "a waiter admitted on the guest plane answers the lapsed row's error" do
+      guest = Sanctum.Context.enter_guest(Sanctum.TestContext.local())
+      fixture = AttemptFixtures.attached!(ctx: guest, runner_id: @worker)
+
+      assert %{"ok" => true} = report(@worker, [fixture.attempt])
+
+      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+               Dispatch.await(fixture.pid, fixture.close)
+
+      assert fixture.close.ctx.plane == :guest
+    end
+
     @tag :capture_log
     test "lapses nothing dispatched to another worker, and a forged report nothing at all" do
       fixture = AttemptFixtures.attached!(runner_id: @worker)

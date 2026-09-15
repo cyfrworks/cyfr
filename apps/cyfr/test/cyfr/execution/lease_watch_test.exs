@@ -97,6 +97,38 @@ defmodule Cyfr.Execution.LeaseWatchTest do
     assert_receive {:DOWN, ^ref, :process, _, {:lease_lost, ^id}}, 2_000
   end
 
+  test "a suspended keeper renews nothing until it is resumed, and keeps its pid", %{
+    ctx: ctx,
+    id: id,
+    attempt: attempt
+  } do
+    {pid, ref, watch} = holder!(id, attempt)
+    :ok = LeaseWatch.suspend(watch)
+    %{lease_until: suspended} = Arca.ExecutionAttempts.get(ctx.athanor_id, attempt)
+
+    Process.sleep(100)
+    assert %{lease_until: ^suspended} = Arca.ExecutionAttempts.get(ctx.athanor_id, attempt)
+
+    :ok = LeaseWatch.resume(watch)
+
+    Cyfr.Test.Wait.wait_until(fn ->
+      %{lease_until: renewed} = Arca.ExecutionAttempts.get(ctx.athanor_id, attempt)
+      DateTime.compare(renewed, suspended) == :gt
+    end)
+
+    assert Process.alive?(watch)
+    refute_received {:DOWN, ^ref, :process, _, _}
+    send(pid, :release)
+  end
+
+  test "suspending a keeper that is gone answers at once", %{id: id, attempt: attempt} do
+    {pid, _ref, watch} = holder!(id, attempt)
+    send(pid, :stop_watch)
+    Cyfr.Test.Wait.wait_until(fn -> not Process.alive?(watch) end)
+    assert :ok = LeaseWatch.suspend(watch)
+    send(pid, :release)
+  end
+
   test "a watch its holder stopped leaves the holder alone", %{id: id, attempt: attempt} do
     {pid, ref, watch} = holder!(id, attempt)
     send(pid, :stop_watch)

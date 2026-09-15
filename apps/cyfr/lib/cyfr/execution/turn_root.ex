@@ -11,12 +11,14 @@ defmodule Cyfr.Execution.TurnRoot do
   here, and pauses, resumes or releases from the same pid. It waits on no
   child itself: every child is dispatched from a worker of its own, the
   child's waiter, so a child that is stopped or times out ends that
-  worker and never the holder. A pause stops the keeper, moves the turn,
-  its attempt and its root out of `running` in one transaction
-  (`Arca.TurnStorage.pause/3`), and only then gives the slot back, so a
-  crash between leaves a paused row and a slot the semaphore's monitor
-  releases — never a running row with no holder. A resume takes the slot
-  first and moves the rows only once it holds one.
+  worker and never the holder. A pause suspends the keeper, moves the
+  turn, its attempt and its root out of `running` in one transaction
+  (`Arca.TurnStorage.pause/3`), and only then stops the keeper and gives
+  the slot back, so a crash between leaves a paused row and a slot the
+  semaphore's monitor releases — never a running row with no holder. A
+  pause whose rows did not move resumes the same keeper, so the claim's
+  keeper is always the one a later pause or release stops. A resume takes
+  the slot first and moves the rows only once it holds one.
   """
 
   alias Cyfr.Execution.{Admission, LeaseWatch, Record}
@@ -73,15 +75,17 @@ defmodule Cyfr.Execution.TurnRoot do
   end
 
   @doc """
-  Pause the turn root from the holder: the keeper stops, the turn, its
-  attempt and its root leave `running` together, the slot is released.
-  `opts`: `:claim`, `:turn_id`, `:fence`, `:reason`, `:launch_step_id`.
-  Answers the paused turn.
+  Pause the turn root from the holder: the keeper is suspended, the turn,
+  its attempt and its root leave `running` together, then the keeper
+  stops and the slot is released. A move that fails answers its error
+  with the claim unchanged: its keeper renews again and its slot is held.
+  `opts`: `:claim`, `:turn_id`, `:fence`, `:reason`, `:launch_step_id`,
+  `:uncertain`. Answers the paused turn.
   """
   @spec pause(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def pause(%Context{} = ctx, _execution_id, opts) do
     claim = Keyword.fetch!(opts, :claim)
-    LeaseWatch.stop(claim.keeper)
+    LeaseWatch.suspend(claim.keeper)
     turn_id = Keyword.fetch!(opts, :turn_id)
 
     moved =
@@ -107,14 +111,14 @@ defmodule Cyfr.Execution.TurnRoot do
 
     case moved do
       {:ok, %{turn: turn, aborted: aborted}} ->
+        LeaseWatch.stop(claim.keeper)
         Cyfr.Execution.Slot.release(claim.token)
         {:ok, %{turn: turn, execution_id: turn.root_execution_id, aborted: aborted}}
 
       {:error, _} = error ->
-        # The rows did not move: the turn still runs and its lease must
-        # keep being renewed.
-        {:ok, keeper} = LeaseWatch.start(self(), claim.execution_id, claim.attempt, [])
-        _ = keeper
+        # The rows did not move: the turn still runs, and the claim's own
+        # keeper renews its lease again.
+        LeaseWatch.resume(claim.keeper)
         error
     end
   end

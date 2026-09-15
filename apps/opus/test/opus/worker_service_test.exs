@@ -129,9 +129,7 @@ defmodule Opus.WorkerServiceTest do
     for _ <- 1..2 do
       spawn_link(fn ->
         id = Cyfr.UUID7.execution_id()
-        # The external-plane context, so the waiter's answer can read the
-        # row it closed.
-        ran = child!(ctx, authority, root_id, attempt, execution_id: id, ctx: ctx)
+        ran = child!(ctx, authority, root_id, attempt, execution_id: id)
         send(test_pid, {:ran, id, ran})
       end)
     end

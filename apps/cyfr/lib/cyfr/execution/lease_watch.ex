@@ -15,6 +15,11 @@ defmodule Cyfr.Execution.LeaseWatch do
   of the attempt stops it at once (`{:cancel_requested, execution_id}`); a
   store that cannot answer, a renewal that raises included, is tolerated
   only inside the lease the attempt last held.
+
+  A holder that moves the attempt out of `running` suspends its keeper
+  first (`suspend/1`), so no renewal races the move, and then stops it
+  (`stop/1`), or resumes it (`resume/1`) when the move did not happen. The
+  keeper keeps its pid throughout.
   """
 
   alias Cyfr.Execution.Record
@@ -29,16 +34,47 @@ defmodule Cyfr.Execution.LeaseWatch do
   @spec start(pid(), String.t(), String.t(), keyword()) :: {:ok, pid()}
   def start(holder, execution_id, attempt, opts \\ [])
       when is_pid(holder) and is_binary(execution_id) and is_binary(attempt) do
-    tick = Keyword.get(opts, :tick_ms, @tick_ms)
+    watch = %{
+      holder: holder,
+      execution_id: execution_id,
+      attempt: attempt,
+      tick: Keyword.get(opts, :tick_ms, @tick_ms)
+    }
+
     until = Keyword.get(opts, :until) || Record.lease_until()
 
     pid =
       spawn_link(fn ->
         Process.link(holder)
-        loop(holder, execution_id, attempt, tick, until)
+        loop(watch, until)
       end)
 
     {:ok, pid}
+  end
+
+  @doc """
+  Stop renewing until `resume/1`. Answers once the keeper will renew
+  nothing more; a renewal in flight finishes first. A keeper that is gone
+  answers `:ok` too.
+  """
+  @spec suspend(pid()) :: :ok
+  def suspend(pid) when is_pid(pid) do
+    ref = Process.monitor(pid)
+    send(pid, {:suspend, self(), ref})
+
+    receive do
+      {^ref, :suspended} -> Process.demonitor(ref, [:flush])
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
+
+    :ok
+  end
+
+  @doc "Renew again, a tick from now, after `suspend/1`."
+  @spec resume(pid()) :: :ok
+  def resume(pid) when is_pid(pid) do
+    send(pid, :resume)
+    :ok
   end
 
   @doc "Stop a keeper without touching its holder."
@@ -51,12 +87,20 @@ defmodule Cyfr.Execution.LeaseWatch do
     :ok
   end
 
-  defp loop(holder, execution_id, attempt, tick, until) do
-    Process.sleep(tick)
+  defp loop(watch, until) do
+    receive do
+      {:suspend, from, ref} ->
+        send(from, {ref, :suspended})
+        receive do: (:resume -> loop(watch, until))
+    after
+      watch.tick -> renew(watch, until)
+    end
+  end
 
-    case Record.renew_lease(execution_id, attempt) do
+  defp renew(%{holder: holder, execution_id: execution_id} = watch, until) do
+    case Record.renew_lease(execution_id, watch.attempt) do
       {:ok, renewed} ->
-        loop(holder, execution_id, attempt, tick, renewed)
+        loop(watch, renewed)
 
       {:cancel_requested, _renewed} ->
         Process.exit(holder, {:cancel_requested, execution_id})
@@ -66,7 +110,7 @@ defmodule Cyfr.Execution.LeaseWatch do
 
       :unavailable ->
         if DateTime.compare(DateTime.utc_now(), until) == :lt,
-          do: loop(holder, execution_id, attempt, tick, until),
+          do: loop(watch, until),
           else: Process.exit(holder, {:lease_lost, execution_id})
     end
   end
