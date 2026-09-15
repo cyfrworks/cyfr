@@ -18,8 +18,8 @@ defmodule Opus.EdgeGuard do
   denies. Schemes are always explicit in blobs — there is no "no scheme
   restriction" value. Domain patterns support `"*"` and `"*.example.com"`
   wildcards; storage paths support `"*"`, trailing-`/` prefixes, and exact
-  file matches. Link-local / cloud-metadata addresses are denied regardless
-  of the private-IP allowlist.
+  file matches. Cloud-metadata addresses are denied regardless of the
+  private-IP allowlist.
 
   Denial messages are part of the guest-visible contract: components and
   tests pin them, so they must not drift.
@@ -98,10 +98,8 @@ defmodule Opus.EdgeGuard do
   Whether a private IP is allowed by the edge's `private_ips` allowlist.
 
   Supports individual IPs (`"192.168.1.100"`) and CIDR ranges (`"10.0.0.0/8"`).
-  Link-local / cloud-metadata addresses (`Cyfr.Cidr.link_local?/1`:
-  `169.254.0.0/16`, `fe80::/10` and the IPv6 forms embedding an IPv4
-  link-local address) are always denied regardless of the allowlist. Empty
-  allowlist denies all.
+  Cloud-metadata addresses (`Cyfr.Cidr.metadata?/1`) are always denied
+  regardless of the allowlist. Empty allowlist denies all.
   """
   @spec allows_private_ip?(edge(), :inet.ip4_address() | :inet.ip6_address()) :: boolean()
   def allows_private_ip?(edge, ip_tuple) do
@@ -110,7 +108,7 @@ defmodule Opus.EdgeGuard do
         false
 
       entries ->
-        if Cyfr.Cidr.link_local?(ip_tuple) do
+        if Cyfr.Cidr.metadata?(ip_tuple) do
           false
         else
           ip_string = :inet.ntoa(ip_tuple) |> to_string()

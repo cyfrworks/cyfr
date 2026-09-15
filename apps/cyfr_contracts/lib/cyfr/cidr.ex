@@ -4,7 +4,7 @@
 defmodule Cyfr.Cidr do
   @moduledoc """
   Single source of truth for CIDR / IP-allowlist matching and for the
-  address classes outbound requests are held to: link-local and
+  address classes outbound requests are held to: cloud metadata and
   private/reserved ranges.
 
   Matches IPv4 and IPv6 CIDRs with family-specific prefix bounds; invalid input fails closed.
@@ -12,7 +12,7 @@ defmodule Cyfr.Cidr do
   `private_ip?/1` is the fixed SSRF range table — a different question from
   allowlist matching. `Cyfr.Network` blocks what it answers true for unless
   the caller's private policy admits the address, and blocks what
-  `link_local?/1` answers true for whatever the policy. Both judge an IPv6
+  `metadata?/1` answers true for whatever the policy. Both judge an IPv6
   address that embeds an IPv4 address (`embedded_ipv4/1`) by the address it
   embeds.
 
@@ -22,6 +22,14 @@ defmodule Cyfr.Cidr do
   """
 
   import Bitwise
+
+  # Instance-metadata endpoints outside the link-local ranges: Alibaba
+  # Cloud, Oracle Cloud, and AWS's IPv6 endpoint.
+  @metadata_addresses [
+    {100, 100, 100, 200},
+    {192, 0, 0, 192},
+    {0xFD00, 0x0EC2, 0, 0, 0, 0, 0, 0x0254}
+  ]
 
   # Private/reserved IPv4 ranges (CIDR notation as {base, mask} tuples)
   @private_ranges [
@@ -158,7 +166,11 @@ defmodule Cyfr.Cidr do
       carry its translator's prefix length, so one address for each
       RFC 6052 placement a prefix within the /48 can use: /48, /56, /64 and
       /96;
-    * 6to4 `2002::/16` (RFC 3056) — bits 16 to 47.
+    * 6to4 `2002::/16` (RFC 3056) — bits 16 to 47;
+    * Teredo `2001::/32` (RFC 4380) — the server in bits 32 to 63 and the
+      client, inverted, in the low 32 bits;
+    * ISATAP (RFC 5214) — an interface identifier `0:5efe` or `200:5efe`
+      followed by the IPv4 address, under any prefix.
 
   Any other address, IPv4 included, carries none.
   """
@@ -178,22 +190,32 @@ defmodule Cyfr.Cidr do
   end
 
   def embedded_ipv4({0x2002, hi, lo, _, _, _, _, _}), do: [v4(hi, lo)]
+
+  def embedded_ipv4({0x2001, 0, s_hi, s_lo, _, _, c_hi, c_lo}),
+    do: [v4(s_hi, s_lo), v4(bxor(c_hi, 0xFFFF), bxor(c_lo, 0xFFFF))]
+
+  def embedded_ipv4({_, _, _, _, isatap, 0x5EFE, hi, lo}) when isatap in [0, 0x200],
+    do: [v4(hi, lo)]
+
   def embedded_ipv4(_ip), do: []
 
   @doc """
-  True for the link-local / cloud-metadata ranges: IPv4 `169.254.0.0/16`,
-  IPv6 `fe80::/10`, and any IPv6 address embedding an IPv4 link-local
-  address (`embedded_ipv4/1`).
+  True for an address that can reach a cloud instance-metadata service:
+  the link-local ranges IPv4 `169.254.0.0/16` and IPv6 `fe80::/10`, the
+  metadata endpoints outside them (`100.100.100.200`, `192.0.0.192`,
+  `fd00:ec2::254`), and any IPv6 address embedding one of those IPv4
+  addresses (`embedded_ipv4/1`).
   """
-  @spec link_local?(:inet.ip_address()) :: boolean()
-  def link_local?({169, 254, _, _}), do: true
-  def link_local?({_, _, _, _}), do: false
-  def link_local?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFE80 and w1 <= 0xFEBF, do: true
+  @spec metadata?(:inet.ip_address()) :: boolean()
+  def metadata?(ip) when ip in @metadata_addresses, do: true
+  def metadata?({169, 254, _, _}), do: true
+  def metadata?({_, _, _, _}), do: false
+  def metadata?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFE80 and w1 <= 0xFEBF, do: true
 
-  def link_local?({_, _, _, _, _, _, _, _} = ip),
-    do: Enum.any?(embedded_ipv4(ip), &link_local?/1)
+  def metadata?({_, _, _, _, _, _, _, _} = ip),
+    do: Enum.any?(embedded_ipv4(ip), &metadata?/1)
 
-  def link_local?(_), do: false
+  def metadata?(_), do: false
 
   @doc """
   Check if an IP tuple is in a private/reserved range.

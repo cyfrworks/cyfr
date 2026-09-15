@@ -98,26 +98,26 @@ defmodule Cyfr.CidrTest do
     end
   end
 
-  describe "link_local?/1 (strict union — IPv4 169.254/16 AND IPv6 fe80::/10)" do
+  describe "metadata?/1" do
     test "IPv4 link-local" do
-      assert Cidr.link_local?({169, 254, 169, 254})
-      refute Cidr.link_local?({169, 253, 0, 1})
-      refute Cidr.link_local?({10, 0, 0, 1})
+      assert Cidr.metadata?({169, 254, 169, 254})
+      refute Cidr.metadata?({169, 253, 0, 1})
+      refute Cidr.metadata?({10, 0, 0, 1})
     end
 
     test "recognizes IPv6 fe80::/10 as link-local" do
-      assert Cidr.link_local?({0xFE80, 0, 0, 0, 0, 0, 0, 1})
-      assert Cidr.link_local?({0xFEBF, 0, 0, 0, 0, 0, 0, 1})
-      refute Cidr.link_local?({0xFEC0, 0, 0, 0, 0, 0, 0, 1})
-      refute Cidr.link_local?({0x2001, 0xDB8, 0, 0, 0, 0, 0, 1})
+      assert Cidr.metadata?({0xFE80, 0, 0, 0, 0, 0, 0, 1})
+      assert Cidr.metadata?({0xFEBF, 0, 0, 0, 0, 0, 0, 1})
+      refute Cidr.metadata?({0xFEC0, 0, 0, 0, 0, 0, 0, 1})
+      refute Cidr.metadata?({0x2001, 0xDB8, 0, 0, 0, 0, 0, 1})
     end
 
     test "IPv4-mapped IPv6 link-local" do
-      assert Cidr.link_local?({0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0x0001})
-      refute Cidr.link_local?({0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001})
+      assert Cidr.metadata?({0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0x0001})
+      refute Cidr.metadata?({0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001})
     end
 
-    test "every IPv6 form embedding 169.254.169.254 is link-local, and its public twin is not" do
+    test "every IPv6 form embedding 169.254.169.254 is metadata, and its public twin is not" do
       forms = [
         # ::a9fe:a9fe, IPv4-compatible
         {{0, 0, 0, 0, 0, 0, 0xA9FE, 0xA9FE}, {0, 0, 0, 0, 0, 0, 0x0808, 0x0808}},
@@ -137,14 +137,38 @@ defmodule Cyfr.CidrTest do
         {{0x64, 0xFF9B, 1, 0, 0x00A9, 0xFEA9, 0xFE00, 0},
          {0x64, 0xFF9B, 1, 0x0808, 0x0008, 0x0808, 0x0808, 0x0808}},
         # 2002:a9fe:a9fe::1, 6to4
-        {{0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 1}, {0x2002, 0x0808, 0x0808, 0, 0, 0, 0, 1}}
+        {{0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 1}, {0x2002, 0x0808, 0x0808, 0, 0, 0, 0, 1}},
+        # 2001:0:a9fe:a9fe::, Teredo server
+        {{0x2001, 0, 0xA9FE, 0xA9FE, 0, 0, 0, 0},
+         {0x2001, 0, 0x0808, 0x0808, 0, 0, 0xF7F7, 0xF7F7}},
+        # 2001:0:808:808::5601:5601, Teredo client (inverted)
+        {{0x2001, 0, 0x0808, 0x0808, 0, 0, 0x5601, 0x5601},
+         {0x2001, 0, 0x0808, 0x0808, 0, 0, 0xF7F7, 0xF7F7}},
+        # 2001:db8::5efe:a9fe:a9fe, ISATAP
+        {{0x2001, 0xDB8, 0, 0, 0, 0x5EFE, 0xA9FE, 0xA9FE},
+         {0x2001, 0xDB8, 0, 0, 0, 0x5EFE, 0x0808, 0x0808}},
+        # 2001:db8::200:5efe:a9fe:a9fe, ISATAP with a global IPv4 flag
+        {{0x2001, 0xDB8, 0, 0, 0x200, 0x5EFE, 0xA9FE, 0xA9FE},
+         {0x2001, 0xDB8, 0, 0, 0x200, 0x5EFE, 0x0808, 0x0808}}
       ]
 
       for {metadata, public} <- forms do
-        assert Cidr.link_local?(metadata), inspect(metadata)
+        assert Cidr.metadata?(metadata), inspect(metadata)
         assert Cidr.private_ip?(metadata), inspect(metadata)
-        refute Cidr.link_local?(public), inspect(public)
+        refute Cidr.metadata?(public), inspect(public)
       end
+    end
+
+    test "the metadata endpoints outside link-local, and their embedded forms" do
+      assert Cidr.metadata?({100, 100, 100, 200})
+      assert Cidr.metadata?({192, 0, 0, 192})
+      assert Cidr.metadata?({0xFD00, 0x0EC2, 0, 0, 0, 0, 0, 0x0254})
+      assert Cidr.metadata?({0x64, 0xFF9B, 0, 0, 0, 0, 0x6464, 0x64C8})
+      assert Cidr.metadata?({0, 0, 0, 0, 0, 0xFFFF, 0xC000, 0x00C0})
+
+      refute Cidr.metadata?({100, 100, 100, 201})
+      refute Cidr.metadata?({192, 0, 0, 193})
+      refute Cidr.metadata?({0xFD00, 0x0EC2, 0, 0, 0, 0, 0, 0x0255})
     end
   end
 

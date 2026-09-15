@@ -208,7 +208,7 @@ defmodule Opus.EdgeGuardTest do
       refute EdgeGuard.allows_private_ip?(e, {192, 168, 1, 1})
     end
 
-    test "link-local and cloud metadata are denied however wide the allowlist is" do
+    test "cloud metadata is denied however wide the allowlist is" do
       # The address every cloud provider serves instance credentials from.
       # An allowlist that names it, or a `0.0.0.0/0` that swallows it, must
       # not reach it — this is the check that keeps a consented egress to a
@@ -231,6 +231,14 @@ defmodule Opus.EdgeGuardTest do
           ] do
         refute EdgeGuard.allows_private_ip?(wide, embedded), inspect(embedded)
       end
+
+      refute EdgeGuard.allows_private_ip?(wide, {0xFD00, 0x0EC2, 0, 0, 0, 0, 0, 0x0254})
+
+      everything =
+        egress_edge(%{domains: [], methods: [], schemes: [], private_ips: ["0.0.0.0/0"]})
+
+      refute EdgeGuard.allows_private_ip?(everything, {100, 100, 100, 200})
+      refute EdgeGuard.allows_private_ip?(everything, {192, 0, 0, 192})
 
       assert EdgeGuard.allows_private_ip?(wide, {0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 0x0001})
     end

@@ -42,11 +42,11 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "127.0.0.1"
     end
 
-    test "blocks link-local 169.254.169.254 (cloud metadata)" do
+    test "blocks the cloud metadata address 169.254.169.254" do
       assert {:error, msg} =
                Network.validate_redirect_url("http://169.254.169.254/latest/meta-data/")
 
-      assert msg =~ "link-local IP"
+      assert msg =~ "metadata IP"
       assert msg =~ "169.254.169.254"
     end
 
@@ -56,7 +56,7 @@ defmodule Cyfr.NetworkTest do
                  private_policy: :allow_all
                )
 
-      assert msg =~ "link-local IP"
+      assert msg =~ "metadata IP"
     end
 
     test "private_policy: :allow_all permits 127.0.0.1" do
@@ -93,16 +93,16 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "private IP"
     end
 
-    test "always blocks link-local (cloud metadata) even with private_policy: :allow_all" do
+    test "always blocks cloud metadata even with private_policy: :allow_all" do
       assert {:error, msg} =
                Network.resolve_and_validate("http://169.254.169.254/", private_policy: :allow_all)
 
-      assert msg =~ "link-local"
+      assert msg =~ "metadata IP"
     end
   end
 
   describe "pinned_request/5 SSRF + DNS-rebinding guard" do
-    # The security contract: a private/link-local resolution is rejected BEFORE
+    # The security contract: a private or metadata resolution is rejected BEFORE
     # any connection, and the connection (when allowed) targets the validated IP
     # — so there is no second DNS resolution to rebind.
     test "blocks loopback before connecting" do
@@ -110,13 +110,13 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "private IP"
     end
 
-    test "always blocks the link-local metadata endpoint" do
+    test "always blocks the metadata endpoint" do
       assert {:error, msg} =
                Network.pinned_request(:get, "http://169.254.169.254/latest/meta-data/",
                  private_policy: :allow_all
                )
 
-      assert msg =~ "link-local"
+      assert msg =~ "metadata IP"
     end
 
     test "rejects non-http(s) schemes" do
