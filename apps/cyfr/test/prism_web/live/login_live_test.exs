@@ -182,6 +182,51 @@ defmodule PrismWeb.LoginLiveTest do
       assert get_session(landed, :sanctum_session_token) == session.token
     end
 
+    test "a boot that lost the control plane stops a waiting sign-in at its next poll, asking no provider",
+         %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/login")
+
+      view
+      |> element("button[phx-click=start][phx-value-provider=github]")
+      |> render_click()
+
+      Cyfr.ControlPlane.mark(:lost)
+      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      Application.delete_env(:cyfr, :device_flow_last_ip)
+      on_exit(fn -> Application.delete_env(:cyfr, :device_flow_last_ip) end)
+
+      send(view.pid, :login_poll)
+      html = render(view)
+
+      assert html =~ "not accepting sign-ins"
+      refute html =~ "Waiting for authorization"
+      assert Application.get_env(:cyfr, :device_flow_last_ip) == nil
+
+      # Stopped: a later tick asks nothing either, owner again or not.
+      Cyfr.ControlPlane.mark(:unclaimed)
+      send(view.pid, :login_poll)
+      _ = render(view)
+      assert Application.get_env(:cyfr, :device_flow_last_ip) == nil
+    end
+
+    test "a page open on a boot that lost the control plane starts no sign-in", %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/login")
+
+      Cyfr.ControlPlane.mark(:lost)
+      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      Application.delete_env(:cyfr, :device_flow_last_ip)
+      on_exit(fn -> Application.delete_env(:cyfr, :device_flow_last_ip) end)
+
+      html =
+        view
+        |> element("button[phx-click=start][phx-value-provider=github]")
+        |> render_click()
+
+      assert html =~ "not accepting sign-ins"
+      refute html =~ "WXYZ-1234"
+      assert Application.get_env(:cyfr, :device_flow_last_ip) == nil
+    end
+
     test "a missing device-complete ticket returns to login", %{conn: conn} do
       conn = get(conn, "/auth/device/complete/not-a-real-ticket")
       assert redirected_to(conn) == "/login"

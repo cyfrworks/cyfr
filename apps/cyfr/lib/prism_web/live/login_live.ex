@@ -11,6 +11,10 @@ defmodule PrismWeb.LoginLive do
 
   A refused sign-in never reaches a session — the door answers on the
   poll; a signed-in person who has no athanor yet is told so.
+
+  A boot that does not own the control plane (`Cyfr.ControlPlane`) signs
+  nobody in: a flow is not started, and a flow already waiting stops at
+  its next poll without asking the provider.
   """
 
   use PrismWeb, :live_view
@@ -20,6 +24,7 @@ defmodule PrismWeb.LoginLive do
 
   @ticket_ttl_ms 60_000
   @default_poll_interval_s 5
+  @not_owner "This server is not accepting sign-ins right now. Try again in a moment."
 
   @impl true
   def mount(params, session, socket) do
@@ -64,6 +69,9 @@ defmodule PrismWeb.LoginLive do
       # never 0.)
       is_integer(last) and now - last < 2_000 ->
         {:noreply, socket}
+
+      not Cyfr.ControlPlane.owner?() ->
+        {:noreply, assign(socket, :error, @not_owner)}
 
       true ->
         start_device_flow(assign(socket, :last_start_at, now), provider)
@@ -116,14 +124,7 @@ defmodule PrismWeb.LoginLive do
   def handle_info(:login_poll, socket) do
     case socket.assigns.login_state do
       :waiting ->
-        finish_poll(
-          socket,
-          DeviceFlow.impl().poll_for_session(
-            socket.assigns.provider,
-            socket.assigns.device_code,
-            socket.assigns.client_ip
-          )
-        )
+        poll(socket)
 
       _ ->
         {:noreply, socket}
@@ -133,6 +134,21 @@ defmodule PrismWeb.LoginLive do
   def handle_info(msg, socket) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
+  end
+
+  defp poll(socket) do
+    if Cyfr.ControlPlane.owner?() do
+      finish_poll(
+        socket,
+        DeviceFlow.impl().poll_for_session(
+          socket.assigns.provider,
+          socket.assigns.device_code,
+          socket.assigns.client_ip
+        )
+      )
+    else
+      {:noreply, assign_idle(socket, @not_owner)}
+    end
   end
 
   defp finish_poll(socket, {:ok, %{status: "pending"} = result}) do
