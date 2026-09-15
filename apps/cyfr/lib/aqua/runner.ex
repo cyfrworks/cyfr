@@ -211,7 +211,7 @@ defmodule Aqua.Runner do
     end
   end
 
-  @doc "Stop the running or paused turn and drop what waited behind it."
+  @doc "Cancel the current running, paused or held turn and the turns queued behind it."
   @spec stop_turn(Context.t(), String.t()) :: :ok | {:error, term()}
   def stop_turn(%Context{} = ctx, thread_id), do: call(ctx, thread_id, {:stop, ctx})
 
@@ -291,7 +291,7 @@ defmodule Aqua.Runner do
           # Turns accepted behind the running one, oldest first.
           queue: [],
           # Open turns another process on this boot still holds: turn id =>
-          # the monitor on that holder, or nil while a recovery retries.
+          # its holder and monitor, or nil while a recovery retries.
           held: %{},
           usage: %{input: 0, output: 0},
           tool_activity: [],
@@ -316,7 +316,13 @@ defmodule Aqua.Runner do
   @impl true
   def handle_call(:state, _from, state), do: {:reply, public_state(state), state}
 
-  def handle_call({:send, ctx, text, opts}, _from, state) do
+  def handle_call(request, from, state) do
+    if Cyfr.ControlPlane.owner?(),
+      do: handle_owned_call(request, from, state),
+      else: {:stop, :normal, {:error, :control_plane_lost}, retire_runtime(state)}
+  end
+
+  defp handle_owned_call({:send, ctx, text, opts}, _from, state) do
     opts = Keyword.put(opts, :last, state.orchestrator)
 
     case Admission.check(ctx, state.athanor_id, text, opts) do
@@ -337,14 +343,20 @@ defmodule Aqua.Runner do
     end
   end
 
-  def handle_call({:stop, ctx}, _from, state) do
+  defp handle_owned_call({:stop, ctx}, _from, state) do
     case Admission.standing(ctx, state.athanor_id) do
-      :ok -> {:reply, :ok, state |> clear_queue("stopped") |> cut("stopped", "cancelled")}
-      refusal -> {:reply, refusal, state}
+      :ok ->
+        case cancel_work(state, "stopped") do
+          {:ok, state} -> {:reply, :ok, state}
+          {:error, reason, state} -> {:stop, :normal, {:error, reason}, retire_runtime(state)}
+        end
+
+      refusal ->
+        {:reply, refusal, state}
     end
   end
 
-  def handle_call({:revoke_grant, ctx, agent, tool, action}, _from, state) do
+  defp handle_owned_call({:revoke_grant, ctx, agent, tool, action}, _from, state) do
     case Admission.standing(ctx, state.athanor_id) do
       :ok ->
         for scope <- Aqua.ToolGrants.scopes() do
@@ -364,7 +376,7 @@ defmodule Aqua.Runner do
     end
   end
 
-  def handle_call({:restart_for_consent, ctx, _result}, _from, state) do
+  defp handle_owned_call({:restart_for_consent, ctx, _result}, _from, state) do
     case Admission.standing(ctx, state.athanor_id) do
       :ok ->
         prompt =
@@ -376,9 +388,14 @@ defmodule Aqua.Runner do
             _ -> nil
           end
 
-        state = state |> clear_queue("restart required") |> cut("restart required", "cancelled")
-        if prompt, do: broadcast(state, {:restart_prompt, prompt, ctx.user_id})
-        {:reply, :ok, state}
+        case cancel_work(state, "restart required") do
+          {:ok, state} ->
+            if prompt, do: broadcast(state, {:restart_prompt, prompt, ctx.user_id})
+            {:reply, :ok, state}
+
+          {:error, reason, state} ->
+            {:stop, :normal, {:error, reason}, retire_runtime(state)}
+        end
 
       refusal ->
         {:reply, refusal, state}
@@ -624,28 +641,40 @@ defmodule Aqua.Runner do
       # Stop local work without aborting or settling its durable turn. The
       # owning boot recovers those rows; process exit retires subscriptions,
       # held monitors and timers addressed to this runner.
-      if state.live, do: Task.shutdown(state.live.task, :brutal_kill)
-      {:stop, :normal, state}
+      {:stop, :normal, retire_runtime(state)}
     end
   end
 
-  defp handle_owned_info({ref, result}, %{live: %{task: %Task{ref: ref}}} = state) do
+  defp handle_owned_info(
+         {ref, result},
+         %{live: %{task: %Aqua.Loop.Worker.Handle{ref: ref}}} = state
+       ) do
     Process.demonitor(ref, [:flush])
-    {:noreply, after_loop(state, result)}
+
+    case Aqua.Loop.Worker.stop(state.live.task.pid) do
+      :ok -> {:noreply, after_loop(state, result)}
+      {:error, _} -> {:stop, :normal, retire_runtime(state)}
+    end
   end
 
   defp handle_owned_info(
          {:DOWN, ref, :process, _pid, reason},
-         %{live: %{task: %Task{ref: ref}}} = state
+         %{live: %{task: %Aqua.Loop.Worker.Handle{ref: ref}}} = state
        ) do
-    {:noreply, crashed(state, reason)}
+    case Aqua.Loop.Worker.stop(state.live.task.pid) do
+      :ok -> crashed(state, reason)
+      {:error, _} -> {:stop, :normal, retire_runtime(state)}
+    end
   end
 
   # The process that held a turn is gone: the turn is recovered now.
   defp handle_owned_info({:DOWN, ref, :process, _pid, _reason} = msg, state) do
-    case Enum.find(state.held, fn {_turn_id, held} -> held == ref end) do
-      {turn_id, _ref} ->
-        {:noreply, recover_held(state, turn_id)}
+    case Enum.find(state.held, fn {_turn_id, held} -> match?(%{ref: ^ref}, held) end) do
+      {turn_id, %{pid: holder}} ->
+        case Aqua.Loop.Worker.stop(holder) do
+          :ok -> {:noreply, recover_held(state, turn_id)}
+          {:error, _} -> {:stop, :normal, retire_runtime(state)}
+        end
 
       nil ->
         Cyfr.UnexpectedMessage.log(__MODULE__, msg)
@@ -712,12 +741,10 @@ defmodule Aqua.Runner do
   defp handle_owned_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
     case Athanors.get(state.athanor_id) do
       {:ok, %{status: "archived"}} ->
-        state =
-          state
-          |> clear_queue("the athanor was archived")
-          |> cut("the athanor was archived", "cancelled")
-
-        {:stop, :normal, state}
+        case cancel_work(state, "the athanor was archived") do
+          {:ok, state} -> {:stop, :normal, state}
+          {:error, _reason, state} -> {:stop, :normal, retire_runtime(state)}
+        end
 
       _ ->
         {:noreply, state}
@@ -797,15 +824,15 @@ defmodule Aqua.Runner do
 
         state = %{state | live: nil, paused: paused}
         broadcast(state, {:turn_paused, live.turn_id, paused.reason})
-        settle_paused(state)
+        {:noreply, settle_paused(state)}
 
       _ ->
         status = if match?({:cancel_requested, _}, reason), do: "cancelled", else: "uncertain"
 
-        %{state | live: nil}
-        |> abort_turn(live.turn_id, describe(reason))
-        |> end_turn(live.turn_id, status, describe(reason))
-        |> start_next()
+        case cancel_turn(state, live.turn_id, describe(reason), status) do
+          :ok -> {:noreply, state |> retire_turn(live.turn_id) |> start_next()}
+          {:error, _reason} -> {:stop, :normal, retire_runtime(state)}
+        end
     end
   end
 
@@ -862,37 +889,90 @@ defmodule Aqua.Runner do
   # Cutting turns short
   # ---------------------------------------------------------------------------
 
-  # The running or paused turn is aborted from here — the fence renewed,
-  # the loop stopped, then the steps settled — and ended.
-  defp cut(%{live: nil, paused: nil} = state, _reason, _status), do: state
+  # The target set belongs to this handler invocation. Retire each local
+  # entry only after its durable cancellation succeeds; a later send is
+  # processed after this call and opens new work.
+  defp cancel_work(state, reason) do
+    targets =
+      Enum.uniq(
+        Enum.flat_map([state.live, state.paused], fn
+          nil -> []
+          entry -> [entry.turn_id]
+        end) ++ Map.keys(state.held) ++ Enum.map(state.queue, & &1.turn_id)
+      )
 
-  defp cut(%{live: %{turn_id: turn_id, task: task}} = state, reason, status) do
-    state = abort_turn(state, turn_id, reason, fn -> Task.shutdown(task, :brutal_kill) end)
-
-    %{state | live: nil}
-    |> end_turn(turn_id, status, reason)
+    Enum.reduce_while(targets, {:ok, state}, fn id, {:ok, state} ->
+      case cancel_turn(state, id, reason, "cancelled") do
+        :ok -> {:cont, {:ok, retire_turn(state, id)}}
+        {:error, error} -> {:halt, {:error, error, state}}
+      end
+    end)
   end
 
-  defp cut(%{paused: %{turn_id: turn_id, expiry: expiry}} = state, reason, status) do
-    if expiry, do: Process.cancel_timer(expiry)
-
-    %{state | paused: nil}
-    |> abort_turn(turn_id, reason)
-    |> end_turn(turn_id, status, reason)
-  end
-
-  defp abort_turn(state, turn_id, reason, stop \\ fn -> :ok end) do
-    case Tape.turn(state.ctx, turn_id) do
-      {:ok, turn} -> _ = Aqua.Loop.abort(state.ctx, turn, reason, stop)
-      _unread -> stop.()
+  defp cancel_turn(state, id, reason, status) do
+    with :ok <- Cyfr.ControlPlane.assert_owner(),
+         {:ok, turn} <- Tape.turn(state.ctx, id) do
+      if Tape.terminal?(turn) do
+        Aqua.Loop.Worker.stop(local_holder(state, id) || Aqua.Loop.holder(id))
+      else
+        with {:ok, aborted} <-
+               Aqua.Loop.abort(state.ctx, turn, reason, fn ->
+                 Aqua.Loop.Worker.stop(local_holder(state, id))
+               end),
+             :ok <- Cyfr.ControlPlane.assert_owner(),
+             {:ok, _} <- Tape.finish(state.ctx, aborted, status, %{error: reason}) do
+          :ok
+        else
+          {:error, :not_open} -> terminal_target(state, id)
+          error -> error
+        end
+      end
     end
+  end
 
+  # A concurrent ordinary completion is already settled. A fence loss is
+  # never handled here and never followed by a write under a reread fence.
+  defp terminal_target(state, id) do
+    case Tape.turn(state.ctx, id) do
+      {:ok, turn} ->
+        if Tape.terminal?(turn), do: :ok, else: {:error, :not_open}
+
+      error ->
+        error
+    end
+  end
+
+  defp local_holder(%{live: %{turn_id: id, task: task}}, id), do: task.pid
+  defp local_holder(state, id), do: get_in(state.held, [id, :pid])
+
+  defp retire_turn(state, id) do
+    if match?(%{turn_id: ^id}, state.live), do: Process.demonitor(state.live.task.ref, [:flush])
+
+    if match?(%{turn_id: ^id}, state.paused) and state.paused.expiry,
+      do: Process.cancel_timer(state.paused.expiry)
+
+    if held = state.held[id], do: Process.demonitor(held.ref, [:flush])
+
+    state = %{
+      state
+      | live: if(match?(%{turn_id: ^id}, state.live), do: nil, else: state.live),
+        paused: if(match?(%{turn_id: ^id}, state.paused), do: nil, else: state.paused),
+        held: Map.delete(state.held, id),
+        queue: Enum.reject(state.queue, &(&1.turn_id == id))
+    }
+
+    broadcast(state, {:queued, length(state.queue)})
+    touch(state)
+  end
+
+  defp retire_runtime(state) do
+    if state.live, do: Aqua.Loop.Worker.stop(state.live.task.pid)
     state
   end
 
   defp end_turn(state, turn_id, status, error) do
     with {:ok, turn} <- Tape.turn(state.ctx, turn_id),
-         false <- turn.status in ["completed", "failed", "cancelled", "uncertain"] do
+         false <- Tape.terminal?(turn) do
       case Tape.finish(state.ctx, turn, status, %{error: error}) do
         {:ok, _} ->
           :ok
@@ -903,15 +983,6 @@ defmodule Aqua.Runner do
     end
 
     touch(state)
-  end
-
-  defp clear_queue(%{queue: []} = state, _reason), do: state
-
-  defp clear_queue(%{queue: queue} = state, reason) do
-    state = Enum.reduce(queue, state, &end_turn(&2, &1.turn_id, "cancelled", reason))
-    state = %{state | queue: []}
-    broadcast(state, {:queued, 0})
-    state
   end
 
   # ---------------------------------------------------------------------------
@@ -972,7 +1043,10 @@ defmodule Aqua.Runner do
           else: continue(state, entry, :adopt)
 
       {:held, turn, holder} ->
-        %{state | held: Map.put(state.held, turn.id, Process.monitor(holder))}
+        %{
+          state
+          | held: Map.put(state.held, turn.id, %{pid: holder, ref: Process.monitor(holder)})
+        }
 
       {:uncertain, turn, why} ->
         give_up(state, turn, why)
@@ -997,8 +1071,14 @@ defmodule Aqua.Runner do
   # waits for that holder like one found at start.
   defp hold_back(state, turn_id) do
     case Aqua.Loop.holder(turn_id) do
-      nil -> recover_held(%{state | held: Map.put(state.held, turn_id, nil)}, turn_id)
-      holder -> %{state | held: Map.put(state.held, turn_id, Process.monitor(holder))}
+      nil ->
+        recover_held(%{state | held: Map.put(state.held, turn_id, nil)}, turn_id)
+
+      holder ->
+        %{
+          state
+          | held: Map.put(state.held, turn_id, %{pid: holder, ref: Process.monitor(holder)})
+        }
     end
   end
 

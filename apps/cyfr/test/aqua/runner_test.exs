@@ -104,7 +104,7 @@ defmodule Aqua.RunnerTest do
   defp running!(thread) do
     assert_receive {:scripted_probe, call, _}, 60_000
     runner = Runner.whereis(thread.id)
-    %{live: %{task: %Task{pid: loop}}} = :sys.get_state(runner)
+    %{live: %{task: %Aqua.Loop.Worker.Handle{pid: loop}}} = :sys.get_state(runner)
     %{runner: runner, loop: loop, call: call}
   end
 
@@ -617,6 +617,12 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, second)
     assert %{running: false, queued: 0} = Runner.state(thread.id, ctx.athanor_id)
     assert Cyfr.Execution.Semaphore.status().root_active == 0
+
+    ScriptedWorker.script([reply("new work")])
+    {:ok, %{turn_id: fresh}} = Runner.send_message(ctx, thread.id, "@aqua again")
+    refute fresh in [first, second]
+    wait_until(fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, fresh)) end, 60_000)
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, fresh)
   end
 
   test "a card pauses the turn, and the decision continues it", %{ctx: ctx, thread: thread} do
@@ -637,6 +643,37 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn_id)
     {:ok, steps} = Tape.steps(ctx, paused)
     assert %{action: "keep", outcome: "ok"} = Enum.find(steps, &(&1.action == "keep"))
+  end
+
+  @tag :stop_handoff
+  test "Stop invalidates a paused approval and a late decision cannot continue the turn", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    script!([
+      call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}),
+      reply("never resumed")
+    ])
+
+    {:ok, %{turn_id: id}} = Runner.send_message(ctx, thread.id, "@aqua keep it")
+    runner = Runner.whereis(thread.id)
+    wait_until(fn -> match?(%{paused: %{}}, :sys.get_state(runner)) end, 60_000)
+    {:ok, turn} = Tape.turn(ctx, id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, turn)
+    {:ok, %{turn_id: queued}} = Runner.send_message(second_member(ctx), thread.id, "@aqua queued")
+    calls = ScriptedWorker.calls()
+
+    assert :ok = Runner.stop_turn(ctx, thread.id)
+    assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, id)
+    assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, queued)
+    assert {:ok, %{status: "invalidated"}} = Tape.approval(ctx, approval.id)
+
+    assert {:ok, %{decision: "invalidated", replayed: true}} =
+             Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+    send(runner, {:thread, thread.id, {:approval_resolved, %{turn_id: id}}})
+    _ = :sys.get_state(runner)
+    assert ScriptedWorker.calls() == calls
   end
 
   test "a runner that starts runs the accepted turn it finds and takes over the running one", %{
@@ -805,7 +842,7 @@ defmodule Aqua.RunnerTest do
         {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
         pids = running!(thread)
         {:ok, %{turn_id: second}} = Runner.send_message(other, thread.id, "@aqua me too")
-        %{live: %{task: %Task{ref: task_ref}}} = :sys.get_state(pids.runner)
+        %{live: %{task: %Aqua.Loop.Worker.Handle{ref: task_ref}}} = :sys.get_state(pids.runner)
 
         :sys.replace_state(pids.runner, fn state ->
           :ok = Runner.unsubscribe(thread.id, ctx.athanor_id)
@@ -964,6 +1001,240 @@ defmodule Aqua.RunnerTest do
         assert ScriptedWorker.calls() == calls
       end
     end
+  end
+
+  for dying <- [false, true] do
+    @tag :stop_handoff
+    test "Stop cancels held and queued work when its holder is dying: #{dying}", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      stop_held(ctx, thread, unquote(dying))
+    end
+  end
+
+  defp stop_held(ctx, thread, dying) do
+    script!([{:probe, self()}, reply("never resumed"), reply("never queued")])
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, content: "@aqua held"},
+        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+      })
+
+    holder = spawn(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+    assert_receive {:scripted_probe, call, _}, 60_000
+    {:ok, runner} = Runner.ensure(thread.id, ctx.athanor_id)
+
+    {:ok, %{turn_id: queued}} =
+      Runner.send_message(second_member(ctx), thread.id, "@aqua queued")
+
+    %{held: held} = :sys.get_state(runner)
+    %{ref: held_ref} = Map.fetch!(held, turn.id)
+    calls = ScriptedWorker.calls()
+
+    if dying do
+      :ok = :sys.suspend(runner)
+      tag = make_ref()
+      send(runner, {:"$gen_call", {self(), tag}, {:stop, ctx}})
+      ref = Process.monitor(holder)
+      Process.exit(holder, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+      :ok = :sys.resume(runner)
+      assert_receive {^tag, :ok}, 5_000
+    else
+      assert :ok = Runner.stop_turn(ctx, thread.id)
+    end
+
+    refute Process.alive?(holder)
+    refute Process.alive?(call)
+    assert {:ok, %{status: "cancelled"} = cancelled} = Tape.turn(ctx, turn.id)
+    assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, queued)
+    assert %{live: nil, paused: nil, held: held, queue: []} = :sys.get_state(runner)
+    assert held == %{}
+    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.content == "@aqua held"))
+    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.content == "@aqua queued"))
+
+    send(runner, {:DOWN, held_ref, :process, holder, :normal})
+    send(runner, {:recover, turn.id})
+    send(runner, {:thread, thread.id, {:approval_resolved, %{turn_id: turn.id}}})
+    send(call, :continue)
+    assert :ok = Runner.stop_turn(ctx, thread.id)
+    assert Tape.turn(ctx, turn.id) == {:ok, cancelled}
+    assert ScriptedWorker.calls() == calls
+  end
+
+  for loss <- [:lost, :expired],
+      operation <- [:send, :stop, :revoke_grant, :restart_for_consent] do
+    @tag :stop_handoff
+    test "a queued #{operation} call refuses without mutation after ownership is #{loss}", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      script!([{:probe, self()}, reply("first"), reply("queued")])
+      {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua first")
+      pids = running!(thread)
+
+      {:ok, %{turn_id: queued}} =
+        Runner.send_message(second_member(ctx), thread.id, "@aqua queued")
+
+      request =
+        case unquote(operation) do
+          :send -> {:send, ctx, "@aqua late", [orchestrators: [%{"name" => "aqua"}]]}
+          :stop -> {:stop, ctx}
+          :revoke_grant -> {:revoke_grant, ctx, "aqua", "notes", "keep"}
+          :restart_for_consent -> {:restart_for_consent, ctx, %{}}
+        end
+
+      before = tape_snapshot(ctx, thread.id, [first, queued])
+      calls = ScriptedWorker.calls()
+      ref = Process.monitor(pids.runner)
+      :ok = :sys.suspend(pids.runner)
+      tag = make_ref()
+      send(pids.runner, {:"$gen_call", {self(), tag}, request})
+      lose_ownership(unquote(loss))
+      :ok = :sys.resume(pids.runner)
+      assert_receive {^tag, {:error, :control_plane_lost}}, 5_000
+      await_retired(pids.runner, ref)
+      assert tape_snapshot(ctx, thread.id, [first, queued]) == before
+      assert ScriptedWorker.calls() == calls
+    end
+  end
+
+  @tag :stop_handoff
+  test "Stop refuses a fence lost during shutdown and does not finish under the successor's fence",
+       %{
+         ctx: ctx,
+         thread: thread
+       } do
+    script!([{:probe, self()}, reply("never resumed")])
+    {:ok, %{turn_id: id}} = Runner.send_message(ctx, thread.id, "@aqua first")
+    pids = running!(thread)
+    {:ok, running} = Tape.turn(ctx, id)
+    :ok = :sys.suspend(Aqua.Loop.Worker)
+    on_exit(fn -> :sys.resume(Aqua.Loop.Worker) end)
+    stop = Task.async(fn -> Runner.stop_turn(ctx, thread.id) end)
+
+    wait_until(fn ->
+      case Tape.turn(ctx, id) do
+        {:ok, turn} -> turn.fence > running.fence
+        _ -> false
+      end
+    end)
+
+    {:ok, aborted} = Tape.turn(ctx, id)
+    {:ok, successor} = Tape.supersede(ctx, aborted)
+    :ok = :sys.resume(Aqua.Loop.Worker)
+    assert {:error, :superseded} = Task.await(stop, 10_000)
+    assert {:ok, ^successor} = Tape.turn(ctx, id)
+    refute Process.alive?(pids.loop)
+    refute Enum.any?(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
+  end
+
+  @tag :stop_handoff
+  @tag capture_log: true
+  test "a failed queued cancellation refuses and retries without changing an already cancelled turn",
+       %{
+         ctx: ctx,
+         thread: thread
+       } do
+    script!([{:probe, self()}, {:probe, self()}, reply("never resumed")])
+    {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua first")
+    _ = running!(thread)
+
+    {:ok, %{turn_id: queued}} =
+      Runner.send_message(second_member(ctx), thread.id, "@aqua queued")
+
+    refuse_turn_writes(queued)
+    assert {:error, :database_error} = Runner.stop_turn(ctx, thread.id)
+    assert {:ok, %{status: "cancelled"} = cancelled} = Tape.turn(ctx, first)
+    assert {:ok, %{status: "accepted", fence: 1}} = Tape.turn(ctx, queued)
+    allow_turn_writes()
+
+    assert :ok = Runner.stop_turn(ctx, thread.id)
+    assert {:ok, ^cancelled} = Tape.turn(ctx, first)
+    assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, queued)
+    assert :ok = Runner.stop_turn(ctx, thread.id)
+  end
+
+  for standing <- [:foreign_tenant, :denied_person] do
+    @tag :stop_handoff
+    test "a queued Stop rechecks #{standing} before cancellation", %{
+      ctx: ctx,
+      user: user,
+      thread: thread
+    } do
+      script!([{:probe, self()}, reply("never resumed")])
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, thread.id, "@aqua first")
+      pids = running!(thread)
+      before = tape_snapshot(ctx, thread.id, [id])
+      :ok = :sys.suspend(pids.runner)
+
+      caller =
+        if unquote(standing) == :foreign_tenant,
+          do: %{ctx | athanor_id: "ath_elsewhere"},
+          else: ctx
+
+      tag = make_ref()
+      send(pids.runner, {:"$gen_call", {self(), tag}, {:stop, caller}})
+
+      if unquote(standing) == :denied_person do
+        user |> Ecto.Changeset.change(status: "denied") |> Arca.Repo.update!()
+      end
+
+      :ok = :sys.resume(pids.runner)
+      assert_receive {^tag, {:error, :not_member}}, 5_000
+      assert tape_snapshot(ctx, thread.id, [id]) == before
+      assert Process.alive?(pids.loop)
+    end
+  end
+
+  # The trigger and function are transactional test state. The fault is
+  # removed before retry; sandbox rollback also removes them on failure.
+  defp refuse_turn_writes(id) do
+    id = String.replace(id, "'", "''")
+
+    statements = %{
+      Ecto.Adapters.Postgres => [
+        """
+        CREATE FUNCTION stop_refusal() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF OLD.id = '#{id}' THEN RAISE EXCEPTION 'test turn write refused'; END IF;
+          RETURN NEW;
+        END $$
+        """,
+        """
+        CREATE TRIGGER stop_refusal BEFORE UPDATE ON turns
+        FOR EACH ROW EXECUTE FUNCTION stop_refusal()
+        """
+      ],
+      Ecto.Adapters.SQLite3 => [
+        """
+        CREATE TRIGGER stop_refusal BEFORE UPDATE ON turns WHEN OLD.id = '#{id}'
+        BEGIN SELECT RAISE(ABORT, 'test turn write refused'); END
+        """
+      ]
+    }
+
+    Enum.each(
+      Map.fetch!(statements, Arca.Repo.__adapter__()),
+      &Ecto.Adapters.SQL.query!(Arca.Repo, &1)
+    )
+  end
+
+  defp allow_turn_writes do
+    statements = %{
+      Ecto.Adapters.Postgres => [
+        "DROP TRIGGER stop_refusal ON turns",
+        "DROP FUNCTION stop_refusal()"
+      ],
+      Ecto.Adapters.SQLite3 => ["DROP TRIGGER stop_refusal"]
+    }
+
+    Enum.each(
+      Map.fetch!(statements, Arca.Repo.__adapter__()),
+      &Ecto.Adapters.SQL.query!(Arca.Repo, &1)
+    )
   end
 
   test "a turn another process on this boot holds is left to it, and recovered once it is gone while this boot owns the control plane",

@@ -290,7 +290,7 @@ defmodule Aqua.Loop.Turn do
           )
         end)
 
-      case Task.yield(task, @probe_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      case Aqua.Loop.Worker.yield(task, @probe_timeout_ms) || Aqua.Loop.Worker.shutdown(task) do
         {:ok, {:ok, %{output: output}}} -> {:ok, output}
         {:ok, {:ok, output}} -> {:ok, output}
         {:ok, {:error, _} = error} -> error

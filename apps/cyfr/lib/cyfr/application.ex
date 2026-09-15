@@ -210,7 +210,10 @@ defmodule Cyfr.Application do
       # Prism dashboard
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
-      {Task.Supervisor, name: Aqua.TaskSupervisor},
+      group(Aqua.WorkerTree, [
+        Aqua.Loop.Worker,
+        {Task.Supervisor, name: Aqua.TaskSupervisor}
+      ]),
       # Thread runners: one process per thread with open
       # turns, started on demand; the recovery task starts one for every
       # thread holding an open turn when the server last stopped. The

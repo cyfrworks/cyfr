@@ -338,8 +338,15 @@ defmodule Aqua.Loop.CloneTest do
     {:ok, running} = Tape.turn(ctx, turn.id)
 
     assert {:ok, _} =
-             Aqua.Loop.abort(ctx, running, "stopped", fn -> Task.shutdown(loop, :brutal_kill) end)
+             Aqua.Loop.abort(ctx, running, "stopped", fn ->
+               {:ok, current} = Tape.turn(ctx, running.id)
+               {:ok, current_clone} = Tape.turn(ctx, clone.id)
+               assert current.fence > running.fence
+               assert current_clone.fence > clone.fence
+               Task.shutdown(loop, :brutal_kill)
+             end)
 
+    refute Process.alive?(worker)
     assert_receive {:DOWN, ^watched, :process, _, _}, 5_000
 
     assert [%{status: "cancelled", fence: fence}] = clones_of(turn)

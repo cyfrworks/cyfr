@@ -253,47 +253,98 @@ defmodule Aqua.Loop do
   `cancelled`, and the aborted mark is written. The caller then ends the
   turn.
 
-  `stop` runs before any child is cancelled, since a cancelled child
-  answers the call waiting on it, and runs whether or not the fence could
-  be raised.
+  `stop` runs after the fence is raised and before any child is cancelled,
+  since a cancelled child answers the call waiting on it. The local holder
+  and its workers are confirmed stopped before settlement. A failed fence,
+  shutdown or storage transition is returned to the caller.
   """
   @spec abort(Context.t(), Tape.turn(), String.t(), (-> term())) ::
           {:ok, Tape.turn()} | {:error, term()}
   def abort(%Context{} = ctx, turn, reason, stop \\ fn -> :ok end) when is_function(stop, 0) do
     guest = Context.enter_guest(ctx)
-    superseded = Tape.supersede(guest, turn)
-    stop.()
+    holder = holder(turn.id)
 
-    with {:ok, superseded} <- superseded,
-         {:ok, clones} <- Tape.open_clones(guest, superseded) do
-      for clone <- clones do
-        settle_aborted(ctx, clone, reason)
-        _ = Tape.close_clone_turn(guest, clone, "cancelled", %{error: reason})
-      end
-
-      settle_aborted(ctx, superseded, reason)
-      _ = Tape.append_aborted(guest, superseded, reason)
+    with :ok <- Cyfr.ControlPlane.assert_owner(),
+         {:ok, superseded} <- Tape.supersede(guest, turn),
+         :ok <- stop_aborted(stop, holder),
+         :ok <- Cyfr.ControlPlane.assert_owner(),
+         {:ok, clones} <- Tape.open_clones(guest, superseded),
+         :ok <- settle_clones(ctx, clones, reason),
+         :ok <- settle_aborted(ctx, superseded, reason),
+         {:ok, _} <- Tape.append_aborted(guest, superseded, reason) do
       {:ok, superseded}
     end
+  end
+
+  defp stop_aborted(stop, holder) do
+    case stop.() do
+      {:error, _} = error -> error
+      _ -> Aqua.Loop.Worker.stop(holder)
+    end
+  end
+
+  defp settle_clones(ctx, clones, reason) do
+    Enum.reduce_while(clones, :ok, fn clone, :ok ->
+      result =
+        with :ok <- settle_aborted(ctx, clone, reason),
+             {:ok, _} <-
+               Tape.close_clone_turn(Context.enter_guest(ctx), clone, "cancelled", %{
+                 error: reason
+               }),
+             do: :ok
+
+      case result do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
   end
 
   defp settle_aborted(ctx, turn, reason) do
     guest = Context.enter_guest(ctx)
 
-    with {:ok, steps} <- Tape.steps(guest, turn) do
-      for %{dispatch_state: "dispatched"} = step <- steps do
-        if step.child_execution_id, do: Cyfr.Execution.cancel(ctx, step.child_execution_id)
-        Aqua.Ops.cancel_call(handle(turn, step))
-
-        case TurnStep.unresolved(step) do
-          :uncertain -> Tape.mark_uncertain(guest, turn, step, reason)
-          :unknown -> Tape.close_step(guest, turn, step, "uncertain", %{error: reason})
-          _unanswered_or_replay -> Tape.close_step(guest, turn, step, "error", %{error: reason})
-        end
-      end
+    with :ok <- Cyfr.ControlPlane.assert_owner(),
+         {:ok, steps} <- Tape.steps(guest, turn),
+         :ok <- settle_aborted_steps(ctx, turn, steps, reason),
+         {:ok, _} <- Tape.skip_steps(guest, turn, reason) do
+      :ok
     end
+  end
 
-    _ = Tape.skip_steps(guest, turn, reason)
+  defp settle_aborted_steps(ctx, turn, steps, reason) do
+    steps
+    |> Enum.filter(&(&1.dispatch_state == "dispatched"))
+    |> Enum.reduce_while(:ok, fn step, :ok ->
+      with :ok <- Cyfr.ControlPlane.assert_owner(),
+           :ok <- cancel_aborted_child(ctx, step.child_execution_id) do
+        Aqua.Ops.cancel_call(handle(turn, step))
+        guest = Context.enter_guest(ctx)
+
+        result =
+          case TurnStep.unresolved(step) do
+            :uncertain -> Tape.mark_uncertain(guest, turn, step, reason)
+            :unknown -> Tape.close_step(guest, turn, step, "uncertain", %{error: reason})
+            _ -> Tape.close_step(guest, turn, step, "error", %{error: reason})
+          end
+
+        case result do
+          {:ok, _} -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+      else
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp cancel_aborted_child(_ctx, nil), do: :ok
+
+  defp cancel_aborted_child(ctx, id) do
+    case Cyfr.Execution.cancel(ctx, id) do
+      {:ok, _} -> :ok
+      {:error, reason} when reason in [:not_found, :not_cancellable] -> :ok
+      error -> error
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1090,7 +1141,7 @@ defmodule Aqua.Loop do
     after
       wait ->
         {%{item: item, task: task}, running} = Map.pop(running, soonest_ref)
-        Task.shutdown(task, :brutal_kill)
+        Aqua.Loop.Worker.shutdown(task)
 
         case settle_dead(state, item, :timeout) do
           {:uncertain, step, why} ->
@@ -1412,7 +1463,7 @@ defmodule Aqua.Loop do
   # then the step settled against the boundary.
   defp cancel_rest(%State{} = state, rest) do
     Enum.each(rest, fn %{item: %{step: step} = item, task: task} ->
-      if task, do: Task.shutdown(task, :brutal_kill)
+      if task, do: Aqua.Loop.Worker.shutdown(task)
       if step.child_execution_id, do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
       Aqua.Ops.cancel_call(handle(state, step))
       _ = settle_dead(state, item, :cancelled, :mark)
@@ -2099,7 +2150,7 @@ defmodule Aqua.Loop do
   defp worker(fun, timeout) do
     task = Aqua.Loop.Worker.async(fun)
 
-    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+    case Aqua.Loop.Worker.yield(task, timeout) || Aqua.Loop.Worker.shutdown(task) do
       {:ok, result} -> {:ok, result}
       {:exit, reason} -> {:exit, reason}
       nil -> {:exit, :timeout}

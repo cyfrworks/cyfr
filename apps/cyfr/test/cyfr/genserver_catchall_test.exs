@@ -17,6 +17,7 @@ defmodule Cyfr.GenServerCatchallTest do
 
   # Probed live: named, started by the app under test.
   @genservers [
+    {Aqua.Loop.Worker, "Loop.Worker"},
     {Cyfr.Ops.Catalog, "Catalog"},
     {Emissary.MCP.ResourceRegistry, "ResourceRegistry"},
     {Arca.Cache.Sweeper, "Sweeper"},
@@ -63,8 +64,7 @@ defmodule Cyfr.GenServerCatchallTest do
         log =
           capture_log(fn ->
             send(pid, @unexpected_msg)
-            # Give the GenServer time to process the message
-            Process.sleep(50)
+            :sys.get_state(pid)
           end)
 
         assert Process.alive?(pid),

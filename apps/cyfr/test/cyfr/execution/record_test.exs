@@ -700,6 +700,31 @@ defmodule Cyfr.Execution.RecordTest do
   end
 
   describe "cancel/2" do
+    @tag capture_log: true
+    test "an unavailable execution table returns the storage refusal without cancelling", %{
+      ctx: ctx
+    } do
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(record)
+
+      # DDL stays inside this synchronous test's sandbox transaction.
+      Ecto.Adapters.SQL.query!(
+        Arca.Repo,
+        "ALTER TABLE executions RENAME TO unavailable_executions"
+      )
+
+      try do
+        assert {:error, :database_error} = Record.cancel(ctx, record.id)
+      after
+        Ecto.Adapters.SQL.query!(
+          Arca.Repo,
+          "ALTER TABLE unavailable_executions RENAME TO executions"
+        )
+      end
+
+      assert {:ok, %{status: :running}} = Record.get(ctx, record.id)
+    end
+
     test "cancels a running execution", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :ok = Record.write_started(record)

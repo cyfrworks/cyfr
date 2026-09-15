@@ -45,12 +45,25 @@ defmodule Aqua.Runner.Admission do
   end
 
   @doc "The estate is open and the caller is seated in it."
-  @spec standing(Context.t(), String.t()) :: :ok | {:error, :archived | :not_member}
-  def standing(%Context{user_id: user_id}, athanor_id) do
+  @spec standing(Context.t(), String.t()) ::
+          :ok | {:error, :archived | :not_member | :unavailable}
+  def standing(%Context{user_id: user_id} = ctx, athanor_id) do
     cond do
-      not Athanors.active?(athanor_id) -> {:error, :archived}
-      not Members.member?(user_id, athanor_id) -> {:error, :not_member}
-      true -> :ok
+      ctx.athanor_id != athanor_id ->
+        {:error, :not_member}
+
+      not Athanors.active?(athanor_id) ->
+        {:error, :archived}
+
+      not Members.member?(user_id, athanor_id) ->
+        {:error, :not_member}
+
+      true ->
+        case Sanctum.Tenancy.revalidate(ctx) do
+          {:ok, %Context{authenticated: true, athanor_id: ^athanor_id}} -> :ok
+          {:ok, _} -> {:error, :not_member}
+          {:error, :unavailable} = error -> error
+        end
     end
   end
 

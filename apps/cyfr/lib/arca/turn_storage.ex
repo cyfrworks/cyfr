@@ -502,7 +502,8 @@ defmodule Arca.TurnStorage do
       athanor_id = Context.athanor!(ctx)
 
       Arca.Repo.transaction(fn ->
-        _ = take!(athanor_id, turn_id, attrs)
+        turn = take!(athanor_id, turn_id, attrs)
+        if turn.status not in @open, do: Arca.Repo.rollback(:not_open)
         now = DateTime.utc_now()
         clones = open_clone_ids(athanor_id, turn_id)
 

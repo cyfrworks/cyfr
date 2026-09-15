@@ -90,4 +90,27 @@ defmodule Aqua.Loop.AbortTest do
     assert {:ok, %{dispatch_state: "closed", outcome: "error"}} = TurnStorage.step(ctx, model.id)
     refute TurnStorage.restricted?(ctx, turn.id)
   end
+
+  test "a lost abort fence leaves the successor and its worker untouched", %{ctx: ctx, turn: turn} do
+    {:ok, successor} = TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence})
+    test = self()
+
+    assert {:error, :superseded} =
+             Aqua.Loop.abort(ctx, turn, "stopped", fn -> send(test, :stopped) end)
+
+    refute_received :stopped
+    assert {:ok, ^successor} = Aqua.Tape.turn(ctx, turn.id)
+  end
+
+  test "failed worker shutdown raises the fence but does not settle the turn", %{
+    ctx: ctx,
+    turn: turn
+  } do
+    assert {:error, :workers_not_stopped} =
+             Aqua.Loop.abort(ctx, turn, "stopped", fn -> {:error, :workers_not_stopped} end)
+
+    assert {:ok, %{status: "accepted", fence: fence}} = Aqua.Tape.turn(ctx, turn.id)
+    assert fence == turn.fence + 1
+    refute Enum.any?(Threads.messages(ctx, turn.thread_id), &(&1.kind == "turn_aborted"))
+  end
 end

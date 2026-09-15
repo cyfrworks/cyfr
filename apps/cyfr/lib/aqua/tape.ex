@@ -31,6 +31,10 @@ defmodule Aqua.Tape do
   @type row :: Arca.Schemas.Message.t()
   @type approval :: Arca.Schemas.Approval.t()
 
+  @doc "Whether the turn has a terminal status in the durable lifecycle."
+  @spec terminal?(turn()) :: boolean()
+  def terminal?(%{status: status}), do: status in TurnStorage.terminal_statuses()
+
   # ---------------------------------------------------------------------------
   # Acceptance
   # ---------------------------------------------------------------------------

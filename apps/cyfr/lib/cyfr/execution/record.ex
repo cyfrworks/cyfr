@@ -252,6 +252,9 @@ defmodule Cyfr.Execution.Record do
 
       {:error, :not_found} ->
         {:error, :not_found}
+
+      {:error, _} = error ->
+        error
     end
   end
 

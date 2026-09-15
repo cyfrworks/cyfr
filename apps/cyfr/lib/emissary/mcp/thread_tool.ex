@@ -645,6 +645,17 @@ defmodule Emissary.MCP.ThreadTool do
   defp translate(:unavailable, _id), do: {:unavailable, "Threads"}
   defp translate(:database_error, _id), do: {:unavailable, "Storage"}
 
+  defp translate(:superseded, _id),
+    do: {:conflict, "The turn's owner changed. Retry the operation."}
+
+  defp translate(:not_open, _id),
+    do: {:conflict, "The turn changed while this request was running. Retry the operation."}
+
+  defp translate(:workers_not_stopped, _id),
+    do: {:timeout, "Some workers have not stopped yet. Retry Stop."}
+
+  defp translate(:workers_unavailable, _id), do: {:unavailable, "Worker coordination"}
+
   # One sentence per reason, and the runner's — the same words the chat
   # shows, so a client and a person are told the same thing.
   defp translate({:scope_not_permitted, _reason} = refusal, _id),
