@@ -13,6 +13,7 @@ on:
       # The authentication and spawner-protocol vectors the suites reproduce.
       - 'tests/fixtures/bridge_auth.json'
       - 'tests/fixtures/spawn_protocol.json'
+      - 'tests/fixtures/residue-canary.go'
       - 'tests/bridge-image/**'
       - 'Dockerfile.node'
       # The isolation test runs the image with the mcp-bridge service's settings.
@@ -24,6 +25,7 @@ on:
       - 'apps/spawn/**'
       - 'tests/fixtures/bridge_auth.json'
       - 'tests/fixtures/spawn_protocol.json'
+      - 'tests/fixtures/residue-canary.go'
       - 'tests/bridge-image/**'
       - 'Dockerfile.node'
       - 'docker-compose.yml'
@@ -96,7 +98,7 @@ jobs:
           cache-dependency-path: apps/spawn/go.sum
 
       - name: gofmt
-        run: test -z "$(gofmt -l .)"
+        run: test -z "$(gofmt -l . ../../tests/fixtures)"
 
       - name: go vet
         run: go vet ./...
@@ -146,6 +148,17 @@ jobs:
         env:
           BRIDGE_IMAGE: cyfr-mcp-bridge:ci
         run: node --test tests/bridge-image/refusals.test.mjs
+
+      # With a pool of one uid: a backend can write outside its home only
+      # into the home root; the entries it leaves there, a directory tree it
+      # made unwritable, System V shared memory, semaphores and message
+      # queues and a POSIX message queue (tests/fixtures/residue-canary.go)
+      # are gone before the next owner runs under the same uid. The spawner
+      # refuses a writable root, a shared /tmp and Docker's default /dev/shm.
+      - name: Residue across uid reuse
+        env:
+          BRIDGE_IMAGE: cyfr-mcp-bridge:ci
+        run: node --test tests/bridge-image/residue.test.mjs
 
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

@@ -38,6 +38,8 @@ RUN apk --no-cache upgrade
 # KILL (it refuses to start with any other capability), starts the bridge
 # as cyfr-bridge, and runs every child under a pooled uid of its own
 # (cyfr-b001…cyfr-b032) with a 0700 home under /var/lib/cyfr-bridge/homes.
+# A uid returns to the pool only once none of its processes, files, IPC
+# objects or message queues remain.
 # ===========================================================================
 FROM base AS mcp-bridge
 LABEL org.opencontainers.image.licenses="Apache-2.0"
@@ -65,6 +67,7 @@ COPY LICENSES/ /app/LICENSES/
 ENV NODE_ENV=production
 EXPOSE 8001
 # Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
-# `no-new-privileges`, a read-only root and CYFR_MCP_BRIDGE_KEY
-# (docker-compose.yml's mcp-bridge service).
+# `no-new-privileges`, a read-only root, `ipc: none`, the homes and attach
+# tmpfs mounts and CYFR_MCP_BRIDGE_KEY (docker-compose.yml's mcp-bridge
+# service).
 ENTRYPOINT ["cyfr-spawn", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/cyfr-bridge/homes", "--client-user", "cyfr-bridge", "--", "node", "server.mjs"]

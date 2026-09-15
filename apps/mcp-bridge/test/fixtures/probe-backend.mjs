@@ -6,7 +6,7 @@
 // JSON object as text; an operation the kernel refuses is reported as
 // `{ ok: false, code }`, never thrown.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -18,6 +18,7 @@ const TOOLS = {
   spawn_daemon: "Start a process in a new session that ignores SIGTERM; returns its pid.",
   echo_env: "The value of one environment variable: { name }; with { stderr: true } it is also written to stderr.",
   exit: "Exit with { code } after answering.",
+  run: "Run a command to completion: { argv }; answers its status, stdout and stderr.",
 };
 
 function attempt(fn) {
@@ -101,6 +102,10 @@ const handlers = {
   exit({ code }) {
     setTimeout(() => process.exit(code), 50);
     return { exiting: code };
+  },
+  run({ argv }) {
+    const result = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 10_000 });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
   },
 };
 

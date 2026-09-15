@@ -12,6 +12,7 @@ on:
       - 'apps/mcp-bridge/**/*.mjs'
       - 'apps/spawn/**'
       - 'tests/bridge-image/**'
+      - 'tests/fixtures/*.go'
       - 'wit/**'
       - 'LICENSES/**'
       - '.github/workflows/license-lint.yml'
@@ -24,6 +25,7 @@ on:
       - 'apps/mcp-bridge/**/*.mjs'
       - 'apps/spawn/**'
       - 'tests/bridge-image/**'
+      - 'tests/fixtures/*.go'
       - 'wit/**'
       - 'LICENSES/**'
 
@@ -71,7 +73,7 @@ jobs:
               fi
             fi
             checked=$((checked + 1))
-          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/spawn/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'tests/bridge-image/*.mjs' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
+          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/spawn/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'tests/bridge-image/*.mjs' 'tests/fixtures/*.go' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
 
           # A scan that reads nothing would pass; refuse it.
           if [ "$checked" -eq 0 ]; then

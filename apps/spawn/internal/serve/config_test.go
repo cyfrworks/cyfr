@@ -128,11 +128,19 @@ func TestResolveAccountsRefusesSharedOrPrivilegedIdentities(t *testing.T) {
 	}
 }
 
-func TestClientEnvironDescribesTheClientUser(t *testing.T) {
-	got := ClientEnviron([]string{"PATH=/usr/bin", "HOME=/root", "USER=root", "CYFR_MCP_BRIDGE_KEY=t", "LOGNAME=root"}, Account{Name: "cyfr-bridge", Home: "/nonexistent"})
-	want := []string{"PATH=/usr/bin", "CYFR_MCP_BRIDGE_KEY=t", "HOME=/nonexistent", "USER=cyfr-bridge", "LOGNAME=cyfr-bridge"}
+func TestClientEnvironDescribesTheClientUserAndItsChannel(t *testing.T) {
+	got := ClientEnviron([]string{"PATH=/usr/bin", "HOME=/root", "USER=root", "CYFR_MCP_BRIDGE_KEY=t", "CYFR_SPAWN_CHANNEL=socket:[1]", "LOGNAME=root"},
+		Account{Name: "cyfr-bridge", Home: "/nonexistent"}, "socket:[4242]")
+	want := []string{"PATH=/usr/bin", "CYFR_MCP_BRIDGE_KEY=t", "HOME=/nonexistent", "USER=cyfr-bridge", "LOGNAME=cyfr-bridge", "CYFR_SPAWN_CHANNEL=socket:[4242]"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("environ %q", got)
+	}
+}
+
+func TestPoolAccountsNamesEveryPooledUidAndGid(t *testing.T) {
+	got := PoolAccounts(map[int]Account{20001: {UID: 20001, GID: 20001}, 20002: {UID: 20002, GID: 30002}})
+	if !got.UIDs[20001] || !got.UIDs[20002] || !got.GIDs[20001] || !got.GIDs[30002] || got.GIDs[20002] || len(got.UIDs) != 2 {
+		t.Fatalf("accounts %+v", got)
 	}
 }
 

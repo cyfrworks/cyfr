@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -27,6 +28,7 @@ import (
 	"github.com/cyfr/spawn/internal/procfs"
 	"github.com/cyfr/spawn/internal/protocol"
 	"github.com/cyfr/spawn/internal/relay"
+	"github.com/cyfr/spawn/internal/residue"
 	"github.com/cyfr/spawn/internal/retire"
 	"github.com/cyfr/spawn/internal/stage"
 )
@@ -57,6 +59,8 @@ const (
 	clearTimeout = 2 * time.Second
 	// sweepInterval is how often quarantined uids are retried.
 	sweepInterval = 5 * time.Second
+	// scrubPasses bounds the retirements of one uid before it is quarantined.
+	scrubPasses = 3
 	// writeTimeout bounds one reply; a client that stops reading for this
 	// long is treated as lost.
 	writeTimeout = 30 * time.Second
@@ -104,6 +108,15 @@ func Main(args []string) int {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
+	mounts, roots, err := residue.ReadRoots()
+	if err != nil {
+		log.Error("refusing to start: %v", err)
+		return ExitConfig
+	}
+	if err := residue.CheckMounts(mounts, cfg.HomeRoot, PoolAccounts(accounts)); err != nil {
+		log.Error("refusing to start: %v", err)
+		return ExitConfig
+	}
 	self, err := os.Executable()
 	if err != nil {
 		log.Error("refusing to start: %v", err)
@@ -116,10 +129,10 @@ func Main(args []string) int {
 		self:     self,
 		client:   client,
 		accounts: accounts,
+		roots:    roots,
 		pools:    map[string]*pool.Pool{},
 		spawns:   map[string]*spawn{},
 		waiters:  map[int]*child{},
-		homes:    map[int]string{},
 	}
 	for _, spec := range cfg.Pools {
 		s.pools[spec.Name] = pool.New(spec)
@@ -165,15 +178,16 @@ type server struct {
 	self     string
 	client   Account
 	accounts map[int]Account
+	// roots are the writable mounts and the mqueue mount a pooled uid can
+	// leave something behind in.
+	roots residue.Roots
 
-	// mu guards pools, spawns, waiters and homes, and is held across every
-	// fork, reap and signal, so a pid is never signalled after it was reaped.
+	// mu guards pools, spawns and waiters, and is held across every fork,
+	// reap and signal, so a pid is never signalled after it was reaped.
 	mu      sync.Mutex
 	pools   map[string]*pool.Pool
 	spawns  map[string]*spawn
 	waiters map[int]*child
-	// homes records the home of each quarantined uid still to be removed.
-	homes map[int]string
 
 	channel  *os.File
 	writeMu  sync.Mutex
@@ -205,7 +219,12 @@ func (s *server) run() int {
 		s.log.Error("client command: %v", err)
 		return ExitStart
 	}
-	clientProc, err := s.start(argv0, s.cfg.ClientArgv, ClientEnviron(os.Environ(), s.client),
+	channelID, err := socketID(theirs)
+	if err != nil {
+		s.log.Error("socketpair: %v", err)
+		return ExitStart
+	}
+	clientProc, err := s.start(argv0, s.cfg.ClientArgv, ClientEnviron(os.Environ(), s.client, channelID),
 		[]uintptr{0, 1, 2, theirs.Fd()}, s.client.UID, s.client.GID, "")
 	theirs.Close()
 	if err != nil {
@@ -450,7 +469,11 @@ func (s *server) handleSpawn(req *protocol.Request) {
 	if p != nil {
 		uid, ok = p.Allocate(func(uid int) bool {
 			c, err := procfs.ScanUID("/proc", uid, 0)
-			return err != nil || c.Total() > 0
+			if err != nil || c.Total() > 0 {
+				return true
+			}
+			found, err := residue.Find(s.roots, residue.SysvipcDir, uid)
+			return err != nil || !found.Empty()
 		})
 	}
 	s.mu.Unlock()
@@ -618,15 +641,20 @@ func (s *server) watchLeader(sp *spawn) {
 	s.retire(sp, leaderExitGrace, true)
 }
 
-// retire ends a spawn once: every process of its uid is terminated, its
-// home removed and the uid returned to its pool, or quarantined if any
-// process survives. With notify, `released` follows.
+// retire ends a spawn once: every process of its uid is terminated, what
+// the uid left behind is removed and the uid returned to its pool, or
+// quarantined if a process or anything it left survives. With notify,
+// `released` follows.
 func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 	sp.retireOnce.Do(func() {
 		go func() {
 			defer close(sp.retired)
 			uid := sp.account.UID
-			clean := s.runRetire(sp.account, sp.home, grace) && s.waitClear(uid)
+			var paths []string
+			if sp.home != "" {
+				paths = []string{sp.home}
+			}
+			clean := s.scrub(sp.account, grace, paths)
 			if sp.relay != nil {
 				select {
 				case <-sp.relay.done:
@@ -640,7 +668,6 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				_ = sp.pool.Release(uid)
 			} else {
 				_ = sp.pool.Quarantine(uid)
-				s.homes[uid] = sp.home
 			}
 			delete(s.spawns, sp.id)
 			s.mu.Unlock()
@@ -648,7 +675,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 			if clean {
 				s.log.Info("spawn %s: uid %d retired", sp.id, uid)
 			} else {
-				s.log.Warn("spawn %s: uid %d quarantined: a process or its home outlived retirement", sp.id, uid)
+				s.log.Warn("spawn %s: uid %d quarantined: a process or something it left outlived retirement", sp.id, uid)
 			}
 			if notify {
 				// `released` follows `exited`; a leader that survived
@@ -663,23 +690,53 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 	})
 }
 
-// runRetire runs `cyfr-spawn retire` as the account and reports whether it
-// finished clean.
-func (s *server) runRetire(acct Account, homePath string, grace time.Duration) bool {
-	spec, err := json.Marshal(retire.Spec{UID: acct.UID, HomeRoot: s.cfg.HomeRoot, Home: homePath, GraceMs: grace.Milliseconds()})
+// scrub retires a uid until nothing of it remains: `cyfr-spawn retire` ends
+// its processes and removes its IPC objects, its message queues and the
+// given paths; then the spawner looks for anything else the uid owns on the
+// writable mounts and retires it again with what it found. It reports
+// whether the uid is clean.
+func (s *server) scrub(acct Account, grace time.Duration, paths []string) bool {
+	for pass := 1; ; pass++ {
+		if exit := s.runRetire(acct, paths, grace); exit != retire.ExitClean && exit != retire.ExitResidue {
+			return false
+		}
+		if !s.waitClear(acct.UID) {
+			return false
+		}
+		found, err := residue.Find(s.roots, residue.SysvipcDir, acct.UID)
+		if err != nil {
+			s.log.Error("uid %d: looking for what it left: %v", acct.UID, err)
+			return false
+		}
+		if found.Empty() {
+			return true
+		}
+		if pass == scrubPasses {
+			s.log.Warn("uid %d: %d entries (truncated: %t), %d IPC objects and %d message queues outlived retirement",
+				acct.UID, len(found.Paths), found.Truncated, len(found.IPC), len(found.Queues))
+			return false
+		}
+		paths, grace = found.Paths, 0
+	}
+}
+
+// runRetire runs `cyfr-spawn retire` as the account and returns its exit
+// status, or -1 when it could not be run or did not exit.
+func (s *server) runRetire(acct Account, paths []string, grace time.Duration) int {
+	spec, err := json.Marshal(retire.Spec{UID: acct.UID, GraceMs: grace.Milliseconds(), Paths: paths})
 	if err != nil {
-		return false
+		return -1
 	}
 	specR, specW, err := os.Pipe()
 	if err != nil {
 		s.log.Error("retire uid %d: %v", acct.UID, err)
-		return false
+		return -1
 	}
 	defer specW.Close()
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
 		specR.Close()
-		return false
+		return -1
 	}
 	c, err := s.start(s.self, []string{"cyfr-spawn", "retire"}, helperEnviron(),
 		[]uintptr{devnull.Fd(), devnull.Fd(), 2, specR.Fd()}, acct.UID, acct.GID, "/")
@@ -687,7 +744,7 @@ func (s *server) runRetire(acct Account, homePath string, grace time.Duration) b
 	devnull.Close()
 	if err != nil {
 		s.log.Error("retire uid %d: %v", acct.UID, err)
-		return false
+		return -1
 	}
 	_ = specW.SetWriteDeadline(time.Now().Add(stageTimeout))
 	_, _ = specW.Write(spec)
@@ -700,7 +757,10 @@ func (s *server) runRetire(acct Account, homePath string, grace time.Duration) b
 		s.signalChild(c, unix.SIGKILL)
 		<-c.done
 	}
-	return c.status.Exited() && c.status.ExitStatus() == retire.ExitClean
+	if !c.status.Exited() {
+		return -1
+	}
+	return c.status.ExitStatus()
 }
 
 // waitClear waits for every process of uid, zombies included, to be gone.
@@ -728,23 +788,21 @@ func (s *server) sweeper() {
 		type entry struct {
 			pool *pool.Pool
 			uid  int
-			home string
 		}
 		var todo []entry
 		s.mu.Lock()
 		for _, p := range s.pools {
 			for _, uid := range p.Quarantined() {
-				todo = append(todo, entry{p, uid, s.homes[uid]})
+				todo = append(todo, entry{p, uid})
 			}
 		}
 		s.mu.Unlock()
 		for _, e := range todo {
-			if !s.runRetire(s.accounts[e.uid], e.home, 0) || !s.waitClear(e.uid) {
+			if !s.scrub(s.accounts[e.uid], 0, nil) {
 				continue
 			}
 			s.mu.Lock()
 			_ = e.pool.Release(e.uid)
-			delete(s.homes, e.uid)
 			s.mu.Unlock()
 			s.log.Info("uid %d returned to pool %s", e.uid, e.pool.Spec().Name)
 		}
@@ -757,6 +815,15 @@ func helperEnviron() []string {
 		return []string{"CYFR_LOG_FORMAT=" + v}
 	}
 	return []string{}
+}
+
+// socketID is the name /proc/<pid>/fd gives the socket f: `socket:[inode]`.
+func socketID(f *os.File) (string, error) {
+	var st unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
+		return "", err
+	}
+	return "socket:[" + strconv.FormatUint(st.Ino, 10) + "]", nil
 }
 
 func randomHex(n int) (string, error) {

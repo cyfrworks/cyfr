@@ -18,6 +18,8 @@ import (
 	"strings"
 
 	"github.com/cyfr/spawn/internal/pool"
+	"github.com/cyfr/spawn/internal/protocol"
+	"github.com/cyfr/spawn/internal/residue"
 )
 
 // Config is the parsed command line.
@@ -163,13 +165,14 @@ func toAccount(u *user.User) (Account, error) {
 }
 
 // ClientEnviron is the client's environment: the spawner's own, with HOME,
-// USER and LOGNAME describing the client user.
-func ClientEnviron(environ []string, client Account) []string {
-	out := make([]string, 0, len(environ)+3)
+// USER and LOGNAME describing the client user and protocol.ChannelEnv
+// naming the channel socket on fd 3.
+func ClientEnviron(environ []string, client Account, channel string) []string {
+	out := make([]string, 0, len(environ)+4)
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
 		switch name {
-		case "HOME", "USER", "LOGNAME":
+		case "HOME", "USER", "LOGNAME", protocol.ChannelEnv:
 			continue
 		}
 		out = append(out, kv)
@@ -178,5 +181,15 @@ func ClientEnviron(environ []string, client Account) []string {
 	if home == "" {
 		home = "/"
 	}
-	return append(out, "HOME="+home, "USER="+client.Name, "LOGNAME="+client.Name)
+	return append(out, "HOME="+home, "USER="+client.Name, "LOGNAME="+client.Name, protocol.ChannelEnv+"="+channel)
+}
+
+// PoolAccounts is the set of pooled uids and gids.
+func PoolAccounts(accounts map[int]Account) residue.Accounts {
+	set := residue.Accounts{UIDs: map[int]bool{}, GIDs: map[int]bool{}}
+	for uid, acct := range accounts {
+		set.UIDs[uid] = true
+		set.GIDs[acct.GID] = true
+	}
+	return set
 }

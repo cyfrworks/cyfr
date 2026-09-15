@@ -145,16 +145,19 @@ services:
       - KILL
     security_opt:
       - no-new-privileges:true
-    # The root is read-only; the tmpfs mounts below are the only writable
-    # surfaces. Backend homes: each backend's uid creates its own 0700 home;
-    # mode 1733 lets it create one without listing the others. Homes hold
-    # npx caches, so they allow exec. /run holds the bridge's private attach
-    # socket.
+    # The root is read-only and the tmpfs mounts below are the only writable
+    # surfaces; cyfr-spawn refuses to start if any other location is
+    # writable by a backend's uid, so a backend has no shared /tmp, /var/tmp,
+    # /run or /dev/shm (`ipc: none` leaves /dev/shm unmounted) and writes
+    # temporary files under its home. Backend homes: each backend's uid
+    # creates its own 0700 home; mode 1733 lets it create one without
+    # listing the others. Homes hold npx caches, so they allow exec.
+    # /run/cyfr-bridge holds the bridge's private attach socket.
     read_only: true
+    ipc: none
     tmpfs:
       - /var/lib/cyfr-bridge/homes:mode=1733,exec
-      - /tmp:mode=1733
-      - /run:mode=1733
+      - /run/cyfr-bridge:uid=10001,gid=10001,mode=0700
     # Read bridge-only settings from .env.bridge; CYFR_MCP_BRIDGE_KEY comes
     # from .env below.
     env_file:

@@ -23,6 +23,11 @@
 // `exited` is sent once, when a spawn's leader process is reaped. `released`
 // is sent once, when the spawn's uid has been retired, whether retirement
 // followed a `release` or the leader's exit.
+//
+// The client's environment carries ChannelEnv, the name /proc/self/fd/3
+// links to for the channel socket (`socket:[inode]`), so a client whose
+// runtime opens descriptors of its own before it can inspect fd 3 tells the
+// inherited channel from one of those.
 package protocol
 
 import (
@@ -39,6 +44,9 @@ import (
 
 // Version is the protocol version every message carries as `v`.
 const Version = 1
+
+// ChannelEnv is the client environment variable naming the channel socket.
+const ChannelEnv = "CYFR_SPAWN_CHANNEL"
 
 // Message types.
 const (

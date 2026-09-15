@@ -93,6 +93,24 @@ export function processes(target) {
     });
 }
 
+/**
+ * Builds tests/fixtures/residue-canary.go for Linux on the host's
+ * architecture, in a Go container pinned to the release apps/spawn/go.mod
+ * names, and answers the directory holding `canary`.
+ */
+export function buildCanary() {
+  const dir = mkdtempSync(path.join(tmpdir(), "cyfr-canary-"));
+  run("docker", [
+    "run", "--rm",
+    "-v", `${path.join(ROOT_DIR, "tests", "fixtures")}:/src:ro`,
+    "-v", `${dir}:/out`,
+    "-e", "CGO_ENABLED=0", "-e", "GOCACHE=/tmp/go-cache", "-e", "GOFLAGS=-buildvcs=false",
+    "-w", "/src",
+    "golang:1.26.5-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
+  ]);
+  return dir;
+}
+
 export function exec(target, script, { user } = {}) {
   return run("docker", ["exec", ...(user ? ["-u", user] : []), target, "sh", "-c", script], { allowFailure: true });
 }
@@ -104,9 +122,10 @@ export function exec(target, script, { user } = {}) {
  * created.
  */
 export class Stack {
-  constructor(project, { overrides = [] } = {}) {
+  constructor(project, { overrides = [], env = {} } = {}) {
     this.project = project;
     this.overrides = overrides;
+    this.extraEnv = env;
     this.root = randomBytes(32);
     this.keyHex = this.root.toString("hex");
     this.projectDir = null;
@@ -148,6 +167,7 @@ export class Stack {
       BRIDGE_IMAGE: IMAGE,
       PROBE_DIR: path.join(ROOT_DIR, "apps", "mcp-bridge", "test", "fixtures"),
       CYFR_MCP_BRIDGE_KEY: this.keyHex,
+      ...this.extraEnv,
     };
 
     this.compose("down", "--volumes", "--remove-orphans");

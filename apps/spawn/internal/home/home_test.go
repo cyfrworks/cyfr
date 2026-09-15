@@ -5,7 +5,6 @@ package home
 
 import (
 	"os"
-	"path/filepath"
 	"regexp"
 	"testing"
 )
@@ -40,70 +39,6 @@ func TestValidateRefusesHomesOutsideTheRootOrNamedForAnotherUid(t *testing.T) {
 		if err := Validate(c.root, c.home, 20007); err == nil {
 			t.Errorf("%s under %s accepted", c.home, c.root)
 		}
-	}
-}
-
-func TestRemoveDeletesATreeTheOwnerMadeUnwritable(t *testing.T) {
-	root := t.TempDir()
-	h := filepath.Join(root, "home")
-	deep := filepath.Join(h, "a", "b")
-	if err := os.MkdirAll(deep, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(deep, "f"), []byte("x"), 0o000); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("/", filepath.Join(h, "link")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(deep, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(filepath.Join(h, "a"), 0o500); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := Remove(h, os.Getuid()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(h); !os.IsNotExist(err) {
-		t.Fatalf("home still present: %v", err)
-	}
-	if err := Remove(h, os.Getuid()); err != nil {
-		t.Fatalf("removing an absent home: %v", err)
-	}
-}
-
-func TestRemoveNeedsNoReadPermissionOnTheRoot(t *testing.T) {
-	root := t.TempDir()
-	h := filepath.Join(root, "home")
-	if err := os.MkdirAll(filepath.Join(h, "sub"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(root, 0o300); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chmod(root, 0o700)
-
-	if err := Remove(h, os.Getuid()); err != nil {
-		t.Fatalf("removing a home under a write-and-search-only root: %v", err)
-	}
-	if _, err := os.Lstat(h); !os.IsNotExist(err) {
-		t.Fatalf("home still present: %v", err)
-	}
-}
-
-func TestRemoveRefusesAHomeOwnedByAnotherUidOrNotADirectory(t *testing.T) {
-	root := t.TempDir()
-	if err := Remove(root, os.Getuid()+1); err == nil {
-		t.Error("a directory owned by another uid was removed")
-	}
-	file := filepath.Join(root, "file")
-	if err := os.WriteFile(file, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := Remove(file, os.Getuid()); err == nil {
-		t.Error("a regular file was accepted as a home")
 	}
 }
 

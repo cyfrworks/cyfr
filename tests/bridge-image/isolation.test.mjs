@@ -180,7 +180,7 @@ test("each backend runs under its own pooled uid, alone in its group, with a pri
   assert.equal(across.status, 401);
   const listed = await c.invoke(BETA, "tools/list");
   assert.deepEqual(listed.body.result.tools.map((t) => t.name).sort(), [
-    "probe__echo_env", "probe__exit", "probe__read_environ", "probe__read_path", "probe__signal", "probe__spawn_daemon", "probe__whoami",
+    "probe__echo_env", "probe__exit", "probe__read_environ", "probe__read_path", "probe__run", "probe__signal", "probe__spawn_daemon", "probe__whoami",
   ]);
 });
 
@@ -235,7 +235,7 @@ test("a backend that exits is reported, its uid and home retired, and it restart
     const [backend] = owner.backends;
     return backend.status === "ready" && backend.restarts === 1 ? backend : null;
   }, "beta to restart");
-  assert.equal(restarted.tools, 7);
+  assert.equal(restarted.tools, 8);
   assert.equal(exec(stack.container, `test -e ${beta.home}`).status, 1, "beta's home outlived its exit");
 
   const again = await c.tool(BETA, "probe__whoami");
