@@ -5,11 +5,12 @@ defmodule Sanctum.Test.ConsentFixtures do
   @moduledoc """
   Seeds the in-memory consent source with a bindable owner profile so tests
   can create profile-bound registrations (webhooks, schedules) without
-  walking the full consent sheet.
+  walking the full consent sheet, and connects a key to a component through
+  the full walk (`bind_key!/4`).
 
-  Requires `Sanctum.Consent.Source.Memory` to be running — add
-  `start_supervised!(Sanctum.Consent.Source.Memory)` to the test's setup
-  (idempotent via `start_source!/0` below).
+  `bindable_profile/3` requires `Sanctum.Consent.Source.Memory` to be
+  running — add `start_supervised!(Sanctum.Consent.Source.Memory)` to the
+  test's setup (idempotent via `start_source!/0` below).
   """
 
   alias Sanctum.Consent.Source
@@ -73,5 +74,38 @@ defmodule Sanctum.Test.ConsentFixtures do
       })
 
     profile_id
+  end
+
+  @doc """
+  Connect a key to `ref` as a person does: a new vault entry holding
+  `fields`, bound to the component's `api_key` need through the consent
+  walk (plan, preview, commit) under the profile `opts[:label]` (default
+  `"default"`). The durable consent source must be the configured one.
+  Answers the entry.
+  """
+  def bind_key!(%Context{} = ctx, ref, fields, opts \\ []) when is_map(fields) do
+    label = Keyword.get(opts, :label, "default")
+
+    {:ok, entry} =
+      Sanctum.Vault.create(ctx, %{
+        name: Keyword.get(opts, :name, "key #{System.unique_integer([:positive])}"),
+        kind: "api_key",
+        fields: fields
+      })
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref, label: label})
+    decisions = %{ref: ref, label: label, bindings: [%{need: "api_key", entry_id: entry.id}]}
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    entry
   end
 end

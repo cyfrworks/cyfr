@@ -14,7 +14,7 @@ defmodule Cyfr.Execution.MCP do
   - `status` - Execution slot diagnostics
   - `force_release` - Release every athanor's execution slots (operator only)
 
-  Runs and cancels go through the execution port (`Cyfr.Execution`); reads
+  Runs and cancels go through `Cyfr.Execution`; reads
   come from the execution records (`Cyfr.Execution.Record`). Its service
   name is `"opus"` and its resources are `opus://executions/…`.
 
@@ -475,10 +475,6 @@ defmodule Cyfr.Execution.MCP do
         } = args
       ) do
     with :ok <- check_chain_scope(ctx, execution_id, args) do
-      # Through the port for the same two reasons run/run_stream go through
-      # it (a stubbed :execution_impl must intercept, available?/0 must
-      # gate). status and force_release read the execution slots directly:
-      # the port is the execution plane, not a general engine facade.
       case Cyfr.Execution.cancel(ctx, execution_id) do
         {:ok, result} ->
           {:ok, result}
@@ -592,7 +588,7 @@ defmodule Cyfr.Execution.MCP do
     end
   end
 
-  # Run the component to completion through the port; an optional
+  # Run the component to completion as a root; an optional
   # `parent_execution_id` records the formula lineage.
   defp start_root("run", ctx, args) do
     reference = args["reference"] || ""
@@ -633,9 +629,6 @@ defmodule Cyfr.Execution.MCP do
   defp run_root_formatted(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
-    # Through the port, as every ingress starts a root: a stub
-    # `:execution_impl` intercepts this one too, and the readiness gate
-    # applies.
     case Cyfr.Execution.run_root(ctx, selector, reference, input, opts) do
       {:error, :no_profile} when selector == :default ->
         {:error,

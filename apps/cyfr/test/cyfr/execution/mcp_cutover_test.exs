@@ -7,7 +7,7 @@ defmodule Cyfr.Execution.MCPCutoverTest do
   # runs), and selection never guesses.
   use ExUnit.Case, async: false
 
-  # A rooted run reaches the engine through the execution port.
+  # A rooted run runs on the opus worker service.
   @moduletag :requires_opus
 
   alias Sanctum.Consent.Source

@@ -16,10 +16,8 @@ defmodule Aqua.Loop.FlushTest do
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
-  alias Cyfr.Test.ScriptedExecution
+  alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap, Source}
-
-  @moduletag :requires_opus_modules
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -33,12 +31,12 @@ defmodule Aqua.Loop.FlushTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "flush_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :execution_impl]
+    keys = [:base_path, :seed_path, :consent_source, :workers]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
     Application.put_env(:cyfr, :consent_source, Source.DB)
-    Application.put_env(:cyfr, :execution_impl, ScriptedExecution)
+    Application.put_env(:cyfr, :workers, [ScriptedWorker])
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -59,6 +57,9 @@ defmodule Aqua.Loop.FlushTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
+    # The model catalyst unseals its key when its runner attaches.
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
+    ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
     {:ok, thread} = Threads.create(ctx)
     {:ok, ctx: ctx, thread: thread}
@@ -166,7 +167,7 @@ defmodule Aqua.Loop.FlushTest do
              for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
 
     [flush, _summary, chat] =
-      for %{input: %{"operation" => "chat"}} = call <- ScriptedExecution.calls(), do: call
+      for %{input: %{"operation" => "chat"}} = call <- ScriptedWorker.calls(), do: call
 
     refute Jason.encode!(flush.input) =~ "ROOM-ONLY-LINE"
     assert Jason.encode!(chat.input) =~ "ROOM-ONLY-LINE"
@@ -363,7 +364,7 @@ defmodule Aqua.Loop.FlushTest do
 
   defp script!(items) do
     start_supervised!(
-      {ScriptedExecution, ref: [@model, "catalyst:local.files"], script: items, window: @window}
+      {ScriptedWorker, ref: [@model, "catalyst:local.files"], script: items, window: @window}
     )
   end
 
@@ -434,7 +435,7 @@ defmodule Aqua.Loop.FlushTest do
     }
 
   defp chat_requests do
-    for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedExecution.calls(),
+    for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
         do: params
   end
 
@@ -449,7 +450,7 @@ defmodule Aqua.Loop.FlushTest do
     turn = accept!(ctx, thread, "@aqua keep it")
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: [@model],
        script: [
          response(

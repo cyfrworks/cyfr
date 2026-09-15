@@ -190,7 +190,7 @@ defmodule Opus.SeedModelCatalystsTest do
     {:ok, before} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{node_ref: "catalyst:local.claude:" <> _, reason: reason}}} =
-             Opus.run_child(before, "catalyst:local.claude", nil, input, child_opts)
+             Cyfr.Execution.run_child(before, "catalyst:local.claude", nil, input, child_opts)
 
     assert reason == "vault_selection_unbound"
 
@@ -225,7 +225,7 @@ defmodule Opus.SeedModelCatalystsTest do
     {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, "Unknown operation: nothing.here"} =
-             Opus.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
+             Cyfr.Execution.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
 
     # Revoking the catalyst's profile cuts the assistant off at the next load.
     {:ok, [claude_profile]} = Source.DB.profiles(ctx, "catalyst:local.claude")
@@ -233,7 +233,7 @@ defmodule Opus.SeedModelCatalystsTest do
     {:ok, revoked} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
-             Opus.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
+             Cyfr.Execution.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
   end
 
   defp newest_shipped(plural, name) do

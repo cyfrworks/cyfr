@@ -4,7 +4,7 @@
 defmodule Cyfr.Execution.MCPTest do
   use ExUnit.Case, async: false
 
-  # Runs and cancels reach the engine through the execution port.
+  # Runs and cancels run on the opus worker service.
   @moduletag :requires_opus
 
   alias Cyfr.Execution.MCP

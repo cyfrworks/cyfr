@@ -19,11 +19,9 @@ defmodule Aqua.RunnerTest do
 
   alias Aqua.{Approvals, Runner, Tape}
   alias Arca.ThreadStorage, as: Threads
-  alias Cyfr.Test.ScriptedExecution
+  alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap, Source}
   alias Sanctum.Tenancy.{Athanors, Members, Users}
-
-  @moduletag :requires_opus_modules
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -34,12 +32,12 @@ defmodule Aqua.RunnerTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "runner_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :execution_impl]
+    keys = [:base_path, :seed_path, :consent_source, :workers]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
     Application.put_env(:cyfr, :consent_source, Source.DB)
-    Application.put_env(:cyfr, :execution_impl, ScriptedExecution)
+    Application.put_env(:cyfr, :workers, [ScriptedWorker])
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -61,13 +59,16 @@ defmodule Aqua.RunnerTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
+    # The model catalyst unseals its key when its runner attaches.
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
+    ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
     {:ok, thread} = Threads.create(ctx)
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, user: user, thread: thread}
   end
 
-  defp script!(items), do: start_supervised!({ScriptedExecution, ref: @model, script: items})
+  defp script!(items), do: start_supervised!({ScriptedWorker, ref: @model, script: items})
 
   defp reply(text),
     do: %{
@@ -82,36 +83,6 @@ defmodule Aqua.RunnerTest do
       "stop_reason" => "tool_call",
       "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
     }
-
-  defp bind_claude!(ctx) do
-    {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: "claude key",
-        kind: "api_key",
-        fields: %{"ANTHROPIC_API_KEY" => "sk-test"}
-      })
-
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @model, label: "default"})
-
-    decisions = %{
-      ref: @model,
-      label: "default",
-      bindings: [%{need: "api_key", entry_id: entry.id}]
-    }
-
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
-
-    entry
-  end
 
   defp second_member(ctx) do
     n = System.unique_integer([:positive])
@@ -360,7 +331,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, paused} = Tape.turn(ctx, turn_id)
     {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
-    ScriptedExecution.script([reply("never minded")])
+    ScriptedWorker.script([reply("never minded")])
 
     assert {:ok, %{decision: "approved"}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
@@ -406,7 +377,7 @@ defmodule Aqua.RunnerTest do
     other = second_member(ctx)
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: [@model, "catalyst:local.http"],
        script: [
          call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
@@ -442,7 +413,7 @@ defmodule Aqua.RunnerTest do
   test "a runner that starts over a stopped turn continues it only on the sender's line past the stop",
        %{ctx: ctx, thread: thread} do
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: [@model, "catalyst:local.http"],
        script: [
          call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
@@ -473,7 +444,7 @@ defmodule Aqua.RunnerTest do
   test "a runner that starts with the acknowledging line already on the tape continues at once",
        %{ctx: ctx, thread: thread} do
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: [@model, "catalyst:local.http"],
        script: [
          call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
@@ -573,7 +544,9 @@ defmodule Aqua.RunnerTest do
     ctx: ctx,
     thread: thread
   } do
-    entry = bind_claude!(ctx)
+    entry =
+      Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
+
     script!([reply("Step one.")])
 
     {:ok, %{admitted: :turn, turn_id: turn_id}} =
@@ -589,7 +562,7 @@ defmodule Aqua.RunnerTest do
     assert bytes =~ "Planner"
 
     assert %{authority: authority} =
-             Enum.find(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+             Enum.find(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
     assert authority.chain == ["agent:local.planner", @model]
     assert authority.profile_id == planner_profile.id
@@ -621,7 +594,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, paused} = Tape.turn(ctx, turn_id)
     {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
-    ScriptedExecution.script([reply("kept it")])
+    ScriptedWorker.script([reply("kept it")])
 
     assert {:ok, %{decision: "approved"}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
@@ -723,13 +696,13 @@ defmodule Aqua.RunnerTest do
                  do: row.content
                )
 
-      assert Enum.count(ScriptedExecution.calls(), &(&1.input["operation"] == "chat")) == 2
+      assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "chat")) == 2
     end
 
     test "mid tool dispatch takes its loop and the call with it; its restart stops on the unknown outcome",
          %{ctx: ctx, thread: thread} do
       start_supervised!(
-        {ScriptedExecution,
+        {ScriptedWorker,
          ref: [@model, "catalyst:local.http"],
          script: [
            call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
@@ -752,7 +725,7 @@ defmodule Aqua.RunnerTest do
       # One call reached the tool, and nothing after it: no second model
       # round, and the dead call's answer never landed.
       assert ["chat", fetch] =
-               ScriptedExecution.calls()
+               ScriptedWorker.calls()
                |> Enum.map(& &1.input["operation"])
                |> Enum.reject(&(&1 == "describe"))
 

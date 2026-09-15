@@ -3,76 +3,62 @@
 
 defmodule Cyfr.ExecutionTest do
   @moduledoc """
-  The execution port: cyfr reaches the engine through `Cyfr.Execution`, the
-  engine registers itself, and a build without one answers unavailable.
+  CYFR runs a component only on a worker service: with none configured, or
+  one that does not answer, execution is unavailable and a run is refused
+  before it is admitted; a configured worker service that answers makes it
+  available.
   """
   use ExUnit.Case, async: false
 
-  defmodule FakeEngine do
-    @behaviour Cyfr.Execution
-    def run_root(_ctx, sel, ref, input, opts),
-      do: {:ok, %{sel: sel, ref: ref, input: input, opts: opts}}
-
-    def run_root_edge(_ctx, src, ref, _input, _opts), do: {:ok, %{src: src, ref: ref}}
-    def authority_for(_ctx, _sel, _ref, _opts), do: {:ok, :authority}
-    def subscribe_events(_id, _ctx), do: :ok
-    def unsubscribe_events(_id, _ctx), do: :ok
-    def events_since(_id, _seq, _athanor), do: [%{seq: 1}]
-    def run_child(_authority, ref, _need, input, _opts), do: {:ok, %{child: ref, input: input}}
-
-    def claim_turn_root(_ctx, ref, opts),
-      do: {:ok, %{execution_id: "exec_turn", attempt: "att_turn", ref: ref, opts: opts}}
-
-    def pause_turn_root(_ctx, id, _opts), do: {:ok, %{execution_id: id}}
-    def resume_turn_root(_ctx, id, _opts), do: {:ok, %{execution_id: id}}
-    def adopt_turn_root(_ctx, id, _opts), do: {:ok, %{execution_id: id}}
-    def release_turn_root(_ctx, _id, _opts), do: :ok
-    def cancel(_ctx, id), do: {:ok, id}
-    def cancel_for_restart(_ctx, _id, _payload), do: :ok
-    def get(_ctx, id), do: {:ok, %{id: id}}
-    def list(_ctx, _opts), do: {:ok, []}
-    def ready?, do: true
-  end
+  alias Cyfr.Test.{AuthorityFixtures, ScriptedWorker}
 
   setup do
-    original = Application.get_env(:cyfr, :execution_impl)
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Arca.Cache.init()
 
-    on_exit(fn ->
-      if original,
-        do: Application.put_env(:cyfr, :execution_impl, original),
-        else: Application.delete_env(:cyfr, :execution_impl)
-    end)
+    previous = Application.get_env(:cyfr, :workers)
+    on_exit(fn -> Application.put_env(:cyfr, :workers, previous) end)
 
-    :ok
+    {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  test "without an engine every call answers unavailable" do
-    Application.delete_env(:cyfr, :execution_impl)
+  defp run(ctx) do
+    Cyfr.Execution.run_child(AuthorityFixtures.root!(), "reagent:local.off-graph:1.0.0", nil, %{},
+      ctx: ctx
+    )
+  end
+
+  test "with no worker service configured, execution is unavailable and a run is refused", %{
+    ctx: ctx
+  } do
+    Application.put_env(:cyfr, :workers, [])
+
     refute Cyfr.Execution.available?()
-    ctx = Sanctum.TestContext.local()
-
-    assert {:error, :execution_unavailable} =
-             Cyfr.Execution.run_root(ctx, :default, "f:local.x", %{})
-
-    assert {:error, :execution_unavailable} = Cyfr.Execution.cancel(ctx, "exec_1")
+    assert {:error, :execution_unavailable} = run(ctx)
+    assert Arca.Repo.all(Arca.Execution) == []
     assert Cyfr.Execution.events_since("exec_1", {0, 0}, ctx.athanor_id) == []
   end
 
-  test "a registered engine answers through the port" do
-    Application.put_env(:cyfr, :execution_impl, FakeEngine)
+  test "a configured worker service that does not answer leaves execution unavailable", %{
+    ctx: ctx
+  } do
+    Application.put_env(:cyfr, :workers, [ScriptedWorker])
+
+    refute Cyfr.Execution.available?()
+    assert {:error, :execution_unavailable} = run(ctx)
+  end
+
+  test "a configured worker service that answers makes execution available" do
+    Application.put_env(:cyfr, :workers, [ScriptedWorker])
+    start_supervised!({ScriptedWorker, ref: "reagent:local.ta", script: []})
+
     assert Cyfr.Execution.available?()
-    ctx = Sanctum.TestContext.local()
-
-    assert {:ok, %{ref: "f:local.x", opts: [route: :protected]}} =
-             Cyfr.Execution.run_root(ctx, {:label, "prof"}, "f:local.x", %{}, route: :protected)
-
-    assert {:ok, "exec_1"} = Cyfr.Execution.cancel(ctx, "exec_1")
-    assert [%{seq: 1}] = Cyfr.Execution.events_since("exec_1", {0, 0}, ctx.athanor_id)
   end
 
   @tag :requires_opus
-  test "the engine registers itself when it starts" do
-    assert Cyfr.Execution.impl() == Opus
+  test "the opus worker service is the one configured, and it answers" do
+    assert Application.get_env(:cyfr, :workers) == [Opus.WorkerService]
     assert Cyfr.Execution.available?()
   end
 end

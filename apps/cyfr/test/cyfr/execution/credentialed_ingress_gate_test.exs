@@ -149,7 +149,7 @@ defmodule Cyfr.Execution.CredentialedIngressGateTest do
       for {_ingress, path, _fallback} <- @ingresses do
         source = File.read!(Path.join(root, path))
 
-        assert String.contains?(source, "run_root") or String.contains?(source, "Opus.run_root"),
+        assert String.contains?(source, "Cyfr.Execution.run_root"),
                "#{path} does not route through the chain"
       end
     end

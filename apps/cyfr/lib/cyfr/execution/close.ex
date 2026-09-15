@@ -7,8 +7,9 @@ defmodule Cyfr.Execution.Close do
   telemetry and the answer its caller receives.
 
   `complete/4` closes a run with its output: the output is masked, checked
-  for an application error and against the node's response size, and
-  written with its result payload. `fail/3` closes a run with a reason and
+  for an application error (unless the run's answer is its catalyst
+  envelope) and against the node's response size, and written with its
+  result payload. `fail/3` closes a run with a reason and
   fails the children a failed formula leaves running. Every text that
   leaves here — the output, the failure message on the row, the terminal
   event and the answer handed to the caller (an MCP client, a parent
@@ -44,6 +45,7 @@ defmodule Cyfr.Execution.Close do
     :setup_stream,
     signature_verified: false,
     started: false,
+    envelope: false,
     admission: []
   ]
 
@@ -52,9 +54,11 @@ defmodule Cyfr.Execution.Close do
   node's, set once policy was enforced; `step_spans` the caller's clock;
   `setup_stream` the stream a setup refusal is announced on (the run's root,
   else its parent); `signature_verified` the registry's attestation flag;
-  `started` whether the row was admitted; `admission` the barriers
-  (`:charge`, `:step`, `:occurrence_id`) a row admitted only on failure
-  passes through.
+  `started` whether the row was admitted; `envelope` whether the output is
+  the component's catalyst envelope (`Cyfr.Models.decode_envelope/1`),
+  whose error is a refusal the component answers rather than a failure of
+  the run; `admission` the barriers (`:charge`, `:step`, `:occurrence_id`)
+  a row admitted only on failure passes through.
   """
   @type t :: %__MODULE__{
           ctx: Context.t(),
@@ -64,15 +68,18 @@ defmodule Cyfr.Execution.Close do
           setup_stream: String.t() | nil,
           signature_verified: boolean(),
           started: boolean(),
+          envelope: boolean(),
           admission: keyword()
         }
 
   @doc """
   Close a run that returned `output`, masked with `secrets`.
 
-  An output that carries an application error (`"error"`), exceeds the
-  node's `max_response_size` or cannot be encoded closes the run failed
-  instead. Answers the result — `%{status: :completed, output: masked,
+  An output that carries an application error (`"error"`) closes the run
+  failed instead, unless the close's `envelope` says the output is the
+  component's catalyst envelope, whose error is its refusal: that run
+  completes with the refusal as its output. An output that exceeds the
+  node's `max_response_size` or cannot be encoded closes the run failed. Answers the result — `%{status: :completed, output: masked,
   metadata: map}` — or `{:error, message}`. A cancel that closed the row
   first leaves the cancelled row standing; the result is still answered.
   """
@@ -220,6 +227,8 @@ defmodule Cyfr.Execution.Close do
   def setup_reason(reason) when is_atom(reason), do: reason
   def setup_reason(reason) when is_tuple(reason) and is_atom(elem(reason, 0)), do: elem(reason, 0)
   def setup_reason(_reason), do: :vault_refused
+
+  defp check_application_error(%__MODULE__{envelope: true}, _secrets, _masked_output), do: :ok
 
   defp check_application_error(close, secrets, masked_output) do
     case application_error(masked_output) do

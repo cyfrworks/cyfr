@@ -156,11 +156,14 @@ defmodule Cyfr.Execution.Dispatch do
     :ok
   end
 
-  # ---------------------------------------------------------------------------
-  # Dispatch
-  # ---------------------------------------------------------------------------
-
-  defp worker do
+  @doc """
+  The worker service a run is dispatched to: the first module in
+  `config :cyfr, :workers` that is loaded, with the boot id its status
+  answers. `{:error, :execution_unavailable}` when none is configured or it
+  does not answer.
+  """
+  @spec worker() :: {:ok, module(), String.t()} | {:error, :execution_unavailable}
+  def worker do
     case Enum.find(Application.get_env(:cyfr, :workers, []), &Code.ensure_loaded?/1) do
       nil ->
         {:error, :execution_unavailable}
@@ -174,6 +177,10 @@ defmodule Cyfr.Execution.Dispatch do
   catch
     :exit, _reason -> {:error, :execution_unavailable}
   end
+
+  # ---------------------------------------------------------------------------
+  # Dispatch
+  # ---------------------------------------------------------------------------
 
   defp dispatch(admitted, worker, input, opts) do
     registered? = register_waiter(admitted.execution_id, worker)

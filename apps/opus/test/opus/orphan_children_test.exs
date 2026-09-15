@@ -126,7 +126,7 @@ defmodule Opus.OrphanChildrenTest do
         send(
           test_pid,
           {:spawned,
-           Opus.Chain.run_child(short, Probe.probe_ref(), nil, %{"op" => "echo"},
+           Cyfr.Execution.run_child(short, Probe.probe_ref(), nil, %{"op" => "echo"},
              ctx: Sanctum.Context.enter_guest(ctx),
              attempt: row.attempt,
              parent_execution_id: root_id,
@@ -208,7 +208,9 @@ defmodule Opus.OrphanChildrenTest do
       send(
         test_pid,
         {:root,
-         Opus.run_root(ctx, :default, Probe.probe_ref(), %{"op" => "echo"}, execution_id: root_id)}
+         Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{"op" => "echo"},
+           execution_id: root_id
+         )}
       )
     end)
 
@@ -287,7 +289,7 @@ defmodule Opus.OrphanChildrenTest do
              Jason.decode!(formula_call(ctx, "run_stream", root_id, authority, row))
 
     assert {:error, {:invoke_denied, :stale_attempt}} =
-             Opus.Chain.run_child(authority, Probe.probe_ref(), nil, %{"op" => "echo"},
+             Cyfr.Execution.run_child(authority, Probe.probe_ref(), nil, %{"op" => "echo"},
                ctx: Sanctum.Context.enter_guest(ctx),
                attempt: row.attempt,
                parent_execution_id: root_id,

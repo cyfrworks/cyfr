@@ -13,18 +13,17 @@ defmodule Aqua.Loop.StreamOrderTest do
   unmasked. Text held back when the stream ends without a `stop` still
   reaches the thread, before the step's row.
 
-  The loop runs against the real root and a scripted model catalyst whose
-  events go through the engine's emit path.
+  The loop runs against the real root and a scripted worker service whose
+  runner pushes the catalyst's events through its attempt, which masks them
+  with the key it unsealed.
   """
 
   use ExUnit.Case, async: false
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
-  alias Cyfr.Test.ScriptedExecution
+  alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap, Source}
-
-  @moduletag :requires_opus_modules
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -36,12 +35,12 @@ defmodule Aqua.Loop.StreamOrderTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "stream_order_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :execution_impl]
+    keys = [:base_path, :seed_path, :consent_source, :workers]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
     Application.put_env(:cyfr, :consent_source, Source.DB)
-    Application.put_env(:cyfr, :execution_impl, ScriptedExecution)
+    Application.put_env(:cyfr, :workers, [ScriptedWorker])
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -62,6 +61,9 @@ defmodule Aqua.Loop.StreamOrderTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
+    # The model catalyst unseals its key when its runner attaches.
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
+    ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
     {:ok, thread} = Threads.create(ctx)
     :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
@@ -74,7 +76,7 @@ defmodule Aqua.Loop.StreamOrderTest do
     answer = Enum.join(texts)
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: @model,
        script: [
          {:emit,
@@ -106,11 +108,11 @@ defmodule Aqua.Loop.StreamOrderTest do
   test "a credential split across deltas with a tool call between never streams unmasked",
        %{ctx: ctx, thread: thread} do
     secret = "sk-live-0123456789"
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => secret})
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: @model,
-       secrets: [secret],
        script: [
          {:emit,
           [
@@ -149,10 +151,13 @@ defmodule Aqua.Loop.StreamOrderTest do
 
   test "text held back when the stream ends without a stop reaches the thread before the step's row",
        %{ctx: ctx, thread: thread} do
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{
+      "ANTHROPIC_API_KEY" => "sk-live-0123456789"
+    })
+
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: @model,
-       secrets: ["sk-live-0123456789"],
        script: [
          {:emit, [%{"type" => "text.delta", "text" => "almost done sk-li"}]},
          reply("almost done sk-li")
@@ -193,7 +198,7 @@ defmodule Aqua.Loop.StreamOrderTest do
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
   defp chat_calls do
-    for %{execution_id: id, input: %{"operation" => "chat"}} <- ScriptedExecution.calls(), do: id
+    for %{execution_id: id, input: %{"operation" => "chat"}} <- ScriptedWorker.calls(), do: id
   end
 
   defp drain do

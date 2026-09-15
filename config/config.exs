@@ -77,9 +77,6 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# Configure the execution implementation before endpoint startup; unavailable code reports no engine.
-config :cyfr, :execution_impl, Opus
-
 # The worker services runs are dispatched to (`Cyfr.Execution.Dispatch`),
 # each a `Cyfr.WorkerAPI` module; a run goes to the first one loaded. With
 # none loaded, a run is refused as :execution_unavailable.

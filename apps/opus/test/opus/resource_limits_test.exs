@@ -92,7 +92,7 @@ defmodule Opus.ResourceLimitsTest do
         )
 
       assert error_msg =~ "Component"
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Cyfr.Execution.list(ctx)
       assert Enum.any?(records, &(&1.status == :failed))
     end
 

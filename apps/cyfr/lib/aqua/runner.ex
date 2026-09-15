@@ -33,7 +33,7 @@ defmodule Aqua.Runner do
   the tape tells the runner — and continues as the person who sent it
   (`Sanctum.Tenancy.continuation/2`), or ends uncertain when that person
   is no longer seated. A loop that dies without an answer is aborted
-  from here (`Aqua.Loop.abort/3`) and its turn ended uncertain, or
+  from here (`Aqua.Loop.abort/4`) and its turn ended uncertain, or
   cancelled when a cancel asked for it.
 
   ## Recovery
@@ -850,13 +850,12 @@ defmodule Aqua.Runner do
   # Cutting turns short
   # ---------------------------------------------------------------------------
 
-  # The running or paused turn is aborted from here — the fence renewed
-  # and the steps settled before the loop is stopped — and ended.
+  # The running or paused turn is aborted from here — the fence renewed,
+  # the loop stopped, then the steps settled — and ended.
   defp cut(%{live: nil, paused: nil} = state, _reason, _status), do: state
 
   defp cut(%{live: %{turn_id: turn_id, task: task}} = state, reason, status) do
-    state = abort_turn(state, turn_id, reason)
-    Task.shutdown(task, :brutal_kill)
+    state = abort_turn(state, turn_id, reason, fn -> Task.shutdown(task, :brutal_kill) end)
 
     %{state | live: nil}
     |> end_turn(turn_id, status, reason)
@@ -870,9 +869,10 @@ defmodule Aqua.Runner do
     |> end_turn(turn_id, status, reason)
   end
 
-  defp abort_turn(state, turn_id, reason) do
-    with {:ok, turn} <- Tape.turn(state.ctx, turn_id) do
-      _ = Aqua.Loop.abort(state.ctx, turn, reason)
+  defp abort_turn(state, turn_id, reason, stop \\ fn -> :ok end) do
+    case Tape.turn(state.ctx, turn_id) do
+      {:ok, turn} -> _ = Aqua.Loop.abort(state.ctx, turn, reason, stop)
+      _unread -> stop.()
     end
 
     state

@@ -149,8 +149,8 @@ defmodule Aqua.Loop.Clone do
   defp roster(%Turn{roster: roster}), do: MapSet.new(roster, & &1["name"])
 
   # A revocation mid-turn lets the in-flight call finish and refuses the
-  # next transition; a clone is one. The pinned profile is loaded again
-  # through the port: its head must still be the pinned consent.
+  # next transition; a clone is one. The pinned profile is loaded again:
+  # its head must still be the pinned consent.
   defp intact(ctx, %Authority{profile_id: profile_id, consent_id: consent_id, source_ref: ref}) do
     case Cyfr.Execution.authority_for(ctx, {:id, profile_id}, ref) do
       {:ok, %Authority{consent_id: ^consent_id}} -> :ok

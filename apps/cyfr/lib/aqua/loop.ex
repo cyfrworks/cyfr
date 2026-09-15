@@ -241,22 +241,30 @@ defmodule Aqua.Loop do
   end
 
   @doc """
-  Abort a turn from outside its process, before it is stopped: the fence
-  of the turn and of its open clones is raised and their dispatched steps
-  cancel-marked, every child execution and every in-process catalog
-  handler is cancelled, dispatched steps settle by
+  Abort a turn from outside its process: the fence of the turn is raised;
+  then `stop` is called, with which the caller stops the turn's process if
+  one still runs, and with it every worker and clone loop under it
+  (`Aqua.Loop.Worker`); then the dispatched steps of the turn and of its
+  open clones are cancel-marked, every child execution and every
+  in-process catalog handler is cancelled, dispatched steps settle by
   `Arca.Schemas.TurnStep.unresolved/1` — a call whose effect is unknown is
   marked `uncertain`, since a cancel does not prove the effect never
   happened — unstarted steps are skipped, each open clone ends
   `cancelled`, and the aborted mark is written. The caller then ends the
-  turn; stopping its process stops every worker and clone loop under it
-  (`Aqua.Loop.Worker`).
-  """
-  @spec abort(Context.t(), Tape.turn(), String.t()) :: {:ok, Tape.turn()} | {:error, term()}
-  def abort(%Context{} = ctx, turn, reason) do
-    guest = Context.enter_guest(ctx)
+  turn.
 
-    with {:ok, superseded} <- Tape.supersede(guest, turn),
+  `stop` runs before any child is cancelled, since a cancelled child
+  answers the call waiting on it, and runs whether or not the fence could
+  be raised.
+  """
+  @spec abort(Context.t(), Tape.turn(), String.t(), (-> term())) ::
+          {:ok, Tape.turn()} | {:error, term()}
+  def abort(%Context{} = ctx, turn, reason, stop \\ fn -> :ok end) when is_function(stop, 0) do
+    guest = Context.enter_guest(ctx)
+    superseded = Tape.supersede(guest, turn)
+    stop.()
+
+    with {:ok, superseded} <- superseded,
          {:ok, clones} <- Tape.open_clones(guest, superseded) do
       for clone <- clones do
         settle_aborted(ctx, clone, reason)
@@ -376,7 +384,7 @@ defmodule Aqua.Loop do
   # run under the old grant.
   defp consented_release(ctx, %{activation: activation}, turn, %{agent: agent}) do
     with {:ok, roster} <- Compendium.AgentSource.enabled_roster(ctx) do
-      consented = Map.get(activation || %{}, source_ref(turn))
+      consented = Map.get(activation, source_ref(turn))
       projected = Compendium.AgentSource.row(agent, roster).release_digest
 
       if is_binary(consented) and consented == projected,
@@ -620,7 +628,8 @@ defmodule Aqua.Loop do
               retention_class: "chat_step",
               retained_input: retained_input,
               charge: Binding.charge(step, turn),
-              guest_fn: :spawn
+              guest_fn: :spawn,
+              envelope: true
             )
           end,
           @model_timeout_ms
@@ -1400,14 +1409,15 @@ defmodule Aqua.Loop do
 
   defp pause_uncertain(%State{} = state, _step, _reason), do: {:error, {:no_claim, state.turn.id}}
 
-  # What the group still had in flight when it stopped: each child
-  # execution cancelled, each nested handler stopped by its handle, each
-  # worker killed, then the step settled against the boundary.
+  # What the group still had in flight when it stopped: each worker killed
+  # before its child execution is cancelled, since a cancelled child answers
+  # the worker waiting on it; each nested handler stopped by its handle;
+  # then the step settled against the boundary.
   defp cancel_rest(%State{} = state, rest) do
     Enum.each(rest, fn %{item: %{step: step} = item, task: task} ->
+      if task, do: Task.shutdown(task, :brutal_kill)
       if step.child_execution_id, do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
       Aqua.Ops.cancel_call(handle(state, step))
-      if task, do: Task.shutdown(task, :brutal_kill)
       _ = settle_dead(state, item, :cancelled, :mark)
       Aqua.Ops.release_call(handle(state, step))
     end)

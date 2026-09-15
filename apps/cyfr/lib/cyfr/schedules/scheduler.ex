@@ -5,7 +5,7 @@ defmodule Cyfr.Schedules.Scheduler do
   @moduledoc """
   The scheduler of recurring component executions: a timer per active
   schedule (`Process.send_after/3`), each firing claiming one occurrence
-  and running it through the execution port.
+  and running it as a root (`Cyfr.Execution.run_root/5`).
 
   Each occurrence fires at most once across the cluster:
   `Arca.ScheduleOccurrences.claim/3` advances the schedule's cursor and
@@ -447,7 +447,7 @@ defmodule Cyfr.Schedules.Scheduler do
     end
   end
 
-  # One invocation through the execution port, the occurrence joined to
+  # One root run, the occurrence joined to
   # the execution by its admission; the occurrence closes with the
   # answer, whichever it is.
   defp run(schedule, occurrence, ctx, exec_reference, input) do

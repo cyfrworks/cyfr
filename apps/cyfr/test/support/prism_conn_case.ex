@@ -38,8 +38,9 @@ defmodule PrismWeb.ConnCase do
 
   @doc """
   Make `athanor_id` an estate a turn can run in: the shipped tree and
-  bundle copied in, indexed, and the baseline consent the soul pins
-  minted — as a fill leaves it. `user_id` is a member whose seat the
+  bundle copied in, indexed, the baseline consent the soul pins minted —
+  as a fill leaves it — and a key connected to the Claude catalyst, which
+  its runs unseal when they attach. `user_id` is a member whose seat the
   bootstrap runs under.
   """
   def ready_estate!(athanor_id, user_id) do
@@ -52,6 +53,11 @@ defmodule PrismWeb.ConnCase do
     {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
     # The soul roots: the consent a turn pins exists, whoever minted it.
     {:ok, _} = Cyfr.Execution.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, "catalyst:local.claude", %{
+      "ANTHROPIC_API_KEY" => "sk-test"
+    })
+
     ctx
   end
 
@@ -73,20 +79,20 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  Route the execution port through the scripted engine for this test,
-  scripting the bundled Claude catalyst; restored on exit. Answers the
-  script agent's pid.
+  Dispatch this test's runs to the scripted worker service, scripting the
+  bundled Claude catalyst; the configured worker services are restored on
+  exit. Answers the scripted worker service's pid.
   """
   def script_model!(items \\ []) do
-    previous = Application.get_env(:cyfr, :execution_impl)
-    Application.put_env(:cyfr, :execution_impl, Cyfr.Test.ScriptedExecution)
+    previous = Application.get_env(:cyfr, :workers)
+    Application.put_env(:cyfr, :workers, [Cyfr.Test.ScriptedWorker])
 
     ExUnit.Callbacks.on_exit(fn ->
-      Application.put_env(:cyfr, :execution_impl, previous)
+      Application.put_env(:cyfr, :workers, previous)
     end)
 
     ExUnit.Callbacks.start_supervised!(
-      {Cyfr.Test.ScriptedExecution, ref: "catalyst:local.claude", script: items}
+      {Cyfr.Test.ScriptedWorker, ref: "catalyst:local.claude", script: items}
     )
   end
 
@@ -110,7 +116,7 @@ defmodule PrismWeb.ConnCase do
 
   @doc "The chat requests the scripted model answered, oldest first."
   def model_requests do
-    Cyfr.Test.ScriptedExecution.calls()
+    Cyfr.Test.ScriptedWorker.calls()
     |> Enum.filter(&(&1.input["operation"] == "chat"))
     |> Enum.map(& &1.input["params"])
   end

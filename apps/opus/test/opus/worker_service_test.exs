@@ -223,7 +223,7 @@ defmodule Opus.WorkerServiceTest do
 
   # A child of the root: the probe echoing, held at its guest's entry.
   defp child!(ctx, authority, root_id, attempt, opts) do
-    Opus.Chain.run_child(
+    Cyfr.Execution.run_child(
       authority,
       Probe.probe_ref(),
       nil,

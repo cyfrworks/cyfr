@@ -200,7 +200,8 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     spawn(fn ->
       send(
         test_pid,
-        {:root, Opus.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
+        {:root,
+         Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
       )
     end)
   end

@@ -16,7 +16,7 @@ defmodule Aqua.Tape do
   guest-planed context writes here unchanged: the tape is a narrow
   interface, not a plane, and the tenant is the context's.
 
-  Pausing and resuming a turn are the execution port's
+  Pausing and resuming a turn are `Cyfr.Execution`'s
   (`Cyfr.Execution.pause_turn_root/3`, `resume_turn_root/3`): they move
   the rows with the root's slot and lease, which only the process holding
   them can do.

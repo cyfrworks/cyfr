@@ -33,7 +33,6 @@ defmodule Opus.HostSurfaceTest do
     # would implement.
     "Arca",
     "Arca.Cache",
-    "Arca.QueryHelpers",
     "Arca.Storage",
     "Arca.Usage",
 
@@ -43,14 +42,14 @@ defmodule Opus.HostSurfaceTest do
     "Compendium.NamespacePolicy",
 
     # Shared primitives — glue, by construction available to any node.
-    # The execution port, and what CYFR owns of a run: the child step
-    # (`Admission.step_invoke`) and its charge row, the dispatch a run and
-    # a cancel go through (`Dispatch.run`, `Dispatch.cancel`), which admits,
-    # waits and stops runs, the registry a streamed child's task registers
-    # in, the worker key the worker service holds, and the host
-    # calls of `Opus.HostClient` — attach, admitted, renew, complete, fail,
-    # emit, the OAuth dispense, the egress rate and the runner exit report —
-    # which are the only way opus reaches a run's attempt (the tests below).
+    # What CYFR owns of a run: a formula's children, run through
+    # `Cyfr.Execution` (`run_child`, `run_child_stream`, `execute_child`)
+    # with the child step (`Admission.step_invoke`) and its charge row taken
+    # for a spawn, the setup event a refused child announces, the worker key
+    # the worker service holds, and the host calls of `Opus.HostClient` —
+    # attach, admitted, renew, complete, fail, emit, the OAuth dispense, the
+    # egress rate and the runner exit report — which are the only way opus
+    # reaches a run's attempt (the tests below).
     "Cyfr.Execution",
     # Egress pinning: a guest request's host resolved and checked against
     # its consented private policy before the connection is made.

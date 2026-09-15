@@ -244,7 +244,7 @@ defmodule PrismWeb.ChatLiveTest do
     # With multiple human members, the estate requires an explicit agent mention.
     assert html =~ "Talk to the group"
 
-    Cyfr.Test.ScriptedExecution.script([model_reply("Hi Alice, hi Bob")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Hi Alice, hi Bob")])
 
     pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua hello from alice"})
@@ -277,7 +277,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     {alice_view, _} = mount_chat(alice_conn)
 
-    Cyfr.Test.ScriptedExecution.script([
+    Cyfr.Test.ScriptedWorker.script([
       model_call("c1", "notes", %{"action" => "keep", "name" => "plan", "content" => "ship it"})
     ])
 
@@ -305,7 +305,7 @@ defmodule PrismWeb.ChatLiveTest do
     [apr] = Threads.pending_approvals(start_ctx, thread.id)
 
     # Bob approves from his tab; the turn continues and answers.
-    Cyfr.Test.ScriptedExecution.script([model_reply("Kept.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Kept.")])
 
     pane(bob_view)
     |> element("#" <> pane(bob_view).id <> "-card-" <> apr.id <> " button[phx-value-scope=once]")
@@ -412,7 +412,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     refute redirected_html =~ "lunch at noon?"
 
-    Cyfr.Test.ScriptedExecution.script([model_reply("Booked.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Booked.")])
 
     pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua book it"})
@@ -439,7 +439,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(group)
     ready_estate!(group.id, alice.user_id)
-    Cyfr.Test.ScriptedExecution.script([model_reply("Read them.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Read them.")])
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
     bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
     carol_conn = log_in_user(build_conn(), carol, athanor_id: estate().id)
@@ -612,7 +612,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     # The fill completes: every pane holding the send retries on its own,
     # the estate accepts the message once, and the turn runs.
-    Cyfr.Test.ScriptedExecution.script([model_reply("Held, then heard")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Held, then heard")])
     ready_estate!(group.id, alice.user_id)
     {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
     {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(row)

@@ -98,7 +98,7 @@ defmodule Opus.FormulaHandler do
   - `:root_execution_id` - The top-level execution ID: the root of the lineage the formula's calls carry, and the stream a setup refusal is announced on (falls back to `parent_execution_id`)
   - `:limits` - The node's `Cyfr.Limits` (batch timeout, max concurrent tasks)
   - `:authority` - The `Cyfr.Authority` the chain runs under (required).
-    Execution dispatch goes through `Opus.Chain` and every other tool through
+    Execution dispatch goes through `Cyfr.Execution` and every other tool through
     `Cyfr.Ops.Catalog.call_in_chain/5`. A formula run always carries one —
     admission raises before reaching here (`Cyfr.Execution.Admission.admit/4`),
     and this fetch keeps a direct caller honest too.
@@ -318,7 +318,7 @@ defmodule Opus.FormulaHandler do
   Execute an MCP tool call from a formula (synchronous).
 
   Parses the JSON request, dispatches through the in-chain chokepoint (or
-  `Opus.Chain` for execution verbs), and returns a JSON response string.
+  `Cyfr.Execution` for execution verbs), and returns a JSON response string.
 
   When a sub-component call fails due to a setup issue (missing consent,
   missing vault entry), the error is enriched with a `remediation` field
@@ -338,7 +338,7 @@ defmodule Opus.FormulaHandler do
   end
 
   # Execution dispatch never rides the tool registry: the invocation is
-  # decided by the transition relation and executed by Opus.Chain with
+  # decided by the transition relation and executed by Cyfr.Execution with
   # host-threaded lineage. Which actions that is, the catalog says — the
   # ones annotated `host: :intercepted` — so the host and the annotation
   # cannot drift apart. Everything else — including a parse failure —
@@ -359,8 +359,8 @@ defmodule Opus.FormulaHandler do
   # An intercepted action the host has no arm for is a typed refusal, never
   # a crash; a test pins that every intercepted action has one.
   @spec child_runner(String.t()) :: {:ok, function()} | :error
-  def child_runner("run"), do: {:ok, &Opus.Chain.run_child/5}
-  def child_runner("run_stream"), do: {:ok, &Opus.Chain.run_child_stream/5}
+  def child_runner("run"), do: {:ok, &Cyfr.Execution.run_child/5}
+  def child_runner("run_stream"), do: {:ok, &Cyfr.Execution.run_child_stream/5}
   def child_runner(_action), do: :error
 
   defp dispatch_child_call(action, args, ctx, opts) do
@@ -636,7 +636,7 @@ defmodule Opus.FormulaHandler do
             Sanctum.Authority.guard_invoke(decision.authority)
             start_time = System.monotonic_time(:millisecond)
 
-            case Opus.Chain.execute_child(decision, input, child_opts) do
+            case Cyfr.Execution.execute_child(decision, input, child_opts) do
               {:ok, output} ->
                 emit_telemetry(parent_execution_id, "execution.run", :ok, start_time)
 

@@ -3,10 +3,10 @@
 
 defmodule Opus.RetainedInputTest do
   @moduledoc """
-  A child run's `retained_input` rides the real path — the port, the
-  chain, the executor, the record — to the payload store: the catalyst
-  receives the input as sent, the store keeps the retained form, and
-  the row's hash describes what was sent.
+  A child run's `retained_input` rides the real path — `Cyfr.Execution`,
+  admission, the worker service's runner, the record — to the payload
+  store: the catalyst receives the input as sent, the store keeps the
+  retained form, and the row's hash describes what was sent.
   """
 
   use ExUnit.Case, async: false

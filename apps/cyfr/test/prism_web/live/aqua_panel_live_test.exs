@@ -157,7 +157,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert thread_of(pane) == nil
     assert render(pane) =~ "Read #{room.name}"
 
-    Cyfr.Test.ScriptedExecution.script([model_reply("They mean Friday.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
     pane |> form("form", %{"message" => "what do they mean?"}) |> render_submit()
 
     # In You, and only there — with the room read into the turn's request
@@ -204,7 +204,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     settled_render(view)
     {panel, _html} = open_panel(view)
     pane = child!(panel, "aqua-panel-pane")
-    Cyfr.Test.ScriptedExecution.script([model_reply("They mean Friday.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
     pane |> form("form", %{"message" => "what do they mean?"}) |> render_submit()
 
     you_thread = settled_you!(me)
@@ -251,7 +251,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     pane = child!(panel, "aqua-panel-pane")
     refute render(pane) =~ "with each message"
-    Cyfr.Test.ScriptedExecution.script([model_reply("hello you")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("hello you")])
     pane |> form("form", %{"message" => "hello me"}) |> render_submit()
 
     you_thread = settled_you!(me)
@@ -279,7 +279,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     {panel, _html} = open_panel(view)
-    Cyfr.Test.ScriptedExecution.script([model_reply("ok")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("ok")])
     {pane, you_thread} = panel_thread(panel, me, "where are my activities?")
 
     # Another page: offered as a link, on You, and nothing pushed.
@@ -309,7 +309,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     {panel, _html} = open_panel(view)
-    Cyfr.Test.ScriptedExecution.script([model_reply("ok")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("ok")])
     {pane, you_thread} = panel_thread(panel, me, "where were we?")
 
     # The estate alone, no `c`: not a thread the panel could turn to.
@@ -332,7 +332,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     mine_id = mine.id
 
     # Both models are held mid-answer, so both turns are running.
-    Cyfr.Test.ScriptedExecution.script([{:probe, self()}, {:probe, self()}])
+    Cyfr.Test.ScriptedWorker.script([{:probe, self()}, {:probe, self()}])
 
     room_pane = child!(view, "pane-" <> room.id)
     room_pane |> form("form", %{"message" => "@aqua go on"}) |> render_submit()

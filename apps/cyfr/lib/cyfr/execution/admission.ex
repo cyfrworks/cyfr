@@ -232,8 +232,10 @@ defmodule Cyfr.Execution.Admission do
   `:activation_stamp`, `:activation_digest`, `:dep_ref`, `:need`,
   `:client_ip`, the barriers `:charge`, `:step`, `:occurrence_id` and
   `:parent_attempt` (the attempt of `:parent_execution_id` a child is
-  admitted under),
-  `:step_spans`, and what the attempt is opened with
+  admitted under), `:step_spans`, `:envelope` (true when the caller reads
+  the component's answer as its catalyst envelope, whose error is a refusal
+  the run completes with: `Cyfr.Execution.Close.complete/4`), and what the
+  attempt is opened with
   (`Cyfr.Execution.Attempt.open/1`): `:runner_id` (the boot id of the
   worker service the run is dispatched to, which is also the row's runner
   and the assignment's audience), `:worker` (that worker service's
@@ -287,6 +289,7 @@ defmodule Cyfr.Execution.Admission do
           step_spans: opts[:step_spans],
           setup_stream: opts[:root_execution_id] || opts[:parent_execution_id],
           signature_verified: component["signature_verified"] || false,
+          envelope: opts[:envelope] == true,
           admission:
             Keyword.take(opts, [:charge, :step, :parent_attempt, :occurrence_id, :runner_id])
         }

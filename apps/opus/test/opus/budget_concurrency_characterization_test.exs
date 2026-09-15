@@ -86,7 +86,7 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
     for _ <- 1..@spawns do
       spawn_link(fn ->
         result =
-          Opus.Chain.run_child(authority, Probe.probe_ref(), nil, %{"op" => "echo"},
+          Cyfr.Execution.run_child(authority, Probe.probe_ref(), nil, %{"op" => "echo"},
             ctx: Sanctum.Context.enter_guest(ctx),
             attempt: attempt,
             parent_execution_id: root_id,

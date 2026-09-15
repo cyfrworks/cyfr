@@ -474,13 +474,8 @@ defmodule Sanctum.Tenancy.Athanors do
     if Cyfr.Execution.available?() do
       ctx = Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
 
-      case Cyfr.Execution.list(ctx, status: :running, limit: 500) do
-        {:ok, running} when is_list(running) ->
-          Enum.each(running, fn %{id: id} -> Cyfr.Execution.cancel(ctx, id) end)
-
-        _ ->
-          :ok
-      end
+      {:ok, running} = Cyfr.Execution.list(ctx, status: :running, limit: 500)
+      Enum.each(running, fn %{id: id} -> Cyfr.Execution.cancel(ctx, id) end)
     end
 
     :ok

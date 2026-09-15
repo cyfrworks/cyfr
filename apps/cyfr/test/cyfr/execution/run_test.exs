@@ -1,19 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule OpusTest do
+defmodule Cyfr.Execution.RunTest do
+  @moduledoc """
+  A root run through `Cyfr.Execution` on the opus worker service, and the
+  records it leaves: a run that fails is recorded failed, an unconsented or
+  empty reference runs nothing, and a finished run cannot be cancelled.
+  """
+
   use ExUnit.Case, async: false
   @moduletag :requires_opus
 
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
-  @math_wasm_path Path.join([__DIR__, "support/test_wasm/math.wasm"])
+  @math_wasm_path Path.join([__DIR__, "../../support/test_wasm/math.wasm"])
   @test_ref "reagent:local.test-math:0.1.0"
   @test_node "reagent:local.test-math"
 
   setup do
-    test_path = Path.join(System.tmp_dir!(), "opus_test_#{:rand.uniform(100_000)}")
+    test_path = Path.join(System.tmp_dir!(), "run_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
@@ -26,7 +32,7 @@ defmodule OpusTest do
 
     ctx =
       Context.build(
-        user_id: "opus_test_user_#{rand_id}",
+        user_id: "run_test_user_#{rand_id}",
         athanor_id: "ath_test",
         permissions: [:*],
         scope: :athanor,
@@ -100,7 +106,7 @@ defmodule OpusTest do
   end
 
   defp run_consented(ctx, input) do
-    Opus.run_root(ctx, :default, @test_ref, input, consent_source: Source.Memory)
+    Cyfr.Execution.run_root(ctx, :default, @test_ref, input, consent_source: Source.Memory)
   end
 
   describe "run_root/5" do
@@ -111,7 +117,7 @@ defmodule OpusTest do
       assert error_msg =~ "Component Model"
 
       # Failed execution record is still written
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Cyfr.Execution.list(ctx)
       assert records != []
       failed = Enum.find(records, &(&1.status == :failed))
       assert failed != nil
@@ -119,42 +125,42 @@ defmodule OpusTest do
 
     test "refuses an unconsented component instead of guessing", %{ctx: ctx} do
       assert {:error, :no_profile} =
-               Opus.run_root(ctx, :default, "reagent:local.nonexistent:0.1.0", %{},
+               Cyfr.Execution.run_root(ctx, :default, "reagent:local.nonexistent:0.1.0", %{},
                  consent_source: Source.Memory
                )
     end
 
     test "returns error for empty reference", %{ctx: ctx} do
       assert {:error, {:invalid_reference, _reason}} =
-               Opus.run_root(ctx, :default, "", %{}, consent_source: Source.Memory)
+               Cyfr.Execution.run_root(ctx, :default, "", %{}, consent_source: Source.Memory)
     end
   end
 
   describe "list/2" do
     test "lists execution records", %{ctx: ctx} do
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Cyfr.Execution.list(ctx)
       assert is_list(records)
     end
 
     test "returns empty list initially", %{ctx: ctx} do
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Cyfr.Execution.list(ctx)
       assert records == []
     end
   end
 
   describe "get/2" do
     test "returns :not_found for non-existent execution", %{ctx: ctx} do
-      assert {:error, :not_found} = Opus.get(ctx, "exec_nonexistent")
+      assert {:error, :not_found} = Cyfr.Execution.get(ctx, "exec_nonexistent")
     end
 
     test "retrieves execution after run", %{ctx: ctx} do
       {:error, _} = run_consented(ctx, %{"a" => 1, "b" => 2})
 
       # Execution record is written even on failure; find it via list
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Cyfr.Execution.list(ctx)
       assert records != []
       record = hd(records)
-      {:ok, fetched} = Opus.get(ctx, record.id)
+      {:ok, fetched} = Cyfr.Execution.get(ctx, record.id)
       assert fetched.id == record.id
       assert fetched.status == :failed
     end
@@ -162,16 +168,16 @@ defmodule OpusTest do
 
   describe "cancel/2" do
     test "returns :not_found for non-existent execution", %{ctx: ctx} do
-      assert {:error, :not_found} = Opus.cancel(ctx, "exec_nonexistent")
+      assert {:error, :not_found} = Cyfr.Execution.cancel(ctx, "exec_nonexistent")
     end
 
     test "returns :not_cancellable for failed execution", %{ctx: ctx} do
       {:error, _} = run_consented(ctx, %{"a" => 1, "b" => 1})
 
       # Find the failed record via list
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Cyfr.Execution.list(ctx)
       record = hd(records)
-      assert {:error, :not_cancellable} = Opus.cancel(ctx, record.id)
+      assert {:error, :not_cancellable} = Cyfr.Execution.cancel(ctx, record.id)
     end
   end
 end

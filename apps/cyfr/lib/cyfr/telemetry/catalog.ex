@@ -131,7 +131,7 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :execution, :child, :admission] => %{
       consumers: [:operator],
       note:
-        "a child run's step span (`Cyfr.Execution.StepSpans`): the port's call to the " <>
+        "a child run's step span (`Cyfr.Execution.StepSpans`): the call of run_child to the " <>
           "guest's start; `mix cyfr.bench.step` reads it for the per-step latency baseline"
     },
     [:cyfr, :execution, :child, :first_delta] => %{

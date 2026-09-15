@@ -6,7 +6,7 @@ defmodule Cyfr.IngressInventoryTest do
   Inventories execution entry points to verify credential-grant checks.
 
   A runtime registry of ingresses would be architecture invented for a
-  test. Instead the source is scanned for callers of the run family and
+  test. Instead the code is scanned for callers of the run family and
   compared against a literal allowlist — so a NEW ingress fails here
   until someone classifies it, which is the fail-closed direction. The
   second arm (`Cyfr.Execution.CredentialedIngressGateTest`) proves each
@@ -19,9 +19,10 @@ defmodule Cyfr.IngressInventoryTest do
   # Adding a row is a deliberate act: it means "this is an ingress, and
   # the credential gate covers it".
   @allowed %{
-    # The chain — where execution is defined.
-    "apps/opus/lib/opus/chain.ex" => :internal,
-    "apps/opus/lib/opus.ex" => :facade,
+    # Where execution is defined: the run family, and the dispatch every
+    # run goes through.
+    "apps/cyfr/lib/cyfr/execution.ex" => :internal,
+    "apps/cyfr/lib/cyfr/execution/dispatch.ex" => :internal,
     # Ingresses proper.
     "apps/cyfr/lib/cyfr/execution/mcp.ex" => :mcp,
     "apps/cyfr/lib/cyfr/schedules/scheduler.ex" => :cron,
@@ -40,33 +41,33 @@ defmodule Cyfr.IngressInventoryTest do
   }
 
   @patterns [
-    "Opus.run_root(",
-    "Opus.run_root_edge(",
     "Cyfr.Execution.run_root(",
     "Cyfr.Execution.run_root_edge(",
     "Cyfr.Execution.claim_turn_root(",
     "Cyfr.Execution.run_child(",
-    "Opus.run_child(",
-    "Opus.Chain.run_root(",
-    "Opus.Chain.run_root_edge(",
-    "Opus.Chain.run_child(",
-    "Opus.Chain.run_child_stream(",
-    "Cyfr.Execution.Admission.step_invoke(",
-    "Cyfr.Execution.Admission.admit(",
-    "Opus.Chain.execute_child(",
-    "Cyfr.Execution.Dispatch.run("
+    "&Cyfr.Execution.run_child/",
+    "Cyfr.Execution.run_child_stream(",
+    "&Cyfr.Execution.run_child_stream/",
+    "Cyfr.Execution.execute_child(",
+    "Admission.step_invoke(",
+    "Admission.admit(",
+    "Dispatch.run("
   ]
 
-  test "every execution entry point is a classified ingress" do
-    root = Path.expand("../../../..", __DIR__)
+  defp root, do: Path.expand("../../../..", __DIR__)
 
+  defp code(path) do
+    path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines() |> Enum.join("\n")
+  end
+
+  test "every execution entry point is a classified ingress" do
     found =
-      Cyfr.Test.SourceTree.files!(Path.join(root, "apps/*/lib/**/*.ex"))
+      Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
       |> Enum.filter(fn path ->
-        source = Cyfr.Test.SourceTree.read(path)
-        Enum.any?(@patterns, &String.contains?(source, &1))
+        code = code(path)
+        Enum.any?(@patterns, &String.contains?(code, &1))
       end)
-      |> Enum.map(&Path.relative_to(&1, root))
+      |> Enum.map(&Path.relative_to(&1, root()))
       |> MapSet.new()
 
     known = MapSet.new(Map.keys(@allowed))
@@ -91,10 +92,9 @@ defmodule Cyfr.IngressInventoryTest do
     """
   end
 
-  # Which ingresses go through `Cyfr.Execution` rather than naming the
-  # engine. The port exists so cyfr has no compile-time path into Opus; an
-  # ingress that names the engine is intercepted by no stubbed
-  # `:execution_impl` and passes no readiness gate.
+  # The ingresses proper. Each starts its root through `Cyfr.Execution`,
+  # which derives the authority a run is admitted under from the selected
+  # profile's consent; admitting or dispatching directly would skip that.
   @ingress_files ~w(
     apps/cyfr/lib/cyfr/execution/mcp.ex
     apps/cyfr/lib/cyfr/schedules/scheduler.ex
@@ -102,36 +102,32 @@ defmodule Cyfr.IngressInventoryTest do
     apps/cyfr/lib/emissary/tincture/invoke.ex
   )
 
-  # The engine's own internals and its facade — where execution IS defined,
-  # and the module the port dispatches to.
+  # Where execution is defined, and where a formula's children are
+  # dispatched under their parent's authority.
   @engine_internals ~w(
-    apps/opus/lib/opus.ex
-    apps/opus/lib/opus/chain.ex
+    apps/cyfr/lib/cyfr/execution.ex
+    apps/cyfr/lib/cyfr/execution/dispatch.ex
     apps/opus/lib/opus/formula_handler.ex
   )
 
-  test "every ingress starts its root through the port" do
-    root = Path.expand("../../../..", __DIR__)
-
+  test "every ingress starts its root through Cyfr.Execution" do
     direct =
       Enum.filter(@ingress_files, fn file ->
-        root
+        root()
         |> Path.join(file)
-        |> Cyfr.Test.SourceTree.read()
-        |> String.split("\n")
-        |> Enum.reject(&String.match?(&1, ~r/^\s*#/))
-        |> Enum.any?(&String.match?(&1, ~r/\bOpus\.(run_root|run_root_edge|run_child)\(/))
+        |> code()
+        |> String.match?(~r/\b(Admission\.(admit|step_invoke)|Dispatch\.run)\(/)
       end)
 
     assert direct == [],
            """
-           These ingresses name the engine directly instead of Cyfr.Execution:
+           These ingresses admit or dispatch a run directly instead of
+           starting it through Cyfr.Execution:
 
              #{Enum.join(direct, "\n  ")}
 
-           A stubbed :execution_impl does not intercept those calls, and they
-           skip Cyfr.Execution.available?/0 — so a headless build answers them
-           by crashing rather than by refusing.
+           A run started that way is admitted under an authority no consent
+           was loaded for.
            """
   end
 

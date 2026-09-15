@@ -8,8 +8,8 @@ defmodule Cyfr.Execution.StepSpans do
   guest's first streamed delta, its completed row, and the whole call as
   its caller waits on it.
 
-  The port starts a clock when it is called and hands it to the engine in
-  the call's options as `:step_spans`. The run's attempt marks the guest's
+  `run_child/5` starts a clock when it is called and hands it to admission
+  in the call's options as `:step_spans`. The run's attempt marks the guest's
   start when its runner attaches, and its first streamed delta and its
   completed write as they happen (`Cyfr.Execution.Attempt`), from
   whichever process each happens in. Each event is emitted at most
@@ -24,10 +24,10 @@ defmodule Cyfr.Execution.StepSpans do
 
   | Event | From | To |
   |---|---|---|
-  | `[:cyfr, :execution, :child, :admission]` | the port is called | the guest starts: its runner attaches |
+  | `[:cyfr, :execution, :child, :admission]` | `run_child/5` is called | the guest starts: its runner attaches |
   | `[:cyfr, :execution, :child, :first_delta]` | the guest starts | its first `text.delta` or `tool_call.*` event is pushed to its stream |
   | `[:cyfr, :execution, :child, :completion]` | the guest starts | its completed row is written |
-  | `[:cyfr, :execution, :run_child]` | the port is called | the port returns, whatever it answers |
+  | `[:cyfr, :execution, :run_child]` | `run_child/5` is called | it returns, whatever it answers |
 
   ## Metadata
 
@@ -74,7 +74,7 @@ defmodule Cyfr.Execution.StepSpans do
   def events, do: [@admission, @first_delta, @completion, @run_child]
 
   @doc """
-  Start the clock for a call of `reference` with the port's `opts`
+  Start the clock for a call of `reference` with `run_child/5`'s `opts`
   (`:execution_id`, `:root_execution_id`, `:ctx`).
   """
   @spec start(String.t(), keyword()) :: t()
@@ -136,7 +136,7 @@ defmodule Cyfr.Execution.StepSpans do
     :ok
   end
 
-  @doc "Mark the port's return and emit run_child."
+  @doc "Mark `run_child/5`'s return and emit run_child."
   @spec returned(t()) :: :ok
   def returned(%__MODULE__{} = clock),
     do: emit(@run_child, System.monotonic_time() - clock.called_at, clock)

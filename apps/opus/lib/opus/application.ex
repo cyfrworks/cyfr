@@ -10,14 +10,10 @@ defmodule Opus.Application do
 
   @impl true
   def start(_type, _args) do
-    # The execution implementation is configured before boot; this application manages readiness.
     children = [
-      # Shared Wasmex engine for compile-once/instantiate-many. The engine
-      # admits work only once it is up (`Opus.ready?/0`).
+      # Shared Wasmex engine for compile-once/instantiate-many.
       Opus.SharedEngine,
-      # Supervised fire-and-forget tasks: an in-chain streamed child
-      # (`execution.run_stream` from a formula) and a guest's streaming HTTP
-      # request.
+      # Supervised fire-and-forget tasks: a guest's streaming HTTP request.
       Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000),
       # The worker service and the runners it starts. They restart together:
       # a restarted service has a new boot id and monitors none of the old

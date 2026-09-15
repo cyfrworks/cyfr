@@ -212,7 +212,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_root_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
+        Cyfr.Execution.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
           execution_id: execution_id,
           type: :reagent
         )
@@ -268,7 +268,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_route_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Cyfr.Execution.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :protected,
           execution_id: execution_id
         )
@@ -286,7 +286,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_route_pub_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Cyfr.Execution.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :public,
           execution_id: execution_id
         )
@@ -357,7 +357,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_child_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.run_child(
+        Cyfr.Execution.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -385,7 +385,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_zero_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.run_child(
+        Cyfr.Execution.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -403,7 +403,13 @@ defmodule Opus.ChainTest do
       auth = authority_with_edges(%{"reagent:local.gone" => %{}})
 
       assert {:error, {:setup_required, payload}} =
-               Opus.run_child(auth, "reagent:local.gone:1.0.0", nil, %{}, child_opts(ctx))
+               Cyfr.Execution.run_child(
+                 auth,
+                 "reagent:local.gone:1.0.0",
+                 nil,
+                 %{},
+                 child_opts(ctx)
+               )
 
       assert payload.profile_id == "prof-chain"
       assert payload.node_ref == "reagent:local.gone:1.0.0"
@@ -443,7 +449,7 @@ defmodule Opus.ChainTest do
         })
 
       assert {:error, {:setup_required, payload}} =
-               Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
+               Cyfr.Execution.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
 
       assert payload.profile_id == "prof-chain"
       assert payload.node_ref == "#{@target_node}:0.1.0"
@@ -517,7 +523,7 @@ defmodule Opus.ChainTest do
       attach_witness()
 
       _result =
-        Opus.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
+        Cyfr.Execution.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
           type: :catalyst,
           execution_id: "exec_chain_cat_#{System.unique_integer([:positive])}"
         )
@@ -693,7 +699,13 @@ defmodule Opus.ChainTest do
       assert Sanctum.Authority.budget(auth).in_flight == 0
 
       _result =
-        Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx, guest_fn: :spawn))
+        Cyfr.Execution.run_child(
+          auth,
+          "#{@target_node}:0.1.0",
+          nil,
+          %{},
+          child_opts(ctx, guest_fn: :spawn)
+        )
 
       assert Sanctum.Authority.budget(auth).in_flight == 0
     end
@@ -723,7 +735,7 @@ defmodule Opus.ChainTest do
       }
 
       _result =
-        Opus.run_child(
+        Cyfr.Execution.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -740,7 +752,7 @@ defmodule Opus.ChainTest do
         Arca.BudgetReservations.charge(ctx.athanor_id, auth.budget.id, %{charge | id: "other"}, 1)
 
       assert {:error, {:invoke_denied, :invoke_budget_exhausted}} =
-               Opus.run_child(
+               Cyfr.Execution.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,
@@ -787,7 +799,7 @@ defmodule Opus.ChainTest do
         |> Arca.Repo.update_all(set: [admit_by: past])
 
       assert {:error, _} =
-               Opus.run_child(
+               Cyfr.Execution.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,

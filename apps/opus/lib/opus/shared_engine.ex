@@ -13,8 +13,6 @@ defmodule Opus.SharedEngine do
   The engine is created once at startup; if creation fails, the application
   crashes (no silent fallback).
 
-  The engine admits no work until this process is up (`Opus.ready?/0`).
-
   ## Fuel Enforcement
 
   Fuel-based CPU limits require `consume_fuel: true` on the engine AND

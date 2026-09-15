@@ -43,8 +43,8 @@ defmodule Opus.ApplicationTest do
   end
 
   describe "readiness" do
-    test "the engine is ready once the execution slots, its WASM engine and its worker service are up" do
-      assert Opus.ready?()
+    test "CYFR can run once the configured worker service answers" do
+      assert Application.get_env(:cyfr, :workers) == [Opus.WorkerService]
       assert Cyfr.Execution.available?()
     end
   end

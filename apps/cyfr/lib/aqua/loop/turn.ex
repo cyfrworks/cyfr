@@ -286,7 +286,8 @@ defmodule Aqua.Loop.Turn do
             root_execution_id: turn.root_execution_id,
             parent_reference: Compendium.AgentSource.ref(turn.orchestrator),
             declared_needs: [],
-            retention_class: "chat_step"
+            retention_class: "chat_step",
+            envelope: true
           )
         end)
 

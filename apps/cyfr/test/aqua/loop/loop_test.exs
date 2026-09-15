@@ -18,10 +18,8 @@ defmodule Aqua.LoopTest do
 
   alias Aqua.{Approvals, Tape}
   alias Arca.ThreadStorage, as: Threads
-  alias Cyfr.Test.ScriptedExecution
+  alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap, Source}
-
-  @moduletag :requires_opus_modules
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -32,12 +30,12 @@ defmodule Aqua.LoopTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "loop_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :execution_impl]
+    keys = [:base_path, :seed_path, :consent_source, :workers]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
     Application.put_env(:cyfr, :consent_source, Source.DB)
-    Application.put_env(:cyfr, :execution_impl, ScriptedExecution)
+    Application.put_env(:cyfr, :workers, [ScriptedWorker])
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -58,6 +56,9 @@ defmodule Aqua.LoopTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
+    # The model catalyst unseals its key when its runner attaches.
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
+    ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
     {:ok, thread} = Threads.create(ctx)
     :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
@@ -85,7 +86,7 @@ defmodule Aqua.LoopTest do
   end
 
   test "the loop resolves a cap for the spec it actually holds", %{ctx: ctx, thread: thread} do
-    start_supervised!({ScriptedExecution, ref: @model, script: []})
+    start_supervised!({ScriptedWorker, ref: @model, script: []})
     turn = accept!(ctx, thread, "hello")
     {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
     {:ok, spec} = Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
@@ -156,7 +157,7 @@ defmodule Aqua.LoopTest do
     turn
   end
 
-  defp script!(items), do: start_supervised!({ScriptedExecution, ref: @model, script: items})
+  defp script!(items), do: start_supervised!({ScriptedWorker, ref: @model, script: items})
 
   defp reply(text),
     do: %{
@@ -245,12 +246,14 @@ defmodule Aqua.LoopTest do
     assert %{status: "completed"} = Arca.Repo.get(Arca.Execution, root)
 
     assert [%{execution_id: child}] =
-             Enum.filter(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+             Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
     assert %{status: "completed", parent_execution_id: ^root} =
              Arca.Repo.get(Arca.Execution, child)
   end
 
+  # The files hand is not scripted: it runs on the opus worker service.
+  @tag :requires_opus
   test "hands run as children in workers, reads beside each other, and the response is persisted before they run",
        %{
          ctx: ctx,
@@ -312,6 +315,8 @@ defmodule Aqua.LoopTest do
     assert_receive {:thread, _, {:tool_activity, [_ | _]}}, 5_000
   end
 
+  # The files hand is not scripted: it runs on the opus worker service.
+  @tag :requires_opus
   test "a call that asks pauses the turn after the auto steps close, and a decision resumes it",
        %{
          ctx: ctx,
@@ -348,7 +353,7 @@ defmodule Aqua.LoopTest do
     assert {:ok, %{decision: "approved"}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
-    ScriptedExecution.script([reply("kept")])
+    ScriptedWorker.script([reply("kept")])
 
     resumed =
       Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
@@ -396,7 +401,7 @@ defmodule Aqua.LoopTest do
         set: [payload: payload]
       )
 
-    ScriptedExecution.script([reply("done")])
+    ScriptedWorker.script([reply("done")])
 
     assert :completed =
              Task.await(
@@ -445,7 +450,7 @@ defmodule Aqua.LoopTest do
 
     {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
     {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :declined})
-    ScriptedExecution.script([reply("done")])
+    ScriptedWorker.script([reply("done")])
 
     assert :completed =
              Task.await(
@@ -512,7 +517,7 @@ defmodule Aqua.LoopTest do
         steer_turn_id: turn.id
       })
 
-    ScriptedExecution.script([{:probe, self()}, reply("ok, dropped")])
+    ScriptedWorker.script([{:probe, self()}, reply("ok, dropped")])
 
     resumed =
       Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
@@ -520,7 +525,7 @@ defmodule Aqua.LoopTest do
     assert_receive {:scripted_probe, worker, _}, 10_000
 
     %{input: %{"params" => %{"messages" => messages}}} =
-      ScriptedExecution.calls() |> Enum.filter(&(&1.input["operation"] == "chat")) |> List.last()
+      ScriptedWorker.calls() |> Enum.filter(&(&1.input["operation"] == "chat")) |> List.last()
 
     texts =
       messages
@@ -556,7 +561,7 @@ defmodule Aqua.LoopTest do
     assert :completed = Task.await(running, 60_000)
 
     [_first, %{input: %{"params" => %{"messages" => messages}}}] =
-      Enum.filter(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+      Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
     assert Jason.encode!(messages) =~ "one more thing"
     assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.content == "and hi again"))
@@ -581,11 +586,10 @@ defmodule Aqua.LoopTest do
     turn = accept!(ctx, thread, "@aqua do things")
 
     start_supervised!(
-      {ScriptedExecution,
-       ref: [@model, "catalyst:local.http", "catalyst:local.files"], script: []}
+      {ScriptedWorker, ref: [@model, "catalyst:local.http", "catalyst:local.files"], script: []}
     )
 
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([
         {"c1", "component", %{"action" => "delete", "name" => "x"}},
         {"c2", "http", %{"action" => "get", "url" => "https://example.test/x"}}
@@ -621,7 +625,7 @@ defmodule Aqua.LoopTest do
         steer_turn_id: turn.id
       })
 
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([
         {"c3", "files", %{"action" => "list", "path" => "data"}},
         {"c4", "files", %{"action" => "write", "path" => "data/x", "content" => "y"}}
@@ -676,7 +680,7 @@ defmodule Aqua.LoopTest do
     assert :completed = Task.await(run(ctx, turn), 60_000)
 
     assert %{execution_id: id, input: sent} =
-             Enum.find(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+             Enum.find(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
     assert Jason.encode!(sent) =~ "ROOM-ONLY-LINE"
 
@@ -695,10 +699,10 @@ defmodule Aqua.LoopTest do
     thread: thread
   } do
     turn = accept!(ctx, thread, "@aqua keep going")
-    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.files"], script: []})
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.files"], script: []})
 
     # Two rounds, a retried third, then a card.
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([{"c1", "files", %{"action" => "list", "path" => "data"}}]),
       %{"entries" => []},
       calls([{"c2", "files", %{"action" => "list", "path" => "data"}}]),
@@ -717,7 +721,7 @@ defmodule Aqua.LoopTest do
     {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
     {:ok, _} = Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
 
-    ScriptedExecution.script(
+    ScriptedWorker.script(
       List.flatten(
         for _ <- 1..40 do
           [calls([{"cx", "files", %{"action" => "list", "path" => "data"}}]), %{"entries" => []}]
@@ -755,9 +759,9 @@ defmodule Aqua.LoopTest do
 
   test "a role's unknown outcome stops the soul", %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua fetch it")
-    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.http"], script: []})
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
 
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([{"r1", "web", %{"task" => "read the page"}}]),
       # The clone's own round, and the hand that dies under it.
       calls([{"w1", "http", %{"action" => "get", "url" => "https://example.test/x"}}]),
@@ -792,9 +796,9 @@ defmodule Aqua.LoopTest do
     thread: thread
   } do
     turn = accept!(ctx, thread, "@aqua fetch both")
-    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.http"], script: []})
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
 
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([
         {"c1", "http", %{"action" => "get", "url" => "https://example.test/a"}},
         {"c2", "http", %{"action" => "get", "url" => "https://example.test/b"}}
@@ -834,7 +838,7 @@ defmodule Aqua.LoopTest do
            ] = steps
 
     other = accept!(ctx, thread, "@aqua again")
-    ScriptedExecution.script([{:refuse, %{"type" => "authentication", "message" => "no key"}}])
+    ScriptedWorker.script([{:refuse, %{"type" => "authentication", "message" => "no key"}}])
     result = Task.await(run(ctx, other), 60_000)
 
     assert {:failed, :setup_required} = result
@@ -987,7 +991,7 @@ defmodule Aqua.LoopTest do
     turn = accept!(ctx, thread, "@aqua hello")
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: @model,
        script: [],
        describe: {:refuse, %{"type" => "unknown_model", "message" => "not a model"}}}
@@ -995,12 +999,12 @@ defmodule Aqua.LoopTest do
 
     assert {:failed, {:unknown_model, _}} = Task.await(run(ctx, turn), 30_000)
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, turn.id)
-    refute Enum.any?(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+    refute Enum.any?(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
-    stop_supervised!(ScriptedExecution)
+    stop_supervised!(ScriptedWorker)
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: @model,
        script: [],
        describe: {:refuse, %{"type" => "secret_denied", "message" => "no key"}}}

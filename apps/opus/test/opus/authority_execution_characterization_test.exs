@@ -92,7 +92,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     attach_witness()
 
     {:ok, run_result} =
-      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
+      Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "chain",
         "depth" => 2,
         "leaf" => nil
@@ -142,7 +142,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
   test "guest emits are attributed: origin and emitting node in the envelope", %{ctx: ctx} do
     {:ok, run_result} =
-      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
+      Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "emit",
         "events" => [%{"note" => "one"}]
       })
@@ -169,7 +169,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     # expanded the manifest allowlist), the action is in-chain-annotated,
     # and the caller identity holds the permission — all three legs.
     {:ok, run_result} =
-      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
+      Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "call",
         "request" => %{
           "tool" => "component",
@@ -190,7 +190,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     # its verdict reaches the guest as an encoded error naming the
     # authority denial.
     {:ok, run_result} =
-      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
+      Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "call",
         "request" => %{"tool" => "webhook", "action" => "list", "args" => %{}}
       })

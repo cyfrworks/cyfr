@@ -76,7 +76,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     :ok = Cyfr.Execution.subscribe_events(id, ctx)
 
     assert {:ok, result} =
-             Opus.run_root(ctx, :default, @stub, chat(), execution_id: id)
+             Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: id)
 
     assert %{"data" => %{"content" => [%{"text" => text}]}} = result.output
     assert text == "The #{@redacted} #{@redacted}."
@@ -107,7 +107,9 @@ defmodule Opus.ExecutorMaskedOutputTest do
     :ok = Cyfr.Execution.subscribe_events(id, ctx)
 
     assert {:error, message} =
-             Opus.run_root(ctx, :default, @stub, %{"operation" => "unknown"}, execution_id: id)
+             Cyfr.Execution.run_root(ctx, :default, @stub, %{"operation" => "unknown"},
+               execution_id: id
+             )
 
     assert message == "the #{@redacted} #{@redacted}, models and chat"
 
@@ -127,7 +129,9 @@ defmodule Opus.ExecutorMaskedOutputTest do
     id = Cyfr.UUID7.execution_id()
     hold_guest!(id)
 
-    assert {:error, message} = Opus.run_root(ctx, :default, @brief, chat(), execution_id: id)
+    assert {:error, message} =
+             Cyfr.Execution.run_root(ctx, :default, @brief, chat(), execution_id: id)
+
     assert message == "Execution #{@redacted} #{@redacted}"
 
     row = Arca.Repo.get!(Arca.Execution, id)
@@ -180,7 +184,11 @@ defmodule Opus.ExecutorMaskedOutputTest do
     :ok = Cyfr.Execution.subscribe_events(id, ctx)
     await_entry!(id)
 
-    run = Task.async(fn -> Opus.run_root(ctx, :default, @stub, chat(), execution_id: id) end)
+    run =
+      Task.async(fn ->
+        Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: id)
+      end)
+
     assert_receive {:entered, ^id, guest}, 30_000
 
     attempt = Cyfr.Execution.Attempt.whereis(id)
