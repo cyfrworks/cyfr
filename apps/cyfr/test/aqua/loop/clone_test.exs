@@ -30,8 +30,7 @@ defmodule Aqua.Loop.CloneTest do
 
   setup do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "clone_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path, :consent_source, :execution_impl]
@@ -50,6 +49,9 @@ defmodule Aqua.Loop.CloneTest do
           else: Application.delete_env(:cyfr, key)
       end
     end)
+
+    # The loops' work stops before the paths it runs under are restored.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
