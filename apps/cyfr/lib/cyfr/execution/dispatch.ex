@@ -19,8 +19,8 @@ defmodule Cyfr.Execution.Dispatch do
        otherwise — waiting at most the run's timeout or 30 seconds; a
        refusal closes the run failed;
     4. the assignment is signed (`Cyfr.Execution.Assignments.issue/1`), its
-       attempt key is sealed with the dispatch seal key
-       (`Cyfr.WorkerAuth.seal_attempt_key/2`), and it is started on the
+       attempt's keys are sealed with the worker service's dispatch seal key
+       (`Cyfr.WorkerAuth.seal_attempt_keys/3`), and it is started on the
        worker service (`c:Cyfr.WorkerAPI.start/3`) with the input's JSON; a
        run that is not started is closed failed;
     5. the waiter waits for the attempt to close the run (`await/2`) and
@@ -46,6 +46,7 @@ defmodule Cyfr.Execution.Dispatch do
   require Logger
 
   alias Cyfr.Execution.{Admission, Assignments, Attempt, Cascade, Charge, Close, Keys, Record}
+  alias Cyfr.WorkerAuth
   alias Sanctum.Context
 
   @slot_wait_ms 30_000
@@ -203,11 +204,12 @@ defmodule Cyfr.Execution.Dispatch do
   # failed by its attempt.
   defp start(admitted, worker, input) do
     with {:signed, {:ok, issued}} <- {:signed, Assignments.issue(admitted.assignment)},
+         {:ok, worker_key} <- Keys.worker_key(admitted.assignment.audience),
          {:ok, sealed} <-
-           Cyfr.WorkerAuth.seal_attempt_key(Keys.dispatch_seal_key(), %{
-             attempt: issued.attempt,
-             key: issued.attempt_key
-           }),
+           WorkerAuth.seal_attempt_keys(
+             WorkerAuth.dispatch_seal_key(worker_key),
+             issued.attempt_keys
+           ),
          :ok <- worker.start(issued.assignment, Jason.encode!(input), sealed) do
       :ok
     else

@@ -21,11 +21,13 @@ defmodule Cyfr.Execution.Host do
        stop without closing their runs (`Cyfr.Execution.Attempt`), and the
        rows are the holder's to write.
     1. The header verifies (`Cyfr.WorkerAuth.verify_host_call/5`) under the
-       worker root and the current generation (`Cyfr.Execution.Keys`), and
-       the body is a known operation with well-formed arguments.
+       call key of the attempt it names, derived from the worker root, and
+       the current generation (`Cyfr.Execution.Keys`), and the body is a
+       known operation with well-formed arguments.
     2. `attach`: the assignment verifies (`Cyfr.Assignment.verify/3`), it
        names the header's athanor, execution, attempt, fence and
-       generation, and the attempt row is claimed for the header's runner
+       generation, its audience is the header's worker service, and the
+       attempt row is claimed for the header's runner
        (`Arca.ExecutionAttempts.claim/4`). The attempt then unseals the
        run's vault edge (`Cyfr.Execution.Attempt.attach/2`).
     3. `renew`: each named attempt is the header's own and is held by its
@@ -76,10 +78,11 @@ defmodule Cyfr.Execution.Host do
 
   `runner_exited/2` takes a report's header (`Cyfr.WorkerAuth.report_header/3`)
   and its JSON body, `{"op": "runner_exited", "args": {"attempts": [ids]}}`,
-  and answers JSON. The header must verify under the dispatch key
-  (`Cyfr.WorkerAuth.verify_report/4`); a report is idempotent, so its nonce
-  is not checked. Each named attempt dispatched to the reporting worker
-  service that still owns its running execution is lapsed
+  and answers JSON. The header must verify under the dispatch key of the
+  worker service it names (`Cyfr.WorkerAuth.verify_report/4`), which only
+  that worker service holds; a report is idempotent, so its nonce is not
+  checked. Each named attempt dispatched to the reporting worker service
+  that still owns its running execution is lapsed
   (`Cyfr.Execution.Lapse`), and the attempt process open for each is
   stopped without closing its run (`Cyfr.Execution.Attempt.stop_unclosed/2`).
   It answers `{"ok": true}`, `{"error": "lost"}` for a report that does not
@@ -177,7 +180,7 @@ defmodule Cyfr.Execution.Host do
   end
 
   defp verify_report(header, body, now) do
-    case WorkerAuth.verify_report(Keys.dispatch_key(), header, body, now) do
+    case WorkerAuth.verify_report(Keys.root(), header, body, now) do
       {:ok, report} ->
         {:ok, report}
 
@@ -232,9 +235,21 @@ defmodule Cyfr.Execution.Host do
   defp dispatch(caller, op, _now), do: Attempt.call(caller.execution_id, caller, op)
 
   defp names_caller(%Assignment{} = assignment, caller) do
-    if Enum.all?(@assignment_fields, &(Map.fetch!(assignment, &1) == Map.fetch!(caller, &1))),
-      do: :ok,
-      else: {:error, :lost}
+    cond do
+      not Enum.all?(@assignment_fields, &(Map.fetch!(assignment, &1) == Map.fetch!(caller, &1))) ->
+        {:error, :lost}
+
+      assignment.audience != caller.worker ->
+        Logger.warning(
+          "[Cyfr.Execution.Host] attach of #{caller.execution_id} refused: the assignment " <>
+            "is addressed to another worker service"
+        )
+
+        {:error, :lost}
+
+      true ->
+        :ok
+    end
   end
 
   defp claim(caller) do

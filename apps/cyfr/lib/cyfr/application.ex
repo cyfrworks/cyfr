@@ -17,7 +17,8 @@ defmodule Cyfr.Application do
     Application.put_env(:phoenix, :filter_parameters, Cyfr.Sanitizer.filter_parameters())
 
     # This boot's name, before any row can carry it, and the worker root
-    # every assignment and attempt key this boot issues derives from.
+    # every assignment, worker and attempt key this boot issues derives
+    # from.
     Cyfr.Boot.mint()
     Cyfr.Execution.Keys.mint()
 

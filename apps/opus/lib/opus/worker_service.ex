@@ -12,21 +12,24 @@ defmodule Opus.WorkerService do
 
   `start/3` reads the assignment (`Cyfr.Assignment.read/1`), refuses it as
   `:malformed` unless it names this boot, its input matches its
-  `input_digest`, and the sealed key opens under the dispatch seal key as
-  the attempt it names (`Cyfr.WorkerAuth.open_attempt_key/2`), and then
-  starts an `Opus.Runner` under `Opus.WorkerService.Runners` with a host
-  client of its own id, and monitors it.
+  `input_digest`, and the sealed keys open under this worker service's
+  dispatch seal key as the attempt it names, on this worker service
+  (`Cyfr.WorkerAuth.open_attempt_keys/2`), and then starts an
+  `Opus.Runner` under `Opus.WorkerService.Runners` with a host client of
+  its own id, and monitors it.
 
   A runner tells the service its component process and what that process
   started (`track/1`). `kill/1` kills a runner's component process and the
   runner by name. When a runner exits, its component process (with the
   formula tracker linked to it) and its streaming requests are stopped; a
   runner that exits other than `:normal` left its attempt open, and a
-  process of its own reports the exit to CYFR at once, signed with the
+  process of its own reports the exit to CYFR at once, signed with its
   dispatch key (`Opus.HostClient.runner_exited/3`).
 
-  In this BEAM the dispatch and dispatch seal keys are CYFR's
-  (`Cyfr.Execution.Keys`).
+  Its dispatch and dispatch seal keys derive from its worker key
+  (`Cyfr.WorkerAuth.worker_key/2`), which in this BEAM is CYFR's to derive
+  for its boot id (`Cyfr.Execution.Keys.worker_key/1`); it keeps no key in
+  its state.
   """
 
   @behaviour Cyfr.WorkerAPI
@@ -88,9 +91,11 @@ defmodule Opus.WorkerService do
     with {:ok, assignment} <- Assignment.read(token),
          true <- assignment.audience == state.boot,
          true <- Cyfr.Digest.sha256(input) == assignment.input_digest,
-         {:ok, %{attempt: attempt, key: key}} <-
-           WorkerAuth.open_attempt_key(Cyfr.Execution.Keys.dispatch_seal_key(), sealed_keys),
-         true <- attempt == Map.take(assignment, @attempt_fields),
+         {:ok, worker_key} <- Cyfr.Execution.Keys.worker_key(state.boot),
+         {:ok, %{attempt: attempt} = keys} <-
+           WorkerAuth.open_attempt_keys(WorkerAuth.dispatch_seal_key(worker_key), sealed_keys),
+         true <-
+           attempt == assignment |> Map.take(@attempt_fields) |> Map.put(:worker, state.boot),
          false <- Map.has_key?(state.executions, assignment.execution_id),
          {:ok, %{} = decoded} <- Jason.decode(input),
          {:ok, pid} <-
@@ -101,7 +106,7 @@ defmodule Opus.WorkerService do
                 token: token,
                 assignment: assignment,
                 input: decoded,
-                client: HostClient.new(attempt, key, Cyfr.UUID7.generate_id("runner")),
+                client: HostClient.new(keys, Cyfr.UUID7.generate_id("runner")),
                 callers: caller.callers,
                 logger: caller.logger
               }}
@@ -223,10 +228,11 @@ defmodule Opus.WorkerService do
       Process.put(:"$callers", runner.callers)
       Cyfr.LoggerContext.restore(runner.logger)
 
-      case HostClient.runner_exited(Cyfr.Execution.Keys.dispatch_key(), boot, [runner.attempt]) do
-        :ok ->
-          :ok
-
+      with {:ok, worker_key} <- Cyfr.Execution.Keys.worker_key(boot),
+           :ok <-
+             HostClient.runner_exited(WorkerAuth.dispatch_key(worker_key), boot, [runner.attempt]) do
+        :ok
+      else
         {:error, reason} ->
           Logger.error(
             "[Opus.WorkerService] the exit of #{runner.execution_id}'s runner was not " <>

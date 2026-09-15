@@ -80,6 +80,35 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
+  describe "CYFR_WORKER_KEY" do
+    test "is the 32-byte root its 64 hexadecimal digits spell, in either case" do
+      root = :crypto.strong_rand_bytes(32)
+
+      for text <- [Base.encode16(root, case: :lower), Base.encode16(root)] do
+        with_env(%{"CYFR_WORKER_KEY" => text}, fn ->
+          assert get_in(read_prod_config!(), [:cyfr, :worker_key]) == root
+        end)
+      end
+    end
+
+    test "unset or blank configures no root" do
+      for value <- [nil, ""] do
+        with_env(%{"CYFR_WORKER_KEY" => value}, fn ->
+          assert get_in(read_prod_config!(), [:cyfr, :worker_key]) == nil
+        end)
+      end
+    end
+
+    test "a malformed key refuses the boot" do
+      for text <- ["abc", String.duplicate("g", 64), Base.encode64(:crypto.strong_rand_bytes(32))] do
+        with_env(%{"CYFR_WORKER_KEY" => text}, fn ->
+          error = assert_raise RuntimeError, fn -> read_prod_config!() end
+          assert Exception.message(error) =~ "CYFR_WORKER_KEY must be exactly 64 hexadecimal"
+        end)
+      end
+    end
+  end
+
   describe "CYFR_DATABASE — the one setting `.env` cannot decide" do
     # Verify .env selection agrees with the compile-time adapter; Ecto cannot switch adapters at runtime.
 

@@ -5,10 +5,14 @@ defmodule Cyfr.AssignmentTest do
   @moduledoc """
   An assignment signs to one canonical token that verifies back to it under
   the assign key only. A token is refused when its MAC or payload was
-  changed, when it was MAC'd with the dispatch key (a worker cannot mint
-  one), when its claim deadline has passed, when its version is unknown,
-  and when its payload has an unknown, missing or mistyped member. A worker
-  reads a token without the assign key, and reading grants nothing.
+  changed, when it was MAC'd with a worker service's dispatch key (a worker
+  cannot mint one), when its claim deadline has passed, when its version is unknown,
+  and when its payload has an unknown, missing or mistyped member: an
+  authority `Cyfr.Authority.from_wire/1` refuses, a component reference
+  that is not canonical, of another type or unbounded, a need or an
+  intercepted action outside its grammar, or a list or actor member over
+  its bound. A worker reads a token without the assign key, and reading
+  grants nothing.
   """
   use ExUnit.Case, async: true
 
@@ -194,9 +198,10 @@ defmodule Cyfr.AssignmentTest do
       assert {:error, :bad_mac} = Assignment.verify(forged, key, @now)
     end
 
-    test "is refused when MAC'd with the dispatch key: a worker cannot mint one",
+    test "is refused when MAC'd with a worker service's key: a worker cannot mint one",
          %{assign_key: key, authority: authority} do
-      dispatch_key = WorkerAuth.dispatch_key(@root)
+      {:ok, worker_key} = WorkerAuth.worker_key(@root, "wrk_1")
+      dispatch_key = WorkerAuth.dispatch_key(worker_key)
       assignment = assignment(authority)
 
       assert {:error, :bad_mac} = Assignment.verify(sign!(assignment, dispatch_key), key, @now)
@@ -283,6 +288,34 @@ defmodule Cyfr.AssignmentTest do
       assert {:error, :malformed} = Assignment.read(resigned(token, key, &Map.delete(&1, "v")))
       assert {:error, :malformed} = Assignment.read(token_over("not json", key))
       assert {:error, :malformed} = Assignment.read(nil)
+    end
+
+    test "is refused with a member outside its shape or its bound",
+         %{assign_key: key, authority: authority} do
+      token = sign!(assignment(authority), key)
+      long = String.duplicate("a", 257)
+
+      changes = [
+        &put_in(&1, ["authority", "invoke_mode"], "everything"),
+        &put_in(&1, ["authority", "cursor"], "bound:"),
+        &put_in(&1, ["authority", "widened"], true),
+        &put_in(&1, ["component", "ref"], "c:local.x:0.1.0"),
+        &put_in(&1, ["component", "ref"], "reagent:local.x:0.1.0"),
+        &put_in(&1, ["component", "ref"], "catalyst:local." <> long <> ":0.1.0"),
+        &put_in(&1, ["component", "ref"], "catalyst:local.x:0.1.0 "),
+        &put_in(&1, ["component", "declared_needs"], ["Source"]),
+        &put_in(&1, ["component", "declared_needs"], ["src|dest"]),
+        &put_in(&1, ["component", "declared_needs"], List.duplicate("source", 257)),
+        &Map.put(&1, "intercepted", ["execution." <> long]),
+        &Map.put(&1, "intercepted", List.duplicate("execution.run", 257)),
+        &put_in(&1, ["actor", "client_ip"], long)
+      ]
+
+      for change <- changes do
+        changed = resigned(token, key, change)
+        assert {:error, :malformed} = Assignment.verify(changed, key, @now)
+        assert {:error, :malformed} = Assignment.read(changed)
+      end
     end
 
     test "decodes an absent optional member as nil", %{assign_key: key, authority: authority} do

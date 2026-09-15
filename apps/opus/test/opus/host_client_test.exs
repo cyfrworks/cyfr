@@ -6,7 +6,7 @@ defmodule Opus.HostClientTest do
   A runner's client reaches its attempt only through `transport/2`, and only
   strings cross it: a signed header, a JSON body naming the operation, and
   a JSON answer. Every host call this client makes goes that way. A
-  client's inspection shows its attempt and never its key.
+  client's inspection shows its attempt and never its keys.
   """
 
   use ExUnit.Case, async: false
@@ -61,7 +61,7 @@ defmodule Opus.HostClientTest do
 
   test "every host call crosses the transport as a header, a JSON body and a JSON answer" do
     attempt = AttemptFixtures.attached!(attach: false)
-    client = HostClient.new(attempt, attempt.key)
+    client = HostClient.new(attempt.keys)
 
     crossed =
       crossings(fn ->
@@ -87,20 +87,23 @@ defmodule Opus.HostClientTest do
     assert ops == ~w(attach renew push_deltas oauth_token take_rate complete fail)
   end
 
-  test "a client's inspection names its attempt and not its key" do
+  test "a client's inspection names its attempt and not its keys" do
     attempt = AttemptFixtures.attached!(attach: false)
-    client = HostClient.new(attempt, attempt.key)
+    client = HostClient.new(attempt.keys)
     shown = inspect(client, limit: :infinity)
 
     assert shown =~ attempt.attempt
-    refute shown =~ "key:"
-    refute shown =~ inspect(attempt.key, limit: :infinity)
+    refute shown =~ "_key:"
+
+    for key <- [attempt.keys.call, attempt.keys.seal],
+        do: refute(shown =~ inspect(key, limit: :infinity))
+
     Cyfr.Execution.Attempt.refuse(attempt.pid, "not started")
   end
 
   test "a client whose key is not its attempt's is answered lost" do
     attempt = AttemptFixtures.attached!()
-    client = HostClient.new(attempt, :crypto.strong_rand_bytes(32), attempt.runner)
+    client = HostClient.new(%{attempt.keys | call: :crypto.strong_rand_bytes(32)}, attempt.runner)
 
     assert {:error, :lost} = HostClient.push_deltas(client, [~s({"type":"note"})])
     assert {:error, :lost} = HostClient.renew(client, [client.attempt])

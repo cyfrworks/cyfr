@@ -16,7 +16,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
   # A real attached attempt's host client for `component_ref`.
   defp host(component_ref) do
     attempt = Cyfr.Test.AttemptFixtures.attached!(component_ref: component_ref)
-    Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+    Opus.HostClient.new(attempt.keys, attempt.runner)
   end
 
   defp rows_for(ctx, component_ref) do

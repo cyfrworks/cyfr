@@ -6,13 +6,15 @@ defmodule Opus.HostClient do
   A runner's client of CYFR's host calls (`Cyfr.HostAPI`), for one
   execution attempt.
 
-  A client names the attempt (its athanor, execution, attempt id, fence and
-  generation), the runner presenting it and the attempt key CYFR issued
-  with the assignment. Every call is a JSON body, `{"op": name,
-  "args": {...}}`, signed with the attempt key under a fresh nonce and the
-  current time (`Cyfr.WorkerAuth.host_call_header/3`), and its answer is
-  JSON. `transport/2` carries the header and body to CYFR and brings the
-  answer back; nothing but those strings crosses it.
+  A client names the attempt (its athanor, execution, attempt id, fence,
+  generation and worker service), the runner presenting it and the
+  attempt's keys CYFR issued with the assignment. Every call is a JSON
+  body, `{"op": name, "args": {...}}`, signed with the attempt's call key
+  under a fresh nonce and the current time
+  (`Cyfr.WorkerAuth.host_call_header/3`), and its answer is JSON.
+  `transport/2` carries the header and body to CYFR and brings the answer
+  back; nothing but those strings crosses it. The attempt's seal key is
+  held for the sealed transport (`Cyfr.WorkerAuth.seal_call/5`).
 
   Each function answers as the `Cyfr.HostAPI` callback of the same name.
   An answer that cannot be read is `{:error, :lost}`.
@@ -22,14 +24,24 @@ defmodule Opus.HostClient do
   the context its guest's in-process calls run in, the run's authority and
   the component's bytes (`Cyfr.Execution.Host.admitted/2`), signed as
   every host call is. `runner_exited/3` is a worker service's report that
-  one of its runners exited, signed with the dispatch key
+  one of its runners exited, signed with that worker service's dispatch key
   (`Cyfr.Execution.Host.runner_exited/2`); it carries only strings.
   """
 
   alias Cyfr.WorkerAuth
 
-  @derive {Inspect, except: [:key]}
-  @enforce_keys [:athanor_id, :execution_id, :attempt, :fence, :generation, :runner, :key]
+  @derive {Inspect, except: [:call_key, :seal_key]}
+  @enforce_keys [
+    :athanor_id,
+    :execution_id,
+    :attempt,
+    :fence,
+    :generation,
+    :worker,
+    :runner,
+    :call_key,
+    :seal_key
+  ]
   defstruct @enforce_keys
 
   @type t :: %__MODULE__{
@@ -38,8 +50,10 @@ defmodule Opus.HostClient do
           attempt: String.t(),
           fence: pos_integer(),
           generation: pos_integer(),
+          worker: String.t(),
           runner: String.t(),
-          key: binary()
+          call_key: binary(),
+          seal_key: binary()
         }
 
   @refusals %{
@@ -53,20 +67,23 @@ defmodule Opus.HostClient do
   }
 
   @doc """
-  A client for `attempt` (`t:Cyfr.WorkerAuth.attempt/0`), signing with
-  `key`. `runner` names the runner presenting the calls; a fresh runner id
-  is minted when it is absent.
+  A client for the attempt `keys` name (`t:Cyfr.WorkerAuth.attempt_keys/0`),
+  signing with its call key. `runner` names the runner presenting the
+  calls; a fresh runner id is minted when it is absent.
   """
-  @spec new(Cyfr.WorkerAuth.attempt(), binary(), String.t() | nil) :: t()
-  def new(attempt, key, runner \\ nil) when is_map(attempt) and is_binary(key) do
+  @spec new(Cyfr.WorkerAuth.attempt_keys(), String.t() | nil) :: t()
+  def new(%{attempt: attempt, call: call_key, seal: seal_key}, runner \\ nil)
+      when is_map(attempt) and is_binary(call_key) and is_binary(seal_key) do
     %__MODULE__{
       athanor_id: Map.fetch!(attempt, :athanor_id),
       execution_id: Map.fetch!(attempt, :execution_id),
       attempt: Map.fetch!(attempt, :attempt),
       fence: Map.fetch!(attempt, :fence),
       generation: Map.fetch!(attempt, :generation),
+      worker: Map.fetch!(attempt, :worker),
       runner: runner || Cyfr.UUID7.generate_id("runner"),
-      key: key
+      call_key: call_key,
+      seal_key: seal_key
     }
   end
 
@@ -160,15 +177,15 @@ defmodule Opus.HostClient do
   def admitted(%__MODULE__{} = client) do
     body = Jason.encode!(%{"op" => "admitted", "args" => %{}})
 
-    case WorkerAuth.host_call_header(client.key, call_fields(client), body) do
+    case WorkerAuth.host_call_header(client.call_key, call_fields(client), body) do
       {:ok, header} -> Cyfr.Execution.Host.admitted(header, body)
       {:error, _invalid} -> {:error, :lost}
     end
   end
 
   @doc """
-  Report, for the worker service `worker` holding `dispatch_key`, that one
-  of its runners exited while it held `attempts`. Answers `:ok`, or
+  Report, for the worker service `worker` holding its `dispatch_key`, that
+  one of its runners exited while it held `attempts`. Answers `:ok`, or
   `{:error, :lost | :unavailable}`.
   """
   @spec runner_exited(binary(), String.t(), [String.t()]) :: :ok | {:error, term()}
@@ -196,7 +213,7 @@ defmodule Opus.HostClient do
 
   defp request(client, op, args) do
     with {:ok, body} <- Jason.encode(%{"op" => op, "args" => args}),
-         {:ok, header} <- WorkerAuth.host_call_header(client.key, call_fields(client), body) do
+         {:ok, header} <- WorkerAuth.host_call_header(client.call_key, call_fields(client), body) do
       header |> transport(body) |> answer()
     else
       _ -> {:error, :lost}
@@ -210,6 +227,7 @@ defmodule Opus.HostClient do
       attempt: client.attempt,
       fence: client.fence,
       generation: client.generation,
+      worker: client.worker,
       runner: client.runner,
       ts: System.system_time(:millisecond),
       nonce: nonce()

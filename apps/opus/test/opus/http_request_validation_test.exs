@@ -20,7 +20,7 @@ defmodule Opus.HttpRequestValidationTest do
   # attempt's consented rate, and the component reference its bucket keys on.
   defp attached_host(opts \\ []) do
     attempt = AttemptFixtures.attached!(opts)
-    {Opus.HostClient.new(attempt, attempt.key, attempt.runner), attempt.component_ref}
+    {Opus.HostClient.new(attempt.keys, attempt.runner), attempt.component_ref}
   end
 
   # Every call goes through the full production entry with the host client a
@@ -263,7 +263,7 @@ defmodule Opus.HttpRequestValidationTest do
 
     test "a request is refused once its attempt is no longer open" do
       attempt = AttemptFixtures.attached!()
-      host = Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+      host = Opus.HostClient.new(attempt.keys, attempt.runner)
       ref = Process.monitor(attempt.pid)
       Process.exit(attempt.pid, :kill)
       assert_receive {:DOWN, ^ref, :process, _, :killed}

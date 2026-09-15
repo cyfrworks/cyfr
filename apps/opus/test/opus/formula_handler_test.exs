@@ -61,7 +61,7 @@ defmodule Opus.FormulaHandlerTest do
         ] ++ opts
       )
 
-    Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+    Opus.HostClient.new(attempt.keys, attempt.runner)
   end
 
   # Helper to build MCP-format requests

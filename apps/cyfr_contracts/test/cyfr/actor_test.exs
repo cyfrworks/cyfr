@@ -4,7 +4,8 @@
 defmodule Cyfr.ActorTest do
   @moduledoc """
   An actor's wire map round-trips through JSON, omits unset members, and
-  decodes fail-closed: an unknown, missing or mistyped member is refused.
+  decodes fail-closed: an unknown, missing or mistyped member, or a string
+  member over 256 bytes, is refused.
   """
   use ExUnit.Case, async: true
 
@@ -48,6 +49,7 @@ defmodule Cyfr.ActorTest do
       %{wire | "authenticated" => nil},
       %{wire | "user_id" => 42},
       %{wire | "user_id" => ""},
+      %{wire | "request_id" => String.duplicate("r", 257)},
       %{wire | "request_id" => nil},
       %{wire | "client_ip" => ["203.0.113.7"]},
       %{authenticated: true},
@@ -59,5 +61,7 @@ defmodule Cyfr.ActorTest do
     for value <- refused do
       assert {:error, :invalid_actor} = Actor.from_wire(value), inspect(value)
     end
+
+    assert {:ok, %Actor{}} = Actor.from_wire(%{wire | "request_id" => String.duplicate("r", 256)})
   end
 end

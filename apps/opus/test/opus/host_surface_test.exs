@@ -47,7 +47,7 @@ defmodule Opus.HostSurfaceTest do
     # (`Admission.step_invoke`) and its charge row, the dispatch a run and
     # a cancel go through (`Dispatch.run`, `Dispatch.cancel`), which admits,
     # waits and stops runs, the registry a streamed child's task registers
-    # in, the dispatch and seal keys the worker service holds, and the host
+    # in, the worker key the worker service holds, and the host
     # calls of `Opus.HostClient` — attach, admitted, renew, complete, fail,
     # emit, the OAuth dispense, the egress rate and the runner exit report —
     # which are the only way opus reaches a run's attempt (the tests below).
@@ -144,12 +144,12 @@ defmodule Opus.HostSurfaceTest do
     # The attempt's state (its masking set, emitter, rates, claim, holds
     # and close), its waiter and the lease are CYFR's: opus asks for them
     # through host calls and names nothing of the attempt itself. Of the
-    # keys it holds only the worker service's dispatch and seal keys.
+    # keys it holds only the worker service's own worker key.
     reaches =
       for {path, line} <- code,
           pattern <- [
             ~r/Cyfr\.Execution\.(Rates|Emit|Close|Assignments|Attempt|Lapse)\b/,
-            ~r/Cyfr\.Execution\.Keys\.(?!dispatch_key\(|dispatch_seal_key\()/,
+            ~r/Cyfr\.Execution\.Keys\.(?!worker_key\()/,
             ~r/\b(Close|Rates|Emit)\.[a-z_]+\(/,
             ~r/\brenew_lease\(/,
             ~r/\bArca\.ExecutionAttempts\b/,
@@ -167,7 +167,7 @@ defmodule Opus.HostSurfaceTest do
            """
   end
 
-  test "the runner and the worker service reach CYFR only through Opus.HostClient and the dispatch keys" do
+  test "the runner and the worker service reach CYFR only through Opus.HostClient and the worker key" do
     contracts = contracts()
 
     reaches =
@@ -182,7 +182,7 @@ defmodule Opus.HostSurfaceTest do
     assert reaches == [],
            """
            the runner or the worker service reaches CYFR other than through
-           Opus.HostClient and the worker service's dispatch keys:
+           Opus.HostClient and the worker service's worker key:
 
            #{Enum.join(reaches, "\n")}
            """

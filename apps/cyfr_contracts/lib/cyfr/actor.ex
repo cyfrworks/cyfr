@@ -24,6 +24,7 @@ defmodule Cyfr.Actor do
         }
 
   @optional ["user_id", "request_id", "client_ip"]
+  @max_bytes 256
   @keys ["authenticated" | @optional]
 
   @doc "The actor as its wire map."
@@ -38,7 +39,7 @@ defmodule Cyfr.Actor do
   @doc """
   An actor back from its wire map. Fail-closed: a member other than the
   four, a missing or non-boolean `authenticated`, or a present member that
-  is not a non-empty string is `{:error, :invalid_actor}`. An absent
+  is not a string of 1 to 256 bytes is `{:error, :invalid_actor}`. An absent
   `user_id`, `request_id` or `client_ip` is nil.
   """
   @spec from_wire(term()) :: {:ok, t()} | {:error, :invalid_actor}
@@ -65,7 +66,7 @@ defmodule Cyfr.Actor do
   defp optional_string?(wire, key) do
     case Map.fetch(wire, key) do
       :error -> true
-      {:ok, value} -> is_binary(value) and value != ""
+      {:ok, value} -> is_binary(value) and byte_size(value) in 1..@max_bytes
     end
   end
 end

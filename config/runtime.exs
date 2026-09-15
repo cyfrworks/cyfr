@@ -115,6 +115,29 @@ if config_env() != :test do
                 end
             end)
 
+    # The root key the execution workers' keys derive from
+    # (`Cyfr.WorkerAuth`): 32 random bytes as 64 hexadecimal digits
+    # (`openssl rand -hex 32`). Unset, this server mints a random root at
+    # every boot, which only a worker service inside this server can use, and
+    # a restart retires every assignment, worker and attempt key issued
+    # before it. A malformed key refuses the boot.
+    config :cyfr,
+           :worker_key,
+           (case env_str.("CYFR_WORKER_KEY", nil) do
+              nil ->
+                nil
+
+              text ->
+                case Cyfr.WorkerAuth.decode_root(text) do
+                  {:ok, root} ->
+                    root
+
+                  :error ->
+                    raise "[Cyfr] FATAL: CYFR_WORKER_KEY must be exactly 64 hexadecimal " <>
+                            "digits (32 bytes); generate one with `openssl rand -hex 32`"
+                end
+            end)
+
     # How long the bridge runs a stdio server's backends without hearing from
     # this server, in milliseconds: 1000 to 60000, default 30000. Every sync
     # and renewal asks for this lease and renewals go out every third of it,

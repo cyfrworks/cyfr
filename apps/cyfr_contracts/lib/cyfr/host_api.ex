@@ -10,9 +10,10 @@ defmodule Cyfr.HostAPI do
   ## A runner's calls
 
   Every callback but `c:runner_exited/2` answers a runner, for one attempt
-  it runs. The call is signed with that attempt's key
-  (`Cyfr.WorkerAuth.host_call_header/3`) and its body is sealed with the
-  same key. Before a callback runs, CYFR verifies the header
+  it runs. The call is signed with that attempt's call key
+  (`Cyfr.WorkerAuth.host_call_header/3`), and its body and answer are
+  sealed with the attempt's seal key (`Cyfr.WorkerAuth.seal_call/5`).
+  Before a callback runs, CYFR verifies the header
   (`Cyfr.WorkerAuth.verify_host_call/5`), refuses a nonce already seen for
   the attempt on a call that is not idempotent, and, for every call but
   `c:attach/2`, checks that the attempt row is current, running, at the
@@ -27,8 +28,9 @@ defmodule Cyfr.HostAPI do
   ## The worker service's report
 
   `c:runner_exited/2` answers a worker service. The report is signed with
-  the dispatch key (`Cyfr.WorkerAuth.report_header/3`) and verified with
-  `Cyfr.WorkerAuth.verify_report/4`.
+  that worker service's own dispatch key (`Cyfr.WorkerAuth.report_header/3`)
+  and verified with `Cyfr.WorkerAuth.verify_report/4`, so it speaks only
+  for the runners of the worker service it names.
   """
 
   alias Cyfr.Assignment
@@ -57,8 +59,12 @@ defmodule Cyfr.HostAPI do
   @typedoc "One attempt's lease renewal: its new expiry in Unix ms, a cancel asked of it, or its loss."
   @type renewal :: {:ok, lease_until :: non_neg_integer()} | :cancel | :lost
 
-  @typedoc "An admitted child: its assignment, already claimed for the calling runner, its attempt key and its secrets."
-  @type child :: %{assignment: Assignment.token(), attempt_key: binary(), secrets: secrets()}
+  @typedoc "An admitted child: its assignment, already claimed for the calling runner, its attempt's keys and its secrets."
+  @type child :: %{
+          assignment: Assignment.token(),
+          attempt_keys: WorkerAuth.attempt_keys(),
+          secrets: secrets()
+        }
 
   @type storage_op :: :read | :write | :append | :list | :delete | :exists
 
@@ -67,8 +73,9 @@ defmodule Cyfr.HostAPI do
   consented vault edge projects (an empty map when the edge grants none).
 
   CYFR verifies the token (`Cyfr.Assignment.verify/3`), checks that it names
-  the caller's attempt and generation, and claims the attempt row: running,
-  at the assignment's fence and unclaimed. An attach from the runner that
+  the caller's attempt and generation and is addressed to the caller's
+  worker service, and claims the attempt row: running, at the assignment's
+  fence and unclaimed. An attach from the runner that
   already holds the claim answers as the first did; one from any other
   runner is `:replayed`. A vault edge that cannot produce its material is
   `{:setup_required, payload}`. On success CYFR keeps the verified

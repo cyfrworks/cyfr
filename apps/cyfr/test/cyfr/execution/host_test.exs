@@ -4,12 +4,16 @@
 defmodule Cyfr.Execution.HostTest do
   @moduledoc """
   A runner reaches its attempt only through host calls, and each call is
-  checked before it acts: the header's MAC under the attempt key, its
-  generation and its window; at attach, the assignment's MAC, its claim
-  deadline, that it names the header's attempt, and the claim on the row;
+  checked before it acts: the header's MAC under the attempt's call key
+  (never its seal key, nor another worker service's), its generation and
+  its window; at attach, the assignment's MAC, its claim deadline, that it
+  names the header's attempt and is addressed to the header's worker
+  service, and the claim on the row;
   on every other call, a nonce not presented before and a row still held
   by the calling runner. Anything that fails answers `lost`, or the
-  specific refusal attach names. A boot that does not hold the control
+  specific refusal attach names. A runner exit report is signed with the
+  reporting worker service's own dispatch key, and lapses only the
+  attempts dispatched to it. A boot that does not hold the control
   plane answers every call `lost`: it unseals nothing, its open attempts
   stop without closing their runs, and neither they, their waiters nor a
   runner exit report writes a row.
@@ -114,6 +118,34 @@ defmodule Cyfr.Execution.HostTest do
                AttemptFixtures.call(fixture, "attach", %{"assignment" => other.assignment})
     end
 
+    @tag :capture_log
+    test "an assignment addressed to another worker service is lost and claims nothing" do
+      fixture = AttemptFixtures.attached!(attach: false, runner_id: @worker)
+
+      # The attempt as the other worker service would present it, with the
+      # keys CYFR would derive for it there.
+      {:ok, keys} = Keys.attempt_keys(%{fixture.keys.attempt | worker: "worker_other"})
+
+      assert %{"error" => "lost"} =
+               attach(fixture, worker: "worker_other", call_key: keys.call)
+
+      assert Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt).claimed_by == nil
+      assert %{"ok" => _} = attach(fixture)
+    end
+
+    @tag :capture_log
+    test "a header signed with the attempt's seal key, or another worker service's call key, is lost" do
+      fixture = AttemptFixtures.attached!(attach: false, runner_id: @worker)
+      {:ok, other} = Keys.attempt_keys(%{fixture.keys.attempt | worker: "worker_other"})
+
+      assert capture_log(fn ->
+               assert %{"error" => "lost"} = attach(fixture, call_key: fixture.keys.seal)
+               assert %{"error" => "lost"} = attach(fixture, call_key: other.call)
+             end) =~ "bad_mac"
+
+      assert Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt).claimed_by == nil
+    end
+
     test "an edge whose consent moved closes the run setup_required" do
       fixture =
         AttemptFixtures.attached!(
@@ -143,10 +175,11 @@ defmodule Cyfr.Execution.HostTest do
 
       log =
         capture_log(fn ->
-          assert %{"error" => "lost"} = renew(%{fixture | key: :crypto.strong_rand_bytes(32)})
+          assert %{"error" => "lost"} =
+                   renew(%{fixture | call_key: :crypto.strong_rand_bytes(32)})
 
           assert %{"error" => "lost"} =
-                   push(fixture, %{"type" => "note"}, key: :crypto.strong_rand_bytes(32))
+                   push(fixture, %{"type" => "note"}, call_key: :crypto.strong_rand_bytes(32))
         end)
 
       assert log =~ "bad_mac"
@@ -155,8 +188,8 @@ defmodule Cyfr.Execution.HostTest do
     test "a header from another generation is refused, though signed with that generation's key" do
       fixture = AttemptFixtures.attached!()
       generation = fixture.generation + 1
-      {:ok, key} = Keys.attempt_key(%{fixture | generation: generation})
-      opts = [generation: generation, key: key]
+      {:ok, keys} = Keys.attempt_keys(%{fixture.keys.attempt | generation: generation})
+      opts = [generation: generation, call_key: keys.call]
 
       log =
         capture_log(fn ->
@@ -433,7 +466,7 @@ defmodule Cyfr.Execution.HostTest do
 
       assert %{"ok" => _} = attach(fixture)
 
-      forged = AttemptFixtures.header(fixture, body, key: :crypto.strong_rand_bytes(32))
+      forged = AttemptFixtures.header(fixture, body, call_key: :crypto.strong_rand_bytes(32))
       assert {:error, :lost} = Cyfr.Execution.Host.admitted(forged, body)
 
       other = AttemptFixtures.body("renew", %{})
@@ -536,11 +569,19 @@ defmodule Cyfr.Execution.HostTest do
   end
 
   describe "a runner exit report" do
-    defp report(worker, attempts, key \\ Keys.dispatch_key()) do
+    # A report naming `worker`, signed with the dispatch key of `signer`
+    # (default the worker it names).
+    defp report(worker, attempts, opts \\ []) do
       body = AttemptFixtures.body("runner_exited", %{"attempts" => attempts})
       fields = %{worker: worker, ts: now(), nonce: "n_#{System.unique_integer([:positive])}"}
+      key = Keyword.get_lazy(opts, :key, fn -> dispatch_key(opts[:signer] || worker) end)
       {:ok, header} = Cyfr.WorkerAuth.report_header(key, fields, body)
       header |> Cyfr.Execution.Host.runner_exited(body) |> Jason.decode!()
+    end
+
+    defp dispatch_key(worker) do
+      {:ok, worker_key} = Keys.worker_key(worker)
+      Cyfr.WorkerAuth.dispatch_key(worker_key)
     end
 
     test "lapses the reporting worker's running attempts at once and stops their attempts" do
@@ -583,16 +624,30 @@ defmodule Cyfr.Execution.HostTest do
       fixture = AttemptFixtures.attached!(runner_id: @worker)
 
       assert %{"ok" => true} = report("worker_other", [fixture.attempt])
-      assert %{"error" => "lost"} = report(@worker, [fixture.attempt], Keys.assign_key())
+      assert %{"error" => "lost"} = report(@worker, [fixture.attempt], key: Keys.assign_key())
 
       forged_body = AttemptFixtures.body("renew", %{"attempts" => [fixture.attempt]})
       fields = %{worker: @worker, ts: now(), nonce: "n_forged"}
-      {:ok, header} = Cyfr.WorkerAuth.report_header(Keys.dispatch_key(), fields, forged_body)
+      {:ok, header} = Cyfr.WorkerAuth.report_header(dispatch_key(@worker), fields, forged_body)
 
       assert %{"error" => "lost"} =
                header |> Cyfr.Execution.Host.runner_exited(forged_body) |> Jason.decode!()
 
       assert row(fixture).status == "running"
+      assert Process.alive?(fixture.pid)
+      assert %{"ok" => _} = renew(fixture)
+      Cyfr.Execution.Attempt.refuse(fixture.pid, "not started")
+    end
+
+    @tag :capture_log
+    test "signed by another worker service for this one, lapses nothing" do
+      fixture = AttemptFixtures.attached!(runner_id: @worker)
+
+      assert %{"error" => "lost"} =
+               report(@worker, [fixture.attempt], signer: "worker_other")
+
+      assert row(fixture).status == "running"
+      assert %{state: "running"} = Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
       assert Process.alive?(fixture.pid)
       assert %{"ok" => _} = renew(fixture)
       Cyfr.Execution.Attempt.refuse(fixture.pid, "not started")

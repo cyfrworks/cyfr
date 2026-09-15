@@ -28,24 +28,27 @@ defmodule Cyfr.Assignment do
       `generation`; nil when no turn step did.
     * `athanor_id` — the tenant.
     * `actor` — who it runs for (`Cyfr.Actor`).
-    * `authority` — its authority as `Cyfr.Authority.to_wire/1`'s map. The
-      encoding carries no null: a member whose value is nil is omitted at
-      any depth, so a verified assignment's authority lacks those members.
-    * `component` — its `ref`, its `type` (one of
+    * `authority` — its authority as `Cyfr.Authority.to_wire/1`'s map, which
+      `Cyfr.Authority.from_wire/1` must accept. The encoding carries no
+      null: a member whose value is nil is omitted at any depth, so a
+      verified assignment's authority lacks those members.
+    * `component` — its `ref` (a canonical component reference,
+      `Cyfr.ComponentRef`, of its `type`), its `type` (one of
       `Cyfr.ComponentRef.valid_types/0`), the `digest` of its artifact, the
-      `declared_needs` its manifest names, and its `activation_digest` (nil
-      when it has none).
+      `declared_needs` its manifest names (at most 256, each a manifest need
+      name: a lowercase letter, then up to 31 lowercase letters, digits,
+      `_` or `-`), and its `activation_digest` (nil when it has none).
     * `input_digest` — `Cyfr.Digest.sha256/1` of the input bytes, which
       travel beside the assignment.
     * `timeout_ms` — the run's timeout; `deadline` — its subtree's deadline;
       `lease_until` — when its lease expires.
     * `intercepted` — the `tool.action` names the catalog annotates
       `host: :intercepted`, which a formula's host runs rather than the
-      catalog.
+      catalog: at most 256, each at most 256 bytes.
 
-  Times are Unix milliseconds. Identifiers are 1 to 256 bytes of printable
-  ASCII without spaces, and digests are `sha256:` followed by 64 lowercase
-  hex digits.
+  Times are Unix milliseconds. Identifiers and component references are 1
+  to 256 bytes of printable ASCII without spaces, and digests are `sha256:`
+  followed by 64 lowercase hex digits.
 
   ## Verifying
 
@@ -165,7 +168,9 @@ defmodule Cyfr.Assignment do
 
   @id ~r/\A[\x21-\x7E]{1,256}\z/
   @digest ~r/\Asha256:[0-9a-f]{64}\z/
-  @tool_action ~r/\A[a-z0-9_-]+\.[a-z0-9_-]+\z/
+  @tool_action ~r/\A(?=.{3,256}\z)[a-z0-9_-]+\.[a-z0-9_-]+\z/
+  @need ~r/\A[a-z][a-z0-9_-]{0,31}\z/
+  @max_list 256
 
   @doc "The token for `assignment`, MAC'd with the assign key."
   @spec sign(t(), binary()) :: {:ok, token()} | {:error, :invalid_assignment | Cyfr.JCS.error()}
@@ -327,14 +332,20 @@ defmodule Cyfr.Assignment do
     end
   end
 
-  defp read(:authority, %{} = authority) when not is_struct(authority), do: {:ok, authority}
+  defp read(:authority, %{} = authority) when not is_struct(authority) do
+    case Cyfr.Authority.from_wire(authority) do
+      {:ok, _authority} -> {:ok, authority}
+      {:error, _reason} -> :error
+    end
+  end
 
   defp read(:component, %{"ref" => ref, "declared_needs" => needs} = component)
-       when is_binary(ref) and ref != "" and is_list(needs) do
+       when is_binary(ref) and is_list(needs) and length(needs) <= @max_list do
     with [] <- Map.keys(component) -- @component_keys,
          true <- Map.get(component, "type") in Cyfr.ComponentRef.valid_types(),
+         true <- canonical_ref?(ref, component["type"]),
          {:ok, digest} <- read(:digest, Map.get(component, "digest")),
-         true <- Enum.all?(needs, &(is_binary(&1) and &1 != "")),
+         true <- Enum.all?(needs, &(is_binary(&1) and Regex.match?(@need, &1))),
          {:ok, activation_digest} <-
            read_member({:optional, :digest}, Map.fetch(component, "activation_digest")) do
       {:ok,
@@ -350,7 +361,7 @@ defmodule Cyfr.Assignment do
     end
   end
 
-  defp read(:intercepted, names) when is_list(names) do
+  defp read(:intercepted, names) when is_list(names) and length(names) <= @max_list do
     if Enum.all?(names, &(is_binary(&1) and Regex.match?(@tool_action, &1))),
       do: {:ok, names},
       else: :error
@@ -359,4 +370,15 @@ defmodule Cyfr.Assignment do
   defp read(_type, _value), do: :error
 
   defp matching(regex, value), do: if(Regex.match?(regex, value), do: {:ok, value}, else: :error)
+
+  # A reference names its component once, as `Cyfr.ComponentRef` spells it,
+  # and of the type the assignment gives.
+  defp canonical_ref?(ref, type) do
+    with true <- Regex.match?(@id, ref),
+         {:ok, %Cyfr.ComponentRef{type: ^type} = parsed} <- Cyfr.ComponentRef.parse(ref) do
+      Cyfr.ComponentRef.to_string(parsed) == ref
+    else
+      _ -> false
+    end
+  end
 end

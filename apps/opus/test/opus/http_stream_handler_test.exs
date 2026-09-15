@@ -15,7 +15,7 @@ defmodule Opus.HttpStreamHandlerTest do
          do: Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     attempt = AttemptFixtures.attached!(component_ref: component_ref, limits: limits)
-    Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+    Opus.HostClient.new(attempt.keys, attempt.runner)
   end
 
   # ============================================================================
@@ -32,8 +32,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           ctx,
-          attached_host("local.test-component:1.0.0", EdgeFixtures.limits()),
-          "local.test-component:1.0.0"
+          attached_host("catalyst:local.test-component:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-component:1.0.0"
         )
 
       assert is_map(imports)
@@ -66,7 +66,7 @@ defmodule Opus.HttpStreamHandlerTest do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
       ctx = Sanctum.TestContext.local()
-      component_ref = "test-stream"
+      component_ref = "catalyst:local.test-stream:1.0.0"
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
@@ -137,8 +137,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           ctx,
-          attached_host("test", EdgeFixtures.limits()),
-          "test"
+          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test:1.0.0"
         )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
@@ -174,8 +174,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           ctx,
-          attached_host("test", EdgeFixtures.limits()),
-          "test"
+          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test:1.0.0"
         )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
@@ -218,8 +218,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           ctx,
-          attached_host("test", EdgeFixtures.limits()),
-          "test"
+          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test:1.0.0"
         )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
@@ -272,8 +272,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           limits,
           ctx,
-          attached_host("test-req-size", limits),
-          "test-req-size"
+          attached_host("catalyst:local.test-req-size:1.0.0", limits),
+          "catalyst:local.test-req-size:1.0.0"
         )
 
       {:fn, request_fn} = imports["cyfr:http/streaming@0.1.0"]["request"]
@@ -301,8 +301,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           ctx,
-          attached_host("test-mp", EdgeFixtures.limits()),
-          "test-mp"
+          attached_host("catalyst:local.test-mp:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-mp:1.0.0"
         )
 
       {:fn, request_fn} = imports["cyfr:http/streaming@0.1.0"]["request"]
@@ -342,8 +342,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           limits,
           ctx,
-          attached_host("test-timeout", limits),
-          "test-timeout"
+          attached_host("catalyst:local.test-timeout:1.0.0", limits),
+          "catalyst:local.test-timeout:1.0.0"
         )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
@@ -409,8 +409,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           limits,
           ctx,
-          attached_host("test-collector-cap", limits),
-          "test-collector-cap"
+          attached_host("catalyst:local.test-collector-cap:1.0.0", limits),
+          "catalyst:local.test-collector-cap:1.0.0"
         )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
@@ -447,8 +447,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           Sanctum.TestContext.local(),
-          attached_host("test-read", EdgeFixtures.limits()),
-          "test-read"
+          attached_host("catalyst:local.test-read:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-read:1.0.0"
         )
 
       %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
@@ -540,8 +540,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           Sanctum.TestContext.local(),
-          attached_host("test-wait", EdgeFixtures.limits()),
-          "test-wait"
+          attached_host("catalyst:local.test-wait:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-wait:1.0.0"
         )
 
       %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
@@ -622,8 +622,8 @@ defmodule Opus.HttpStreamHandlerTest do
           edge,
           EdgeFixtures.limits(),
           ctx,
-          attached_host("test-cleanup", EdgeFixtures.limits()),
-          "test-cleanup"
+          attached_host("catalyst:local.test-cleanup:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-cleanup:1.0.0"
         )
 
       _stream_ns = imports["cyfr:http/streaming@0.1.0"]

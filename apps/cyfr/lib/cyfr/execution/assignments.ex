@@ -3,8 +3,8 @@
 
 defmodule Cyfr.Execution.Assignments do
   @moduledoc """
-  The signed assignment of an admitted execution attempt, and the attempt
-  key its runner signs host calls with.
+  The signed assignment of an admitted execution attempt, and the keys its
+  runner signs and seals host calls with.
 
   `issue/1` builds a `Cyfr.Assignment` from what admission settled and
   signs it with the assign key (`Cyfr.Execution.Keys`). The runner presents
@@ -14,8 +14,9 @@ defmodule Cyfr.Execution.Assignments do
   An assignment is issued under the current generation
   (`Cyfr.Execution.Keys.generation/0`), to the worker service it is
   dispatched to as its audience, and may be claimed for 30 seconds after
-  it is issued. Its deadline is its
-  timeout from issue, and its lease runs one lease period from issue.
+  it is issued. Its deadline is its timeout from issue, and its lease runs
+  one lease period from issue. Its attempt's keys are bound to that worker
+  service as well as to the attempt, its fence and its generation.
   """
 
   alias Cyfr.{Actor, Assignment, Authority}
@@ -43,14 +44,10 @@ defmodule Cyfr.Execution.Assignments do
         }
 
   @typedoc """
-  An issued assignment: its token, the attempt it names as a host call
-  header carries it, and that attempt's key.
+  An issued assignment: its token and its attempt's keys, naming the
+  attempt as a host call header carries it.
   """
-  @type issued :: %{
-          assignment: Assignment.token(),
-          attempt: Cyfr.WorkerAuth.attempt(),
-          attempt_key: binary()
-        }
+  @type issued :: %{assignment: Assignment.token(), attempt_keys: Cyfr.WorkerAuth.attempt_keys()}
 
   @doc """
   Sign the assignment of the admitted attempt at fence 1. Answers
@@ -66,7 +63,8 @@ defmodule Cyfr.Execution.Assignments do
       execution_id: record.id,
       attempt: record.attempt,
       fence: 1,
-      generation: Keys.generation()
+      generation: Keys.generation(),
+      worker: admitted.audience
     }
 
     assignment = %Assignment{
@@ -92,8 +90,8 @@ defmodule Cyfr.Execution.Assignments do
     }
 
     with {:ok, token} <- Assignment.sign(assignment, Keys.assign_key()),
-         {:ok, key} <- Keys.attempt_key(attempt) do
-      {:ok, %{assignment: token, attempt: attempt, attempt_key: key}}
+         {:ok, keys} <- Keys.attempt_keys(attempt) do
+      {:ok, %{assignment: token, attempt_keys: keys}}
     end
   end
 

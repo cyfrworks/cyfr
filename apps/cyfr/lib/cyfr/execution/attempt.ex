@@ -234,7 +234,8 @@ defmodule Cyfr.Execution.Attempt do
   be produced each close the run failed as `{:setup_required, payload}`,
   which is answered. An attach by the runner already attached answers the
   same fields; one by any other runner is `:replayed`. A caller naming
-  another attempt or fence, or an attempt that is not open, is `:lost`.
+  another attempt, fence or worker service, or an attempt that is not open,
+  is `:lost`.
   """
   @spec attach(String.t(), caller()) ::
           {:ok, %{optional(String.t()) => String.t()}}
@@ -246,7 +247,8 @@ defmodule Cyfr.Execution.Attempt do
   @doc """
   What the caller's runner runs the attempt with beyond its assignment
   (`t:admitted/0`), for a runner in this BEAM. The caller must be the
-  attached runner at this attempt and fence, and the row must still be held
+  attached runner at this attempt, fence and worker service, and the row
+  must still be held
   by it; otherwise `:lost`, or `:unavailable` when the store cannot answer.
   """
   @spec admitted(String.t(), caller()) :: {:ok, admitted()} | {:error, :lost | :unavailable}
@@ -256,7 +258,8 @@ defmodule Cyfr.Execution.Attempt do
 
   @doc """
   Run `op` for the caller's runner. Before it runs, the caller must be the
-  attached runner at this attempt and fence, its nonce must not have been
+  attached runner at this attempt, fence and worker service, its nonce must
+  not have been
   presented before, and the attempt row must still be held by it
   (`Arca.ExecutionAttempts.held?/4`). A caller that fails the first two is
   `:lost`; a row no longer held is `:lost` and stops the attempt; a store
@@ -556,7 +559,8 @@ defmodule Cyfr.Execution.Attempt do
     :ok
   end
 
-  defp lapse(%__MODULE__{runner_id: nil}), do: :ok
+  # A run dispatched to no worker service has no runner whose attempt lapses.
+  defp lapse(%__MODULE__{worker: nil}), do: :ok
   defp lapse(state), do: Lapse.dispatched(state.runner_id, [state.attempt])
 
   defp note_unreaped(state) do
@@ -641,7 +645,7 @@ defmodule Cyfr.Execution.Attempt do
 
   defp names_attempt?(state, caller) do
     caller.execution_id == state.execution_id and caller.attempt == state.attempt and
-      caller.fence == state.fence
+      caller.fence == state.fence and caller.worker == state.runner_id
   end
 
   defp fresh_nonce(state, %{nonce: nonce, ts: ts}) do

@@ -9,11 +9,12 @@ defmodule Cyfr.Test.AttemptFixtures do
   `Cyfr.Execution.Host.call/2`.
 
   The attached map carries what a runner's client needs (the attempt's
-  `athanor_id`, `execution_id`, `attempt`, `fence` and `generation`, the
-  `runner` and the attempt `key`) together with the row's `record`, its
-  `close` state, the attempt `pid`, the `ctx`, `authority` and
-  `component_ref` it runs under, its `input`, the signed `assignment` and
-  the `secrets` attach answered.
+  `athanor_id`, `execution_id`, `attempt`, `fence`, `generation` and
+  `worker`, the `runner`, the attempt's `keys` as
+  `Cyfr.WorkerAuth.attempt_keys/2` answers them and its `call_key`)
+  together with the row's `record`, its `close` state, the attempt `pid`,
+  the `ctx`, `authority` and `component_ref` it runs under, its `input`,
+  the signed `assignment` and the `secrets` attach answered.
   """
 
   import ExUnit.Assertions
@@ -37,8 +38,8 @@ defmodule Cyfr.Test.AttemptFixtures do
   - `:stream_id` — the stream its events go on (default the execution's);
   - `:runner` — the attaching runner's id (default a fresh one);
   - `:runner_id` — the worker service boot the attempt is dispatched to:
-    the row's runner, the assignment's audience and the attempt's (default
-    this boot's id, and the attempt names none);
+    the row's runner, the assignment's audience, the worker its keys are
+    bound to and the attempt's (default this boot's id);
   - `:wasm_bytes` — the bytes the attempt answers its runner;
   - `:attach` — `false` to stop before attaching.
   """
@@ -47,18 +48,19 @@ defmodule Cyfr.Test.AttemptFixtures do
     ctx = Keyword.get_lazy(opts, :ctx, &Sanctum.TestContext.local/0)
     {authority, entry} = authority(ctx, opts)
 
+    component_type = Keyword.get(opts, :component_type, :catalyst)
+
     component_ref =
       Keyword.get_lazy(opts, :component_ref, fn ->
-        "catalyst:local.attempt-fixture-#{System.unique_integer([:positive])}:0.1.0"
+        "#{component_type}:local.attempt-fixture-#{System.unique_integer([:positive])}:0.1.0"
       end)
 
     limits = Keyword.get_lazy(opts, :limits, fn -> Authority.limits(authority) end)
     input = %{"fixture" => true}
 
-    component_type = Keyword.get(opts, :component_type, :catalyst)
     record = Record.new(ctx, component_ref, input, component_type: component_type)
-    runner_id = Keyword.get(opts, :runner_id)
-    :ok = Record.write_started(record, if(runner_id, do: [runner_id: runner_id], else: []))
+    runner_id = Keyword.get_lazy(opts, :runner_id, &Record.runner_id/0)
+    :ok = Record.write_started(record, runner_id: runner_id)
     close = %Close{ctx: ctx, record: record, limits: limits, started: true}
 
     {:ok, pid} =
@@ -89,13 +91,14 @@ defmodule Cyfr.Test.AttemptFixtures do
         },
         input: input,
         timeout_ms: 60_000,
-        audience: runner_id || Record.runner_id()
+        audience: runner_id
       })
 
     fixture =
-      Map.merge(issued.attempt, %{
+      Map.merge(issued.attempt_keys.attempt, %{
         runner: Keyword.get_lazy(opts, :runner, fn -> Cyfr.UUID7.generate_id("runner") end),
-        key: issued.attempt_key,
+        keys: issued.attempt_keys,
+        call_key: issued.attempt_keys.call,
         assignment: issued.assignment,
         record: record,
         close: close,
@@ -119,8 +122,8 @@ defmodule Cyfr.Test.AttemptFixtures do
   @doc """
   Sign and send one host call for `fixture`'s attempt, answering the decoded
   JSON. Options override the header's fields (`:runner`, `:nonce`, `:ts`,
-  `:generation`, `:fence`) or the `:key` it is signed with (default the
-  fixture's attempt key); `:body` sends that exact body.
+  `:generation`, `:fence`, `:worker`) or the `:call_key` it is signed with
+  (default the fixture's); `:body` sends that exact body.
   """
   @spec call(map(), String.t(), map(), keyword()) :: map()
   def call(fixture, op, args, opts \\ []) do
@@ -141,12 +144,13 @@ defmodule Cyfr.Test.AttemptFixtures do
       attempt: fixture.attempt,
       fence: Keyword.get(opts, :fence, fixture.fence),
       generation: Keyword.get(opts, :generation, fixture.generation),
+      worker: Keyword.get(opts, :worker, fixture.worker),
       runner: Keyword.get(opts, :runner, fixture.runner),
       ts: Keyword.get_lazy(opts, :ts, fn -> System.system_time(:millisecond) end),
       nonce: Keyword.get_lazy(opts, :nonce, &nonce/0)
     }
 
-    key = Keyword.get(opts, :key, fixture.key)
+    key = Keyword.get(opts, :call_key, fixture.call_key)
     {:ok, header} = Cyfr.WorkerAuth.host_call_header(key, fields, body)
     header
   end
@@ -155,7 +159,7 @@ defmodule Cyfr.Test.AttemptFixtures do
   @spec caller(map()) :: Cyfr.WorkerAuth.host_call()
   def caller(fixture) do
     fixture
-    |> Map.take([:athanor_id, :execution_id, :attempt, :fence, :generation, :runner])
+    |> Map.take([:athanor_id, :execution_id, :attempt, :fence, :generation, :worker, :runner])
     |> Map.merge(%{ts: System.system_time(:millisecond), nonce: nonce()})
   end
 
@@ -169,15 +173,17 @@ defmodule Cyfr.Test.AttemptFixtures do
     %Arca.Schemas.ExecutionAttempt{} =
       row = Arca.ExecutionAttempts.current(athanor_id, execution_id)
 
-    attempt = %{
-      athanor_id: athanor_id,
-      execution_id: execution_id,
-      attempt: row.attempt,
-      fence: row.fence,
-      generation: Keys.generation()
-    }
+    {:ok, keys} =
+      Keys.attempt_keys(%{
+        athanor_id: athanor_id,
+        execution_id: execution_id,
+        attempt: row.attempt,
+        fence: row.fence,
+        generation: Keys.generation(),
+        worker: row.runner_id
+      })
 
-    Map.merge(attempt, %{runner: row.claimed_by, key: attempt_key!(attempt)})
+    Map.merge(keys.attempt, %{runner: row.claimed_by, keys: keys, call_key: keys.call})
   end
 
   @doc "A delta of `event` (JSON text) naming `fixture`'s attempt, as its wire map."
@@ -200,11 +206,6 @@ defmodule Cyfr.Test.AttemptFixtures do
       "fence" => fixture.fence,
       "status" => status
     })
-  end
-
-  defp attempt_key!(fields) do
-    {:ok, key} = Keys.attempt_key(fields)
-    key
   end
 
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)

@@ -84,10 +84,7 @@ defmodule Cyfr.BridgeAuth do
   digits, in either case. Anything else is `:error`.
   """
   @spec decode_root(term()) :: {:ok, binary()} | :error
-  def decode_root(text) when is_binary(text) and byte_size(text) == 64,
-    do: Base.decode16(text, case: :mixed)
-
-  def decode_root(_text), do: :error
+  defdelegate decode_root(text), to: MacEnvelope
 
   @doc "The key the controller signs control messages with."
   @spec control_key(binary()) :: binary()

@@ -7,11 +7,12 @@ defmodule Opus.WorkerServiceTest do
   that is killed kills its run: the runner and its component process stop,
   the attempt lapses at once, and the in-flight count, the execution slot
   and the charge row the run held all go back. Neither the worker service
-  nor its runners' supervisor shows a runner's attempt key. A runner that exits is
-  reported at once: its attempt lapses and its waiter answers, while a
-  sibling run on the same worker service keeps running and completes. The
-  worker service starts only an assignment addressed to it, with the input
-  its digest binds and a key that opens as its attempt.
+  nor its runners' supervisor shows a runner's attempt keys. A runner that
+  exits is reported at once: its attempt lapses and its waiter answers,
+  while a sibling run on the same worker service keeps running and
+  completes. The worker service starts only an assignment addressed to it,
+  with the input its digest binds and keys sealed for it that open as its
+  attempt.
 
   The runs are the `nested-probe` formula as a child of an admitted root,
   held at the entry to their guest until the test lets them go.
@@ -104,11 +105,12 @@ defmodule Opus.WorkerServiceTest do
     assert Semaphore.status().child_active == children_before + 1
     assert [%{admitted_at: %DateTime{}}] = charges(ctx, authority)
 
-    # The runner's attempt key is in neither the worker service's status
+    # The runner's attempt keys are in neither the worker service's status
     # nor its runners' supervisor's.
-    key = AttemptFixtures.current!(ctx.athanor_id, id).key
+    %{keys: keys} = AttemptFixtures.current!(ctx.athanor_id, id)
 
-    for process <- [Opus.WorkerService, Opus.WorkerService.Runners] do
+    for process <- [Opus.WorkerService, Opus.WorkerService.Runners],
+        key <- [keys.call, keys.seal] do
       status = :erlang.term_to_binary(:sys.get_status(process))
       assert :binary.match(status, key) == :nomatch
     end
@@ -195,11 +197,20 @@ defmodule Opus.WorkerServiceTest do
       Attempt.refuse(fixture.pid, "not started")
     end
 
-    test "refuses a key that does not open as the assignment's attempt", %{boot: boot} do
+    test "refuses keys that do not open as the assignment's attempt on this worker service", %{
+      boot: boot
+    } do
       fixture = AttemptFixtures.attached!(runner_id: boot, attach: false)
       other = AttemptFixtures.attached!(runner_id: boot, attach: false)
+      elsewhere = Cyfr.WorkerAuth.dispatch_seal_key(worker_key!("worker_other"))
+      signing = Cyfr.WorkerAuth.dispatch_key(worker_key!(boot))
 
-      for sealed <- [sealed(other), sealed(fixture, Keys.dispatch_key()), "not sealed"] do
+      for sealed <- [
+            sealed(other),
+            sealed(fixture, elsewhere),
+            sealed(fixture, signing),
+            "not sealed"
+          ] do
         assert {:error, :malformed} =
                  Opus.WorkerService.start(fixture.assignment, input(fixture), sealed)
       end
@@ -268,10 +279,17 @@ defmodule Opus.WorkerServiceTest do
 
   defp input(fixture), do: Jason.encode!(fixture.input)
 
-  defp sealed(fixture, key \\ Keys.dispatch_seal_key()) do
-    attempt = Map.take(fixture, [:athanor_id, :execution_id, :attempt, :fence, :generation])
-    {:ok, sealed} = Cyfr.WorkerAuth.seal_attempt_key(key, %{attempt: attempt, key: fixture.key})
+  # The fixture's attempt keys, sealed with `key` (default the dispatch seal
+  # key of the worker service the attempt is dispatched to).
+  defp sealed(fixture, key \\ nil) do
+    key = key || Cyfr.WorkerAuth.dispatch_seal_key(worker_key!(fixture.worker))
+    {:ok, sealed} = Cyfr.WorkerAuth.seal_attempt_keys(key, fixture.keys)
     sealed
+  end
+
+  defp worker_key!(worker) do
+    {:ok, key} = Keys.worker_key(worker)
+    key
   end
 
   defp row(id), do: Arca.Repo.get!(Arca.Execution, id)

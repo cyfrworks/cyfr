@@ -33,7 +33,7 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
         nil,
         Cyfr.Limits.defaults(:catalyst),
         Sanctum.TestContext.local(),
-        Opus.HostClient.new(attempt, attempt.key, attempt.runner),
+        Opus.HostClient.new(attempt.keys, attempt.runner),
         "catalyst:local.streamer:0.1.0"
       )
 

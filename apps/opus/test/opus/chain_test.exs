@@ -666,7 +666,7 @@ defmodule Opus.ChainTest do
           component_type: :formula
         )
 
-      host = Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+      host = Opus.HostClient.new(attempt.keys, attempt.runner)
       {imports, tracker} = fork_imports(ctx, auth, attempt.execution_id, host: host)
 
       on_exit(fn ->

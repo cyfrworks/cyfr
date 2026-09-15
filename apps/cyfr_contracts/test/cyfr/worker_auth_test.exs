@@ -3,30 +3,42 @@
 
 defmodule Cyfr.WorkerAuthTest do
   @moduledoc """
-  The worker key schedule and headers: every derived key is distinct per
-  label and per attempt field; a host call verifies against the root at the
-  current generation and is refused, in order, when its timestamp is outside
-  the 30-second window, when its MAC is forged or made with any key but its
-  attempt's, and when its generation is not current; a sealed attempt key
-  opens only under the dispatch seal key, as the attempt it names;
-  WorkerAPI requests and worker service reports verify only as their own
-  kind, under the dispatch key.
+  The worker key schedule and headers. Every key, canonical string, header,
+  sealed value and assignment token reproduces the shared vectors
+  (`tests/fixtures/worker_auth.json`). Every derived key is distinct per
+  label, per worker service and per attempt field. A host call verifies
+  against the root at the current generation and is refused, in order, when
+  its timestamp is outside the 30-second window, when its MAC is forged or
+  made with any key but its attempt's call key, and when its generation is
+  not current. A worker service's keys are its own: its reports verify only
+  as its own, and attempt keys sealed for it open only under its seal key,
+  as the attempt they name. A sealed host call body or answer opens only as
+  the direction and the call it was sealed for.
   """
   use ExUnit.Case, async: true
 
-  alias Cyfr.WorkerAuth
+  alias Cyfr.{Assignment, MacEnvelope, WorkerAuth}
+
+  @vectors Path.expand("../../../../tests/fixtures/worker_auth.json", __DIR__)
+           |> File.read!()
+           |> Jason.decode!()
 
   @root :binary.list_to_bin(Enum.to_list(0..31))
   @now 1_789_305_249_602
   @body ~s({"attempts":["att_1"]})
+  @worker "wrk_4f3c2a1e9d8b7c6a"
 
   @attempt %{
     athanor_id: "ath_01a09fee-045b-770b-b745-a62792bb8798",
     execution_id: "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
     attempt: "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
     fence: 2,
-    generation: 7
+    generation: 7,
+    worker: @worker
   }
+
+  defp hex(bytes), do: Base.encode16(bytes, case: :lower)
+  defp unhex(text), do: Base.decode16!(text, case: :lower)
 
   defp call(overrides \\ %{}) do
     @attempt
@@ -34,22 +46,26 @@ defmodule Cyfr.WorkerAuthTest do
     |> Map.merge(overrides)
   end
 
-  defp attempt_key!(fields) do
-    {:ok, key} = WorkerAuth.attempt_key(@root, fields)
+  defp keys!(attempt) do
+    {:ok, keys} = WorkerAuth.attempt_keys(@root, attempt)
+    keys
+  end
+
+  defp worker_key!(worker \\ @worker) do
+    {:ok, key} = WorkerAuth.worker_key(@root, worker)
     key
   end
 
   defp call_header!(call, key \\ nil, body \\ @body) do
-    {:ok, header} = WorkerAuth.host_call_header(key || attempt_key!(call), call, body)
+    {:ok, header} = WorkerAuth.host_call_header(key || keys!(call).call, call, body)
     header
   end
 
   @iv :binary.copy(<<9>>, 12)
 
   defp sealed!(attempt \\ @attempt, iv \\ @iv) do
-    key = attempt_key!(attempt)
-    seal_key = WorkerAuth.dispatch_seal_key(@root)
-    {:ok, sealed} = WorkerAuth.seal_attempt_key(seal_key, %{attempt: attempt, key: key}, iv)
+    seal_key = WorkerAuth.dispatch_seal_key(worker_key!(attempt.worker))
+    {:ok, sealed} = WorkerAuth.seal_attempt_keys(seal_key, keys!(attempt), iv)
     sealed
   end
 
@@ -63,52 +79,201 @@ defmodule Cyfr.WorkerAuthTest do
     )
   end
 
+  describe "the shared vectors" do
+    setup do
+      v = @vectors
+      attempt = Map.new(v["attempt"], fn {name, value} -> {String.to_atom(name), value} end)
+      {:ok, v: v, root: unhex(v["root_hex"]), attempt: attempt}
+    end
+
+    test "every key derives as the vectors say", %{v: v, root: root, attempt: attempt} do
+      keys = v["keys"]
+      {:ok, worker_key} = WorkerAuth.worker_key(root, v["worker"])
+
+      assert hex(WorkerAuth.assign_key(root)) == keys["assign_hex"]
+      assert hex(worker_key) == keys["worker_hex"]
+      assert hex(WorkerAuth.dispatch_key(worker_key)) == keys["dispatch_hex"]
+      assert hex(WorkerAuth.dispatch_seal_key(worker_key)) == keys["dispatch_seal_hex"]
+
+      assert {:ok, %{call: call_key, seal: seal_key, attempt: ^attempt}} =
+               WorkerAuth.attempt_keys(root, attempt)
+
+      assert {:ok, ^call_key} = WorkerAuth.attempt_call_key(root, attempt)
+      assert {:ok, ^seal_key} = WorkerAuth.attempt_seal_key(root, attempt)
+      assert hex(call_key) == keys["attempt_call_hex"]
+      assert hex(seal_key) == keys["attempt_seal_hex"]
+    end
+
+    test "a host call's canonical string, header and MAC match", %{v: v, attempt: attempt} do
+      c = v["call"]
+      call = Map.merge(attempt, %{runner: c["runner"], ts: c["ts"], nonce: c["nonce"]})
+      call_key = unhex(v["keys"]["attempt_call_hex"])
+
+      assert {:ok, c["header"]} == WorkerAuth.host_call_header(call_key, call, c["body"])
+      assert_mac(call_key, c["canonical"], c["header"])
+      assert c["canonical"] =~ Cyfr.Digest.sha256_hex(c["body"])
+
+      assert {:ok, ^call} =
+               WorkerAuth.verify_host_call(
+                 unhex(v["root_hex"]),
+                 c["header"],
+                 c["body"],
+                 c["ts"],
+                 attempt.generation
+               )
+    end
+
+    test "a report's and a request's canonical strings, headers and MACs match",
+         %{v: v, root: root} do
+      dispatch_key = unhex(v["keys"]["dispatch_hex"])
+
+      for {kind, header_fun} <- [
+            {"report", &WorkerAuth.report_header/3},
+            {"request", &WorkerAuth.request_header/3}
+          ] do
+        d = v[kind]
+        fields = %{worker: v["worker"], ts: d["ts"], nonce: d["nonce"]}
+
+        assert {:ok, d["header"]} == header_fun.(dispatch_key, fields, d["body"])
+        assert_mac(dispatch_key, d["canonical"], d["header"])
+      end
+
+      r = v["report"]
+      assert {:ok, _} = WorkerAuth.verify_report(root, r["header"], r["body"], r["ts"])
+      q = v["request"]
+      assert {:ok, _} = WorkerAuth.verify_request(dispatch_key, q["header"], q["body"], q["ts"])
+    end
+
+    test "sealed attempt keys and sealed host calls reproduce and open",
+         %{v: v, attempt: attempt} do
+      keys = %{
+        attempt: attempt,
+        call: unhex(v["keys"]["attempt_call_hex"]),
+        seal: unhex(v["keys"]["attempt_seal_hex"])
+      }
+
+      dseal = unhex(v["keys"]["dispatch_seal_hex"])
+      s = v["sealed_attempt_keys"]
+
+      assert {:ok, s["sealed"]} == WorkerAuth.seal_attempt_keys(dseal, keys, unhex(s["iv_hex"]))
+      assert {:ok, ^keys} = WorkerAuth.open_attempt_keys(dseal, s["sealed"])
+
+      c = v["call"]
+      call = Map.merge(attempt, %{runner: c["runner"], ts: c["ts"], nonce: c["nonce"]})
+      sc = v["sealed_call"]
+
+      assert {:ok, sc["body_sealed"]} ==
+               WorkerAuth.seal_call(keys.seal, :body, call, c["body"], unhex(sc["body_iv_hex"]))
+
+      assert {:ok, sc["answer_sealed"]} ==
+               WorkerAuth.seal_call(
+                 keys.seal,
+                 :answer,
+                 call,
+                 sc["answer"],
+                 unhex(sc["answer_iv_hex"])
+               )
+
+      assert {:ok, c["body"]} == WorkerAuth.open_call(keys.seal, :body, call, sc["body_sealed"])
+
+      assert {:ok, sc["answer"]} ==
+               WorkerAuth.open_call(keys.seal, :answer, call, sc["answer_sealed"])
+    end
+
+    test "the assignment token is its payload MAC'd with the assign key", %{v: v, root: root} do
+      a = v["assignment"]
+      assign_key = WorkerAuth.assign_key(root)
+
+      assert Base.url_encode64(:crypto.mac(:hmac, :sha256, assign_key, a["payload"]),
+               padding: false
+             ) == a["mac"]
+
+      assert a["token"] == Base.url_encode64(a["payload"], padding: false) <> "." <> a["mac"]
+      assert {:ok, assignment} = Assignment.verify(a["token"], assign_key, a["now"])
+      assert {:ok, a["token"]} == Assignment.sign(assignment, assign_key)
+      assert {:ok, a["payload"]} == Cyfr.JCS.encode(Jason.decode!(a["payload"]))
+    end
+
+    test "every valid root text decodes to the root, and every invalid one is refused",
+         %{v: v, root: root} do
+      for text <- v["root_text"]["valid"], do: assert({:ok, ^root} = WorkerAuth.decode_root(text))
+
+      for text <- v["root_text"]["invalid"],
+          do: assert(:error = WorkerAuth.decode_root(text), inspect(text))
+
+      assert :error = WorkerAuth.decode_root(nil)
+    end
+  end
+
+  defp assert_mac(key, canonical, header) do
+    [_signed, mac] = String.split(header, " mac=")
+    assert Base.url_encode64(:crypto.mac(:hmac, :sha256, key, canonical), padding: false) == mac
+  end
+
   describe "key schedule" do
     test "every key is 32 bytes, stable, and distinct per label" do
-      {:ok, attempt} = WorkerAuth.attempt_key(@root, @attempt)
+      keys = keys!(@attempt)
+      worker_key = worker_key!()
 
-      keys = [
-        WorkerAuth.dispatch_key(@root),
-        WorkerAuth.dispatch_seal_key(@root),
+      all = [
         WorkerAuth.assign_key(@root),
-        attempt
+        worker_key,
+        WorkerAuth.dispatch_key(worker_key),
+        WorkerAuth.dispatch_seal_key(worker_key),
+        keys.call,
+        keys.seal
       ]
 
-      assert Enum.all?(keys, &(byte_size(&1) == 32))
-      assert Enum.uniq(keys) == keys
-      refute @root in keys
+      assert Enum.all?(all, &(byte_size(&1) == 32))
+      assert Enum.uniq(all) == all
+      refute @root in all
       assert WorkerAuth.assign_key(@root) == WorkerAuth.assign_key(@root)
 
       other_root = :binary.list_to_bin(Enum.to_list(1..32))
       refute WorkerAuth.assign_key(other_root) == WorkerAuth.assign_key(@root)
     end
 
-    test "an attempt key is distinct per attempt field and ignores the rest" do
-      base = attempt_key!(@attempt)
+    test "a worker service's keys are distinct per worker service" do
+      [mine, theirs] = for worker <- [@worker, "wrk_other"], do: worker_key!(worker)
+
+      refute mine == theirs
+      refute WorkerAuth.dispatch_key(mine) == WorkerAuth.dispatch_key(theirs)
+      refute WorkerAuth.dispatch_seal_key(mine) == WorkerAuth.dispatch_seal_key(theirs)
+    end
+
+    test "an attempt's keys are distinct per attempt field and ignore the rest" do
+      base = keys!(@attempt)
 
       variants = [
         athanor_id: "ath_other",
         execution_id: "exec_other",
         attempt: "att_other",
         fence: 3,
-        generation: 8
+        generation: 8,
+        worker: "wrk_other"
       ]
 
-      keys = for {field, value} <- variants, do: attempt_key!(Map.put(@attempt, field, value))
+      others = for {field, value} <- variants, do: keys!(Map.put(@attempt, field, value))
+      calls = Enum.map([base | others], & &1.call)
+      seals = Enum.map([base | others], & &1.seal)
 
-      assert Enum.uniq([base | keys]) == [base | keys]
-      assert attempt_key!(call(%{runner: "run_other", ts: 1, nonce: "n_other"})) == base
+      assert Enum.uniq(calls) == calls
+      assert Enum.uniq(seals) == seals
+      assert %{call: call, seal: seal} = keys!(call(%{runner: "run_other", ts: 1, nonce: "n_o"}))
+      assert {call, seal} == {base.call, base.seal}
     end
 
-    test "an attempt key refuses an invalid field" do
+    test "an attempt's keys and a worker key refuse an invalid field" do
       assert {:error, {:invalid_field, :fence}} =
-               WorkerAuth.attempt_key(@root, %{@attempt | fence: -1})
+               WorkerAuth.attempt_keys(@root, %{@attempt | fence: -1})
 
       assert {:error, {:invalid_field, :athanor_id}} =
-               WorkerAuth.attempt_key(@root, %{@attempt | athanor_id: "ath 1"})
+               WorkerAuth.attempt_call_key(@root, %{@attempt | athanor_id: "ath 1"})
 
-      assert {:error, {:invalid_field, :generation}} =
-               WorkerAuth.attempt_key(@root, Map.delete(@attempt, :generation))
+      assert {:error, {:invalid_field, :worker}} =
+               WorkerAuth.attempt_seal_key(@root, Map.delete(@attempt, :worker))
+
+      assert {:error, {:invalid_field, :worker}} = WorkerAuth.worker_key(@root, "wrk 1")
     end
   end
 
@@ -118,7 +283,7 @@ defmodule Cyfr.WorkerAuthTest do
       header = call_header!(call)
 
       assert header =~
-               ~r/\Av1 kind=call athanor_id=ath_\S+ execution_id=\S+ attempt=\S+ fence=2 generation=7 runner=run_4f3c2a1e ts=1789305249602 nonce=n_7d3e9a mac=\S+\z/
+               ~r/\Av1 kind=call athanor_id=ath_\S+ execution_id=\S+ attempt=\S+ fence=2 generation=7 worker=wrk_4f3c2a1e9d8b7c6a runner=run_4f3c2a1e ts=1789305249602 nonce=n_7d3e9a mac=\S+\z/
 
       assert {:ok, ^call} = verify(header)
     end
@@ -145,24 +310,33 @@ defmodule Cyfr.WorkerAuthTest do
       assert {:error, :bad_mac} =
                verify(String.replace(header, "runner=run_4f3c2a1e", "runner=run_x"))
 
+      assert {:error, :bad_mac} =
+               verify(String.replace(header, "worker=#{@worker}", "worker=wrk_other"))
+
       assert {:error, :bad_mac} = verify(String.replace(header, "nonce=n_7d3e9a", "nonce=n_x"))
 
       assert {:error, :bad_mac} =
                verify(String.replace(header, "ts=1789305249602", "ts=1789305249603"))
     end
 
-    test "is refused when signed with another attempt's key" do
-      other = attempt_key!(%{@attempt | attempt: "att_other"})
-      successor = attempt_key!(%{@attempt | fence: 3})
-
-      assert {:error, :bad_mac} = verify(call_header!(call(), other))
-      assert {:error, :bad_mac} = verify(call_header!(call(), successor))
+    test "is refused when signed with another attempt's or another worker service's call key" do
+      for other <- [
+            %{@attempt | attempt: "att_other"},
+            %{@attempt | fence: 3},
+            %{@attempt | worker: "wrk_other"}
+          ] do
+        assert {:error, :bad_mac} = verify(call_header!(call(), keys!(other).call))
+      end
     end
 
-    test "is refused when signed with the dispatch, seal or assign key" do
+    test "is refused when signed with its own seal key, or a worker, dispatch or assign key" do
+      worker_key = worker_key!()
+
       for key <- [
-            WorkerAuth.dispatch_key(@root),
-            WorkerAuth.dispatch_seal_key(@root),
+            keys!(@attempt).seal,
+            worker_key,
+            WorkerAuth.dispatch_key(worker_key),
+            WorkerAuth.dispatch_seal_key(worker_key),
             WorkerAuth.assign_key(@root),
             @root
           ] do
@@ -178,7 +352,7 @@ defmodule Cyfr.WorkerAuthTest do
     end
 
     test "checks the window before the MAC, and the MAC before the generation" do
-      forged = call_header!(call(%{generation: 6}), WorkerAuth.dispatch_key(@root))
+      forged = call_header!(call(%{generation: 6}), WorkerAuth.assign_key(@root))
 
       assert {:error, :outside_window} = verify(forged, now: @now + 60_000)
       assert {:error, :bad_mac} = verify(forged)
@@ -192,55 +366,61 @@ defmodule Cyfr.WorkerAuthTest do
       assert {:error, :malformed} = verify(String.replace(header, "kind=call", "kind=request"))
       assert {:error, :malformed} = verify(String.replace(header, "fence=2", "fence=02"))
       assert {:error, :malformed} = verify(String.replace(header, " runner=run_4f3c2a1e", ""))
+      assert {:error, :malformed} = verify(String.replace(header, " worker=#{@worker}", ""))
       assert {:error, :malformed} = verify(header <> " nonce=n_again")
     end
   end
 
-  describe "sealed attempt key" do
-    test "opens under the dispatch seal key as the attempt it names" do
-      seal_key = WorkerAuth.dispatch_seal_key(@root)
-      key = attempt_key!(@attempt)
+  describe "sealed attempt keys" do
+    test "open under the dispatch seal key of the worker service they name, as their attempt" do
+      seal_key = WorkerAuth.dispatch_seal_key(worker_key!())
+      keys = keys!(@attempt)
 
-      assert {:ok, %{attempt: @attempt, key: ^key}} =
-               WorkerAuth.open_attempt_key(seal_key, sealed!())
+      assert {:ok, ^keys} = WorkerAuth.open_attempt_keys(seal_key, sealed!())
 
       assert sealed!() == sealed!()
       refute sealed!() == sealed!(@attempt, :binary.copy(<<1>>, 12))
-      refute sealed!() =~ Base.url_encode64(key, padding: false)
 
-      extra = Map.put(@attempt, :runner, "run_4f3c2a1e")
-      assert {:ok, %{attempt: @attempt}} = WorkerAuth.open_attempt_key(seal_key, sealed!(extra))
+      for key <- [keys.call, keys.seal],
+          do: refute(sealed!() =~ Base.url_encode64(key, padding: false))
     end
 
-    test "does not open under any other key" do
+    test "do not open under another worker service's seal key, or any other key" do
       other_root = :binary.list_to_bin(Enum.to_list(1..32))
+      mine = worker_key!()
+      theirs = worker_key!("wrk_other")
+      {:ok, elsewhere} = WorkerAuth.worker_key(other_root, @worker)
 
       for key <- [
-            WorkerAuth.dispatch_key(@root),
+            WorkerAuth.dispatch_seal_key(theirs),
+            WorkerAuth.dispatch_key(mine),
+            mine,
             WorkerAuth.assign_key(@root),
-            attempt_key!(@attempt),
-            WorkerAuth.dispatch_seal_key(other_root)
+            keys!(@attempt).seal,
+            WorkerAuth.dispatch_seal_key(elsewhere)
           ] do
-        assert {:error, :unsealable} = WorkerAuth.open_attempt_key(key, sealed!())
+        assert {:error, :unsealable} = WorkerAuth.open_attempt_keys(key, sealed!())
       end
     end
 
-    test "does not open as another attempt, or once its seal was changed" do
-      seal_key = WorkerAuth.dispatch_seal_key(@root)
+    test "do not open as another attempt or worker service, or once their seal was changed" do
+      seal_key = WorkerAuth.dispatch_seal_key(worker_key!())
       [named, box] = String.split(sealed!(), ".")
 
-      renamed =
+      renamed = fn field, value ->
         @attempt
-        |> Map.new(fn {name, value} -> {Atom.to_string(name), value} end)
-        |> Map.put("fence", 3)
+        |> Map.new(fn {name, v} -> {Atom.to_string(name), v} end)
+        |> Map.put(field, value)
         |> Jason.encode!()
         |> Base.url_encode64(padding: false)
+      end
 
       <<first, rest::binary>> = Base.url_decode64!(box, padding: false)
       flipped = Base.url_encode64(<<Bitwise.bxor(first, 1), rest::binary>>, padding: false)
 
       for sealed <- [
-            renamed <> "." <> box,
+            renamed.("fence", 3) <> "." <> box,
+            renamed.("worker", "wrk_other") <> "." <> box,
             named <> "." <> flipped,
             named <> "." <> box <> "." <> box,
             box,
@@ -248,42 +428,78 @@ defmodule Cyfr.WorkerAuthTest do
             "",
             nil
           ] do
-        assert {:error, :unsealable} = WorkerAuth.open_attempt_key(seal_key, sealed),
+        assert {:error, :unsealable} = WorkerAuth.open_attempt_keys(seal_key, sealed),
                inspect(sealed)
       end
     end
 
-    test "refuses an attempt with an invalid field" do
-      seal_key = WorkerAuth.dispatch_seal_key(@root)
-      key = attempt_key!(@attempt)
+    test "refuse an attempt with an invalid field" do
+      seal_key = WorkerAuth.dispatch_seal_key(worker_key!())
+      keys = keys!(@attempt)
 
       assert {:error, {:invalid_field, :attempt}} =
-               WorkerAuth.seal_attempt_key(seal_key, %{
-                 attempt: %{@attempt | attempt: "att 1"},
-                 key: key
+               WorkerAuth.seal_attempt_keys(seal_key, %{
+                 keys
+                 | attempt: %{@attempt | attempt: "att 1"}
                })
     end
   end
 
-  describe "WorkerAPI requests and reports" do
-    @dispatch %{worker: "wrk_1", ts: @now, nonce: "n_1"}
+  describe "sealed host calls" do
+    test "open only as the direction and the call they were sealed for" do
+      %{seal: seal, call: call_key} = keys!(@attempt)
+      call = call()
+      {:ok, body} = WorkerAuth.seal_call(seal, :body, call, @body)
+      {:ok, answer} = WorkerAuth.seal_call(seal, :answer, call, ~s({"ok":true}))
 
-    test "verify under the dispatch key as their own kind only" do
-      key = WorkerAuth.dispatch_key(@root)
+      assert {:ok, @body} = WorkerAuth.open_call(seal, :body, call, body)
+      assert {:ok, ~s({"ok":true})} = WorkerAuth.open_call(seal, :answer, call, answer)
+      refute body =~ "attempts"
+
+      assert {:error, :unsealable} = WorkerAuth.open_call(seal, :answer, call, body)
+      assert {:error, :unsealable} = WorkerAuth.open_call(seal, :body, call, answer)
+      assert {:error, :unsealable} = WorkerAuth.open_call(call_key, :body, call, body)
+
+      for other <- [call(%{nonce: "n_other"}), call(%{ts: @now + 1}), call(%{runner: "run_x"})] do
+        assert {:error, :unsealable} = WorkerAuth.open_call(seal, :body, other, body)
+      end
+
+      assert {:error, :unsealable} = WorkerAuth.open_call(seal, :body, call, nil)
+    end
+  end
+
+  describe "WorkerAPI requests and reports" do
+    @dispatch %{worker: @worker, ts: @now, nonce: "n_1"}
+
+    test "verify under the worker service's dispatch key as their own kind only" do
+      key = WorkerAuth.dispatch_key(worker_key!())
       {:ok, request} = WorkerAuth.request_header(key, @dispatch, @body)
       {:ok, report} = WorkerAuth.report_header(key, @dispatch, @body)
 
       assert {:ok, @dispatch} = WorkerAuth.verify_request(key, request, @body, @now)
-      assert {:ok, @dispatch} = WorkerAuth.verify_report(key, report, @body, @now)
-      assert {:error, :malformed} = WorkerAuth.verify_report(key, request, @body, @now)
+      assert {:ok, @dispatch} = WorkerAuth.verify_report(@root, report, @body, @now)
+      assert {:error, :malformed} = WorkerAuth.verify_report(@root, request, @body, @now)
       assert {:error, :malformed} = WorkerAuth.verify_request(key, report, @body, @now)
 
       forged = String.replace(report, "kind=report", "kind=request")
       assert {:error, :bad_mac} = WorkerAuth.verify_request(key, forged, @body, @now)
     end
 
+    test "a report signed by one worker service never verifies as another's" do
+      theirs = WorkerAuth.dispatch_key(worker_key!("wrk_other"))
+
+      {:ok, as_mine} = WorkerAuth.report_header(theirs, @dispatch, @body)
+      assert {:error, :bad_mac} = WorkerAuth.verify_report(@root, as_mine, @body, @now)
+
+      {:ok, own} = WorkerAuth.report_header(theirs, %{@dispatch | worker: "wrk_other"}, @body)
+      readdressed = String.replace(own, "worker=wrk_other", "worker=#{@worker}")
+      assert {:error, :bad_mac} = WorkerAuth.verify_report(@root, readdressed, @body, @now)
+      assert {:ok, %{worker: "wrk_other"}} = WorkerAuth.verify_report(@root, own, @body, @now)
+    end
+
     test "are refused outside the window, over another body or under another key" do
-      key = WorkerAuth.dispatch_key(@root)
+      worker_key = worker_key!()
+      key = WorkerAuth.dispatch_key(worker_key)
       {:ok, request} = WorkerAuth.request_header(key, @dispatch, @body)
 
       assert {:error, :outside_window} =
@@ -294,14 +510,23 @@ defmodule Cyfr.WorkerAuthTest do
 
       assert {:error, :bad_mac} = WorkerAuth.verify_request(key, request, "{}", @now)
 
-      assert {:error, :bad_mac} =
-               WorkerAuth.verify_request(WorkerAuth.assign_key(@root), request, @body, @now)
+      for other <- [
+            WorkerAuth.assign_key(@root),
+            WorkerAuth.dispatch_seal_key(worker_key),
+            worker_key
+          ] do
+        assert {:error, :bad_mac} = WorkerAuth.verify_request(other, request, @body, @now)
+      end
 
-      {:ok, by_attempt} = WorkerAuth.request_header(attempt_key!(@attempt), @dispatch, @body)
+      {:ok, by_attempt} = WorkerAuth.request_header(keys!(@attempt).call, @dispatch, @body)
       assert {:error, :bad_mac} = WorkerAuth.verify_request(key, by_attempt, @body, @now)
 
-      readdressed = String.replace(request, "worker=wrk_1", "worker=wrk_2")
+      readdressed = String.replace(request, "worker=#{@worker}", "worker=wrk_2")
       assert {:error, :bad_mac} = WorkerAuth.verify_request(key, readdressed, @body, @now)
     end
+  end
+
+  test "the root text is the one MacEnvelope decodes" do
+    assert {:ok, @root} = MacEnvelope.decode_root(hex(@root))
   end
 end

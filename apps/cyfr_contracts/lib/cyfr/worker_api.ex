@@ -8,10 +8,10 @@ defmodule Cyfr.WorkerAPI do
 
   A worker service runs no guest code: it starts runners, kills them and
   reports on them. Every request is addressed to one worker service and
-  signed with the dispatch key (`Cyfr.WorkerAuth.request_header/3`); the
-  worker service verifies it (`Cyfr.WorkerAuth.verify_request/4`), refuses
-  a request addressed to another worker service and refuses a nonce it
-  has already seen. It reports each runner's exit to CYFR itself
+  signed with that worker service's dispatch key
+  (`Cyfr.WorkerAuth.request_header/3`); the worker service verifies it
+  (`Cyfr.WorkerAuth.verify_request/4`), refuses a request addressed to
+  another worker service and refuses a nonce it has already seen. It reports each runner's exit to CYFR itself
   (`c:Cyfr.HostAPI.runner_exited/2`).
   """
 
@@ -32,13 +32,13 @@ defmodule Cyfr.WorkerAPI do
 
   @doc """
   Start an assignment on a runner. `input` is the execution's input bytes,
-  bound by the assignment's `input_digest`, and `sealed_keys` is the
-  attempt key sealed with the dispatch seal key
-  (`Cyfr.WorkerAuth.seal_attempt_key/2`). The runner attaches
+  bound by the assignment's `input_digest`, and `sealed_keys` are the
+  attempt's keys sealed with the worker service's dispatch seal key
+  (`Cyfr.WorkerAuth.seal_attempt_keys/3`). The runner attaches
   (`c:Cyfr.HostAPI.attach/2`) before it runs anything. `:malformed` means
   the assignment cannot be read or is addressed to another worker service,
   the input does not match its digest or the keys do not open as its
-  attempt.
+  attempt on this worker service.
   """
   @callback start(Cyfr.Assignment.token(), input :: binary(), sealed_keys :: String.t()) ::
               :ok | {:error, :malformed}

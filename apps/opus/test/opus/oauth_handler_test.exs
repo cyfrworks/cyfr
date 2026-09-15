@@ -30,7 +30,7 @@ defmodule Opus.OAuthHandlerTest do
   # (`Cyfr.Test.AttemptFixtures.attached!/1`), and that attempt.
   defp token_fn(opts) do
     attempt = AttemptFixtures.attached!(opts)
-    {fun_of(Opus.HostClient.new(attempt, attempt.key, attempt.runner)), attempt}
+    {fun_of(Opus.HostClient.new(attempt.keys, attempt.runner)), attempt}
   end
 
   defp fun_of(host) do

@@ -59,6 +59,16 @@ defmodule Cyfr.MacEnvelope do
   # 2^53 − 1: every integer up to it is exact in an IEEE 754 double.
   @max_integer 9_007_199_254_740_991
 
+  @doc """
+  A root secret as it is configured: exactly 64 hexadecimal digits, in
+  either case, spelling 32 bytes. Anything else is `:error`.
+  """
+  @spec decode_root(term()) :: {:ok, binary()} | :error
+  def decode_root(text) when is_binary(text) and byte_size(text) == 64,
+    do: Base.decode16(text, case: :mixed)
+
+  def decode_root(_text), do: :error
+
   @doc "The key HMAC-SHA256 of `root` over `label` derives."
   @spec derive(binary(), String.t()) :: binary()
   def derive(root, label) when byte_size(root) == 32 and is_binary(label),

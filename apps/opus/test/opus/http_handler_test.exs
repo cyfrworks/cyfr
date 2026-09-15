@@ -15,7 +15,7 @@ defmodule Opus.HttpHandlerTest do
          do: Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     attempt = AttemptFixtures.attached!(component_ref: component_ref, limits: limits)
-    Opus.HostClient.new(attempt, attempt.key, attempt.runner)
+    Opus.HostClient.new(attempt.keys, attempt.runner)
   end
 
   # ============================================================================
@@ -287,7 +287,7 @@ defmodule Opus.HttpHandlerTest do
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
 
       ctx = Sanctum.TestContext.local()
-      component_ref = "local.test-catalyst:1.0.0"
+      component_ref = "catalyst:local.test-catalyst:1.0.0"
 
       {:ok,
        edge: edge,
@@ -477,8 +477,8 @@ defmodule Opus.HttpHandlerTest do
           edge,
           limits,
           ctx,
-          attached_host("local.test-component:1.0.0", limits),
-          "local.test-component:1.0.0"
+          attached_host("catalyst:local.test-component:1.0.0", limits),
+          "catalyst:local.test-component:1.0.0"
         )
 
       assert is_map(imports)
@@ -502,8 +502,8 @@ defmodule Opus.HttpHandlerTest do
           edge,
           limits,
           ctx,
-          attached_host("local.test-component:1.0.0", limits),
-          "local.test-component:1.0.0"
+          attached_host("catalyst:local.test-component:1.0.0", limits),
+          "catalyst:local.test-component:1.0.0"
         )
 
       {:fn, func} = imports["cyfr:http/fetch@0.1.0"]["request"]
@@ -540,7 +540,7 @@ defmodule Opus.HttpHandlerTest do
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
 
       ctx = Sanctum.TestContext.local()
-      component_ref = "local.test-catalyst-b64:1.0.0"
+      component_ref = "catalyst:local.test-catalyst-b64:1.0.0"
 
       {:ok,
        edge: edge,
@@ -616,7 +616,7 @@ defmodule Opus.HttpHandlerTest do
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
 
       ctx = Sanctum.TestContext.local()
-      component_ref = "local.test-catalyst-mp:1.0.0"
+      component_ref = "catalyst:local.test-catalyst-mp:1.0.0"
 
       {:ok,
        edge: edge,
@@ -903,7 +903,7 @@ defmodule Opus.HttpHandlerTest do
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
 
       ctx = Sanctum.TestContext.local()
-      component_ref = "local.ssrf-test:1.0.0"
+      component_ref = "catalyst:local.ssrf-test:1.0.0"
 
       {:ok,
        edge: edge,
