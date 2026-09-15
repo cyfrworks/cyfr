@@ -17,6 +17,8 @@ func init() {
 	buildCmd.AddCommand(buildCompileCmd)
 	buildCmd.AddCommand(buildToolchainsCmd)
 	buildCmd.AddCommand(buildValidateCmd)
+
+	buildCompileCmd.Flags().Bool("resolve", false, "Rust: resolve the crates afresh and keep the new Cargo.lock (after a dependency changes)")
 }
 
 var buildCmd = &cobra.Command{
@@ -35,10 +37,16 @@ and auto-register it. The component must already exist (use 'cyfr new' to scaffo
 WASM types (catalyst, reagent, formula) compile Rust to WASM via cargo-component.
 Tinctures with a React scaffold compile via npm + Vite to static HTML/JS/CSS.
 
+A Rust component's first build resolves its crates and keeps the Cargo.lock
+it wrote; every later build is locked to it, so a dependency the lock does
+not cover is refused. After changing dependencies, compile with --resolve to
+resolve afresh and keep the new lock.
+
 The type can be given as a prefix (c:, r:, f:, t:) or as a separate first argument.`,
 	Example: `  cyfr build compile catalyst:local.my-api:0.1.0
   cyfr build compile c local.my-api:0.1.0
-  cyfr build compile t:local.my-dashboard:0.1.0`,
+  cyfr build compile t:local.my-dashboard:0.1.0
+  cyfr build compile --resolve c:local.my-api:0.1.0`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
@@ -51,11 +59,16 @@ The type can be given as a prefix (c:, r:, f:, t:) or as a separate first argume
 
 		fmt.Fprintf(os.Stderr, "Compiling %s...\n", normalized)
 
-		result, err := client.CallToolWithProgress(cmd.Context(), ops.Build, map[string]any{
+		callArgs := map[string]any{
 			"action":    ops.BuildCompile,
 			"reference": normalized,
 			"build_id":  buildID,
-		}, progressPrinter())
+		}
+		if resolve, _ := cmd.Flags().GetBool("resolve"); resolve {
+			callArgs["resolve"] = true
+		}
+
+		result, err := client.CallToolWithProgress(cmd.Context(), ops.Build, callArgs, progressPrinter())
 		if err != nil {
 			return handleToolError(err, "Compile failed")
 		}

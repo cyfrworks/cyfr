@@ -394,6 +394,12 @@ The recommended way to compile is `cyfr build compile`, which reads the source, 
 cyfr build compile catalyst:local.my-api:0.1.0
 ```
 
+A component's first build resolves its crates and saves the `Cargo.lock` it wrote beside the source; every later build runs `--locked` against it, so a dependency the lock does not cover is refused with cargo's message. After adding or changing a dependency, compile once with `--resolve` (the `build` tool's `resolve: true`) to resolve afresh and keep the new lock:
+
+```bash
+cyfr build compile --resolve catalyst:local.my-api:0.1.0
+```
+
 **Manual build** (if you prefer direct cargo-component): `cargo component build --release --target wasm32-wasip2` from the `src/` directory, then `cp target/wasm32-wasip2/release/*.wasm ../{type}.wasm`, `cargo clean`, and `cyfr register`.
 
 ### Parallel Invocation (Formula)

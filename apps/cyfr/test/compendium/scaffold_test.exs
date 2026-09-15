@@ -161,7 +161,8 @@ defmodule Compendium.ScaffoldTest do
       assert result.status == "created"
       assert result.reference == "catalyst:local.weather-api:0.1.0"
       assert is_list(result.files)
-      assert is_list(result.next_steps)
+      assert Enum.any?(result.next_steps, &(&1 =~ "cyfr-manifest.json through Files"))
+      refute Enum.any?(result.next_steps, &(&1 =~ "Edit cyfr-manifest.json"))
 
       base =
         Arca.Adapters.Local.build_path(

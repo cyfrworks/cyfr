@@ -358,9 +358,11 @@ defmodule Compendium.Scaffold do
 
   defp next_steps("catalyst", reference, _template) do
     [
-      "Edit #{Compendium.ComponentPath.manifest_name()} to declare the needs and caps blocks " <>
-        "(storage grants default to none; 'data/' is the component-private scope — " <>
-        "grant 'components/' only when the component genuinely manages component trees)",
+      "Declare the needs and caps blocks in #{Compendium.ComponentPath.manifest_name()} " <>
+        "through Files — the console's Files page or the files tool; a chain's source tool " <>
+        "reads the manifest but never changes it (storage grants default to none; 'data/' " <>
+        "is the component-private scope — grant 'components/' only when the component " <>
+        "genuinely manages component trees)",
       "Edit src/src/lib.rs to implement your catalyst logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"
@@ -369,9 +371,11 @@ defmodule Compendium.Scaffold do
 
   defp next_steps("formula", reference, _template) do
     [
-      "Edit #{Compendium.ComponentPath.manifest_name()} to declare the needs and caps blocks " <>
-        "(storage grants default to none; 'data/' is the component-private scope — " <>
-        "grant 'components/' only when the component genuinely manages component trees)",
+      "Declare the needs and caps blocks in #{Compendium.ComponentPath.manifest_name()} " <>
+        "through Files — the console's Files page or the files tool; a chain's source tool " <>
+        "reads the manifest but never changes it (storage grants default to none; 'data/' " <>
+        "is the component-private scope — grant 'components/' only when the component " <>
+        "genuinely manages component trees)",
       "Edit src/src/lib.rs to implement your formula logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"
