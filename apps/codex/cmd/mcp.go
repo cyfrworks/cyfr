@@ -59,7 +59,9 @@ immediately and its tools are discovered.
 Header values can reference a stored vault entry with the vault: prefix.
 A stdio server names "transport":"stdio" and its backends instead of a url;
 an env value is a vault: template, except NODE_ENV, LOG_LEVEL, TZ, LANG,
-LC_ALL, NO_COLOR and DEBUG, which may be literals.`,
+LC_ALL, NO_COLOR and DEBUG, which may be literals.
+
+Adding a server takes a signed-in session (cyfr login); an API key cannot.`,
 	Example: `  cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key"}}'
   cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'
   cyfr mcp add gh '{"transport":"stdio","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:gh-token"}}]}'`,
@@ -168,7 +170,10 @@ the new config and its tools are discovered again.
 --epoch is the epoch "cyfr mcp get" showed: the update is refused when the
 server has changed since.
 
-Header values can reference a stored vault entry with the vault: prefix.`,
+Header values can reference a stored vault entry with the vault: prefix.
+
+Replacing a server's config takes a signed-in session (cyfr login); an API
+key cannot.`,
 	Example: `  cyfr mcp update notion --epoch 3 '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key-2"}}'`,
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {

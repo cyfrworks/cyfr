@@ -21,6 +21,14 @@ defmodule Emissary.MCP.McpServersTool do
   credential rides along; the listing (names, transport, status and the
   vault entries a server reads) is open to any authenticated caller.
 
+  `create` and `update` are also `consent: :interactive`: a definition
+  binds vault entries to a command, a URL or headers, and the server
+  unseals those entries by name whenever it starts, so defining or changing
+  one is a person's act in an interactive session, like `vault.create` and
+  `profile.grant`. An admin API key operates saved servers — get, test,
+  refresh, restart, enable, disable, delete — and defines none. No action
+  is reachable from a running chain.
+
   Every write raises the row's epoch. `update` names the epoch it read and
   is refused when the row has moved on. A write that changes what runs —
   update, delete, disable, restart — stops the server's process, which
@@ -72,8 +80,18 @@ defmodule Emissary.MCP.McpServersTool do
         readOnlyHint: false,
         destructiveHint: true,
         actions: %{
-          "create" => %{kind: :write, planes: [:external], permission: :admin},
-          "update" => %{kind: :write, planes: [:external], permission: :admin},
+          "create" => %{
+            kind: :write,
+            planes: [:external],
+            permission: :admin,
+            consent: :interactive
+          },
+          "update" => %{
+            kind: :write,
+            planes: [:external],
+            permission: :admin,
+            consent: :interactive
+          },
           "delete" => %{kind: :destructive, planes: [:external], permission: :admin},
           # The listing (names, transport, status, the vault entries a server
           # reads) is open to any authenticated caller; a server's connection

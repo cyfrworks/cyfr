@@ -46,7 +46,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
 | **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read the vault. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Full access to all operations including key management. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server — take a signed-in session instead. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -136,7 +136,7 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
 | `storage_write` | Set retention policies |
 | `execution_write` | Service-level execution management |
-| `admin` | API key management, retention cleanup, session operations, force-release |
+| `admin` | API key management, retention cleanup, session operations, force-release, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
 | `*` | Wildcard — all permissions |
 
 #### Key Type Defaults and Ceilings

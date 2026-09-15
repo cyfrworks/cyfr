@@ -384,6 +384,8 @@ Adding one from Prism:
 
 From the CLI or MCP, the same server is `cyfr mcp add github '{"transport":"stdio","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:github-token"}}]}'`; a server may define up to four backends.
 
+Defining or changing a server — `mcp_servers.create` and `update`, http or stdio — takes a signed-in session: Prism, or the CLI after `cyfr login`. A definition decides what the server runs and where it sends the vault entries it names, which is a person's decision like granting a vault entry to a component. An admin API key can list, inspect, test, refresh, restart, enable, disable and delete servers, but defines none.
+
 How it holds together:
 
 - **One key.** `CYFR_MCP_BRIDGE_KEY` (32 random bytes as 64 hex digits) is in `.env`; `cyfr init` generates it and compose gives it to both `cyfr` and `mcp-bridge`. The bridge refuses to start without it, and cyfr refuses stdio servers without it (and `CYFR_MCP_BRIDGE_URL`, which compose sets). It is the only setting the bridge needs.
