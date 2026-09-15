@@ -56,7 +56,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
   end
 
   # One row in each of the tables whose survival was the point: a sealed
-  # credential, a conversation with a message, and a request log.
+  # credential, a thread with a message, and a request log.
   defp seed_rows!(ctx) do
     {:ok, _entry} =
       Sanctum.Vault.create(ctx, %{
@@ -65,10 +65,10 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
         fields: %{"token" => "super-secret-value"}
       })
 
-    {:ok, conv} = Arca.ConversationStorage.create(ctx)
+    {:ok, thread} = Arca.ThreadStorage.create(ctx)
 
     {:ok, _msg} =
-      Arca.ConversationStorage.append(ctx, conv.id, %{
+      Arca.ThreadStorage.append(ctx, thread.id, %{
         author: ctx.user_id,
         kind: "text",
         content: "something private"
@@ -139,7 +139,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     :ok = seed_rows!(ctx)
 
     for table <-
-          ~w(vault_entries conversations messages memberships api_keys mcp_logs policy_logs) do
+          ~w(vault_entries threads messages memberships api_keys mcp_logs policy_logs) do
       assert count(table, group.id) >= 1, "#{table} was not seeded — the erasure proves nothing"
     end
 

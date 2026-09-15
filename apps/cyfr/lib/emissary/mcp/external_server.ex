@@ -6,15 +6,38 @@ defmodule Emissary.MCP.ExternalServer do
   GenServer managing a connection to a single external MCP server.
 
   One process per active connection, keyed by `{name, athanor_id}`.
-  Connects lazily on first access: a stateless `tools/list` probe under the
-  current protocol revision, falling back to the legacy
-  initialize → initialized handshake for third-party servers still on the
-  older revision (see `connect/1`). Discovered tool definitions are cached.
+  Connects lazily on first access. Discovered tool definitions are cached.
 
-  ## HTTP Transport
+  ## HTTP transport
 
   Uses Streamable HTTP (JSON-RPC 2.0 over HTTP POST) as defined by the
-  MCP spec. Each request gets a fresh HTTP request — no persistent connection.
+  MCP spec. Each request gets a fresh HTTP request — no persistent
+  connection. Connecting is a stateless `tools/list` probe under the current
+  protocol revision, falling back to the legacy initialize → initialized
+  handshake for third-party servers still on the older revision (see
+  `connect/1`).
+
+  ## Stdio transport
+
+  A stdio server's backends run on the MCP bridge. Connecting asks the
+  controller (`Emissary.MCP.Bridge.sync/1`) to run this server's owner at
+  its epoch and receives a grant; every request to the bridge's `/mcp` then
+  carries a `Cyfr-Bridge-Auth` header signed with the grant's owner key
+  over the exact body sent (`Cyfr.BridgeAuth.invoke_header/3`), with a
+  fresh nonce and timestamp. The process holds the owner key and never an
+  env value: the bridge masks backend credentials in what it answers.
+
+  A call the bridge refuses before running it is answered as follows:
+  `stale_boot`, `epoch_ahead`, `unknown_owner` and `lapsed` sync again and
+  retry the call once; `stale_epoch` re-reads the row, and a row whose epoch
+  moved leaves this process in error until it is replaced. Stopping the
+  process releases its owner on the bridge within 3 s.
+
+  The tool catalogue is listed again whenever the controller issues a new
+  grant or reports that the owner's catalogue changed — a backend that
+  became ready after the sync answered, crashed or restarted — and a
+  changed catalogue invalidates the athanor's cached external tool list and
+  tells its subscribers (`Cyfr.Bus.mcp_servers/1`).
   """
 
   use GenServer
@@ -23,6 +46,10 @@ defmodule Emissary.MCP.ExternalServer do
   alias Emissary.MCP.Protocol
 
   @initialize_timeout_ms 15_000
+  # How long a caller waits for a connect, which for a stdio server includes
+  # the bridge starting its backends.
+  @connect_call_timeout_ms 60_000
+  @retried_refusals ~w(stale_boot epoch_ahead unknown_owner lapsed)
   # Client-side deadline for a call_tool round-trip. The upstream timeout is
   # operator-settable per server (config timeout_ms), so the caller's wait
   # must cover the largest upstream budget we allow — otherwise a slow-but-
@@ -87,7 +114,7 @@ defmodule Emissary.MCP.ExternalServer do
   """
   def get_tools(name, athanor_id) do
     case lookup(name, athanor_id) do
-      {:ok, pid} -> GenServer.call(pid, :get_tools, @initialize_timeout_ms)
+      {:ok, pid} -> GenServer.call(pid, :get_tools, @connect_call_timeout_ms)
       {:error, _} = err -> err
     end
   end
@@ -118,6 +145,9 @@ defmodule Emissary.MCP.ExternalServer do
       {:ok, pid} -> GenServer.call(pid, :status)
       {:error, :not_running} -> :disconnected
     end
+  catch
+    # A process busy connecting answers nothing until it is done.
+    :exit, _ -> %{status: :connecting, tool_count: 0, server_info: nil}
   end
 
   @doc """
@@ -125,7 +155,7 @@ defmodule Emissary.MCP.ExternalServer do
   """
   def reinitialize(name, athanor_id) do
     case lookup(name, athanor_id) do
-      {:ok, pid} -> GenServer.call(pid, :reinitialize, @initialize_timeout_ms)
+      {:ok, pid} -> GenServer.call(pid, :reinitialize, @connect_call_timeout_ms)
       {:error, _} = err -> err
     end
   end
@@ -144,16 +174,20 @@ defmodule Emissary.MCP.ExternalServer do
   defmodule State do
     @moduledoc false
     # `headers` holds RESOLVED credential values (vault references already
-    # unsealed to plaintext) and `raw_headers` may carry inline ones. OTP
-    # prints `inspect(state)` in every GenServer crash/exit report, so both
-    # are excluded from Inspect — a crashed call must not write bearer
-    # tokens into the log stream.
-    @derive {Inspect, except: [:headers, :raw_headers]}
+    # unsealed to plaintext), `raw_headers` may carry inline ones and
+    # `bridge` holds a stdio owner's key. OTP prints `inspect(state)` in
+    # every GenServer crash/exit report, so all three are excluded from
+    # Inspect — a crashed call must not write credentials into the log.
+    @derive {Inspect, except: [:headers, :raw_headers, :bridge]}
     defstruct [
       :name,
       :url,
       :timeout_ms,
       :athanor_id,
+      :server_id,
+      :epoch,
+      # The grant `Emissary.MCP.Bridge.sync/1` issued (stdio only).
+      :bridge,
       :server_info,
       :error,
       :last_init_attempt,
@@ -162,21 +196,35 @@ defmodule Emissary.MCP.ExternalServer do
       # re-probing on every call would double the traffic to a legacy peer
       # forever.
       :era,
+      transport: :http,
       raw_headers: %{},
       headers: %{},
       status: :disconnected,
       tools: [],
       request_id: 0,
-      # Detached upstream calls currently running: %{task_pid => monitor_ref}.
-      in_flight: %{}
+      # Detached upstream calls currently running:
+      # %{task_pid => {monitor_ref, from, caller_ref}}.
+      in_flight: %{},
+      # What each running call asked, so a refused one can be sent again:
+      # %{task_pid => {tool_name, arguments, attempt}}.
+      calls: %{}
     ]
   end
 
+  # Exits are trapped so a stop — a vault change, a deleted row, an archived
+  # athanor — runs `terminate/2`, which ends every upstream call still in
+  # flight with the credentials this process resolved, and releases a
+  # stdio server's owner on the bridge.
   @impl true
   def init(config) do
+    Process.flag(:trap_exit, true)
+
     state = %State{
       name: config[:name],
       url: config[:url],
+      transport: config[:transport] || :http,
+      server_id: config[:id],
+      epoch: config[:epoch],
       raw_headers: config[:headers] || %{},
       timeout_ms:
         min(
@@ -214,73 +262,7 @@ defmodule Emissary.MCP.ExternalServer do
 
   @impl true
   def handle_call({:call_tool, tool_name, arguments}, from, state) do
-    state = ensure_ready(state)
-
-    cond do
-      state.status != :ready ->
-        {:reply, {:error, "Server #{state.name} is not ready: #{state.error}"}, state}
-
-      map_size(state.in_flight) >= max_in_flight() ->
-        {:reply,
-         {:error,
-          "Server #{state.name} is busy (#{max_in_flight()} calls in flight) — retry shortly"},
-         state}
-
-      true ->
-        {request_id, state} = next_request_id(state)
-
-        body =
-          Emissary.MCP.Message.encode_request(request_id, "tools/call", %{
-            "name" => tool_name,
-            "arguments" => arguments || %{}
-          })
-
-        # The upstream HTTP round-trip runs OUTSIDE this process so one slow
-        # server never head-of-line-blocks every other caller of the same
-        # server for up to their full call timeout. The task gets a snapshot
-        # of state (resolved headers, masking material) and replies directly;
-        # config (re)resolution stays serialized in the GenServer above. The
-        # tool catalogue is dropped from the snapshot — the call doesn't read
-        # it, and it would otherwise be copied into every task heap.
-        snapshot = %{state | tools: [], in_flight: %{}}
-
-        logger_metadata = Cyfr.LoggerContext.capture()
-
-        case Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
-               Cyfr.LoggerContext.restore(logger_metadata)
-
-               reply =
-                 try do
-                   dispatch_upstream_call(snapshot, body, tool_name)
-                 rescue
-                   e ->
-                     # The exception's message can carry the upstream URL or
-                     # a transport internal; the caller (a guest or the
-                     # console) gets the tool's name only, the log the rest.
-                     Logger.warning(
-                       "[ExternalServer] call to #{tool_name} raised: #{Exception.message(e)}"
-                     )
-
-                     {:error, "External call failed for #{tool_name}"}
-                 end
-
-               GenServer.reply(from, reply)
-             end) do
-          {:ok, task_pid} ->
-            ref = Process.monitor(task_pid)
-            # `from` rides along so an abnormal exit can still answer — see
-            # the :DOWN clause; the caller is watched too, so a caller that
-            # goes away mid-call takes its upstream round-trip with it.
-            {caller, _tag} = from
-            caller_ref = Process.monitor(caller)
-
-            {:noreply,
-             %{state | in_flight: Map.put(state.in_flight, task_pid, {ref, from, caller_ref})}}
-
-          {:error, reason} ->
-            {:reply, {:error, "External call failed to start: #{inspect(reason)}"}, state}
-        end
-    end
+    dispatch_call(state, from, {tool_name, arguments, 0})
   end
 
   @impl true
@@ -305,12 +287,98 @@ defmodule Emissary.MCP.ExternalServer do
         tools: [],
         server_info: nil,
         error: nil,
-        headers: %{}
+        headers: %{},
+        bridge: nil
     }
 
     case do_initialize(state) do
       {:ok, state} -> {:reply, {:ok, state.status}, state}
       {:error, reason, state} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  # Runs a call in a detached task, or answers why it cannot run. `attempt`
+  # counts the times the bridge refused this call before running it.
+  defp dispatch_call(state, from, {tool_name, arguments, _attempt} = call) do
+    state = ensure_ready(state)
+
+    cond do
+      state.status != :ready ->
+        {:reply, {:error, "Server #{state.name} is not ready: #{state.error}"}, state}
+
+      map_size(state.in_flight) >= max_in_flight() ->
+        {:reply,
+         {:error,
+          "Server #{state.name} is busy (#{max_in_flight()} calls in flight) — retry shortly"},
+         state}
+
+      true ->
+        {request_id, state} = next_request_id(state)
+
+        body =
+          Emissary.MCP.Message.encode_request(request_id, "tools/call", %{
+            "name" => tool_name,
+            "arguments" => arguments || %{}
+          })
+
+        # The upstream HTTP round-trip runs OUTSIDE this process so one slow
+        # server never head-of-line-blocks every other caller of the same
+        # server for up to their full call timeout. The task gets a snapshot
+        # of state (resolved headers, masking material, a stdio grant) and
+        # replies directly; config (re)resolution stays serialized in the
+        # GenServer above. The tool catalogue is dropped from the snapshot —
+        # the call doesn't read it, and it would otherwise be copied into
+        # every task heap.
+        snapshot = %{state | tools: [], in_flight: %{}, calls: %{}}
+        server = self()
+
+        logger_metadata = Cyfr.LoggerContext.capture()
+
+        case Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+               Cyfr.LoggerContext.restore(logger_metadata)
+
+               reply =
+                 try do
+                   dispatch_upstream_call(snapshot, body, tool_name)
+                 rescue
+                   e ->
+                     # The exception's message can carry the upstream URL or
+                     # a transport internal; the caller (a guest or the
+                     # console) gets the tool's name only, the log the rest.
+                     Logger.warning(
+                       "[ExternalServer] call to #{tool_name} raised: #{Exception.message(e)}"
+                     )
+
+                     {:error, "External call failed for #{tool_name}"}
+                 end
+
+               case reply do
+                 # Refused before it ran: the server decides what happens next.
+                 {:bridge_refused, code, boot} ->
+                   send(server, {:bridge_refused, self(), code, boot})
+
+                 reply ->
+                   GenServer.reply(from, reply)
+               end
+             end) do
+          {:ok, task_pid} ->
+            ref = Process.monitor(task_pid)
+            # `from` rides along so an abnormal exit can still answer — see
+            # the :DOWN clause; the caller is watched too, so a caller that
+            # goes away mid-call takes its upstream round-trip with it.
+            {caller, _tag} = from
+            caller_ref = Process.monitor(caller)
+
+            {:noreply,
+             %{
+               state
+               | in_flight: Map.put(state.in_flight, task_pid, {ref, from, caller_ref}),
+                 calls: Map.put(state.calls, task_pid, call)
+             }}
+
+          {:error, reason} ->
+            {:reply, {:error, "External call failed to start: #{inspect(reason)}"}, state}
+        end
     end
   end
 
@@ -328,7 +396,7 @@ defmodule Emissary.MCP.ExternalServer do
         if reason != :normal,
           do: GenServer.reply(from, {:error, {:uncertain, "External call did not complete"}})
 
-        {:noreply, %{state | in_flight: Map.delete(state.in_flight, pid)}}
+        {:noreply, forget_call(state, pid)}
 
       nil ->
         # A caller gone mid-call: its upstream round-trip is nobody's now.
@@ -336,7 +404,7 @@ defmodule Emissary.MCP.ExternalServer do
           {task_pid, {task_ref, _from, _caller_ref}} ->
             Process.demonitor(task_ref, [:flush])
             Process.exit(task_pid, :kill)
-            {:noreply, %{state | in_flight: Map.delete(state.in_flight, task_pid)}}
+            {:noreply, forget_call(state, task_pid)}
 
           nil ->
             {:noreply, state}
@@ -344,13 +412,127 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
+  # The bridge refused a call before running it.
+  def handle_info({:bridge_refused, task_pid, code, boot}, state) do
+    case Map.get(state.in_flight, task_pid) do
+      {task_ref, from, caller_ref} ->
+        Process.demonitor(task_ref, [:flush])
+        Process.demonitor(caller_ref, [:flush])
+        call = Map.fetch!(state.calls, task_pid)
+        if code == "stale_boot" and is_binary(boot), do: Emissary.MCP.Bridge.boot_seen(boot)
+        after_refusal(forget_call(state, task_pid), from, call, code)
+
+      nil ->
+        {:noreply, state}
+    end
+  end
+
+  # The controller synced this server's owner again and issued a new grant.
+  def handle_info({:bridge_owner, %{epoch: epoch} = grant}, %State{epoch: epoch} = state) do
+    {:noreply, relist_tools(%{state | bridge: grant, url: grant.url})}
+  end
+
+  def handle_info({:bridge_owner, _grant_for_another_epoch}, state), do: {:noreply, state}
+
+  # The bridge reports that this owner's tool catalogue changed.
+  def handle_info({:bridge_tools_changed, epoch}, %State{epoch: epoch} = state) do
+    {:noreply, relist_tools(state)}
+  end
+
+  def handle_info({:bridge_tools_changed, _another_epoch}, state), do: {:noreply, state}
+
   def handle_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
+  defp forget_call(state, task_pid) do
+    %{
+      state
+      | in_flight: Map.delete(state.in_flight, task_pid),
+        calls: Map.delete(state.calls, task_pid)
+    }
+  end
+
+  # A lifetime, generation or lease the grant no longer matches: sync again
+  # and send the call once more.
+  defp after_refusal(state, from, {tool, arguments, 0}, code) when code in @retried_refusals do
+    state = %{state | status: :disconnected, bridge: nil, last_init_attempt: nil}
+
+    case dispatch_call(state, from, {tool, arguments, 1}) do
+      {:reply, reply, state} ->
+        GenServer.reply(from, reply)
+        {:noreply, state}
+
+      {:noreply, state} ->
+        {:noreply, state}
+    end
+  end
+
+  # The bridge runs a newer version of this owner. A row whose epoch moved
+  # has been changed since this process started: it stays in error until
+  # `Emissary.MCP.ExternalServerSupervisor.ensure_started/1` replaces it.
+  defp after_refusal(state, from, _call, "stale_epoch") do
+    ctx = Sanctum.Context.internal(athanor_id: state.athanor_id, scope: :athanor)
+
+    state =
+      case Arca.McpServerStorage.get_by_id(ctx, state.server_id) do
+        {:ok, %{epoch: epoch}} when epoch == state.epoch ->
+          state
+
+        _moved_or_gone ->
+          %{state | status: :error, error: "the server's configuration changed", bridge: nil}
+      end
+
+    GenServer.reply(
+      from,
+      {:error, "Server #{state.name} changed while the call was sent — retry"}
+    )
+
+    {:noreply, state}
+  end
+
+  defp after_refusal(state, from, _call, code) do
+    GenServer.reply(from, {:error, "The MCP bridge refused the call to #{state.name} (#{code})"})
+    {:noreply, state}
+  end
+
   defp max_in_flight,
     do: Application.get_env(:cyfr, :external_server_max_in_flight, @default_max_in_flight)
+
+  # A connected stdio server lists its tools again under its grant. A
+  # refused or failed listing leaves the catalogue as it was: the next call
+  # meets the refusal and recovers from it.
+  defp relist_tools(%State{transport: :stdio, status: :ready, bridge: %{}} = state) do
+    listing = %{state | timeout_ms: min(state.timeout_ms, @initialize_timeout_ms)}
+
+    case send_tools_list(listing) do
+      {:ok, tools, listed} when tools != state.tools ->
+        Logger.info("[ExternalServer] #{state.name}: #{length(tools)} tools after a change")
+        tools_changed(state.athanor_id)
+        %{listed | timeout_ms: state.timeout_ms, tools: tools}
+
+      {:ok, _same, listed} ->
+        %{listed | timeout_ms: state.timeout_ms}
+
+      _refused ->
+        state
+    end
+  end
+
+  defp relist_tools(state), do: state
+
+  defp tools_changed(athanor_id) do
+    Emissary.MCP.ExternalProvider.invalidate_external_tools_cache(
+      Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
+    )
+
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      Cyfr.Bus.mcp_servers(athanor_id),
+      :mcp_servers_changed
+    )
+  end
 
   # Bring a not-yet-ready server up before dispatching, mirroring the
   # get_tools arms: disconnected always retries, error retries when the
@@ -409,42 +591,51 @@ defmodule Emissary.MCP.ExternalServer do
       {:legacy, _state} ->
         {:error, "#{state.name} changed protocol era mid-connection"}
 
+      {:bridge_refused, _code, _boot} = refused ->
+        refused
+
       {:error, reason} ->
         {:error, mask_credentials(reason, state)}
     end
   end
 
-  # OTP crash reports and :sys.get_status print the full state — which
-  # holds resolved credential header values. Redact both header maps so a
-  # crashed server process cannot page a credential into the log.
+  # OTP crash reports and :sys.get_status print the state, the last message
+  # and the exit reason — which can hold resolved credential header values
+  # and a stdio owner's key.
   @impl true
-  def format_status(status) do
-    Map.new(status, fn
-      {:state, %State{} = state} ->
-        {:state,
-         %{
-           state
-           | headers: redact_values(state.headers),
-             raw_headers: redact_values(state.raw_headers)
-         }}
-
-      other ->
-        other
-    end)
-  end
-
-  defp redact_values(map) when is_map(map), do: Map.new(map, fn {k, _} -> {k, "[REDACTED]"} end)
-  defp redact_values(other), do: other
+  def format_status(status), do: Emissary.MCP.StatusRedaction.format_status(status)
 
   @impl true
   def terminate(reason, state) do
     Logger.info("[ExternalServer] #{state.name} shutting down: #{inspect(reason)}")
+
+    for {task_pid, {task_ref, from, caller_ref}} <- state.in_flight do
+      Process.demonitor(task_ref, [:flush])
+      Process.demonitor(caller_ref, [:flush])
+      Process.exit(task_pid, :kill)
+      GenServer.reply(from, {:error, {:uncertain, "Server #{state.name} stopped mid-call"}})
+    end
+
+    if state.transport == :stdio, do: Emissary.MCP.Bridge.release(owner(state))
+
     :ok
   end
+
+  defp owner(state),
+    do: %{athanor_id: state.athanor_id, server_id: state.server_id, epoch: state.epoch}
 
   # ============================================================================
   # MCP Handshake
   # ============================================================================
+
+  # A stdio server connects through the bridge: a grant for its owner, then
+  # a signed `tools/list`. A grant the bridge stops honouring between the
+  # two (it restarted, or the lease lapsed) is asked for once more.
+  defp do_initialize(%State{transport: :stdio} = state) do
+    Logger.info("[ExternalServer] Connecting to #{state.name} through the MCP bridge")
+    state = %{state | last_init_attempt: System.monotonic_time(:millisecond), era: :modern}
+    stdio_connect(state, 0)
+  end
 
   defp do_initialize(state) do
     Logger.info("[ExternalServer] Connecting to #{state.name} at #{state.url}")
@@ -497,6 +688,56 @@ defmodule Emissary.MCP.ExternalServer do
         end
     end
   end
+
+  # The `else` arms see the state this function was called with: no grant,
+  # and the operator's call timeout.
+  defp stdio_connect(state, attempt) do
+    with {:ok, grant} <- Emissary.MCP.Bridge.sync(owner(state)),
+         granted = %{
+           state
+           | bridge: grant,
+             url: grant.url,
+             timeout_ms: min(state.timeout_ms, @initialize_timeout_ms)
+         },
+         {:ok, tools, connected} <- send_tools_list(granted) do
+      Logger.info(
+        "[ExternalServer] Connected to #{state.name}: #{length(tools)} tools discovered"
+      )
+
+      {:ok, %{connected | timeout_ms: state.timeout_ms, status: :ready, tools: tools, error: nil}}
+    else
+      {:error, {:bridge_refused, code, _boot}} when code in @retried_refusals and attempt == 0 ->
+        stdio_connect(state, 1)
+
+      {:error, reason} ->
+        fail_initialize(%{state | bridge: nil}, bridge_reason(reason))
+
+      {:legacy, _state} ->
+        fail_initialize(%{state | bridge: nil}, "the MCP bridge refused the request")
+    end
+  end
+
+  defp bridge_reason({:bridge_refused, code, _boot}), do: "the MCP bridge refused (#{code})"
+  defp bridge_reason(:bridge_not_configured), do: "no MCP bridge is configured"
+  defp bridge_reason(:bridge_unavailable), do: "the MCP bridge is unavailable"
+  defp bridge_reason(:control_plane_lost), do: "this server does not own its control plane"
+  defp bridge_reason(:capacity), do: "the MCP bridge has no free backend slots"
+
+  defp bridge_reason({:pool_share, limit}),
+    do: "this athanor already runs its share of the MCP bridge (#{limit} backends)"
+
+  defp bridge_reason({:person_share, limit}),
+    do:
+      "the member who created this server already runs their share of the MCP bridge " <>
+        "(#{limit} backends, across every athanor)"
+
+  defp bridge_reason({:control_too_large, limit}),
+    do: "this server's backends and their env exceed what one sync may carry (#{limit} bytes)"
+
+  defp bridge_reason({:env_unresolved, backend, name}),
+    do: "backend '#{backend}' env #{name} does not resolve to a single-field vault entry"
+
+  defp bridge_reason(reason), do: reason
 
   # `state.error` surfaces to callers and the status view — the same egress
   # rule as results: mask the credentials this plane injected before a
@@ -599,6 +840,9 @@ defmodule Emissary.MCP.ExternalServer do
       {:legacy, state} ->
         {:legacy, state}
 
+      {:bridge_refused, _code, _boot} = refused ->
+        {:error, refused}
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -616,71 +860,127 @@ defmodule Emissary.MCP.ExternalServer do
       |> Enum.concat(protocol_headers(body, state.era, state.tools))
       |> merge_headers(state.headers)
 
-    case Jason.encode(body) do
-      {:ok, json_body} ->
-        # Pin to the validated IP on EVERY request (not just at init), with the
-        # original hostname preserved for SNI/Host. This both blocks SSRF and
-        # closes the DNS-rebinding gap that connecting by hostname would reopen.
-        # A private server (mcp-bridge on the compose network) is reachable
-        # only when the operator named it in the private-egress allowlist.
-        opts = [
-          receive_timeout: state.timeout_ms,
-          allow_private: :policy,
-          # Enforced while the body streams in — the transfer aborts at the
-          # ceiling, so a hostile peer cannot make this node buffer an
-          # arbitrarily large body before a post-hoc check.
-          max_response_bytes: @max_response_body_bytes
-        ]
+    with {:ok, json_body} <- Jason.encode(body),
+         {:ok, headers} <- sign(state, headers, json_body) do
+      post_encoded(state, body, headers, json_body)
+    else
+      {:error, {:invalid_field, _}} -> {:error, "Request signing failed"}
+      {:error, _reason} -> {:error, "Request encoding failed"}
+    end
+  end
 
-        case Cyfr.Network.pinned_request(:post, state.url, headers, json_body, opts) do
-          {:ok, status, _headers, resp_body} when status in 200..299 ->
-            with {:ok, parsed} <- parse_response(resp_body) do
-              check_response_id(parsed, body)
-            end
+  # A stdio server's request carries the owner's signature over the exact
+  # bytes sent, with a nonce and timestamp of its own.
+  defp sign(%State{transport: :stdio, bridge: %{} = grant} = state, headers, json_body) do
+    invoke = %{
+      athanor: state.athanor_id,
+      server: state.server_id,
+      generation: grant.generation,
+      epoch: grant.epoch,
+      boot: grant.boot,
+      ts: System.os_time(:millisecond),
+      nonce: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+    }
 
-          {:error, {:response_too_large, _size, _max}} ->
-            {:error, "Response too large (max 10MB)"}
+    with {:ok, header} <- Cyfr.BridgeAuth.invoke_header(grant.owner_key, invoke, json_body) do
+      {:ok, [{"cyfr-bridge-auth", header} | headers]}
+    end
+  end
 
-          {:ok, status, _headers, resp_body} ->
-            # A 4xx while speaking the current revision is how a peer says it
-            # cannot. The specification is explicit that the body has to be read
-            # before falling back: a modern server also answers 4xx for an
-            # unsupported version or a bad header, and those mean "retry
-            # differently", not "you are talking to an older server".
-            #
-            # The body is inspected, never reflected — it may carry internal
-            # diagnostics or credentials echoed back at us.
-            cond do
-              # An auth rejection is never an era signal: a legacy retry
-              # re-sends the same refused credential, wastes a round-trip,
-              # and logs "speaks a pre-2026 revision" about a server whose
-              # only complaint is the bearer token. Say what it is.
-              status in [401, 403] ->
-                {:error,
-                 "HTTP #{status} — the server refused the configured " <>
-                   "credentials; check the registered Authorization header"}
+  defp sign(%State{transport: :stdio}, _headers, _json_body),
+    do: {:error, {:invalid_field, :grant}}
 
-              state.era == :modern and status in 400..499 and not modern_error?(resp_body) ->
-                {:legacy, state}
+  defp sign(_state, headers, _json_body), do: {:ok, headers}
 
-              true ->
-                {:error, "HTTP #{status}"}
-            end
+  defp post_encoded(state, body, headers, json_body) do
+    # Pin to the validated IP on EVERY request (not just at init), with the
+    # original hostname preserved for SNI/Host. This both blocks SSRF and
+    # closes the DNS-rebinding gap that connecting by hostname would reopen.
+    # A private server (mcp-bridge on the compose network) is reachable
+    # only when the operator named it in the private-egress allowlist.
+    opts = [
+      receive_timeout: state.timeout_ms,
+      private_policy: :operator,
+      # Enforced while the body streams in — the transfer aborts at the
+      # ceiling, so a hostile peer cannot make this node buffer an
+      # arbitrarily large body before a post-hoc check.
+      max_response_bytes: @max_response_body_bytes
+    ]
 
-          # SSRF/DNS validation failures are safe, descriptive strings.
-          {:error, reason} when is_binary(reason) ->
-            {:error, reason}
-
-          # Transport/connection failure — log detail internally, surface a
-          # generic message to the caller. Whether the request reached the
-          # server is not known from here.
-          {:error, reason} ->
-            Logger.debug("[ExternalServer] request to #{state.name} failed: #{inspect(reason)}")
-            {:error, {:uncertain, "Request failed"}}
+    case Cyfr.Network.pinned_request(:post, state.url, headers, json_body, opts) do
+      {:ok, status, _headers, resp_body} when status in 200..299 ->
+        with {:ok, parsed} <- parse_response(resp_body) do
+          check_response_id(parsed, body)
         end
 
-      {:error, _reason} ->
-        {:error, "Request encoding failed"}
+      {:error, {:response_too_large, _size, _max}} ->
+        {:error, "Response too large (max 10MB)"}
+
+      {:ok, status, resp_headers, resp_body} when state.transport == :stdio ->
+        bridge_refusal(status, resp_headers, resp_body)
+
+      {:ok, status, _headers, resp_body} ->
+        # A 4xx while speaking the current revision is how a peer says it
+        # cannot. The specification is explicit that the body has to be read
+        # before falling back: a modern server also answers 4xx for an
+        # unsupported version or a bad header, and those mean "retry
+        # differently", not "you are talking to an older server".
+        #
+        # The body is inspected, never reflected — it may carry internal
+        # diagnostics or credentials echoed back at us.
+        cond do
+          # An auth rejection is never an era signal: a legacy retry
+          # re-sends the same refused credential, wastes a round-trip,
+          # and logs "speaks a pre-2026 revision" about a server whose
+          # only complaint is the bearer token. Say what it is.
+          status in [401, 403] ->
+            {:error,
+             "HTTP #{status} — the server refused the configured " <>
+               "credentials; check the registered Authorization header"}
+
+          state.era == :modern and status in 400..499 and not modern_error?(resp_body) ->
+            {:legacy, state}
+
+          true ->
+            {:error, "HTTP #{status}"}
+        end
+
+      # SSRF/DNS validation failures are safe, descriptive strings.
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      # Transport/connection failure — log detail internally, surface a
+      # generic message to the caller. Whether the request reached the
+      # server is not known from here.
+      {:error, reason} ->
+        Logger.debug("[ExternalServer] request to #{state.name} failed: #{inspect(reason)}")
+        {:error, {:uncertain, "Request failed"}}
+    end
+  end
+
+  # The bridge refuses before anything runs: a bad signature (401), or a
+  # request that names another lifetime, version, lease or nonce (409, 503).
+  # Anything else is a JSON-RPC error the MCP layer answered.
+  defp bridge_refusal(401, _headers, _body),
+    do: {:error, "the MCP bridge refused this server's signature"}
+
+  defp bridge_refusal(status, headers, body) when status in [409, 503] do
+    case Jason.decode(body) do
+      {:ok, %{"error" => code}} when is_binary(code) ->
+        {:bridge_refused, code, Emissary.MCP.Bridge.boot_header(headers)}
+
+      _ ->
+        {:error, "HTTP #{status}"}
+    end
+  end
+
+  defp bridge_refusal(status, _headers, body) do
+    case Jason.decode(body) do
+      {:ok, %{"error" => %{"message" => message}}} when is_binary(message) ->
+        {:error, "HTTP #{status}: #{message}"}
+
+      _ ->
+        {:error, "HTTP #{status}"}
     end
   end
 
@@ -898,29 +1198,25 @@ defmodule Emissary.MCP.ExternalServer do
 
   def resolve_headers(_headers, _athanor_id), do: {:ok, %{}}
 
-  # `vault:` is the only credential reference. `secret:` is refused rather
-  # than falling through to the literal clause below, which would send the
-  # operator's reference text to a third party as the header value — a
-  # request that silently fails to authenticate while looking like it tried.
-  defp resolve_value("secret:" <> _name, athanor_id) do
-    Logger.warning(
-      "[ExternalServer] 'secret:' is not a credential reference — " <>
-        "use vault:<entry name> (athanor=#{athanor_id})"
-    )
-
-    {:error, :unknown_credential_reference}
+  # A vault-backed header (`Emissary.MCP.VaultRef.template/1`) resolves the
+  # entry's single material field. Deliberately single-field — a header
+  # carries one value, and picking silently from a bundle would smuggle the
+  # wrong credential into the wrong header. Errors stay opaque outward, like
+  # secrets.
+  defp resolve_value(value, athanor_id) when is_binary(value) do
+    case Emissary.MCP.VaultRef.classify(value) do
+      {:vault, template} -> resolve_template(template, athanor_id)
+      :unresolved -> {:error, :unresolved_ref}
+      :literal -> {:ok, value}
+    end
   end
 
-  # A vault-backed header: `vault:<entry name>` resolves the entry's single
-  # material field. Deliberately single-field — a header carries one value,
-  # and picking silently from a bundle would smuggle the wrong credential
-  # into the wrong header. Errors stay opaque outward, like secrets.
-  defp resolve_value("vault:" <> entry_name, athanor_id) do
+  defp resolve_template(%{name: entry_name} = template, athanor_id) do
     case Sanctum.VaultReader.unseal_by_name(athanor_id, entry_name) do
       {:ok, fields} ->
         case Map.values(fields) do
           [value] ->
-            {:ok, value}
+            {:ok, Emissary.MCP.VaultRef.render(template, value)}
 
           _ ->
             Logger.debug(
@@ -939,8 +1235,6 @@ defmodule Emissary.MCP.ExternalServer do
         {:error, :vault_ref_unavailable}
     end
   end
-
-  defp resolve_value(value, _athanor_id) when is_binary(value), do: {:ok, value}
 
   # ============================================================================
   # Credential masking
@@ -966,7 +1260,7 @@ defmodule Emissary.MCP.ExternalServer do
 
       cond do
         not is_binary(resolved) -> []
-        is_binary(raw) and String.starts_with?(raw, "vault:") -> with_bare_token(resolved)
+        Emissary.MCP.VaultRef.vault_ref?(raw) -> with_bare_token(resolved)
         credential_shaped_header?(key) -> with_bare_token(resolved)
         true -> []
       end
@@ -1012,7 +1306,7 @@ defmodule Emissary.MCP.ExternalServer do
 
   defp validate_server_url(url) do
     Cyfr.Network.validate_redirect_url(url,
-      allow_private: :policy
+      private_policy: :operator
     )
   end
 

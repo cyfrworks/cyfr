@@ -21,29 +21,19 @@ defmodule Arca.SanctumSurfaceTest do
 
   # The Sanctum namespaces lib/arca reaches into IN CODE (doc prose
   # mentions many more — the filter below is what keeps this list honest),
-  # and why each is here. Narrower than it reads from a raw grep: eight
-  # namespaces, mostly vocabulary.
+  # and why each is here. Narrower than it reads from a raw grep, and mostly vocabulary.
   @surface [
     # The tenancy carrier and its resolution — the reason the cycle
     # exists at all: every scoped read and stamped write names it.
     "Sanctum.Context",
     "Sanctum.Tenancy",
 
-    # Vocabulary and limits that travel with rows.
+    # Vocabulary that travels with rows.
     "Sanctum.Atoms",
-    "Sanctum.ComponentRef",
-    "Sanctum.Limits",
-    "Sanctum.Sanitizer",
 
     # The one genuine domain-logic reach: the webhook signature header's
     # default is the domain's to name.
-    "Sanctum.Webhook",
-
-    # The profile label grammar belongs to the selector vocabulary
-    # (`Sanctum.Authority.RootSelect.valid_label?/1`): `decode/1` tells an
-    # id from a label by prefix and is only sound while no stored label
-    # wears it, so the profile schema holds every insert to that one rule.
-    "Sanctum.Authority"
+    "Sanctum.Webhook"
   ]
 
   @namespace ~r/\bSanctum(?:\.[A-Z]\w+)+\b/
@@ -51,7 +41,7 @@ defmodule Arca.SanctumSurfaceTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp reached do
-    for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/arca/**/*.ex")),
+    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/arca/**/*.ex")),
         line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new(),

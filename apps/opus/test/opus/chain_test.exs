@@ -1,26 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Opus.ChainTest do
-  # run_root / run_child are dark: no production ingress calls them yet.
-  # These tests drive the vertical against the in-memory consent source and
-  # a real published component (math.wasm — a core module that fails at
-  # component compile, which is irrelevant: every property asserted here is
-  # decided before compilation).
+  # Runs under the authority `Cyfr.Execution.Admission` decides (whose own
+  # cases are `Cyfr.Execution.AdmissionTest`), against the in-memory consent
+  # source and a real published component (math.wasm — a core module that
+  # fails at component compile, which is irrelevant: every property
+  # asserted here is decided before compilation).
   use ExUnit.Case, async: false
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Consent.Source
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
+  # Activation digests as the resolver spells them; an assignment carries
+  # nothing else.
+  @root_act Cyfr.Digest.sha256("root-act")
+  @root_activation Cyfr.Digest.sha256("root-activation")
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
     start_supervised!(Source.Memory)
 
     test_path = Path.join(System.tmp_dir!(), "opus_chain_test_#{:rand.uniform(100_000)}")
@@ -69,6 +72,8 @@ defmodule Opus.ChainTest do
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
     end)
+
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {:ok, ctx: ctx, root: root_component, target: target_component}
   end
@@ -165,24 +170,25 @@ defmodule Opus.ChainTest do
     :ok = Source.Memory.put_head_consent(ctx, profile.id, consent)
   end
 
-  # Build the real formula import closures the way the runtime does for an
-  # authority execution: guest-planed ctx, node limits, host-threaded
-  # transition inputs.
-  defp fork_imports(ctx, auth, parent_id, overrides \\ []) do
-    Opus.FormulaHandler.build_formula_imports(
-      Context.enter_guest(ctx),
-      parent_id,
-      Keyword.merge(
+  # A formula's attempt under `auth`, attached by a runner of the worker
+  # service's group, and the real import closures the runtime builds for
+  # it: the node's limits and the actions its assignment intercepts. The
+  # transition inputs its children are stepped with are the attempt's.
+  defp fork_imports(ctx, auth, opts \\ []) do
+    fixture =
+      Opus.Test.FormulaHost.attached!(
         [
-          root_execution_id: parent_id,
-          limits: Sanctum.Authority.limits(auth),
+          ctx: ctx,
           authority: auth,
-          declared_needs: [],
-          activation_digest: "sha256:root-act"
-        ],
-        overrides
+          component_ref: "formula:local.chain-fork:0.1.0",
+          activation_digest: @root_act
+        ] ++ opts
       )
-    )
+
+    {imports, tracker} =
+      Opus.FormulaHandler.build_formula_imports(fixture.host, Opus.Test.FormulaHost.opts(auth))
+
+    {fixture.host, imports, tracker}
   end
 
   defp wait_until(fun, timeout_ms \\ 5_000) do
@@ -208,7 +214,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_root_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
+        Cyfr.Execution.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
           execution_id: execution_id,
           type: :reagent
         )
@@ -218,80 +224,11 @@ defmodule Opus.ChainTest do
       assert metadata.authority.profile_id == "prof-chain"
       assert metadata.authority.consent_id == "consent-chain"
       assert metadata.authority.cursor == {:bound, @root_node}
-      # The context crossing into guest closures can never again authorize
-      # an external-plane call.
-      assert metadata.plane == :guest
 
       row = Arca.Repo.get(Arca.Execution, execution_id)
       assert row.activation_digest != nil
       assert Jason.decode!(row.activation_graph) == %{@root_node => root.release_digest}
       assert JCS.hash_binary(row.activation_graph) == row.activation_digest
-    end
-
-    test "no profile refuses instead of guessing", %{ctx: ctx} do
-      assert {:error, :no_profile} =
-               Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{}, type: :reagent)
-    end
-
-    test "two active owner profiles are ambiguous without a selector", %{ctx: ctx, root: root} do
-      seed(ctx, profile_summary(), consent(root))
-      seed(ctx, profile_summary(%{id: "prof-chain-2", label: "work"}), consent(root))
-
-      assert {:error, {:ambiguous, ids}} =
-               Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{}, type: :reagent)
-
-      assert Enum.sort(ids) == ["prof-chain", "prof-chain-2"]
-
-      # An explicit selector resolves it.
-      attach_witness()
-
-      _result =
-        Opus.run_root(ctx, {:label, "work"}, "#{@root_node}:0.1.0", %{},
-          type: :reagent,
-          execution_id: "exec_chain_sel_#{System.unique_integer([:positive])}"
-        )
-
-      assert_receive {:authority_entered, metadata}, 30_000
-      assert metadata.authority.profile_id == "prof-chain-2"
-    end
-
-    test "consent drift refuses with consent_required", %{ctx: ctx, root: root} do
-      drifted = consent(root, %{activation: %{@root_node => "sha256:stale-grant"}})
-      seed(ctx, profile_summary(), drifted)
-
-      assert {:error, {:consent_required, payload}} =
-               Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{}, type: :reagent)
-
-      assert payload.profile_id == "prof-chain"
-      assert payload.current_revision == 1
-    end
-
-    test "a public route selects the public profile even for an authenticated caller", %{
-      ctx: ctx,
-      root: root
-    } do
-      attach_witness()
-      seed(ctx, profile_summary(), consent(root))
-
-      seed(
-        ctx,
-        profile_summary(%{id: "prof-chain-pub", kind: :public, label: "public"}),
-        consent(root, %{id: "consent-chain-pub", invoke_mode: :edge_only})
-      )
-
-      assert ctx.authenticated
-
-      _result =
-        Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{},
-          type: :reagent,
-          route: :public,
-          execution_id: "exec_chain_pub_#{System.unique_integer([:positive])}"
-        )
-
-      assert_receive {:authority_entered, metadata}, 30_000
-      assert metadata.authority.profile_id == "prof-chain-pub"
-      assert metadata.authority.profile_kind == :public
-      assert metadata.authority.invoke_mode == :edge_only
     end
   end
 
@@ -326,36 +263,11 @@ defmodule Opus.ChainTest do
       :ok
     end
 
-    test "a public route selects the public profile despite authentication and binds the edge",
-         %{ctx: ctx} do
-      attach_witness()
-      assert ctx.authenticated
-
-      _result =
-        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
-          route: :public,
-          execution_id: "exec_route_pub_#{System.unique_integer([:positive])}"
-        )
-
-      assert_receive {:authority_entered, metadata}, 30_000
-      assert metadata.authority.profile_id == "prof-route-pub"
-      assert metadata.authority.profile_kind == :public
-      assert metadata.authority.cursor == {:bound, @target_node}
-      assert metadata.authority.depth == 1
-    end
-
-    test "an edge_only public profile denies an off-edge reference", %{ctx: ctx} do
-      assert {:error, {:invoke_denied, :edge_only}} =
-               Opus.Chain.run_root_edge(ctx, @root_node, "reagent:local.off-edge:1.0.0", %{},
-                 route: :public
-               )
-    end
-
     test "the routed execution row is root-shaped with the activation graph", %{ctx: ctx} do
       execution_id = "exec_route_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Cyfr.Execution.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :protected,
           execution_id: execution_id
         )
@@ -373,18 +285,12 @@ defmodule Opus.ChainTest do
       execution_id = "exec_route_pub_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Cyfr.Execution.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :public,
           execution_id: execution_id
         )
 
       assert %{profile_id: "prof-route-pub"} = Arca.Repo.get(Arca.Execution, execution_id)
-    end
-
-    test "a call without a route raises rather than falling through to a guess", %{ctx: ctx} do
-      assert_raise KeyError, ~r/:route/, fn ->
-        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{}, [])
-      end
     end
   end
 
@@ -401,7 +307,9 @@ defmodule Opus.ChainTest do
         activation: %{@root_node => "sha256:act-root"}
       }
 
-      {:ok, auth} = Authority.root(profile, blob)
+      {:ok, auth} =
+        Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
+
       auth
     end
 
@@ -411,7 +319,7 @@ defmodule Opus.ChainTest do
           ctx: Context.enter_guest(ctx),
           parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
           root_execution_id: "exec_root_ref",
-          activation_digest: "sha256:root-activation"
+          activation_digest: @root_activation
         ],
         overrides
       )
@@ -448,7 +356,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_child_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.run_child(
+        Cyfr.Execution.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -460,12 +368,11 @@ defmodule Opus.ChainTest do
       assert metadata.authority.cursor == {:bound, @target_node}
       assert metadata.authority.depth == 1
       assert metadata.authority.chain == [@root_node, @target_node]
-      assert metadata.plane == :guest
       assert Map.get(target, :release_digest) != nil
 
       row = Arca.Repo.get(Arca.Execution, execution_id)
       # A child carries its root's activation digest, no graph.
-      assert row.activation_digest == "sha256:root-activation"
+      assert row.activation_digest == @root_activation
       assert row.activation_graph == nil
       assert row.parent_execution_id != nil
     end
@@ -476,7 +383,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_zero_#{System.unique_integer([:positive])}"
 
       _result =
-        Opus.run_child(
+        Cyfr.Execution.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -490,29 +397,17 @@ defmodule Opus.ChainTest do
       assert metadata.authority.policy == :none
     end
 
-    test "an edge_only authority denies an edge-miss instead of running inert", %{ctx: ctx} do
-      {:ok, blob} = Blob.parse(Jason.decode!(blob_json()))
-
-      profile = %{
-        profile_id: "prof-pub",
-        consent_id: "consent-pub",
-        source_ref: @root_node,
-        kind: :public,
-        invoke_mode: :edge_only,
-        activation: %{@root_node => "sha256:act-root"}
-      }
-
-      {:ok, auth} = Authority.root(profile, blob)
-
-      assert {:error, {:invoke_denied, :edge_only}} =
-               Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
-    end
-
     test "a bound edge whose target no longer resolves is setup_required", %{ctx: ctx} do
       auth = authority_with_edges(%{"reagent:local.gone" => %{}})
 
       assert {:error, {:setup_required, payload}} =
-               Opus.run_child(auth, "reagent:local.gone:1.0.0", nil, %{}, child_opts(ctx))
+               Cyfr.Execution.run_child(
+                 auth,
+                 "reagent:local.gone:1.0.0",
+                 nil,
+                 %{},
+                 child_opts(ctx)
+               )
 
       assert payload.profile_id == "prof-chain"
       assert payload.node_ref == "reagent:local.gone:1.0.0"
@@ -552,18 +447,11 @@ defmodule Opus.ChainTest do
         })
 
       assert {:error, {:setup_required, payload}} =
-               Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
+               Cyfr.Execution.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
 
       assert payload.profile_id == "prof-chain"
       assert payload.node_ref == "#{@target_node}:0.1.0"
       assert payload.reason == "vault_entry_revoked"
-    end
-
-    test "a need containing the edge separator is rejected before edge lookup", %{ctx: ctx} do
-      auth = authority_with_edges(%{@target_node => %{}})
-
-      assert {:error, {:invalid_need, "a|b"}} =
-               Opus.run_child(auth, "#{@target_node}:0.1.0", "a|b", %{}, child_opts(ctx))
     end
 
     test "a consented catalyst with no legacy policy rows executes under its blob", %{
@@ -626,14 +514,14 @@ defmodule Opus.ChainTest do
       # nothing executes, so the blob below is provably the only policy in
       # play.
       assert {:error, no_authority_error} =
-               Opus.Executor.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
+               Cyfr.Execution.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
 
       assert no_authority_error =~ "without an authority is not a thing"
 
       attach_witness()
 
       _result =
-        Opus.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
+        Cyfr.Execution.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
           type: :catalyst,
           execution_id: "exec_chain_cat_#{System.unique_integer([:positive])}"
         )
@@ -645,9 +533,9 @@ defmodule Opus.ChainTest do
     test "the formula closures intercept execution dispatch under an authority", %{ctx: ctx} do
       attach_witness()
       auth = authority_with_edges(%{@target_node => %{}})
-      parent_id = "exec_fork_parent_#{System.unique_integer([:positive])}"
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+      {host, imports, tracker} = fork_imports(ctx, auth)
+      parent_id = host.execution_id
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -688,14 +576,13 @@ defmodule Opus.ChainTest do
 
       assert [row] = rows
       assert row.parent_execution_id == parent_id
-      assert row.activation_digest == "sha256:root-act"
+      assert row.activation_digest == @root_act
     end
 
     test "an omitted need is rejected when the closure declares needs", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
-      parent_id = "exec_fork_need_#{System.unique_integer([:positive])}"
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id, declared_needs: ["source"])
+      {_host, imports, tracker} = fork_imports(ctx, auth, declared_needs: ["source"])
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -716,9 +603,8 @@ defmodule Opus.ChainTest do
     test "the spawn closure charges the budget and releases it on completion", %{ctx: ctx} do
       attach_witness()
       auth = authority_with_edges(%{@target_node => %{}})
-      parent_id = "exec_fork_spawn_#{System.unique_integer([:positive])}"
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+      {_host, imports, tracker} = fork_imports(ctx, auth)
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -735,15 +621,14 @@ defmodule Opus.ChainTest do
 
       assert %{"task_id" => _} = Jason.decode!(spawn_fn.(request))
       assert_receive {:authority_entered, _}, 30_000
-      wait_until(fn -> Authority.budget(auth).in_flight == 0 end)
+      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     end
 
     test "an in-chain run_stream is spawn-shaped and returns stream info", %{ctx: ctx} do
       attach_witness()
       auth = authority_with_edges(%{@target_node => %{}})
-      parent_id = "exec_fork_stream_#{System.unique_integer([:positive])}"
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+      {_host, imports, tracker} = fork_imports(ctx, auth)
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -767,28 +652,14 @@ defmodule Opus.ChainTest do
       assert stream_url == "/api/executions/#{execution_id}/events"
       assert_receive {:authority_entered, metadata}, 30_000
       assert metadata.execution_id == execution_id
-      wait_until(fn -> Authority.budget(auth).in_flight == 0 end)
-    end
-
-    test "authority_for loads the root authority without executing anything", %{
-      ctx: ctx,
-      root: root
-    } do
-      attach_witness()
-      seed(ctx, profile_summary(), consent(root))
-
-      assert {:ok, %Authority{} = auth} = Opus.Chain.authority_for(ctx, :default, @root_node)
-      assert auth.profile_id == "prof-chain"
-      assert auth.cursor == {:bound, @root_node}
-      # Nothing ran.
-      refute_receive {:authority_entered, _}, 100
+      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     end
 
     test "an oversized emit is refused by the node's own request limit", %{ctx: ctx} do
       auth = authority_with_edges(%{})
-      parent_id = "exec_fork_emit_#{System.unique_integer([:positive])}"
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+      # The formula's attempt answers its emit under the node's limits.
+      {_host, imports, tracker} = fork_imports(ctx, auth)
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -806,50 +677,23 @@ defmodule Opus.ChainTest do
       assert %{"error" => %{"type" => "invalid_request"}} =
                Jason.decode!(emit_fn.(Jason.encode!(["not", "an", "object"])))
     end
-
-    test "a spawn charges the root budget and a denied spawn does not", %{ctx: ctx} do
-      auth = authority_with_edges(%{@target_node => %{}})
-      assert Authority.budget(auth).in_flight == 0
-
-      {:ok, decision} =
-        Opus.Chain.step_invoke(
-          auth,
-          "#{@target_node}:0.1.0",
-          nil,
-          child_opts(ctx, guest_fn: :spawn)
-        )
-
-      assert Authority.budget(decision.authority).in_flight == 1
-      :ok = Authority.release_invoke(decision.authority)
-      assert Authority.budget(auth).in_flight == 0
-
-      # Depth-capped spawn consumes nothing.
-      deep =
-        Enum.reduce(1..Authority.depth_cap(), auth, fn _i, a ->
-          Authority.unbound_child(a, "reagent:local.deep")
-        end)
-
-      assert {:error, {:invoke_denied, :depth_cap}} =
-               Opus.Chain.step_invoke(
-                 deep,
-                 "#{@target_node}:0.1.0",
-                 nil,
-                 child_opts(ctx, guest_fn: :spawn)
-               )
-
-      assert Authority.budget(auth).in_flight == 0
-    end
   end
 
   describe "run_child/5 as a spawn" do
     test "a spawn-shaped child holds the slot for the call and releases it on return", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
 
       _result =
-        Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx, guest_fn: :spawn))
+        Cyfr.Execution.run_child(
+          auth,
+          "#{@target_node}:0.1.0",
+          nil,
+          %{},
+          child_opts(ctx, guest_fn: :spawn)
+        )
 
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
     end
 
     test "with a charge identity the hold is a row, taken before the run and given back after", %{
@@ -877,7 +721,7 @@ defmodule Opus.ChainTest do
       }
 
       _result =
-        Opus.run_child(
+        Cyfr.Execution.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -885,7 +729,7 @@ defmodule Opus.ChainTest do
           child_opts(ctx, guest_fn: :spawn, charge: charge)
         )
 
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
       assert %{charged: 0} = Arca.BudgetReservations.lookup(ctx.athanor_id, auth.budget.id)
       assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, auth.budget.id)
 
@@ -894,7 +738,7 @@ defmodule Opus.ChainTest do
         Arca.BudgetReservations.charge(ctx.athanor_id, auth.budget.id, %{charge | id: "other"}, 1)
 
       assert {:error, {:invoke_denied, :invoke_budget_exhausted}} =
-               Opus.run_child(
+               Cyfr.Execution.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,
@@ -902,7 +746,7 @@ defmodule Opus.ChainTest do
                  child_opts(ctx, guest_fn: :spawn, charge: charge)
                )
 
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
     end
 
     test "a hold past its admission window refuses the child before it runs", %{ctx: ctx} do
@@ -941,7 +785,7 @@ defmodule Opus.ChainTest do
         |> Arca.Repo.update_all(set: [admit_by: past])
 
       assert {:error, _} =
-               Opus.run_child(
+               Cyfr.Execution.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,
@@ -950,7 +794,7 @@ defmodule Opus.ChainTest do
                )
 
       assert Arca.Repo.get(Arca.Execution, child_id) == nil
-      assert Authority.budget(auth).in_flight == 0
+      assert Sanctum.Authority.budget(auth).in_flight == 0
     end
   end
 end

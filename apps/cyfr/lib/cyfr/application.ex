@@ -14,10 +14,13 @@ defmodule Cyfr.Application do
     # One redaction vocabulary: Phoenix's inbound request-param filter is
     # fed from its owner (config/config.exs deliberately does not spell a
     # list — config files run before this module exists).
-    Application.put_env(:phoenix, :filter_parameters, Sanctum.Sanitizer.filter_parameters())
+    Application.put_env(:phoenix, :filter_parameters, Cyfr.Sanitizer.filter_parameters())
 
-    # This boot's name, before any row can carry it.
+    # This boot's name, before any row can carry it, and the worker root
+    # every assignment, worker and attempt key this boot issues derives
+    # from.
     Cyfr.Boot.mint()
+    Cyfr.Execution.Keys.mint()
 
     # Resolve the at-rest cipher keyring before the database opens: the
     # migration step below compares it with the keyring the database was
@@ -40,7 +43,7 @@ defmodule Cyfr.Application do
     # deliberately NOT owned here: it is a disposable read-through cache,
     # created and re-created by its one supervised owner
     # (`Arca.Cache.Sweeper`) — a sweeper crash flushes it, harmlessly.
-    Sanctum.Authority.Budget.ensure_table()
+    Sanctum.Authority.BudgetCounter.ensure_table()
 
     # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
@@ -80,10 +83,12 @@ defmodule Cyfr.Application do
     infra_children = [
       # Arca storage layer
       Arca.Repo,
-      # The keyring this database was sealed with, against the one this boot
-      # resolved — before any worker can seal a row under a different key
-      # wearing the same label. Runs whether or not this boot migrated.
-      keyring_fingerprint_check(),
+      # The database is the one this release's schema built, its tenant
+      # roster covers the schema, and its keyring is the one this boot
+      # resolved — before any worker reads a row or seals one under a
+      # different key wearing the same label. Runs whether or not this boot
+      # migrated.
+      database_checks(),
       # Who owns this database's control plane — claimed right after the repo
       # is up, before anything that assumes it is the only one.
       control_plane_claim(),
@@ -122,14 +127,57 @@ defmodule Cyfr.Application do
       # Emissary web layer
       EmissaryWeb.Telemetry,
       {Phoenix.PubSub, name: Emissary.PubSub},
+      # Execution admission: the sliding-window counters consented rate
+      # limits are checked against, and the execution slots.
+      Cyfr.Execution.Rates,
+      {Cyfr.Execution.Semaphore,
+       max:
+         Application.get_env(
+           :cyfr,
+           :max_concurrent_executions,
+           Cyfr.Execution.Semaphore.default_slots()
+         ),
+       tenant_max:
+         Application.get_env(
+           :cyfr,
+           :max_concurrent_executions_per_tenant,
+           Cyfr.Execution.Semaphore.default_tenant_slots()
+         )},
+      # Execution bookkeeping, after PubSub (the buffers broadcast on it):
+      # the execution_id → driving-process registry, the per-execution
+      # event-buffer registry, the emit counter, the buffers, and the open
+      # attempts' registry and supervisor. The counter comes before the
+      # buffers, so a restart of this group rebuilds the numbering source
+      # first and then the buffers that read it; the attempts, which push
+      # onto the buffers, come last; a dead registry restarts what
+      # registers in it.
+      group(Cyfr.Execution.Tree, [
+        {Registry, keys: :unique, name: Cyfr.Execution.Registry},
+        {Registry, keys: :unique, name: Cyfr.Execution.Events.Registry},
+        Cyfr.Execution.Events.Sequence,
+        {DynamicSupervisor, name: Cyfr.Execution.Events.Supervisor, strategy: :one_for_one},
+        {Registry, keys: :unique, name: Cyfr.Execution.Attempt.Registry},
+        {DynamicSupervisor, name: Cyfr.Execution.Attempt.Supervisor, strategy: :one_for_one}
+      ]),
+      # Roots run in the background (`execution.run_stream`), after the
+      # registry each one registers in; shutdown waits up to 30 s for them.
+      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Execution.TaskSupervisor},
+        shutdown: 30_000
+      ),
+      # Periodic sweep that fails running executions whose lease lapsed;
+      # started only when `:execution_sweeper_enabled`.
+      Cyfr.Execution.Sweeper,
       # subscriptions/listen stream slots — duplicate keys, one entry per open
       # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
       # process, so a vanished client frees its slot without bookkeeping.
       {Registry, keys: :duplicate, name: Emissary.MCP.SubscriptionRegistry},
-      # Use :rest_for_one for the external-server registry, servers and
-      # reconciler. Registry failure restarts its dependents.
+      # Use :rest_for_one for the external-server registry, the MCP bridge
+      # controller, servers and reconciler. A failure restarts its
+      # dependents. The controller starts before the servers and stops after
+      # them, because a stopping stdio server releases its owner through it.
       group(Emissary.MCP.ExternalServerTree, [
         {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
+        Emissary.MCP.Bridge,
         {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
         Emissary.MCP.ExternalServerReconciler
       ]),
@@ -163,15 +211,17 @@ defmodule Cyfr.Application do
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
       {Task.Supervisor, name: Aqua.TaskSupervisor},
-      # Conversation runners: one process per conversation with open
+      # Thread runners: one process per thread with open
       # turns, started on demand; the recovery task starts one for every
-      # conversation holding an open turn when the server last stopped.
-      # Registry and the supervisor whose children register in it restart
-      # together.
+      # thread holding an open turn when the server last stopped. The
+      # registry names each runner by its thread and each loop by the root
+      # turn it holds (`Aqua.Loop.holder/1`). Registry and the supervisor
+      # whose children register in it restart together; a runner's loop
+      # dies with the runner.
       group(Aqua.RunnerTree, [
         {Registry, keys: :unique, name: Aqua.RunnerRegistry},
         {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one},
-        maybe_conversation_recovery()
+        maybe_thread_recovery()
       ]),
       # Last, and synchronous: reconciles the platform-admin roster against
       # the env and offers new seed media to the estates that exist (the
@@ -205,8 +255,8 @@ defmodule Cyfr.Application do
   end
 
   # Off in the test env: suites drive runners directly.
-  defp maybe_conversation_recovery do
-    if Application.get_env(:cyfr, :conversation_recovery, true) do
+  defp maybe_thread_recovery do
+    if Application.get_env(:cyfr, :thread_recovery, true) do
       [
         Supervisor.child_spec(
           {Task, &Aqua.Runner.recover_all/0},
@@ -273,7 +323,8 @@ defmodule Cyfr.Application do
 
   # Run migrations before the connection pool starts to avoid concurrent
   # DDL and database-lock errors. CYFR_AUTO_MIGRATE=false leaves migration
-  # to the operator via Cyfr.Release.migrate/0.
+  # to the operator via Cyfr.Release.migrate/0; either way the boot's
+  # database checks run once the pool is up.
   defp maybe_migrate_before_pool do
     if Application.get_env(:cyfr, :auto_migrate, true) do
       config = Application.get_env(:cyfr, Arca.Repo, [])
@@ -282,20 +333,17 @@ defmodule Cyfr.Application do
       {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 1))
       Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
       configure_database()
-      # Verify the tenant-table roster against the migrated schema.
-      # Refuse boot if an athanor-scoped table would escape tenant deletion.
-      Arca.TenantTables.verify_roster!()
       # Stop the temporary repo so the supervisor can start the real one
       Supervisor.stop(repo_pid)
     end
   end
 
-  # A one-shot check that reads the repo at boot, outside any test's
-  # sandbox; the suite turns it off and exercises `Cyfr.KeyringFingerprint`
-  # directly.
-  defp keyring_fingerprint_check do
-    if Application.get_env(:cyfr, :keyring_fingerprint_check_enabled, true),
-      do: [Cyfr.KeyringFingerprint.Check],
+  # One-shot checks that read the repo at boot, outside any test's
+  # sandbox; the suite turns them off and exercises `Arca.SchemaFingerprint`
+  # and `Cyfr.KeyringFingerprint` directly.
+  defp database_checks do
+    if Application.get_env(:cyfr, :database_checks_enabled, true),
+      do: [Arca.SchemaFingerprint.Check, Cyfr.KeyringFingerprint.Check],
       else: []
   end
 

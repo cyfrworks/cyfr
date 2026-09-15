@@ -22,7 +22,7 @@ defmodule PrismWeb.FilesLiveTest do
   test "the root lists the folders in their tiers and nothing of the server's", %{conn: conn} do
     {_view, html} = mount_athanor(conn, "/files")
 
-    for folder <- ~w(data aqua components conversations notes) do
+    for folder <- ~w(data aqua components threads notes) do
       assert html =~ "#{folder}/"
     end
 

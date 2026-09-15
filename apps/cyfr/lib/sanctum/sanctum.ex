@@ -96,7 +96,7 @@ defmodule Sanctum do
   """
   @spec build_tincture_context(Context.t(), map()) :: Context.t()
   def build_tincture_context(%Context{} = caller_ctx, tincture) do
-    tincture_id = Sanctum.ComponentRef.build("tincture", tincture.publisher, tincture.name)
+    tincture_id = Cyfr.ComponentRef.build("tincture", tincture.publisher, tincture.name)
 
     # Key on `authenticated` (the real signal), NOT on namespace presence — an
     # authenticated user may legitimately have a nil namespace (identity-only,

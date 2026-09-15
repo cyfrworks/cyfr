@@ -24,8 +24,8 @@ defmodule Aqua.Loop.Clone do
   alias Aqua.Tape
   alias Arca.Schemas.Message
   alias Compendium.AgentSource
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
 
   @type refusal ::
           {:no_role_edge, String.t()}
@@ -58,7 +58,7 @@ defmodule Aqua.Loop.Clone do
       state = %Aqua.Loop.State{
         spec: spec,
         claim: nil,
-        turn: clone,
+        turn: spec.turn,
         parent: parent,
         clone?: true,
         since: parent.since,
@@ -149,8 +149,8 @@ defmodule Aqua.Loop.Clone do
   defp roster(%Turn{roster: roster}), do: MapSet.new(roster, & &1["name"])
 
   # A revocation mid-turn lets the in-flight call finish and refuses the
-  # next transition; a clone is one. The pinned profile is loaded again
-  # through the port: its head must still be the pinned consent.
+  # next transition; a clone is one. The pinned profile is loaded again:
+  # its head must still be the pinned consent.
   defp intact(ctx, %Authority{profile_id: profile_id, consent_id: consent_id, source_ref: ref}) do
     case Cyfr.Execution.authority_for(ctx, {:id, profile_id}, ref) do
       {:ok, %Authority{consent_id: ^consent_id}} -> :ok
@@ -158,18 +158,20 @@ defmodule Aqua.Loop.Clone do
     end
   end
 
-  # The spec is built from the pinned row; a row that cannot carry a spec
-  # is closed before the refusal is answered.
+  # The spec is built from the pinned row and the release it resolves is
+  # pinned on the clone's row; a row that cannot carry a spec is closed
+  # before the refusal is answered.
   defp build(guest, ctx, clone, child, parent) do
-    case Turn.build(ctx, clone,
-           authority: child,
-           catalyst: parent.spec.catalyst,
-           model: parent.spec.model,
-           excerpt?: false
-         ) do
-      {:ok, spec} ->
-        {:ok, spec}
-
+    with {:ok, spec} <-
+           Turn.build(ctx, clone,
+             authority: child,
+             catalyst: parent.spec.catalyst,
+             model: parent.spec.model,
+             excerpt?: false
+           ),
+         {:ok, pinned} <- Tape.pin_catalyst(guest, clone, spec.catalyst) do
+      {:ok, Turn.with_turn(spec, pinned)}
+    else
       {:error, reason} ->
         _ = Tape.close_clone_turn(guest, clone, "failed", %{error: describe(reason)})
         {:error, reason}

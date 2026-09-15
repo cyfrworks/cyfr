@@ -1,6 +1,7 @@
-# Findings the bridge image cannot take a fix for, with what would lift each.
-# Read by the image scan in .github/workflows/node-ci.yml. Every other
-# fixable HIGH or CRITICAL still fails that job.
+# Findings the bridge and builder images cannot take a fix for, with what
+# would lift each. Read by the image scans in .github/workflows/node-ci.yml
+# (bridge), test.yml and docker.yml (builder). Every other fixable HIGH or
+# CRITICAL still fails those jobs.
 #
 # Each entry is scoped to the path where the finding was observed, so the
 # same identifier appearing anywhere else — above all in the bridge's own
@@ -11,13 +12,15 @@
 # npm release ships any of these fixes: 12.0.2 is the newest and was
 # measured carrying all of them. Patching a dependency inside npm's own tree
 # is not something an image should do to itself, and npm cannot be removed —
-# the bridge launches its backends through `npx`, so npm is runtime code
-# here rather than build tooling.
+# the bridge launches its backends through `npx` and the builder installs a
+# tincture's dependencies with `npm install`, so npm is runtime code in both
+# rather than build tooling.
 #
-# What reaches them is a package an operator names through `add_backend`,
-# and running that package is arbitrary execution by design; the bridge
-# exists to do it. A denial of service, or a parser disagreeing about an
-# address, sits below what that caller already commands.
+# What reaches them is a package a stdio server's backend command names, or
+# a tincture's own package.json, and running that package's code is
+# arbitrary execution by design, under a pooled uid of its own. A denial of
+# service, or a parser disagreeing about an address, sits below what that
+# caller already commands.
 
 vulnerabilities:
   # brace-expansion 5.0.7. Lift when an npm release bundles 5.0.9 or later.

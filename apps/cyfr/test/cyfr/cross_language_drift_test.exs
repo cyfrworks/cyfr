@@ -19,8 +19,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
   defp read!(rel), do: File.read!(Path.join(@root, rel))
 
-  test "the Go ref grammar matches Sanctum.ComponentRef" do
-    elixir = read!("apps/cyfr/lib/sanctum/component_ref.ex")
+  test "the Go ref grammar matches Cyfr.ComponentRef" do
+    elixir = read!("apps/cyfr_contracts/lib/cyfr/component_ref.ex")
     go = read!("apps/codex/internal/ref/ref.go")
 
     # Grammar bodies match across languages. Whole-input anchors are
@@ -40,7 +40,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
 
     # And the Elixir side anchors them the strict way, everywhere — the
-    # property the bodies above cannot show. `Sanctum.ComponentRefTest`
+    # property the bodies above cannot show. `Cyfr.ComponentRefTest`
     # covers the behaviour ("alice\n" is refused); this is the spelling.
     refute elixir =~ ~r/~r\/\^/,
            "component_ref.ex anchors a grammar with `^`; PCRE's `$` also " <>
@@ -67,11 +67,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
       # validate/1 is the strict verdict (parse is shape-only); parse/1
       # supplies the fields the fixture pins on valid cases.
-      case Sanctum.ComponentRef.validate(ref) do
+      case Cyfr.ComponentRef.validate(ref) do
         :ok ->
           assert case_["valid"], "#{ref} validated but the fixture says invalid"
 
-          {:ok, parsed} = Sanctum.ComponentRef.parse(ref)
+          {:ok, parsed} = Cyfr.ComponentRef.parse(ref)
           assert parsed.type == case_["type"], "#{ref}: type #{parsed.type}"
           assert parsed.namespace == case_["namespace"], "#{ref}: ns #{parsed.namespace}"
           assert parsed.name == case_["name"], "#{ref}: name #{parsed.name}"
@@ -103,8 +103,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
   end
 
-  test "the Go ref constants match Sanctum.ComponentRef's" do
-    elixir = read!("apps/cyfr/lib/sanctum/component_ref.ex")
+  test "the Go ref constants match Cyfr.ComponentRef's" do
+    elixir = read!("apps/cyfr_contracts/lib/cyfr/component_ref.ex")
     go = read!("apps/codex/internal/ref/ref.go")
 
     # The length caps and rosters the regex test cannot see. Elixir spells
@@ -118,7 +118,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
     # Derived, not spelled: a literal roster here goes green for a fifth
     # component kind while checking nothing about it.
-    for type <- Sanctum.ComponentRef.valid_types() do
+    for type <- Cyfr.ComponentRef.valid_types() do
       assert elixir =~ ~s("#{type}"), "type #{type} missing from Elixir roster"
       assert go =~ ~s("#{type}":), "type #{type} missing from Go roster"
     end
@@ -147,7 +147,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # silently stops being explained (Go) or stops crossing the boundary —
     # this pins every roster.
     consent = read!("apps/cyfr/lib/sanctum/consent.ex")
-    opus_mcp = read!("apps/opus/lib/opus/mcp.ex")
+    execution_mcp = read!("apps/cyfr/lib/cyfr/execution/mcp.ex")
     signal = read!("apps/cyfr/lib/emissary/mcp/consent_signal.ex")
     message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
     root_go = read!("apps/codex/cmd/root.go")
@@ -183,10 +183,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert signal =~ ~s("tag") and signal =~ ~s("payload")
     assert client_go =~ ~s(data["tag"]) and client_go =~ ~s(data["payload"])
 
-    # Opus.MCP spells the roster once, as the guard on format_root_result/1.
-    assert opus_mcp =~
+    # Cyfr.Execution.MCP spells the roster once, as the guard on format_root_result/1.
+    assert execution_mcp =~
              "tag in [:setup_required, :consent_required, :consent_conflict, :restart_required]",
-           "opus/mcp.ex guard roster must include the four consent signal tags"
+           "execution/mcp.ex guard roster must include the four consent signal tags"
 
     # The payload keys Consent documents as normative are the ones the CLI
     # formatter reads — a renamed key degrades every explanation to the

@@ -24,27 +24,22 @@ end
 
 defmodule Sanctum.Test.AltAuthProvider do
   @moduledoc """
-  Alternate auth provider test double used by tests that need a
-  non-default `Sanctum.Auth` implementation (e.g. to verify behaviour
-  when `:auth_provider` is set to a module other than the built-in
-  `Sanctum.Auth.OAuth`). Delegates the Ueberauth→Context mapping to
-  `Sanctum.Auth.OAuth` so controller/plug behaviour is exercised
-  faithfully.
+  Alternate auth provider test double for tests that need a browser-callback
+  `Sanctum.Auth` implementation without an issuer to configure: it names the
+  person from the Ueberauth struct under a fixed test issuer and does not
+  pre-set `authenticated:` — the controller creates the session.
   """
   @behaviour Sanctum.Auth
 
   alias Sanctum.Context
 
-  # Build an identity Context straight from the Ueberauth struct (no
-  # built-in provider-env gate, does not pre-set `authenticated:` — the
-  # controller creates the session). Other shapes fall back to the
-  # built-in provider.
+  @issuer "https://idp.test"
+
   @impl true
   def authenticate(%{__struct__: Ueberauth.Auth} = auth) do
     provider = auth.provider
     email = auth.info && Map.get(auth.info, :email)
-    iss = Sanctum.Auth.Identity.issuer(provider)
-    user_id = Sanctum.Auth.Identity.key(provider, iss, to_string(auth.uid))
+    user_id = Sanctum.Auth.Identity.key(provider, @issuer, to_string(auth.uid))
 
     ctx =
       Context.build(
@@ -58,8 +53,8 @@ defmodule Sanctum.Test.AltAuthProvider do
     {:ok, ctx}
   end
 
-  def authenticate(params), do: Sanctum.Auth.OAuth.authenticate(params)
+  def authenticate(_params), do: {:error, :invalid_params}
 
   @impl true
-  defdelegate current_user(conn), to: Sanctum.Auth.OAuth
+  def current_user(_conn), do: nil
 end

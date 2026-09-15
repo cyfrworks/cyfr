@@ -50,7 +50,9 @@ defmodule Aqua.Loop.Policy do
   """
   @spec replay_safe?(Call.t()) :: boolean()
   def replay_safe?(%Call{kind: :hand, tool: tool, action: action}),
-    do: get_in(Aqua.Hands.catalog(), [tool, :actions, action, :recovery]) == :replay_safe
+    do:
+      Cyfr.Ops.Annotations.recovery_of(get_in(Aqua.Hands.catalog(), [tool, :actions, action])) ==
+        :replay_safe
 
   def replay_safe?(%Call{kind: :catalog, tool: tool, action: action}),
     do: Aqua.Ops.replay_safe?(tool, action)
@@ -129,7 +131,7 @@ defmodule Aqua.Loop.Policy do
     consented? = Keyword.get(opts, :consented?, fn _ -> false end)
     touched = Keyword.get(opts, :touched, MapSet.new())
 
-    case Sanctum.ComponentRef.parse(reference) do
+    case Cyfr.ComponentRef.parse(reference) do
       {:ok, _} ->
         cond do
           MapSet.member?(touched, name_level(reference)) -> :card
@@ -179,7 +181,7 @@ defmodule Aqua.Loop.Policy do
   """
   @spec card(Call.t(), keyword()) :: map()
   def card(%Call{} = call, opts \\ []) do
-    proposal = %{"tool" => call.tool, "action" => call.action, "args" => call.args}
+    proposal = proposal(call)
 
     %{
       "kind" => "request_approval",
@@ -196,12 +198,17 @@ defmodule Aqua.Loop.Policy do
     }
   end
 
+  @doc "The canonical proposal a card shows for `call`, and its digest hashes."
+  @spec proposal(Call.t()) :: map()
+  def proposal(%Call{} = call),
+    do: %{"tool" => call.tool, "action" => call.action, "args" => call.args}
+
   @doc "The digest a card is consumed by: the canonical proposal, hashed."
   @spec proposal_digest(map()) :: String.t()
   def proposal_digest(%{"proposal" => proposal}), do: proposal_digest(proposal)
 
   def proposal_digest(proposal) when is_map(proposal) do
-    {:ok, digest} = Sanctum.JCS.hash(proposal)
+    {:ok, digest} = Cyfr.JCS.hash(proposal)
     digest
   end
 

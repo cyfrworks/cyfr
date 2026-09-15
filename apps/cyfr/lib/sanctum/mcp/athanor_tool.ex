@@ -484,7 +484,7 @@ defmodule Sanctum.MCP.AthanorTool do
         end,
       settings: Athanors.settings(athanor),
       provisioned: not is_nil(athanor.provisioned_at),
-      provisioning_error: Athanors.settings(athanor)["provisioning_error"],
+      provisioning_failure: Athanors.provisioning_failure(athanor),
       created_at: athanor.created_at
     }
   end

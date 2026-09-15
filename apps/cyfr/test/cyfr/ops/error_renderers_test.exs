@@ -66,7 +66,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
       assert Opus.FormulaHandler.render_reason({:not_found, "component", "x"}) ==
                Error.message({:not_found, "component", "x"})
 
-      unauthorized = {:missing_permission, :vault_write}
+      unauthorized = {:missing_permission, :vault_read}
 
       if Sanctum.Unauthorized.reason?(unauthorized) do
         assert Opus.FormulaHandler.render_reason(unauthorized) ==

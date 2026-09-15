@@ -14,7 +14,7 @@ defmodule Sanctum.ProvisioningClosureTest do
   """
   use ExUnit.Case, async: false
 
-  alias Sanctum.Consent.{Loader, Source}
+  alias Sanctum.Consent.Source
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
@@ -78,7 +78,7 @@ defmodule Sanctum.ProvisioningClosureTest do
       assert %DateTime{} = group.provisioned_at,
              "the estate did not provision: #{inspect(Athanors.settings(group))}"
 
-      refute Map.has_key?(Athanors.settings(group), "provisioning_error")
+      refute Athanors.provisioning_failure(group)
 
       # Every model catalyst is a row of the estate: shipped, never pulled.
       for name <- @providers do
@@ -90,7 +90,7 @@ defmodule Sanctum.ProvisioningClosureTest do
       # The soul is consented and loads: its whole closure is the local seed.
       assert {:ok, [_profile]} = Source.DB.profiles(in_group, "agent:local.aqua")
 
-      assert {:ok, %Sanctum.Authority{} = auth} =
+      assert {:ok, %Cyfr.Authority{} = auth} =
                Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua",
                  consent_source: Source.DB
                )
@@ -107,7 +107,7 @@ defmodule Sanctum.ProvisioningClosureTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Path.wildcard(match_dot: false)
+    |> Cyfr.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       rel = Path.relative_to(src, @bundle)

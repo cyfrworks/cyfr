@@ -25,10 +25,10 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
   describe "mcp_servers management requires :admin" do
     # Denials are asserted through the dispatcher — the permission gate lives
     # in the action annotations, enforced by the catalog, not in the handler.
-    test "mutating actions are denied for an execute-only context" do
+    test "mutating actions, and reading a server's config, are denied for an execute-only context" do
       ctx = execute_only_ctx()
 
-      for action <- ~w(create delete enable disable test refresh) do
+      for action <- ~w(create delete enable disable test refresh get) do
         assert {:error, reason} =
                  Cyfr.Ops.Catalog.call_external("mcp_servers", ctx, %{
                    "action" => action,
@@ -40,7 +40,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       end
     end
 
-    test "reads stay open to authenticated callers" do
+    test "the listing stays open to authenticated callers" do
       ctx = execute_only_ctx()
 
       assert {:ok, %{servers: _}} =
@@ -125,24 +125,17 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                  })
                )
 
-      # Reject secret: references with an error directing callers to vault:.
-      assert {:error, msg} =
-               Emissary.MCP.McpServersTool.handle(
-                 "mcp_servers",
-                 ctx,
-                 create_args(%{"Authorization" => "secret:MY_TOKEN"})
-               )
+      for unresolved <- ["secret:my-token", "Token secret:my-token", "Bearer vault:"] do
+        assert {:error, message} =
+                 Emissary.MCP.McpServersTool.handle(
+                   "mcp_servers",
+                   ctx,
+                   create_args(%{"X-Client-Version" => unresolved})
+                 )
 
-      assert msg =~ "vault:"
-
-      # Even in a header whose NAME is not credential-shaped — otherwise the
-      # row persists and only fails at server boot.
-      assert {:error, _} =
-               Emissary.MCP.McpServersTool.handle(
-                 "mcp_servers",
-                 ctx,
-                 create_args(%{"X-Thing" => "secret:MY_TOKEN"})
-               )
+        assert message =~ "does not resolve"
+        assert message =~ "vault:ENTRY"
+      end
     end
   end
 

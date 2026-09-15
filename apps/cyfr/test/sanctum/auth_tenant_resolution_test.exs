@@ -45,7 +45,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
     test "resolves a freshly-built (athanor-less) context via the resolver" do
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
 
-      # Same shape as the contexts produced by OAuth.authenticate/1 and
+      # Same shape as the contexts produced by OIDC.authenticate/1 and
       # DeviceFlow's create_session/2 — Context.build/1 leaves athanor_id nil.
       ctx = oauth_shaped_context()
       assert ctx.athanor_id == nil, "Context.build/1 should leave athanor_id unresolved"
@@ -72,19 +72,21 @@ defmodule Sanctum.AuthTenantResolutionTest do
       assert result.athanor_id == nil
     end
 
-    test "OAuth.authenticate/1 names the identity and nothing more: the athanor comes after the door" do
+    test "OIDC.authenticate/1 names the identity and nothing more: the athanor comes after the door" do
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
-      configure_github_test_credentials!()
+      Application.put_env(:cyfr, :oidc_issuer, "https://auth.example.com")
+      on_exit(fn -> Application.delete_env(:cyfr, :oidc_issuer) end)
 
-      auth_params = %{
-        provider: :github,
+      auth = %{
+        __struct__: Ueberauth.Auth,
+        provider: :oidcc,
         uid: "12345",
         info: %{email: "verified@example.com"},
-        extra: %{raw_info: %{user: %{"email_verified" => true}}}
+        extra: %{raw_info: %{userinfo: %{"email_verified" => true}}}
       }
 
-      assert {:ok, %Context{} = ctx} = Sanctum.Auth.OAuth.authenticate(auth_params)
-      assert ctx.user_id == Sanctum.Auth.Identity.builtin_key(:github, "12345")
+      assert {:ok, %Context{} = ctx} = Sanctum.Auth.OIDC.authenticate(auth)
+      assert ctx.user_id == "oidcc|https://auth.example.com|12345"
       assert ctx.athanor_id == nil
     end
   end
@@ -135,28 +137,10 @@ defmodule Sanctum.AuthTenantResolutionTest do
       email: "tester@example.com",
       provider: "github",
       namespace: "testns",
-      # Athanor-less, like the real OAuth/OIDC providers — resolved via memberships.
+      # Athanor-less, as device flow and the OIDC provider build it — resolved via memberships.
       athanor_id: nil,
       permissions: [:*]
     )
-  end
-
-  # OAuth.authenticate/1 short-circuits if neither GitHub nor Google is
-  # configured. Inject test credentials so the provider-check passes.
-  defp configure_github_test_credentials! do
-    original =
-      Application.get_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
-
-    Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth,
-      client_id: "test_client_id",
-      client_secret: "test_client_secret"
-    )
-
-    on_exit(fn ->
-      if original,
-        do: Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth, original),
-        else: Application.delete_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
-    end)
   end
 
   defp rows!({:ok, rows}), do: rows

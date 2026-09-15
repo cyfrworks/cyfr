@@ -7,17 +7,22 @@ defmodule Locus.BuilderService do
   `Locus.Builder.compile/3` and returns the artifact.
 
   Served only when `:cyfr, :builder_listen` is true — the `builder`
-  release sets `CYFR_BUILDER_LISTEN=true`; the app image never listens.
+  release sets `CYFR_BUILDER_LISTEN=true`; the app image never listens —
+  and only on a node cyfr-spawn started, so every build it serves runs
+  under a pooled uid of its own (`Locus.Spawner`, `Locus.Application`).
   The client half is `Locus.BuilderClient`, selected by
   `CYFR_BUILDER_URL` on the server node.
 
-  The contract is deliberately small: `POST /build` carries the source
-  map (base64 values), the language and the target type; the response
-  carries the compiled bytes (or a tincture's output files), the digest,
-  and the build log lines. Progress cannot stream over one POST — the
-  client replays the returned log lines to its own progress sink at
-  completion. Auth is one static bearer (`CYFR_BUILDER_TOKEN`), compared
-  constant-time; the compose network is internal-only on top.
+  The contract is deliberately small (`Locus.BuilderProtocol`): `POST
+  /build` carries the source map (base64 values), the language and the
+  target type; the response carries the compiled bytes (or a tincture's
+  output files), the digest, and the build log lines. Progress cannot
+  stream over one POST — the client replays the returned log lines to its
+  own progress sink at completion. Auth is one static bearer
+  (`CYFR_BUILDER_TOKEN`), compared constant-time; the compose network is
+  internal-only on top. A request at another protocol is refused with 409
+  before its body is read, and every answer names this builder's protocol
+  and release.
   """
 
   use Plug.Router
@@ -33,6 +38,7 @@ defmodule Locus.BuilderService do
   # until this ran first the concurrency cap bounded toolchain processes but
   # not memory, on a port that binds 0.0.0.0.
   plug(:authenticate)
+  plug(:handshake)
   plug(Plug.Parsers, parsers: [:json], json_decoder: Jason, length: @max_body_bytes)
   plug(:dispatch)
 
@@ -56,15 +62,31 @@ defmodule Locus.BuilderService do
     end
   end
 
+  defp handshake(%Plug.Conn{request_path: "/build"} = conn, _opts) do
+    protocol = List.first(get_req_header(conn, Locus.BuilderProtocol.protocol_header()))
+
+    if protocol == Integer.to_string(Locus.BuilderProtocol.version()) do
+      conn
+    else
+      release = List.first(get_req_header(conn, Locus.BuilderProtocol.release_header()))
+
+      conn
+      |> send_json(409, %{ok: false, error: Locus.BuilderProtocol.refusal(protocol, release)})
+      |> halt()
+    end
+  end
+
+  defp handshake(conn, _opts), do: conn
+
   post "/build" do
-    with {:ok, source_files, language, target_type} <- decode_request(conn.body_params),
+    with {:ok, source_files, language, target_type, resolve?} <- decode_request(conn.body_params),
          # The cap is enforced on THIS side of the wire too: the client-side
          # limiter governs one app node, but two app nodes (or anything else
          # holding the token) could otherwise run unbounded concurrent
          # cargo builds in the one container sized for a couple.
          :ok <- acquire_slot() do
       try do
-        run_build(conn, source_files, language, target_type)
+        run_build(conn, source_files, language, target_type, resolve?)
       after
         Locus.BuildLimiter.release()
       end
@@ -101,25 +123,41 @@ defmodule Locus.BuilderService do
     end
   end
 
-  defp decode_request(%{
-         "source_files" => sources,
-         "language" => language,
-         "target_type" => target_type
-       })
+  defp decode_request(
+         %{
+           "source_files" => sources,
+           "language" => language,
+           "target_type" => target_type
+         } = request
+       )
        when is_map(sources) and is_binary(language) and is_binary(target_type) do
-    with {:ok, language} <-
+    with {:ok, resolve?} <- resolve_flag(request),
+         {:ok, language} <-
            known(language, Enum.map(Locus.Builder.languages(), &Atom.to_string/1), "language"),
          # The roster, not a copy of it: `Compendium.Scaffold.validate_type/1`
          # reads the same source, and a hand-written list here would silently
          # refuse a fifth component kind the rest of the system had accepted.
          {:ok, target_type} <-
-           known(target_type, Sanctum.ComponentRef.valid_types(), "target_type"),
+           known(target_type, Cyfr.ComponentRef.valid_types(), "target_type"),
+         language = String.to_existing_atom(language),
+         target_type = String.to_existing_atom(target_type),
+         :ok <- paired(language, target_type),
          {:ok, decoded} <- decode_sources(sources) do
-      {:ok, decoded, String.to_existing_atom(language), String.to_existing_atom(target_type)}
+      {:ok, decoded, language, target_type, resolve?}
     end
   end
 
   defp decode_request(_), do: {:error, "source_files, language and target_type are required"}
+
+  defp resolve_flag(%{"resolve" => resolve}) when is_boolean(resolve), do: {:ok, resolve}
+  defp resolve_flag(%{"resolve" => _}), do: {:error, "resolve must be a boolean"}
+  defp resolve_flag(_request), do: {:ok, false}
+
+  defp paired(language, target_type) do
+    if Locus.Builder.language_for(target_type) == language,
+      do: :ok,
+      else: {:error, "a #{target_type} is not built from #{language}"}
+  end
 
   defp known(value, roster, field) do
     if value in roster, do: {:ok, value}, else: {:error, "unknown #{field}: #{value}"}
@@ -157,13 +195,13 @@ defmodule Locus.BuilderService do
     Locus.BuildLimiter.acquire(Locus.BuildLimiter, nil)
   end
 
-  defp run_build(conn, source_files, language, target_type) do
+  defp run_build(conn, source_files, language, target_type, resolve?) do
     log = :ets.new(:build_log, [:public])
-    # [line_seq, bytes_retained] — the byte budget mirrors Locus.Builder's
-    # own retained-output cap, so a chatty build cannot grow this table
+    # [line_seq, bytes_retained] — the byte budget mirrors the executor's
+    # own retained-log cap, so a chatty build cannot grow this table
     # without bound while its lines wait to be replayed.
     counter = :counters.new(2, [])
-    max_log_bytes = Locus.Builder.max_port_output_bytes()
+    max_log_bytes = Locus.Executor.max_log_bytes()
 
     on_progress = fn stage, message ->
       line = "#{stage}: #{message}"
@@ -180,7 +218,8 @@ defmodule Locus.BuilderService do
     result =
       Locus.Builder.compile(source_files, language,
         target_type: target_type,
-        on_progress: on_progress
+        on_progress: on_progress,
+        resolve: resolve?
       )
 
     logs =
@@ -201,6 +240,7 @@ defmodule Locus.BuilderService do
           exports: built.exports,
           language: built.language,
           target_type: built.target_type,
+          lockfile: built.lockfile,
           logs: logs
         })
 
@@ -216,6 +256,9 @@ defmodule Locus.BuilderService do
           logs: logs
         })
 
+      {:error, :builder_at_capacity} ->
+        send_json(conn, 429, %{ok: false, error: render_reason(:builder_at_capacity), logs: logs})
+
       {:error, reason} ->
         send_json(conn, 422, %{ok: false, error: render_reason(reason), logs: logs})
     end
@@ -226,12 +269,21 @@ defmodule Locus.BuilderService do
 
   defp render_reason(:compilation_timeout), do: "Compilation timed out"
 
+  defp render_reason(:builder_at_capacity),
+    do: "builder at capacity (no build uid is free)"
+
   defp render_reason({:toolchain_not_found, lang}),
     do: "Toolchain not found in the builder image: #{lang}"
 
   defp render_reason(reason), do: "Compilation error: #{inspect(reason)}"
 
   defp send_json(conn, status, payload) do
+    payload =
+      Map.merge(payload, %{
+        protocol: Locus.BuilderProtocol.version(),
+        version: Locus.BuilderProtocol.release()
+      })
+
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(payload))

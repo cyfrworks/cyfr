@@ -45,11 +45,9 @@ defmodule Compendium.AquaPathTest do
     assert AquaPath.locate(AquaPath.skills_root()) == :above_unit
   end
 
-  test "an older tree's agents/ files are units for deletion only" do
-    # `reset all` can drop a stale shadow left under the old directory;
-    # nothing else reads there.
-    assert AquaPath.locate(["aqua", "agents", "old.md"]) == {:file, ["aqua", "agents", "old.md"]}
-    assert AquaPath.locate(["aqua", "agents"]) == :above_unit
+  test "a file outside the soul, the roles and the scrolls is plain storage" do
+    assert AquaPath.locate(["aqua", "drafts", "old.md"]) == :above_unit
+    assert AquaPath.locate(["aqua", "drafts"]) == :above_unit
   end
 
   test "only the grammar mints a unit — junk names and non-.md files stay plain storage" do

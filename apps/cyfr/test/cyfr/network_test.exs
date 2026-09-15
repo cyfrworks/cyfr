@@ -42,29 +42,31 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "127.0.0.1"
     end
 
-    test "blocks link-local 169.254.169.254 (cloud metadata)" do
+    test "blocks the cloud metadata address 169.254.169.254" do
       assert {:error, msg} =
                Network.validate_redirect_url("http://169.254.169.254/latest/meta-data/")
 
-      assert msg =~ "link-local IP"
+      assert msg =~ "metadata IP"
       assert msg =~ "169.254.169.254"
     end
 
-    test "169.254.x.x always blocked even with allow_private: true" do
+    test "169.254.x.x always blocked even with private_policy: :allow_all" do
       assert {:error, msg} =
                Network.validate_redirect_url("http://169.254.169.254/latest/meta-data/",
-                 allow_private: true
+                 private_policy: :allow_all
                )
 
-      assert msg =~ "link-local IP"
+      assert msg =~ "metadata IP"
     end
 
-    test "allow_private: true permits 127.0.0.1" do
-      assert :ok = Network.validate_redirect_url("http://127.0.0.1/v2/", allow_private: true)
+    test "private_policy: :allow_all permits 127.0.0.1" do
+      assert :ok =
+               Network.validate_redirect_url("http://127.0.0.1/v2/", private_policy: :allow_all)
     end
 
-    test "allow_private: true permits localhost" do
-      assert :ok = Network.validate_redirect_url("http://localhost/v2/", allow_private: true)
+    test "private_policy: :allow_all permits localhost" do
+      assert :ok =
+               Network.validate_redirect_url("http://localhost/v2/", private_policy: :allow_all)
     end
 
     test "DNS failure returns error" do
@@ -77,102 +79,13 @@ defmodule Cyfr.NetworkTest do
     end
   end
 
-  describe "private_ip?/1" do
-    test "IPv4 private ranges" do
-      assert Network.private_ip?({127, 0, 0, 1})
-      assert Network.private_ip?({10, 0, 0, 1})
-      assert Network.private_ip?({10, 255, 255, 255})
-      assert Network.private_ip?({172, 16, 0, 1})
-      assert Network.private_ip?({172, 31, 255, 255})
-      assert Network.private_ip?({192, 168, 0, 1})
-      assert Network.private_ip?({192, 168, 255, 255})
-      assert Network.private_ip?({169, 254, 169, 254})
-      assert Network.private_ip?({0, 0, 0, 0})
-    end
-
-    test "IPv4 public ranges" do
-      refute Network.private_ip?({8, 8, 8, 8})
-      refute Network.private_ip?({1, 1, 1, 1})
-      refute Network.private_ip?({142, 250, 80, 46})
-      refute Network.private_ip?({172, 32, 0, 1})
-    end
-
-    test "IPv6 loopback" do
-      assert Network.private_ip?({0, 0, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "IPv6 unspecified" do
-      assert Network.private_ip?({0, 0, 0, 0, 0, 0, 0, 0})
-    end
-
-    test "IPv6 unique local (fc00::/7)" do
-      assert Network.private_ip?({0xFC00, 0, 0, 0, 0, 0, 0, 1})
-      assert Network.private_ip?({0xFD00, 0, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "IPv6 link-local (fe80::/10)" do
-      assert Network.private_ip?({0xFE80, 0, 0, 0, 0, 0, 0, 1})
-      assert Network.private_ip?({0xFEBF, 0, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "IPv4-mapped IPv6 private" do
-      # ::ffff:10.0.0.1
-      assert Network.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001})
-      # ::ffff:169.254.169.254
-      assert Network.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0xA9FE})
-    end
-
-    test "IPv4 CGNAT (100.64.0.0/10, RFC 6598)" do
-      assert Network.private_ip?({100, 64, 0, 1})
-      assert Network.private_ip?({100, 127, 255, 255})
-      refute Network.private_ip?({100, 63, 255, 255})
-      refute Network.private_ip?({100, 128, 0, 0})
-    end
-
-    test "IPv4 reserved blocks" do
-      # 192.0.0.0/24 IETF protocol assignments
-      assert Network.private_ip?({192, 0, 0, 170})
-      refute Network.private_ip?({192, 0, 1, 1})
-      # 198.18.0.0/15 benchmarking
-      assert Network.private_ip?({198, 18, 0, 1})
-      assert Network.private_ip?({198, 19, 255, 255})
-      refute Network.private_ip?({198, 20, 0, 1})
-      # multicast + reserved + broadcast
-      assert Network.private_ip?({224, 0, 0, 251})
-      assert Network.private_ip?({239, 255, 255, 255})
-      assert Network.private_ip?({240, 0, 0, 1})
-      assert Network.private_ip?({255, 255, 255, 255})
-      refute Network.private_ip?({223, 255, 255, 255})
-    end
-
-    test "NAT64 well-known prefix embeds the IPv4 verdict (64:ff9b::/96)" do
-      # 64:ff9b::a9fe:a9fe ≡ 169.254.169.254 behind a NAT64 gateway
-      assert Network.private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, 0xA9FE, 0xA9FE})
-      # 64:ff9b::a00:1 ≡ 10.0.0.1
-      assert Network.private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 0x0001})
-      # 64:ff9b::808:808 ≡ 8.8.8.8 — public stays public
-      refute Network.private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, 0x0808, 0x0808})
-    end
-
-    test "6to4 embeds the IPv4 verdict (2002::/16)" do
-      # 2002:a9fe:a9fe:: ≡ 169.254.169.254
-      assert Network.private_ip?({0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 1})
-      # 2002:808:808:: ≡ 8.8.8.8
-      refute Network.private_ip?({0x2002, 0x0808, 0x0808, 0, 0, 0, 0, 1})
-    end
-
-    test "IPv6 public" do
-      refute Network.private_ip?({0x2607, 0xF8B0, 0x4004, 0x800, 0, 0, 0, 0x200E})
-    end
-  end
-
   describe "resolve_and_validate/2" do
     test "returns the validated IP and parsed URI for a public host" do
       assert {:ok, ip, %URI{host: "storage.googleapis.com"}} =
                Network.resolve_and_validate("https://storage.googleapis.com/bucket/blob")
 
       assert tuple_size(ip) in [4, 8]
-      refute Network.private_ip?(ip)
+      refute Cyfr.Cidr.private_ip?(ip)
     end
 
     test "blocks a host that resolves to a private IP" do
@@ -180,16 +93,16 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "private IP"
     end
 
-    test "always blocks link-local (cloud metadata) even with allow_private" do
+    test "always blocks cloud metadata even with private_policy: :allow_all" do
       assert {:error, msg} =
-               Network.resolve_and_validate("http://169.254.169.254/", allow_private: true)
+               Network.resolve_and_validate("http://169.254.169.254/", private_policy: :allow_all)
 
-      assert msg =~ "link-local"
+      assert msg =~ "metadata IP"
     end
   end
 
   describe "pinned_request/5 SSRF + DNS-rebinding guard" do
-    # The security contract: a private/link-local resolution is rejected BEFORE
+    # The security contract: a private or metadata resolution is rejected BEFORE
     # any connection, and the connection (when allowed) targets the validated IP
     # — so there is no second DNS resolution to rebind.
     test "blocks loopback before connecting" do
@@ -197,13 +110,13 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "private IP"
     end
 
-    test "always blocks the link-local metadata endpoint" do
+    test "always blocks the metadata endpoint" do
       assert {:error, msg} =
                Network.pinned_request(:get, "http://169.254.169.254/latest/meta-data/",
-                 allow_private: true
+                 private_policy: :allow_all
                )
 
-      assert msg =~ "link-local"
+      assert msg =~ "metadata IP"
     end
 
     test "rejects non-http(s) schemes" do
@@ -219,29 +132,15 @@ defmodule Cyfr.NetworkTest do
     end
   end
 
-  describe "bounded_collector/1 + collected_body/2" do
-    test "collects a within-limit body in order" do
-      collector = Network.bounded_collector(10)
-      resp = %Req.Response{}
+  describe "Cyfr.BoundedBody on the pinned transport's Req.Response" do
+    test "collects into a Req.Response and halts past the ceiling" do
+      collector = Cyfr.BoundedBody.collector(4)
 
-      {:cont, {_req, resp}} = collector.({:data, "12345"}, {:req, resp})
-      {:cont, {_req, resp}} = collector.({:data, "67890"}, {:req, resp})
+      {:cont, {_req, resp}} = collector.({:data, "1234"}, {:req, %Req.Response{}})
+      assert Cyfr.BoundedBody.read(resp, 4) == {:ok, "1234"}
 
-      assert Network.collected_body(resp, 10) == {:ok, "1234567890"}
-    end
-
-    test "halts the transfer past the ceiling and reports the size" do
-      collector = Network.bounded_collector(10)
-      resp = %Req.Response{}
-
-      {:cont, {_req, resp}} = collector.({:data, "1234567890"}, {:req, resp})
-      {:halt, {_req, resp}} = collector.({:data, "x"}, {:req, resp})
-
-      assert Network.collected_body(resp, 10) == {:error, {:response_too_large, 11, 10}}
-    end
-
-    test "an empty transfer collects an empty body" do
-      assert Network.collected_body(%Req.Response{}, 10) == {:ok, ""}
+      {:halt, {_req, resp}} = collector.({:data, "5"}, {:req, resp})
+      assert Cyfr.BoundedBody.read(resp, 4) == {:error, {:response_too_large, 5, 4}}
     end
   end
 end

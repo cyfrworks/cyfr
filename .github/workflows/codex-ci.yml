@@ -14,6 +14,9 @@ on:
       # the scaffold's role and scroll rosters to seed/aqua — an edit
       # to any of them must run the Go tests.
       - '.env.example'
+      # TestShippedComposePullsTheBuilderWhenBuildsUseIt reads the shipped
+      # compose file's profiles.
+      - 'docker-compose.yml'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
       - '.github/workflows/codex-ci.yml'
@@ -21,6 +24,7 @@ on:
     paths:
       - 'apps/codex/**'
       - '.env.example'
+      - 'docker-compose.yml'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
       - '.github/workflows/codex-ci.yml'

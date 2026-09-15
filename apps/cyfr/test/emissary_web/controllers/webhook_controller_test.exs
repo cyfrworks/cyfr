@@ -222,7 +222,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
       request_id = response["request_id"]
 
       # Sync on the spawned task so the test process doesn't exit while
-      # `Opus.Executor.run/3` is still mid-query (would yank the Ecto sandbox
+      # `Cyfr.Execution.Dispatch.run/4` is still mid-query (would yank the Ecto sandbox
       # connection and produce noisy crash logs).
       assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,
                       %{request_id: ^request_id}},

@@ -54,6 +54,78 @@ defmodule Arca.Adapters.LocalTest do
     end
   end
 
+  describe "replace_tree/3" do
+    @tree ["data", "site"]
+
+    # What the tree's parent holds on disk, hidden names included.
+    defp beside(ctx), do: ctx |> Local.build_path(["data"]) |> File.ls!() |> Enum.sort()
+
+    test "lays a tree where none was, then replaces it whole", %{ctx: ctx} do
+      assert :ok = Local.replace_tree(ctx, @tree, [{["index.html"], "one"}, {["a", "b.js"], "b"}])
+      assert {:ok, "one"} = Local.get(ctx, @tree ++ ["index.html"])
+
+      assert :ok = Local.replace_tree(ctx, @tree, [{["index.html"], fn -> {:ok, "two"} end}])
+      assert {:ok, [["data", "site", "index.html"]]} = Local.list_recursive(ctx, @tree)
+      assert {:ok, "two"} = Local.get(ctx, @tree ++ ["index.html"])
+      assert beside(ctx) == ["site"]
+    end
+
+    test "a staging failure leaves the tree as it was and nothing staged", %{ctx: ctx} do
+      :ok = Local.replace_tree(ctx, @tree, [{["index.html"], "one"}])
+
+      assert {:error, :enospc} =
+               Local.replace_tree(ctx, @tree, [
+                 {["index.html"], "two"},
+                 {["late.js"], fn -> {:error, :enospc} end}
+               ])
+
+      assert {:ok, [["data", "site", "index.html"]]} = Local.list_recursive(ctx, @tree)
+      assert {:ok, "one"} = Local.get(ctx, @tree ++ ["index.html"])
+      assert beside(ctx) == ["site"]
+    end
+
+    test "the tree being staged is hidden from listings, walks and usage", %{ctx: ctx} do
+      :ok = Local.replace_tree(ctx, @tree, [{["index.html"], "one"}])
+      test_pid = self()
+
+      replacing =
+        Task.async(fn ->
+          Local.replace_tree(ctx, @tree, [
+            {["index.html"], "staged bytes"},
+            {["late.js"],
+             fn ->
+               send(test_pid, {:staging, self()})
+
+               receive do
+                 :proceed -> {:ok, "late"}
+               end
+             end}
+          ])
+        end)
+
+      assert_receive {:staging, replacer}, 5_000
+
+      assert ["site", staged] = beside(ctx)
+      assert Arca.Storage.tmp_name?(staged)
+      assert {:ok, [{"site", :dir}]} = Local.list_typed(ctx, ["data"])
+      assert {:ok, [["data", "site", "index.html"]]} = Local.list_recursive(ctx, ["data"])
+      assert {:ok, %{files: 1, bytes: 3}} = Local.usage(ctx, ["data"])
+
+      send(replacer, :proceed)
+      assert :ok = Task.await(replacing, 30_000)
+      assert {:ok, "late"} = Local.get(ctx, @tree ++ ["late.js"])
+      assert beside(ctx) == ["site"]
+    end
+
+    test "every relative path is validated as a write's would be", %{ctx: ctx} do
+      assert_raise ArgumentError, fn ->
+        Local.replace_tree(ctx, @tree, [{["..", "escape.txt"], "x"}])
+      end
+
+      refute File.exists?(Local.build_path(ctx, ["data", "escape.txt"]))
+    end
+  end
+
   describe "atomic-write hygiene" do
     test "in-flight temp names are invisible to listings, walks and usage", %{ctx: ctx} do
       :ok = Local.put(ctx, ["data", "a.txt"], "a")
@@ -85,9 +157,9 @@ defmodule Arca.Adapters.LocalTest do
     test "sweep_stale_tmp/1 reclaims an aged tmp-named directory subtree", %{ctx: ctx} do
       :ok = Local.put(ctx, ["data", "a.txt"], "a")
 
-      # A pre-reservation offender: the facade now refuses tmp-shaped
-      # segments at every depth, but a directory written before that gate
-      # hides its whole subtree from listings and the usage walk.
+      # A tmp-named directory — the staged or retired tree a crashed
+      # `replace_tree/3` leaves — hides its whole subtree from listings and
+      # the usage walk.
       dir = Local.build_path(ctx, ["data", "x.tmp.1"])
       File.mkdir_p!(dir)
       File.write!(Path.join(dir, "hidden.txt"), "hidden")

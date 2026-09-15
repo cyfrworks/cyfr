@@ -73,7 +73,7 @@ defmodule Arca do
   adapter's single validation site) and an athanor-less context on a
   tenant path (`ArgumentError` from `Arca.Storage.tenant_segments/1`).
   Every untrusted-path ingress validates at its own boundary first
-  (`Opus.StorageHandler`, the MCP resource read, attachment filenames);
+  (`Cyfr.Execution.GuestStorage`, the MCP resource read, attachment filenames);
   `exists?/2` alone is total over both path and context.
 
   ## Usage
@@ -342,9 +342,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["conversations", "conv_1", "msg_1.json"], "{}")
+      iex> Arca.put(ctx, ["threads", "thread_1", "msg_1.json"], "{}")
       :ok
-      iex> Arca.delete_tree(ctx, ["conversations", "conv_1"])
+      iex> Arca.delete_tree(ctx, ["threads", "thread_1"])
       :ok
   """
   @spec delete_tree(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
@@ -440,6 +440,54 @@ defmodule Arca do
         {:ok, copied} -> {:ok, Enum.reverse(copied)}
         {:error, _} = error -> error
       end
+    end
+  end
+
+  @doc """
+  Replace the directory tree at `path` with `files` —
+  `{relative_path, content}` pairs, `content` as bytes or a zero-arity
+  function answering `{:ok, bytes}` or `{:error, reason}`, resolved one
+  file at a time.
+
+  A reader sees the tree that was at `path` until the new one is whole,
+  then the new one: the adapter stages the files where no reader looks and
+  swaps them in (`c:Arca.Storage.replace_tree/3`, which states each
+  adapter's exact guarantee). A failure before the swap answers its error
+  and leaves the tree at `path` as it was. An adapter that cannot hide a
+  partial tree refuses with `{:error, :atomic_replace_unsupported}` and
+  writes nothing. Inside a unit the replacement holds the unit's lock
+  (`Arca.Overlay`), so writes to the unit wait for it; elsewhere a write
+  under `path` made during the replacement can land in the tree it retires.
+
+  `cap:` (required) — `{:checked, bytes}` checks `bytes`, the replacement's
+  size, against the athanor's storage cap before anything is staged;
+  `:exempt` states an uncapped call site. `{:error, :reserved_name}` when
+  `path` or a relative path names the `.tmp.<n>` shape, and
+  `{:error, :invalid_path}` for an empty relative path, besides the
+  refusals every write answers. A replacement drops the cached usage
+  counters, so the next cap check measures the tree afresh.
+  """
+  @spec replace_tree(
+          Context.t(),
+          Arca.Storage.path(),
+          [Arca.Storage.tree_file()],
+          keyword()
+        ) :: :ok | {:error, term()}
+  def replace_tree(%Context{} = ctx, path, files, opts) when is_list(files) do
+    path = normalize(path)
+    files = Enum.map(files, fn {rel, content} when is_list(rel) -> {normalize(rel), content} end)
+
+    cond do
+      Enum.any?(files, &match?({[], _content}, &1)) ->
+        {:error, :invalid_path}
+
+      reserved_name?(path) or Enum.any?(files, fn {rel, _content} -> reserved_name?(rel) end) ->
+        {:error, :reserved_name}
+
+      true ->
+        mutating(ctx, path, :replace_tree, opts, fn p ->
+          adapter(p).replace_tree(ctx, p, files)
+        end)
     end
   end
 
@@ -616,6 +664,23 @@ defmodule Arca do
       end
     else
       :ok
+    end
+  end
+
+  # A replacement states its size with its policy, since its contents may
+  # not be resolved until it is staged.
+  defp check_cap(ctx, path, :replace_tree, opts) do
+    case Keyword.fetch!(opts, :cap) do
+      {:checked, bytes} when is_integer(bytes) and bytes >= 0 ->
+        if Arca.Storage.classify(path) == :tenant and not Arca.Overlay.internal_writes?(),
+          do: Sanctum.Tenancy.Caps.check_storage(ctx, bytes),
+          else: :ok
+
+      :exempt ->
+        :ok
+
+      other ->
+        raise ArgumentError, "cap: must be {:checked, bytes} or :exempt, got #{inspect(other)}"
     end
   end
 

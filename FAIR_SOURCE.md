@@ -12,15 +12,23 @@ differs from the license texts, the license texts control.
 | Where | License | Why |
 |-------|---------|-----|
 | `apps/cyfr/lib/sanctum/**` and `apps/cyfr/test/sanctum/**` | FSL-1.1-Apache-2.0 | Sanctum — authentication (OIDC/OAuth/API keys), tenancy, policy enforcement, the cipher that encrypts every secret, and audit. It is the security and multi-tenancy spine, threaded through the majority of the control plane, so any hosted offering of CYFR must redistribute it. |
-| Everything else (`apps/cyfr/lib/{arca,emissary*,prism*,compendium,cyfr}/`, the tenancy migrations under `apps/cyfr/priv/repo/migrations/`, `apps/{locus,opus}/`, web UIs, docs) | Apache-2.0 | Apache by default; the schema DDL every self-hoster must run is not gated. |
+| Everything else (`apps/cyfr/lib/{arca,emissary*,prism*,compendium,cyfr}/`, the tenancy migrations under `apps/cyfr/priv/repo/migrations/`, `apps/{cyfr_contracts,locus,opus}/`, web UIs, docs) | Apache-2.0 | Apache by default; the schema DDL every self-hoster must run is not gated. |
 
 The rule is simply the directory: everything under
 `apps/cyfr/lib/sanctum/` and `apps/cyfr/test/sanctum/` is FSL-1.1-Apache-2.0,
-and everything else in the repo is Apache-2.0. The Apache-licensed portion
-is not independently buildable: it calls into Sanctum throughout (storage
-consults the tenant policy and cipher; the builder embeds `Sanctum.Limits`),
-so running any part of CYFR means running the FSL part under its terms —
-the split governs what you may reuse elsewhere, not what boots alone. Elixir files carry an in-band
+and everything else in the repo is Apache-2.0. The control plane's
+Apache-licensed code is not independently buildable: it calls into Sanctum
+throughout (storage consults the tenant policy and cipher), so running CYFR
+means running the FSL part under its terms — the split governs what you may
+reuse elsewhere, not what boots alone. The shared contracts
+(`apps/cyfr_contracts`: component references, limits, digests, canonical JSON,
+the authority an execution runs under as data — the consent policy blob, the
+transition relation, root-profile selection, its wire form — secret masking,
+and the other pure primitives every part of CYFR speaks) depend on no other
+app and build alone, with the repository's `wit/` definitions compiled in;
+Sanctum keeps the
+authority's live half (the invoke-budget counter, the consent loader and the
+platform ceiling). Elixir files carry an in-band
 `SPDX-License-Identifier` header (there is no `REUSE.toml`), and the
 [license-lint CI](.github/workflows/license-lint.yml) enforces the boundary
 mechanically.

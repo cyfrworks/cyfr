@@ -219,7 +219,6 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
 
   describe "POST /claim-namespace/submit — the claim (Bypass)" do
     setup do
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
       bypass = Bypass.open()
       original_scheme = Application.get_env(:cyfr, :registry_scheme)
       original_oci = Application.get_env(:cyfr, :oci_registry_url)

@@ -2,8 +2,9 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.AuthorityPlumbingTest do
-  # Verify authority survives the runtime-option allowlist and that
-  # authority_required fails closed in both executor and runtime.
+  # Verify the authority a run's assignment carries survives the
+  # runtime-option allowlist, and that authority_required fails closed in
+  # both admission and runtime.
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
@@ -66,35 +67,42 @@ defmodule Opus.AuthorityPlumbingTest do
     on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
+  # The authority as an assignment carries it to its runner: every member
+  # but the budget's cap, which a decoded copy never charges.
+  defp as_assigned(authority) do
+    {:ok, decoded} = Cyfr.Authority.from_wire(Cyfr.Authority.to_wire(authority))
+    decoded
+  end
+
   # math.wasm is a core module, not a Component Model binary, so every run
   # here fails at component compile. That is irrelevant: the witness fires
   # and the required-check runs before compilation is attempted.
 
-  test "an :authority passed to Executor.run reaches the runtime intact", %{ctx: ctx} do
+  test "an :authority passed to a dispatched run reaches the runtime as its assignment carries it",
+       %{ctx: ctx} do
     attach_witness()
-    authority = Sanctum.Authority.zero()
+    authority = Cyfr.Authority.zero()
     execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
 
     _result =
-      Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+      Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
         execution_id: execution_id,
         authority: authority
       )
 
     assert_receive {:authority_entered, metadata}, 30_000
-    assert metadata.authority == authority
+    assert metadata.authority == as_assigned(authority)
     assert metadata.execution_id == execution_id
   end
 
   test "a run without an authority fails closed, executing nothing", %{ctx: ctx} do
     attach_witness()
 
-    # The enforcement stage raises for a missing authority; the pipeline
-    # rescue converts that into a failed execution that never reached the
-    # runtime.
+    # Admission raises for a missing authority, and the raise closes the
+    # run failed before it reaches the runtime.
     assert {:error, message} =
-             Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
+             Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
 
     assert message =~ "without an authority is not a thing"
     refute_receive {:authority_entered, _}, 500
@@ -104,7 +112,7 @@ defmodule Opus.AuthorityPlumbingTest do
     attach_witness()
 
     assert {:error, message} =
-             Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+             Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
                type: :reagent,
                authority_required: true
              )
@@ -115,17 +123,17 @@ defmodule Opus.AuthorityPlumbingTest do
 
   test "authority_required with an authority proceeds to the runtime", %{ctx: ctx} do
     attach_witness()
-    authority = Sanctum.Authority.zero()
+    authority = Cyfr.Authority.zero()
 
     _result =
-      Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+      Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
         authority: authority,
         authority_required: true
       )
 
     assert_receive {:authority_entered, metadata}, 30_000
-    assert metadata.authority == authority
+    assert metadata.authority == as_assigned(authority)
   end
 
   test "the runtime itself re-checks authority_required" do
@@ -139,7 +147,7 @@ defmodule Opus.AuthorityPlumbingTest do
     # check passed and execution was attempted.
     result =
       Opus.Runtime.execute_component(<<0, 1, 2, 3>>, %{},
-        authority: Sanctum.Authority.zero(),
+        authority: Cyfr.Authority.zero(),
         authority_required: true
       )
 

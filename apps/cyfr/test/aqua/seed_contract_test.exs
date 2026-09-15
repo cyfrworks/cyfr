@@ -29,8 +29,8 @@ defmodule Aqua.SeedContractTest do
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
 
-  # The `execution.*` and `schedule.*` entries come from Opus' providers;
-  # an app-scoped run has no Opus modules and cannot expand them.
+  # The `build.*` entries come from Locus's provider; an app-scoped run has
+  # no sibling app's modules and cannot expand them.
   @moduletag :requires_opus_modules
 
   test "every action the seed may call is granted by the manifest and reachable in-chain" do
@@ -210,11 +210,7 @@ defmodule Aqua.SeedContractTest do
     roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
 
     files =
-      [Path.join(@seed, "aqua.md")] ++
-        (roles
-         |> File.ls!()
-         |> Enum.filter(&String.ends_with?(&1, ".md"))
-         |> Enum.map(&Path.join(roles, &1)))
+      [Path.join(@seed, "aqua.md") | Cyfr.Test.SourceTree.files!(Path.join(roles, "*.md"))]
 
     for path <- files,
         name = Path.basename(path, ".md"),

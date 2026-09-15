@@ -17,12 +17,10 @@ defmodule Aqua.Loop.CloneTest do
 
   alias Aqua.Loop.Clone
   alias Aqua.Tape
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Compendium.{AgentIndex, AgentSource, AquaPath}
-  alias Cyfr.Test.ScriptedExecution
+  alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap, Commit, Plan, Source}
-
-  @moduletag :requires_opus_modules
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -30,16 +28,15 @@ defmodule Aqua.Loop.CloneTest do
 
   setup do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "clone_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :execution_impl]
+    keys = [:base_path, :seed_path, :consent_source, :workers]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
     Application.put_env(:cyfr, :consent_source, Source.DB)
-    Application.put_env(:cyfr, :execution_impl, ScriptedExecution)
+    Application.put_env(:cyfr, :workers, [ScriptedWorker])
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -51,15 +48,21 @@ defmodule Aqua.Loop.CloneTest do
       end
     end)
 
+    # The loops' work stops before the paths it runs under are restored.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = AgentIndex.sync(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
+    # The model catalyst unseals its key when its runner attaches.
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
+    ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, conv} = Conversations.create(ctx)
-    {:ok, ctx: ctx, conv: conv}
+    {:ok, thread} = Threads.create(ctx)
+    {:ok, ctx: ctx, thread: thread}
   end
 
   defp reply(text),
@@ -76,9 +79,9 @@ defmodule Aqua.Loop.CloneTest do
       "usage" => %{"input_tokens" => 3, "output_tokens" => 2}
     }
 
-  defp accept!(ctx, conv, text) do
+  defp accept!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: text},
         turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
       })
@@ -94,7 +97,7 @@ defmodule Aqua.Loop.CloneTest do
 
   defp call_under(role) do
     ref = AgentSource.ref(role)
-    Enum.find(ScriptedExecution.calls(), &(ref in &1.authority.chain))
+    Enum.find(ScriptedWorker.calls(), &(ref in &1.authority.chain))
   end
 
   defp bind_claude!(ctx, opts) do
@@ -133,10 +136,10 @@ defmodule Aqua.Loop.CloneTest do
   end
 
   test "the soul clones the planner, which answers from its own turn under the soul's consent",
-       %{ctx: ctx, conv: conv} do
-    turn = accept!(ctx, conv, "@aqua plan this")
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua plan this")
 
-    start_supervised!({ScriptedExecution,
+    start_supervised!({ScriptedWorker,
      ref: @model,
      script: [
        call("r1", "planner", %{"task" => "lay out the steps"}),
@@ -199,7 +202,10 @@ defmodule Aqua.Loop.CloneTest do
     assert [%{content: "lay out the steps"} | _] = clone_rows
   end
 
-  test "two roles on one catalyst run with the keys their edges select", %{ctx: ctx, conv: conv} do
+  test "two roles on one catalyst run with the keys their edges select", %{
+    ctx: ctx,
+    thread: thread
+  } do
     home = bind_claude!(ctx, name: "home key", key: "sk-home")
     work = bind_claude!(ctx, name: "work key", key: "sk-work", label: "work")
 
@@ -211,10 +217,10 @@ defmodule Aqua.Loop.CloneTest do
       ]
     })
 
-    turn = accept!(ctx, conv, "@aqua fetch, then make")
+    turn = accept!(ctx, thread, "@aqua fetch, then make")
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: @model,
        script: [
          call("r1", "web", %{"task" => "read the page"}),
@@ -256,11 +262,11 @@ defmodule Aqua.Loop.CloneTest do
        %{reference: "catalyst:local.http", need: nil, activation_digest: nil, declared_needs: []}}
 
     {:ok, as_web} = Clone.authority(soul, "web", web, roster)
-    assert {:child, _} = Sanctum.Authority.Transition.step(as_web, :call, http)
+    assert {:child, _} = Cyfr.Authority.Transition.step(as_web, :call, http)
 
     refute match?(
              {:child, %{cursor: {:bound, _}}},
-             Sanctum.Authority.Transition.step(as_planner, :call, http)
+             Cyfr.Authority.Transition.step(as_planner, :call, http)
            )
 
     # A role the soul's consent does not name.
@@ -277,11 +283,84 @@ defmodule Aqua.Loop.CloneTest do
              Clone.authority(moved, "planner", planner, roster)
   end
 
-  test "a clone runs the bytes its row pinned, not the file as it is now", %{ctx: ctx, conv: conv} do
-    turn = accept!(ctx, conv, "@aqua plan this")
+  test "a clone's streamed text reaches the thread on the soul's turn under its role", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    turn = accept!(ctx, thread, "@aqua plan this")
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
+       ref: @model,
+       script: [
+         call("r1", "planner", %{"task" => "plan"}),
+         {:emit, [%{"type" => "text.delta", "text" => "planning"}]},
+         reply("planned"),
+         {:emit, [%{"type" => "text.delta", "text" => "done"}]},
+         reply("done")
+       ]}
+    )
+
+    assert :completed = run!(ctx, turn)
+
+    turn_id = turn.id
+
+    assert_receive {:thread, _,
+                    {:delta, %{text: "planning", role: "planner", turn_id: ^turn_id}}},
+                   5_000
+
+    assert_receive {:thread, _, {:delta, %{text: "done", role: nil, turn_id: ^turn_id}}}, 5_000
+  end
+
+  test "a turn cut while its clone works stops the clone, which writes nothing more", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    turn = accept!(ctx, thread, "@aqua plan this")
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [
+         call("r1", "planner", %{"task" => "plan"}),
+         {:probe, self()},
+         reply("planned"),
+         reply("done")
+       ]}
+    )
+
+    loop = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+    assert_receive {:scripted_probe, worker, _}, 60_000
+    [clone] = clones_of(turn)
+    watched = Process.monitor(worker)
+
+    {:ok, running} = Tape.turn(ctx, turn.id)
+
+    assert {:ok, _} =
+             Aqua.Loop.abort(ctx, running, "stopped", fn -> Task.shutdown(loop, :brutal_kill) end)
+
+    assert_receive {:DOWN, ^watched, :process, _, _}, 5_000
+
+    assert [%{status: "cancelled", fence: fence}] = clones_of(turn)
+    assert fence > clone.fence
+
+    for owner <- [running, clone] do
+      {:ok, steps} = Tape.steps(ctx, owner)
+      refute Enum.any?(steps, &(&1.dispatch_state in ["proposed", "dispatched"]))
+    end
+
+    assert {:error, :superseded} = Tape.close_clone_turn(ctx, clone, "completed")
+  end
+
+  test "a clone runs the bytes its row pinned, not the file as it is now", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    turn = accept!(ctx, thread, "@aqua plan this")
+
+    start_supervised!(
+      {ScriptedWorker,
        ref: @model,
        script: [call("r1", "planner", %{"task" => "plan"}), reply("planned"), reply("done")]}
     )
@@ -314,19 +393,18 @@ defmodule Aqua.Loop.CloneTest do
     refute pinned =~ "LIVE-EDIT-MARKER"
   end
 
-  test "a soul whose consent moved mid-turn clones nothing more", %{ctx: ctx, conv: conv} do
-    turn = accept!(ctx, conv, "@aqua fetch, then make")
+  test "a soul whose consent moved mid-turn clones nothing more, and unseals no key for its next call",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua fetch, then make")
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: @model,
        script: [
          call("r1", "web", %{"task" => "read the page"}),
          reply("The page says hello."),
          {:probe, self()},
-         call("r2", "artisan", %{"task" => "make a thing"}),
-         reply("Made."),
-         reply("Fetched; making was refused.")
+         call("r2", "artisan", %{"task" => "make a thing"})
        ]}
     )
 
@@ -337,7 +415,9 @@ defmodule Aqua.Loop.CloneTest do
     :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, soul_profile.id, "revoked")
     send(worker, :continue)
 
-    assert :completed = Task.await(task, 120_000)
+    # The call in flight finishes; the soul's next model call is refused at
+    # attach, since its pinned consent is no longer the head.
+    assert {:failed, {:setup_required, %{reason: "consent_moved"}}} = Task.await(task, 120_000)
 
     {:ok, steps} = Tape.steps(ctx, turn)
 
@@ -353,7 +433,7 @@ defmodule Aqua.Loop.CloneTest do
   end
 
   test "a member's own role, consented through the soul's walk, clones under the soul's consent",
-       %{ctx: ctx, conv: conv} do
+       %{ctx: ctx, thread: thread} do
     {:ok, %{"cloneable" => true}} =
       Aqua.AgentConfig.call_aqua(ctx, %{"action" => "create", "name" => "scout"})
 
@@ -364,10 +444,10 @@ defmodule Aqua.Loop.CloneTest do
     bind_claude!(ctx, name: "claude key", key: "sk-test")
     consent!(ctx, %{ref: @soul, selections: [%{dep: @model, label: "default"}]})
 
-    turn = accept!(ctx, conv, "@aqua scout ahead")
+    turn = accept!(ctx, thread, "@aqua scout ahead")
 
     start_supervised!(
-      {ScriptedExecution,
+      {ScriptedWorker,
        ref: @model,
        script: [
          call("r1", "scout", %{"task" => "look"}),

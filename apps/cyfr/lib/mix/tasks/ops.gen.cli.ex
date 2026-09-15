@@ -5,9 +5,9 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   @shortdoc "Render the operation catalog's tool and action names for the CLI"
 
   @moduledoc """
-  Renders every `tool.action` the operation catalog serves into
-  `apps/codex/internal/ops/catalog_gen.go`: one Go constant per tool, one
-  per action, and the actions per tool. The CLI's built-in commands name
+  Renders every `tool.action` the operation catalog serves outside a
+  running chain into `apps/codex/internal/ops/catalog_gen.go`: one Go
+  constant per tool, one per action, and the actions per tool. The CLI's built-in commands name
   operations through these constants, so a renamed or retired action
   fails `go build`; `Cyfr.Ops.LiteralDriftTest` refuses a checked-in
   render that is stale.
@@ -70,7 +70,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   @spec render() :: String.t()
   def render do
     by_tool =
-      Cyfr.Ops.Catalog.tool_actions()
+      Cyfr.Ops.Catalog.external_tool_actions()
       |> Enum.map(fn pair ->
         [tool, action] = String.split(pair, ".", parts: 2)
         {tool, action}

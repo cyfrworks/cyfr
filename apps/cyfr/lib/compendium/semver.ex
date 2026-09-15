@@ -4,7 +4,7 @@
 defmodule Compendium.Semver do
   @moduledoc """
   The one version ordering. Registered versions are validated semver
-  (`Sanctum.ComponentRef.validate_version/1` at every ingress), so
+  (`Cyfr.ComponentRef.validate_version/1` at every ingress), so
   unparsable input reaches ordering only from remote tag lists and seed
   directory names — and the order is total anyway: both parse →
   `Version.compare/2` (prereleases order correctly, `1.0.0-rc1 < 1.0.0`);

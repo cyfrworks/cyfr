@@ -4,8 +4,9 @@
 defmodule Cyfr.Ops.ReplaySafeAuditTest do
   @moduledoc """
   `recovery: :replay_safe` is a reviewed property of a read: the boot
-  audit refuses it on any other kind and any other value, the set a
-  recovered turn may re-dispatch is derived from the declarations, and
+  audit refuses it on any other kind, any other value and any declared
+  action outside the enum; the reader answers it for a read alone; the set
+  a recovered turn may re-dispatch is derived from the declarations, and
   that derived set is the review record.
   """
 
@@ -27,7 +28,8 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
             actions: %{
               "peek" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
               "poke" => %{kind: :write, planes: [:in_chain], recovery: :replay_safe},
-              "odd" => %{kind: :read, planes: [:in_chain], recovery: :reconcile}
+              "odd" => %{kind: :read, planes: [:in_chain], recovery: :reconcile},
+              "hidden" => %{kind: :write, planes: [:in_chain], recovery: :replay_safe}
             }
           },
           input_schema: %{
@@ -47,12 +49,17 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
     assert {:error, missing} = Catalog.audit_action_kinds([Carrier])
 
     assert Enum.map(missing, &{&1.action, &1.reason}) |> Enum.sort() ==
-             [{"odd", :invalid_recovery}, {"poke", :invalid_recovery}]
+             [
+               {"hidden", :invalid_recovery},
+               {"odd", :invalid_recovery},
+               {"poke", :invalid_recovery}
+             ]
   end
 
   test "the reader answers replay_safe for a read and nothing else" do
     [tool] = Carrier.tools()
     assert Annotations.recovery(tool, "peek") == :replay_safe
+    assert Annotations.recovery(tool, "poke") == nil
     assert Annotations.recovery(tool, "odd") == nil
     assert Annotations.recovery(tool, "nope") == nil
   end
@@ -73,7 +80,7 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
              "source.tree"
            ]
 
-    assert Catalog.replay_safe_actions([Carrier]) == ["carrier.peek", "carrier.poke"]
+    assert Catalog.replay_safe_actions([Carrier]) == ["carrier.peek"]
     assert Aqua.Ops.replay_safe?("notes", "read")
     refute Aqua.Ops.replay_safe?("notes", "keep")
     refute Aqua.Ops.replay_safe?("http", "get")

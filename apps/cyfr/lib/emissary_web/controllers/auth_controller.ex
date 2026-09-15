@@ -9,13 +9,13 @@ defmodule EmissaryWeb.AuthController do
 
   GitHub and Google browser sign-in is device flow on `/login`
   (`PrismWeb.LoginLive`). This controller finishes that flow
-  (`GET /auth/device/complete/:ticket`) and still runs the Ueberauth
-  web-callback path for a configured OIDC issuer (`GET /auth/oidcc`).
+  (`GET /auth/device/complete/:ticket`) and runs the Ueberauth callback for a
+  configured OIDC issuer (`GET /auth/oidcc`).
 
   ## Routes
 
-  - `GET /auth/:provider` - OIDC (and leftover web OAuth) kickoff
-  - `GET /auth/:provider/callback` - Handles OAuth callback (redirects; the
+  - `GET /auth/:provider` - OIDC kickoff
+  - `GET /auth/:provider/callback` - Handles the OIDC callback (redirects; the
     session token lives in the cookie, never in a body)
   - `GET /auth/device/complete/:ticket` - Sets the cookie after device flow
   - `GET /auth/post-legal-accept` - Re-probes after policy acceptance
@@ -32,9 +32,10 @@ defmodule EmissaryWeb.AuthController do
   alias Sanctum.Session
 
   @doc """
-  Initiates OAuth request to provider.
+  Answers a sign-in start for a provider this server does not configure.
 
-  Ueberauth handles the redirect automatically based on the :provider param.
+  `EmissaryWeb.Plugs.ConfiguredUeberauth` redirects a configured OIDC start
+  before this action runs.
   """
   def request(conn, _params) do
     # Render the no-strategy branch as HTML; Ueberauth handles configured redirects.
@@ -51,18 +52,15 @@ defmodule EmissaryWeb.AuthController do
   Finishes GitHub/Google device-flow sign-in: the LiveView minted a
   one-time ticket after `DeviceFlow.poll_for_session/3` created the
   Sanctum session; this sets the cookie and routes the same way the
-  Ueberauth callback does (home, claim, or legal-accept).
+  OIDC callback does (home, claim, or legal-accept).
   """
   def device_complete(conn, %{"ticket" => ticket})
       when is_binary(ticket) and byte_size(ticket) > 0 and byte_size(ticket) <= 64 do
-    key = {:login_device_ticket, ticket}
-
-    case Arca.Cache.get(key) do
+    # Taken in one operation, so of two requests presenting the ticket only
+    # one finds it; and consumed whichever way the check goes: a ticket
+    # presented by the wrong browser is spent, not left for the right one.
+    case Arca.Cache.take({:login_device_ticket, ticket}) do
       {:ok, payload} ->
-        # Consumed whichever way the check goes: a ticket presented by the
-        # wrong browser is spent, not left for the right one to find.
-        Arca.Cache.invalidate(key)
-
         if same_browser?(conn, payload) do
           apply_device_ticket(conn, payload)
         else
@@ -127,7 +125,7 @@ defmodule EmissaryWeb.AuthController do
   end
 
   @doc """
-  Handles the OAuth callback from the provider — the browser sign-in.
+  Handles the OIDC callback from the issuer — the browser sign-in.
 
   Door → what sign-in records → the registry courtesy
   (`Sanctum.SignIn.complete/3`) → a session and a redirect. Every outcome
@@ -374,8 +372,8 @@ defmodule EmissaryWeb.AuthController do
   defp screen_name(_), do: nil
 
   defp authenticate_with_provider(auth) do
-    # Dispatch generically to whatever module is configured. Both
-    # Sanctum.Auth.OAuth and the configured auth provider implement authenticate/1.
+    # Dispatch to the configured provider; only `Sanctum.Auth.OIDC` accepts a
+    # callback.
     case Cyfr.RuntimeConfig.auth_provider() do
       nil ->
         {:error, :auth_provider_not_configured}

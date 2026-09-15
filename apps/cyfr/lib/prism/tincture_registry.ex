@@ -139,7 +139,7 @@ defmodule Prism.TinctureRegistry do
     if MapSet.member?(state.watching, athanor_id) do
       state
     else
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.tinctures(athanor_id))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.tinctures(athanor_id))
       %{state | watching: MapSet.put(state.watching, athanor_id)}
     end
   end

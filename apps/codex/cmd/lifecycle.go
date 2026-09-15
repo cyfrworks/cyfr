@@ -7,10 +7,13 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +32,16 @@ func generateSecretKey() (string, error) {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(b), nil
+}
+
+// generateBridgeKey returns CYFR_MCP_BRIDGE_KEY: 32 cryptographically random
+// bytes as 64 hexadecimal digits, the one form cyfr and the bridge accept.
+func generateBridgeKey() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func init() {
@@ -74,11 +87,12 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 			fmt.Fprintf(os.Stderr, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
 		}
 
-		// Warm-pull every image referenced in docker-compose.yml (cyfr, caddy —
-		// mcp-bridge is `build:`-only and has no image: line, so it's skipped).
-		// Plain `docker pull` doesn't need .env to exist. Falls back to the
-		// published cyfr image on a dev build (no compose).
-		images := imagesFromCompose("docker-compose.yml")
+		// Warm-pull the images docker-compose.yml starts with this project's
+		// profiles (cyfr, plus caddy and the builder when .env already turns
+		// them on — mcp-bridge is `build:`-only). Plain `docker pull` doesn't
+		// need .env to exist. Falls back to the published cyfr image on a dev
+		// build (no compose).
+		images := imagesFromCompose("docker-compose.yml", composeProfiles(".env"))
 		if len(images) == 0 {
 			images = []string{"ghcr.io/cyfrworks/cyfr:latest"}
 		}
@@ -125,9 +139,9 @@ database_path: ./data/cyfr.db
 			if err != nil {
 				return fmt.Errorf("Failed to generate secret key: %w", err)
 			}
-			bridgeToken, err := generateSecretKey()
+			bridgeKey, err := generateBridgeKey()
 			if err != nil {
-				return fmt.Errorf("Failed to generate mcp-bridge token: %w", err)
+				return fmt.Errorf("Failed to generate the MCP bridge key: %w", err)
 			}
 
 			host := "localhost"
@@ -151,15 +165,11 @@ database_path: ./data/cyfr.db
 			}
 			adminEmailConfigured = adminEmail != ""
 
-			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, bridgeToken, host, adminEmail, acmeEmail, tls)), 0600); err != nil {
+			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, bridgeKey, host, adminEmail, acmeEmail, tls)), 0600); err != nil {
 				return fmt.Errorf("Failed to write .env: %w", err)
 			}
 			envCreated = true
 		}
-
-		// Ensure the mcp-bridge bind-mount target exists so the container can
-		// write ./data/mcp-bridge/backends.json on first add_backend.
-		_ = os.MkdirAll("data/mcp-bridge", 0755)
 
 		// Generate .gitignore if it doesn't already exist (idempotent)
 		gitignoreCreated := false
@@ -216,10 +226,7 @@ database_path: ./data/cyfr.db
 			fmt.Println("  cyfr.yaml already exists (skipped).")
 		}
 		if envCreated {
-			fmt.Println("  .env created from .env.example (contains a generated secret key + mcp-bridge token — do not commit)")
-			fmt.Println("     To require the bridge token, register mcp-bridge in the PWA with header")
-			fmt.Println("     `Authorization: vault:mcp_bridge_token` and store MCP_BRIDGE_TOKEN's value in a")
-			fmt.Println("     Vault entry named `mcp_bridge_token`.")
+			fmt.Println("  .env created from .env.example (contains a generated secret key and MCP bridge key — do not commit)")
 		} else if fileExists(".env") {
 			fmt.Println("  .env already exists (skipped).")
 		}
@@ -259,11 +266,13 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// imagesFromCompose returns every `image:` value referenced by services in the
-// compose file at path, in the order they appear. Build-only services (e.g.
-// mcp-bridge, which has only `build:`) are skipped. Returns nil if the file
-// can't be read or parsed — callers should fall back to a sensible default.
-func imagesFromCompose(path string) []string {
+// imagesFromCompose returns every `image:` value referenced by the services
+// of the compose file at path that start with the given profiles active: a
+// service with no `profiles:`, or one naming any of them. Images are in the
+// order the services appear. Build-only services (e.g. mcp-bridge, which has
+// only `build:`) are skipped. Returns nil if the file can't be read or parsed
+// — callers should fall back to a sensible default.
+func imagesFromCompose(path string, profiles []string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -279,7 +288,7 @@ func imagesFromCompose(path string) []string {
 	var images []string
 	for i := 0; i+1 < len(services.Content); i += 2 {
 		svc := services.Content[i+1]
-		if svc.Kind != yaml.MappingNode {
+		if svc.Kind != yaml.MappingNode || !startsWith(svc, profiles) {
 			continue
 		}
 		if img := mapValue(svc, "image"); img != nil && img.Value != "" {
@@ -287,6 +296,48 @@ func imagesFromCompose(path string) []string {
 		}
 	}
 	return images
+}
+
+// startsWith reports whether a compose service starts when the given
+// profiles are active: it names no profile, or one of them.
+func startsWith(svc *yaml.Node, profiles []string) bool {
+	named := mapValue(svc, "profiles")
+	if named == nil {
+		return true
+	}
+	for _, p := range named.Content {
+		if slices.Contains(profiles, p.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// composeProfiles returns the Docker Compose profiles the project in the
+// current directory runs with, read from the dotenv file at envPath: `tls`
+// when CYFR_BEHIND_PROXY is true (Caddy fronts cyfr), and `builder` when
+// CYFR_BUILDER_URL names the compose builder service (host `builder`). Every
+// command that starts, stops or pulls the stack passes them.
+func composeProfiles(envPath string) []string {
+	var profiles []string
+	if envFlagTrue(envPath, "CYFR_BEHIND_PROXY") {
+		profiles = append(profiles, "tls")
+	}
+	if raw, ok := envValue(envPath, "CYFR_BUILDER_URL"); ok {
+		if u, err := url.Parse(raw); err == nil && u.Hostname() == "builder" {
+			profiles = append(profiles, "builder")
+		}
+	}
+	return profiles
+}
+
+// profileArgs renders profiles as `docker compose` arguments.
+func profileArgs(profiles []string) []string {
+	var args []string
+	for _, p := range profiles {
+		args = append(args, "--profile", p)
+	}
+	return args
 }
 
 // ask prompts on stdout and reads a line from r, returning def if the input is empty.
@@ -305,14 +356,16 @@ func ask(r *bufio.Reader, question, def string) string {
 }
 
 // renderEnvFile fills in a .env.example template: substitutes the generated
-// secret key, sets MCP_BRIDGE_TOKEN (whether the template ships it commented
-// or not) so the bridge boots closed, sets CYFR_HOST, sets CADDY_ACME_EMAIL
+// secret key, sets CYFR_MCP_BRIDGE_KEY (whether the template ships it
+// commented or not) — the key cyfr and the bridge derive their signing and
+// sealing keys from, without which the bridge does not start — sets
+// CYFR_HOST, sets CADDY_ACME_EMAIL
 // if non-empty, flips CYFR_BEHIND_PROXY based on the TLS choice, and (if
 // adminEmail is non-empty) un-comments and sets CYFR_PLATFORM_ADMIN_EMAILS.
 // Everything else is left as-is. TestRenderEnvFileShippedTemplate binds this
 // key set to the real .env.example — a template edit that strands a key
 // fails there, not on a user's first `cyfr up`.
-func renderEnvFile(template, secretKey, bridgeToken, host, adminEmail, acmeEmail string, tls bool) string {
+func renderEnvFile(template, secretKey, bridgeKey, host, adminEmail, acmeEmail string, tls bool) string {
 	behindProxy := "false"
 	if tls {
 		behindProxy = "true"
@@ -322,9 +375,9 @@ func renderEnvFile(template, secretKey, bridgeToken, host, adminEmail, acmeEmail
 		switch {
 		case strings.HasPrefix(line, "CYFR_SECRET_KEY_BASE="):
 			lines[i] = "CYFR_SECRET_KEY_BASE=" + secretKey
-		case strings.HasPrefix(line, "MCP_BRIDGE_TOKEN="),
-			strings.HasPrefix(line, "# MCP_BRIDGE_TOKEN="):
-			lines[i] = "MCP_BRIDGE_TOKEN=" + bridgeToken
+		case strings.HasPrefix(line, "CYFR_MCP_BRIDGE_KEY="),
+			strings.HasPrefix(line, "# CYFR_MCP_BRIDGE_KEY="):
+			lines[i] = "CYFR_MCP_BRIDGE_KEY=" + bridgeKey
 		case strings.HasPrefix(line, "CYFR_HOST="):
 			lines[i] = "CYFR_HOST=" + host
 		case strings.HasPrefix(line, "CYFR_BEHIND_PROXY="):
@@ -344,23 +397,22 @@ var upCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Start the CYFR stack with Docker Compose in detached mode. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
-Always brings up cyfr (the one endpoint: Prism, API, MCP, tinctures) and mcp-bridge (HTTP MCP gateway that wraps stdio/npx MCP servers — register it from Prism's "MCP Servers" page).
+Always brings up cyfr (the one endpoint: Prism, API, MCP, tinctures) and mcp-bridge (runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid of its own; cyfr tells it what to run).
 
-When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fronts cyfr on :80/:443. Otherwise cyfr is reachable directly at http://localhost:4000.`,
+When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fronts cyfr on :80/:443. Otherwise cyfr is reachable directly at http://localhost:4000.
+
+When CYFR_BUILDER_URL in .env names the builder service (http://builder:4100), the builder container is also started (builder profile).`,
 	Example: `  cyfr up`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Registry auth is per-user: `cyfr login` (device flow) after
 		// `cyfr context add`, and cyfr.run mints push tokens via the identity
 		// probe. There are no static registry credentials to configure.
 
-		// `cyfr init` writes CYFR_BEHIND_PROXY=true into .env on TLS-yes and
-		// reads back to flip the caddy profile here.
-		tls := envFlagTrue(".env", "CYFR_BEHIND_PROXY")
-		composeArgs := []string{"compose"}
-		if tls {
-			composeArgs = append(composeArgs, "--profile", "tls")
-		}
-		composeArgs = append(composeArgs, "up", "-d")
+		// `cyfr init` writes CYFR_BEHIND_PROXY=true into .env on TLS-yes;
+		// .env's settings select the caddy and builder profiles here.
+		profiles := composeProfiles(".env")
+		tls := slices.Contains(profiles, "tls")
+		composeArgs := append(append([]string{"compose"}, profileArgs(profiles)...), "up", "-d")
 
 		c := exec.Command("docker", composeArgs...)
 		c.Stdout = os.Stdout
@@ -405,9 +457,8 @@ When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fro
 			fmt.Println("")
 			fmt.Println("Optional next steps:")
 			fmt.Println("  cyfr login      authenticate this CLI")
-			fmt.Println("  cyfr register   scan & register the bundled components")
-			fmt.Println("  Then in Prism's \"MCP Servers\" page, click \"Setup MCP Bridge\"")
-			fmt.Println("  to wire stdio/npx MCP servers (filesystem, github, …) into AQUA.")
+			fmt.Println("  Then in Prism's \"MCP Servers\" page, click \"Add stdio server\"")
+			fmt.Println("  to run stdio/npx MCP servers (filesystem, github, …) for AQUA.")
 		} else {
 			fmt.Fprintf(os.Stderr, "Warning: server did not become healthy within 30s. Check 'docker compose logs'.\n")
 		}
@@ -419,12 +470,12 @@ var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR server container",
 	GroupID: "server",
-	Long:    "Stop the CYFR server and remove its containers via Docker Compose. Includes the tls-profile caddy service so a stack started with `cyfr up` in TLS mode is fully torn down.",
+	Long:    "Stop the CYFR server and remove its containers via Docker Compose. Includes the tls-profile caddy service and the builder-profile builder service, so a stack started with `cyfr up` with either is fully torn down.",
 	Example: "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Always pass --profile tls so down considers the opt-in caddy too;
-		// harmless if it isn't running.
-		c := exec.Command("docker", "compose", "--profile", "tls", "down")
+		// Every profile, so down considers the opt-in services too; harmless
+		// for one that isn't running.
+		c := exec.Command("docker", "compose", "--profile", "tls", "--profile", "builder", "down")
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
@@ -440,21 +491,26 @@ var downCmd = &cobra.Command{
 // truthy value (`true`/`1`/`yes`, case-insensitive). Returns false if the
 // file is unreadable or the key is absent.
 func envFlagTrue(path, key string) bool {
+	v, _ := envValue(path, key)
+	v = strings.ToLower(v)
+	return v == "true" || v == "1" || v == "yes"
+}
+
+// envValue returns the value of the first uncommented `key=` line in the
+// dotenv-style file `path`, trimmed and unquoted, and whether one was found
+// with a non-empty value.
+func envValue(path, key string) (string, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return "", false
 	}
 	prefix := key + "="
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
 		if strings.HasPrefix(line, prefix) {
-			v := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, prefix)))
-			v = strings.Trim(v, `"'`)
-			return v == "true" || v == "1" || v == "yes"
+			v := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, prefix)), `"'`)
+			return v, v != ""
 		}
 	}
-	return false
+	return "", false
 }

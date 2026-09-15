@@ -156,7 +156,7 @@ defmodule PrismWeb.ClaimNamespaceController do
       suggested: suggested,
       error: error,
       csrf_token: Plug.CSRFProtection.get_csrf_token(),
-      pattern: Sanctum.ComponentRef.personal_slug_html_pattern()
+      pattern: Cyfr.ComponentRef.personal_slug_html_pattern()
     )
   end
 

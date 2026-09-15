@@ -5,42 +5,83 @@ defmodule Sanctum.ToolServerDigest do
   @moduledoc """
   External MCP configuration digest pinned by a consent tool_server resource.
 
-  `JCS({url, enabled, header_templates, tool_patterns})` over the stored
-  header **templates** (`vault:ENTRY` references and non-credential
-  literals), never resolved values: rotating a referenced vault entry must
-  not move the digest, while re-pointing the URL or swapping a header
-  reference must. There is deliberately no stored digest column — a
-  stored digest is a cache someone forgets to recompute; deriving at
-  read makes "changed config ⇒ mismatch ⇒ deny" true by construction.
+  `JCS({id, transport, url, enabled, header_templates, backends,
+  tool_patterns})` over the server row's id and its stored header and env
+  **templates** (vault references and non-credential literals), never
+  resolved values: rotating a referenced vault entry must not move the
+  digest, while re-pointing the URL, swapping a header or env reference,
+  changing a backend's command, or deleting the row and creating another
+  under the same name must. A stdio server's `url` is the empty string. There is
+  deliberately no stored digest column — a stored digest is a cache someone
+  forgets to recompute; deriving at read makes "changed config ⇒ mismatch ⇒
+  deny" true by construction.
 
   This is the *consent* identity. The supervisor's process-reconciliation
-  digest is a different digest on purpose: it covers `timeout_ms`
-  (process identity), which consent has no business pinning.
+  digest is a different digest on purpose: it covers `timeout_ms` and the
+  row's epoch (process identity), which consent has no business pinning.
   """
 
-  alias Sanctum.JCS
-  alias Sanctum.ToolPattern
+  alias Cyfr.JCS
+  alias Cyfr.ToolPattern
 
   @doc "Compute the digest for a server's stored configuration."
   @spec compute(map()) :: {:ok, String.t()} | {:error, term()}
-  def compute(%{url: url, enabled: enabled, headers: headers, tool_patterns: patterns})
-      when is_binary(url) and is_boolean(enabled) and is_map(headers) and is_list(patterns) do
-    header_templates =
-      headers
-      |> Enum.map(fn {name, template} ->
-        %{"name" => to_string(name), "template" => to_string(template)}
-      end)
-      |> Enum.sort_by(& &1["name"])
-
-    JCS.hash(%{
-      "url" => url,
-      "enabled" => enabled,
-      "header_templates" => header_templates,
-      "tool_patterns" => Enum.sort(patterns)
-    })
+  def compute(
+        %{
+          id: id,
+          transport: transport,
+          url: url,
+          enabled: enabled,
+          headers: headers,
+          backends: backends,
+          tool_patterns: patterns
+        } = server
+      )
+      when is_binary(id) and transport in ["http", "stdio"] and (is_binary(url) or is_nil(url)) and
+             is_boolean(enabled) and is_map(headers) and is_list(backends) and is_list(patterns) do
+    with {:ok, backends} <- backend_templates(backends) do
+      JCS.hash(%{
+        "id" => id,
+        "transport" => transport,
+        "url" => url || "",
+        "enabled" => enabled,
+        "header_templates" => templates(headers),
+        "backends" => backends,
+        "tool_patterns" => Enum.sort(patterns)
+      })
+    else
+      :error -> {:error, {:invalid_server_config, server}}
+    end
   end
 
   def compute(other), do: {:error, {:invalid_server_config, other}}
+
+  defp templates(map) do
+    map
+    |> Enum.map(fn {name, template} ->
+      %{"name" => to_string(name), "template" => to_string(template)}
+    end)
+    |> Enum.sort_by(& &1["name"])
+  end
+
+  defp backend_templates(backends) do
+    backends
+    |> Enum.reduce_while({:ok, []}, fn
+      %{"name" => name, "command" => command} = backend, {:ok, acc}
+      when is_binary(name) and is_binary(command) ->
+        env = if is_map(backend["env"]), do: backend["env"], else: %{}
+
+        entry = %{"name" => name, "command" => command, "env_templates" => templates(env)}
+        {:cont, {:ok, [entry | acc]}}
+
+      _other, _acc ->
+        {:halt, :error}
+    end)
+    |> case do
+      {:ok, entries} -> {:ok, Enum.sort_by(entries, & &1["name"])}
+      :error -> :error
+    end
+  end
 
   @doc """
   The ONE place a peer's schema spelling is normalized on the way in.
@@ -60,9 +101,12 @@ defmodule Sanctum.ToolServerDigest do
     config = Arca.McpServerStorage.config(server)
 
     compute(%{
+      id: server.id,
+      transport: server.transport,
       url: server.url,
       enabled: server.enabled == true,
       headers: config["headers"] || %{},
+      backends: config["backends"] || [],
       tool_patterns: tool_patterns(server)
     })
   end

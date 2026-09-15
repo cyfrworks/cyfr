@@ -66,25 +66,25 @@ defmodule Compendium.Pull do
   @spec pull_shipped(Context.t(), String.t()) ::
           {:ok, %{status: String.t(), component_ref: String.t()}} | {:error, term()}
   def pull_shipped(%Context{} = ctx, reference) when is_binary(reference) do
-    with {:ok, %Sanctum.ComponentRef{} = cref} <- Sanctum.ComponentRef.parse(reference),
+    with {:ok, %Cyfr.ComponentRef{} = cref} <- Cyfr.ComponentRef.parse(reference),
          :ok <- local_ref(cref),
          {:ok, version} <- shipped_version(cref),
          unit =
            Compendium.ComponentPath.version_dir(cref.type, cref.namespace, cref.name, version),
          :ok <- Arca.Overlay.pull_shipped(ctx, unit),
          {:ok, _} <- Compendium.Registry.register_from_arca(ctx, unit) do
-      pulled = %Sanctum.ComponentRef{cref | version: version}
-      {:ok, %{status: "pulled", component_ref: Sanctum.ComponentRef.to_string(pulled)}}
+      pulled = %Cyfr.ComponentRef{cref | version: version}
+      {:ok, %{status: "pulled", component_ref: Cyfr.ComponentRef.to_string(pulled)}}
     end
   end
 
-  defp local_ref(%Sanctum.ComponentRef{namespace: namespace}) do
+  defp local_ref(%Cyfr.ComponentRef{namespace: namespace}) do
     if Compendium.ComponentPath.local_publisher?(namespace), do: :ok, else: {:error, :not_local}
   end
 
   # The version the seed ships for the ref: the named one when it does,
   # else the newest.
-  defp shipped_version(%Sanctum.ComponentRef{} = cref) do
+  defp shipped_version(%Cyfr.ComponentRef{} = cref) do
     with {:ok, versions} <- Compendium.Provenance.shipped_versions(cref.type, cref.name) do
       cond do
         is_nil(cref.version) and versions != [] -> {:ok, hd(versions)}
@@ -101,7 +101,7 @@ defmodule Compendium.Pull do
   """
   @spec missing_deps(Context.t(), map(), keyword()) :: [String.t()]
   def missing_deps(%Context{} = ctx, component, opts \\ []) when is_map(component) do
-    manifest = Compendium.Manifest.decode(Map.get(component, :manifest))
+    manifest = Cyfr.Manifest.decode(Map.get(component, :manifest))
 
     with {:ok, deps} <-
            DependencyResolver.extract_from_manifest(manifest, component_id(component)) do
@@ -126,8 +126,8 @@ defmodule Compendium.Pull do
   """
   @spec oci_reference_for(String.t()) :: {:ok, String.t()} | {:error, String.t()}
   def oci_reference_for(reference) when is_binary(reference) do
-    case Sanctum.ComponentRef.parse(reference) do
-      {:ok, %Sanctum.ComponentRef{namespace: ns} = cref} ->
+    case Cyfr.ComponentRef.parse(reference) do
+      {:ok, %Cyfr.ComponentRef{namespace: ns} = cref} ->
         case Compendium.NamespacePolicy.refuse_remote_ingress(ns) do
           :ok -> to_oci_ref(cref)
           {:error, _message} = refused -> refused
@@ -170,7 +170,7 @@ defmodule Compendium.Pull do
   end
 
   defp present?(ctx, ref) do
-    case Sanctum.ComponentRef.parse(ref) do
+    case Cyfr.ComponentRef.parse(ref) do
       {:ok, cref} ->
         dep = %{
           dep_name: cref.name,
@@ -197,7 +197,7 @@ defmodule Compendium.Pull do
   defp component_id(%{id: id}) when is_binary(id), do: id
   defp component_id(component), do: to_string(component[:name] || "component")
 
-  defp to_oci_ref(%Sanctum.ComponentRef{version: nil} = cref) do
+  defp to_oci_ref(%Cyfr.ComponentRef{version: nil} = cref) do
     registry = Compendium.RegistryHost.canonical_host()
 
     # Ask whether there is a registry BEFORE resolving a tag: the tag list is
@@ -213,7 +213,7 @@ defmodule Compendium.Pull do
     end
   end
 
-  defp to_oci_ref(%Sanctum.ComponentRef{} = cref) do
+  defp to_oci_ref(%Cyfr.ComponentRef{} = cref) do
     registry = Compendium.RegistryHost.canonical_host()
 
     with :ok <- registry_configured(),

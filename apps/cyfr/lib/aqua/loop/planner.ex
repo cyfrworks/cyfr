@@ -9,7 +9,7 @@ defmodule Aqua.Loop.Planner do
 
   A request fits while the observed size stays under most of the usable
   window — the context window less the output ceiling and a margin — and
-  its bytes stay under the consented request cap (`Sanctum.Limits`
+  its bytes stay under the consented request cap (`Cyfr.Limits`
   `max_request_size`); past either the planner names the compaction
   boundary: the oldest row the model keeps reading (`first_kept_seq`,
   inclusive), chosen so a tool call is never parted from its results,
@@ -58,7 +58,7 @@ defmodule Aqua.Loop.Planner do
 
     # What the model will actually be sent. The projection keeps every row a
     # compaction already summarized — only the request drops them — so
-    # measuring the raw projection measures the whole conversation again and
+    # measuring the raw projection measures the whole thread again and
     # compacts on the first round of every later turn.
     rows = readable(rows)
 
@@ -192,8 +192,7 @@ defmodule Aqua.Loop.Planner do
   The request that produces a compaction summary: the rows before the
   boundary, shaped as `messages`, with the previous summary first when
   there is one, and the instruction to hand the work over in a summary.
-  `opts`: `:model`, `:max_tokens`, `:tools` (offered when the flush is
-  granted), `:previous_summary`.
+  `opts`: `:model`, `:max_tokens`, `:previous_summary`.
   """
   @spec summary_request([map()], keyword()) :: map()
   def summary_request(messages, opts) when is_list(messages) do
@@ -233,7 +232,6 @@ defmodule Aqua.Loop.Planner do
           ],
       "max_tokens" => Keyword.get(opts, :max_tokens, 4_096)
     }
-    |> maybe_tools(Keyword.get(opts, :tools))
   end
 
   @doc "A quarter of the bytes, never less than one token."
@@ -329,13 +327,8 @@ defmodule Aqua.Loop.Planner do
     byte_size(content || "") + byte_size(if(is_binary(payload), do: payload, else: ""))
   end
 
-  defp maybe_tools(request, tools) when is_list(tools) and tools != [],
-    do: Map.put(request, "tools", tools)
-
-  defp maybe_tools(request, _), do: request
-
   defp summary_instruction do
-    "You are compacting a long conversation for the assistant that will continue it. " <>
+    "You are compacting a long thread for the assistant that will continue it. " <>
       "Summarize faithfully and concretely; never invent; keep what the next steps need."
   end
 end

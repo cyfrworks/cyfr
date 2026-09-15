@@ -245,7 +245,7 @@ defmodule Compendium.AquaAgent do
 
   @doc "The digest of `to_manifest/1`: the agent's capability revision."
   @spec capability_digest(t()) :: {:ok, String.t()} | {:error, term()}
-  def capability_digest(agent), do: Sanctum.JCS.hash(to_manifest(agent))
+  def capability_digest(agent), do: Cyfr.JCS.hash(to_manifest(agent))
 
   @doc "One agent by name — the soul or a role, whichever the name is — through the overlay union."
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}

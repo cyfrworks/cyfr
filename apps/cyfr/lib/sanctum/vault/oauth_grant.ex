@@ -335,7 +335,7 @@ defmodule Sanctum.Vault.OAuthGrant do
              Arca.VaultStorage.update_binding(pending.athanor_id, id, %{
                binding_digest: digest
              }) do
-        broadcast(pending, id, :create)
+        broadcast(pending, id, target.name, :create)
         {:ok, %{entry_id: id, name: target.name, provider: target.provider, rebound: false}}
       end
     end
@@ -349,28 +349,9 @@ defmodule Sanctum.Vault.OAuthGrant do
 
       with {:ok, json} <- Payload.encode_material(fields, bundle),
            {:ok, sealed} <- seal(json, aad) do
-        case Arca.VaultStorage.rotate_payload(
-               entry.athanor_id,
-               entry.id,
-               entry.payload_rev,
-               sealed
-             ) do
-          :ok ->
-            with {:ok, rebound} <- maybe_rebind(entry, target) do
-              if entry.status == "needs_reauth" do
-                Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
-              end
-
-              broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
-
-              {:ok,
-               %{
-                 entry_id: entry.id,
-                 name: entry.name,
-                 provider: target.provider,
-                 rebound: rebound
-               }}
-            end
+        case commit_grant(entry, target, sealed) do
+          {:ok, rebound} ->
+            granted(pending, entry, target, rebound)
 
           {:error, :payload_conflict} ->
             # A concurrent material write landed between authorize and
@@ -396,35 +377,9 @@ defmodule Sanctum.Vault.OAuthGrant do
           aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
           with {:ok, json} <- Payload.encode_material(current_fields(entry), bundle),
-               {:ok, sealed} <- seal(json, aad) do
-            case Arca.VaultStorage.rotate_payload(
-                   entry.athanor_id,
-                   entry.id,
-                   entry.payload_rev,
-                   sealed
-                 ) do
-              :ok ->
-                with {:ok, rebound} <- maybe_rebind(entry, target) do
-                  # The same clear apply_grant does: a successful re-auth
-                  # must not leave the entry stuck at needs_reauth.
-                  if entry.status == "needs_reauth" do
-                    Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
-                  end
-
-                  broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
-
-                  {:ok,
-                   %{
-                     entry_id: entry.id,
-                     name: entry.name,
-                     provider: target.provider,
-                     rebound: rebound
-                   }}
-                end
-
-              {:error, reason} ->
-                {:error, reason}
-            end
+               {:ok, sealed} <- seal(json, aad),
+               {:ok, rebound} <- commit_grant(entry, target, sealed) do
+            granted(pending, entry, target, rebound)
           end
         end
 
@@ -433,13 +388,46 @@ defmodule Sanctum.Vault.OAuthGrant do
     end
   end
 
+  # The new material, a binding change and the entry's reactivation land in
+  # one transaction, the binding first: tokens granted for a new binding are
+  # never readable under a consent to the old one, and a binding that cannot
+  # move leaves the old material in place. `{:error, :payload_conflict}`
+  # when another material write landed since `entry` was read.
+  defp commit_grant(entry, target, sealed) do
+    Arca.Repo.transaction(fn ->
+      with {:ok, rebound} <- maybe_rebind(entry, target),
+           :ok <-
+             Arca.VaultStorage.rotate_payload(
+               entry.athanor_id,
+               entry.id,
+               entry.payload_rev,
+               sealed
+             ),
+           :ok <- reactivate(entry) do
+        rebound
+      else
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # A successful re-auth clears `needs_reauth`.
+  defp reactivate(%{status: "needs_reauth"} = entry),
+    do: Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
+
+  defp reactivate(_entry), do: :ok
+
+  defp granted(pending, entry, target, rebound) do
+    broadcast(pending, entry.id, entry.name, if(rebound, do: :rebind, else: :rotate))
+    {:ok, %{entry_id: entry.id, name: entry.name, provider: target.provider, rebound: rebound}}
+  end
+
   defp still_living(%{status: "tombstoned"}), do: {:error, :not_found}
   defp still_living(%{status: "revoked"}), do: {:error, :revoked}
   defp still_living(_), do: :ok
 
-  # Preserve v2 material fields across a re-auth; a v1 pointer (or an
-  # unreadable payload) converts to empty-fields material — the pointer's
-  # legacy rows are not this entry's material and never migrate silently.
+  # Preserve material fields across a re-auth; an unreadable payload
+  # converts to empty-fields material.
   defp current_fields(entry) do
     aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
@@ -453,9 +441,9 @@ defmodule Sanctum.Vault.OAuthGrant do
   end
 
   # A grant whose endpoints or scopes differ from the entry's stored
-  # binding fields is a binding change: update them, recompute the derived
-  # digest, and flip referencing profiles to needs_consent. The common
-  # re-auth (same binding) touches nothing.
+  # binding fields is a binding change, moved with the referencing profiles
+  # set needs_consent in one transaction (`Sanctum.Vault.move_binding/2`).
+  # The common re-auth (same binding) touches nothing.
   defp maybe_rebind(entry, target) do
     stored_endpoints = decode_map(entry.oauth_endpoints)
     stored_scopes = decode_list(entry.oauth_scopes)
@@ -470,30 +458,12 @@ defmodule Sanctum.Vault.OAuthGrant do
         oauth_scopes: Jason.encode!(target.scopes)
       }
 
-      rebound = Map.merge(Map.from_struct(entry), changes)
+      case Sanctum.Vault.move_binding(entry, changes) do
+        {:ok, _moved} ->
+          {:ok, true}
 
-      with {:ok, digest} <- VaultReader.binding_digest(rebound),
-           :ok <-
-             Arca.VaultStorage.update_binding(
-               entry.athanor_id,
-               entry.id,
-               Map.put(changes, :binding_digest, digest)
-             ),
-           {:ok, affected} <-
-             Arca.ConsentStorage.head_profiles_referencing(entry.athanor_id, entry.id) do
-        Enum.each(affected, fn profile_id ->
-          Arca.ProfileStorage.set_status(entry.athanor_id, profile_id, "needs_consent")
-        end)
-
-        {:ok, true}
-      else
         error ->
-          # The binding moved but the profiles that consented to the OLD
-          # binding may not have been flipped to needs_consent — so a wider
-          # grant could run under a consent nobody re-approved. Reporting
-          # success here is the one fail-open in the credential path: refuse
-          # instead, and let the caller surface it.
-          Logger.error("[Vault.OAuthGrant] rebind bookkeeping failed: #{inspect(error)}")
+          Logger.error("[Vault.OAuthGrant] rebind failed: #{inspect(error)}")
           {:error, :rebind_bookkeeping_failed}
       end
     end
@@ -503,17 +473,17 @@ defmodule Sanctum.Vault.OAuthGrant do
   # Plumbing
   # ---------------------------------------------------------------------------
 
-  defp broadcast(pending, entry_id, verb) do
+  defp broadcast(pending, entry_id, name, verb) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Cyfr.Topics.vault_changed(pending.athanor_id),
+      Cyfr.Bus.vault_changed(pending.athanor_id),
       {:vault_entry_changed, entry_id, verb}
     )
 
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Cyfr.Topics.vault_changed_global(),
-      {:vault_entry_changed_global, pending.athanor_id, entry_id, verb, %{}}
+      Cyfr.Bus.vault_changed_global(),
+      {:vault_entry_changed_global, pending.athanor_id, entry_id, verb, %{name: name}}
     )
   end
 

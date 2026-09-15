@@ -24,10 +24,10 @@ config :cyfr,
     Emissary.MCP.Tools.RecordsProvider,
     # Chat on the wire, so Prism is a client of the agent runtime rather
     # than the only way to reach it.
-    Emissary.MCP.ConversationTool,
+    Emissary.MCP.ThreadTool,
     # A card decided from the wire: the same door the console's buttons use.
     Emissary.MCP.ApprovalTool,
-    # What was kept out of a conversation — a separate object from the tape,
+    # What was kept out of a thread — a separate object from the tape,
     # which is what lets a thread be erased honestly.
     Emissary.MCP.NotesTool,
     # The athanor's files as the Files page shows them, one tier per folder.
@@ -37,7 +37,7 @@ config :cyfr,
     # would widen it for every agent.
     Compendium.MCP.SourceTool,
     # Domain services
-    Opus.MCP,
+    Cyfr.Execution.MCP,
     Cyfr.Schedules.Provider,
     Locus.MCP,
     Compendium.MCP,
@@ -77,18 +77,20 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# Configure the execution implementation before endpoint startup; unavailable code reports no engine.
-config :cyfr, :execution_impl, Opus
+# The worker services runs are dispatched to (`Cyfr.Execution.Dispatch`),
+# each a `Cyfr.WorkerAPI` module; a run goes to the first one loaded. With
+# none loaded, a run is refused as :execution_unavailable.
+config :cyfr, :workers, [Opus.WorkerService]
 
 # The byte store behind retained execution payloads
 # (`Arca.ExecutionPayloads.Store`): the athanor's own tree by default.
 config :cyfr, :execution_payload_store, Arca.ExecutionPayloads.Store.Overlay
 
 # Inbound request-param redaction (:filter_parameters) is set at boot by
-# Cyfr.Application from Sanctum.Sanitizer.filter_parameters/0 — the one
+# Cyfr.Application from Cyfr.Sanitizer.filter_parameters/0 — the one
 # redaction vocabulary. It is not spelled here so it cannot drift from it.
 # Outbound response bodies are redacted at their call sites with
-# Sanctum.Sanitizer.sanitize/1.
+# Cyfr.Sanitizer.sanitize/1.
 
 # Arca Repo adapter is selected at build time — Ecto can't swap adapters at
 # runtime. The one CYFR_DATABASE parse lives in database_choice.exs (shared
@@ -101,11 +103,15 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
   :sqlite ->
     config :cyfr, :repo_adapter, Ecto.Adapters.SQLite3
 
+    # Every transaction takes the write lock at BEGIN. A deferred transaction
+    # that reads and then writes fails with SQLITE_BUSY_SNAPSHOT when another
+    # write committed in between, which would surface as a lost write.
     config :cyfr, Arca.Repo,
       database: Path.expand("data/cyfr.db"),
       pool_size: 20,
       journal_mode: :wal,
-      busy_timeout: 5_000
+      busy_timeout: 5_000,
+      default_transaction_mode: :immediate
 
   :postgres ->
     config :cyfr, :repo_adapter, Ecto.Adapters.Postgres
@@ -152,16 +158,12 @@ config :cyfr, :tincture_max_decompressed_bytes, 256 * 1024 * 1024
 config :cyfr, :cache_max_binary_bytes, 256 * 1024 * 1024
 config :cyfr, :cache_max_compiled_components, 32
 
-# External MCP server connections per athanor, and concurrent in-flight
-# calls one server process admits before refusing (`Emissary.MCP`).
+# External MCP server connections per athanor, concurrent in-flight calls
+# one server process admits before refusing (`Emissary.MCP`), and the
+# backends one stdio server may define (`Emissary.MCP.BackendDefinition`).
 config :cyfr, :max_external_servers, 50
 config :cyfr, :external_server_max_in_flight, 8
-
-# How long a dispensed OAuth token stays tracked for output masking
-# (`Opus.OAuthTokenTracker`), how long a returning sign-in waits on the
-# cyfr.run probe before proceeding without it (`Sanctum.SignIn`), and the
-# retention sweep interval (`Cyfr.RetentionScheduler`).
-config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
+config :cyfr, :max_backends_per_server, 4
 
 # The deadline, in milliseconds, for one provisioning attempt's required
 # dependency pulls: the closure of every component the bundle cannot run
@@ -172,12 +174,11 @@ config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
 # waits up to two minutes per request and retries twice, so one stalled
 # blob can hold an attempt for several minutes within this bound.
 config :cyfr, :provisioning_required_pull_budget_ms, :timer.minutes(10)
-config :cyfr, :returning_probe_ms, 5_000
-# The context window assumed for a model whose catalyst reports none and
-# whose catalyst name the host's table does not know, in tokens. The loop
-# compacts a conversation against this when nothing better is reported.
-config :cyfr, :model_context_window_default, 128_000
 
+# How long a returning sign-in waits on the cyfr.run probe before
+# proceeding without it (`Sanctum.SignIn`), in milliseconds, and the
+# retention sweep interval (`Cyfr.RetentionScheduler`).
+config :cyfr, :returning_probe_ms, 5_000
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 
 # How long an approval card waits for a decision before it expires as a
@@ -204,11 +205,11 @@ config :cyfr, Cyfr.Retention,
   policy_log_days: 30,
   # Days of MCP request log kept.
   mcp_log_days: 30,
-  # Days of conversation messages kept.
+  # Days of thread messages kept.
   messages_days: 365
 
 # Read-but-not-set here, deliberately: `:webhook_max_body_bytes` derives
-# its default from `Sanctum.Limits.default_max_request_size/0` (a literal
+# its default from `Cyfr.Limits.default_max_request_size/0` (a literal
 # here would be a second spelling of a derived value), and
 # `:platform_ceiling` is a structured policy override
 # (`Sanctum.Policy.Ceiling`), not a scalar knob.

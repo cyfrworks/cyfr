@@ -6,7 +6,7 @@ defmodule PrismWeb.FilesLive do
   The athanor's files, one tree: the folders the storage layout shows a
   person, each in its tier. `data/` is theirs to fill and clear;
   `components/` and `aqua/` hold shaped units whose files are edited in
-  place; `notes/` and `conversations/` are read here and managed on
+  place; `notes/` and `threads/` are read here and managed on
   their own pages. The server's own storage is not a folder at all.
 
   Every read and change goes through the `file` tool; the bytes of a
@@ -228,9 +228,9 @@ defmodule PrismWeb.FilesLive do
         "disable or reset them from the AQUA page."
 
   defp tier_hint(:read, "notes" <> _),
-    do: "Kept out of conversations — managed on the Notes surface."
+    do: "Kept out of threads — managed on the Notes surface."
 
-  defp tier_hint(:read, "conversations" <> _),
+  defp tier_hint(:read, "threads" <> _),
     do: "Chat attachments — managed from the threads they belong to."
 
   defp tier_hint(_tier, _path), do: nil

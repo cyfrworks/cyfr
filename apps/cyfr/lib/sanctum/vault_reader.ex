@@ -28,15 +28,13 @@ defmodule Sanctum.VaultReader do
   per entry. An OAuth `projection.scopes` is enforced at dispense: the
   requested scopes must be a subset of what the entry was authorized
   for, because an issued token cannot be attenuated after the fact.
-
-  `Sanctum.Vault.Payload` rejects version-1 pointers as `{:error, :legacy_pointer_retired}`.
   """
 
   require Logger
 
   alias Sanctum.CipherAAD
   alias Sanctum.Context
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   @type vault_resource :: %{
           required(:entry_id) => String.t(),
@@ -88,13 +86,16 @@ defmodule Sanctum.VaultReader do
   @doc """
   Unseal an entry's v2 material by name, returning `%{field => value}`.
 
-  For host-side credential resolution that has **no consent edge** — the
-  external-MCP header plane, where a `vault:<name>` reference maps to a
-  single-field entry. Deliberately no binding-digest check (there is no consent
-  digest to compare against) and no projection; the caller enforces its own
-  single-value policy. This is host code, not guest code, so there is no
-  anonymous caller to reject. Fails closed on a missing, non-`active`, or v1
-  entry, exactly as the consent path does.
+  For the external MCP servers' credentials, which have **no consent edge**:
+  a `vault:<name>` template in an http server's headers or a stdio backend's
+  env maps to a single-field entry. The binding is the server definition
+  itself, and only an interactive session writes one (`mcp_servers.create`
+  and `update` declare `consent: :interactive`). No binding-digest check
+  (there is no consent digest to compare against) and no projection; the
+  caller enforces its own single-value policy. This is host code, not guest
+  code, so there is no anonymous caller to reject. Fails closed on a
+  missing, non-`active`, or unreadable entry, exactly as the consent path
+  does.
   """
   @spec unseal_by_name(String.t(), String.t()) ::
           {:ok, %{String.t() => String.t()}} | {:error, error()}

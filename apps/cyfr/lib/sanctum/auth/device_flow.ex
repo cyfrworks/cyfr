@@ -46,6 +46,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       device: "https://github.com/login/device/code",
       token: "https://github.com/login/oauth/access_token",
       userinfo: "https://api.github.com/user",
+      emails: "https://api.github.com/user/emails",
       scope: "read:user user:email"
     },
     google: %{
@@ -55,6 +56,15 @@ defmodule Sanctum.Auth.DeviceFlow do
       scope: "openid email profile"
     }
   }
+
+  # The endpoints a flow talks to. A suite points them at a stand-in IdP
+  # with `config :cyfr, :device_flow_endpoints, %{github: %{token: url}}`,
+  # so the sign-in it drives is this module's own; like `impl/0` it is a
+  # test seam, not an operator setting.
+  defp urls(provider) do
+    overrides = Application.get_env(:cyfr, :device_flow_endpoints, %{})
+    Map.merge(Map.fetch!(@provider_urls, provider), Map.get(overrides, provider, %{}))
+  end
 
   # Default polling configuration
   @default_poll_interval 5
@@ -313,7 +323,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   # ============================================================================
 
   defp request_device_code(provider, client_id) when provider in [:github, :google] do
-    urls = @provider_urls[provider]
+    urls = urls(provider)
 
     body =
       URI.encode_query(%{
@@ -352,7 +362,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   # ============================================================================
 
   defp request_token(provider, client_id, device_code) when provider in [:github, :google] do
-    urls = @provider_urls[provider]
+    urls = urls(provider)
 
     # Google's device-flow token endpoint REQUIRES client_secret in the body
     # or returns {"error": "invalid_request"}; GitHub's device-flow tokens
@@ -422,7 +432,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       {"user-agent", "cyfr-server"}
     ]
 
-    case http_get(@provider_urls[:github].userinfo, headers) do
+    case http_get(urls(:github).userinfo, headers) do
       {:ok, %{"id" => id} = user_data} ->
         # The public profile email carries no verification signal; the
         # primary from /user/emails does, and the door needs it.
@@ -454,7 +464,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       {"accept", "application/json"}
     ]
 
-    case http_get(@provider_urls[:google].userinfo, headers) do
+    case http_get(urls(:google).userinfo, headers) do
       {:ok, %{"sub" => sub, "email_verified" => true} = user_data} ->
         {:ok,
          %{
@@ -485,7 +495,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       {"user-agent", "cyfr-server"}
     ]
 
-    case http_get("https://api.github.com/user/emails", headers) do
+    case http_get(urls(:github).emails, headers) do
       {:ok, emails} when is_list(emails) ->
         case Enum.find(emails, &(&1["primary"] == true)) do
           %{"email" => email} = primary -> {:ok, email, primary["verified"] == true}

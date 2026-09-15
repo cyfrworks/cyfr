@@ -46,7 +46,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
 | **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read the vault. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Full access to all operations including key management. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server — take a signed-in session instead. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -88,7 +88,7 @@ cyfr key create --name "react-app" --type application
 cyfr key create --name "node-backend" --type service
 
 # Service key with extra scope
-cyfr key create --name "node-backend-rw" --type service --scope "vault_read,vault_write"
+cyfr key create --name "node-backend-rw" --type service --scope "vault_read,component_manage"
 
 # Admin key (CI/CD) with IP allowlist — defaults to * (all scopes)
 cyfr key create --name "github-actions" --type admin --ip-allowlist "140.82.112.0/20"
@@ -130,13 +130,11 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 |-------|----------------|
 | `execute` | Run components, manage schedules, compile builds |
 | `vault_read` | Read stored credential metadata (vault entries; material never leaves the vault) |
-| `vault_write` | Store/replace provider credentials (e.g. `oauth set_client`) |
 | `component_read` | Get component blobs, discover components |
 | `component_manage` | Pull, push, register, remove, scaffold components |
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
 | `storage_write` | Set retention policies |
-| `execution_write` | Service-level execution management |
-| `admin` | API key management, retention cleanup, session operations, force-release |
+| `admin` | API key management, retention cleanup, session operations, force-release, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
 | `*` | Wildcard — all permissions |
 
 #### Key Type Defaults and Ceilings
@@ -146,8 +144,8 @@ Each key type has default scopes (applied when none are specified) and a ceiling
 | Type | Default Scopes | Allowed Scopes (Ceiling) |
 |------|---------------|--------------------------|
 | **Application** | `["execute", "component_read", "storage_read"]` | `["execute", "vault_read", "component_read", "storage_read"]` |
-| **Service** | `["execute", "vault_read", "component_read", "storage_read", "storage_write"]` | `["execute", "vault_read", "vault_write", "component_read", "component_manage", "storage_read", "storage_write", "execution_write"]` |
-| **Admin** | `["*"]` (all) | `["vault_read", "vault_write", "admin", "*"]` |
+| **Service** | `["execute", "vault_read", "component_read", "storage_read", "storage_write"]` | `["execute", "vault_read", "component_read", "component_manage", "storage_read", "storage_write"]` |
+| **Admin** | `["*"]` (all) | `["vault_read", "admin", "*"]` |
 
 ### Rate Limiting
 
@@ -1061,14 +1059,13 @@ A typical live-data pipeline:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CYFR_GITHUB_CLIENT_ID` | — | GitHub OAuth app client ID (for `cyfr login`) |
-| `CYFR_GITHUB_CLIENT_SECRET` | — | GitHub OAuth app client secret |
 | `CYFR_GOOGLE_CLIENT_ID` | — | Google OAuth client ID (alternative sign-in provider) |
 | `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
 | `CYFR_SESSION_TTL_HOURS` | `720` | Session idle timeout in hours (30 days; `0` = never expire) |
 | `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oauth` (GitHub/Google) or `oidc` (federated) |
 | `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails of the server's operators (platform admins). They are always let in and manage the door — the server allowlist (`cyfr admin allow <email\|user_id\|*>`) that decides who else may sign in. Everyone not on either list is refused at sign-in (403). |
 | `CYFR_MAX_ATHANORS`, `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES` | unset (off) | Public-door caps for a server whose allowlist is `*`. Note `CYFR_ATHANOR_STORAGE_BYTES` in particular: unset, an athanor's storage has no total-byte ceiling (each write is still bounded, and files per scope are backstopped) — a server exposed to others sets it deliberately. |
-| `CYFR_MAX_CONVERSATIONS_PER_ATHANOR` | `1000` | Threads one estate may hold (`0` = off). A thread is a row any member — or any headless client of theirs, via `conversation.create` — can mint, each with a follow row of its own, so an estate's count needs a ceiling the way its DMs do. |
+| `CYFR_MAX_THREADS_PER_ATHANOR` | `1000` | Threads one estate may hold (`0` = off). A thread is a row any member — or any headless client of theirs, via `thread.create` — can mint, each with a follow row of its own, so an estate's count needs a ceiling the way its DMs do. |
 | `CYFR_MAX_PAIRS_PER_PERSON` | `200` | Active DMs one person may hold open (`0` = off). A DM is minted for two and asks nobody else's consent, so the cap is checked for both people; without it one member of a large room could spend `CYFR_MAX_ATHANORS` for everyone by opening a DM with every co-member. |
 
 ### Platform admins

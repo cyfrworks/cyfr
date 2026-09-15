@@ -141,7 +141,7 @@ defmodule Arca.Adapters.Local do
         _ -> 0
       end
 
-    if existing + byte_size(content) > Sanctum.Limits.default_max_response_size() do
+    if existing + byte_size(content) > Cyfr.Limits.default_max_response_size() do
       {:error, :object_too_large}
     else
       :ok
@@ -192,9 +192,10 @@ defmodule Arca.Adapters.Local do
 
   defp kind(path), do: if(File.dir?(path), do: :dir, else: :file)
 
-  # A `put/3` in flight (or a crashed one): named `<file>.tmp.<n>` next to
-  # its target. Never content — listings, walks and usage skip the pattern,
-  # and `sweep_stale_tmp/1` reclaims orphans.
+  # A `put/3` in flight, or a `replace_tree/3`'s staged or retired tree (or
+  # a crashed one's): named `<name>.tmp.<n>` next to its target. Never
+  # content — listings, walks and usage skip the pattern, and
+  # `sweep_stale_tmp/1` reclaims orphans.
   defp tmp_name?(name), do: Arca.Storage.tmp_name?(name)
 
   @impl true
@@ -325,6 +326,106 @@ defmodule Arca.Adapters.Local do
       {:ok, Plug.Conn.send_file(conn, status, full_path)}
     else
       {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Replace the directory tree at `path` with `files`
+  (`c:Arca.Storage.replace_tree/3`).
+
+  Every file is written under a staging directory beside `path`, named
+  `<name>.tmp.<n>` so listings, walks and usage skip it. The tree at `path`
+  is then renamed aside under another such name, the staged tree renamed
+  into its place, and the previous tree removed. A reader opening a file
+  under `path` reads the previous tree before the second rename and the
+  new one after it; between the two renames, which follow one another
+  directly, `path` holds nothing, and a reader that lists the tree and
+  then opens its files across that moment can read files of both. If the
+  second rename fails, the previous tree is renamed back.
+
+  A failure while staging removes the staging directory and leaves `path`
+  as it was. A crash between the renames leaves `path` empty until the
+  next replacement, with both trees under temporary names that
+  `sweep_stale_tmp/1` reclaims.
+  """
+  @impl true
+  def replace_tree(%Context{} = ctx, path, files) when is_list(files) do
+    refuse_seed_write!(path)
+    live = build_path(ctx, path)
+    staged = tmp_path(live)
+
+    with :ok <- stage(ctx, path, staged, files),
+         :ok <- swap(live, staged) do
+      :ok
+    else
+      {:error, _} = error ->
+        File.rm_rf(staged)
+        error
+    end
+  end
+
+  defp tmp_path(path), do: "#{path}.tmp.#{System.unique_integer([:positive])}"
+
+  # A staged file lands at a fresh name no reader resolves, so it is
+  # written in place rather than through `put/3`'s rename.
+  defp stage(ctx, path, staged, files) do
+    with :ok <- File.mkdir_p(staged) do
+      Enum.reduce_while(files, :ok, fn {rel, content}, :ok ->
+        # Validates `rel` and its containment exactly as a write would.
+        _live_file = build_path(ctx, path ++ rel)
+        target = Path.join([staged | rel])
+
+        with {:ok, bytes} <- file_bytes(content),
+             :ok <- File.mkdir_p(Path.dirname(target)),
+             :ok <- File.write(target, bytes) do
+          {:cont, :ok}
+        else
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  defp file_bytes(bytes) when is_binary(bytes), do: {:ok, bytes}
+  defp file_bytes(fun) when is_function(fun, 0), do: fun.()
+
+  defp swap(live, staged) do
+    retired = tmp_path(live)
+
+    with :ok <- File.mkdir_p(Path.dirname(live)) do
+      case File.rename(live, retired) do
+        :ok ->
+          case File.rename(staged, live) do
+            :ok ->
+              remove_retired(retired)
+
+            {:error, _} = error ->
+              File.rename(retired, live)
+              error
+          end
+
+        {:error, :enoent} ->
+          File.rename(staged, live)
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  # The replacement has landed; a previous tree that cannot be removed
+  # stays hidden under its temporary name until the sweep reclaims it.
+  defp remove_retired(retired) do
+    case File.rm_rf(retired) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason, file} ->
+        Logger.warning(
+          "[Arca.Local.replace_tree] previous tree not removed (#{inspect(reason)} at #{file})"
+        )
+
+        :ok
     end
   end
 

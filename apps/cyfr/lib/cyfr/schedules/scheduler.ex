@@ -5,7 +5,7 @@ defmodule Cyfr.Schedules.Scheduler do
   @moduledoc """
   The scheduler of recurring component executions: a timer per active
   schedule (`Process.send_after/3`), each firing claiming one occurrence
-  and running it through the execution port.
+  and running it as a root (`Cyfr.Execution.run_root/5`).
 
   Each occurrence fires at most once across the cluster:
   `Arca.ScheduleOccurrences.claim/3` advances the schedule's cursor and
@@ -65,8 +65,7 @@ defmodule Cyfr.Schedules.Scheduler do
 
   @impl true
   def handle_continue(:load_schedules, state) do
-    state = state |> load_all_schedules() |> recover_occurrences()
-    {:noreply, state}
+    {:noreply, state |> load_all_schedules() |> recover_when_owner()}
   end
 
   @impl true
@@ -86,10 +85,18 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   @impl true
+  # A boot that does not own the control plane claims no occurrence: the
+  # schedule is asked again at the recheck.
   def handle_info({:fire, schedule_id}, state) do
     state = %{state | timers: Map.delete(state.timers, schedule_id)}
-    {:noreply, fire_schedule(schedule_id, state)}
+
+    case Cyfr.ControlPlane.when_owner(fn -> fire_schedule(schedule_id, state) end) do
+      :not_owner -> {:noreply, recheck_later(schedule_id, state)}
+      fired -> {:noreply, fired}
+    end
   end
+
+  def handle_info(:recover_occurrences, state), do: {:noreply, recover_when_owner(state)}
 
   def handle_info({:recheck, schedule_id}, state) do
     state = %{state | timers: Map.delete(state.timers, schedule_id)}
@@ -218,6 +225,17 @@ defmodule Cyfr.Schedules.Scheduler do
 
       timer_failed(schedule.id, inspect(reason))
       acc
+  end
+
+  defp recover_when_owner(state) do
+    case Cyfr.ControlPlane.when_owner(fn -> recover_occurrences(state) end) do
+      :not_owner ->
+        Process.send_after(self(), :recover_occurrences, @recheck_ms)
+        state
+
+      recovered ->
+        recovered
+    end
   end
 
   # What the last scheduler left open: a claimed occurrence was never
@@ -429,7 +447,7 @@ defmodule Cyfr.Schedules.Scheduler do
     end
   end
 
-  # One invocation through the execution port, the occurrence joined to
+  # One root run, the occurrence joined to
   # the execution by its admission; the occurrence closes with the
   # answer, whichever it is.
   defp run(schedule, occurrence, ctx, exec_reference, input) do
@@ -698,7 +716,7 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   defp broadcast_update(ctx) do
-    case Phoenix.PubSub.broadcast(Emissary.PubSub, Cyfr.Topics.schedules(ctx), :schedules_updated) do
+    case Phoenix.PubSub.broadcast(Emissary.PubSub, Cyfr.Bus.schedules(ctx), :schedules_updated) do
       :ok ->
         :ok
 

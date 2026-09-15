@@ -97,10 +97,7 @@ func TestSetToken_Persists(t *testing.T) {
 	cfg := &Config{
 		CurrentContext: "local",
 		Contexts: map[string]*Context{
-			// A legacy config: the credential lives under session_id. A
-			// token write must land on `token` AND clear the legacy field,
-			// so the file converges on the modern shape.
-			"local": {URL: "http://127.0.0.1:4000", SessionID: "legacy-session"},
+			"local": {URL: "http://127.0.0.1:4000"},
 		},
 	}
 	if err := cfg.SaveTo(path); err != nil {
@@ -111,7 +108,6 @@ func TestSetToken_Persists(t *testing.T) {
 	// assignment + SaveTo manually to avoid touching the home dir.
 	ctx := cfg.Current()
 	ctx.Token = "test-token-123"
-	ctx.SessionID = ""
 	if err := cfg.SaveTo(path); err != nil {
 		t.Fatalf("SaveTo after token set failed: %v", err)
 	}
@@ -127,9 +123,6 @@ func TestSetToken_Persists(t *testing.T) {
 	loaded, err := LoadFrom(path)
 	if err != nil {
 		t.Fatalf("LoadFrom failed: %v", err)
-	}
-	if loaded.Contexts["local"].SessionID != "" {
-		t.Errorf("legacy session_id survived the token write: %q", loaded.Contexts["local"].SessionID)
 	}
 	if loaded.Contexts["local"].Credential() != "test-token-123" {
 		t.Errorf("expected credential 'test-token-123', got %q", loaded.Contexts["local"].Credential())

@@ -22,7 +22,7 @@ defmodule Aqua.ToolGrants do
 
   An agent belongs to the estate whose `aqua/` tree holds it, and a tape
   runs its own estate's agents alone, so every row is keyed by the estate
-  in focus: a conversation-scope answer by the thread, an agent-scope one
+  in focus: a thread-scope answer by the thread, an agent-scope one
   by the estate and the agent's name.
 
   ## Destructive and external actions take no standing allow
@@ -38,8 +38,8 @@ defmodule Aqua.ToolGrants do
 
   A tool declares `standing:` beside `kind:` on an action. `false` means
   no standing allow at any scope (a pinned page, read into every turn, is
-  changed one click at a time); `:conversation` means a standing allow for
-  one conversation and never agent scope (a filed note follows the thread
+  changed one click at a time); `:thread` means a standing allow for
+  one thread and never agent scope (a filed note follows the thread
   it was kept from, not the agent). Absent means either scope. The same
   declaration is minted into the approval intent the runner checks, so
   the two gates cannot disagree.
@@ -175,7 +175,7 @@ defmodule Aqua.ToolGrants do
   # counting. A deny is always honoured.
   defp standing_allows(rows) do
     Enum.filter(rows, fn row ->
-      is_map(row) and check_standing(row, Map.get(row, :scope, "conversation"), "allow") == :ok
+      is_map(row) and check_standing(row, Map.get(row, :scope, "thread"), "allow") == :ok
     end)
   end
 
@@ -185,31 +185,31 @@ defmodule Aqua.ToolGrants do
   @unavailable {:unavailable, "The standing answers"}
 
   @doc """
-  The standing decisions bearing on one conversation and one agent: this
+  The standing decisions bearing on one thread and one agent: this
   thread's own, and the agent-scope ones of the estate.
 
   A store that cannot be read is `{:error, {:unavailable, _}}`, never an
   empty list: "no rows" would drop every deny and leave an authored
   `auto` automatic — an outage must stop the turn, not widen it.
   """
-  @spec for_conversation(Context.t(), String.t(), String.t()) ::
+  @spec for_thread(Context.t(), String.t(), String.t()) ::
           {:ok, [ToolGrant.t()]} | {:error, unavailable()}
-  def for_conversation(%Context{} = ctx, conversation_id, agent_name) do
-    with {:ok, by_agent} <- for_agents(ctx, conversation_id, [agent_name]) do
+  def for_thread(%Context{} = ctx, thread_id, agent_name) do
+    with {:ok, by_agent} <- for_agents(ctx, thread_id, [agent_name]) do
       {:ok, Map.get(by_agent, agent_name, [])}
     end
   end
 
   @doc """
-  `for_conversation/3` for every agent of a roster at once — one read of
+  `for_thread/3` for every agent of a roster at once — one read of
   the thread's rows, split by agent name — so a turn composes the soul
   AND each role it may clone into from the standing decisions made for
   that agent, with no read per role. Fails closed like it.
   """
   @spec for_agents(Context.t(), String.t(), [String.t()]) ::
           {:ok, %{String.t() => [ToolGrant.t()]}} | {:error, unavailable()}
-  def for_agents(%Context{} = ctx, conversation_id, names) when is_list(names) do
-    case ToolGrantStorage.list_for_conversation(Context.athanor!(ctx), conversation_id) do
+  def for_agents(%Context{} = ctx, thread_id, names) when is_list(names) do
+    case ToolGrantStorage.list_for_thread(Context.athanor!(ctx), thread_id) do
       {:ok, rows} ->
         by_name = rows |> Enum.filter(&(&1.agent_name in names)) |> Enum.group_by(& &1.agent_name)
         {:ok, Map.new(names, &{&1, Map.get(by_name, &1, [])})}
@@ -220,7 +220,7 @@ defmodule Aqua.ToolGrants do
   end
 
   @doc """
-  Every `{agent_name, tool, action}` a conversation currently auto-approves
+  Every `{agent_name, tool, action}` a thread currently auto-approves
   by a grant, for every agent that has rows in it — the runner's fast
   path, keyed by the agent a card names, so an answer given for one
   agent never runs another's card. Standing-checked and deny-subtracted
@@ -228,8 +228,8 @@ defmodule Aqua.ToolGrants do
   """
   @spec allowed_by_agent(Context.t(), String.t()) ::
           {:ok, MapSet.t({String.t(), String.t(), String.t()})} | {:error, unavailable()}
-  def allowed_by_agent(%Context{} = ctx, conversation_id) do
-    case ToolGrantStorage.list_for_conversation(Context.athanor!(ctx), conversation_id) do
+  def allowed_by_agent(%Context{} = ctx, thread_id) do
+    case ToolGrantStorage.list_for_thread(Context.athanor!(ctx), thread_id) do
       {:ok, rows} ->
         {:ok,
          rows
@@ -245,7 +245,7 @@ defmodule Aqua.ToolGrants do
   end
 
   @doc """
-  The `{tool, action}` pairs a conversation currently auto-approves BY A
+  The `{tool, action}` pairs a thread currently auto-approves BY A
   GRANT — what the runner's fast path checks before re-asking, and what
   the chat shows as its standing grants. An authored `auto` never mints a
   card, so it is never here; a deny for the same pair subtracts, so a
@@ -268,7 +268,7 @@ defmodule Aqua.ToolGrants do
   def scopes, do: @scopes
 
   @doc """
-  Record a decision. `scope` is `"conversation"` or `"agent"`, `effect`
+  Record a decision. `scope` is `"thread"` or `"agent"`, `effect`
   `"allow"` or `"deny"`. A standing allow for a destructive or external
   action is refused outright at either scope; a deny is always recordable.
   """
@@ -280,7 +280,7 @@ defmodule Aqua.ToolGrants do
 
   @doc """
   The row a decision writes, checked and not written: `put/2`'s attrs
-  with the athanor, the deciding person and the conversation the scope
+  with the athanor, the deciding person and the thread the scope
   keys on, for a caller that lands it inside a transaction of its own
   (`Arca.ToolGrantStorage.put/1`).
   """
@@ -291,7 +291,7 @@ defmodule Aqua.ToolGrants do
       {:ok,
        attrs
        |> Map.merge(%{athanor_id: Context.athanor!(ctx), granted_by: ctx.user_id})
-       |> Map.put(:conversation_id, conversation_for(scope, attrs))}
+       |> Map.put(:thread_id, thread_for(scope, attrs))}
     end
   end
 
@@ -310,9 +310,8 @@ defmodule Aqua.ToolGrants do
   def refusal_message({:scope_not_permitted, :never_standing}),
     do: "This action is decided one click at a time — it takes no standing answer."
 
-  def refusal_message({:scope_not_permitted, :conversation_only}),
-    do:
-      "This action can be pre-answered for this conversation only, not for the agent everywhere."
+  def refusal_message({:scope_not_permitted, :thread_only}),
+    do: "This action can be pre-answered for this thread only, not for the agent everywhere."
 
   def refusal_message({:scope_not_permitted, :unknown_kind}),
     do: "This action's kind is unknown, so no standing answer was recorded."
@@ -325,7 +324,7 @@ defmodule Aqua.ToolGrants do
   def revoke(%Context{} = ctx, %{scope: scope} = attrs) when scope in @scopes do
     attrs
     |> Map.put(:athanor_id, Context.athanor!(ctx))
-    |> Map.put(:conversation_id, conversation_for(scope, attrs))
+    |> Map.put(:thread_id, thread_for(scope, attrs))
     |> ToolGrantStorage.delete()
   end
 
@@ -357,16 +356,16 @@ defmodule Aqua.ToolGrants do
   defp check_declared_standing(tool, action, scope) do
     case Aqua.Kinds.standing_for(tool, action) do
       false -> {:error, {:scope_not_permitted, :never_standing}}
-      :conversation when scope == "agent" -> {:error, {:scope_not_permitted, :conversation_only}}
+      :thread when scope == "agent" -> {:error, {:scope_not_permitted, :thread_only}}
       _ -> :ok
     end
   end
 
-  # An agent-scope row names no conversation: it is the same answer in
+  # An agent-scope row names no thread: it is the same answer in
   # every thread, and storing the one it happened to be given in would
   # make the key ambiguous.
-  defp conversation_for("agent", _attrs), do: nil
-  defp conversation_for("conversation", attrs), do: Map.fetch!(attrs, :conversation_id)
+  defp thread_for("agent", _attrs), do: nil
+  defp thread_for("thread", attrs), do: Map.fetch!(attrs, :thread_id)
 
   defp key_string(%{tool: tool, action: action}), do: "#{tool}.#{action}"
 end

@@ -23,7 +23,7 @@ defmodule Opus.BootstrapFirstRunTest do
   @seed_root Path.expand("../../../../seed", __DIR__)
   @models ~w(claude openai gemini grok openrouter)
   @bundled ["catalysts/local/files/0.5.2", "catalysts/local/http/1.1.2"] ++
-             Enum.map(@models, &"catalysts/local/#{&1}/1.2.0")
+             Enum.map(@models, &"catalysts/local/#{&1}/1.3.1")
   @formulas ["formulas/local/list-models/0.6.2"]
 
   setup do
@@ -122,7 +122,7 @@ defmodule Opus.BootstrapFirstRunTest do
     assert http_auth.resources.egress.domains == ["*"]
     # The one component allowed plaintext says so explicitly.
     assert Enum.sort(http_auth.resources.egress.schemes) == ["http", "https"]
-    assert Sanctum.Authority.limits(http_auth).rate_limit == %{requests: 60, window: "1m"}
+    assert Cyfr.Authority.limits(http_auth).rate_limit == %{requests: 60, window: "1m"}
   end
 
   test "a needs-declaring catalyst is not ready until its vault entry binds", %{ctx: ctx} do

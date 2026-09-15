@@ -67,7 +67,7 @@ defmodule Compendium.TinctureValidator do
          :ok <- check_type(manifest),
          :ok <- check_entry_in_pairs(files, manifest),
          :ok <- check_reserved_dirs_in_pairs(files) do
-      {digest, size} = compute_digest_from_pairs(files)
+      {digest, size} = Cyfr.Digest.file_set(files)
       {:ok, %{digest: digest, size: size, exports: []}}
     end
   end
@@ -163,7 +163,7 @@ defmodule Compendium.TinctureValidator do
       |> Enum.reject(fn {segs, _bytes} -> segs |> List.last() |> excluded?() end)
       |> Map.new(fn {segs, bytes} -> {Enum.join(segs, "/"), bytes} end)
 
-    compute_digest_from_pairs(Map.merge(bundle, extra_pairs))
+    Cyfr.Digest.file_set(Map.merge(bundle, extra_pairs))
   end
 
   # arca:bypass-ok=D — tar-extract tmp dir scan; see module note.
@@ -181,23 +181,12 @@ defmodule Compendium.TinctureValidator do
   end
 
   # arca:bypass-ok=D — tar-extract tmp dir; see module note.
-  # Digest format is Cyfr.Digest's — a tincture digest compares byte-equal
-  # with every other component digest in the components table.
   defp compute_digest(directory_path) do
-    files =
-      directory_path
-      |> list_files_recursive()
-      |> Enum.reject(&excluded?/1)
-      |> Enum.sort()
-
-    {chunks, total_size} =
-      Enum.reduce(files, {[], 0}, fn file, {acc, size} ->
-        relative = Path.relative_to(file, directory_path)
-        {:ok, content} = File.read(file)
-        {[content, relative | acc], size + byte_size(content)}
-      end)
-
-    {Cyfr.Digest.sha256_stream(Enum.reverse(chunks)), total_size}
+    directory_path
+    |> list_files_recursive()
+    |> Enum.reject(&excluded?/1)
+    |> Enum.map(&{Path.relative_to(&1, directory_path), File.read!(&1)})
+    |> Cyfr.Digest.file_set()
   end
 
   # Symlinks are refused before any walk: the digest and store walkers use
@@ -278,15 +267,5 @@ defmodule Compendium.TinctureValidator do
       nil -> :ok
       key -> {:error, "'#{String.split(key, "/") |> List.first()}' is a reserved directory name"}
     end
-  end
-
-  # Digest format is Cyfr.Digest's — see compute_digest/1.
-  defp compute_digest_from_pairs(files) do
-    sorted = files |> Map.to_list() |> Enum.sort_by(fn {k, _} -> k end)
-
-    total_size = Enum.reduce(sorted, 0, fn {_, content}, size -> size + byte_size(content) end)
-    chunks = Enum.flat_map(sorted, fn {relative, content} -> [relative, content] end)
-
-    {Cyfr.Digest.sha256_stream(chunks), total_size}
   end
 end

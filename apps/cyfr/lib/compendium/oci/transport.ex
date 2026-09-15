@@ -152,7 +152,7 @@ defmodule Compendium.OCI.Transport do
     # streams in — a hostile registry cannot flood the host's heap.
     case Cyfr.Network.pinned_request(method, url, headers, body,
            receive_timeout: @receive_timeout,
-           allow_private: :policy,
+           private_policy: :operator,
            max_response_bytes: Keyword.get(opts, :max_response_bytes, @default_max_response_bytes)
          ) do
       {:ok, 401, resp_headers, resp_body} ->

@@ -40,6 +40,8 @@ defmodule Arca.Schemas.Athanor do
     field :created_by, :string
     field :settings, :string
     field :provisioned_at, :utc_datetime_usec
+    field :provisioning_failed_at, :utc_datetime_usec
+    field :provisioning_failure, :string
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end
@@ -89,7 +91,7 @@ defmodule Arca.Schemas.Athanor do
     |> validate_inclusion(:status, @statuses)
     # The slug grammar is the namespace grammar: a person's athanor slug is
     # their cyfr.run namespace, a group's slug is chosen from its name.
-    |> validate_format(:slug, Sanctum.ComponentRef.personal_slug_regex(),
+    |> validate_format(:slug, Cyfr.ComponentRef.personal_slug_regex(),
       message: "must be lowercase alphanumeric with single hyphens"
     )
     |> validate_owner()

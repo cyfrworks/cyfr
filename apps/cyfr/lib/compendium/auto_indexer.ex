@@ -198,7 +198,7 @@ defmodule Compendium.AutoIndexer do
     if has_tincture_changes do
       Phoenix.PubSub.broadcast(
         Emissary.PubSub,
-        Cyfr.Topics.tinctures(ctx.athanor_id),
+        Cyfr.Bus.tinctures(ctx.athanor_id),
         {:tinctures_changed, ctx.athanor_id}
       )
     end

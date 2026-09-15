@@ -70,6 +70,11 @@ defmodule Locus.MCP do
               "description" =>
                 "Component reference to compile, e.g. 'catalyst:local.my-api:0.1.0' (compile action)"
             },
+            "resolve" => %{
+              "type" => "boolean",
+              "description" =>
+                "compile only, Rust: resolve the crates afresh and keep the new Cargo.lock — needed after a dependency changes; otherwise a component with a Cargo.lock builds locked to it"
+            },
             "wasm_base64" => %{
               "type" => "string",
               "description" => "Base64-encoded WASM binary (validate action)"
@@ -87,19 +92,33 @@ defmodule Locus.MCP do
   # Tool Handlers - Action-based dispatch
   # ============================================================================
 
-  # Intentionally public (no auth check): read-only introspection of available
-  # build toolchains. No user data or side effects.
+  # Intentionally public (no auth check): read-only introspection of the
+  # toolchains builds run with — the builder container's when one is
+  # configured. No user data or side effects.
   def handle("build", %Context{} = _ctx, %{"action" => "toolchains"}) do
-    {:ok, %{toolchains: Locus.Builder.available_toolchains()}}
+    if Locus.BuilderClient.enabled?() do
+      case Locus.BuilderClient.toolchains() do
+        {:ok, toolchains} ->
+          {:ok, %{toolchains: toolchains}}
+
+        {:error, :builder_unreachable} ->
+          {:error, {:unavailable, "The builder service"}}
+
+        {:error, {:builder_protocol_mismatch, _protocol, _release} = mismatch} ->
+          builder_mismatch(mismatch)
+      end
+    else
+      {:ok, %{toolchains: Locus.Builder.available_toolchains()}}
+    end
   end
 
   # Intentionally public (no auth check): stateless WASM binary validation.
   # Caller supplies the bytes; no server-side data is exposed.
   # Max base64 input size: 50MB binary ≈ 67MB base64
   # 64 MiB — the shared memory ceiling's spelling
-  # (`Sanctum.Limits.default_max_memory_bytes/0`), reused as the base64
+  # (`Cyfr.Limits.default_max_memory_bytes/0`), reused as the base64
   # input bound so the two cannot drift apart.
-  @max_base64_size Sanctum.Limits.default_max_memory_bytes()
+  @max_base64_size Cyfr.Limits.default_max_memory_bytes()
 
   # Validate stays deliberately public, but decoding and walking up to
   # 48 MiB of WASM is real CPU with no build-slot accounting — so each
@@ -121,10 +140,12 @@ defmodule Locus.MCP do
       when is_binary(reference) do
     with :ok <- builds_enabled(),
          {:ok, build_id} <- settle_build_id(ctx, args["build_id"]) do
+      resolve? = args["resolve"] == true
+
       if args["async"] == true do
-        start_async_compile(ctx, reference, build_id)
+        start_async_compile(ctx, reference, build_id, resolve?)
       else
-        run_compile(ctx, reference, build_id)
+        run_compile(ctx, reference, build_id, resolve?)
       end
     end
   end
@@ -229,11 +250,11 @@ defmodule Locus.MCP do
   defp settle_build_id(_ctx, _other),
     do: {:error, {:invalid_argument, "build_id must be a string"}}
 
-  defp run_compile(ctx, reference, build_id) do
+  defp run_compile(ctx, reference, build_id, resolve?) do
     case Locus.BuildLimiter.acquire(Locus.BuildLimiter, ctx.athanor_id) do
       :ok ->
         try do
-          do_run_compile(ctx, reference, build_id)
+          do_run_compile(ctx, reference, build_id, resolve?)
         after
           Locus.BuildLimiter.release()
         end
@@ -247,7 +268,7 @@ defmodule Locus.MCP do
   # Async mode: record "started", run the same pipeline off the request
   # process, record the outcome. Completion also rides the build:<id> topic
   # the progress callback already broadcasts on.
-  defp start_async_compile(ctx, reference, build_id) do
+  defp start_async_compile(ctx, reference, build_id, resolve?) do
     case Cyfr.BuildRecords.record_started(ctx, build_id, reference) do
       :ok ->
         logger_metadata = Cyfr.LoggerContext.capture()
@@ -256,7 +277,7 @@ defmodule Locus.MCP do
           Task.Supervisor.start_child(Locus.TaskSupervisor, fn ->
             Cyfr.LoggerContext.restore(logger_metadata)
 
-            case run_compile(ctx, reference, build_id) do
+            case run_compile(ctx, reference, build_id, resolve?) do
               {:ok, result} ->
                 Cyfr.BuildRecords.record_finished(ctx, build_id, "compiled", result)
 
@@ -299,7 +320,7 @@ defmodule Locus.MCP do
   defp format_async_error(reason),
     do: if(is_binary(reason), do: reason, else: inspect(reason))
 
-  defp do_run_compile(ctx, reference, build_id) do
+  defp do_run_compile(ctx, reference, build_id, resolve?) do
     build_meta = %{
       build_id: build_id,
       reference: reference,
@@ -321,7 +342,7 @@ defmodule Locus.MCP do
       with {:ok, type, name, version} <- parse_reference(reference),
            {:ok, version} <- resolve_version(ctx, reference, type, name, version),
            {:ok, source_files} <- read_source_tree(ctx, type, name, version),
-           {:ok, result} <- do_compile(source_files, type, on_progress) do
+           {:ok, result} <- do_compile(source_files, type, on_progress, resolve?) do
         # Save compiled artifacts — WASM binary or tincture output files
         store_result =
           if Map.has_key?(result, :output_files) do
@@ -331,7 +352,8 @@ defmodule Locus.MCP do
               Compendium.ComponentPath.wasm_path(type, publisher(), name, version)
 
             # Apply the tenant storage cap to bounded build output.
-            Arca.put(ctx, wasm_path, result.wasm_bytes)
+            with :ok <- Arca.put(ctx, wasm_path, result.wasm_bytes),
+                 do: keep_lockfile(ctx, type, name, version, source_files, result)
           end
 
         case store_result do
@@ -399,6 +421,11 @@ defmodule Locus.MCP do
                registration: "pending"
              }}
 
+          {:error, :atomic_replace_unsupported} ->
+            {:error,
+             "This server's storage cannot replace a tincture's dist/ without readers " <>
+               "seeing a partial build, so the build was not saved"}
+
           {:error, reason} ->
             Logger.error("[Locus.MCP] compiled artifact save failed: #{inspect(reason)}")
             {:error, {:unavailable, "The build store"}}
@@ -435,7 +462,7 @@ defmodule Locus.MCP do
     # drift. Every later step (source read, version resolution's target,
     # artifact store) uses the local publisher, so a non-local reference
     # must be refused here rather than silently renamespaced.
-    case Sanctum.ComponentRef.parse(reference) do
+    case Cyfr.ComponentRef.parse(reference) do
       {:ok, ref} ->
         case Compendium.NamespacePolicy.require_local_build(ref.namespace) do
           :ok -> {:ok, ref.type, ref.name, ref.version}
@@ -453,7 +480,7 @@ defmodule Locus.MCP do
   defp resolve_version(ctx, reference, _type, _name, nil) do
     case Compendium.Resolver.resolve(ctx, reference) do
       {:ok, resolved_ref, _metadata} ->
-        {:ok, parsed} = Sanctum.ComponentRef.parse(resolved_ref)
+        {:ok, parsed} = Cyfr.ComponentRef.parse(resolved_ref)
         {:ok, parsed.version}
 
       {:error, reason} ->
@@ -500,10 +527,25 @@ defmodule Locus.MCP do
     end
   end
 
+  # The Cargo.lock a Rust build used becomes the unit's, so the next build of
+  # the same sources is locked to it.
+  defp keep_lockfile(ctx, type, name, version, source_files, %{lockfile: lockfile})
+       when is_binary(lockfile) do
+    if Map.get(source_files, "Cargo.lock") == lockfile do
+      :ok
+    else
+      path = Compendium.ComponentPath.version_dir(type, publisher(), name, version)
+      Arca.put(ctx, path ++ ["src", "Cargo.lock"], lockfile)
+    end
+  end
+
+  defp keep_lockfile(_ctx, _type, _name, _version, _source_files, _result), do: :ok
+
   # Collect all source files under src_base as a map of relative paths to
   # contents — one subtree read, no per-entry probing. Excludes the shared
   # build droppings (target/, node_modules/, .git/ — the same predicate
-  # every tree copy applies) and keeps only .rs/.wit files and Cargo.toml.
+  # every tree copy applies) and keeps only .rs/.wit files, Cargo.toml and
+  # Cargo.lock.
   defp collect_source_files(ctx, src_base) do
     case Arca.read_subtree(ctx, src_base) do
       {:ok, pairs} ->
@@ -511,7 +553,7 @@ defmodule Locus.MCP do
             not Arca.Storage.build_dropping?(rel),
             name = List.last(rel),
             String.ends_with?(name, ".rs") or String.ends_with?(name, ".wit") or
-              name == "Cargo.toml",
+              name in ["Cargo.toml", "Cargo.lock"],
             into: %{} do
           {Path.join(rel), content}
         end
@@ -521,14 +563,11 @@ defmodule Locus.MCP do
     end
   end
 
-  defp language_for_type("tincture"), do: :javascript
-  defp language_for_type(_), do: :rust
-
-  defp do_compile(source_files, type, on_progress) do
+  defp do_compile(source_files, type, on_progress, resolve?) do
     target_type = String.to_existing_atom(type)
-    language = language_for_type(type)
+    language = Locus.Builder.language_for(target_type)
 
-    build_opts = [target_type: target_type, on_progress: on_progress]
+    build_opts = [target_type: target_type, on_progress: on_progress, resolve: resolve?]
 
     # The build-isolation seam: CYFR_BUILDER_URL set → the builder
     # container compiles; unset → in-process, with Locus.Builder's honest
@@ -557,6 +596,9 @@ defmodule Locus.MCP do
       {:error, {:builder_failed, message}} ->
         {:error, "Builder: #{message}"}
 
+      {:error, {:builder_protocol_mismatch, _protocol, _release} = mismatch} ->
+        builder_mismatch(mismatch)
+
       {:error, :builder_unreachable} ->
         Logger.warning(
           "[Locus.MCP] builder unreachable — check CYFR_BUILDER_URL and the container"
@@ -577,8 +619,10 @@ defmodule Locus.MCP do
     end
   end
 
-  # Exclude tincture dist/ and data.db in addition to shared build artifacts.
-  @tincture_excluded ~w(dist data.db)
+  # A tincture's build output lands under `dist/` and its `data.db` is data;
+  # neither is build input.
+  @dist "dist"
+  @tincture_excluded [@dist, "data.db"]
 
   defp collect_tincture_source(ctx, base) do
     case Arca.read_subtree(ctx, base) do
@@ -596,12 +640,13 @@ defmodule Locus.MCP do
   end
 
   @doc """
-  Save a tincture build into its version directory: the unit as it stands
-  with the build laid over it, the manifest riding as the sentinel.
+  Save a tincture build into its version directory: the build replaces the
+  unit's `dist/` whole, under the unit's lock, and the rest of the unit —
+  its manifest, its source and its own `data.db` — is not touched.
 
   Public because the toolchain half and the storage half fail
   independently. A test that drives `npm` proves the build; this proves the
-  save, which is where every JS tincture used to stop.
+  save.
   """
   @spec store_tincture_output(
           Sanctum.Context.t(),
@@ -612,60 +657,11 @@ defmodule Locus.MCP do
           %{String.t() => binary()} | [{String.t(), binary()}]
         ) :: :ok | {:error, term()}
   def store_tincture_output(ctx, type, publisher, name, version, output_files) do
-    base = Compendium.ComponentPath.version_dir(type, publisher, name, version)
-    sentinel = Compendium.ComponentPath.manifest_name()
+    unit = Compendium.ComponentPath.version_dir(type, publisher, name, version)
+    files = Enum.map(output_files, fn {rel, content} -> {Path.split(rel), content} end)
+    total_bytes = Enum.reduce(files, 0, fn {_segs, content}, acc -> acc + byte_size(content) end)
 
-    # One unit commit, like every other writer of this unit shape
-    # (Registry, Fork): sentinel-last, rollback on failure — a file-by-file
-    # loop once halted mid-way and left a partially-written version
-    # directory behind. Cap-CHECKED like the WASM save above — the old
-    # blanket exemption let repeated tincture builds walk an athanor past
-    # its storage quota 64 MiB at a time (only the builder's per-build
-    # ceilings applied).
-    #
-    # The build answers with `dist/`-relative paths, and the unit's
-    # completion file is its `cyfr-manifest.json`, which no `dist/` holds —
-    # so committing the build alone resolved no sentinel and saved nothing.
-    # Committing it alone would also have been wrong the moment it worked:
-    # `commit_unit` clears the unit first, and the unit is where the SOURCE
-    # lives — `package.json`, `vite.config.ts`, `src/`, `public/`, the
-    # tincture's own `data.db`. The commit is therefore the unit as it
-    # stands with the build laid over it, and the manifest rides as the
-    # sentinel rather than as a file the build was expected to produce.
-    with {:ok, manifest} <- Arca.get(ctx, base ++ [sentinel]),
-         {:ok, kept} <- unit_files(ctx, base, sentinel) do
-      built = Map.new(output_files, fn {rel, content} -> {Path.split(rel), content} end)
-      files = kept |> Map.merge(built) |> Enum.to_list()
-
-      total_bytes =
-        Enum.reduce(files, 0, fn {_segs, content}, acc -> acc + byte_size(content) end)
-
-      case Arca.Overlay.commit_unit(ctx, base, {:files, files},
-             cap: {:checked, total_bytes},
-             sentinel: manifest
-           ) do
-        {:ok, _written} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
-
-  # What the unit already holds, keyed by segments relative to the version
-  # directory, as `commit_unit`'s `{:files, …}` wants them. The manifest is
-  # excluded: it rides as the sentinel, which the commit writes last and by
-  # itself.
-  #
-  # This reads the whole unit — a tincture's own `data.db` included — because
-  # the commit clears the unit before it writes, so anything not handed back
-  # is lost. Phase 5's draft-and-revision model is what removes the read.
-  defp unit_files(ctx, base, sentinel) do
-    case Arca.read_subtree(ctx, base) do
-      {:ok, entries} ->
-        {:ok, entries |> Enum.reject(fn {segs, _} -> segs == [sentinel] end) |> Map.new()}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    Arca.Overlay.replace_subtree(ctx, unit, [@dist], files, cap: {:checked, total_bytes})
   end
 
   defp build_progress_callback(build_id, ctx, build_meta) do
@@ -679,7 +675,7 @@ defmodule Locus.MCP do
       if build_id do
         Phoenix.PubSub.broadcast(
           Emissary.PubSub,
-          Cyfr.Topics.build(build_id, ctx),
+          Cyfr.Bus.build(build_id, ctx),
           {:build_progress,
            %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
         )
@@ -694,4 +690,9 @@ defmodule Locus.MCP do
       :ok
     end
   end
+
+  # Operator prose naming both sides' protocol and release: the remedy is
+  # to run a builder image of this server's release.
+  defp builder_mismatch({:builder_protocol_mismatch, protocol, release}),
+    do: {:error, "Builder: " <> Locus.BuilderProtocol.mismatch(protocol, release)}
 end

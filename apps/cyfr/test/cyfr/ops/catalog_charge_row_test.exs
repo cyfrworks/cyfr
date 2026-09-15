@@ -12,8 +12,8 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Context
 
   @node "formula:local.charge-row"
@@ -55,7 +55,8 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
           invoke_mode: :open_inert,
           activation: %{@node => "sha256:charge-row"}
         },
-        blob
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
       )
 
     {:ok, %{attempt: root_attempt}} =
@@ -111,7 +112,7 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
       {:error, msg} when is_binary(msg) -> refute msg =~ "Denied by chain authority"
     end
 
-    assert Authority.budget(auth).in_flight == 0
+    assert Sanctum.Authority.budget(auth).in_flight == 0
     assert %{charged: 0} = Arca.BudgetReservations.lookup(@athanor, auth.budget.id)
     assert {:ok, []} = Arca.BudgetReservations.charges(@athanor, auth.budget.id)
   end
@@ -125,7 +126,7 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
 
     assert {:error, msg} = call(ctx, auth, charge)
     assert msg =~ "Denied by chain authority"
-    assert Authority.budget(auth).in_flight == 0
+    assert Sanctum.Authority.budget(auth).in_flight == 0
 
     assert {:ok, [%{id: "other"}]} = Arca.BudgetReservations.charges(@athanor, auth.budget.id)
   end
@@ -170,6 +171,6 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
              )
 
     assert msg =~ "Denied by chain authority"
-    assert Authority.budget(auth).in_flight == 0
+    assert Sanctum.Authority.budget(auth).in_flight == 0
   end
 end

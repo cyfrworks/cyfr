@@ -44,7 +44,7 @@ defmodule Arca.TenantArgumentOrderTest do
   defp offenders do
     root()
     |> Path.join(@storage_glob)
-    |> Path.wildcard()
+    |> Cyfr.Test.SourceTree.files!()
     |> Enum.flat_map(fn path ->
       file = Path.basename(path)
       exempt = Map.get(@exempt, file, [])

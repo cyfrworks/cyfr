@@ -25,10 +25,9 @@ defmodule Opus.ComponentType do
   - **Reagent**: Pure compute — no HTTP, no secrets, no side effects
   - **Formula**: Orchestration — dispatches MCP tool calls via `cyfr:formula/invoke@0.1.0` host function.
     All capabilities (component execution, registry search, build, guides) are governed by the
-    consent edges its authority carries. Sub-invocations run through the full Executor pipeline
-    (edge check, rate limit, credentials, WASM, masking, record write, telemetry). Each gets its
-    own `exec_<uuid7>` ID and stores
-    `parent_execution_id` for lineage tracking.
+    consent edges its authority carries. Sub-invocations are admitted, run and closed like any
+    execution (edge check, rate limit, credentials, WASM, masking, record write, telemetry). Each
+    gets its own `exec_<uuid7>` ID and stores `parent_execution_id` for lineage tracking.
 
   ## Secrets Access
 
@@ -94,7 +93,7 @@ defmodule Opus.ComponentType do
   # Both the string and atom parse paths derive from the canonical type
   # list, so a new executable type added there is accepted here without a
   # second edit.
-  @valid_type_strings Sanctum.ComponentRef.executable_types()
+  @valid_type_strings Cyfr.ComponentRef.executable_types()
   @valid_types Enum.map(@valid_type_strings, &String.to_atom/1)
 
   @doc """
@@ -152,7 +151,7 @@ defmodule Opus.ComponentType do
   # Nor does it get the host's stdout/stderr. Inheriting them handed every
   # guest — reagents included, whose whole definition is compute with no I/O —
   # an unbounded write straight into the operator's console and log
-  # aggregation: no `Opus.SecretMasker`, no emit rate limit, no emit size cap,
+  # aggregation: no `Cyfr.SecretMasker`, no emit rate limit, no emit size cap,
   # and a trivial way to fill a disk. `wasmex`'s WASI options are inherit-or-
   # nothing (there is no capture pipe to point somewhere safe), so this is
   # `false`. A component that wants to say something says it through `emit`,

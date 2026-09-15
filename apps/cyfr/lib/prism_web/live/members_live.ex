@@ -118,7 +118,7 @@ defmodule PrismWeb.MembersLive do
        socket
        |> put_flash(
          :info,
-         "A new group with the three of you. This conversation stays as it was — " <>
+         "A new group with the three of you. This thread stays as it was — " <>
            "nothing moves."
        )
        |> push_navigate(to: PrismWeb.Focus.path(route, "/members"))}
@@ -189,7 +189,7 @@ defmodule PrismWeb.MembersLive do
   # empty tape. Said before it happens, because people will read it as
   # data loss otherwise: it is, and it is deliberate.
   defp leave_confirm(%{roster: "frozen"}, _members) do
-    "Leaving ends this conversation for both of you — it is archived, and " <>
+    "Leaving ends this thread for both of you — it is archived, and " <>
       "messaging them again starts a new, empty one. Continue?"
   end
 
@@ -247,7 +247,7 @@ defmodule PrismWeb.MembersLive do
             phx-click="leave"
             data-confirm={leave_confirm(@athanor, @members)}
           >
-            {if frozen?(@athanor), do: "End conversation", else: "Leave group"}
+            {if frozen?(@athanor), do: "End thread", else: "Leave group"}
           </.button>
         </:actions>
       </.page_header>
@@ -264,7 +264,7 @@ defmodule PrismWeb.MembersLive do
               <% @athanor && @athanor.kind == "person" -> %>
                 Your own athanor. It has one member — you.
               <% @athanor && frozen?(@athanor) -> %>
-                A direct conversation — its two members were set when it opened, and
+                A direct thread — its two members were set when it opened, and
                 nobody else can join. To bring someone in, add them below: that starts
                 a new group with the three of you and leaves this one as it is.
               <% true -> %>

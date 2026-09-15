@@ -40,7 +40,8 @@ defmodule Sanctum.CatalogTest do
     root = Path.expand("../../../..", __DIR__)
 
     reaches =
-      for file <- Path.wildcard(Path.join(root, "apps/cyfr/lib/sanctum/consent/**/*.ex")),
+      for file <-
+            Cyfr.Test.SourceTree.files!(Path.join(root, "apps/cyfr/lib/sanctum/consent/**/*.ex")),
           line <- file |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
           line =~ ~r/\bEmissary\./,
           do: "#{Path.relative_to(file, root)}: #{String.trim(line)}"

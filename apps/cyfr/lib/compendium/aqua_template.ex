@@ -28,7 +28,6 @@ defmodule Compendium.AquaTemplate do
   alias Sanctum.Context
 
   @seed_prefix Arca.Storage.seed_prefix("aqua")
-  @legacy_agents AquaPath.legacy_agents_dirname()
 
   @doc "The template's seed segments: `[\"seed\", \"aqua\"]`."
   @spec seed_prefix() :: [String.t()]
@@ -36,45 +35,24 @@ defmodule Compendium.AquaTemplate do
 
   @doc """
   Whether the install ships a well-formed template: a soul file that
-  parses, and roles (optional) that each parse. Fails loud with a reason
-  — an older shape (`agents/` with no soul beside it, or a v2 `agent.json`)
-  gets a pointed message, so an operator who mounted an old tree learns it
-  at boot, not from an empty roster.
+  parses, and roles (optional) that each parse. Fails loud with a reason,
+  so an operator who mounted a broken tree learns it at boot, not from an
+  empty roster.
   """
   @spec seed_check() :: :ok | {:error, term()}
   def seed_check do
     ctx = Sanctum.system_context()
 
-    cond do
-      Arca.exists?(ctx, @seed_prefix ++ ["agent.json"]) ->
-        {:error, :seed_is_v2_shaped}
-
-      agents_shaped?(ctx) ->
-        {:error, :seed_is_agents_shaped}
-
-      true ->
-        with {:ok, _soul} <- seed_soul(ctx),
-             {:ok, _roles} <- seed_roles(ctx) do
-          :ok
-        end
-    end
-  end
-
-  # The shape before the soul had a file of its own: agents under
-  # `agents/`, no `aqua.md` beside them. A mount with a soul AND a stale
-  # `agents/` is the current shape carrying a leftover, and reads fine.
-  defp agents_shaped?(ctx) do
-    case Arca.list_typed(ctx, @seed_prefix ++ [@legacy_agents]) do
-      {:ok, [_ | _]} -> not Arca.exists?(ctx, @seed_prefix ++ [List.last(AquaPath.soul_file())])
-      _ -> false
+    with {:ok, _soul} <- seed_soul(ctx),
+         {:ok, _roles} <- seed_roles(ctx) do
+      :ok
     end
   end
 
   @doc """
   The files the seed ships, as paths relative to the aqua root — only what
   the tree's grammar recognises as a unit (the soul, `roles/*.md`, the
-  scrolls). A mount that still carries an older shape beside the shipped
-  one is not what the seed ships. A seed that cannot be listed answers
+  scrolls). A seed that cannot be listed answers
   nothing, and says so in the log — a silent empty list reads as "the
   install ships no files", which is never true.
   """
@@ -84,9 +62,7 @@ defmodule Compendium.AquaTemplate do
       {:ok, leaves} ->
         leaves
         |> Enum.map(&Enum.drop(&1, length(@seed_prefix)))
-        |> Enum.filter(fn rel ->
-          hd(rel) != @legacy_agents and AquaPath.locate(AquaPath.root() ++ rel) != :above_unit
-        end)
+        |> Enum.filter(&(AquaPath.locate(AquaPath.root() ++ &1) != :above_unit))
 
       {:error, reason} ->
         Logger.error(

@@ -31,7 +31,7 @@ defmodule Arca.DbRescueCoverageTest do
   @tag_marker ~r/#\s*arca:db-raise-ok\s+\S/
 
   defp sources do
-    [@root, "apps/cyfr/lib/arca", "**/*.ex"] |> Path.join() |> Path.wildcard()
+    [@root, "apps/cyfr/lib/arca", "**/*.ex"] |> Path.join() |> Cyfr.Test.SourceTree.files!()
   end
 
   # Same per-function segmentation as Arca.UnscopedQuerySeamTest: heads at

@@ -52,8 +52,8 @@ defmodule Sanctum.EstablishBoundaryTest do
   @caller "apps/cyfr/lib/sanctum/caller.ex"
 
   defp lib_files do
-    for dir <- ~w(apps/cyfr/lib apps/opus/lib apps/locus/lib),
-        file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
+    for dir <- Cyfr.Test.SourceTree.app_libs(@root),
+        file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
         do:
           {Path.relative_to(file, @root),
            Cyfr.Test.CodeLines.lines(Cyfr.Test.SourceTree.read(file))}

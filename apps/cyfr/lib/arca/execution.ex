@@ -156,7 +156,7 @@ defmodule Arca.Execution do
     case get_field(changeset, :kind) do
       "turn" -> validate_inclusion(changeset, :component_type, ["agent"])
       "tool_call" -> validate_inclusion(changeset, :component_type, ["tool_server"])
-      _ -> validate_inclusion(changeset, :component_type, Sanctum.ComponentRef.executable_types())
+      _ -> validate_inclusion(changeset, :component_type, Cyfr.ComponentRef.executable_types())
     end
   end
 
@@ -182,6 +182,15 @@ defmodule Arca.Execution do
   end
 
   @doc """
+  Whether `reason` is the refusal of one of `admit/2`'s barriers: an
+  expired hold, a superseded step, a parent that ended or an occurrence
+  not claimed.
+  """
+  @spec barrier_refusal?(term()) :: boolean()
+  def barrier_refusal?(reason),
+    do: reason in [:hold_expired, :step_superseded, :parent_ended, :occurrence_not_claimed]
+
+  @doc """
   Admit an execution: the row, its first attempt and, for a root, its
   budget reservation, in one transaction. `attrs` are the start
   changeset's; `opts`:
@@ -196,6 +205,11 @@ defmodule Arca.Execution do
     belongs to; the step barrier binds the child to it while the step is
     dispatched, on its generation and not cancelled, and admission is
     refused `{:error, :step_superseded}` otherwise.
+  - `:parent_attempt` — the attempt of the row's `parent_execution_id` this
+    child is admitted under; the parent barrier holds it while it owns its
+    running parent, running with no cancel asked of it
+    (`Arca.ExecutionAttempts.hold_for_child!/3`), and admission is refused
+    `{:error, :parent_ended}` otherwise.
   - `:payloads` — staged payloads (`Arca.ExecutionPayloads.Staged`)
     committed for the attempt in the same transaction; one that cannot
     be kept refuses admission `{:error, {:payload_not_retained, why}}`.
@@ -206,7 +220,8 @@ defmodule Arca.Execution do
 
   Answers `{:ok, %{execution: t(), attempt: ExecutionAttempt.t()}}`; the
   execution's `event_seq` is the number of the `execution.started` event
-  the transaction appended, for the caller to publish.
+  the transaction appended, for the caller to publish. A barrier's refusal
+  (`barrier_refusal?/1`) writes nothing.
   """
   @spec admit(map(), keyword()) ::
           {:ok, %{execution: struct(), attempt: struct()}} | {:error, term()}
@@ -260,6 +275,17 @@ defmodule Arca.Execution do
           %{id: step_id, generation: generation} ->
             if Arca.TurnStorage.bind_child!(athanor_id, step_id, generation, execution.id) != 1,
               do: Arca.Repo.rollback(:step_superseded)
+
+          nil ->
+            :ok
+        end
+
+        case Keyword.get(opts, :parent_attempt) do
+          parent_attempt when is_binary(parent_attempt) ->
+            parent_id = Map.fetch!(attrs, :parent_execution_id)
+
+            if Arca.ExecutionAttempts.hold_for_child!(athanor_id, parent_id, parent_attempt) != 1,
+              do: Arca.Repo.rollback(:parent_ended)
 
           nil ->
             :ok
@@ -649,7 +675,7 @@ defmodule Arca.Execution do
 
   System-internal: the `id` originates from trusted runtime state — the
   cancellation cascade (`list_running_children/1`, already tenant-scoped)
-  or the `Opus.ExecutionSweeper`'s own scan — never from caller-supplied
+  or the `Cyfr.Execution.Sweeper`'s own scan — never from caller-supplied
   input. `fence`: `attempt:` names the attempt being retired (the row's
   current one when absent); `lease_until:` is the lease the sweeper
   observed, and the attempt lapses only if that exact lease still stands,
@@ -856,7 +882,7 @@ defmodule Arca.Execution do
   `now` (the sweep), each as the row's map with the attempt's `attempt`,
   `runner_id` and `lease_until` beside it.
 
-  Intentionally spans all tenants: the `Opus.ExecutionSweeper` GC must reap
+  Intentionally spans all tenants: the `Cyfr.Execution.Sweeper` GC must reap
   orphaned rows left by a crashed runner — this node's or another
   node's — when no tenant context can be reconstructed. System-internal
   only — not reachable from a tenant request.
@@ -876,13 +902,45 @@ defmodule Arca.Execution do
         select: {e, a}
       )
       |> Arca.Repo.all()
-      |> Enum.map(fn {e, a} ->
-        e
-        |> Map.from_struct()
-        |> Map.delete(:__meta__)
-        |> Map.merge(%{attempt: a.attempt, runner_id: a.runner_id, lease_until: a.lease_until})
-      end)
+      |> Enum.map(&attempt_row/1)
     end)
+  end
+
+  @doc """
+  The running executions whose current attempt is one of `attempts`,
+  running and dispatched to the worker service boot `runner_id`, in the
+  shape `list_stale_running/2` answers. Spans every tenant: the ids come
+  from a verified worker service report or from an attempt's own state,
+  never from a request. `{:error, :database_error}` when the store cannot
+  answer.
+  """
+  @spec list_running_dispatched([String.t()], String.t()) :: [map()] | {:error, :database_error}
+  def list_running_dispatched(attempts, runner_id)
+      when is_list(attempts) and is_binary(runner_id) do
+    Arca.Repo.Errors.with_db_rescue("Execution.list_running_dispatched", fn ->
+      # arca:unscoped-ok a runner's attempts are lapsed across tenants when
+      # its worker service reports its exit; the ids are the report's.
+      from(a in Arca.Schemas.ExecutionAttempt,
+        join: e in __MODULE__,
+        on: e.id == a.execution_id and e.current_attempt == a.attempt,
+        where: a.attempt in ^attempts and a.runner_id == ^runner_id,
+        where: a.state == "running" and e.status == "running",
+        select: {e, a}
+      )
+      |> Arca.Repo.all()
+      |> Enum.map(&attempt_row/1)
+    end)
+  end
+
+  defp attempt_row({execution, attempt}) do
+    execution
+    |> Map.from_struct()
+    |> Map.delete(:__meta__)
+    |> Map.merge(%{
+      attempt: attempt.attempt,
+      runner_id: attempt.runner_id,
+      lease_until: attempt.lease_until
+    })
   end
 
   @doc """

@@ -14,8 +14,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Context
 
   @plane_refusal ~r/guest-plane context cannot/
@@ -69,7 +69,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
           invoke_mode: :open_inert,
           activation: %{node => "sha256:matrix"}
         },
-        blob
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
       )
 
     auth

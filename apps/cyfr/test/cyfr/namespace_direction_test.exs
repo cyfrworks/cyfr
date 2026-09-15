@@ -17,6 +17,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   use ExUnit.Case, async: true
 
   @engine_libs [
+    "apps/cyfr_contracts/lib",
     "apps/opus/lib",
     "apps/locus/lib",
     # The domain inside cyfr holds the same rule: storage, components and
@@ -40,7 +41,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   # layer, and an engine that names it has taken the browser surface as a
   # dependency. Scoped to apps/opus and apps/locus only; inside cyfr the
   # domain namespaces are held to the written-down roster below.
-  @engine_apps ["apps/opus/lib", "apps/locus/lib"]
+  @engine_apps ["apps/cyfr_contracts/lib", "apps/opus/lib", "apps/locus/lib"]
   @forbidden_web_from_engine_apps ~r/\bEmissaryWeb\.[A-Z]/
 
   defp root, do: Path.expand("../../../..", __DIR__)
@@ -51,7 +52,7 @@ defmodule Cyfr.NamespaceDirectionTest do
       root()
       |> Path.join(dir)
       |> Path.join("**/*.ex")
-      |> Path.wildcard()
+      |> Cyfr.Test.SourceTree.files!()
     end)
     |> Enum.flat_map(fn path ->
       path
@@ -82,7 +83,7 @@ defmodule Cyfr.NamespaceDirectionTest do
            #{Enum.map_join(found, "\n", &"  #{&1}")}
 
            A shared primitive that both the engine and the console need is
-           glue and belongs under `Cyfr.` — that is what `Cyfr.Topics` and
+           glue and belongs under `Cyfr.` — that is what `Cyfr.Bus` and
            `Cyfr.UUID7` are. Emissary is fair game (the MCP contract); a
            user interface is not.
            """
@@ -115,7 +116,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   # `{rel, module}` for every live domain→web reach, with its line.
   defp domain_web_reaches do
     for dir <- @domain_dirs,
-        path <- Path.wildcard(Path.join(root(), dir <> "/**/*.ex")),
+        path <- Cyfr.Test.SourceTree.files!(Path.join(root(), dir <> "/**/*.ex")),
         rel = Path.relative_to(path, root()),
         {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
         [module] <- Regex.scan(~r/\bEmissaryWeb\.[A-Z]\w+/, line, capture: :first),
@@ -161,11 +162,11 @@ defmodule Cyfr.NamespaceDirectionTest do
   end
 
   test "the shared primitives live in the glue namespace" do
-    assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/topics.ex"))
-    assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/uuid7.ex"))
+    assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/bus.ex"))
+    assert File.exists?(Path.join(root(), "apps/cyfr_contracts/lib/cyfr/uuid7.ex"))
 
     refute File.exists?(Path.join(root(), "apps/cyfr/lib/prism/topics.ex")),
-           "Cyfr.Topics moved out of the console namespace; it must not come back"
+           "Cyfr.Bus moved out of the console namespace; it must not come back"
 
     refute File.exists?(Path.join(root(), "apps/cyfr/lib/emissary/uuid7.ex")),
            "Cyfr.UUID7 moved out of the transport namespace; it must not come back"

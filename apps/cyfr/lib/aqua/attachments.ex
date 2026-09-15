@@ -4,7 +4,7 @@
 defmodule Aqua.Attachments do
   @moduledoc """
   The files members attach to chat messages, stored as blobs under the
-  athanor's own storage — `conversations/<conversation>/<message>/<n>-<name>`
+  athanor's own storage — `threads/<thread>/<message>/<n>-<name>`
   through `Arca` — and referenced from the message row's payload as
   `%{"filename", "stored_name", "media_type", "size"}`. No storage path is
   ever persisted: a ref names its blob only by `stored_name`, and
@@ -52,9 +52,9 @@ defmodule Aqua.Attachments do
              | :storage_full
              | :storage_unverifiable
              | :storage_error}
-  def store(_ctx, _conversation_id, _message_id, []), do: {:ok, []}
+  def store(_ctx, _thread_id, _message_id, []), do: {:ok, []}
 
-  def store(%Context{} = ctx, conversation_id, message_id, files) when is_list(files) do
+  def store(%Context{} = ctx, thread_id, message_id, files) when is_list(files) do
     with :ok <- check_count(files),
          :ok <- check_sizes(files),
          :ok <- check_quota(ctx, files) do
@@ -65,7 +65,7 @@ defmodule Aqua.Attachments do
         # and distinctly addressable. The path is blob_path/3's — the
         # same spelling the read side and the rollback resolve.
         stored_name = "#{index}-#{safe_filename(file["filename"])}"
-        {:ok, path} = blob_path(conversation_id, message_id, %{"stored_name" => stored_name})
+        {:ok, path} = blob_path(thread_id, message_id, %{"stored_name" => stored_name})
         bytes = file["bytes"] || ""
 
         case Arca.put(ctx, path, bytes) do
@@ -86,7 +86,7 @@ defmodule Aqua.Attachments do
             )
 
             Enum.each(refs, fn written ->
-              with {:ok, blob} <- blob_path(conversation_id, message_id, written) do
+              with {:ok, blob} <- blob_path(thread_id, message_id, written) do
                 Arca.delete(ctx, blob)
               end
             end)
@@ -108,9 +108,9 @@ defmodule Aqua.Attachments do
   those unreferenced bytes when the enclosing send fails.
   """
   @spec discard(Context.t(), String.t(), String.t(), [ref()]) :: :ok
-  def discard(%Context{} = ctx, conversation_id, message_id, refs) when is_list(refs) do
+  def discard(%Context{} = ctx, thread_id, message_id, refs) when is_list(refs) do
     Enum.each(refs, fn ref ->
-      with {:ok, blob} <- blob_path(conversation_id, message_id, ref) do
+      with {:ok, blob} <- blob_path(thread_id, message_id, ref) do
         Arca.delete(ctx, blob)
       end
     end)
@@ -122,11 +122,11 @@ defmodule Aqua.Attachments do
   ref without a stored name (it references no blob).
   """
   @spec blob_path(String.t(), String.t(), ref()) :: {:ok, [String.t()]} | :error
-  def blob_path(conversation_id, message_id, ref)
-      when is_binary(conversation_id) and is_binary(message_id) do
+  def blob_path(thread_id, message_id, ref)
+      when is_binary(thread_id) and is_binary(message_id) do
     case ref["stored_name"] do
       name when is_binary(name) and name != "" ->
-        {:ok, Arca.ConversationStorage.blob_root(conversation_id) ++ [message_id, name]}
+        {:ok, Arca.ThreadStorage.blob_root(thread_id) ++ [message_id, name]}
 
       _ ->
         :error
@@ -150,9 +150,9 @@ defmodule Aqua.Attachments do
   missing is skipped rather than failing the turn.
   """
   @spec load(Context.t(), String.t(), [%{message_id: String.t(), ref: ref()}]) :: [map()]
-  def load(%Context{} = ctx, conversation_id, attachments) when is_list(attachments) do
+  def load(%Context{} = ctx, thread_id, attachments) when is_list(attachments) do
     Enum.flat_map(attachments, fn %{message_id: message_id, ref: ref} ->
-      with {:ok, path} <- blob_path(conversation_id, message_id, ref),
+      with {:ok, path} <- blob_path(thread_id, message_id, ref),
            {:ok, bytes} <- Arca.get(ctx, path) do
         [
           %{
@@ -170,7 +170,7 @@ defmodule Aqua.Attachments do
   @doc "The refs stored on a message row's payload (`[]` when none)."
   @spec refs_of(Arca.Schemas.Message.t()) :: [ref()]
   def refs_of(msg) do
-    case Arca.ConversationStorage.payload(msg)["attachments"] do
+    case Arca.ThreadStorage.payload(msg)["attachments"] do
       refs when is_list(refs) -> refs
       _ -> []
     end

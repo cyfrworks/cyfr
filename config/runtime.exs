@@ -89,6 +89,82 @@ if config_env() != :test do
     # (`Cyfr.ControlPlane`).
     config :cyfr, :cluster, env_bool.("CYFR_CLUSTER", false)
 
+    # The MCP bridge that runs stdio MCP servers (`Emissary.MCP.Bridge`):
+    # its base URL (compose: http://mcp-bridge:8001) and the root key this
+    # server and the bridge both derive their signing and sealing keys from
+    # — 32 random bytes as 64 hexadecimal digits, the same value in the
+    # bridge's environment (`cyfr init` generates it). With either unset,
+    # no stdio server can be created or started; a malformed key refuses
+    # the boot.
+    config :cyfr, :mcp_bridge_url, env_str.("CYFR_MCP_BRIDGE_URL", nil)
+
+    config :cyfr,
+           :mcp_bridge_key,
+           (case env_str.("CYFR_MCP_BRIDGE_KEY", nil) do
+              nil ->
+                nil
+
+              text ->
+                case Cyfr.BridgeAuth.decode_root(text) do
+                  {:ok, root} ->
+                    root
+
+                  :error ->
+                    raise "[Cyfr] FATAL: CYFR_MCP_BRIDGE_KEY must be exactly 64 hexadecimal " <>
+                            "digits (32 bytes); generate one with `openssl rand -hex 32`"
+                end
+            end)
+
+    # The root key the execution workers' keys derive from
+    # (`Cyfr.WorkerAuth`): 32 random bytes as 64 hexadecimal digits
+    # (`openssl rand -hex 32`). Unset, this server mints a random root at
+    # every boot, which only a worker service inside this server can use, and
+    # a restart retires every assignment, worker and attempt key issued
+    # before it. A malformed key refuses the boot.
+    config :cyfr,
+           :worker_key,
+           (case env_str.("CYFR_WORKER_KEY", nil) do
+              nil ->
+                nil
+
+              text ->
+                case Cyfr.WorkerAuth.decode_root(text) do
+                  {:ok, root} ->
+                    root
+
+                  :error ->
+                    raise "[Cyfr] FATAL: CYFR_WORKER_KEY must be exactly 64 hexadecimal " <>
+                            "digits (32 bytes); generate one with `openssl rand -hex 32`"
+                end
+            end)
+
+    # How long the bridge runs a stdio server's backends without hearing from
+    # this server, in milliseconds: 1000 to 60000, default 30000. Every sync
+    # and renewal asks for this lease and renewals go out every third of it,
+    # so backends whose server crashed, lost the control plane or cannot
+    # reach the bridge are retired within one lease. Anything but a whole
+    # number in the range refuses the boot.
+    mcp_bridge_ms = fn key, range ->
+      case Cyfr.RuntimeConfig.milliseconds(getenv, key, range) do
+        {:ok, ms} -> ms
+        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+      end
+    end
+
+    if lease_ms = mcp_bridge_ms.("CYFR_MCP_BRIDGE_LEASE_MS", 1_000..60_000) do
+      config :cyfr, :mcp_bridge_lease_ms, lease_ms
+    end
+
+    # How long the bridge keeps a stdio backend running with no tool call to
+    # it, in milliseconds: 1000 to 86400000, default 900000 (15 minutes).
+    # An idle backend's processes are retired and its pool slot freed; its
+    # tools stay listed, and the next call to it starts it again, which for
+    # an `npx -y` package means downloading it again. Anything but a whole
+    # number in the range refuses the boot.
+    if idle_ms = mcp_bridge_ms.("CYFR_MCP_BRIDGE_IDLE_MS", 1_000..86_400_000) do
+      config :cyfr, :mcp_bridge_idle_ms, idle_ms
+    end
+
     # Device label attached to registry credentials (unset = hostname).
     config :cyfr, :device_label, env_str.("CYFR_DEVICE_LABEL", nil)
 
@@ -129,6 +205,23 @@ if config_env() != :test do
   # attached to the builder network alone, so every interface there is
   # that network; a builder run outside compose binds one address here.
   config :cyfr, :builder_bind, env_str.("CYFR_BUILDER_BIND", "0.0.0.0")
+  # A Cargo home whose registry cache every Rust build starts from, copied
+  # into the build's own Cargo home. The builder image sets it to the
+  # crates the scaffold depends on; unset, a build fetches every crate.
+  config :cyfr, :build_cargo_seed, env_str.("CYFR_BUILD_CARGO_SEED", nil)
+
+  # A build's deadline in milliseconds, where the build runs (the builder
+  # container, or this server for in-process builds): past it every process
+  # the build started is killed and the build fails as timed out. Default
+  # 270000, 30 s under the MCP tool layer's five-minute limit on a
+  # synchronous compile; accepted 1000..600000, since a server waits 12
+  # minutes for its builder's answer.
+  if build_timeout_ms = env_int.("CYFR_BUILD_TIMEOUT_MS", nil) do
+    unless build_timeout_ms in 1_000..600_000,
+      do: raise("CYFR_BUILD_TIMEOUT_MS must be within 1000..600000, got #{build_timeout_ms}")
+
+    config :cyfr, :build_timeout_ms, build_timeout_ms
+  end
 
   # Whether this server builds components at all — `build.compile` on every
   # surface. An appliance that only runs what it pulled turns it off, and
@@ -468,28 +561,11 @@ if config_env() != :test do
     # MCP server on this list, never as a URL the bundled http catalyst fetches.
     config :cyfr, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
 
-    # GitHub OAuth
-    # Device flow (CLI and Prism) only needs client ID — no secret.
-    # Ueberauth's leftover web-callback strategy is registered only when a
-    # secret is also set (otherwise GET /auth/github 500s inside the strategy).
+    # GitHub and Google sign in by device flow (CLI and Prism). GitHub needs
+    # only a client ID; Google needs a client ID and secret.
     github_id = env_str.("CYFR_GITHUB_CLIENT_ID", nil)
-    github_secret = env_str.("CYFR_GITHUB_CLIENT_SECRET", nil)
-
-    if github_id && github_secret do
-      config :ueberauth, Ueberauth.Strategy.Github.OAuth,
-        client_id: github_id,
-        client_secret: github_secret
-    end
-
-    # Google device flow requires both client ID and client secret.
     google_id = env_str.("CYFR_GOOGLE_CLIENT_ID", nil)
     google_secret = env_str.("CYFR_GOOGLE_CLIENT_SECRET", nil)
-
-    if google_id && google_secret do
-      config :ueberauth, Ueberauth.Strategy.Google.OAuth,
-        client_id: google_id,
-        client_secret: google_secret
-    end
 
     # Device Flow credentials for Google. `google_client_id` is sent on both
     # the device-code request and the token exchange; `google_client_secret`
@@ -531,9 +607,7 @@ if config_env() != :test do
 
     config :cyfr, :oci_registry_url, oci_registry_url_config
 
-    # Device Flow Client IDs for Sanctum authentication
-    # Device Flow only needs client ID, no secret required.
-    # (`github_id` was read once above, next to the Ueberauth pair.)
+    # GitHub device flow needs only its client ID (read above).
     if github_id do
       config :cyfr, :github_client_id, github_id
     end
@@ -543,13 +617,14 @@ if config_env() != :test do
 
     config :cyfr, :platform_admin_emails, platform_admins
 
-    # Account caps: unset disables limits except pairs (200) and conversations (1000); 0 disables those defaults.
+    # Account caps: unset disables limits except groups (50 per person),
+    # pairs (200) and threads (1000); 0 disables those defaults.
     config :cyfr, :caps,
       max_athanors: env_int.("CYFR_MAX_ATHANORS", nil),
-      max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", nil),
+      max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", 50),
       max_pairs_per_person: env_int.("CYFR_MAX_PAIRS_PER_PERSON", 200),
       max_members_per_group: env_int.("CYFR_MAX_MEMBERS_PER_GROUP", nil),
-      max_conversations_per_athanor: env_int.("CYFR_MAX_CONVERSATIONS_PER_ATHANOR", 1000),
+      max_threads_per_athanor: env_int.("CYFR_MAX_THREADS_PER_ATHANOR", 1000),
       mint_per_hour: env_int.("CYFR_MINT_PER_HOUR", nil),
       athanor_storage_bytes: env_int.("CYFR_ATHANOR_STORAGE_BYTES", nil)
 
@@ -573,50 +648,26 @@ if config_env() != :test do
               "an OIDC provider signs in through the browser page a headless node refuses"
     end
 
-    # Build Ueberauth providers list dynamically
-    providers = []
+    # Generic OIDC, the one browser-callback sign-in. When selected, register
+    # the issuer for ueberauth_oidcc and its strategy. CYFR_OIDC_ISSUER is also
+    # pinned at `:cyfr, :oidc_issuer` — the single source both the boot
+    # reserved-host check (`Cyfr.Application.validate_oidc_issuer_config!/0`) and
+    # the login id builder (`Sanctum.Auth.OIDC.resolve_issuer/0`) read.
+    if auth_provider == Sanctum.Auth.OIDC do
+      {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
 
-    providers =
-      if github_id && github_secret do
-        [{:github, {Ueberauth.Strategy.Github, [default_scope: "user:email"]}} | providers]
-      else
-        providers
-      end
+      config :cyfr, :oidc_issuer, oidc.issuer
+      config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
 
-    providers =
-      if google_id && google_secret do
-        [{:google, {Ueberauth.Strategy.Google, [default_scope: "email profile"]}} | providers]
-      else
-        providers
-      end
-
-    # Generic OIDC. When selected, register the issuer for ueberauth_oidcc and add
-    # the strategy. CYFR_OIDC_ISSUER is also pinned at `:cyfr, :oidc_issuer` — the
-    # single source both the boot reserved-host check
-    # (`Cyfr.Application.validate_oidc_issuer_config!/0`) and the login id builder
-    # (`Sanctum.Auth.OIDC.resolve_issuer/2`) read.
-    providers =
-      if auth_provider == Sanctum.Auth.OIDC do
-        {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
-
-        config :cyfr, :oidc_issuer, oidc.issuer
-        config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
-
-        # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
-        # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
-        # and the canonical `oidcc|<iss>|<sub>` id form.
-        oidc_provider =
-          {:oidcc,
-           {Ueberauth.Strategy.Oidcc,
-            issuer: :cyfr_oidc, client_id: oidc.client_id, client_secret: oidc.client_secret}}
-
-        [oidc_provider | providers]
-      else
-        providers
-      end
-
-    if providers != [] do
-      config :ueberauth, Ueberauth, providers: providers
+      # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
+      # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
+      # and the canonical `oidcc|<iss>|<sub>` id form.
+      config :ueberauth, Ueberauth,
+        providers: [
+          oidcc:
+            {Ueberauth.Strategy.Oidcc,
+             issuer: :cyfr_oidc, client_id: oidc.client_id, client_secret: oidc.client_secret}
+        ]
     end
 
     # Storage backend. Unset/`local` keeps the filesystem default from config.exs;

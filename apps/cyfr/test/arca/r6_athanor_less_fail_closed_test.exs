@@ -82,7 +82,7 @@ defmodule Arca.R6AthanorLessFailClosedTest do
 
   describe "athanor_ready?/1 — the boundary spelling of the same invariant" do
     # Total predicates (`Arca.exists?/2`) and guest-facing refusals
-    # (`Opus.StorageHandler`) consume this instead of catching the raise.
+    # (`Cyfr.Execution.GuestStorage`) consume this instead of catching the raise.
     test "answers exactly where tenant_segments/1 raises" do
       ctx = Context.build(user_id: "u1", athanor_id: nil)
 

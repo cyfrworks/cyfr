@@ -5,8 +5,8 @@ defmodule PrismWeb.ConnCase do
   @moduledoc """
   Test case for the Prism (LiveView) surface.
 
-  Checks out the SQL sandbox (shared mode for sync tests, so LiveView
-  processes and supervised tasks can hit the repo), imports
+  Starts the SQL sandbox (`Cyfr.Test.Sandbox`: shared for sync tests, so
+  LiveView processes and supervised tasks can hit the repo), imports
   `Phoenix.LiveViewTest`, and provides helpers to sign a test user in the
   way the browser does — a `Sanctum.Session` row, a claimed personal
   namespace, a membership — and mount authenticated LiveViews.
@@ -32,49 +32,15 @@ defmodule PrismWeb.ConnCase do
   end
 
   setup tags do
-    # The sandbox owner is its own process, not the test: the work a page
-    # leaves behind (a conversation runner finishing a turn, a task on one
-    # of the supervisors below) is stopped from `on_exit`, which runs after
-    # the test process is gone. Were the test the owner, that work would
-    # lose its connection first, crash, and be restarting when the teardown
-    # reaches it. Callbacks run last-registered first, so the owner is
-    # stopped only after everything that used it has been.
-    owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Arca.Repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(owner) end)
-
-    # LiveViews spawn work on these supervisors (session refresh, AQUA calls,
-    # MCP tool dispatch); let that work reach the sandbox connection — and
-    # stop whatever is still running when the test ends, or a straggler
-    # holding the sandbox connection makes the next test's first write
-    # find the database busy.
-    supervisors =
-      for name <- [Aqua.TaskSupervisor, Emissary.TaskSupervisor],
-          pid = Process.whereis(name),
-          is_pid(pid) do
-        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, pid)
-        pid
-      end
-
-    on_exit(fn ->
-      for sup <- supervisors, child <- Task.Supervisor.children(sup) do
-        Task.Supervisor.terminate_child(sup, child)
-      end
-
-      # Conversation runners the chat page started idle out on their own,
-      # which is far too late for the next test's sandbox.
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(Aqua.RunnerSupervisor),
-          is_pid(pid) do
-        DynamicSupervisor.terminate_child(Aqua.RunnerSupervisor, pid)
-      end
-    end)
-
+    Cyfr.Test.Sandbox.setup!(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 
   @doc """
   Make `athanor_id` an estate a turn can run in: the shipped tree and
-  bundle copied in, indexed, and the baseline consent the soul pins
-  minted — as a fill leaves it. `user_id` is a member whose seat the
+  bundle copied in, indexed, the baseline consent the soul pins minted —
+  as a fill leaves it — and a key connected to the Claude catalyst, which
+  its runs unseal when they attach. `user_id` is a member whose seat the
   bootstrap runs under.
   """
   def ready_estate!(athanor_id, user_id) do
@@ -87,6 +53,11 @@ defmodule PrismWeb.ConnCase do
     {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
     # The soul roots: the consent a turn pins exists, whoever minted it.
     {:ok, _} = Cyfr.Execution.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
+
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, "catalyst:local.claude", %{
+      "ANTHROPIC_API_KEY" => "sk-test"
+    })
+
     ctx
   end
 
@@ -108,20 +79,20 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  Route the execution port through the scripted engine for this test,
-  scripting the bundled Claude catalyst; restored on exit. Answers the
-  script agent's pid.
+  Dispatch this test's runs to the scripted worker service, scripting the
+  bundled Claude catalyst; the configured worker services are restored on
+  exit. Answers the scripted worker service's pid.
   """
   def script_model!(items \\ []) do
-    previous = Application.get_env(:cyfr, :execution_impl)
-    Application.put_env(:cyfr, :execution_impl, Cyfr.Test.ScriptedExecution)
+    previous = Application.get_env(:cyfr, :workers)
+    Application.put_env(:cyfr, :workers, [Cyfr.Test.ScriptedWorker])
 
     ExUnit.Callbacks.on_exit(fn ->
-      Application.put_env(:cyfr, :execution_impl, previous)
+      Application.put_env(:cyfr, :workers, previous)
     end)
 
     ExUnit.Callbacks.start_supervised!(
-      {Cyfr.Test.ScriptedExecution, ref: "catalyst:local.claude", script: items}
+      {Cyfr.Test.ScriptedWorker, ref: "catalyst:local.claude", script: items}
     )
   end
 
@@ -145,7 +116,7 @@ defmodule PrismWeb.ConnCase do
 
   @doc "The chat requests the scripted model answered, oldest first."
   def model_requests do
-    Cyfr.Test.ScriptedExecution.calls()
+    Cyfr.Test.ScriptedWorker.calls()
     |> Enum.filter(&(&1.input["operation"] == "chat"))
     |> Enum.map(& &1.input["params"])
   end

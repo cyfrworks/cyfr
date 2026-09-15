@@ -31,10 +31,7 @@ defmodule Prism.AquaTemplatePolicyTest do
              Enum.join(unreachable, "\n")
   end
 
-  # The "execution" entries come from Opus.MCP's registered tool — an
-  # app-scoped run has no Opus modules, so the registry has nothing to
-  # enumerate under that name.
-  @tag :requires_opus_modules
+  # The "execution" entries come from Cyfr.Execution.MCP's registered tool.
   test "the capability matrix offers reachable actions, with their real kinds" do
     catalog = Map.new(PrismWeb.AquaLive.Catalog.enumerate_tool_actions())
 
@@ -53,11 +50,7 @@ defmodule Prism.AquaTemplatePolicyTest do
     roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
 
     files =
-      [Path.join(@seed, "aqua.md")] ++
-        (roles
-         |> File.ls!()
-         |> Enum.filter(&String.ends_with?(&1, ".md"))
-         |> Enum.map(&Path.join(roles, &1)))
+      [Path.join(@seed, "aqua.md") | Cyfr.Test.SourceTree.files!(Path.join(roles, "*.md"))]
 
     for path <- files,
         name = Path.basename(path, ".md"),

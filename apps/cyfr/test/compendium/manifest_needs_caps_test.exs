@@ -149,14 +149,24 @@ defmodule Compendium.ManifestNeedsCapsTest do
       assert {:error, {:invalid_caps, {:invalid_storage_path, "aqua/"}}} =
                Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["data/", "aqua/"]}}})
 
-      assert {:error, {:invalid_caps, {:invalid_storage_path, "conversations/"}}} =
-               Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["conversations/"]}}})
+      assert {:error, {:invalid_caps, {:invalid_storage_path, "threads/"}}} =
+               Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["threads/"]}}})
+
+      # `threads/` is a host scope of the athanor's tree, and the retired
+      # name for it (spelled split for the vocabulary gate) is no root.
+      assert "threads" in Arca.Storage.tenant_roots()
+      retired = "conver" <> "sations"
+      refute retired in Arca.Storage.tenant_roots()
+      retired_grant = retired <> "/"
+
+      assert {:error, {:invalid_caps, {:invalid_storage_path, ^retired_grant}}} =
+               Caps.validate(%{"caps" => %{"storage" => %{"paths" => [retired_grant]}}})
 
       assert {:error, {:invalid_caps, {:invalid_storage_path, "guest/"}}} =
                Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["guest/"]}}})
     end
 
-    test "limits carry the Sanctum.Limits vocabulary with strict durations" do
+    test "limits carry the Cyfr.Limits vocabulary with strict durations" do
       assert {:error, {:invalid_caps, {:invalid_limit, "timeout", "5min"}}} =
                Caps.validate(%{"caps" => %{"limits" => %{"timeout" => "5min"}}})
 
@@ -193,15 +203,6 @@ defmodule Compendium.ManifestNeedsCapsTest do
       assert bare != with_caps
       assert bare != with_needs
       assert with_caps != with_needs
-    end
-
-    test "the retired blocks no longer contribute to the digest (subtractive change)" do
-      legacy = %{"setup" => %{"policy" => %{"timeout" => "30s"}}, "wasi" => %{"http" => true}}
-
-      # Unsupported manifest blocks do not contribute to the release digest.
-      {:ok, with_legacy} = Compendium.ReleaseDigest.compute("sha256:abc", legacy)
-      {:ok, without} = Compendium.ReleaseDigest.compute("sha256:abc", %{})
-      assert with_legacy == without
     end
   end
 
@@ -245,87 +246,24 @@ defmodule Compendium.ManifestNeedsCapsTest do
                })
     end
 
-    test "publish_bytes refuses a manifest with a setup block", %{ctx: ctx, wasm: wasm} do
+    test "publish_bytes refuses a manifest with an unknown top-level key", %{ctx: ctx, wasm: wasm} do
       manifest =
         Jason.encode!(%{
-          "name" => "legacy-setup",
+          "name" => "unknown-key",
           "version" => "1.0.0",
           "type" => "reagent",
           "setup" => %{"policy" => %{"allowed_domains" => ["a.example"]}}
         })
 
-      assert {:error, {:legacy_manifest_blocks, msg}} =
+      assert {:error, {:unknown_manifest_keys, msg}} =
                Compendium.Registry.publish_bytes(ctx, wasm, %{
-                 name: "legacy-setup",
+                 name: "unknown-key",
                  version: "1.0.0",
                  type: "reagent",
                  manifest: manifest
                })
 
-      assert msg =~ "retired block(s) setup"
-      assert msg =~ "declare needs/caps instead"
-    end
-
-    test "publish_bytes refuses a manifest with an oauth block", %{ctx: ctx, wasm: wasm} do
-      manifest =
-        Jason.encode!(%{
-          "name" => "legacy-oauth",
-          "version" => "1.0.0",
-          "type" => "reagent",
-          "oauth" => %{"google" => %{"scopes" => ["email"]}}
-        })
-
-      assert {:error, {:legacy_manifest_blocks, msg}} =
-               Compendium.Registry.publish_bytes(ctx, wasm, %{
-                 name: "legacy-oauth",
-                 version: "1.0.0",
-                 type: "reagent",
-                 manifest: manifest
-               })
-
-      assert msg =~ "retired block(s) oauth"
-    end
-
-    test "publish_bytes refuses a manifest with a wasi block", %{ctx: ctx, wasm: wasm} do
-      manifest =
-        Jason.encode!(%{
-          "name" => "legacy-wasi",
-          "version" => "1.0.0",
-          "type" => "reagent",
-          "wasi" => %{"http" => true}
-        })
-
-      assert {:error, {:legacy_manifest_blocks, msg}} =
-               Compendium.Registry.publish_bytes(ctx, wasm, %{
-                 name: "legacy-wasi",
-                 version: "1.0.0",
-                 type: "reagent",
-                 manifest: manifest
-               })
-
-      assert msg =~ "retired block(s) wasi"
-    end
-
-    test "publish_bytes names every retired block a manifest carries", %{ctx: ctx, wasm: wasm} do
-      manifest =
-        Jason.encode!(%{
-          "name" => "legacy-all",
-          "version" => "1.0.0",
-          "type" => "reagent",
-          "setup" => %{"policy" => %{}},
-          "oauth" => %{"google" => %{}},
-          "wasi" => %{"http" => true}
-        })
-
-      assert {:error, {:legacy_manifest_blocks, msg}} =
-               Compendium.Registry.publish_bytes(ctx, wasm, %{
-                 name: "legacy-all",
-                 version: "1.0.0",
-                 type: "reagent",
-                 manifest: manifest
-               })
-
-      assert msg =~ "setup/oauth/wasi"
+      assert msg =~ "unknown top-level key(s): setup"
     end
 
     test "publish_bytes accepts well-formed needs and caps", %{ctx: ctx, wasm: wasm} do
@@ -349,7 +287,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
     end
   end
 
-  describe "the limits roster stays bound to Sanctum.Limits" do
+  describe "the limits roster stays bound to Cyfr.Limits" do
     test "Caps admits exactly the fields Limits clamps" do
       # Caps holds a string-keyed copy (the manifest is JSON; Caps is
       # Apache, Limits is FSL) — this pin is what makes the copy safe. A
@@ -359,7 +297,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
         Enum.sort(~w(max_memory_bytes max_request_size max_response_size
                      max_concurrent_tasks timeout batch_timeout rate_limit))
 
-      limits_roster = Sanctum.Limits.fields() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+      limits_roster = Cyfr.Limits.fields() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
 
       assert caps_roster == limits_roster
     end
@@ -382,7 +320,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
 
         result = Caps.validate(manifest)
 
-        limits_ok? = match?({:ok, _}, Sanctum.Limits.parse_duration(value))
+        limits_ok? = match?({:ok, _}, Cyfr.Limits.parse_duration(value))
 
         assert result == :ok == ok?,
                "Caps disagrees on #{inspect(value)}: got #{inspect(result)}"

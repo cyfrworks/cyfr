@@ -39,7 +39,7 @@ defmodule Opus.Runtime do
 
   # Default memory ceiling for sandboxed execution — the shared 64 MiB
   # bound, read from its owner rather than re-spelled here.
-  @default_max_memory_bytes Sanctum.Limits.default_max_memory_bytes()
+  @default_max_memory_bytes Cyfr.Limits.default_max_memory_bytes()
 
   @doc """
   Execute a WASM component with JSON input, returning JSON output.
@@ -48,16 +48,29 @@ defmodule Opus.Runtime do
   components via `Opus.ComponentCache`. Stores are built explicitly with
   the shared engine.
 
+  `wasm` is the component's bytes, or a function answering them
+  (`{:ok, bytes}` or `{:error, {:artifact, sentence}}`), called only when
+  no compiled component for `:digest` is cached; a refusal it answers is
+  the run's error sentence.
+
   ## Options
 
   - `:component_type` - One of `:reagent`, `:catalyst`, `:formula`. Defaults to `:reagent`.
   - `:reference` - Component reference string (for telemetry and errors)
-  - `:digest` - Content digest (the compiled-component cache key)
+  - `:digest` - Content digest (the compiled-component cache key); required
+    when `wasm` is a function
   - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
-  - `:authority` - The `Sanctum.Authority` this execution runs under
+  - `:authority` - The `Cyfr.Authority` this execution runs under
   - `:authority_required` - Defaults to true: a nil `:authority` raises instead
     of executing (a WASM run always carries one; this is the final invariant
     guard). Pass `false` only for authority-free harness runs in tests.
+  - `:execution_id` - The admitted execution
+  - `:host` - The attached `Opus.HostClient` of the execution's attempt:
+    the guest's `emit`, OAuth tokens, storage, HTTP rate checks and egress
+    denials, and a formula's children and catalog tool calls, are its host
+    calls
+  - `:intercepted` - The `tool.action` names a formula's host runs rather
+    than the catalog, as its assignment carries them
 
   ## Examples
 
@@ -68,10 +81,13 @@ defmodule Opus.Runtime do
       iex> result
       %{"sum" => 8}
   """
-  @spec execute_component(binary(), map(), keyword()) ::
-          {:ok, map()} | {:ok, map(), map()} | {:error, term()}
-  def execute_component(wasm_bytes, input, opts \\ [])
-      when is_binary(wasm_bytes) and is_map(input) do
+  @spec execute_component(
+          binary() | (-> {:ok, binary()} | {:error, {:artifact, String.t()}}),
+          map(),
+          keyword()
+        ) :: {:ok, map()} | {:ok, map(), map()} | {:error, term()}
+  def execute_component(wasm, input, opts \\ [])
+      when (is_binary(wasm) or is_function(wasm, 0)) and is_map(input) do
     component_type = Keyword.get(opts, :component_type, :reagent)
     wasi_opts = Opus.ComponentType.wasi_options(component_type)
 
@@ -79,18 +95,14 @@ defmodule Opus.Runtime do
     component_ref = Keyword.get(opts, :component_ref)
     edge = Keyword.get(opts, :edge)
     limits = Keyword.get(opts, :limits)
-    ctx = Keyword.get(opts, :ctx)
     execution_id = Keyword.get(opts, :execution_id)
-    root_execution_id = Keyword.get(opts, :root_execution_id)
     reference = Keyword.get(opts, :reference)
     digest = Keyword.get(opts, :digest)
     authority = Keyword.get(opts, :authority)
-    declared_needs = Keyword.get(opts, :declared_needs)
-    activation_digest = Keyword.get(opts, :activation_digest)
+    host = Keyword.get(opts, :host)
 
-    # Second line of defense behind the executor's own check: if an opts
-    # filter between the caller and here dropped :authority but kept the
-    # requirement flag, the execution must die rather than run on ambient
+    # Admission refuses a run without an authority; this is the last guard:
+    # a runtime reached without one dies rather than run on ambient
     # permissions.
     if Keyword.get(opts, :authority_required, true) and is_nil(authority) do
       raise ArgumentError,
@@ -105,8 +117,7 @@ defmodule Opus.Runtime do
         %{
           authority: authority,
           execution_id: execution_id,
-          reference: reference,
-          plane: ctx && ctx.plane
+          reference: reference
         }
       )
     end
@@ -117,11 +128,8 @@ defmodule Opus.Runtime do
 
     authority_info = %{
       authority: authority,
-      declared_needs: declared_needs,
-      activation_digest: activation_digest,
-      # The attempt that owns this execution's row, for the lineage of
-      # every call a formula makes.
-      attempt: Keyword.get(opts, :execution_attempt)
+      # The actions a formula's host runs rather than the catalog.
+      intercepted: Keyword.get(opts, :intercepted, [])
     }
 
     # Build imports and collect cleanup refs
@@ -132,11 +140,9 @@ defmodule Opus.Runtime do
         component_ref,
         edge,
         limits,
-        ctx,
+        host,
         execution_id,
-        root_execution_id,
-        authority_info,
-        input
+        authority_info
       )
 
     # Notify caller of cleanup_refs so they can clean up on timeout kill
@@ -166,14 +172,7 @@ defmodule Opus.Runtime do
       case store_result do
         {:ok, store} ->
           # Get or compile the component (cache hit skips JIT)
-          component_result =
-            if is_binary(digest) and digest != "" do
-              Opus.ComponentCache.get_or_compile(digest, wasm_bytes, store)
-            else
-              Wasmex.Components.Component.new(store, wasm_bytes)
-            end
-
-          case component_result do
+          case compile(store, wasm, digest) do
             {:ok, component} ->
               # Start GenServer directly with pre-built store + component
               case GenServer.start_link(
@@ -195,6 +194,9 @@ defmodule Opus.Runtime do
                   {:error, "Component instantiation failed: #{inspect(reason)}"}
               end
 
+            {:error, {:artifact, sentence}} ->
+              {:error, sentence}
+
             {:error, reason} ->
               {:error,
                "Component compilation failed: #{inspect(reason)}. " <>
@@ -214,22 +216,20 @@ defmodule Opus.Runtime do
   end
 
   # Build all host function imports and collect cleanup refs. The node's
-  # limits are the presence signal for capability-scoped imports: they are
-  # always carried under an authority, while the edge itself may be nil
-  # (resources :none) — a nil edge builds the same imports with deny-all
-  # resource lists, so a guest's host call fails with a denial instead of
-  # a missing import.
+  # limits and the attempt's host client are the presence signal for
+  # capability-scoped imports: they are always carried under an admitted
+  # authority, while the edge itself may be nil (resources :none) — a nil
+  # edge builds the same imports with deny-all resource lists, so a guest's
+  # host call fails with a denial instead of a missing import.
   defp build_imports_and_cleanup(
          component_type,
          preloaded_fields,
          component_ref,
          edge,
          limits,
-         ctx,
+         host,
          execution_id,
-         root_execution_id,
-         authority_info,
-         input
+         authority_info
        ) do
     vault_imports =
       if component_type == :catalyst do
@@ -239,65 +239,47 @@ defmodule Opus.Runtime do
       end
 
     http_imports =
-      if component_type == :catalyst && limits && ctx do
-        Opus.HttpHandler.build_http_imports(edge, limits, ctx, component_ref)
+      if component_type == :catalyst && limits && host do
+        Opus.HttpHandler.build_http_imports(edge, limits, host, component_ref)
       else
         %{}
       end
 
     {stream_imports, stream_exec_ref} =
-      if component_type == :catalyst && limits && ctx do
-        Opus.HttpStreamHandler.build_stream_imports(edge, limits, ctx, component_ref)
+      if component_type == :catalyst && limits && host do
+        Opus.HttpStreamHandler.build_stream_imports(edge, limits, host, component_ref)
       else
         {%{}, nil}
       end
 
     storage_imports =
-      if component_type == :catalyst && limits && ctx do
-        Opus.StorageHandler.build_storage_imports(
-          edge,
-          limits,
-          ctx,
-          component_ref,
-          public_storage_opts(authority_info.authority)
-        )
+      if component_type == :catalyst && limits && host do
+        Opus.StorageHandler.build_storage_imports(limits, host, component_ref)
       else
         %{}
       end
 
-    # Require an execution id so every dispensed token can be tracked
-    # and redacted by SecretMasker.
+    # The execution's attempt dispenses every token, so each one is in its
+    # masking set before the guest has it.
     oauth_imports =
-      if component_type == :catalyst && ctx && execution_id do
-        Opus.OAuthHandler.build_oauth_imports(
-          ctx,
-          component_ref,
-          execution_id,
-          [limits: limits] ++ oauth_resolver_opts(authority_info.authority, ctx)
-        )
+      if component_type == :catalyst && host do
+        Opus.OAuthHandler.build_oauth_imports(host)
       else
         %{}
       end
 
-    # Route emits to root execution's event buffer so nested formula events
-    # reach the top-level SSE stream the UI is subscribed to
-    root_execution_id = root_execution_id || execution_id
+    emit_imports =
+      if component_type == :catalyst && host && authority_info.authority do
+        build_emit_imports(host)
+      else
+        %{}
+      end
 
     {formula_imports, formula_tracker_pid} =
-      if component_type == :formula && ctx && execution_id do
-        Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
-          root_execution_id: root_execution_id,
-          attempt: authority_info.attempt,
+      if component_type == :formula && host do
+        Opus.FormulaHandler.build_formula_imports(host,
           limits: limits,
-          authority: authority_info.authority,
-          declared_needs: authority_info.declared_needs,
-          activation_digest: authority_info.activation_digest,
-          secrets: Map.values(preloaded_fields),
-          # What this formula was started as and with: a child of the same
-          # formula is admitted only as a delegate its roster lists, with
-          # the roster's own configuration (`Opus.FormulaHandler`).
-          parent_reference: component_ref,
-          parent_roster: Opus.FormulaHandler.roster_of(input)
+          intercepted: authority_info.intercepted
         )
       else
         {%{}, nil}
@@ -309,6 +291,7 @@ defmodule Opus.Runtime do
       |> Map.merge(stream_imports)
       |> Map.merge(storage_imports)
       |> Map.merge(oauth_imports)
+      |> Map.merge(emit_imports)
       |> Map.merge(formula_imports)
 
     cleanup_refs = %{
@@ -320,26 +303,49 @@ defmodule Opus.Runtime do
     {all_imports, cleanup_refs}
   end
 
-  # Under an authority, tokens come from the consent edge's vault resource
-  # through the vault reader — the callee-keyed lookup is unreachable. An
-  # authority execution without a vault edge resolves nothing, fail closed.
-  # Public-profile storage rides explicit opts derived from the authority's
-  # profile kind — never a flag a guest could influence.
-  defp public_storage_opts(%Sanctum.Authority{profile_kind: :public}), do: [public?: true]
-  defp public_storage_opts(_authority), do: []
+  # A catalyst's `cyfr:emit/events` import: each event is a `push_deltas`
+  # host call, and CYFR checks, masks and pushes it on the stream the
+  # attempt was opened on.
+  defp build_emit_imports(host) do
+    %{
+      "cyfr:emit/events@0.1.0" => %{
+        "emit" => {:fn, fn json_event -> emit(host, json_event) end}
+      }
+    }
+  end
 
-  defp oauth_resolver_opts(%Sanctum.Authority{resources: resources}, ctx) do
-    case resources do
-      %Sanctum.Authority.Blob.Edge{vault: %{} = vault} ->
-        [resolver: fn provider -> Sanctum.VaultReader.oauth_token(ctx, vault, provider) end]
+  @doc """
+  Deliver one guest event through the attempt's host client, answering the
+  JSON the guest's `emit` returns. A refused host call answers a
+  `dispatch_error`.
+  """
+  @spec emit(Opus.HostClient.t(), String.t()) :: String.t()
+  def emit(%Opus.HostClient{} = host, json_event) when is_binary(json_event) do
+    case Opus.HostClient.push_deltas(host, [json_event]) do
+      {:ok, [reply]} ->
+        reply
 
-      _ ->
-        [resolver: fn _provider -> {:error, "no vault resource granted on this edge"} end]
+      {:error, refusal} ->
+        Logger.warning(
+          "[Opus.Runtime] #{host.execution_id} emit refused by the host: #{inspect(refusal)}"
+        )
+
+        Cyfr.WitResponse.encode_error(:dispatch_error, "The emit call failed.")
     end
   end
 
+  defp compile(store, wasm, digest) when is_binary(digest) and digest != "",
+    do: Opus.ComponentCache.get_or_compile(digest, fn -> artifact(wasm) end, store)
+
+  defp compile(store, wasm, _digest) do
+    with {:ok, bytes} <- artifact(wasm), do: Wasmex.Components.Component.new(store, bytes)
+  end
+
+  defp artifact(bytes) when is_binary(bytes), do: {:ok, bytes}
+  defp artifact(fetch) when is_function(fetch, 0), do: fetch.()
+
   # Build secrets host functions for WASI import from pre-resolved secrets map.
-  # The map is built once per execution by the Executor, so each get() is a
+  # The map is unsealed once per execution, at attach, so each get() is a
   # simple Map.get with no file I/O or PBKDF2 derivation.
   defp build_vault_imports(preloaded, component_ref) when is_map(preloaded) do
     %{
@@ -409,7 +415,7 @@ defmodule Opus.Runtime do
 
       {:ok, json_input} ->
         # Components (especially Catalysts) can make HTTP calls that take much longer
-        # than the default 5s GenServer.call timeout. The Executor enforces its own
+        # than the default 5s GenServer.call timeout. The runner enforces its own
         # wall-clock timeout, so we use :infinity here to avoid double-timeout races.
         case Wasmex.Components.call_function(pid, call_name, [json_input], :infinity) do
           {:ok, json_output} when is_binary(json_output) ->
@@ -447,7 +453,7 @@ defmodule Opus.Runtime do
   # ===========================================================================
 
   # Wrap a successful result in the {:ok, output, metadata} shape the
-  # executor consumes. The metadata map is currently empty — it is the seam
+  # runner consumes. The metadata map is currently empty — it is the seam
   # where real per-execution metrics ride when the engine can report them;
   # nothing is fabricated here.
   defp add_execution_metadata({:ok, output}, metadata) when is_map(metadata) do

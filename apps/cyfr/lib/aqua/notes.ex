@@ -3,10 +3,10 @@
 
 defmodule Aqua.Notes do
   @moduledoc """
-  What somebody chose to keep out of a conversation.
+  What somebody chose to keep out of a thread.
 
   Notes use their own storage root and survive deletion or retention
-  cleanup of the conversations they came from.
+  cleanup of the threads they came from.
 
   ## One pile, two temperatures
 
@@ -32,7 +32,7 @@ defmodule Aqua.Notes do
 
   ## Provenance
 
-  A note carries who kept it, when, and — when known — the conversation and
+  A note carries who kept it, when, and — when known — the thread and
   execution it came from, as frontmatter above the body. The reader is the
   one the agent files share, `Compendium.AquaAgent.parse_frontmatter/1`.
 
@@ -62,14 +62,14 @@ defmodule Aqua.Notes do
   @index_limit 40
 
   @type scope :: String.t()
-  @type provenance :: [kept_by: String.t(), conversation: String.t(), execution: String.t()]
+  @type provenance :: [kept_by: String.t(), thread: String.t(), execution: String.t()]
   @type note :: %{
           name: String.t(),
           content: String.t(),
           athanor_id: String.t(),
           kept_by: String.t() | nil,
           kept_at: String.t() | nil,
-          conversation: String.t() | nil,
+          thread: String.t() | nil,
           execution: String.t() | nil
         }
   @typedoc """
@@ -675,7 +675,7 @@ defmodule Aqua.Notes do
       [
         {"kept_by", Keyword.get(provenance, :kept_by) || ctx.user_id || "system"},
         {"kept_at", DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()},
-        {"conversation", Keyword.get(provenance, :conversation)},
+        {"thread", Keyword.get(provenance, :thread)},
         {"execution", Keyword.get(provenance, :execution)}
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
@@ -702,7 +702,7 @@ defmodule Aqua.Notes do
       athanor_id: ctx.athanor_id,
       kept_by: meta["kept_by"],
       kept_at: meta["kept_at"],
-      conversation: meta["conversation"],
+      thread: meta["thread"],
       execution: meta["execution"]
     }
   end

@@ -106,7 +106,7 @@ defmodule Sanctum.Context do
     platform_admin: false,
     # Which authorization plane this context is on. :external is every real
     # ingress; :guest is stamped one-way by enter_guest/1 when a context
-    # enters a WASM closure (Opus.Executor before a guest run, the conversation
+    # enters a WASM closure (an execution's attempt for its guest's calls, the thread
     # runner before an approved in-chain call), and require_permission/2 fails closed on it — a
     # context that has entered a guest closure can never authorize an
     # external-plane call.
@@ -134,7 +134,7 @@ defmodule Sanctum.Context do
       athanor_id: Keyword.fetch!(opts, :athanor_id),
       scope: :athanor,
       auth_method: :scheduled,
-      permissions: [:execute, :storage_read, :storage_write, :execution_write]
+      permissions: [:execute, :storage_read, :storage_write]
     )
   end
 
@@ -301,7 +301,7 @@ defmodule Sanctum.Context do
     * `:namespace`      — default `nil`
     * `:athanor_id`     — default `nil`; a task that touches one athanor's
       rows or files passes it, together with `scope: :athanor`
-    * `:permissions`    — default `[:execute, :storage_read, :execution_write, :storage_write]`
+    * `:permissions`    — default `[:execute, :storage_read, :storage_write]`
     * `:scope`          — default `:platform`
     * `:auth_method`    — default `:system`; cron passes `:scheduled`
 
@@ -323,7 +323,6 @@ defmodule Sanctum.Context do
         Keyword.get(opts, :permissions, [
           :execute,
           :storage_read,
-          :execution_write,
           :storage_write
         ]),
       scope: Keyword.get(opts, :scope, :platform),

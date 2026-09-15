@@ -17,7 +17,7 @@ defmodule Aqua.Roster do
   The roster as the console and the runner show it: `name` and `title`
   per enabled agent. Fail-open BY CHOICE, and said in the log by the read
   itself: an unreadable tree reads as "nobody here" — the chat still
-  renders, which beats refusing the whole conversation for a catalog
+  renders, which beats refusing the whole thread for a catalog
   read. A send with an empty roster and no prior pick is still refused
   `:no_orchestrator` by the runner.
   """

@@ -60,11 +60,11 @@ defmodule Opus.Test.NestedExecution do
   end
 
   @doc """
-  Execute the probe through the consent-rooted path (`Opus.run_root/5`).
+  Execute the probe through the consent-rooted path (`Cyfr.Execution.run_root/5`).
   Returns `{:ok, decoded_probe_output, raw_result}`.
   """
   def run_probe(ctx, input, opts \\ []) do
-    case Opus.run_root(ctx, :default, @probe_ref, input, opts) do
+    case Cyfr.Execution.run_root(ctx, :default, @probe_ref, input, opts) do
       {:ok, result} -> {:ok, decode(result.output), result}
       other -> other
     end

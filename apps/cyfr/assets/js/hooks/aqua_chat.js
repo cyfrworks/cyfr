@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Chat composer textarea hook (ConversationPaneLive).
+// Chat composer textarea hook (ThreadPaneLive).
 //
 // - Takes focus when it mounts — a pane opening, a thread switching, the
 //   person's own AQUA panel opening — unless focus already sits inside a

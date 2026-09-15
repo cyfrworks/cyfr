@@ -4,7 +4,7 @@
 defmodule Sanctum.Tenancy.MembersTest do
   use ExUnit.Case, async: false
 
-  alias Arca.TopicSubscriptionStorage, as: Subs
+  alias Arca.ThreadSubscriptionStorage, as: Subs
   alias Sanctum.Tenancy.{Athanors, Members}
 
   setup do
@@ -343,7 +343,7 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
   end
 
-  # Topic follows must be removed when membership ends.
+  # Thread follows must be removed when membership ends.
   describe "follows end with the seat" do
     test "remove_member/2 drops the leaver's follows and nobody else's", %{athanor: athanor} do
       n = System.unique_integer([:positive])
@@ -352,14 +352,14 @@ defmodule Sanctum.Tenancy.MembersTest do
       {:ok, :added} = Members.add(athanor, [user_id: leaver.id], "system")
       {:ok, :added} = Members.add(athanor, [user_id: stayer.id], "system")
 
-      conv = "conv_#{n}"
-      :ok = Subs.follow(follow_ctx(athanor.id, leaver.id), conv, leaver.id)
-      :ok = Subs.follow(follow_ctx(athanor.id, stayer.id), conv, stayer.id)
+      thread = "thread_#{n}"
+      :ok = Subs.follow(follow_ctx(athanor.id, leaver.id), thread, leaver.id)
+      :ok = Subs.follow(follow_ctx(athanor.id, stayer.id), thread, stayer.id)
 
       :ok = Members.remove_member(athanor, user_id: leaver.id)
 
-      refute Subs.follows?(athanor.id, conv, leaver.id)
-      assert Subs.follows?(athanor.id, conv, stayer.id)
+      refute Subs.follows?(athanor.id, thread, leaver.id)
+      assert Subs.follows?(athanor.id, thread, stayer.id)
     end
 
     test "remove_all_for_user/1 drops the follows in every athanor the person sat in", %{
@@ -374,8 +374,8 @@ defmodule Sanctum.Tenancy.MembersTest do
       {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
       {:ok, :added} = Members.add(other, [user_id: user.id], "system")
 
-      :ok = Subs.follow(follow_ctx(athanor.id, user.id), "conv_a_#{n}", user.id)
-      :ok = Subs.follow(follow_ctx(other.id, user.id), "conv_b_#{n}", user.id)
+      :ok = Subs.follow(follow_ctx(athanor.id, user.id), "thread_a_#{n}", user.id)
+      :ok = Subs.follow(follow_ctx(other.id, user.id), "thread_b_#{n}", user.id)
 
       :ok = Members.remove_all_for_user(user.id)
 
@@ -391,9 +391,9 @@ defmodule Sanctum.Tenancy.MembersTest do
       {:ok, :added} = Members.add(athanor, [user_id: stayer.id], "system")
 
       ctx = follow_ctx(athanor.id, user.id)
-      conv = "conv_#{n}"
-      :ok = Subs.follow(ctx, conv, user.id)
-      assert MapSet.member?(Subs.followed(ctx, user.id), conv)
+      thread = "thread_#{n}"
+      :ok = Subs.follow(ctx, thread, user.id)
+      assert MapSet.member?(Subs.followed(ctx, user.id), thread)
 
       :ok = Members.remove_member(athanor, user_id: user.id)
       {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")

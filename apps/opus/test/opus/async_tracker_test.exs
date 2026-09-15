@@ -113,8 +113,45 @@ defmodule Opus.AsyncTrackerTest do
       # A zero max_concurrent_tasks grant must prohibit task creation.
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 0)
 
+      refute AsyncTracker.room?(tracker)
+
       assert {:error, :max_tasks_exceeded} =
                AsyncTracker.spawn_task(tracker, fn -> :ok end, "ref1")
+
+      GenServer.stop(tracker)
+    end
+  end
+
+  # ============================================================================
+  # room?/1
+  # ============================================================================
+
+  describe "room?/1" do
+    test "answers what a spawn would find: live tasks and undrained results under the cap" do
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 2)
+      assert AsyncTracker.room?(tracker)
+
+      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :a end, "ref1")
+      assert AsyncTracker.room?(tracker)
+
+      {:ok, _id2} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            receive do
+              :never -> :b
+            end
+          end,
+          "ref2"
+        )
+
+      refute AsyncTracker.room?(tracker)
+
+      wait_completed(tracker, id1)
+      refute AsyncTracker.room?(tracker)
+
+      assert {:ok, :a} = AsyncTracker.await_task(tracker, id1, 1000)
+      assert AsyncTracker.room?(tracker)
 
       GenServer.stop(tracker)
     end

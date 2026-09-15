@@ -116,18 +116,6 @@ defmodule Compendium.RegistryTest do
                })
     end
 
-    test "rejects a manifest carrying an oauth block", %{ctx: ctx} do
-      assert {:error, {:legacy_manifest_blocks, msg}} =
-               Registry.publish_bytes(ctx, @valid_wasm, %{
-                 name: "bad-oauth",
-                 version: "1.0.0",
-                 type: "reagent",
-                 manifest: ~s({"oauth": "not-a-map"})
-               })
-
-      assert msg =~ "retired block(s) oauth"
-    end
-
     test "allows overwriting local publisher versions", %{ctx: ctx} do
       {:ok, _} =
         Registry.publish_bytes(ctx, @valid_wasm, %{

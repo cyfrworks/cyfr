@@ -94,6 +94,39 @@ defmodule Cyfr.ApplicationTest do
       refute EmissaryWeb.Endpoint in ids
     end
 
+    test "execution rates, slots, event streams and attempts start under the infra tier after PubSub" do
+      # `which_children/1` lists the most recently started child first.
+      started = Cyfr.InfraSupervisor |> started_ids()
+      at = fn id -> Enum.find_index(started, &(&1 == id)) end
+      pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
+
+      for id <- [Cyfr.Execution.Rates, Cyfr.Execution.Semaphore, Cyfr.Execution.Tree] do
+        assert is_integer(at.(id)) and at.(id) > pubsub,
+               "#{inspect(id)} must start under the infra tier after PubSub"
+      end
+
+      assert [
+               Cyfr.Execution.Registry,
+               Cyfr.Execution.Events.Registry,
+               Cyfr.Execution.Events.Sequence,
+               Cyfr.Execution.Events.Supervisor,
+               Cyfr.Execution.Attempt.Registry,
+               Cyfr.Execution.Attempt.Supervisor
+             ] = started_ids(Cyfr.Execution.Tree)
+    end
+
+    test "background roots and the stale-execution sweeper start after the execution group" do
+      started = Cyfr.InfraSupervisor |> started_ids()
+      at = fn id -> Enum.find_index(started, &(&1 == id)) end
+
+      # The sweeper is a child even where `:execution_sweeper_enabled` is off
+      # and it did not start.
+      for id <- [Cyfr.Execution.TaskSupervisor, Cyfr.Execution.Sweeper] do
+        assert is_integer(at.(id)) and at.(id) > at.(Cyfr.Execution.Tree),
+               "#{inspect(id)} must start under the infra tier after Cyfr.Execution.Tree"
+      end
+    end
+
     test "the endpoint lives under the web tier" do
       ids =
         Cyfr.WebSupervisor
@@ -103,6 +136,13 @@ defmodule Cyfr.ApplicationTest do
       assert EmissaryWeb.Endpoint in ids
       refute Arca.Repo in ids
     end
+  end
+
+  defp started_ids(supervisor) do
+    supervisor
+    |> Supervisor.which_children()
+    |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
+    |> Enum.reverse()
   end
 
   describe "parse_keyring_env!/1" do

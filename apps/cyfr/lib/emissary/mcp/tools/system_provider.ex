@@ -268,14 +268,14 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   defp reason_text(reason) when is_binary(reason), do: reason
-  defp reason_text(reason), do: inspect(Sanctum.Sanitizer.sanitize(reason))
+  defp reason_text(reason), do: inspect(Cyfr.Sanitizer.sanitize(reason))
 
   # ============================================================================
   # Tools List Filtering
   # ============================================================================
 
   defp handle_tools_list_for(tools, component_ref) do
-    case Sanctum.ComponentRef.parse(component_ref) do
+    case Cyfr.ComponentRef.parse(component_ref) do
       {:ok, %{type: "formula"}} ->
         filtered = Cyfr.Ops.Catalog.in_chain_view(tools)
         {:ok, %{tools: filtered, component_ref: component_ref, filtered: true}}
@@ -300,32 +300,20 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     |> Map.put(:registry, check_registry_health())
   end
 
-  # Memoized: this is an outbound HTTPS probe with 3s connect + 3s read
-  # timeouts, and system/status is called from the dev topbar on page
-  # loads — per-call probing put that latency on the page and hammered
-  # the registry. Registry health does not change per request.
+  # The probe's answer is memoized per registry: it is an outbound HTTPS
+  # probe with 3s connect + 3s read timeouts, and system/status is called
+  # from the dev topbar on page loads. What configuration alone decides is
+  # answered afresh.
   @registry_health_ttl_ms 30_000
 
   defp check_registry_health do
-    case Arca.Cache.get(:registry_health) do
-      {:ok, cached} ->
-        cached
-
-      :miss ->
-        health = probe_registry_health()
-        Arca.Cache.put(:registry_health, health, @registry_health_ttl_ms)
-        health
-    end
-  end
-
-  defp probe_registry_health do
     cond do
       not Compendium.RegistryHost.configured?() ->
         # No registry is not a registry that is down.
         "disabled"
 
       Application.get_env(:cyfr, :registry_health_probe, true) ->
-        do_probe_registry_health()
+        probed_registry_health(registry_url())
 
       true ->
         # The test env turns the probe off: a real DNS + TLS round-trip with
@@ -335,10 +323,22 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     end
   end
 
-  # Apply shared TLS verification, SSRF checks, and DNS pinning.
-  defp do_probe_registry_health do
-    url = registry_url()
+  defp probed_registry_health(url) do
+    key = {:registry_health, url}
 
+    case Arca.Cache.get(key) do
+      {:ok, cached} ->
+        cached
+
+      :miss ->
+        health = probe_registry_health(url)
+        Arca.Cache.put(key, health, @registry_health_ttl_ms)
+        health
+    end
+  end
+
+  # Apply shared TLS verification, SSRF checks, and DNS pinning.
+  defp probe_registry_health(url) do
     case Cyfr.Network.pinned_request(:get, "https://#{url}/health", [], nil,
            receive_timeout: 3_000,
            max_response_bytes: 64 * 1024

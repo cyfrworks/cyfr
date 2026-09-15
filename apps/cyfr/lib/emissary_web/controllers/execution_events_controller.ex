@@ -114,7 +114,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
     end
   end
 
-  # Everything after the cursor, in order, from the port: the durable
+  # Everything after the cursor, in order: the durable
   # rows first, then the deltas under the last of them. Answers the
   # cursor delivered to, and whether a terminal event ended the stream.
   defp drain(conn, execution_id, exec, cursor) do
@@ -137,8 +137,8 @@ defmodule EmissaryWeb.ExecutionEventsController do
 
   # A live event is a trigger. The one that immediately follows the
   # cursor goes straight out; anything else means rows the notification
-  # overtook, or a prefix this client has not reached, and the port is
-  # asked for everything after the cursor instead — so delivery is in
+  # overtook, or a prefix this client has not reached, and everything
+  # after the cursor is read instead — so delivery is in
   # commit order whatever order publications arrive in, and nothing is
   # sent twice. The deadline bounds a stream whose execution never
   # reaches a terminal event — the client reconnects with Last-Event-ID

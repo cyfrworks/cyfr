@@ -110,7 +110,9 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :opus, :fetch] => %{
       consumers: [:operator],
-      note: "component-bytes fetch during execution setup; execute.start/stop carry the outcome"
+      note:
+        "a component's bytes read by digest, at admission and for its runner's fetch_artifact; " <>
+          "execute.start/stop carry the outcome"
     },
     [:cyfr, :opus, :runtime, :authority_entered] => %{
       consumers: [:operator],
@@ -127,6 +129,30 @@ defmodule Cyfr.Telemetry.Catalog do
         "a timeout kill left a native thread spinning (no wasmex epoch interruption) — " <>
           "the one signal that a node is quietly losing cores; the semaphore refuses the " <>
           "tenant past a threshold"
+    },
+    [:cyfr, :execution, :child, :admission] => %{
+      consumers: [:operator],
+      note:
+        "a child run's step span (`Cyfr.Execution.StepSpans`): the call of run_child to the " <>
+          "guest's start; `mix cyfr.bench.step` reads it for the per-step latency baseline"
+    },
+    [:cyfr, :execution, :child, :first_delta] => %{
+      consumers: [:operator],
+      note:
+        "a child run's step span (`Cyfr.Execution.StepSpans`): the guest's start to its " <>
+          "first streamed delta; `mix cyfr.bench.step` reads it for time to first delta"
+    },
+    [:cyfr, :execution, :child, :completion] => %{
+      consumers: [:operator],
+      note:
+        "a child run's step span (`Cyfr.Execution.StepSpans`): the guest's start to its " <>
+          "completed row; `mix cyfr.bench.step` reads it for the per-step latency baseline"
+    },
+    [:cyfr, :execution, :run_child] => %{
+      consumers: [:operator],
+      note:
+        "a child run's whole call as its caller waits on it (`Cyfr.Execution.StepSpans`); " <>
+          "`mix cyfr.bench.step` reads it for the per-step total"
     },
     [:cyfr, :opus, :execution, :unsigned] => %{
       consumers: [:operator],
@@ -153,9 +179,9 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:operator],
       note: "formula concurrency activity, kept for operator metrics"
     },
-    [:cyfr, :opus, :formula, :emit] => %{
+    [:cyfr, :opus, :emit] => %{
       consumers: [:operator],
-      note: "formula concurrency activity, kept for operator metrics"
+      note: "guest stream events, kept for operator metrics"
     },
     [:cyfr, :opus, :formula, :cancel] => %{
       consumers: [:operator],

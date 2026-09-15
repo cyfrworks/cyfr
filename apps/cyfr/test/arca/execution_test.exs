@@ -46,7 +46,7 @@ defmodule Arca.ExecutionTest do
       # Tinctures are browser-side and never execute through Opus.
       refute Execution.start_changeset(Map.put(base, :component_type, "tincture")).valid?
 
-      for type <- Sanctum.ComponentRef.executable_types() do
+      for type <- Cyfr.ComponentRef.executable_types() do
         assert Execution.start_changeset(Map.put(base, :component_type, type)).valid?
       end
     end
@@ -256,7 +256,7 @@ defmodule Arca.ExecutionTest do
         Sanctum.Context.build(
           user_id: "user_test",
           athanor_id: @athanor,
-          permissions: [:execution_write],
+          permissions: [],
           scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
@@ -339,7 +339,7 @@ defmodule Arca.ExecutionTest do
         Sanctum.Context.build(
           user_id: "user_test",
           athanor_id: @athanor,
-          permissions: [:execution_write],
+          permissions: [],
           scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",

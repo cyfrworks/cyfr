@@ -14,15 +14,12 @@ defmodule Aqua.LoopTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Aqua.{Approvals, Tape}
-  alias Arca.ConversationStorage, as: Conversations
-  alias Cyfr.Test.ScriptedExecution
+  alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap, Source}
-
-  @moduletag :requires_opus_modules
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -30,16 +27,15 @@ defmodule Aqua.LoopTest do
 
   setup do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "loop_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :execution_impl]
+    keys = [:base_path, :seed_path, :consent_source, :workers]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
     Application.put_env(:cyfr, :consent_source, Source.DB)
-    Application.put_env(:cyfr, :execution_impl, ScriptedExecution)
+    Application.put_env(:cyfr, :workers, [ScriptedWorker])
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -51,41 +47,48 @@ defmodule Aqua.LoopTest do
       end
     end)
 
+    # The loops' work stops before the paths it runs under are restored.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
+    # The model catalyst unseals its key when its runner attaches.
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
+    ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, conv} = Conversations.create(ctx)
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, conv.id))
-    {:ok, ctx: ctx, conv: conv}
+    {:ok, thread} = Threads.create(ctx)
+    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    {:ok, ctx: ctx, thread: thread}
   end
 
   test "the catalyst's consented cap answers to a name, not to the ref the spec carries", %{
     ctx: ctx
   } do
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
 
     # What `Aqua.AgentConfig` resolves, and so what the spec holds.
-    versioned = @model <> ":1.2.0"
-    {:ok, name_ref} = Sanctum.ComponentRef.to_name_ref(versioned)
+    versioned = @model <> ":1.3.1"
+    {:ok, name_ref} = Cyfr.ComponentRef.to_name_ref(versioned)
 
-    # The graph is keyed the way `Opus.Chain` steps: by name. Asking with
+    # The graph is keyed the way `Cyfr.Execution.Admission` steps: by name. Asking with
     # the version answers nothing, and a cap of nil is a size check that
     # never fires — which is what the loop did while it asked that way.
-    assert {:error, :unknown_node} = Sanctum.Authority.node_limits(authority, versioned)
+    assert {:error, :unknown_node} = Cyfr.Authority.node_limits(authority, versioned)
 
-    assert {:ok, %Sanctum.Limits{max_request_size: cap}} =
-             Sanctum.Authority.node_limits(authority, name_ref)
+    assert {:ok, %Cyfr.Limits{max_request_size: cap}} =
+             Cyfr.Authority.node_limits(authority, name_ref)
 
     assert is_integer(cap) and cap > 0
   end
 
-  test "the loop resolves a cap for the spec it actually holds", %{ctx: ctx, conv: conv} do
-    turn = accept!(ctx, conv, "hello")
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+  test "the loop resolves a cap for the spec it actually holds", %{ctx: ctx, thread: thread} do
+    start_supervised!({ScriptedWorker, ref: @model, script: []})
+    turn = accept!(ctx, thread, "hello")
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
     {:ok, spec} = Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
 
     # The spec holds a versioned ref, and the graph is keyed by name. Asking
@@ -101,7 +104,7 @@ defmodule Aqua.LoopTest do
     end
 
     test "a reply carrying no text is refused, so the boundary does not advance" do
-      # `summarize/5` filters the reply to text blocks and joins them, so a
+      # The loop filters the reply to text blocks and joins them, so a
       # reply of only tool calls — or of no content at all — arrives here as
       # "". Committing it would render an empty summary in place of every row
       # before `first_kept_seq`.
@@ -144,9 +147,9 @@ defmodule Aqua.LoopTest do
     %{step: %{kind: "tool"}, call: {:ok, call}}
   end
 
-  defp accept!(ctx, conv, text) do
+  defp accept!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: text},
         turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
       })
@@ -154,7 +157,7 @@ defmodule Aqua.LoopTest do
     turn
   end
 
-  defp script!(items), do: start_supervised!({ScriptedExecution, ref: @model, script: items})
+  defp script!(items), do: start_supervised!({ScriptedWorker, ref: @model, script: items})
 
   defp reply(text),
     do: %{
@@ -179,13 +182,37 @@ defmodule Aqua.LoopTest do
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
-  defp roots, do: Opus.ExecutionSemaphore.status().root_active
+  defp keep(events) do
+    Enum.reduce(events, Aqua.Loop.Stream.new(), fn
+      {:turn_fence, _, fence}, kept -> Aqua.Loop.Stream.advance(kept, fence)
+      {:delta, delta}, kept -> Aqua.Loop.Stream.add(kept, delta)
+      {:delta_abandoned, marker}, kept -> Aqua.Loop.Stream.abandoned(kept, marker)
+      {:message, row}, kept -> Aqua.Loop.Stream.landed(kept, row)
+      _event, kept -> kept
+    end)
+  end
+
+  defp drain do
+    receive do
+      message -> [message | drain()]
+    after
+      0 -> []
+    end
+  end
+
+  defp files_catalyst(ctx) do
+    {:ok, listing} = Aqua.AgentConfig.catalyst_listing(ctx)
+    {:ok, ref} = Aqua.AgentConfig.resolve_catalyst(listing, "catalyst:local.files")
+    ref
+  end
+
+  defp roots, do: Cyfr.Execution.Semaphore.status().root_active
 
   test "a reply lands as rows before the turn ends, and the root is let go", %{
     ctx: ctx,
-    conv: conv
+    thread: thread
   } do
-    turn = accept!(ctx, conv, "@aqua hello")
+    turn = accept!(ctx, thread, "@aqua hello")
     script!([{:probe, self()}, reply("hi there")])
     before = roots()
 
@@ -195,7 +222,7 @@ defmodule Aqua.LoopTest do
     assert_receive {:scripted_probe, worker, _child}, 10_000
 
     assert roots() == before + 1
-    holders = Opus.ExecutionSemaphore.status().holders
+    holders = Cyfr.Execution.Semaphore.status().holders
     assert Enum.any?(holders, &(&1.pid == inspect(task.pid) and &1.class == :root))
     refute Enum.any?(holders, &(&1.pid == inspect(task.pid) and &1.class == :child))
     assert {:ok, %{status: "running", root_execution_id: root}} = Tape.turn(ctx, turn.id)
@@ -209,9 +236,9 @@ defmodule Aqua.LoopTest do
 
     assert is_binary(digest)
     assert roots() == before
-    assert_receive {:conversation, _, {:message, %{kind: "text", content: "hi there"}}}, 5_000
-    assert_receive {:conversation, _, {:usage, %{input: 10, output: 5}}}, 5_000
-    assert_receive {:conversation, _, {:turn_finished}}, 5_000
+    assert_receive {:thread, _, {:message, %{kind: "text", content: "hi there"}}}, 5_000
+    assert_receive {:thread, _, {:usage, %{input: 10, output: 5}}}, 5_000
+    assert_receive {:thread, _, {:turn_finished}}, 5_000
 
     assert {:ok, [%{kind: "model", dispatch_state: "closed", outcome: "ok"}]} =
              Tape.steps(ctx, turn)
@@ -219,18 +246,20 @@ defmodule Aqua.LoopTest do
     assert %{status: "completed"} = Arca.Repo.get(Arca.Execution, root)
 
     assert [%{execution_id: child}] =
-             Enum.filter(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+             Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
     assert %{status: "completed", parent_execution_id: ^root} =
              Arca.Repo.get(Arca.Execution, child)
   end
 
+  # The files hand is not scripted: it runs on the opus worker service.
+  @tag :requires_opus
   test "hands run as children in workers, reads beside each other, and the response is persisted before they run",
        %{
          ctx: ctx,
-         conv: conv
+         thread: thread
        } do
-    turn = accept!(ctx, conv, "@aqua look around")
+    turn = accept!(ctx, thread, "@aqua look around")
 
     script!([
       calls(
@@ -267,7 +296,7 @@ defmodule Aqua.LoopTest do
     end
 
     # The response's rows: the text, one tool_call per call, then results.
-    rows = Conversations.messages(ctx, conv.id)
+    rows = Threads.messages(ctx, thread.id)
     kinds = Enum.map(rows, & &1.kind)
 
     assert kinds == [
@@ -283,15 +312,17 @@ defmodule Aqua.LoopTest do
     # Nothing stays charged against the turn's reservation.
     {:ok, %{budget_id: budget_id}} = Tape.turn(ctx, turn.id)
     assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, budget_id)
-    assert_receive {:conversation, _, {:tool_activity, [_ | _]}}, 5_000
+    assert_receive {:thread, _, {:tool_activity, [_ | _]}}, 5_000
   end
 
+  # The files hand is not scripted: it runs on the opus worker service.
+  @tag :requires_opus
   test "a call that asks pauses the turn after the auto steps close, and a decision resumes it",
        %{
          ctx: ctx,
-         conv: conv
+         thread: thread
        } do
-    turn = accept!(ctx, conv, "@aqua keep a note")
+    turn = accept!(ctx, thread, "@aqua keep a note")
     before = roots()
 
     script!([
@@ -322,7 +353,7 @@ defmodule Aqua.LoopTest do
     assert {:ok, %{decision: "approved"}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
-    ScriptedExecution.script([reply("kept")])
+    ScriptedWorker.script([reply("kept")])
 
     resumed =
       Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
@@ -338,11 +369,105 @@ defmodule Aqua.LoopTest do
     assert roots() == before
   end
 
+  test "an approved call whose row no longer matches its approval runs nothing", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    turn = accept!(ctx, thread, "@aqua keep a note")
+
+    script!([
+      calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "remember"}}])
+    ])
+
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+    # The call's row now says something other than what was approved.
+    {:ok, steps} = Tape.steps(ctx, paused)
+    keep = Enum.find(steps, &(&1.action == "keep"))
+    {:ok, row} = Tape.message(ctx, keep.message_id)
+
+    payload =
+      row
+      |> Tape.payload()
+      |> put_in(["arguments", "content"], "something else")
+      |> Jason.encode!()
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(m in Arca.Schemas.Message, where: m.id == ^row.id),
+        set: [payload: payload]
+      )
+
+    ScriptedWorker.script([reply("done")])
+
+    assert :completed =
+             Task.await(
+               Task.async(fn ->
+                 Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+               end),
+               60_000
+             )
+
+    assert {:ok, %{dispatch_state: "closed", outcome: "denied"}} = Tape.step(ctx, keep.id)
+    assert {:error, _} = Aqua.Notes.read(ctx, "n")
+  end
+
+  test "a turn pins the catalyst release it runs on; a resume runs only that release, and only one speaking model/chat@1",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua keep a note")
+
+    script!([
+      calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}])
+    ])
+
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+
+    assert {:ok, %{catalyst_ref: "catalyst:local.claude:" <> _ = pinned} = paused} =
+             Tape.turn(ctx, turn.id)
+
+    assert {:error, :catalyst_pinned} =
+             Arca.TurnStorage.pin_catalyst(ctx, turn.id, "catalyst:local.openai:1.3.1", %{
+               fence: paused.fence
+             })
+
+    # A spec is built on the pinned release alone, and only on one that
+    # speaks the chat contract.
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+
+    for {ref, refusal} <- [
+          {"catalyst:local.claude:0.0.1", :catalyst_not_in_estate},
+          {files_catalyst(ctx), :catalyst_not_chat}
+        ] do
+      assert {:error, {^refusal, ^ref}} =
+               Aqua.Loop.Turn.build(ctx, %{paused | catalyst_ref: ref},
+                 authority: authority,
+                 excerpt?: false
+               )
+    end
+
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :declined})
+    ScriptedWorker.script([reply("done")])
+
+    assert :completed =
+             Task.await(
+               Task.async(fn ->
+                 Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+               end),
+               60_000
+             )
+
+    assert {:ok, %{catalyst_ref: ^pinned}} = Tape.turn(ctx, turn.id)
+  end
+
   test "a grant withdrawn while the model answers does not run the call it used to allow",
-       %{ctx: ctx, conv: conv} do
+       %{ctx: ctx, thread: thread} do
     grant = %{
-      scope: "conversation",
-      conversation_id: conv.id,
+      scope: "thread",
+      thread_id: thread.id,
       agent_name: "aqua",
       tool: "notes",
       action: "keep"
@@ -350,7 +475,7 @@ defmodule Aqua.LoopTest do
 
     {:ok, _} = Aqua.ToolGrants.put(ctx, Map.put(grant, :effect, "allow"))
 
-    turn = accept!(ctx, conv, "@aqua keep a note")
+    turn = accept!(ctx, thread, "@aqua keep a note")
 
     script!([
       {:probe, self()},
@@ -377,9 +502,9 @@ defmodule Aqua.LoopTest do
   test "a steer that arrived while the turn waited skips the approved step and reaches the model",
        %{
          ctx: ctx,
-         conv: conv
+         thread: thread
        } do
-    turn = accept!(ctx, conv, "@aqua keep a note")
+    turn = accept!(ctx, thread, "@aqua keep a note")
     script!([calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}])])
     assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
     {:ok, paused} = Tape.turn(ctx, turn.id)
@@ -387,12 +512,12 @@ defmodule Aqua.LoopTest do
     {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
     {:ok, _} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "actually, never mind"},
         steer_turn_id: turn.id
       })
 
-    ScriptedExecution.script([{:probe, self()}, reply("ok, dropped")])
+    ScriptedWorker.script([{:probe, self()}, reply("ok, dropped")])
 
     resumed =
       Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
@@ -400,7 +525,7 @@ defmodule Aqua.LoopTest do
     assert_receive {:scripted_probe, worker, _}, 10_000
 
     %{input: %{"params" => %{"messages" => messages}}} =
-      ScriptedExecution.calls() |> Enum.filter(&(&1.input["operation"] == "chat")) |> List.last()
+      ScriptedWorker.calls() |> Enum.filter(&(&1.input["operation"] == "chat")) |> List.last()
 
     texts =
       messages
@@ -418,17 +543,53 @@ defmodule Aqua.LoopTest do
     assert {:ok, %{status: "approved"}} = Tape.approval(ctx, approval.id)
   end
 
+  test "a steer that lands while the last answer is written is answered before the turn completes",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+    script!([{:probe, self()}, reply("hello"), reply("and hi again")])
+
+    running = run(ctx, turn)
+    assert_receive {:scripted_probe, worker, _}, 30_000
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, content: "one more thing"},
+        steer_turn_id: turn.id
+      })
+
+    send(worker, :continue)
+    assert :completed = Task.await(running, 60_000)
+
+    [_first, %{input: %{"params" => %{"messages" => messages}}}] =
+      Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
+
+    assert Jason.encode!(messages) =~ "one more thing"
+    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.content == "and hi again"))
+  end
+
+  test "a steer names an open turn of its own thread", %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+    {:ok, elsewhere} = Threads.create(ctx)
+
+    assert {:error, :turn_over} =
+             Tape.accept(ctx, elsewhere.id, %{
+               message: %{author: ctx.user_id, content: "wrong room"},
+               steer_turn_id: turn.id
+             })
+
+    assert Threads.messages(ctx, elsewhere.id) == []
+  end
+
   test "a policy refusal is the call's own result; a dead worker stops the turn, and the sender's next line continues it with reads only",
-       %{ctx: ctx, conv: conv} do
+       %{ctx: ctx, thread: thread} do
     before = roots()
-    turn = accept!(ctx, conv, "@aqua do things")
+    turn = accept!(ctx, thread, "@aqua do things")
 
     start_supervised!(
-      {ScriptedExecution,
-       ref: [@model, "catalyst:local.http", "catalyst:local.files"], script: []}
+      {ScriptedWorker, ref: [@model, "catalyst:local.http", "catalyst:local.files"], script: []}
     )
 
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([
         {"c1", "component", %{"action" => "delete", "name" => "x"}},
         {"c2", "http", %{"action" => "get", "url" => "https://example.test/x"}}
@@ -451,20 +612,20 @@ defmodule Aqua.LoopTest do
     assert %{dispatch_state: "uncertain", outcome: "uncertain"} =
              get = Enum.find(steps, &(&1.action == "get"))
 
-    [row] = Enum.filter(Conversations.messages(ctx, conv.id), &(&1.kind == "turn_aborted"))
-    assert %{"covers" => [%{"step_id" => step_id}]} = Conversations.payload(row)
+    [row] = Enum.filter(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
+    assert %{"covers" => [%{"step_id" => step_id}]} = Threads.payload(row)
     assert step_id == get.id
     assert paused.window_upto_seq == row.seq
 
     # The sender's line past the stop continues the turn: a read runs, a
     # write is refused until a new turn starts.
     {:ok, _} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "carry on, carefully"},
         steer_turn_id: turn.id
       })
 
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([
         {"c3", "files", %{"action" => "list", "path" => "data"}},
         {"c4", "files", %{"action" => "write", "path" => "data/x", "content" => "y"}}
@@ -492,23 +653,26 @@ defmodule Aqua.LoopTest do
     assert roots() == before
   end
 
-  test "the room excerpt reaches the model and never the retained input", %{ctx: ctx, conv: conv} do
+  test "the room excerpt reaches the model and never the retained input", %{
+    ctx: ctx,
+    thread: thread
+  } do
     # The room is read under the person's own seat.
     {:ok, _} =
       Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
-    {:ok, room} = Conversations.create(ctx)
+    {:ok, room} = Threads.create(ctx)
 
     {:ok, _} =
-      Conversations.append(ctx, room.id, %{author: ctx.user_id, content: "ROOM-ONLY-LINE"})
+      Threads.append(ctx, room.id, %{author: ctx.user_id, content: "ROOM-ONLY-LINE"})
 
     {:ok, %{turn: turn}} =
-      Tape.accept(ctx, conv.id, %{
+      Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua what did they say?"},
         turn: %{
           orchestrator: "aqua",
           requested_by: ctx.user_id,
-          options: %{"room" => %{"athanor_id" => ctx.athanor_id, "conversation_id" => room.id}}
+          options: %{"room" => %{"athanor_id" => ctx.athanor_id, "thread_id" => room.id}}
         }
       })
 
@@ -516,7 +680,7 @@ defmodule Aqua.LoopTest do
     assert :completed = Task.await(run(ctx, turn), 60_000)
 
     assert %{execution_id: id, input: sent} =
-             Enum.find(ScriptedExecution.calls(), &(&1.input["operation"] == "chat"))
+             Enum.find(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
     assert Jason.encode!(sent) =~ "ROOM-ONLY-LINE"
 
@@ -532,13 +696,13 @@ defmodule Aqua.LoopTest do
 
   test "the step cap counts every model step of the turn, across a pause and a retry", %{
     ctx: ctx,
-    conv: conv
+    thread: thread
   } do
-    turn = accept!(ctx, conv, "@aqua keep going")
-    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.files"], script: []})
+    turn = accept!(ctx, thread, "@aqua keep going")
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.files"], script: []})
 
     # Two rounds, a retried third, then a card.
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([{"c1", "files", %{"action" => "list", "path" => "data"}}]),
       %{"entries" => []},
       calls([{"c2", "files", %{"action" => "list", "path" => "data"}}]),
@@ -557,7 +721,7 @@ defmodule Aqua.LoopTest do
     {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
     {:ok, _} = Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
 
-    ScriptedExecution.script(
+    ScriptedWorker.script(
       List.flatten(
         for _ <- 1..40 do
           [calls([{"cx", "files", %{"action" => "list", "path" => "data"}}]), %{"entries" => []}]
@@ -577,13 +741,13 @@ defmodule Aqua.LoopTest do
     assert Enum.count(steps, &(&1.kind == "model")) == 30
   end
 
-  test "a card expires when the estate says, not after a day", %{ctx: ctx, conv: conv} do
+  test "a card expires when the estate says, not after a day", %{ctx: ctx, thread: thread} do
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
 
     {:ok, _} =
       Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => 1}})
 
-    turn = accept!(ctx, conv, "@aqua keep it")
+    turn = accept!(ctx, thread, "@aqua keep it")
     script!([calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}])])
     assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
 
@@ -593,11 +757,11 @@ defmodule Aqua.LoopTest do
     assert left in 3500..3600
   end
 
-  test "a role's unknown outcome stops the soul", %{ctx: ctx, conv: conv} do
-    turn = accept!(ctx, conv, "@aqua fetch it")
-    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.http"], script: []})
+  test "a role's unknown outcome stops the soul", %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua fetch it")
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
 
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([{"r1", "web", %{"task" => "read the page"}}]),
       # The clone's own round, and the hand that dies under it.
       calls([{"w1", "http", %{"action" => "get", "url" => "https://example.test/x"}}]),
@@ -619,22 +783,22 @@ defmodule Aqua.LoopTest do
 
     [row] =
       Enum.filter(
-        Conversations.messages(ctx, conv.id),
+        Threads.messages(ctx, thread.id),
         &(&1.kind == "turn_aborted" and &1.turn_id == turn.id)
       )
 
-    assert %{"covers" => [%{"step_id" => covered}]} = Conversations.payload(row)
+    assert %{"covers" => [%{"step_id" => covered}]} = Threads.payload(row)
     assert covered == clone_step.id
   end
 
   test "the first unknown outcome stops the group; what still runs is cancelled and covered", %{
     ctx: ctx,
-    conv: conv
+    thread: thread
   } do
-    turn = accept!(ctx, conv, "@aqua fetch both")
-    start_supervised!({ScriptedExecution, ref: [@model, "catalyst:local.http"], script: []})
+    turn = accept!(ctx, thread, "@aqua fetch both")
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
 
-    ScriptedExecution.script([
+    ScriptedWorker.script([
       calls([
         {"c1", "http", %{"action" => "get", "url" => "https://example.test/a"}},
         {"c2", "http", %{"action" => "get", "url" => "https://example.test/b"}}
@@ -649,16 +813,16 @@ defmodule Aqua.LoopTest do
     assert length(gets) == 2
     assert Enum.all?(gets, &(&1.dispatch_state == "uncertain"))
 
-    [row] = Enum.filter(Conversations.messages(ctx, conv.id), &(&1.kind == "turn_aborted"))
-    covered = row |> Conversations.payload() |> Map.fetch!("covers") |> Enum.map(& &1["step_id"])
+    [row] = Enum.filter(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
+    covered = row |> Threads.payload() |> Map.fetch!("covers") |> Enum.map(& &1["step_id"])
     assert Enum.sort(covered) == Enum.sort(Enum.map(gets, & &1.id))
   end
 
   test "a rate limit is retried and an authentication refusal ends the turn asking for setup", %{
     ctx: ctx,
-    conv: conv
+    thread: thread
   } do
-    turn = accept!(ctx, conv, "@aqua hi")
+    turn = accept!(ctx, thread, "@aqua hi")
     # A typed refusal rides the envelope's error, not the engine's.
     script!([
       {:refuse, %{"type" => "rate_limited", "message" => "slow down"}},
@@ -673,22 +837,192 @@ defmodule Aqua.LoopTest do
              %{kind: "model", outcome: "ok"}
            ] = steps
 
-    other = accept!(ctx, conv, "@aqua again")
-    ScriptedExecution.script([{:refuse, %{"type" => "authentication", "message" => "no key"}}])
+    other = accept!(ctx, thread, "@aqua again")
+    ScriptedWorker.script([{:refuse, %{"type" => "authentication", "message" => "no key"}}])
     result = Task.await(run(ctx, other), 60_000)
 
     assert {:failed, :setup_required} = result
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, other.id)
-    assert_receive {:conversation, _, {:consent_required, ref, user}}, 5_000
+    assert_receive {:thread, _, {:consent_required, ref, user}}, 5_000
     assert ref =~ @model and user == ctx.user_id
   end
 
-  test "the step cap ends a turn that never stops calling", %{ctx: ctx, conv: conv} do
-    turn = accept!(ctx, conv, "@aqua loop forever")
+  test "a chat step's text streams to the thread in order, once, under its turn's fence, before its row lands",
+       %{
+         ctx: ctx,
+         thread: thread
+       } do
+    turn = accept!(ctx, thread, "@aqua hello")
+    turn_id = turn.id
+
+    script!([
+      {:emit,
+       [
+         %{"type" => "text.delta", "text" => "hi "},
+         %{"type" => "tool_call.delta", "index" => 0, "arguments" => "{}"},
+         %{"type" => "text.delta", "text" => "there"},
+         %{"type" => "stop", "stop_reason" => "end_turn"}
+       ]},
+      reply("hi there")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+    assert_receive {:thread, _, {:turn_finished}}, 5_000
+
+    {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
+
+    streamed =
+      for {:thread, _, event} <- drain(),
+          match?({:turn_fence, _, _}, event) or match?({:delta, _}, event) or
+            match?({:delta_abandoned, _}, event) or
+            match?({:message, %{kind: "text", author: "aqua"}}, event),
+          do: event
+
+    assert [
+             {:turn_fence, ^turn_id, ^fence},
+             {:delta,
+              %{
+                turn_id: ^turn_id,
+                fence: ^fence,
+                source: ^turn_id,
+                step_id: step_id,
+                text: "hi ",
+                role: nil,
+                seq: first
+              }},
+             {:delta, %{step_id: step_id, text: "there", seq: second}},
+             {:message, %{content: "hi there"} = row}
+           ] = streamed
+
+    assert second > first
+    assert Tape.payload(row)["step_id"] == step_id
+  end
+
+  test "a refused chat step's text is withdrawn, and no earlier step's late text returns once the retry lands",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+
+    script!([
+      {:emit, [%{"type" => "text.delta", "text" => "partial answer"}]},
+      {:refuse, %{"type" => "rate_limited", "message" => "slow down"}},
+      {:emit, [%{"type" => "text.delta", "text" => "the answer"}]},
+      reply("the answer")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    events = for {:thread, _, event} <- drain(), do: event
+    deltas = for {:delta, delta} <- events, do: delta
+
+    assert [
+             %{text: "partial answer", ordinal: refused} = first,
+             %{text: "the answer", ordinal: retried}
+           ] = deltas
+
+    assert retried > refused
+    assert [%{step_id: abandoned}] = for({:delta_abandoned, marker} <- events, do: marker)
+    assert abandoned == first.step_id
+
+    kept = keep(events)
+    assert Aqua.Loop.Stream.texts(kept) == []
+
+    late = %{first | seq: {99, 99}, text: " and more"}
+    assert Aqua.Loop.Stream.texts(Aqua.Loop.Stream.add(kept, late)) == []
+    assert Aqua.Loop.Stream.texts(Aqua.Loop.Stream.add(kept, %{late | step_id: "older"})) == []
+  end
+
+  test "a stream cut short is retried, and the thread and its answer hold the retry's text once",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+
+    script!([
+      {:emit, [%{"type" => "text.delta", "text" => "the ans"}]},
+      {:refuse, %{"type" => "incomplete_stream", "message" => "the stream ended early"}},
+      {:emit,
+       [
+         %{"type" => "text.delta", "text" => "the "},
+         %{"type" => "text.delta", "text" => "answer"}
+       ]},
+      reply("the answer")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    assert {:ok,
+            [
+              %{kind: "model", outcome: "error", error: "incomplete_stream"} = cut,
+              %{kind: "model", outcome: "ok"} = retried
+            ]} = Tape.steps(ctx, turn)
+
+    events = for {:thread, _, event} <- drain(), do: event
+    deltas = for {:delta, delta} <- events, do: delta
+
+    # The attempt's masking holdback may re-chunk a step's text; each step's
+    # deltas arrive together, the cut step's first.
+    assert [{cut_step, cut_deltas}, {retry_step, retry_deltas}] =
+             Enum.chunk_by(deltas, & &1.step_id) |> Enum.map(&{hd(&1).step_id, &1})
+
+    assert Enum.map_join(cut_deltas, & &1.text) == "the ans"
+    assert Enum.map_join(retry_deltas, & &1.text) == "the answer"
+    assert cut_step == cut.id and retry_step == retried.id
+    assert hd(retry_deltas).ordinal > hd(cut_deltas).ordinal
+    assert [%{step_id: ^cut_step}] = for({:delta_abandoned, marker} <- events, do: marker)
+
+    # A viewer following the thread keeps only the retry's answer while it
+    # streams, and nothing once its row lands.
+    {streaming, [landed | _]} =
+      Enum.split_while(events, &(not match?({:message, %{kind: "text", author: "aqua"}}, &1)))
+
+    assert [%{step_id: ^retry_step, text: "the answer"}] =
+             Aqua.Loop.Stream.texts(keep(streaming))
+
+    assert Aqua.Loop.Stream.texts(keep(streaming ++ [landed])) == []
+
+    assert [%{content: "the answer"} = row] =
+             Enum.filter(
+               Threads.messages(ctx, thread.id),
+               &(&1.kind == "text" and &1.author == "aqua")
+             )
+
+    assert Tape.payload(row)["step_id"] == retry_step
+  end
+
+  test "a model its catalyst does not know ends the turn before any request, and a missing key asks for setup",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [],
+       describe: {:refuse, %{"type" => "unknown_model", "message" => "not a model"}}}
+    )
+
+    assert {:failed, {:unknown_model, _}} = Task.await(run(ctx, turn), 30_000)
+    assert {:ok, %{status: "failed"}} = Tape.turn(ctx, turn.id)
+    refute Enum.any?(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
+
+    stop_supervised!(ScriptedWorker)
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [],
+       describe: {:refuse, %{"type" => "secret_denied", "message" => "no key"}}}
+    )
+
+    other = accept!(ctx, thread, "@aqua again")
+    assert {:failed, :setup_required} = Task.await(run(ctx, other), 30_000)
+    assert_receive {:thread, _, {:consent_required, ref, user}}, 5_000
+    assert ref =~ @model and user == ctx.user_id
+  end
+
+  test "the step cap ends a turn that never stops calling", %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua loop forever")
     script!(List.duplicate(calls([{"u", "ui", %{"kind" => "ui.overlay.close"}}]), 40))
     assert {:failed, :step_cap} = Task.await(run(ctx, turn), 120_000)
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, turn.id)
-    assert_receive {:conversation, _, {:intents, [%{kind: "overlay_close"}], _}}, 5_000
+    assert_receive {:thread, _, {:intents, [%{kind: "overlay_close"}], _}}, 5_000
   end
 
   defp turn_root(ctx, turn) do

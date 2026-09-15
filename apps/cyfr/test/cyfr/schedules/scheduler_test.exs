@@ -9,82 +9,30 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Cyfr.Schedules.Scheduler
+  alias Cyfr.Test.{AuthorityFixtures, ScriptedWorker}
+  alias Sanctum.Consent.Source
 
-  # The execution port, answering as the engine would for the scheduler:
-  # admission is the one place an occurrence is joined to its execution,
-  # and the engine's answer is what closes it. `:refuse` refuses
-  # admission (nothing is admitted); `:hang` never answers.
-  defmodule Engine do
-    @behaviour Cyfr.Execution
-
-    def calls, do: Agent.get(__MODULE__, & &1)
-
-    def run_root(ctx, _selector, reference, input, opts) do
-      Agent.update(__MODULE__, &[%{reference: reference, input: input, opts: opts} | &1])
-
-      case Application.get_env(:cyfr, :schedules_test_engine, :complete) do
-        :refuse ->
-          {:error, :refused}
-
-        :hang ->
-          Process.sleep(:infinity)
-
-        :complete ->
-          {:ok, %{attempt: attempt}} =
-            Arca.Execution.admit(
-              %{
-                id: Keyword.fetch!(opts, :execution_id),
-                reference: reference,
-                user_id: ctx.user_id,
-                athanor_id: ctx.athanor_id,
-                component_type: "reagent",
-                schedule_id: Keyword.fetch!(opts, :schedule_id)
-              },
-              occurrence_id: Keyword.fetch!(opts, :occurrence_id)
-            )
-
-          {:ok, _} =
-            Arca.Execution.record_end(
-              ctx,
-              Keyword.fetch!(opts, :execution_id),
-              "completed",
-              %{completed_at: DateTime.utc_now(), duration_ms: 1, output: ~s({"ran":true})},
-              attempt.attempt
-            )
-
-          {:ok, %{output: %{"ran" => true}}}
-      end
-    end
-
-    def run_root_edge(_ctx, _src, _ref, _input, _opts), do: {:error, :unsupported}
-    def authority_for(_ctx, _sel, _ref, _opts), do: {:error, :unsupported}
-    def subscribe_events(_id, _ctx), do: :ok
-    def unsubscribe_events(_id, _ctx), do: :ok
-    def events_since(_id, _seq, _athanor), do: []
-    def run_child(_authority, _ref, _need, _input, _opts), do: {:error, :unsupported}
-    def claim_turn_root(_ctx, _ref, _opts), do: {:error, :unsupported}
-    def pause_turn_root(_ctx, _id, _opts), do: {:error, :unsupported}
-    def resume_turn_root(_ctx, _id, _opts), do: {:error, :unsupported}
-    def adopt_turn_root(_ctx, _id, _opts), do: {:error, :unsupported}
-    def release_turn_root(_ctx, _id, _opts), do: :ok
-    def cancel(_ctx, _id), do: {:error, :unsupported}
-    def cancel_for_restart(_ctx, _id, _payload), do: {:error, :unsupported}
-    def get(_ctx, _id), do: {:error, :not_found}
-    def list(_ctx, _opts), do: {:ok, []}
-    def ready?, do: true
-  end
+  @reference "reagent:local.test"
+  @profile_id "prof_test"
+  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
 
   setup do
+    Arca.Cache.init()
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    keys = [:cron_scheduler_enabled, :execution_impl, :schedules_test_engine]
+    test_path = Path.join(System.tmp_dir!(), "scheduler_#{System.unique_integer([:positive])}")
+    keys = [:cron_scheduler_enabled, :workers, :base_path]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :cron_scheduler_enabled, true)
-    Application.put_env(:cyfr, :execution_impl, Engine)
-    Application.put_env(:cyfr, :schedules_test_engine, :complete)
+    Application.put_env(:cyfr, :workers, [ScriptedWorker])
+    Application.put_env(:cyfr, :base_path, test_path)
+    ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
+      Cyfr.Execution.Semaphore.forgive_unreaped(ctx.athanor_id)
+      File.rm_rf!(test_path)
+
       for {key, value} <- prev do
         if value,
           do: Application.put_env(:cyfr, key, value),
@@ -92,9 +40,55 @@ defmodule Cyfr.Schedules.SchedulerTest do
       end
     end)
 
-    start_supervised!(%{id: Engine, start: {Agent, :start_link, [fn -> [] end, [name: Engine]]}})
-    {:ok, ctx: Sanctum.TestContext.local()}
+    Sanctum.Test.ConsentFixtures.start_source!()
+    consented!(ctx)
+    {:ok, ctx: ctx}
   end
+
+  # The scheduled component, registered, and the profile schedules name
+  # with its head consent: the component's node under the fixture limits.
+  defp consented!(ctx) do
+    {:ok, component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+        name: "test",
+        version: "1.0.0",
+        type: "reagent"
+      })
+
+    :ok =
+      Source.Memory.put_profile(ctx, %{
+        id: @profile_id,
+        kind: :owner,
+        source_ref: @reference,
+        label: "default",
+        status: :active
+      })
+
+    :ok =
+      Source.Memory.put_head_consent(ctx, @profile_id, %{
+        id: "consent-#{@profile_id}",
+        revision: 1,
+        scope: :versionless,
+        pinned_version: "",
+        invoke_mode: :open_inert,
+        shape_digest: "sha256:shape-#{@profile_id}",
+        commit_digest: "sha256:commit-#{@profile_id}",
+        resolved_policy:
+          Jason.encode!(%{
+            "canonical" => "jcs-1",
+            "nodes" => %{
+              @reference => %{
+                "limits" => AuthorityFixtures.limits_map(),
+                "edges" => %{"@ingress" => %{}}
+              }
+            }
+          }),
+        activation: %{@reference => component.release_digest},
+        vault_refs: []
+      })
+  end
+
+  defp script!(items), do: start_supervised!({ScriptedWorker, ref: @reference, script: items})
 
   # The scheduler under test, started after the rows it should find.
   defp scheduler!, do: start_supervised!(Scheduler)
@@ -110,7 +104,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
             cron_expression: "0 * * * *",
             reference: "reagent:local.test:1.0.0",
             resolved_reference: "reagent:local.test:1.0.0",
-            profile_id: "prof_test",
+            profile_id: @profile_id,
             next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second)
           },
           attrs
@@ -146,22 +140,32 @@ defmodule Cyfr.Schedules.SchedulerTest do
     end
   end
 
-  test "a due occurrence is one row, one execution, one invocation through the port", %{
+  test "a due occurrence is one row, one execution, one background run on a worker service", %{
     ctx: ctx
   } do
+    script!([{:probe, self()}, %{"ran" => true}])
     schedule = due!(create_schedule(ctx))
     scheduler!()
 
+    assert_receive {:scripted_probe, runner, running_id}, 10_000
+
+    assert Enum.any?(
+             Cyfr.Execution.Semaphore.status().holders,
+             &(&1.pid == inspect(Cyfr.Execution.Attempt.whereis(running_id)) and
+                 &1.class == :background)
+           )
+
+    send(runner, :continue)
     wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
 
     assert [%{state: "completed", execution_id: execution_id, attempts: 1}] =
              occurrences(ctx, schedule)
 
-    assert [%{opts: opts}] = Engine.calls()
-    assert Keyword.fetch!(opts, :execution_id) == execution_id
-    assert Keyword.fetch!(opts, :schedule_id) == schedule.id
-    assert Keyword.fetch!(opts, :retention_class) == "schedule"
-    assert Keyword.fetch!(opts, :class) == :background
+    assert running_id == execution_id
+    assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
+
+    assert {:ok, %{retention_class: "schedule"}, _bytes} =
+             Arca.ExecutionPayloads.get(ctx, execution_id, "input")
 
     assert [%{id: ^execution_id, schedule_id: schedule_id, status: "completed"}] =
              Arca.Repo.all(Arca.Execution)
@@ -176,11 +180,33 @@ defmodule Cyfr.Schedules.SchedulerTest do
     assert row.last_execution_id == execution_id
   end
 
+  test "a boot that does not own the control plane claims no occurrence, and fires once it does",
+       %{ctx: ctx} do
+    Cyfr.ControlPlane.mark(:lost)
+    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+
+    script!([%{"ran" => true}])
+    schedule = due!(create_schedule(ctx))
+    pid = scheduler!()
+
+    # The due timer fired on load and was deferred to the recheck.
+    _ = :sys.get_state(pid)
+    send(pid, {:fire, schedule.id})
+    _ = :sys.get_state(pid)
+    assert occurrences(ctx, schedule) == []
+    assert ScriptedWorker.calls() == []
+
+    Cyfr.ControlPlane.mark(:unclaimed)
+    send(pid, {:fire, schedule.id})
+    wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
+  end
+
   test "an admission that fails marks the occurrence failed without invoking anything", %{
     ctx: ctx
   } do
-    Application.put_env(:cyfr, :schedules_test_engine, :refuse)
-    schedule = due!(create_schedule(ctx))
+    script!([%{"ran" => true}])
+    # A profile no consent source holds: the root is refused before admission.
+    schedule = due!(create_schedule(ctx, %{profile_id: "prof_unconsented"}))
     scheduler!()
 
     wait_until(fn ->
@@ -189,10 +215,12 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
     assert [%{state: "failed", execution_id: nil, attempts: 0}] = occurrences(ctx, schedule)
     assert [] = Arca.Repo.all(Arca.Execution)
+    assert ScriptedWorker.calls() == []
   end
 
   test "a claimed occurrence nothing invoked runs once on recovery; a started one whose execution ended is uncertain",
        %{ctx: ctx} do
+    script!([%{"ran" => true}])
     schedule = create_schedule(ctx)
     now = DateTime.utc_now()
 
@@ -247,8 +275,8 @@ defmodule Cyfr.Schedules.SchedulerTest do
     end)
 
     assert {:ok, %{state: "uncertain"}} = ScheduleOccurrences.get(ctx, "occ_started")
-    assert [%{opts: opts}] = Engine.calls()
-    assert Keyword.fetch!(opts, :occurrence_id) == claimed.id
+    assert {:ok, %{execution_id: execution_id}} = ScheduleOccurrences.get(ctx, claimed.id)
+    assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
     # The cursor is untouched: recovery re-runs a claim, it never claims anew.
     assert [_, _] = occurrences(ctx, schedule)
   end
@@ -286,22 +314,24 @@ defmodule Cyfr.Schedules.SchedulerTest do
   end
 
   test "a missed occurrence fires once", %{ctx: ctx} do
+    script!([%{"ran" => true}])
     schedule = due!(create_schedule(ctx), 7_200)
     scheduler!()
 
     wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
     Process.sleep(200)
     assert [_] = occurrences(ctx, schedule)
-    assert [_] = Engine.calls()
+    assert [_] = ScriptedWorker.calls()
   end
 
   test "a runner that dies leaves a started occurrence uncertain", %{ctx: ctx} do
-    Application.put_env(:cyfr, :schedules_test_engine, :hang)
+    script!([:hang])
     schedule = due!(create_schedule(ctx))
     pid = scheduler!()
 
     wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
-    {:ok, _} = admit_for_hung!(ctx, schedule)
+    wait_until(fn -> match?([_], ScriptedWorker.calls()) end, 5_000)
+    assert [%{state: "started"}] = occurrences(ctx, schedule)
 
     # The hung runner is killed underneath the scheduler.
     [task_pid] =
@@ -312,24 +342,6 @@ defmodule Cyfr.Schedules.SchedulerTest do
     Process.exit(task_pid, :kill)
 
     wait_until(fn -> match?([%{state: "uncertain"}], occurrences(ctx, schedule)) end)
-  end
-
-  # The hung engine never admitted; a started occurrence is what an
-  # admission leaves, so it is written here as the engine would.
-  defp admit_for_hung!(ctx, schedule) do
-    [occurrence] = occurrences(ctx, schedule)
-
-    Arca.Execution.admit(
-      %{
-        id: "exec_hung",
-        reference: "reagent:local.test:1.0.0",
-        user_id: ctx.user_id,
-        athanor_id: ctx.athanor_id,
-        component_type: "reagent",
-        schedule_id: schedule.id
-      },
-      occurrence_id: occurrence.id
-    )
   end
 
   test "the scheduler survives an unexpected message" do

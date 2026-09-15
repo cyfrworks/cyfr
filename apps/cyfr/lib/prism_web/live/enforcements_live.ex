@@ -6,7 +6,7 @@ defmodule PrismWeb.EnforcementsLive do
   Live feed of policy enforcement decisions.
 
   Each row is one `Arca.PolicyLog` record — an allow/deny outcome from one
-  of the enforcement chokepoints (`Opus.Executor` pre-execution gate, the
+  of the enforcement chokepoints (`Cyfr.Execution.Admission` pre-execution gate, the
   HTTP egress validators, or the tincture rate limiter). Telemetry from
   `[:cyfr, :sanctum, :policy, :decision]` fans out via PubSub so the table
   updates without a full reload.
@@ -36,7 +36,7 @@ defmodule PrismWeb.EnforcementsLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.enforcement(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.enforcement(ctx))
     end
 
     {:ok,

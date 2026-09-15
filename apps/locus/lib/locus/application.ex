@@ -3,38 +3,54 @@
 
 defmodule Locus.Application do
   @moduledoc """
-  Locus's own supervision tree: the build-slot limiter and the task pool
-  builds run on.
-
-  Supervises dedicated build workers for cargo-component and npm/Vite jobs.
+  Locus's own supervision tree: the build-slot limiter, the task pool the
+  build tool's background work runs on, the client of cyfr-spawn when this
+  node was started by it, and the builder service when this node is the
+  builder.
   """
 
   use Application
 
   @impl true
   def start(_type, _args) do
+    spawner? = Locus.Spawner.channel_inherited?()
+    listen? = Application.get_env(:cyfr, :builder_listen, false)
+
     children =
       [
         Locus.BuildLimiter,
         {Task.Supervisor, name: Locus.TaskSupervisor}
-      ] ++ builder_endpoint()
+      ] ++ spawner(spawner?) ++ builder_endpoint(listen?, spawner?)
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Locus.Supervisor)
   end
 
-  # The builder container's HTTP face — only when this node IS the builder
-  # (the `builder` release sets CYFR_BUILDER_LISTEN=true). The app image
-  # never listens on this port. In compose the container sits on the
-  # builder network alone, so every interface is that network; elsewhere
-  # `CYFR_BUILDER_BIND` names the one address to listen on.
-  defp builder_endpoint do
-    if Application.get_env(:cyfr, :builder_listen, false) do
-      port = Application.get_env(:cyfr, :builder_port, 4100)
-      ip = bind_address!(Application.get_env(:cyfr, :builder_bind, "0.0.0.0"))
-      [{Bandit, plug: Locus.BuilderService, port: port, ip: ip}]
-    else
-      []
-    end
+  defp spawner(true), do: [Locus.Spawner]
+  defp spawner(false), do: []
+
+  @doc """
+  The builder container's HTTP face, when this node is the builder (the
+  `builder` release sets CYFR_BUILDER_LISTEN=true). The builder serves
+  builds only through cyfr-spawn, which runs each under a uid of its own;
+  without the spawner's channel the boot is refused. In compose the
+  container sits on the builder network alone, so every interface is that
+  network; elsewhere `CYFR_BUILDER_BIND` names the one address to listen on.
+  """
+  @spec builder_endpoint(boolean(), boolean()) :: [
+          Supervisor.child_spec() | {module(), keyword()}
+        ]
+  def builder_endpoint(false = _listen?, _spawner?), do: []
+
+  def builder_endpoint(true, false) do
+    raise "[Locus] FATAL: the builder runs builds only through cyfr-spawn, which starts it with " <>
+            "its channel on fd 3 (CYFR_SPAWN_CHANNEL); fd 3 is not that channel. Start the builder " <>
+            "through `cyfr-spawn serve --pool build:… -- /app/bin/builder start` (the image's entrypoint)."
+  end
+
+  def builder_endpoint(true, true) do
+    port = Application.get_env(:cyfr, :builder_port, 4100)
+    ip = bind_address!(Application.get_env(:cyfr, :builder_bind, "0.0.0.0"))
+    [{Bandit, plug: Locus.BuilderService, port: port, ip: ip}]
   end
 
   @doc """

@@ -24,11 +24,11 @@ defmodule Aqua.Ops do
   Call a tool on the in-chain plane, under the chain's `authority`.
 
   `opts` are the registry's own (`:lineage` — the host-stamped execution
-  and conversation identity a tool may trust, guest-supplied spellings
+  and thread identity a tool may trust, guest-supplied spellings
   dropped); the helper forwards them so the runner can name a card's own
   execution without the argument map carrying it.
   """
-  @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Sanctum.Authority.t(), keyword()) ::
+  @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Cyfr.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def call_in_chain(tool, %Sanctum.Context{} = ctx, args, authority, opts \\ []) do
     Cyfr.Ops.Catalog.call_in_chain(tool, ctx, args, authority, opts)
@@ -69,10 +69,10 @@ defmodule Aqua.Ops do
   end
 
   @doc """
-  The registry's `standing` annotation for `tool`/`action` — `:conversation`,
+  The registry's `standing` annotation for `tool`/`action` — `:thread`,
   `false`, or nil when the action declares none or the tool is unknown.
   """
-  @spec action_standing(String.t(), String.t()) :: :conversation | false | nil
+  @spec action_standing(String.t(), String.t()) :: :thread | false | nil
   def action_standing(tool, action) do
     case Cyfr.Ops.Catalog.get_tool(tool) do
       {:ok, tool_def} -> Cyfr.Ops.Annotations.standing(tool_def, action)
@@ -119,13 +119,13 @@ defmodule Aqua.Ops do
   One sentence for a refusal: the shared renderer first (crafted binaries,
   consent signals, the crash vocabulary — the same sentence everywhere),
   and an internal term sanitized BEFORE inspect — this text persists as a
-  conversation message every member reads, and a flattened string is past
+  thread message every member reads, and a flattened string is past
   the sanitizer's reach.
   """
   @spec render_refusal(term()) :: String.t()
   def render_refusal(reason) do
     case Cyfr.Ops.Error.render(reason) do
-      nil -> inspect(Sanctum.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
+      nil -> inspect(Cyfr.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
       sentence -> sentence
     end
   end

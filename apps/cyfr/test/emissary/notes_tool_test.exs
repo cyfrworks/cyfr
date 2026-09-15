@@ -9,8 +9,8 @@ defmodule Emissary.MCP.NotesToolTest do
 
   alias Emissary.MCP.NotesTool, as: Tool
   alias Cyfr.Ops.Catalog
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
   alias Sanctum.Context
 
   setup do
@@ -94,7 +94,8 @@ defmodule Emissary.MCP.NotesToolTest do
           invoke_mode: :open_inert,
           activation: %{node => "sha256:notes"}
         },
-        blob
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
       )
 
     auth
@@ -253,7 +254,7 @@ defmodule Emissary.MCP.NotesToolTest do
     assert note.content == "Lisbon"
     assert note.kept_by == ctx.user_id
     assert {:ok, _, 0} = DateTime.from_iso8601(note.kept_at)
-    assert is_nil(note.conversation)
+    assert is_nil(note.thread)
     assert is_nil(note.execution)
   end
 
@@ -309,24 +310,27 @@ defmodule Emissary.MCP.NotesToolTest do
     auth = granting([{"notes", "keep"}, {"notes", "read"}])
 
     # What the model wrote as provenance — ignored in a chain: the host
-    # stamps the card's own execution and conversation as lineage, and
-    # those are the only provenance the tool records there.
+    # stamps the card's own execution and thread as lineage, and
+    # those are the only provenance the tool records there. The guest's
+    # own lineage keys are dropped before the stamp.
     args = %{
       "action" => "keep",
       "name" => "decided",
       "content" => "Lisbon",
-      "conversation" => "forged",
-      "execution" => "forged"
+      "thread" => "forged",
+      "execution" => "forged",
+      "thread_id" => "forged",
+      "root_execution_id" => "forged"
     }
 
-    lineage = [lineage: %{root_execution_id: "exec_1", conversation_id: "conv_1"}]
+    lineage = [lineage: %{root_execution_id: "exec_1", thread_id: "thread_1"}]
 
     # The person's own session, now guest-planed by the approved run: the
     # plane is not asked again, the surface is.
     assert {:ok, %{kept: "decided", athanor_id: id}} = in_chain(ctx, args, auth, lineage)
     assert id == estate.id
 
-    assert {:ok, %{conversation: "conv_1", execution: "exec_1", kept_by: kept_by}} =
+    assert {:ok, %{thread: "thread_1", execution: "exec_1", kept_by: kept_by}} =
              in_chain(ctx, %{"action" => "read", "name" => "decided"}, auth)
 
     assert kept_by == ctx.user_id
@@ -334,8 +338,23 @@ defmodule Emissary.MCP.NotesToolTest do
     # Without host lineage the forged values are still not recorded.
     assert {:ok, _} = in_chain(ctx, %{args | "name" => "bare"}, auth)
 
-    assert {:ok, %{conversation: nil, execution: nil}} =
+    assert {:ok, %{thread: nil, execution: nil}} =
              in_chain(ctx, %{"action" => "read", "name" => "bare"}, auth)
+
+    # The thread's lineage key is `thread_id`: the retired key (spelled
+    # split for the vocabulary gate) is neither stamped from lineage nor
+    # read as the thread when a guest supplies it.
+    retired = "conver" <> "sation_id"
+
+    old_lineage = [
+      lineage: %{String.to_atom(retired) => "thread_1", root_execution_id: "exec_1"}
+    ]
+
+    retired_args = args |> Map.put("name", "retired") |> Map.put(retired, "thread_1")
+    assert {:ok, _} = in_chain(ctx, retired_args, auth, old_lineage)
+
+    assert {:ok, %{thread: nil, execution: "exec_1"}} =
+             in_chain(ctx, %{"action" => "read", "name" => "retired"}, auth)
 
     # The same formula started by a key or a schedule is refused inside the
     # chain exactly as it is at the door — the click was a session's.
@@ -515,8 +534,8 @@ defmodule Emissary.MCP.NotesToolTest do
 
     names =
       roles
-      |> File.ls!()
-      |> Enum.filter(&String.ends_with?(&1, ".md"))
+      |> Path.join("*.md")
+      |> Cyfr.Test.SourceTree.files!()
       |> Enum.map(&Path.basename(&1, ".md"))
 
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(seed, "aqua.md")))
@@ -529,7 +548,7 @@ defmodule Emissary.MCP.NotesToolTest do
     # A filed note follows the thread it was kept from, never the agent;
     # a pinned page is changed one click at a time; forget is destructive
     # and already takes no standing allow.
-    assert actions["keep"].standing == :conversation
+    assert actions["keep"].standing == :thread
     assert actions["pin"].standing == false
     assert actions["forget"].kind == :destructive
 

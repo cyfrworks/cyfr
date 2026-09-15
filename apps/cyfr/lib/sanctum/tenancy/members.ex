@@ -415,7 +415,7 @@ defmodule Sanctum.Tenancy.Members do
   The owner of a person's athanor is that athanor's one member and is never
   removed — deny at the door is the only way out of one's own furnace.
 
-  The person's topic follows in the athanor go with the seat: a follow row
+  The person's thread follows in the athanor go with the seat: a follow row
   left behind would resume the moment they are re-added, so a returning
   member starts unfollowed like a new one.
   """
@@ -430,7 +430,7 @@ defmodule Sanctum.Tenancy.Members do
     # orphaned follows would stand until a re-add revived them.
     with {:ok, row} <- find(user_id, "athanor", athanor_id),
          :ok <- end_if_frozen(athanor),
-         :ok <- Arca.TopicSubscriptionStorage.unfollow_all(athanor_id, user_id),
+         :ok <- Arca.ThreadSubscriptionStorage.unfollow_all(athanor_id, user_id),
          {:ok, _} <- remove(row) do
       # Invalidate cached contexts after membership removal; retain sessions for revalidation.
       Sanctum.Session.invalidate_memo_for_user(user_id)
@@ -451,7 +451,7 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc """
   Remove every row of a person (a denied user's rows) — group and platform
-  alike, and their topic follows in every athanor they held a seat in. A
+  alike, and their thread follows in every athanor they held a seat in. A
   group they were the last active member of is archived, as when they
   leave it. A failure is reported: the caller is ejecting someone and must
   not answer "done" while rows survive.
@@ -511,7 +511,7 @@ defmodule Sanctum.Tenancy.Members do
     rows
     |> athanor_ids()
     |> Enum.reduce_while(:ok, fn athanor_id, :ok ->
-      case Arca.TopicSubscriptionStorage.unfollow_all(athanor_id, user_id) do
+      case Arca.ThreadSubscriptionStorage.unfollow_all(athanor_id, user_id) do
         :ok -> {:cont, :ok}
         {:error, _} = err -> {:halt, err}
       end

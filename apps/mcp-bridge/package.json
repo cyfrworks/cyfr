@@ -3,7 +3,7 @@
   "version": "0.5.8",
   "private": true,
   "license": "Apache-2.0",
-  "description": "Wraps stdio/npx MCP servers behind a single HTTP MCP endpoint. Registered with cyfr like any other HTTP MCP \u2014 admin tools (add_backend / remove_backend / list_backends / restart_backend) and the children's forwarded tools all surface through the same /mcp endpoint.",
+  "description": "Runs the stdio MCP servers CYFR registers with transport stdio, one owner per server row, and serves each owner's backend tools over HTTP MCP under requests signed with CYFR_MCP_BRIDGE_KEY.",
   "type": "module",
   "main": "server.mjs",
   "scripts": {
@@ -14,6 +14,6 @@
     "express": "^5.2.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24.2"
   }
 }

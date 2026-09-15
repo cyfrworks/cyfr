@@ -415,10 +415,10 @@ defmodule Compendium.OCI.ManifestTest do
 
   describe "the kind roster" do
     test "covers every component type, derived from the one roster" do
-      # The media-type table derives from Sanctum.ComponentRef.valid_types/0
+      # The media-type table derives from Cyfr.ComponentRef.valid_types/0
       # — a new kind gets a media type by construction, and this pins the
       # spellings so a derivation change is a loud diff.
-      for type <- Sanctum.ComponentRef.valid_types() do
+      for type <- Cyfr.ComponentRef.valid_types() do
         assert is_binary(Manifest.wasm_media_type(type))
       end
 

@@ -1,10 +1,11 @@
 # CYFR self-hosted stack:
 #   cyfr        — the one endpoint (:4000): Prism (chat + console), API, MCP,
 #                 tinctures
-#   mcp-bridge  — HTTP MCP gateway that wraps stdio/npx MCP servers. Register
-#                 it from Prism's "MCP Servers" page (one-click preset);
-#                 admin and child tools all surface under cyfr's `bridge:`
-#                 namespace. State persists to ./data/mcp-bridge/backends.json.
+#   mcp-bridge  — runs the stdio/npx MCP servers CYFR registers with
+#                 transport `stdio`, one owner per server row, each backend
+#                 under a uid of its own. Every request between cyfr and the
+#                 bridge is signed under CYFR_MCP_BRIDGE_KEY; the bridge
+#                 keeps no state.
 #   caddy       — TLS + reverse proxy in front of cyfr. Opt-in via the `tls`
 #                 profile.                                   [profile: tls]
 #
@@ -45,6 +46,9 @@ services:
       - CYFR_TRUSTED_PROXY_HOPS=${CYFR_TRUSTED_PROXY_HOPS:-1}
       # The private hosts outbound calls may reach; the bridge is one.
       - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-mcp-bridge}
+      # Where cyfr reaches the mcp-bridge service. Stdio MCP servers need this
+      # and CYFR_MCP_BRIDGE_KEY, which cyfr reads from .env (env_file above).
+      - CYFR_MCP_BRIDGE_URL=${CYFR_MCP_BRIDGE_URL:-http://mcp-bridge:8001}
     networks:
       - default
       - builder
@@ -67,11 +71,14 @@ services:
     # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
     # port and the probed path have one author.
 
-  # Optional builder: `docker compose --profile builder up -d`.
-  # Set CYFR_BUILDER_URL=http://builder:4100 and CYFR_BUILDER_TOKEN in .env.
+  # Optional builder: `docker compose --profile builder up -d`, or `cyfr up`
+  # once .env sets CYFR_BUILDER_URL=http://builder:4100 and CYFR_BUILDER_TOKEN.
   # Compose forwards the token; put builder-only overrides in .env.builder.
   builder:
     container_name: cyfr-builder
+    # Pulled as published; a source checkout builds it with
+    # `docker compose --profile builder build builder`.
+    image: ghcr.io/cyfrworks/cyfr-builder:latest
     build:
       context: .
       dockerfile: Dockerfile.builder
@@ -92,12 +99,37 @@ services:
     # listening on it (CYFR_BUILDER_BIND is for a builder outside compose).
     networks:
       - builder
+    # docker-init is PID 1 and forwards stop signals to cyfr-spawn, the
+    # child subreaper of every build process.
+    init: true
+    # cyfr-spawn refuses to start with any capability other than these: it
+    # starts the builder release and each build under their own uids and
+    # signals their processes. The release and every build run with none.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - KILL
+    security_opt:
+      - no-new-privileges:true
     # No /data mount, read-only root: the builder holds no tenant state —
-    # sources arrive in the request, artifacts leave in the response, and
-    # the only writable surface is its own build scratch.
+    # sources arrive in the request, artifacts leave in the response. The
+    # tmpfs mounts below are the only writable surfaces, and cyfr-spawn
+    # refuses to start if any other location is writable by a build's uid
+    # (`ipc: none` leaves /dev/shm unmounted). Build homes: each build's
+    # uid creates its own 0700 home holding its sources, Cargo home, npm
+    # cache, temporary files and target directory; mode 1733 lets it create
+    # one without listing the others, and build scripts and bundler
+    # binaries run from there, so it allows exec. Its size bounds what all
+    # concurrent builds write, and counts against the memory limit below.
+    # /run/cyfr-builder holds the release's temporary files and the socket
+    # builds' relays attach to.
     read_only: true
+    ipc: none
     tmpfs:
-      - /tmp:size=2g
+      - /var/lib/cyfr-builder/homes:mode=1733,exec,size=2g
+      - /run/cyfr-builder:uid=10001,gid=10001,mode=0700,size=16m
     restart: unless-stopped
     logging:
       driver: json-file
@@ -108,7 +140,9 @@ services:
       resources:
         limits:
           # The one container that runs multi-minute cargo/npm compiles —
-          # without a ceiling a runaway build starves the host.
+          # without a ceiling a runaway build starves the host. No build has
+          # a memory bound of its own: this limit bounds every concurrent
+          # build, their homes' tmpfs pages and the release together.
           memory: ${CYFR_BUILDER_MEMORY_LIMIT:-3G}
           cpus: "${CYFR_BUILDER_CPU_LIMIT:-2}"
 
@@ -121,28 +155,50 @@ services:
       target: mcp-bridge
     expose:
       - "8001"
-    # Use Docker init to reap orphaned descendants and forward signals to Node.
+    # docker-init is PID 1 and forwards stop signals to cyfr-spawn. cyfr-spawn
+    # is the child subreaper of everything it starts, so an orphaned backend
+    # process is reparented to it, not to docker-init, and retired with its uid.
     init: true
-    # Read bridge-only settings from .env.bridge; forward MCP_BRIDGE_TOKEN from .env below.
+    # cyfr-spawn refuses to start with any capability other than these: it
+    # starts the bridge and each backend under their own uids and signals
+    # their processes. The bridge and every backend run with none.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - KILL
+    security_opt:
+      - no-new-privileges:true
+    # The root is read-only and the tmpfs mounts below are the only writable
+    # surfaces; cyfr-spawn refuses to start if any other location is
+    # writable by a backend's uid, so a backend has no shared /tmp, /var/tmp,
+    # /run or /dev/shm (`ipc: none` leaves /dev/shm unmounted) and writes
+    # temporary files under its home. Backend homes: each backend's uid
+    # creates its own 0700 home; mode 1733 lets it create one without
+    # listing the others. Homes hold npx caches, so they allow exec.
+    # /run/cyfr-bridge holds the bridge's private attach socket.
+    read_only: true
+    ipc: none
+    tmpfs:
+      - /var/lib/cyfr-bridge/homes:mode=1733,exec
+      - /run/cyfr-bridge:uid=10001,gid=10001,mode=0700
+    # Read bridge-only settings from .env.bridge; CYFR_MCP_BRIDGE_KEY comes
+    # from .env below.
     env_file:
       - path: .env.bridge
         required: false
     environment:
-      # /mcp requires `Authorization: Bearer <token>`. `cyfr init` generates
-      # this token. Register the bridge in Prism with header
-      # `Authorization: vault:mcp_bridge_token` (store the same value in a
-      # Vault entry named `mcp_bridge_token`). The bridge FAILS CLOSED:
-      # unset, it refuses to boot (and restart-loops here) unless
-      # MCP_BRIDGE_ALLOW_INSECURE=1 explicitly opts into an open bridge on
-      # the container network. The port is `expose`d, never published.
-      - MCP_BRIDGE_TOKEN=${MCP_BRIDGE_TOKEN:-}
-    volumes:
-      # Host-visible persistence: backends.json lives here, easy to inspect
-      # or back up. The container creates the file on first add_backend.
-      - ./data/mcp-bridge:/data
+      # The root every signing and sealing key between cyfr and the bridge is
+      # derived from: 32 random bytes as 64 hexadecimal digits. `cyfr init`
+      # generates it into .env, and cyfr reads the same value from there.
+      # Without a valid key the bridge refuses to start (and restart-loops
+      # here). The port is `expose`d, never published.
+      - CYFR_MCP_BRIDGE_KEY=${CYFR_MCP_BRIDGE_KEY:-}
     restart: unless-stopped
-    # Shutdown SIGTERMs the child servers and drains in-flight requests;
-    # compose's default 10s is tight when several children are up.
+    # Shutdown retires every backend (SIGTERM, 2s, then SIGKILL for all of
+    # its processes) and drains in-flight requests; compose's default 10s is
+    # tight when several backends are up.
     stop_grace_period: 15s
     logging:
       driver: json-file
@@ -151,7 +207,7 @@ services:
         max-file: "3"
     healthcheck:
       # node:24-alpine ships busybox wget, not curl. /health is unauthenticated
-      # by design (server.mjs).
+      # and carries no data (server.mjs).
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8001/health"]
       interval: 10s
       timeout: 3s

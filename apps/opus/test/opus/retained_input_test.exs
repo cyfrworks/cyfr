@@ -3,10 +3,10 @@
 
 defmodule Opus.RetainedInputTest do
   @moduledoc """
-  A child run's `retained_input` rides the real path — the port, the
-  chain, the executor, the record — to the payload store: the catalyst
-  receives the input as sent, the store keeps the retained form, and
-  the row's hash describes what was sent.
+  A child run's `retained_input` rides the real path — `Cyfr.Execution`,
+  admission, the worker service's runner, the record — to the payload
+  store: the catalyst receives the input as sent, the store keeps the
+  retained form, and the row's hash describes what was sent.
   """
 
   use ExUnit.Case, async: false
@@ -80,7 +80,7 @@ defmodule Opus.RetainedInputTest do
 
   test "the store keeps the retained form of a child run's input", %{ctx: ctx} do
     :ok = bind_claude!(ctx)
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
     id = Cyfr.UUID7.execution_id()
 
     sent = %{"operation" => "describe", "params" => %{"marker" => "SENT-ONLY"}}

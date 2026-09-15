@@ -11,7 +11,7 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   Every edge A → B carries B's own resources, and every node's grant is
   manifest-sourced: resources come from the declared caps (the ask,
-  granted whole at this grain) and limits from `Sanctum.Limits.defaults/1`
+  granted whole at this grain) and limits from `Cyfr.Limits.defaults/1`
   under `caps.limits`. A manifest with no `needs`/`caps` blocks grants the
   empty ask — deny-all resources under type-default limits.
 
@@ -25,7 +25,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   """
 
   alias Compendium.Manifest.Caps
-  alias Sanctum.JCS
+  alias Cyfr.JCS
 
   @type vault_fn ::
           (node_key :: String.t(), row :: map(), manifest :: map() -> map() | nil)
@@ -114,7 +114,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   defp edge_vaults(node, nodes) do
-    ingress = node.edges[Sanctum.Authority.Blob.ingress_key()]
+    ingress = node.edges[Cyfr.Authority.Blob.ingress_key()]
     ingress_vault = if is_map(ingress), do: [ingress["__vault__"]], else: []
 
     dep_vaults =
@@ -143,7 +143,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   defp build_node(ctx, graph, node_key, source_ref, vault_fn, edge_vault_fn, extras) do
     with {:ok, row} <- node_row(ctx, node_key),
          manifest =
-           Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest")),
+           Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest")),
          {:ok, resources, limits} <- node_grant(ctx, node_key, manifest) do
       vault = vault_fn.(node_key, row, manifest)
 
@@ -163,7 +163,7 @@ defmodule Sanctum.Consent.BlobBuilder do
             |> Map.merge(extras)
             |> Map.put("__vault__", vault)
 
-          Map.put(edges, Sanctum.Authority.Blob.ingress_key(), ingress)
+          Map.put(edges, Cyfr.Authority.Blob.ingress_key(), ingress)
         else
           edges
         end
@@ -182,7 +182,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   defp edge_vault(edge_vault_fn, from, dep, ctx) do
     case node_row(ctx, dep) do
       {:ok, row} ->
-        manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+        manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
         edge_vault_fn.(from, dep, row, manifest)
 
       {:error, _} ->
@@ -222,7 +222,7 @@ defmodule Sanctum.Consent.BlobBuilder do
     defaults =
       node_key
       |> node_type()
-      |> Sanctum.Limits.defaults()
+      |> Cyfr.Limits.defaults()
       |> Map.from_struct()
 
     defaults
@@ -237,14 +237,14 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   defp node_type(node_key) do
-    case Sanctum.ComponentRef.parse(node_key) do
+    case Cyfr.ComponentRef.parse(node_key) do
       {:ok, ref} -> String.to_existing_atom(ref.type)
       {:error, _} -> :reagent
     end
   end
 
   defp node_row(ctx, node_key) do
-    case Sanctum.ComponentRef.parse(node_key) do
+    case Cyfr.ComponentRef.parse(node_key) do
       {:ok, ref} ->
         case Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
           {:ok, row} -> {:ok, row}
@@ -266,7 +266,7 @@ defmodule Sanctum.Consent.BlobBuilder do
       {:ok, deps} ->
         deps
         |> Enum.map(fn dep ->
-          {Sanctum.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name),
+          {Cyfr.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name),
            dep.optional == true}
         end)
         |> Enum.reject(fn {key, optional?} -> optional? and not Map.has_key?(graph, key) end)

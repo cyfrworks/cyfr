@@ -22,7 +22,8 @@ defmodule Sanctum.Authority.BudgetGuard do
 
   use GenServer
 
-  alias Sanctum.Authority.Budget
+  alias Cyfr.Authority.Budget
+  alias Sanctum.Authority.BudgetCounter
 
   # Explicit rather than inherited: every charge and release in the system
   # funnels through this one process, so its call timeout is a parameter of
@@ -42,6 +43,26 @@ defmodule Sanctum.Authority.BudgetGuard do
   def guard(%Budget{} = budget, pid \\ self()) do
     GenServer.call(__MODULE__, {:guard, budget, pid}, @call_timeout_ms)
   catch
+    :exit, _ -> :ok
+  end
+
+  @doc """
+  Move the guard on one slot of `budget` from `from` to `to`, which then
+  holds the slot: it is released when `to` releases it or dies. Answers
+  `:ok` when the slot moved, and `:released` when `from` holds no guard on
+  it — its holder released it, or died and the compensation released it —
+  so `to` holds nothing.
+
+  A call that times out answers `:released`: the move may still land, and
+  a holder that released a slot it does not hold would free a sibling's.
+  Any other exit means the call never landed and the guard's state is
+  gone, so `to` holds the slot unguarded and releases it directly.
+  """
+  @spec handover(Budget.t(), pid(), pid()) :: :ok | :released
+  def handover(%Budget{} = budget, from, to) when is_pid(from) and is_pid(to) do
+    GenServer.call(__MODULE__, {:handover, budget, from, to}, @call_timeout_ms)
+  catch
+    :exit, {:timeout, _} -> :released
     :exit, _ -> :ok
   end
 
@@ -74,7 +95,7 @@ defmodule Sanctum.Authority.BudgetGuard do
   """
   @spec release_after_exit(Budget.t(), term()) :: :ok
   def release_after_exit(%Budget{}, {:timeout, _}), do: :ok
-  def release_after_exit(%Budget{} = budget, _reason), do: Budget.release(budget)
+  def release_after_exit(%Budget{} = budget, _reason), do: BudgetCounter.release(budget)
 
   @impl true
   def init(_opts) do
@@ -84,28 +105,19 @@ defmodule Sanctum.Authority.BudgetGuard do
 
   @impl true
   def handle_call({:guard, budget, pid}, _from, state) do
-    key = {budget.id, pid}
+    {:reply, :ok, put_guard(state, budget, pid)}
+  end
 
-    # Re-guarding the same holder replaces the old monitor rather than
-    # stacking a second release.
-    state =
-      case Map.get(state.guards, key) do
-        {old_ref, _} ->
-          Process.demonitor(old_ref, [:flush])
-          %{state | refs: Map.delete(state.refs, old_ref)}
+  def handle_call({:handover, budget, from, to}, _from, state) do
+    case Map.pop(state.guards, {budget.id, from}) do
+      {nil, _} ->
+        {:reply, :released, state}
 
-        nil ->
-          state
-      end
-
-    ref = Process.monitor(pid)
-
-    {:reply, :ok,
-     %{
-       state
-       | guards: Map.put(state.guards, key, {ref, budget}),
-         refs: Map.put(state.refs, ref, key)
-     }}
+      {{ref, guarded}, guards} ->
+        Process.demonitor(ref, [:flush])
+        state = %{state | guards: guards, refs: Map.delete(state.refs, ref)}
+        {:reply, :ok, put_guard(state, guarded, to)}
+    end
   end
 
   def handle_call({:release, budget, pid}, _from, state) do
@@ -113,12 +125,12 @@ defmodule Sanctum.Authority.BudgetGuard do
 
     case Map.pop(state.guards, key) do
       {nil, _} ->
-        Budget.release(budget)
+        BudgetCounter.release(budget)
         {:reply, :ok, state}
 
       {{ref, guarded}, guards} ->
         Process.demonitor(ref, [:flush])
-        Budget.release(guarded)
+        BudgetCounter.release(guarded)
         {:reply, :ok, %{state | guards: guards, refs: Map.delete(state.refs, ref)}}
     end
   end
@@ -131,7 +143,7 @@ defmodule Sanctum.Authority.BudgetGuard do
 
       {key, refs} ->
         {{^ref, budget}, guards} = Map.pop(state.guards, key)
-        Budget.release(budget)
+        BudgetCounter.release(budget)
         {:noreply, %{state | guards: guards, refs: refs}}
     end
   end
@@ -139,5 +151,29 @@ defmodule Sanctum.Authority.BudgetGuard do
   def handle_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
+  end
+
+  # Re-guarding the same holder replaces the old monitor rather than
+  # stacking a second release.
+  defp put_guard(state, budget, pid) do
+    key = {budget.id, pid}
+
+    state =
+      case Map.get(state.guards, key) do
+        {old_ref, _} ->
+          Process.demonitor(old_ref, [:flush])
+          %{state | refs: Map.delete(state.refs, old_ref)}
+
+        nil ->
+          state
+      end
+
+    ref = Process.monitor(pid)
+
+    %{
+      state
+      | guards: Map.put(state.guards, key, {ref, budget}),
+        refs: Map.put(state.refs, ref, key)
+    }
   end
 end

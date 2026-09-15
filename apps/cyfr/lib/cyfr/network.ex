@@ -6,9 +6,9 @@ defmodule Cyfr.Network do
   Network security utilities for SSRF prevention.
 
   Validates outbound URLs before connecting, blocking requests to
-  private/reserved IP ranges. Used by OCI blob operations and external MCP
-  servers to prevent malicious registries/servers from reaching internal
-  services or cloud metadata endpoints.
+  private/reserved IP ranges (`Cyfr.Cidr.private_ip?/1`). Used by OCI blob
+  operations and external MCP servers to prevent malicious registries/servers
+  from reaching internal services or cloud metadata endpoints.
 
   ## DNS-rebinding protection
 
@@ -22,35 +22,7 @@ defmodule Cyfr.Network do
   connection target, so there is no second resolution to rebind.
   """
 
-  import Bitwise
   import Cyfr.MapUtil, only: [put_unless_nil: 3]
-
-  # Private/reserved IPv4 ranges (CIDR notation as {base, mask} tuples)
-  @private_ranges [
-    # 127.0.0.0/8 - loopback
-    {bsl(127, 24), 0xFF000000},
-    # 10.0.0.0/8 - private class A
-    {bsl(10, 24), 0xFF000000},
-    # 172.16.0.0/12 - private class B
-    {bsl(172, 24) + bsl(16, 16), 0xFFF00000},
-    # 192.168.0.0/16 - private class C
-    {bsl(192, 24) + bsl(168, 16), 0xFFFF0000},
-    # 169.254.0.0/16 - link-local / cloud metadata
-    {bsl(169, 24) + bsl(254, 16), 0xFFFF0000},
-    # 0.0.0.0/8 - current network
-    {0, 0xFF000000},
-    # 100.64.0.0/10 - CGNAT (RFC 6598); internal service ranges on several
-    # clouds and overlay networks
-    {bsl(100, 24) + bsl(64, 16), 0xFFC00000},
-    # 192.0.0.0/24 - IETF protocol assignments (RFC 6890)
-    {bsl(192, 24), 0xFFFFFF00},
-    # 198.18.0.0/15 - benchmarking (RFC 2544)
-    {bsl(198, 24) + bsl(18, 16), 0xFFFE0000},
-    # 224.0.0.0/4 - multicast
-    {bsl(224, 24), 0xF0000000},
-    # 240.0.0.0/4 - reserved, includes 255.255.255.255 broadcast
-    {bsl(240, 24), 0xF0000000}
-  ]
 
   @doc """
   Validate a redirect URL is safe to follow.
@@ -60,13 +32,11 @@ defmodule Cyfr.Network do
 
   ## Options
 
-    * `:allow_private` - when `true`, permits private IPs except
-      169.254.0.0/16 (link-local/cloud metadata) which is always blocked.
-      `:policy` permits a private IP only when the host or the IP is on the
-      operator's private-egress allowlist (`CYFR_PRIVATE_EGRESS_TARGETS`,
-      `private_allowed?/2`) — the posture every deployment shares once it has
-      a door: a compose-network mcp-bridge or the lights in Home are named,
-      not implied by "single user".
+    * `:private_policy` — see `pin/2` (default `:deny`). `:operator` permits
+      a private IP only when the host or the IP is on the operator's
+      private-egress allowlist (`CYFR_PRIVATE_EGRESS_TARGETS`,
+      `private_allowed?/2`): a compose-network mcp-bridge is named, never
+      implied.
 
   Returns `:ok` or `{:error, reason_string}`.
   """
@@ -82,13 +52,13 @@ defmodule Cyfr.Network do
   Resolve a URL's host, validate the IP, and return both the validated IP
   tuple and the parsed URI so the caller can pin the connection to that IP.
 
-  Single source of truth for the scheme/host/IP checks. Same `:allow_private`
+  Single source of truth for the scheme/host/IP checks. Same `:private_policy`
   semantics as `validate_redirect_url/2`.
   """
   @spec resolve_and_validate(String.t(), keyword()) ::
           {:ok, :inet.ip_address(), URI.t()} | {:error, String.t()}
   def resolve_and_validate(url, opts \\ []) do
-    case pin(url, translate_legacy_opts(opts)) do
+    case pin(url, opts) do
       {:ok, %{ip_tuple: ip_tuple, uri: uri}} -> {:ok, ip_tuple, uri}
       {:error, _type, message} -> {:error, message}
     end
@@ -111,9 +81,9 @@ defmodule Cyfr.Network do
 
     * `:private_policy` — `:deny` (default) | `:allow_all` | `:operator`
       (the `CYFR_PRIVATE_EGRESS_TARGETS` allowlist) | `{:fun, (ip_tuple ->
-      boolean)}` (the guest's consent check). Link-local is always
-      blocked, whatever the policy — that range is the cloud metadata
-      endpoint.
+      boolean)}` (the guest's consent check). A cloud-metadata address
+      (`Cyfr.Cidr.metadata?/1`, IPv6 forms embedding one included) is
+      always blocked, whatever the policy.
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
@@ -150,17 +120,6 @@ defmodule Cyfr.Network do
     end
   end
 
-  defp translate_legacy_opts(opts) do
-    policy =
-      case Keyword.get(opts, :allow_private, false) do
-        true -> :allow_all
-        :policy -> :operator
-        _ -> :deny
-      end
-
-    opts |> Keyword.delete(:allow_private) |> Keyword.put(:private_policy, policy)
-  end
-
   @doc """
   Issue an HTTP request with SSRF protection AND DNS-rebinding protection.
 
@@ -175,12 +134,12 @@ defmodule Cyfr.Network do
 
   ## Options
 
-    * `:allow_private` — see `validate_redirect_url/2` (default `false`)
+    * `:private_policy` — see `pin/2` (default `:deny`)
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
     * `:max_response_bytes` — enforce a response-size ceiling WHILE the
-      body streams in (via `bounded_collector/1`), aborting the transfer
+      body streams in (via `Cyfr.BoundedBody.collector/1`), aborting the transfer
       at the limit instead of buffering an arbitrarily large body first.
       Exceeding it returns `{:error, {:response_too_large, size, max}}`.
   """
@@ -190,7 +149,7 @@ defmodule Cyfr.Network do
     # The identity semantics matter here: no accept-encoding and no decode
     # (OCI digest verification hashes the body as received), no redirects,
     # no Req-level retry — `pin/2` bakes exactly that policy in.
-    case pin(url, translate_legacy_opts(opts)) do
+    case pin(url, opts) do
       {:ok, %{req_opts: req_opts}} ->
         max_bytes = Keyword.get(opts, :max_response_bytes)
 
@@ -199,7 +158,7 @@ defmodule Cyfr.Network do
           |> Keyword.put(:method, method)
           |> Keyword.put(:headers, headers)
           |> put_unless_nil(:body, body)
-          |> put_unless_nil(:into, max_bytes && bounded_collector(max_bytes))
+          |> put_unless_nil(:into, max_bytes && Cyfr.BoundedBody.collector(max_bytes))
 
         case Req.request(req_opts) do
           {:ok, %Req.Response{status: status, headers: resp_headers} = resp} ->
@@ -217,51 +176,7 @@ defmodule Cyfr.Network do
   end
 
   defp response_body(%Req.Response{body: body}, nil), do: {:ok, body}
-  defp response_body(resp, max_bytes), do: collected_body(resp, max_bytes)
-
-  @doc """
-  A Req `into:` collector that aborts the transfer once the accumulated
-  body exceeds `max_bytes` — the ceiling is enforced while the body
-  streams in, so a hostile or misconfigured server cannot make the host
-  buffer an arbitrarily large binary before a post-hoc size check runs.
-
-  Read the result with `collected_body/2`; `resp.body` stays empty.
-  Shared by `pinned_request/5` and the guest HTTP handler, so both
-  outbound planes bound the response the same way.
-  """
-  @spec bounded_collector(pos_integer()) :: fun()
-  def bounded_collector(max_bytes) when is_integer(max_bytes) and max_bytes > 0 do
-    fn {:data, data}, {req, resp} ->
-      chunks = [data | resp.private[:network_chunks] || []]
-      size = (resp.private[:network_size] || 0) + byte_size(data)
-
-      resp =
-        resp
-        |> Req.Response.put_private(:network_chunks, chunks)
-        |> Req.Response.put_private(:network_size, size)
-
-      if size > max_bytes do
-        {:halt, {req, Req.Response.put_private(resp, :network_truncated, true)}}
-      else
-        {:cont, {req, resp}}
-      end
-    end
-  end
-
-  @doc """
-  The body a `bounded_collector/1` accumulated: `{:ok, binary}` for a
-  complete transfer, `{:error, {:response_too_large, size, max_bytes}}`
-  for one aborted at the ceiling (`size` is the bytes seen at the abort).
-  """
-  @spec collected_body(Req.Response.t(), pos_integer()) ::
-          {:ok, binary()} | {:error, {:response_too_large, non_neg_integer(), pos_integer()}}
-  def collected_body(%Req.Response{} = resp, max_bytes) do
-    if resp.private[:network_truncated] do
-      {:error, {:response_too_large, resp.private[:network_size] || 0, max_bytes}}
-    else
-      {:ok, (resp.private[:network_chunks] || []) |> Enum.reverse() |> IO.iodata_to_binary()}
-    end
-  end
+  defp response_body(resp, max_bytes), do: Cyfr.BoundedBody.read(resp, max_bytes)
 
   @doc """
   Format a resolved IP string as a URL authority host, bracketing IPv6 literals.
@@ -316,23 +231,23 @@ defmodule Cyfr.Network do
     end
   end
 
+  # A metadata address is refused before the private classification or any
+  # policy is consulted.
   defp check_ip(ip_tuple, hostname, policy) do
-    if private_ip?(ip_tuple) do
-      cond do
-        # 169.254.0.0/16 always blocked — cloud metadata endpoint
-        Sanctum.Cidr.link_local?(ip_tuple) ->
-          {:error, :private_ip_blocked,
-           "link-local IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
+    cond do
+      Cyfr.Cidr.metadata?(ip_tuple) ->
+        {:error, :private_ip_blocked,
+         "metadata IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
 
-        private_permitted?(policy, hostname, ip_tuple) ->
-          :ok
+      not Cyfr.Cidr.private_ip?(ip_tuple) ->
+        :ok
 
-        true ->
-          {:error, :private_ip_blocked,
-           "private IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
-      end
-    else
-      :ok
+      private_permitted?(policy, hostname, ip_tuple) ->
+        :ok
+
+      true ->
+        {:error, :private_ip_blocked,
+         "private IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
     end
   end
 
@@ -351,7 +266,7 @@ defmodule Cyfr.Network do
     host = if is_binary(hostname), do: String.downcase(hostname), else: nil
 
     Enum.any?(private_egress_targets(), fn target ->
-      String.downcase(target) == host or Sanctum.Cidr.match?(ip_tuple, target)
+      String.downcase(target) == host or Cyfr.Cidr.match?(ip_tuple, target)
     end)
   end
 
@@ -363,50 +278,6 @@ defmodule Cyfr.Network do
       _ -> []
     end
   end
-
-  @doc """
-  Check if an IP tuple is in a private/reserved range.
-  """
-  @spec private_ip?(:inet.ip4_address() | :inet.ip6_address()) :: boolean()
-  def private_ip?({a, b, c, d}) do
-    ip_int = bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
-
-    Enum.any?(@private_ranges, fn {base, mask} ->
-      band(ip_int, mask) == base
-    end)
-  end
-
-  # IPv6 loopback ::1
-  def private_ip?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
-
-  # IPv6 unspecified ::
-  def private_ip?({0, 0, 0, 0, 0, 0, 0, 0}), do: true
-
-  # IPv6 unique local fc00::/7
-  def private_ip?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFC00 and w1 <= 0xFDFF, do: true
-
-  # IPv6 link-local fe80::/10
-  def private_ip?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFE80 and w1 <= 0xFEBF, do: true
-
-  # IPv4-mapped IPv6 (::ffff:x.x.x.x) — delegate to IPv4 check
-  def private_ip?({0, 0, 0, 0, 0, 0xFFFF, ab, cd}) do
-    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
-  end
-
-  # NAT64 well-known prefix 64:ff9b::/96 (RFC 6052) — the embedded IPv4
-  # decides. Without this, 64:ff9b::a9fe:a9fe reaches 169.254.169.254
-  # through a NAT64 gateway.
-  def private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, ab, cd}) do
-    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
-  end
-
-  # 6to4 2002::/16 (RFC 3056) — the embedded IPv4 decides.
-  def private_ip?({0x2002, ab, cd, _, _, _, _, _}) do
-    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
-  end
-
-  # All other IPv6 addresses are considered public
-  def private_ip?({_, _, _, _, _, _, _, _}), do: false
 
   defp format_ip(ip_tuple), do: :inet.ntoa(ip_tuple) |> to_string()
 end

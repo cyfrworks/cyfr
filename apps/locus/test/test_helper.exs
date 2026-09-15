@@ -21,4 +21,8 @@ end
 # starting it), so the test run starts it here explicitly.
 {:ok, _} = Application.ensure_all_started(:cyfr)
 
+# A suite database built from a different schema would run stale, since the
+# baseline still reads as applied; refuse it before any test touches it.
+Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, &Arca.SchemaFingerprint.verify!/0)
+
 ExUnit.start()

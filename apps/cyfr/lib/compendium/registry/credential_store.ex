@@ -261,58 +261,20 @@ defmodule Compendium.Registry.CredentialStore do
   defp normalize_value(v) when is_atom(v), do: Atom.to_string(v)
   defp normalize_value(v), do: v
 
+  # The one credential shape this store writes; any other row is unusable.
   defp decode_credential(json) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, map} when is_map(map) ->
+      {:ok, %{"type" => "push_token"} = map} ->
         credential =
-          map
-          |> Enum.reduce(%{}, fn {k, v}, acc ->
-            atom_key = safe_atom(k)
-            if atom_key in @valid_keys, do: Map.put(acc, atom_key, v), else: acc
-          end)
-          |> Map.update(:type, :push_token, &normalize_type/1)
+          for key <- @valid_keys,
+              Map.has_key?(map, Atom.to_string(key)),
+              into: %{},
+              do: {key, Map.fetch!(map, Atom.to_string(key))}
 
-        {:ok, credential}
+        {:ok, %{credential | type: :push_token}}
 
       _ ->
         :not_found
     end
-  rescue
-    ArgumentError -> :not_found
   end
-
-  # Normalize credential types; log nil or unknown values and default to :push_token.
-  defp normalize_type(t) when is_atom(t), do: t
-
-  defp normalize_type(t) when is_binary(t) do
-    case safe_atom(t) do
-      nil ->
-        Logger.warning(
-          "[CredentialStore] credential type=#{inspect(t)} not a known atom; " <>
-            "coercing to :push_token (likely stale row predating auth-refactor)"
-        )
-
-        :push_token
-
-      atom ->
-        atom
-    end
-  end
-
-  defp normalize_type(other) do
-    Logger.warning(
-      "[CredentialStore] credential type=#{inspect(other)} unexpected shape; " <>
-        "coercing to :push_token"
-    )
-
-    :push_token
-  end
-
-  defp safe_atom(s) when is_binary(s) do
-    String.to_existing_atom(s)
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp safe_atom(a) when is_atom(a), do: a
 end

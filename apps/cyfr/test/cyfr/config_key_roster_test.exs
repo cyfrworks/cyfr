@@ -37,8 +37,9 @@ defmodule Cyfr.ConfigKeyRosterTest do
     tenancy_resolver_override: :seam,
     catalog: :seam,
     tool_providers_lenient: :seam,
-    conversation_recovery: :seam,
+    thread_recovery: :seam,
     device_flow: :seam,
+    device_flow_endpoints: :seam,
     provisioning_inline: :seam,
     record_sink_inline: :seam,
 
@@ -49,7 +50,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
     provisioning_boot_enabled: :default,
     retention_scheduler_enabled: :default,
     control_plane_claim_enabled: :default,
-    keyring_fingerprint_check_enabled: :default,
+    database_checks_enabled: :default,
     telemetry_console_enabled: :default,
 
     # Derived at boot from `:crypto_keyring_json`, which IS an operator
@@ -81,8 +82,8 @@ defmodule Cyfr.ConfigKeyRosterTest do
   # `Application.get_env/fetch_env/compile_env` on `:cyfr`, ignoring
   # comments so a key named in prose is not mistaken for a read.
   defp keys_read do
-    for glob <- ["apps/cyfr/lib/**/*.ex", "apps/opus/lib/**/*.ex", "apps/locus/lib/**/*.ex"],
-        path <- Path.wildcard(Path.join(root(), glob)),
+    for lib <- Cyfr.Test.SourceTree.app_libs(root()),
+        path <- Cyfr.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
         source = Cyfr.Test.SourceTree.read(path),
         code = source |> Cyfr.Test.CodeLines.lines() |> Enum.join("\n"),
         [_, key] <-
@@ -96,7 +97,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
 
   # `config :cyfr, :key, …` and the multi-key `config :cyfr,\n  key: …` form.
   defp keys_declared do
-    for path <- Path.wildcard(Path.join(root(), "config/*.exs")),
+    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "config/*.exs")),
         source = File.read!(path),
         key <- single_keys(source) ++ block_keys(source),
         reduce: %{} do

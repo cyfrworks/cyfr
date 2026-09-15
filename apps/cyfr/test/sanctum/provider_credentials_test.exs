@@ -66,12 +66,12 @@ defmodule Sanctum.ProviderCredentialsTest do
   end
 
   describe "permission gates" do
-    test "put requires :vault_write" do
+    test "put requires an interactive session" do
       ctx = narrow_ctx([:execute])
       assert {:error, _} = ProviderCredentials.put(ctx, "google", "id", "sec")
     end
 
-    test "delete requires :vault_write" do
+    test "delete requires an interactive session" do
       ctx = narrow_ctx([:execute, :vault_read])
       assert {:error, _} = ProviderCredentials.delete(ctx, "google")
     end

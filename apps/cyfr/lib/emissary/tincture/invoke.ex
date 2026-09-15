@@ -53,7 +53,7 @@ defmodule Emissary.Tincture.Invoke do
   defp do_run(auth_ctx, tincture, reference, input, opts) do
     route = Keyword.fetch!(opts, :route)
     method = Keyword.fetch!(opts, :method)
-    tincture_ref = Sanctum.ComponentRef.build("tincture", tincture.publisher, tincture.name)
+    tincture_ref = Cyfr.ComponentRef.build("tincture", tincture.publisher, tincture.name)
 
     ctx = %{Sanctum.build_tincture_context(auth_ctx, tincture) | request_id: request_id()}
 
@@ -147,13 +147,13 @@ defmodule Emissary.Tincture.Invoke do
 
   defp finish({:error, reason}, ctx, telemetry_meta, duration_ms, _route) do
     # Sanitize structured payloads before inspect removes their field boundaries.
-    Logger.warning("[Tincture.Invoke] error: #{inspect(Sanctum.Sanitizer.sanitize(reason))}")
+    Logger.warning("[Tincture.Invoke] error: #{inspect(Cyfr.Sanitizer.sanitize(reason))}")
 
     # Sanitize BEFORE inspect: once flattened to a string, the sanitizer's
     # sensitive-key redaction can no longer see the map it protects.
     log_failed(
       ctx,
-      if(is_binary(reason), do: reason, else: inspect(Sanctum.Sanitizer.sanitize(reason))),
+      if(is_binary(reason), do: reason, else: inspect(Cyfr.Sanitizer.sanitize(reason))),
       duration_ms
     )
 

@@ -208,7 +208,7 @@ defmodule PrismWeb.ShellLive do
 
       tincture ->
         ref =
-          Sanctum.ComponentRef.build(
+          Cyfr.ComponentRef.build(
             "tincture",
             tincture.publisher,
             tincture.name,
@@ -318,7 +318,7 @@ defmodule PrismWeb.ShellLive do
     tinctures =
       Prism.TinctureRegistry.list_tinctures(ctx)
       |> Enum.map(fn t ->
-        ref = Sanctum.ComponentRef.build("tincture", t.publisher, t.name)
+        ref = Cyfr.ComponentRef.build("tincture", t.publisher, t.name)
 
         public =
           case Sanctum.Consent.Source.impl().profiles(ctx, ref) do

@@ -10,6 +10,9 @@ on:
       - '**/*.exs'
       - 'apps/codex/**'
       - 'apps/mcp-bridge/**/*.mjs'
+      - 'apps/spawn/**'
+      - 'tests/bridge-image/**'
+      - 'tests/fixtures/*.go'
       - 'wit/**'
       - 'LICENSES/**'
       - '.github/workflows/license-lint.yml'
@@ -20,6 +23,9 @@ on:
       - '**/*.exs'
       - 'apps/codex/**'
       - 'apps/mcp-bridge/**/*.mjs'
+      - 'apps/spawn/**'
+      - 'tests/bridge-image/**'
+      - 'tests/fixtures/*.go'
       - 'wit/**'
       - 'LICENSES/**'
 
@@ -47,6 +53,7 @@ jobs:
           }
 
           fail=0
+          checked=0
           while IFS= read -r f; do
             head3="$(head -3 "$f")"
 
@@ -65,7 +72,14 @@ jobs:
                 fail=1
               fi
             fi
-          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
+            checked=$((checked + 1))
+          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/spawn/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'tests/bridge-image/*.mjs' 'tests/fixtures/*.go' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
+
+          # A scan that reads nothing would pass; refuse it.
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no tracked source matched — the lint would check nothing"
+            exit 1
+          fi
 
           if [ "$fail" -ne 0 ]; then
             echo "License boundary check failed. Fix the headers above."

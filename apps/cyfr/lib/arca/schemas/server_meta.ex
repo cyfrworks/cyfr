@@ -3,8 +3,9 @@
 
 defmodule Arca.Schemas.ServerMeta do
   @moduledoc """
-  One fact about this server, by key: the keyring fingerprint the
-  database was sealed with, the boot that owns the control plane. Not an
+  One fact about this server, by key: the schema the database was built
+  from, the keyring fingerprint it was sealed with, the boot that owns the
+  control plane. Not an
   athanor's — the row describes the deployment. Managed by
   `Arca.ServerMetaStorage`.
   """

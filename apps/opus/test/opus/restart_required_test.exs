@@ -5,7 +5,7 @@ defmodule Opus.RestartRequiredTest do
   # Runtime consent ends the current execution with restart_required; only a new root uses the revision.
   use ExUnit.Case, async: false
 
-  alias Opus.ExecutionRecord
+  alias Cyfr.Execution.Record
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -16,9 +16,9 @@ defmodule Opus.RestartRequiredTest do
 
   defp running!(ctx) do
     record =
-      ExecutionRecord.new(ctx, "formula:local.restarter:1.0.0", %{}, component_type: :formula)
+      Record.new(ctx, "formula:local.restarter:1.0.0", %{}, component_type: :formula)
 
-    :ok = ExecutionRecord.write_started(record)
+    :ok = Record.write_started(record)
     record
   end
 
@@ -41,7 +41,7 @@ defmodule Opus.RestartRequiredTest do
     )
 
     assert {:ok, %{cancelled: true}} =
-             Opus.Executor.cancel_for_restart(ctx, record.id, @payload)
+             Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
 
     assert_receive {:execution_event, event}, 2_000
     assert event.type == "execution.cancelled"
@@ -55,14 +55,14 @@ defmodule Opus.RestartRequiredTest do
   test "the execution is really stopped, not re-bound", %{ctx: ctx} do
     record = running!(ctx)
 
-    {:ok, _} = Opus.Executor.cancel_for_restart(ctx, record.id, @payload)
+    {:ok, _} = Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
 
-    {:ok, reloaded} = ExecutionRecord.get(ctx, record.id)
+    {:ok, reloaded} = Record.get(ctx, record.id)
     assert reloaded.status == :cancelled
 
     # And it cannot be restarted in place — a re-run is a new execution.
     assert {:error, :not_cancellable} =
-             Opus.Executor.cancel_for_restart(ctx, record.id, @payload)
+             Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
   end
 
   test "an ordinary cancel still reports as cancelled", %{ctx: ctx} do
@@ -73,7 +73,7 @@ defmodule Opus.RestartRequiredTest do
       Sanctum.PubSub.topic("execution:events:#{record.id}", ctx)
     )
 
-    assert {:ok, _} = Opus.Executor.cancel(ctx, record.id)
+    assert {:ok, _} = Cyfr.Execution.Dispatch.cancel(ctx, record.id)
 
     assert_receive {:execution_event, event}, 2_000
     assert event.type == "execution.cancelled"
@@ -88,7 +88,7 @@ defmodule Opus.RestartRequiredTest do
       Sanctum.PubSub.topic("execution:events:#{record.id}", ctx)
     )
 
-    {:ok, _} = Opus.Executor.cancel_for_restart(ctx, record.id, @payload)
+    {:ok, _} = Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
     assert_receive {:execution_event, event}, 2_000
 
     # Everything the console needs to say "approved — re-run to continue"

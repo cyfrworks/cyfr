@@ -6,7 +6,7 @@ defmodule Cyfr.MixProject do
   def project do
     [
       apps_path: "apps",
-      apps: [:cyfr, :locus, :opus],
+      apps: [:cyfr_contracts, :cyfr, :locus, :opus],
       version: "0.5.8",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -15,6 +15,11 @@ defmodule Cyfr.MixProject do
       dialyzer: dialyzer(),
       listeners: [Phoenix.CodeReloader]
     ]
+  end
+
+  # The step bench builds its estate from test fixtures in the test database.
+  def cli do
+    [preferred_envs: ["cyfr.bench.step": :test]]
   end
 
   defp deps do
@@ -45,6 +50,7 @@ defmodule Cyfr.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      "cyfr.bench.step": ["ecto.create --quiet", "ecto.migrate --quiet", "cyfr.bench.step"],
       "assets.deploy": ["tailwind prism --minify", "esbuild prism --minify", "phx.digest"]
     ]
   end
@@ -53,19 +59,19 @@ defmodule Cyfr.MixProject do
     [
       cyfr: [
         applications: [
+          cyfr_contracts: :permanent,
           cyfr: :permanent,
           locus: :permanent,
           opus: :permanent
         ]
       ],
       # The builder container: the toolchain half of Locus and nothing
-      # else. The cyfr app is LOADED (the pure modules Locus.Builder
-      # reaches — Cyfr.{PathSafety,Digest,LoggerContext},
-      # Compendium.{WasmValidator,Scaffold,WITSource}, and the
-      # FSL-licensed Sanctum.Limits — compile into the build path) but
-      # never STARTED: no endpoint, no repo, no tenant state.
+      # else. The contracts are started; the cyfr app is LOADED but never
+      # STARTED: no endpoint, no repo, no tenant state. The build path
+      # reaches only the contracts (`Locus.HostSurfaceTest`).
       builder: [
         applications: [
+          cyfr_contracts: :permanent,
           locus: :permanent,
           cyfr: :load
         ]

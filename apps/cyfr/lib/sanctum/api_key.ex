@@ -74,14 +74,12 @@ defmodule Sanctum.ApiKey do
     service: [
       "execute",
       "vault_read",
-      "vault_write",
       "component_read",
       "component_manage",
       "storage_read",
-      "storage_write",
-      "execution_write"
+      "storage_write"
     ],
-    admin: ["vault_read", "vault_write", "admin", "*"]
+    admin: ["vault_read", "admin", "*"]
   }
 
   @doc false
@@ -608,28 +606,15 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  # An entry that is not a string cannot match an IP. `encode_allowlist/1`
-  # refuses to write one now, but a row stored before it did must fail the
-  # match rather than the request: raising here took down the whole
-  # authentication path, and did so on every call for that key.
-  defp ip_matches?(_client_ip, pattern) do
-    Logger.warning(
-      "[ApiKey] ignoring a non-string ip_allowlist entry (#{inspect(pattern)}); " <>
-        "the key's allowlist should be rewritten"
-    )
-
-    false
-  end
-
   # Exact-IP match stays a string compare in ip_matches?/2; only the CIDR
-  # arithmetic is delegated to the Sanctum.Cidr SSOT. The operator-facing
+  # arithmetic is delegated to the Cyfr.Cidr SSOT. The operator-facing
   # misconfig warning is preserved (fires whenever the IP or CIDR is
   # unparseable, exactly as before). ip_in_network?/3 is used directly (no
   # v4-mapped unwrap) to keep this path's prior behaviour identical.
   defp ip_in_cidr?(ip_string, cidr_string) do
-    case {Sanctum.Cidr.parse_ip(ip_string), Sanctum.Cidr.parse_cidr(cidr_string)} do
+    case {Cyfr.Cidr.parse_ip(ip_string), Cyfr.Cidr.parse_cidr(cidr_string)} do
       {{:ok, ip}, {:ok, {network, prefix_length}}} ->
-        Sanctum.Cidr.ip_in_network?(ip, network, prefix_length)
+        Cyfr.Cidr.ip_in_network?(ip, network, prefix_length)
 
       _ ->
         Logger.warning(

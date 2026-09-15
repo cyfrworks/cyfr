@@ -84,7 +84,7 @@ defmodule Arca.VaultStorageTest do
     end
   end
 
-  describe "update_binding/4" do
+  describe "update_binding/3" do
     test "updates binding columns and the cached digest", %{athanor: athanor} do
       entry = put!(athanor)
 

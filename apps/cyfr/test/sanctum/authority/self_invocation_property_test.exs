@@ -4,8 +4,8 @@ defmodule Sanctum.Authority.SelfInvocationPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # Self-invocation preserves cursor and resources only when activation

@@ -68,8 +68,8 @@ defmodule PrismWeb.TopbarLiveTest do
         authenticated: true
       )
 
-    {:ok, conv} = Arca.ConversationStorage.create(group_ctx, %{title: "Bells thread"})
-    Sanctum.Notify.broadcast(group.id, :approval_pending, %{conversation_id: conv.id})
+    {:ok, thread} = Arca.ThreadStorage.create(group_ctx, %{title: "Bells thread"})
+    Sanctum.Notify.broadcast(group.id, :approval_pending, %{thread_id: thread.id})
     :sys.get_state(bar.pid)
     assert render(bar) =~ "bg-blue-500/80"
 
@@ -79,7 +79,7 @@ defmodule PrismWeb.TopbarLiveTest do
     before = render(bar)
     Sanctum.Notify.broadcast(group.id, :approval_resolved, %{})
     Sanctum.Notify.broadcast(group.id, :athanor_changed, %{name: "Bells"})
-    Sanctum.Notify.broadcast(group.id, :approval_pending, %{conversation_id: "conv_unfollowed"})
+    Sanctum.Notify.broadcast(group.id, :approval_pending, %{thread_id: "thread_unfollowed"})
     :sys.get_state(bar.pid)
     assert render(bar) == before
   end

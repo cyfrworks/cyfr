@@ -19,6 +19,34 @@ defmodule Sanctum.DoorTest do
 
   defp uid(n), do: "github|https://github.com|#{n}"
 
+  describe "writes racing one entry" do
+    test "concurrent requests and allows for one address leave one row, and nobody sees a conflict" do
+      requests =
+        1..6
+        |> Task.async_stream(fn _ -> Store.request("email", "race@example.com", uid(1)) end,
+          max_concurrency: 6,
+          timeout: 10_000
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert Enum.all?(requests, &match?({:ok, _, _}, &1))
+      assert Enum.count(requests, &match?({:ok, :created, _}, &1)) == 1
+
+      allows =
+        1..4
+        |> Task.async_stream(fn _ -> Store.allow("email", "fresh@example.com", "ops") end,
+          max_concurrency: 4,
+          timeout: 10_000
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert Enum.all?(allows, &match?({:ok, %{status: "allowed"}}, &1))
+
+      assert Enum.count(Store.list(), &(&1.value in ["race@example.com", "fresh@example.com"])) ==
+               2
+    end
+  end
+
   describe "admit/3 — the order of the door" do
     test "an empty list admits only the platform admins" do
       assert {:ok, :admin} = Door.admit(uid(1), "ops@example.com", true)

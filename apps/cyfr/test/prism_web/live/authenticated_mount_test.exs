@@ -181,7 +181,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
   test "the chat page's thread list is a panel a phone can open and close", %{conn: conn} do
     conn = log_in_user(conn, test_user())
     {_view, html} = mount_athanor(conn, "")
-    assert html =~ ~s(id="conversation-list")
+    assert html =~ ~s(id="thread-list")
     assert html =~ "max-md:hidden"
   end
 end

@@ -43,7 +43,7 @@ defmodule Arca.RowPlaneSeamTest do
   defp repo_calls do
     @surface_dirs
     |> Enum.flat_map(fn dir ->
-      root() |> Path.join(dir) |> Path.join("**/*.ex") |> Path.wildcard()
+      root() |> Path.join(dir) |> Path.join("**/*.ex") |> Cyfr.Test.SourceTree.files!()
     end)
     |> Enum.flat_map(fn path ->
       hits =

@@ -336,10 +336,10 @@ defmodule Emissary.MCP.RequestLog do
   @doc """
   Sanitize input data to redact sensitive values.
 
-  Delegates to `Sanctum.Sanitizer.sanitize/1`.
+  Delegates to `Cyfr.Sanitizer.sanitize/1`.
   """
   @spec sanitize_input(term()) :: term()
-  defdelegate sanitize_input(input), to: Sanctum.Sanitizer, as: :sanitize
+  defdelegate sanitize_input(input), to: Cyfr.Sanitizer, as: :sanitize
 
   # The tools/call wire shape re-encodes the tool's structured result as an
   # opaque JSON string under `"content"[]."text"`. Key-based redaction cannot

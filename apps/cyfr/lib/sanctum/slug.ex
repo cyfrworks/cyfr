@@ -4,7 +4,7 @@
 defmodule Sanctum.Slug do
   @moduledoc """
   Slugs from names, in the grammar personal namespaces use
-  (`Sanctum.ComponentRef.personal_slug_regex/0`): lowercase alphanumerics
+  (`Cyfr.ComponentRef.personal_slug_regex/0`): lowercase alphanumerics
   and single hyphens, 1–39 bytes. A group's slug is derived from its name
   once, at creation; a person's slug is their namespace and never derived.
   """
@@ -51,5 +51,5 @@ defmodule Sanctum.Slug do
 
   @doc "Whether the string is a well-formed slug."
   @spec valid?(String.t() | nil) :: boolean()
-  def valid?(slug), do: Sanctum.ComponentRef.valid_personal_slug?(slug)
+  def valid?(slug), do: Cyfr.ComponentRef.valid_personal_slug?(slug)
 end

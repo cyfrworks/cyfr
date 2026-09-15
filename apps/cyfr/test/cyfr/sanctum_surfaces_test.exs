@@ -28,23 +28,14 @@ defmodule Cyfr.SanctumSurfacesTest do
   #     `emissary` — domain code whose Sanctum reach should stay vocabulary
   #     and the tenancy carrier.
   @surfaces %{
-    # `Sanctum.Authority` is `Aqua.Ops` alone: the in-chain call an
-    # approved proposal runs under carries the chain's authority, and the
-    # seam's contract names its type. `Sanctum.Provisioning` is
-    # `Aqua.AgentConfig`'s two in-process agent reads alone — the first-need
-    # hook: a turn reads its estate's tree in-process now rather than
-    # through the `aqua` tool, and the bundle a group estate is filled
-    # with on first read has to be there before the turn roots an
-    # authority in it. The tool keeps the same hook for readers outside
-    # the harness.
-    # `Sanctum.JCS` is the canonical form a card's proposal is digested in
-    # (`Aqua.Loop.Policy.proposal_digest/1`) — the same canon the consent
-    # digests use, so a decision consumes exactly what was shown.
-    # `Sanctum.Limits` is the loop's deadline: the timeout the authority's
-    # consented node limits carry, parsed once per turn.
+    # `Sanctum.Provisioning` is `Aqua.AgentConfig`'s two in-process agent
+    # reads alone — the first-need hook: a turn reads its estate's tree
+    # in-process now rather than through the `aqua` tool, and the bundle a
+    # group estate is filled with on first read has to be there before the
+    # turn roots an authority in it. The tool keeps the same hook for
+    # readers outside the harness.
     "aqua" => ~w(
-      Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.JCS
-      Sanctum.Limits Sanctum.Notify Sanctum.Provisioning Sanctum.Sanitizer Sanctum.Tenancy
+      Sanctum.Context Sanctum.Notify Sanctum.Provisioning Sanctum.Tenancy
     ),
     # `Sanctum.Provisioning` is `Compendium.MCP.AquaTool` and
     # `ComponentTool`'s list action alone — the first-need hook. A group
@@ -53,46 +44,52 @@ defmodule Cyfr.SanctumSurfacesTest do
     # a DM must not wait on a registry round trip that can fail. These two
     # tools ARE the bundle's readers, so the hook lives where the read is
     # rather than in every caller that might trigger one.
-    # `Sanctum.Limits` is here for `Compendium.Manifest.Caps` alone: a
-    # manifest's `limits` block is that module's vocabulary, and the caps
-    # reader matches the keys against its closed field list rather than
-    # trusting `String.to_existing_atom/1` to find atoms some other module
-    # happened to load first.
     "compendium" => ~w(
-      Sanctum.Cipher Sanctum.CipherAAD Sanctum.ComponentRef Sanctum.Consent
-      Sanctum.Context Sanctum.JCS Sanctum.Limits Sanctum.Namespace
-      Sanctum.Provisioning Sanctum.Sanitizer Sanctum.SignIn Sanctum.ToolPattern
-      Sanctum.VaultReader
+      Sanctum.Cipher Sanctum.CipherAAD Sanctum.Consent Sanctum.Context
+      Sanctum.Namespace Sanctum.Provisioning Sanctum.SignIn Sanctum.VaultReader
     ),
     # Cyfr.Release uses Sanctum.Cipher for key rotation. Cyfr.Ops uses
-    # consent classes, chain authority, authorization rendering, and
-    # the Sanctum.Catalog port. Cyfr.Models.Windows parses a catalyst
-    # reference to read its exact name (Sanctum.ComponentRef).
+    # consent classes, the spawn-charged chain authority step and its
+    # invoke budget, authorization rendering, and the Sanctum.Catalog port;
+    # Cyfr.Application creates the invoke-budget counter and supervises its
+    # guard. Cyfr.Execution holds a spawned child's charged invoke-budget
+    # slot under the guard until the child's attempt takes it over
+    # (Sanctum.Authority). Cyfr.Execution.Admission loads a root's authority
+    # from its profile's consent (Sanctum.Consent) and steps a child's through
+    # the transition relation (Sanctum.Authority); Cyfr.Execution.Charge gives
+    # a refused charge's slot back to the invoke-budget counter. Admitting a
+    # run records its policy consultation and its rate and size denials
+    # (Sanctum.Policy). A spawned child's Cyfr.Execution.Attempt takes over
+    # the invoke-budget slot its waiter charged and gives it back when it
+    # stops, and Cyfr.Execution.Dispatch gives back the slot of a child
+    # refused before its attempt opens (Sanctum.Authority); the authority's
+    # wire decoder is Cyfr.Authority's, in the contracts. When its runner
+    # attaches, Cyfr.Execution.Attempt checks its consent is still the
+    # profile's head (Sanctum.Consent) and unseals its vault edge
+    # (Sanctum.VaultReader), and it dispenses the run's OAuth tokens from
+    # that edge (Sanctum.VaultReader). A runner's egress denials are recorded
+    # through its attempt (Cyfr.Execution.Host.Storage, Sanctum.Policy).
     "cyfr" => ~w(
-      Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cidr
-      Sanctum.Cipher Sanctum.ComponentRef Sanctum.Consent Sanctum.Context
-      Sanctum.Door Sanctum.Notify
-      Sanctum.OAuth
-      Sanctum.Provisioning Sanctum.ProvisioningRegistry Sanctum.ProvisioningSupervisor
-      Sanctum.PubSub
-      Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy Sanctum.ToolServerDigest
-      Sanctum.Unauthorized Sanctum.UnauthorizedError
+      Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
+      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth
+      Sanctum.Policy Sanctum.Provisioning Sanctum.ProvisioningRegistry
+      Sanctum.ProvisioningSupervisor Sanctum.PubSub Sanctum.Session
+      Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
+      Sanctum.UnauthorizedError Sanctum.VaultReader
     ),
     # Aqua.Notes resolves personal notes through users.personal_athanor_id.
     "emissary" => ~w(
-      Sanctum.ComponentRef Sanctum.Context Sanctum.Sanitizer Sanctum.ToolPattern
-      Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.VaultReader
+      Sanctum.Context Sanctum.ToolServerDigest Sanctum.Unauthorized
+      Sanctum.VaultReader
     ),
     "emissary_web" => ~w(
       Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
-      Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Limits
-      Sanctum.Sanitizer Sanctum.Session Sanctum.SignIn
+      Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Session Sanctum.SignIn
       Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.TinctureAuth
-      Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault
-      Sanctum.Webhook
+      Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Webhook
     ),
     "prism" => ~w(
-      Sanctum.Context Sanctum.Notify Sanctum.Sanitizer Sanctum.Tenancy
+      Sanctum.Context Sanctum.Notify Sanctum.Tenancy
     ),
     # `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` alone,
     # and it is here for the same reason `emissary_web` has it: the console
@@ -103,10 +100,9 @@ defmodule Cyfr.SanctumSurfacesTest do
     # (`LoginLive`, `RegistryLive`). Assembling `connect_info` is a web
     # concern; the hop rules stay in the auth domain, spelled once.
     "prism_web" => ~w(
-      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp
-      Sanctum.ComponentRef Sanctum.Consent Sanctum.Context Sanctum.Door
-      Sanctum.Notify Sanctum.Session Sanctum.SignIn Sanctum.Tenancy
-      Sanctum.TinctureAuth Sanctum.Webhook
+      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
+      Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.Session Sanctum.SignIn
+      Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Webhook
     )
   }
 
@@ -115,7 +111,7 @@ defmodule Cyfr.SanctumSurfacesTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp reached(ns) do
-    for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/#{ns}/**/*.ex")),
+    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/#{ns}/**/*.ex")),
         line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new(),
@@ -169,7 +165,8 @@ defmodule Cyfr.SanctumSurfacesTest do
 
   test "lib/compendium touches only the allowed Sanctum.Consent submodules" do
     deep =
-      for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/compendium/**/*.ex")),
+      for path <-
+            Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/compendium/**/*.ex")),
           line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
           [module] <- Regex.scan(~r/\bSanctum\.Consent\.[A-Z]\w+/, line, capture: :first),
           into: MapSet.new(),

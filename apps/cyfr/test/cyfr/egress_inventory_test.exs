@@ -14,16 +14,18 @@ defmodule Cyfr.EgressInventoryTest do
   it — the fail-closed direction.
 
   The JS bridge (`apps/mcp-bridge/server.mjs`) is its own egress arm: it
-  wraps stdio MCP backends and speaks HTTP only to the loopback backends
-  it spawned. It ships with the server, is scanned by nothing here, and
-  is called out so this inventory is honest about its edge.
+  runs stdio MCP backends, which reach the network as their commands do,
+  and speaks to them only over their stdio. It ships with the server, is
+  scanned by nothing here, and is called out so this inventory is honest
+  about its edge. CYFR reaches the bridge through `Cyfr.Network`.
   """
 
   use ExUnit.Case, async: true
 
   @allowed %{
-    # The one pinned transport: SSRF validation, hostname-preserving IP
-    # pinning, and streaming response caps live here.
+    # The one pinned transport: SSRF validation and hostname-preserving IP
+    # pinning live here; its response is bounded while it streams
+    # (`Cyfr.BoundedBody`).
     "apps/cyfr/lib/cyfr/network.ex" => :pinned_owner,
     # S3-compatible object store — operator-configured endpoint, SigV4.
     "apps/cyfr/lib/arca/adapters/s3.ex" => :object_store,
@@ -56,7 +58,7 @@ defmodule Cyfr.EgressInventoryTest do
 
   test "every outbound HTTP site is classified" do
     found =
-      Path.wildcard(Path.join(root(), "apps/*/lib/**/*.ex"))
+      Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
       |> Enum.filter(fn path ->
         source =
           path

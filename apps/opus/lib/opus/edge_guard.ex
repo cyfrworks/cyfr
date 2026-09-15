@@ -3,13 +3,15 @@
 
 defmodule Opus.EdgeGuard do
   @moduledoc """
-  Resource checks over a consent edge, shared by every WASI host handler.
+  Egress checks over a consent edge, shared by the runner's HTTP host
+  handlers.
 
-  An execution's capability is the `%Sanctum.Authority.Blob.Edge{}` it runs
-  under plus the node's `%Sanctum.Limits{}`. This module is the single home
-  for matching a concrete request against that edge — domains, schemes,
-  methods, private IPs, storage paths and actions — and for the request /
-  response size checks against the limits.
+  An execution's capability is the `%Cyfr.Authority.Blob.Edge{}` it runs
+  under plus the node's `%Cyfr.Limits{}`. This module is the runner's home
+  for matching a concrete request against that edge's egress — domains,
+  schemes, methods and private IPs — and for the envelope, request and
+  response size checks against the limits. Storage grants are checked on
+  CYFR (`Cyfr.Execution.GuestStorage`).
 
   ## Semantics
 
@@ -17,45 +19,23 @@ defmodule Opus.EdgeGuard do
   or a `nil` resource group behaves as all-empty lists, and an empty list
   denies. Schemes are always explicit in blobs — there is no "no scheme
   restriction" value. Domain patterns support `"*"` and `"*.example.com"`
-  wildcards; storage paths support `"*"`, trailing-`/` prefixes, and exact
-  file matches. Link-local / cloud-metadata addresses are denied regardless
-  of the private-IP allowlist.
+  wildcards. Cloud-metadata addresses are denied regardless of the
+  private-IP allowlist.
 
   Denial messages are part of the guest-visible contract: components and
   tests pin them, so they must not drift.
   """
 
-  alias Sanctum.Authority.Blob.Edge
-  alias Sanctum.Limits
+  alias Cyfr.Authority.Blob.Edge
+  alias Cyfr.Limits
 
   @type edge :: Edge.t() | nil
 
-  # ============================================================================
-  # Edge accessors (nil edge / nil group => empty list => deny)
-  # ============================================================================
-
-  @doc "Allowed egress domains for an edge (empty = deny all)."
-  @spec domains(edge()) :: [String.t()]
-  def domains(edge), do: egress(edge, :domains)
-
-  # Internal accessors for the checks below — external callers use the
-  # check_* predicates, never the raw lists.
+  # Internal accessors for the checks below; the allowed lists themselves
+  # are `Cyfr.Authority.Blob.Edge`'s.
   defp methods(edge), do: egress(edge, :methods)
   defp schemes(edge), do: egress(edge, :schemes)
   defp private_ips(edge), do: egress(edge, :private_ips)
-
-  @doc "Allowed storage paths for an edge (empty = deny all)."
-  @spec paths(edge()) :: [String.t()]
-  def paths(edge), do: storage(edge, :paths)
-
-  @doc "Allowed storage actions for an edge (empty = deny all)."
-  @spec actions(edge()) :: [String.t()]
-  def actions(edge), do: storage(edge, :actions)
-
-  @doc "Granted tool actions for an edge (empty = deny all)."
-  @spec tools(edge()) :: [String.t()]
-  def tools(nil), do: []
-  def tools(%Edge{tools: tools}), do: tools
 
   # ============================================================================
   # Egress checks
@@ -69,7 +49,7 @@ defmodule Opus.EdgeGuard do
   """
   @spec check_domain(edge(), String.t()) :: :ok | {:error, String.t()}
   def check_domain(edge, domain) when is_binary(domain) do
-    allowed = domains(edge)
+    allowed = Edge.domains(edge)
 
     if Enum.any?(allowed, &domain_matches?(&1, domain)) do
       :ok
@@ -119,8 +99,8 @@ defmodule Opus.EdgeGuard do
   Whether a private IP is allowed by the edge's `private_ips` allowlist.
 
   Supports individual IPs (`"192.168.1.100"`) and CIDR ranges (`"10.0.0.0/8"`).
-  Link-local / cloud-metadata ranges (`169.254.0.0/16`, `fe80::/10`) are always
-  denied regardless of the allowlist. Empty allowlist denies all.
+  Cloud-metadata addresses (`Cyfr.Cidr.metadata?/1`) are always denied
+  regardless of the allowlist. Empty allowlist denies all.
   """
   @spec allows_private_ip?(edge(), :inet.ip4_address() | :inet.ip6_address()) :: boolean()
   def allows_private_ip?(edge, ip_tuple) do
@@ -129,50 +109,13 @@ defmodule Opus.EdgeGuard do
         false
 
       entries ->
-        if Sanctum.Cidr.link_local?(ip_tuple) do
+        if Cyfr.Cidr.metadata?(ip_tuple) do
           false
         else
           ip_string = :inet.ntoa(ip_tuple) |> to_string()
           Enum.any?(entries, &ip_entry_matches?(&1, ip_tuple, ip_string))
         end
     end
-  end
-
-  # ============================================================================
-  # Storage checks
-  # ============================================================================
-
-  @doc """
-  Whether a storage action is allowed by the edge (case-insensitive).
-  """
-  @spec allows_action?(edge(), String.t()) :: boolean()
-  def allows_action?(edge, action) when is_binary(action) do
-    down = String.downcase(action)
-    Enum.any?(actions(edge), &(String.downcase(&1) == down))
-  end
-
-  @doc """
-  Whether a storage path is allowed by the edge.
-
-  - `"*"` allows everything
-  - a trailing-`/` entry is a directory prefix
-  - anything else is an exact file match
-
-  Empty allowlist denies all.
-  """
-  @spec allows_path?(edge(), String.t()) :: boolean()
-  def allows_path?(edge, path) when is_binary(path) do
-    Enum.any?(paths(edge), fn
-      "*" ->
-        true
-
-      entry ->
-        if String.ends_with?(entry, "/") do
-          String.starts_with?(path, entry)
-        else
-          path == entry
-        end
-    end)
   end
 
   # ============================================================================
@@ -259,10 +202,6 @@ defmodule Opus.EdgeGuard do
   defp egress(%Edge{egress: nil}, _key), do: []
   defp egress(%Edge{egress: egress}, key), do: Map.get(egress, key, [])
 
-  defp storage(nil, _key), do: []
-  defp storage(%Edge{storage: nil}, _key), do: []
-  defp storage(%Edge{storage: storage}, key), do: Map.get(storage, key, [])
-
   defp domain_matches?(pattern, domain) when is_binary(pattern) and is_binary(domain) do
     cond do
       pattern == "*" ->
@@ -281,10 +220,10 @@ defmodule Opus.EdgeGuard do
   end
 
   # Exact-IP entries compare against the canonical ntoa string; CIDR entries
-  # delegate to the Sanctum.Cidr SSOT (IPv4 + IPv6).
+  # delegate to the Cyfr.Cidr SSOT (IPv4 + IPv6).
   defp ip_entry_matches?(entry, ip_tuple, ip_string) do
     if String.contains?(entry, "/") do
-      Sanctum.Cidr.ip_in_cidr?(ip_tuple, entry)
+      Cyfr.Cidr.ip_in_cidr?(ip_tuple, entry)
     else
       entry == ip_string
     end

@@ -289,7 +289,7 @@ defmodule Sanctum.ApiKeyTest do
         ApiKey.create(ctx, %{
           name: "valid-key",
           type: :service,
-          scope: ["vault_read", "vault_write"],
+          scope: ["vault_read", "component_manage"],
           rate_limit: "50/1m"
         })
 
@@ -297,7 +297,7 @@ defmodule Sanctum.ApiKeyTest do
 
       assert validated.name == "valid-key"
       assert validated.type == :service
-      assert validated.scope == ["vault_read", "vault_write"]
+      assert validated.scope == ["vault_read", "component_manage"]
       assert validated.rate_limit == "50/1m"
     end
 

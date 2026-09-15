@@ -138,7 +138,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     # A person reads the athanor's whole tree; a key scoped to storage reads
-    # sees what an agent could have written or a conversation attached.
+    # sees what an agent could have written or a thread attached.
     # A completed execution's result is a payload a member reads by the
     # execution's id; another estate reads nothing.
     test "record.payload answers a retained result to a member of the athanor", %{ctx: ctx} do
@@ -224,18 +224,29 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
                MCP.handle("record", ctx, %{member | "attempt" => "att_0"})
     end
 
-    test "a key scoped to storage reads reaches data/ and conversations/, a person everything",
+    test "a key scoped to storage reads reaches data/ and threads/, a person everything",
          %{ctx: ctx} do
       :ok = Arca.put(ctx, ["data", "reach.txt"], "g")
+      :ok = Arca.put(ctx, ["threads", "thread_r", "reach.bin"], "t")
       :ok = Arca.put(ctx, ["aqua", "reach.md"], "a")
 
       key = %{ctx | permissions: MapSet.new([:storage_read]), auth_method: :api_key}
 
       assert {:ok, _} = MCP.read(key, "arca://files/data/reach.txt")
+      assert {:ok, _} = MCP.read(key, "arca://files/threads/thread_r/reach.bin")
       assert {:error, msg} = MCP.read(key, "arca://files/aqua/reach.md")
       assert err_msg(msg) =~ "Forbidden path"
 
       assert {:ok, _} = MCP.read(ctx, "arca://files/aqua/reach.md")
+
+      # The retired name for threads/ (spelled split for the vocabulary
+      # gate) reaches nothing, for a key or a person.
+      retired = "arca://files/" <> "conver" <> "sations/thread_r/reach.bin"
+
+      for reader <- [key, ctx] do
+        assert {:error, msg} = MCP.read(reader, retired)
+        assert err_msg(msg) =~ "Forbidden path"
+      end
     end
   end
 

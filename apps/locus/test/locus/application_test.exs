@@ -13,4 +13,18 @@ defmodule Locus.ApplicationTest do
       Locus.Application.bind_address!("builder")
     end
   end
+
+  test "a node that is not the builder serves nothing, and the builder refuses to serve without the spawner" do
+    assert Locus.Application.builder_endpoint(false, false) == []
+    assert Locus.Application.builder_endpoint(false, true) == []
+
+    assert_raise RuntimeError,
+                 ~r/runs builds only through cyfr-spawn.*fd 3 is not that channel/,
+                 fn ->
+                   Locus.Application.builder_endpoint(true, false)
+                 end
+
+    assert [{Bandit, opts}] = Locus.Application.builder_endpoint(true, true)
+    assert opts[:plug] == Locus.BuilderService
+  end
 end

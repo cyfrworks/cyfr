@@ -55,8 +55,8 @@ defmodule Arca.DbRescueSeamTest do
 
   test "inline db-errors rescues exist only at the enumerated exceptions" do
     found =
-      for dir <- ["apps/cyfr/lib", "apps/opus/lib", "apps/locus/lib"],
-          file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
+      for dir <- Cyfr.Test.SourceTree.app_libs(@root),
+          file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
           count = length(Regex.scan(@rescue_pattern, Cyfr.Test.SourceTree.read(file))),
           count > 0,
           into: %{} do

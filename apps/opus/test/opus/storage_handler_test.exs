@@ -1,38 +1,35 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.StorageHandlerTest.UnreadableUsageAdapter do
-  @moduledoc false
-  use Opus.StorageTestDouble
-
-  def usage(_ctx, _path), do: {:error, :unreadable}
-end
-
 defmodule Opus.StorageHandlerTest do
+  @moduledoc """
+  The runner's storage import is dispatch only: it bounds and parses the
+  guest's request, hands the operation to its attempt's host client, and
+  hands CYFR's answer back to the guest as JSON. A request that does not
+  parse never reaches CYFR; an attempt that no longer holds its row is a
+  storage_error; every call fires its telemetry. What an operation may
+  reach is `Cyfr.Execution.GuestStorageTest`'s.
+  """
+
   use ExUnit.Case, async: false
 
-  alias Opus.StorageHandlerTest.UnreadableUsageAdapter
-
-  alias Opus.StorageHandler
+  alias Cyfr.Test.AttemptFixtures
+  alias Opus.{HostClient, StorageHandler}
   alias Opus.Test.EdgeFixtures
+
+  @ref "catalyst:local.files:0.1.0"
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Arca.Cache.init()
 
-    # The public-quota counters are keyed (athanor, scope) and survive
-    # writes by design; each test here gets a fresh storage root under the
-    # same athanor id, so stale counters must go first.
-    Arca.Cache.delete_match({:scope_usage, :_, :_, :_})
+    test_dir =
+      Path.join(System.tmp_dir!(), "storage_handler_test_#{System.unique_integer([:positive])}")
 
-    test_dir = Path.join(System.tmp_dir!(), "storage_handler_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_dir)
-
-    ctx = Sanctum.TestContext.local()
-    component_ref = "catalyst:local.files:0.1.0"
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
@@ -42,1390 +39,151 @@ defmodule Opus.StorageHandlerTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
-    {:ok, ctx: ctx, component_ref: component_ref, test_dir: test_dir}
+    edge =
+      EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write", "list", "delete", "exists"])
+
+    attempt = AttemptFixtures.attached!(authority: %{Cyfr.Authority.zero() | resources: edge})
+
+    {:ok, attempt: attempt, host: HostClient.new(attempt.keys, attempt.runner)}
   end
 
-  # ============================================================================
-  # Build Imports
-  # ============================================================================
+  defp call(host, request, limits \\ nil) do
+    {:fn, call} =
+      StorageHandler.build_storage_imports(limits, host, @ref)["cyfr:storage/files@0.1.0"]["call"]
 
-  describe "build_storage_imports/3" do
-    test "returns correct namespace structure", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
-
-      assert Map.has_key?(imports, "cyfr:storage/files@0.1.0")
-      assert Map.has_key?(imports["cyfr:storage/files@0.1.0"], "call")
-      assert match?({:fn, _}, imports["cyfr:storage/files@0.1.0"]["call"])
-    end
-
-    test "closure executes storage operations", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
-      {:fn, call_fn} = imports["cyfr:storage/files@0.1.0"]["call"]
-
-      # Write a file first
-      write_req =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "data/test.txt",
-          "content" => Base.encode64("hello")
-        })
-
-      write_result = call_fn.(write_req)
-      decoded = Jason.decode!(write_result)
-      assert decoded["status"] == "ok"
-      assert decoded["written"] == true
-    end
+    request |> encode() |> call.() |> Jason.decode!()
   end
 
-  # ============================================================================
-  # Bare-root listing
-  # ============================================================================
+  defp encode(request) when is_binary(request), do: request
+  defp encode(request), do: Jason.encode!(request)
 
-  describe "bare-root listing" do
-    test "empty path answers the two scopes, never the athanor's data root", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      # The widest grant there is — the synthetic answer must hold even here.
-      edge = EdgeFixtures.edge(paths: ["*"], actions: ["read", "write", "list", "exists"])
-      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
-      {:fn, call_fn} = imports["cyfr:storage/files@0.1.0"]["call"]
+  defp write(path, text),
+    do: %{"action" => "write", "path" => path, "content" => Base.encode64(text)}
 
-      # Host state a raw root walk would have surfaced to the guest.
-      :ok = Arca.put(ctx, ["aqua", "agent.json"], "{}")
+  test "an operation runs on CYFR and its answer reaches the guest with its status", %{
+    attempt: attempt,
+    host: host
+  } do
+    assert %{"status" => "ok", "path" => "data/a.txt", "written" => true, "size" => 5} =
+             call(host, write("data/a.txt", "hello"))
 
-      list = call_fn.(Jason.encode!(%{"action" => "list", "path" => ""})) |> Jason.decode!()
-      assert list["status"] == "ok"
-      assert Enum.sort(list["files"]) == ["components/", "data/"]
+    assert {:ok, "hello"} = Arca.get(attempt.ctx, ["data", "a.txt"])
 
-      exists = call_fn.(Jason.encode!(%{"action" => "exists", "path" => ""})) |> Jason.decode!()
-      assert exists["status"] == "ok"
-      assert exists["exists"] == true
-    end
+    assert %{"status" => "ok", "content" => content, "encoding" => "base64"} =
+             call(host, %{"action" => "read", "path" => "data/a.txt"})
 
-    test "mutations on the bare root and bare scopes are refused, even with '*'", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      edge = EdgeFixtures.edge(paths: ["*"], actions: ["read", "write", "append", "delete"])
-      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
-      {:fn, call_fn} = imports["cyfr:storage/files@0.1.0"]["call"]
+    assert Base.decode64!(content) == "hello"
 
-      # `""` and a bare scope name directories — a write there would wedge
-      # the athanor's tree (Arca refuses them as :invalid_path; the guest
-      # gets the typed refusal before Arca is even asked).
-      for {action, extra} <- [
-            {"write", %{"content" => Base.encode64("x")}},
-            {"append", %{"content" => Base.encode64("x")}},
-            {"delete", %{}}
-          ],
-          path <- ["", "data", "components"] do
-        req = Map.merge(%{"action" => action, "path" => path}, extra)
-        decoded = call_fn.(Jason.encode!(req)) |> Jason.decode!()
+    assert %{"status" => "ok", "path" => "data", "files" => ["a.txt"]} =
+             call(host, %{"action" => "list", "path" => "data"})
 
-        assert decoded["error"]["type"] == "storage_path_denied",
-               "#{action} #{inspect(path)} must refuse, got: #{inspect(decoded)}"
-      end
+    # A listing without a path names the scope listing, which a `data/`
+    # grant does not reach.
+    for action <- ["list", "exists"] do
+      assert %{"error" => %{"message" => "Storage path '' is not allowed by policy."}} =
+               call(host, %{"action" => action})
     end
   end
 
-  # ============================================================================
-  # Read Action
-  # ============================================================================
+  test "CYFR's refusal reaches the guest as its typed error", %{host: host} do
+    assert %{"error" => %{"type" => "storage_path_denied", "message" => message}} =
+             call(host, write("aqua/agent.json", "{}"))
 
-  describe "execute/5 - read" do
-    test "reads a file and returns base64 content", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
+    assert message =~ "must start with"
 
-      # Write file via Arca directly
-      :ok = Arca.put(ctx, ["data", "test.txt"], "hello world")
+    assert %{"error" => %{"type" => "action_denied"}} =
+             call(host, %{"action" => "append", "path" => "data/a.txt", "content" => "eA=="})
+  end
 
-      request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
+  test "a request that does not parse is refused without a host call", %{host: host} do
+    for {request, type, fragment} <- [
+          {"not json", "invalid_json", "Invalid JSON"},
+          {~s({"path": "data/test.txt"}), "invalid_request", "'action'"},
+          {~s([1, 2, 3]), "invalid_request", "'action'"},
+          {~s({"action": "read"}), "invalid_request", "'path'"},
+          {~s({"action": "write", "path": 42}), "invalid_request", "'path'"},
+          {~s({"action": "write", "path": "data/a.txt", "content": 42}), "invalid_request",
+           "content"},
+          {~s({"action": "truncate", "path": "data/test.txt"}), "unknown_action", "truncate"}
+        ] do
+      assert %{"error" => %{"type" => ^type, "message" => message}} =
+               call(%{host | call_key: :crypto.strong_rand_bytes(32)}, request)
 
-      assert decoded["status"] == "ok"
-      assert decoded["path"] == "data/test.txt"
-      assert decoded["encoding"] == "base64"
-      assert Base.decode64!(decoded["content"]) == "hello world"
-      assert decoded["size"] == 11
-    end
-
-    test "returns error for missing file", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request = Jason.encode!(%{"action" => "read", "path" => "data/missing.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "not_found"
-      assert decoded["error"]["message"] =~ "not found"
+      assert message =~ fragment
     end
   end
 
-  # ============================================================================
-  # Write Action
-  # ============================================================================
-
-  describe "execute/5 - write" do
-    test "writes base64 content to file", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      content = Base.encode64("hello world")
-
-      request =
-        Jason.encode!(%{"action" => "write", "path" => "data/test.txt", "content" => content})
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-      assert decoded["written"] == true
-      assert decoded["size"] == 11
-      assert decoded["path"] == "data/test.txt"
-
-      # Verify via Arca
-      {:ok, stored} = Arca.get(ctx, ["data", "test.txt"])
-      assert stored == "hello world"
-    end
-
-    test "returns error for invalid base64 content", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "data/test.txt",
-          "content" => "not-valid-base64!!!"
-        })
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "invalid_base64"
-      assert decoded["error"]["message"] =~ "Invalid base64"
-    end
-
-    test "returns error for missing content field", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request = Jason.encode!(%{"action" => "write", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "invalid_request"
-      assert decoded["error"]["message"] =~ "content"
-    end
-  end
-
-  # ============================================================================
-  # List Action
-  # ============================================================================
-
-  describe "execute/5 - list" do
-    test "lists files in a directory", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      # Write some files
-      :ok = Arca.put(ctx, ["data", "a.txt"], "aaa")
-      :ok = Arca.put(ctx, ["data", "b.txt"], "bbb")
-
-      request = Jason.encode!(%{"action" => "list", "path" => "data"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-      assert is_list(decoded["files"])
-    end
-
-    test "marks directories with trailing slash", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      # Write a file and a nested file (which creates the subdirectory)
-      :ok = Arca.put(ctx, ["data", "file.txt"], "content")
-      :ok = Arca.put(ctx, ["data", "subdir", "nested.txt"], "nested")
-
-      request = Jason.encode!(%{"action" => "list", "path" => "data"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-      files = decoded["files"]
-
-      # Directories should end with /
-      dir_entries = Enum.filter(files, &String.ends_with?(&1, "/"))
-      file_entries = Enum.reject(files, &String.ends_with?(&1, "/"))
-
-      assert "subdir/" in dir_entries
-      assert "file.txt" in file_entries
-      refute "subdir" in file_entries
-    end
-  end
-
-  # ============================================================================
-  # Delete Action
-  # ============================================================================
-
-  describe "execute/5 - delete" do
-    test "deletes a file", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      :ok = Arca.put(ctx, ["data", "to-delete.txt"], "content")
-
-      request = Jason.encode!(%{"action" => "delete", "path" => "data/to-delete.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-      assert decoded["deleted"] == true
-
-      # Verify deleted
-      assert {:error, :not_found} = Arca.get(ctx, ["data", "to-delete.txt"])
-    end
-  end
-
-  # ============================================================================
-  # Exists Action
-  # ============================================================================
-
-  describe "execute/5 - exists" do
-    test "returns true for existing file", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      :ok = Arca.put(ctx, ["data", "exists.txt"], "content")
-
-      request = Jason.encode!(%{"action" => "exists", "path" => "data/exists.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-      assert decoded["exists"] == true
-    end
-
-    test "returns false for missing file", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request = Jason.encode!(%{"action" => "exists", "path" => "data/nope.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-      assert decoded["exists"] == false
-    end
-  end
-
-  # ============================================================================
-  # Unknown Action
-  # ============================================================================
-
-  describe "execute/5 - unknown action" do
-    test "returns error for unknown action", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request = Jason.encode!(%{"action" => "truncate", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "unknown_action"
-      assert decoded["error"]["message"] =~ "Unknown storage action: truncate"
-    end
-  end
-
-  # ============================================================================
-  # Path Traversal Rejection
-  # ============================================================================
-
-  describe "execute/5 - path safety" do
-    test "rejects path traversal with '..'", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request = Jason.encode!(%{"action" => "read", "path" => "data/../secrets/key.json"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "storage_path_denied"
-      assert decoded["error"]["message"] =~ "Path traversal"
-    end
-
-    test "rejects absolute paths", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request = Jason.encode!(%{"action" => "read", "path" => "/etc/passwd"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "storage_path_denied"
-    end
-
-    test "rejects traversal in write", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "data/../../evil.txt",
-          "content" => Base.encode64("bad")
-        })
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "storage_path_denied"
-    end
-
-    test "rejects traversal in delete", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request = Jason.encode!(%{"action" => "delete", "path" => "data/../secrets/key.json"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "storage_path_denied"
-    end
-  end
-
-  # ============================================================================
-  # allowed_paths Enforcement
-  # ============================================================================
-
-  describe "execute/5 - allowed_paths enforcement" do
-    test "denies when allowed_paths is empty", %{ctx: ctx, component_ref: ref} do
-      edge = EdgeFixtures.edge(paths: [], actions: ["read"])
-
-      request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "storage_path_denied"
-      assert decoded["error"]["message"] =~ "not allowed by policy"
-    end
-
-    test "denies path outside allowed prefixes but within valid scope", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      edge = EdgeFixtures.edge(paths: ["data/reports/"], actions: ["read"])
-
-      request = Jason.encode!(%{"action" => "read", "path" => "data/secrets/key.json"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "storage_path_denied"
-      assert decoded["error"]["message"] =~ "not allowed by policy"
-    end
-
-    test "allows path within allowed prefixes", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
-
-      request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-    end
-
-    test "supports multiple allowed path prefixes", %{ctx: ctx, component_ref: ref} do
-      edge = EdgeFixtures.edge(paths: ["data/", "components/catalysts/"], actions: ["read"])
-
-      # Component paths are tenant-relative — the guest's spelling IS the
-      # host's spelling, and the context supplies the athanor.
-      :ok =
-        Arca.put(
-          ctx,
-          ["components", "catalysts", "test", "pkg", "0.1.0", "output.json"],
-          "{}"
-        )
-
-      request =
-        Jason.encode!(%{
-          "action" => "read",
-          "path" => "components/catalysts/test/pkg/0.1.0/output.json"
-        })
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-    end
-  end
-
-  # ============================================================================
-  # Request Parsing
-  # ============================================================================
-
-  describe "execute/5 - request parsing" do
-    test "returns error for invalid JSON", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      result = StorageHandler.execute("not json", edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "invalid_json"
-    end
-
-    test "returns error for missing action", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      result = StorageHandler.execute(~s({"path": "data/test.txt"}), edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "invalid_request"
-    end
-
-    test "returns error for missing path on read", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      result = StorageHandler.execute(~s({"action": "read"}), edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "invalid_request"
-      assert decoded["error"]["message"] =~ "path"
-    end
-  end
-
-  # ============================================================================
-  # Telemetry
-  # ============================================================================
-
-  describe "execute/5 - telemetry" do
-    test "emits telemetry event on storage call", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      test_pid = self()
-      handler_ref = make_ref()
-
-      :telemetry.attach(
-        "test-storage-#{inspect(handler_ref)}",
-        [:cyfr, :opus, :storage, :call],
-        fn event_name, measurements, metadata, _config ->
-          send(test_pid, {:telemetry_event, event_name, measurements, metadata})
-        end,
-        nil
+  test "a request past the envelope bound is refused before it is parsed" do
+    limits = %Cyfr.Limits{max_request_size: 16, max_response_size: 16}
+    edge = EdgeFixtures.edge(paths: ["data/"], actions: ["write"])
+
+    attempt =
+      AttemptFixtures.attached!(
+        authority: %{Cyfr.Authority.zero() | resources: edge},
+        limits: limits
       )
 
-      :ok = Arca.put(ctx, ["data", "telemetry-test.txt"], "content")
+    host = HostClient.new(attempt.keys, attempt.runner)
 
-      request = Jason.encode!(%{"action" => "read", "path" => "data/telemetry-test.txt"})
-      _result = StorageHandler.execute(request, edge, nil, ctx, ref)
+    huge =
+      ~s({"action": "write", "path": "data/x.txt", "content": "#{String.duplicate("A", 200_000)}"})
 
-      assert_receive {:telemetry_event, [:cyfr, :opus, :storage, :call], measurements, metadata}
-      assert is_integer(measurements.duration_ms)
-      assert metadata.component_ref == ref
-      assert metadata.action == "read"
-      assert metadata.status == :ok
+    assert %{"error" => %{"type" => "request_too_large"}} = call(host, huge, limits)
 
-      :telemetry.detach("test-storage-#{inspect(handler_ref)}")
-    end
-
-    test "emits telemetry with error status on denied path", %{ctx: ctx, component_ref: ref} do
-      edge = EdgeFixtures.edge(paths: [])
-
-      test_pid = self()
-      handler_ref = make_ref()
-
-      :telemetry.attach(
-        "test-storage-denied-#{inspect(handler_ref)}",
-        [:cyfr, :opus, :storage, :call],
-        fn _event_name, _measurements, metadata, _config ->
-          send(test_pid, {:telemetry_status, metadata.status})
-        end,
-        nil
-      )
-
-      request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      _result = StorageHandler.execute(request, edge, nil, ctx, ref)
-
-      assert_receive {:telemetry_status, :error}
-
-      :telemetry.detach("test-storage-denied-#{inspect(handler_ref)}")
-    end
+    # A payload past the consented size but within the envelope is refused
+    # by CYFR, under the attempt's limits, on its decoded bytes.
+    assert %{"error" => %{"type" => "request_too_large", "message" => "Storage write" <> _}} =
+             call(host, write("data/y.txt", String.duplicate("z", 24)), limits)
   end
 
-  # ============================================================================
-  # allowed_actions Enforcement
-  # ============================================================================
+  test "an attempt that no longer holds its row reads and writes nothing", %{
+    attempt: attempt,
+    host: host
+  } do
+    assert %{"written" => true} = call(host, write("data/before.txt", "kept"))
+    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(attempt.ctx, attempt.execution_id)
 
-  describe "execute/5 - allowed_actions enforcement" do
-    test "denies action not in allowed_actions", %{ctx: ctx, component_ref: ref} do
-      edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "list", "exists"])
+    for request <- [
+          write("data/after.txt", "late"),
+          write("data/before.txt", "overwritten"),
+          %{"action" => "read", "path" => "data/before.txt"}
+        ] do
+      assert %{"error" => %{"type" => "storage_error", "message" => message}} =
+               call(host, request)
 
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
-
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "data/test.txt",
-          "content" => Base.encode64("new")
-        })
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "action_denied"
-      assert decoded["error"]["message"] =~ "Storage action 'write' is not allowed by policy."
+      assert message =~ "not current"
     end
 
-    test "allows action in allowed_actions", %{ctx: ctx, component_ref: ref} do
-      edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "list", "exists"])
-
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
-
-      request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-    end
-
-    test "denies all actions when default (empty list)", %{ctx: ctx, component_ref: ref} do
-      edge = EdgeFixtures.edge(paths: ["data/"])
-
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
-
-      request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "action_denied"
-    end
-
-    test "allows all actions when explicitly set", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
-
-      # Read
-      request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      assert Jason.decode!(result)["status"] == "ok"
-
-      # Write
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "data/new.txt",
-          "content" => Base.encode64("new")
-        })
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      assert Jason.decode!(result)["status"] == "ok"
-
-      # Delete
-      request = Jason.encode!(%{"action" => "delete", "path" => "data/new.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      assert Jason.decode!(result)["status"] == "ok"
-    end
-
-    test "denies delete when only read allowed", %{ctx: ctx, component_ref: ref} do
-      edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read"])
-
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
-
-      request = Jason.encode!(%{"action" => "delete", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "action_denied"
-    end
+    refute Arca.exists?(attempt.ctx, ["data", "after.txt"])
+    assert {:ok, "kept"} = Arca.get(attempt.ctx, ["data", "before.txt"])
   end
 
-  # ============================================================================
-  # validate_path_safe/1
-  # ============================================================================
+  test "every call fires its telemetry with the action and its outcome", %{host: host} do
+    test = self()
+    handler = "storage-handler-test-#{System.unique_integer([:positive])}"
 
-  describe "validate_path_safe/1" do
-    test "allows normal paths" do
-      assert :ok = StorageHandler.validate_path_safe("data/file.txt")
+    :telemetry.attach(
+      handler,
+      [:cyfr, :opus, :storage, :call],
+      fn _event, measurements, metadata, _config ->
+        send(test, {:storage_call, measurements, metadata})
+      end,
+      nil
+    )
 
-      assert :ok =
-               StorageHandler.validate_path_safe("components/catalysts/test/0.1.0/catalyst.wasm")
-    end
+    on_exit(fn -> :telemetry.detach(handler) end)
 
-    test "rejects absolute paths" do
-      assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_safe("/etc/passwd")
+    call(host, write("data/t.txt", "x"))
 
-      assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_safe("/data/file.txt")
-    end
+    assert_receive {:storage_call, %{duration_ms: duration},
+                    %{component_ref: @ref, action: "write", status: :ok}}
 
-    test "rejects path traversal" do
-      assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_safe("data/../secret")
+    assert is_integer(duration)
 
-      assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_safe("../escape")
+    call(host, write("aqua/t.txt", "x"))
+    assert_receive {:storage_call, _, %{action: "write", status: :error}}
 
-      assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_safe("data/a/../../c")
-    end
-
-    test "allows empty path" do
-      assert :ok = StorageHandler.validate_path_safe("")
-    end
-  end
-
-  # ============================================================================
-  # validate_path_scope/1
-  # ============================================================================
-
-  describe "validate_path_scope/1" do
-    test "allows data/ paths" do
-      assert :ok = StorageHandler.validate_path_scope("data/file.txt")
-      assert :ok = StorageHandler.validate_path_scope("data/reports/2024.json")
-    end
-
-    test "allows components/ paths" do
-      assert :ok =
-               StorageHandler.validate_path_scope("components/catalysts/test/0.1.0/catalyst.wasm")
-
-      assert :ok = StorageHandler.validate_path_scope("components/reagents/agent/data.json")
-    end
-
-    test "allows empty path" do
-      assert :ok = StorageHandler.validate_path_scope("")
-    end
-
-    test "rejects paths outside valid scopes" do
-      assert {:error, :storage_path_denied, msg} =
-               StorageHandler.validate_path_scope("secrets/key.json")
-
-      assert msg =~ "must start with 'components/' or 'data/'"
-
-      assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_scope("agent/file.txt")
-
-      assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_scope("artifacts/build.wasm")
-    end
-
-    test "rejects the host scopes — aqua/ and conversations/ are invisible to guests" do
-      assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_scope("aqua/agent.json")
-
-      assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_scope("aqua")
-
-      assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_scope("conversations/conv_1/msg_1/0-file.png")
-
-      assert {:error, :storage_path_denied, _} =
-               StorageHandler.validate_path_scope("conversations")
-    end
-
-    test "agrees with the manifest parser — a grant that parses is a path this gate honors" do
-      table = [
-        "data",
-        "data/",
-        "data/notes.txt",
-        "components",
-        "components/catalysts/local/x/0.1.0/catalyst.wasm",
-        "aqua/agent.json",
-        "conversations/conv_1",
-        "guest/notes.txt",
-        "secrets/key.json"
-      ]
-
-      for path <- table do
-        manifest = %{"caps" => %{"storage" => %{"paths" => [path]}}}
-        parses? = Compendium.Manifest.Caps.validate(manifest) == :ok
-        honored? = StorageHandler.validate_path_scope(path) == :ok
-
-        assert parses? == honored?,
-               "manifest and boundary disagree on #{inspect(path)}: " <>
-                 "parses?=#{parses?} honored?=#{honored?}"
-      end
-
-      # Two deliberate asymmetries. `"*"` is grant grammar (EdgeGuard's
-      # concern), never a request path: it parses, and the scope gate
-      # rightly refuses it as a path. `""` is a request-path special (the
-      # synthetic scope listing), never a grant: the gate honors it, and
-      # the manifest's string rules refuse it.
-      assert :ok =
-               Compendium.Manifest.Caps.validate(%{
-                 "caps" => %{"storage" => %{"paths" => ["*"]}}
-               })
-
-      assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_scope("*")
-      assert :ok = StorageHandler.validate_path_scope("")
-    end
-  end
-
-  # ============================================================================
-  # Append Action
-  # ============================================================================
-
-  describe "execute/5 - append" do
-    test "appends base64 content to a file", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "append", "list", "delete", "exists"]
-        )
-
-      :ok = Arca.put(ctx, ["data", "log.txt"], "line1\n")
-
-      request =
-        Jason.encode!(%{
-          "action" => "append",
-          "path" => "data/log.txt",
-          "content" => Base.encode64("line2\n")
-        })
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-      assert decoded["appended"] == true
-      assert decoded["size"] == 6
-
-      # Verify content was appended
-      {:ok, content} = Arca.get(ctx, ["data", "log.txt"])
-      assert content == "line1\nline2\n"
-    end
-
-    test "creates file if it does not exist", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "append", "list", "delete", "exists"]
-        )
-
-      request =
-        Jason.encode!(%{
-          "action" => "append",
-          "path" => "data/new-log.txt",
-          "content" => Base.encode64("first line\n")
-        })
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["status"] == "ok"
-      assert decoded["appended"] == true
-    end
-
-    test "rejects append without content", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "append", "list", "delete", "exists"]
-        )
-
-      request = Jason.encode!(%{"action" => "append", "path" => "data/log.txt"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "invalid_request"
-    end
-
-    test "rejects invalid base64 content", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "append", "list", "delete", "exists"]
-        )
-
-      request =
-        Jason.encode!(%{
-          "action" => "append",
-          "path" => "data/log.txt",
-          "content" => "not valid base64!!!"
-        })
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "invalid_base64"
-    end
-
-    test "denied when append not in allowed_actions", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request =
-        Jason.encode!(%{
-          "action" => "append",
-          "path" => "data/log.txt",
-          "content" => Base.encode64("data")
-        })
-
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "action_denied"
-    end
-  end
-
-  # ============================================================================
-  # Scope Validation Integration
-  # ============================================================================
-
-  describe "execute/5 - scope validation" do
-    test "rejects paths outside data/ and components/ scopes", %{ctx: ctx, component_ref: ref} do
-      edge =
-        EdgeFixtures.edge(
-          paths: ["data/"],
-          actions: ["read", "write", "list", "delete", "exists"]
-        )
-
-      request = Jason.encode!(%{"action" => "read", "path" => "secrets/key.json"})
-      result = StorageHandler.execute(request, edge, nil, ctx, ref)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "storage_path_denied"
-      assert decoded["error"]["message"] =~ "must start with 'components/' or 'data/'"
-    end
-  end
-
-  # ============================================================================
-  # Size ceilings (node limits) and the public quota
-  # ============================================================================
-
-  describe "size ceilings from node limits" do
-    defp small_limits do
-      %Sanctum.Limits{max_request_size: 16, max_response_size: 16}
-    end
-
-    defp rw_edge do
-      EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write"])
-    end
-
-    test "a write past max_request_size is refused on the DECODED size", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      # 24 decoded bytes → 32 base64 chars. The ceiling reads the payload,
-      # not the framing.
-      content = Base.encode64(String.duplicate("x", 24))
-      request = ~s({"action": "write", "path": "data/big.txt", "content": "#{content}"})
-
-      decoded =
-        Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
-
-      assert decoded["error"]["type"] == "request_too_large"
-    end
-
-    test "a small write under the ceiling still lands", %{ctx: ctx, component_ref: ref} do
-      content = Base.encode64("tiny")
-      request = ~s({"action": "write", "path": "data/small.txt", "content": "#{content}"})
-
-      decoded =
-        Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
-
-      assert decoded["written"] == true
-    end
-
-    test "a read past max_response_size is refused before base64 framing", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      :ok = Arca.put(ctx, ["data", "big.txt"], String.duplicate("y", 64))
-
-      request = ~s({"action": "read", "path": "data/big.txt"})
-
-      decoded =
-        Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
-
-      assert decoded["error"]["type"] == "response_too_large"
-    end
-
-    test "the raw envelope is bounded before it is parsed", %{ctx: ctx, component_ref: ref} do
-      # Reject oversized encoded envelopes before JSON parsing; valid payloads within the consent limit must fit.
-      huge =
-        ~s({"action": "write", "path": "data/x.txt", "content": "#{String.duplicate("A", 200_000)}"})
-
-      decoded =
-        Jason.decode!(StorageHandler.execute(huge, rw_edge(), small_limits(), ctx, ref))
-
-      assert decoded["error"]["type"] == "request_too_large"
-
-      # ...and a request that merely exceeds the PAYLOAD ceiling still gets
-      # the payload-level refusal, measured after decoding.
-      modest =
-        ~s({"action": "write", "path": "data/y.txt", "content": "#{Base.encode64(String.duplicate("z", 24))}"})
-
-      assert Jason.decode!(StorageHandler.execute(modest, rw_edge(), small_limits(), ctx, ref))[
-               "error"
-             ]["type"] == "request_too_large"
-    end
-  end
-
-  describe "public quota counts what the guest actually stores" do
-    defp quota_write(ctx, ref, path, bytes, quota) do
-      content = Base.encode64(String.duplicate("z", bytes))
-      request = ~s({"action": "write", "path": "#{path}", "content": "#{content}"})
-
-      StorageHandler.execute(request, rw_edge(), nil, ctx, ref,
-        public?: true,
-        public_quota: quota
-      )
-      |> Jason.decode!()
-    end
-
-    test "usage is recursive — a nested write cannot evade the byte ceiling", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      quota = %{max_bytes: 100, max_files: 50}
-
-      # Count nested files toward the storage quota.
-      assert %{"written" => true} = quota_write(ctx, ref, "data/nested/deep/a.txt", 60, quota)
-
-      # 60 more would cross 100; the recursive usage must see the first file.
-      decoded = quota_write(ctx, ref, "data/b.txt", 60, quota)
-      assert decoded["error"]["type"] == "storage_quota_exceeded"
-      assert decoded["error"]["message"] =~ "storage quota"
-    end
-
-    test "the file ceiling counts nested files too", %{ctx: ctx, component_ref: ref} do
-      quota = %{max_bytes: 1_000_000, max_files: 2}
-
-      assert %{"written" => true} = quota_write(ctx, ref, "data/one/a.txt", 4, quota)
-      assert %{"written" => true} = quota_write(ctx, ref, "data/two/b.txt", 4, quota)
-
-      decoded = quota_write(ctx, ref, "data/three/c.txt", 4, quota)
-      assert decoded["error"]["type"] == "storage_quota_exceeded"
-      assert decoded["error"]["message"] =~ "file quota"
-    end
-
-    test "usage is cached and bumped per write, not re-walked", %{ctx: ctx, component_ref: ref} do
-      quota = %{max_bytes: 1_000_000, max_files: 10}
-
-      # The first check primes the counters; the write itself bumps them.
-      assert %{"written" => true} = quota_write(ctx, ref, "data/a.txt", 4, quota)
-
-      bytes_key = Arca.Cache.Keys.scope_usage_bytes(ctx.athanor_id, "data")
-      files_key = Arca.Cache.Keys.scope_usage_files(ctx.athanor_id, "data")
-      assert {:ok, 4} = Arca.Cache.get(bytes_key)
-      assert {:ok, 1} = Arca.Cache.get(files_key)
-
-      # A second write is answered from the bumped counters — and bumps on.
-      assert %{"written" => true} = quota_write(ctx, ref, "data/b.txt", 6, quota)
-      assert {:ok, 10} = Arca.Cache.get(bytes_key)
-      assert {:ok, 2} = Arca.Cache.get(files_key)
-
-      # A delete drops both counters so reclaimed space is recomputed.
-      del_edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write", "delete"])
-      request = ~s({"action": "delete", "path": "data/b.txt"})
-
-      assert %{"deleted" => true} =
-               StorageHandler.execute(request, del_edge, nil, ctx, ref, []) |> Jason.decode!()
-
-      assert :miss = Arca.Cache.get(bytes_key)
-      assert :miss = Arca.Cache.get(files_key)
-    end
-
-    test "the incoming size is the decoded payload, not the base64 framing", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      # 90 decoded bytes → 120 base64 chars. Under a 100-byte quota the
-      # write must pass: framing is transport, not stored bytes.
-      quota = %{max_bytes: 100, max_files: 50}
-      assert %{"written" => true} = quota_write(ctx, ref, "data/exact.txt", 90, quota)
-    end
-
-    defp components_quota_write(ctx, ref, path, bytes, quota) do
-      content = Base.encode64(String.duplicate("z", bytes))
-      request = ~s({"action": "write", "path": "#{path}", "content": "#{content}"})
-
-      edge = EdgeFixtures.edge(paths: ["data/", "components/"], actions: ["read", "write"])
-
-      StorageHandler.execute(request, edge, nil, ctx, ref,
-        public?: true,
-        public_quota: quota
-      )
-      |> Jason.decode!()
-    end
-
-    test "the components scope is counted too — the quota is not data-only", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      quota = %{max_bytes: 100, max_files: 50}
-
-      assert %{"written" => true} =
-               components_quota_write(
-                 ctx,
-                 ref,
-                 "components/catalysts/local/pkg/0.1.0/a.txt",
-                 60,
-                 quota
-               )
-
-      decoded =
-        components_quota_write(ctx, ref, "components/catalysts/local/pkg/0.1.0/b.txt", 60, quota)
-
-      assert decoded["error"]["type"] == "storage_quota_exceeded"
-    end
-
-    test "an athanor-less context gets a typed refusal, never a raise", %{component_ref: ref} do
-      # No athanor: the quota walk cannot pin the components root, so it is
-      # skipped as unreadable, and the write itself is refused downstream.
-      anon = Sanctum.Context.build(user_id: "anon", athanor_id: nil, authenticated: false)
-
-      quota = %{max_bytes: 100, max_files: 50}
-
-      decoded =
-        components_quota_write(anon, ref, "components/catalysts/local/pkg/0.1.0/a.txt", 10, quota)
-
-      assert %{"error" => %{"type" => _}} = decoded
-    end
-
-    test "an unreadable usage refuses the public write — fail closed", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      # An induced usage failure must not mint unlimited writes on the
-      # adversarial (public) surface. The adapter seam is the designed swap
-      # point; counters were cleared in setup, so the walk is consulted.
-      original = Application.get_env(:cyfr, :storage_adapter)
-      Application.put_env(:cyfr, :storage_adapter, UnreadableUsageAdapter)
-
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:cyfr, :storage_adapter, original),
-          else: Application.delete_env(:cyfr, :storage_adapter)
-      end)
-
-      decoded = quota_write(ctx, ref, "data/a.txt", 10, %{max_bytes: 100, max_files: 50})
-      assert decoded["error"]["type"] == "storage_quota_exceeded"
-      assert decoded["error"]["message"] =~ "usage unavailable"
-    end
-  end
-
-  # ============================================================================
-  # File-count backstop (authenticated writes)
-  # ============================================================================
-
-  describe "scope file ceiling" do
-    test "guest writes stop at the fixed per-scope file ceiling", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      # Prime the cached counters at the ceiling rather than writing 100k
-      # files; the gate reads exactly these.
-      Arca.Cache.put(Arca.Cache.Keys.scope_usage_files(ctx.athanor_id, "data"), 100_000, 60_000)
-      Arca.Cache.put(Arca.Cache.Keys.scope_usage_bytes(ctx.athanor_id, "data"), 1_000, 60_000)
-
-      edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write"])
-
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "data/one-more.txt",
-          "content" => Base.encode64("x")
-        })
-
-      decoded = Jason.decode!(StorageHandler.execute(request, edge, nil, ctx, ref))
-      assert decoded["error"]["type"] == "storage_quota_exceeded"
-      assert decoded["error"]["message"] =~ "file ceiling"
-    end
-  end
-
-  # ============================================================================
-  # The seed overlay at the guest boundary
-  # ============================================================================
-
-  describe "seed overlay through the guest boundary" do
-    setup %{test_dir: test_dir} do
-      seed = Path.join(test_dir, "seed_fixture")
-      bundle = Path.join([seed, "components", "catalysts", "local", "bundled", "1.0.0"])
-      File.mkdir_p!(bundle)
-      File.write!(Path.join(bundle, "cyfr-manifest.json"), ~s({"type":"catalyst"}))
-      File.write!(Path.join(bundle, "config.json"), ~s({"seeded":true}))
-
-      prev_seed = Application.get_env(:cyfr, :seed_path)
-      Application.put_env(:cyfr, :seed_path, seed)
-
-      on_exit(fn ->
-        if prev_seed,
-          do: Application.put_env(:cyfr, :seed_path, prev_seed),
-          else: Application.delete_env(:cyfr, :seed_path)
-      end)
-
-      :ok
-    end
-
-    test "a guest reads a shipped bundle file the athanor holds", %{ctx: ctx, component_ref: ref} do
-      :ok =
-        Arca.Overlay.pull_shipped(ctx, ["components", "catalysts", "local", "bundled", "1.0.0"])
-
-      edge = EdgeFixtures.edge(paths: ["components/"], actions: ["read", "list", "exists"])
-
-      request =
-        Jason.encode!(%{
-          "action" => "read",
-          "path" => "components/catalysts/local/bundled/1.0.0/config.json"
-        })
-
-      decoded = Jason.decode!(StorageHandler.execute(request, edge, nil, ctx, ref))
-      assert decoded["status"] == "ok"
-      assert Base.decode64!(decoded["content"]) == ~s({"seeded":true})
-
-      list =
-        Jason.decode!(
-          StorageHandler.execute(
-            Jason.encode!(%{"action" => "list", "path" => "components/catalysts/local/bundled"}),
-            edge,
-            nil,
-            ctx,
-            ref
-          )
-        )
-
-      assert list["files"] == ["1.0.0/"]
-    end
-
-    test "a guest write into a shipped copy lands as an edit", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      unit = ["components", "catalysts", "local", "bundled", "1.0.0"]
-      :ok = Arca.Overlay.pull_shipped(ctx, unit)
-      edge = EdgeFixtures.edge(paths: ["components/"], actions: ["read", "write"])
-
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "components/catalysts/local/bundled/1.0.0/config.json",
-          "content" => Base.encode64(~s({"seeded":false}))
-        })
-
-      decoded = Jason.decode!(StorageHandler.execute(request, edge, nil, ctx, ref))
-      assert decoded["written"] == true
-
-      # The copy is the athanor's, edited: the shipped sibling stays and
-      # the unit still reads shipped, with the edit in its diff.
-      assert {:ok, ~s({"seeded":false})} = Arca.get(ctx, unit ++ ["config.json"])
-      assert Arca.Adapters.Local.exists?(ctx, unit ++ ["cyfr-manifest.json"])
-      assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :shipped}
-      assert {:ok, true} = Arca.Overlay.edited?(ctx, unit)
-    end
-
-    test "a guest mutation above the unit grammar is refused; data/ is untouched", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      edge = EdgeFixtures.edge(paths: ["data/", "components/"], actions: ["read", "write"])
-
-      # components/junk.txt would mint a tree shape no unit grammar owns.
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "components/junk.txt",
-          "content" => Base.encode64("junk")
-        })
-
-      decoded = Jason.decode!(StorageHandler.execute(request, edge, nil, ctx, ref))
-      assert decoded["error"]["type"] == "storage_path_denied"
-      assert decoded["error"]["message"] =~ "version directory"
-
-      # The same depth in data/ is an ordinary guest write.
-      ok =
-        Jason.decode!(
-          StorageHandler.execute(
-            Jason.encode!(%{
-              "action" => "write",
-              "path" => "data/junk.txt",
-              "content" => Base.encode64("fine")
-            }),
-            edge,
-            nil,
-            ctx,
-            ref
-          )
-        )
-
-      assert ok["written"] == true
-    end
-
-    test "a guest write under a pulled publisher is refused; local/ is free", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      edge = EdgeFixtures.edge(paths: ["data/", "components/"], actions: ["read", "write"])
-
-      # Pulled components are fork-to-modify: the scanner would refuse the
-      # rewrite and the digest checks would refuse the bytes, so the write
-      # is refused at the boundary with the fork path named.
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "components/catalysts/moonmoon69/x/1.0.0/catalyst.wasm",
-          "content" => Base.encode64("evil")
-        })
-
-      decoded = Jason.decode!(StorageHandler.execute(request, edge, nil, ctx, ref))
-      assert decoded["error"]["type"] == "storage_path_denied"
-      assert decoded["error"]["message"] =~ "fork into local/"
-
-      # The same write into local/ is the rebuild loop and stays open.
-      ok =
-        Jason.decode!(
-          StorageHandler.execute(
-            Jason.encode!(%{
-              "action" => "write",
-              "path" => "components/catalysts/local/mine/0.1.0/output.json",
-              "content" => Base.encode64(~s({"ok":true}))
-            }),
-            edge,
-            nil,
-            ctx,
-            ref
-          )
-        )
-
-      assert ok["written"] == true
-    end
-  end
-
-  # ============================================================================
-  # The boundary never raises into WASM
-  # ============================================================================
-
-  describe "boundary error containment" do
-    test "a malformed athanor id gets a typed refusal, never a raise", %{component_ref: ref} do
-      # A corrupted row must refuse here, not raise out of Arca's
-      # fail-closed tenant guard into the Wasmex host closure.
-      bad = Sanctum.Context.build(user_id: "u", athanor_id: "x/../y", authenticated: true)
-      edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write"])
-
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "data/a.txt",
-          "content" => Base.encode64("x")
-        })
-
-      decoded = Jason.decode!(StorageHandler.execute(request, edge, nil, bad, ref))
-      assert decoded["error"]["type"] == "storage_path_denied"
-    end
-
-    test "an exception below the boundary returns JSON, never raises", %{
-      ctx: ctx,
-      component_ref: ref
-    } do
-      # A quota map without its keys raises a KeyError below the gate; the
-      # boundary must turn it into a generic typed error — and leak nothing.
-      edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write"])
-
-      request =
-        Jason.encode!(%{
-          "action" => "write",
-          "path" => "data/a.txt",
-          "content" => Base.encode64("x")
-        })
-
-      decoded =
-        Jason.decode!(
-          StorageHandler.execute(request, edge, nil, ctx, ref,
-            public?: true,
-            public_quota: %{}
-          )
-        )
-
-      assert decoded["error"]["type"] == "storage_error"
-      assert decoded["error"]["message"] == "Internal storage error."
-    end
+    call(host, "not json")
+    assert_receive {:storage_call, _, %{action: "unknown", status: :error}}
   end
 end

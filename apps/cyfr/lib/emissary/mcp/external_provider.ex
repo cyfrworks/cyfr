@@ -66,8 +66,8 @@ defmodule Emissary.MCP.ExternalProvider do
   `"console": true`. The wiring backstop still holds — the HTTP MCP
   router rejects any tool name it cannot find in the registered-tool
   cache, and proxied `server:tool` names are never cached there — but the
-  console's own dispatch path is in-process and needed the explicit gate,
-  or one dynamic tool name on a page would have reached `add_backend`.
+  console's own dispatch path is in-process, so without the explicit gate
+  one dynamic tool name on a page would reach any upstream tool.
 
   The opt-in is per server, self-set by whoever may create the server
   row: its job is stopping accidental or attacker-influenced dynamic
@@ -137,7 +137,7 @@ defmodule Emissary.MCP.ExternalProvider do
         {:ok, tools} ->
           matched =
             Enum.filter(tools, fn tool ->
-              Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool["name"] || ""))
+              Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, tool["name"] || ""))
             end)
 
           descriptions =
@@ -193,7 +193,7 @@ defmodule Emissary.MCP.ExternalProvider do
 
             tools
             |> Enum.filter(fn tool ->
-              Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool["name"] || ""))
+              Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, tool["name"] || ""))
             end)
             |> Enum.map(fn tool ->
               upstream_ann = tool["annotations"] || %{}
@@ -283,7 +283,7 @@ defmodule Emissary.MCP.ExternalProvider do
               not server.enabled ->
                 {:error, "Server '#{server_name}' is disabled"}
 
-              not Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, remote_tool)) ->
+              not Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, remote_tool)) ->
                 {:error, "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}
 
               plane == :external and not console_reachable?(server) ->

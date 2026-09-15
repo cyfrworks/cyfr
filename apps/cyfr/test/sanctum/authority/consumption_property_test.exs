@@ -4,9 +4,9 @@ defmodule Sanctum.Authority.ConsumptionPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
+  alias Cyfr.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # A child receives exactly its selected edge's resources from the root consent revision.

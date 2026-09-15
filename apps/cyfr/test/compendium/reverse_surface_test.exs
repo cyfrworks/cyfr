@@ -69,7 +69,7 @@ defmodule Compendium.ReverseSurfaceTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp reached(glob) do
-    for path <- Path.wildcard(Path.join(root(), glob)),
+    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), glob)),
         line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new(),

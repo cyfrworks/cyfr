@@ -12,9 +12,6 @@ defmodule Sanctum.Vault.Payload do
   Decoding is strict: unknown top-level keys, non-string field values and
   malformed oauth blocks are refused, so a tampered or mis-written payload
   fails before any of it is dispensed.
-
-  Rejects version-1 pointer documents as `:legacy_pointer_retired`.
-  Recreate those entries with credential material.
   """
 
   @type t :: map()
@@ -23,7 +20,7 @@ defmodule Sanctum.Vault.Payload do
 
   @doc "Decode and validate a sealed payload's plaintext."
   @spec decode(binary()) ::
-          {:ok, t()} | {:error, {:invalid_payload, term()} | :legacy_pointer_retired}
+          {:ok, t()} | {:error, {:invalid_payload, term()}}
   def decode(plaintext) when is_binary(plaintext) do
     case Jason.decode(plaintext) do
       {:ok, decoded} -> validate(decoded)
@@ -51,8 +48,6 @@ defmodule Sanctum.Vault.Payload do
   # ---------------------------------------------------------------------------
   # Validation
   # ---------------------------------------------------------------------------
-
-  defp validate(%{"v" => 1}), do: {:error, :legacy_pointer_retired}
 
   defp validate(%{"v" => 2, "fields" => fields} = doc) when is_map(fields) do
     with :ok <- only_keys(doc, ~w(v fields oauth)),

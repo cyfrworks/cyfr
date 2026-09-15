@@ -3,7 +3,7 @@
 
 defmodule Arca.Schemas.Message do
   @moduledoc """
-  Ecto schema for the `messages` table (backs `Arca.ConversationStorage`).
+  Ecto schema for the `messages` table (backs `Arca.ThreadStorage`).
 
   One row per thread entry, in `seq` order. `author` is a user id or one
   of the two reserved authors below (`agent_author/0`, `system_author/0`);
@@ -47,7 +47,7 @@ defmodule Arca.Schemas.Message do
   def system_author, do: @system_author
 
   schema "messages" do
-    field :conversation_id, :string
+    field :thread_id, :string
     field :athanor_id, :string
     field :seq, :integer
     field :author, :string
@@ -67,7 +67,7 @@ defmodule Arca.Schemas.Message do
 
   @fields [
     :id,
-    :conversation_id,
+    :thread_id,
     :athanor_id,
     :seq,
     :author,
@@ -88,11 +88,11 @@ defmodule Arca.Schemas.Message do
   def changeset(row, attrs) do
     row
     |> cast(attrs, @fields)
-    |> validate_required([:id, :conversation_id, :athanor_id, :seq, :author, :kind, :inserted_at])
+    |> validate_required([:id, :thread_id, :athanor_id, :seq, :author, :kind, :inserted_at])
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:status, @statuses)
-    |> unique_constraint([:conversation_id, :seq])
-    |> unique_constraint([:conversation_id, :client_id])
+    |> unique_constraint([:thread_id, :seq])
+    |> unique_constraint([:thread_id, :client_id])
     # The primary key, under the name each adapter reports it by.
     |> unique_constraint(:id, name: :messages_pkey)
     |> unique_constraint(:id, name: :messages_id_index)

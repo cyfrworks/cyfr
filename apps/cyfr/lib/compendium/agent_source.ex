@@ -36,7 +36,7 @@ defmodule Compendium.AgentSource do
   """
 
   alias Compendium.{AquaAgent, AquaPath}
-  alias Sanctum.ComponentRef
+  alias Cyfr.ComponentRef
   alias Sanctum.Context
 
   @type_name "agent"

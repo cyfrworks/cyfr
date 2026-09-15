@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml by e2e.test.mjs: the cyfr and mcp-bridge
+# services keep every setting compose gives them; this adds only the images
+# under test, a 5 s bridge lease, a loopback port for the test to call cyfr
+# on, a container name and data volume of the test's own, and the probe
+# backend. The test writes the project's .env (CYFR_SECRET_KEY_BASE,
+# CYFR_MCP_BRIDGE_KEY and the operator's settings).
+services:
+  cyfr:
+    image: ${CYFR_IMAGE:?set CYFR_IMAGE}
+    pull_policy: never
+    container_name: cyfr-bridge-e2e
+    ports: !override
+      - "127.0.0.1::4000"
+    volumes: !override
+      - cyfr-data:/app/data
+    environment:
+      - CYFR_MCP_BRIDGE_LEASE_MS=5000
+
+  mcp-bridge:
+    image: ${BRIDGE_IMAGE:?set BRIDGE_IMAGE}
+    pull_policy: never
+    volumes:
+      - ${PROBE_DIR:?set PROBE_DIR}:/probe:ro
+
+volumes:
+  cyfr-data:

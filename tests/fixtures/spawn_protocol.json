@@ -1,0 +1,62 @@
+{
+  "comment": "The vectors binding cyfr-spawn (apps/spawn, Go) and its client in the MCP bridge (apps/mcp-bridge/spawn-client.mjs, Node): the spawner accepts every valid request and refuses every invalid one with its code, both sides encode each frame to the bytes given, and the client understands every reply.",
+  "frames": [
+    { "stream": 3, "payload_hex": "30313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630313233343536373839616263646566", "encoded_hex": "030000004030313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630313233343536373839616263646566" },
+    { "stream": 0, "payload_hex": "7b7d0a", "encoded_hex": "00000000037b7d0a" },
+    { "stream": 1, "payload_hex": "68656c6c6f", "encoded_hex": "010000000568656c6c6f" },
+    { "stream": 2, "payload_hex": "", "encoded_hex": "0200000000" }
+  ],
+  "valid_requests": [
+    {
+      "v": 1,
+      "type": "spawn",
+      "id": "7",
+      "pool": "backends",
+      "argv": ["/bin/sh", "-c", "npx -y @modelcontextprotocol/server-everything"],
+      "env": { "GITHUB_TOKEN": "ghp_example", "NODE_ENV": "production" },
+      "attach": { "path": "/run/cyfr-bridge/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+    },
+    {
+      "v": 1,
+      "type": "spawn",
+      "id": "8",
+      "pool": "backends",
+      "argv": ["node", "probe.mjs"],
+      "env": {},
+      "rlimits": { "nofile": 256, "nproc": 32, "core": 0, "fsize": 1048576 },
+      "attach": { "path": "/run/cyfr-bridge/attach.sock", "token": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" }
+    },
+    { "v": 1, "type": "signal", "spawn_id": "00112233445566778899aabbccddeeff", "sig": "SIGTERM" },
+    { "v": 1, "type": "release", "spawn_id": "00112233445566778899aabbccddeeff", "grace_ms": 2000 },
+    { "v": 1, "type": "pool", "id": "9", "pool": "backends" }
+  ],
+  "invalid_requests": [
+    { "why": "wrong version", "code": "bad_request", "id": "1", "request": { "v": 2, "type": "pool", "id": "1", "pool": "backends" } },
+    { "why": "unknown type", "code": "bad_request", "id": "1", "request": { "v": 1, "type": "exec", "id": "1" } },
+    { "why": "unknown field", "code": "bad_request", "request": { "v": 1, "type": "pool", "id": "1", "pool": "backends", "extra": true } },
+    { "why": "field of another type", "code": "bad_request", "id": "1", "request": { "v": 1, "type": "pool", "id": "1", "pool": "backends", "sig": "SIGTERM" } },
+    { "why": "empty argv", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": [], "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "reserved env name", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "env": { "PATH": "/tmp" }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "reserved env prefix", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "env": { "MCP_BRIDGE_PORT": "t" }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "malformed env name", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "env": { "A=B": "t" }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "NUL in argv", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x\u0000y"], "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "rlimit above its ceiling", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "rlimits": { "nofile": 4096 }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "core dumps asked for", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "rlimits": { "core": 1 }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "no attach", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"] } },
+    { "why": "relative attach path", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "attach": { "path": "run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "short token", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "attach": { "path": "/run/a.sock", "token": "0123" } } },
+    { "why": "signal outside the allowed set", "code": "bad_request", "spawn_id": "00112233445566778899aabbccddeeff", "request": { "v": 1, "type": "signal", "spawn_id": "00112233445566778899aabbccddeeff", "sig": "SIGSTOP" } },
+    { "why": "malformed spawn id", "code": "bad_request", "request": { "v": 1, "type": "signal", "spawn_id": "../../etc", "sig": "SIGTERM" } },
+    { "why": "release without grace", "code": "bad_request", "spawn_id": "00112233445566778899aabbccddeeff", "request": { "v": 1, "type": "release", "spawn_id": "00112233445566778899aabbccddeeff" } },
+    { "why": "grace above the maximum", "code": "bad_request", "spawn_id": "00112233445566778899aabbccddeeff", "request": { "v": 1, "type": "release", "spawn_id": "00112233445566778899aabbccddeeff", "grace_ms": 60001 } }
+  ],
+  "replies": [
+    { "v": 1, "type": "spawned", "id": "7", "spawn_id": "00112233445566778899aabbccddeeff", "uid": 20007, "pid": 41 },
+    { "v": 1, "type": "error", "id": "8", "code": "capacity" },
+    { "v": 1, "type": "error", "spawn_id": "00112233445566778899aabbccddeeff", "code": "unknown_spawn" },
+    { "v": 1, "type": "exited", "spawn_id": "00112233445566778899aabbccddeeff", "code": 1, "signal": null },
+    { "v": 1, "type": "exited", "spawn_id": "00112233445566778899aabbccddeeff", "code": null, "signal": "SIGKILL" },
+    { "v": 1, "type": "released", "spawn_id": "00112233445566778899aabbccddeeff" },
+    { "v": 1, "type": "pool", "id": "9", "pool": "backends", "size": 32, "free": 30, "quarantined": 1 }
+  ]
+}

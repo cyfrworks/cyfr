@@ -31,7 +31,7 @@ defmodule Opus.Test.ConsentFixtures do
   context's tenant and return its profile id.
   """
   def bindable_profile(%Context{} = ctx, target_ref, opts \\ []) do
-    {:ok, name_ref} = Sanctum.ComponentRef.to_name_ref(target_ref)
+    {:ok, name_ref} = Cyfr.ComponentRef.to_name_ref(target_ref)
     profile_id = opts[:profile_id] || "prof-#{System.unique_integer([:positive])}"
 
     :ok =
@@ -55,7 +55,7 @@ defmodule Opus.Test.ConsentFixtures do
         # Derived, never a literal: `Consent.Loader` refuses a row whose
         # stored digest does not match its policy bytes, so a fixture that
         # hardcoded one would drift the moment the policy changed.
-        blob_digest: Sanctum.JCS.hash_binary("{}"),
+        blob_digest: Cyfr.JCS.hash_binary("{}"),
         resolved_policy: "{}",
         activation: %{name_ref => "sha256:act"},
         vault_refs: []

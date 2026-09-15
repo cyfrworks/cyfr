@@ -6,11 +6,12 @@ defmodule Locus.HostSurfaceTest do
   What locus reaches for in cyfr, written down.
 
   Checks the builder release’s runtime isolation. It loads cyfr with
-  runtime: false; its standalone path may use only pure cyfr modules.
-  Locus.MCP runs in the server and has separate dependencies.
+  runtime: false; its standalone path reaches no cyfr module, only the
+  shared contracts (`apps/cyfr_contracts`), which are not cyfr and are not
+  counted. Locus.MCP runs in the server and has separate dependencies.
 
   Opus, Arca and Compendium each have a rostered surface for the same
-  reason. This is the one that was missing.
+  reason.
 
   Each entry says what it is and, where it matters, whether it needs a
   *started* cyfr — because that is the distinction the builder release
@@ -19,38 +20,9 @@ defmodule Locus.HostSurfaceTest do
   use ExUnit.Case, async: true
 
   @surface [
-    # ——— Build plane: pure, and safe in the builder release ———
-    # The host ABI, compile-embedded (`Compendium.WITSource`) rather than
-    # read from disk, so the sandbox is written from the release's own
-    # bytes. The Cargo.toml template is delegated here rather than forked.
-    "Compendium.Scaffold",
-    "Compendium.WITSource",
-    # Artifact validation before anything is stored: the WASM component
-    # shape, and the tincture bundle's.
-    "Compendium.WasmValidator",
-    # Path grammar for source files written into the build sandbox — the
-    # denylist Arca shares, applied before any file is created.
-    "Cyfr.PathSafety",
-    # Content addressing for build outputs.
-    "Cyfr.Digest",
-    # Reference and limit vocabulary the build request speaks.
-    "Sanctum.ComponentRef",
-    "Sanctum.Limits",
-    # The log-metadata roster and the unexpected-message spelling — shared
-    # phrasing, not capability.
-    "Cyfr.LoggerContext",
-    "Cyfr.UnexpectedMessage",
-    "Cyfr.UUID7",
-    # The short-hex mint for scratch-dir labels — pure, like UUID7.
-    "Cyfr.Hex",
-    # The builder client's outbound HTTP, classified separately from the
-    # pinned OCI path because it talks to an operator-configured sibling.
-    "Cyfr.Network",
-    # The operation catalog: an in-chain tool call is dispatched through it.
-    "Cyfr.Ops",
-    # Whether this server builds at all (`CYFR_BUILDS`): an application-env
-    # read, answered by a loaded cyfr as well as a started one.
-    "Cyfr.RuntimeConfig",
+    # ——— Build plane: nothing ———
+    # Every module but `Locus.MCP` reaches only the contracts, so the
+    # builder release runs no cyfr code.
 
     # ——— Product plane: `Locus.MCP` only, and needs a STARTED cyfr ———
     # These are why the builder release must never route MCP traffic: each
@@ -65,8 +37,14 @@ defmodule Locus.HostSurfaceTest do
     "Compendium.NamespacePolicy",
     "Compendium.Resolver",
     "Cyfr.BuildRecords",
+    # The operation catalog: `Locus.MCP` is a provider, and a compiled
+    # component is registered through it.
+    "Cyfr.Ops",
     "Cyfr.RateLimiter",
-    "Cyfr.Topics",
+    # Whether this server builds at all (`CYFR_BUILDS`): an application-env
+    # read, answered by a loaded cyfr as well as a started one.
+    "Cyfr.RuntimeConfig",
+    "Cyfr.Bus",
     "Emissary.MCP",
     "Emissary.PubSub",
     "Sanctum.Context"
@@ -76,10 +54,42 @@ defmodule Locus.HostSurfaceTest do
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
+  # The shared contracts are not cyfr: their modules are named where they
+  # are defined, and a reach into them is not a reach into the control plane.
+  defp contracts do
+    modules =
+      for path <-
+            Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
+          module <- defined_modules(File.read!(path)),
+          into: MapSet.new(),
+          do: module
+
+    if MapSet.size(modules) == 0, do: raise("no modules found under apps/cyfr_contracts/lib")
+    modules
+  end
+
+  # Every `defmodule` in formatted source, a nested one named under the
+  # module enclosing it (`Outer.Inner`): each level indents two spaces.
+  defp defined_modules(source) do
+    source
+    |> Cyfr.Test.CodeLines.lines()
+    |> Enum.flat_map(&Regex.scan(~r/^((?:  )*)defmodule ([A-Z][\w.]*) do/, &1))
+    |> Enum.map_reduce([], fn [_, indent, name], enclosing ->
+      path = Enum.take(enclosing, div(byte_size(indent), 2)) ++ [name]
+      {Enum.join(path, "."), path}
+    end)
+    |> elem(0)
+  end
+
+  # A reach counts unless it names a contracts module exactly, so a cyfr
+  # module that shares a contracts module's namespace is still counted.
   defp reached do
-    for path <- Path.wildcard(Path.join(root(), "apps/locus/lib/**/*.ex")),
+    contracts = contracts()
+
+    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/locus/lib/**/*.ex")),
         line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
         [_, module] <- Regex.scan(@namespace, line),
+        not MapSet.member?(contracts, module),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
   end

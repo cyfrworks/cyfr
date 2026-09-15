@@ -19,17 +19,28 @@ defmodule Cyfr.ControlPlaneTest do
 
   defp me, do: Cyfr.Boot.id()
 
+  defp claim_enabled(enabled) do
+    previous = Application.get_env(:cyfr, :control_plane_claim_enabled)
+    Application.put_env(:cyfr, :control_plane_claim_enabled, enabled)
+    on_exit(fn -> Application.put_env(:cyfr, :control_plane_claim_enabled, previous) end)
+  end
+
   test "a boot claims the plane at start and releases it at stop" do
+    claim_enabled(true)
     {:ok, pid} = ControlPlane.start_link(name: nil, lease_ms: 60_000, renew_ms: 60_000)
     assert ControlPlane.owner?()
     assert {:ok, owner, _until} = Claim.holder()
     assert owner == me()
+    assert {:ok, generation} = ControlPlane.generation()
 
     :ok = GenServer.stop(pid)
     refute ControlPlane.owner?()
+    assert {:error, :unavailable} = ControlPlane.generation()
 
-    # The row is left expired: the next boot claims without waiting.
-    assert {:ok, _} = Claim.claim("boot-next", 60_000)
+    # The row is left expired: the next boot claims without waiting, one
+    # generation up.
+    assert {:ok, _, next} = Claim.claim("boot-next", 60_000)
+    assert next == generation + 1
   end
 
   test "ownership is the lease deadline: it lapses on the clock and is regained by renewal" do
@@ -53,7 +64,7 @@ defmodule Cyfr.ControlPlaneTest do
     Process.sleep(200)
     refute ControlPlane.owner?()
 
-    assert {:ok, _} = Claim.claim("boot-successor", 60_000)
+    assert {:ok, _, _} = Claim.claim("boot-successor", 60_000)
 
     # The old holder's tick finds the row another's, records the loss and
     # cannot reclaim a live lease.
@@ -67,7 +78,7 @@ defmodule Cyfr.ControlPlaneTest do
   end
 
   test "a holder that stopped without releasing is waited out and replaced" do
-    assert {:ok, _} = Claim.claim("boot-killed", 300)
+    assert {:ok, _, _} = Claim.claim("boot-killed", 300)
 
     started = System.monotonic_time(:millisecond)
     {:ok, pid} = ControlPlane.start_link(name: nil, lease_ms: 60_000, renew_ms: 60_000)
@@ -82,7 +93,7 @@ defmodule Cyfr.ControlPlaneTest do
   end
 
   test "a holder that keeps renewing is live, and the second boot refuses" do
-    assert {:ok, _} = Claim.claim("boot-live", 400)
+    assert {:ok, _, _} = Claim.claim("boot-live", 400)
     test = self()
 
     renewer =
@@ -112,15 +123,26 @@ defmodule Cyfr.ControlPlaneTest do
 
   test "the ownership record is fail-closed once a claim is configured" do
     ControlPlane.mark(:unclaimed)
-    previous = Application.get_env(:cyfr, :control_plane_claim_enabled)
 
-    try do
-      Application.put_env(:cyfr, :control_plane_claim_enabled, true)
-      refute ControlPlane.owner?()
-      Application.put_env(:cyfr, :control_plane_claim_enabled, false)
-      assert ControlPlane.owner?()
-    after
-      Application.put_env(:cyfr, :control_plane_claim_enabled, previous)
-    end
+    claim_enabled(true)
+    refute ControlPlane.owner?()
+    assert {:error, :unavailable} = ControlPlane.generation()
+
+    claim_enabled(false)
+    assert ControlPlane.owner?()
+    assert ControlPlane.generation() == :none
+  end
+
+  @tag :capture_log
+  test "a boot that cannot read the claim row refuses to start and holds no generation" do
+    claim_enabled(true)
+    Arca.Repo.query!("DROP TABLE server_meta")
+
+    assert {:error, {%RuntimeError{message: message}, _stack}} =
+             ControlPlane.start_link(name: nil, lease_ms: 60_000, renew_ms: 60_000)
+
+    assert message =~ "could not be read or written (:unavailable)"
+    refute ControlPlane.owner?()
+    assert {:error, :unavailable} = ControlPlane.generation()
   end
 end

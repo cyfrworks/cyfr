@@ -8,12 +8,12 @@ defmodule PrismWeb.ChatLive do
 
   The rail is the person's contact list: their own athanor, their DMs (the
   frozen pairs, shown by the other person's name), their groups and each
-  group's topics — membership IS the list. Opening a row opens that thread
-  in place as `PrismWeb.ConversationPaneLive`, a nested LiveView with a
+  group's threads — membership IS the list. Opening a row opens that thread
+  in place as `PrismWeb.ThreadPaneLive`, a nested LiveView with a
   focused context of its own, so nothing here depends on which estate the
   session happens to default to. The workbench's switcher governs the
   workbench; this page governs itself through its address:
-  `?a=<route>` names the estate, `?c=<conversation_id>` the thread (without
+  `?a=<route>` names the estate, `?c=<thread_id>` the thread (without
   it the estate's most recent, or a fresh one started by the first message).
 
   A DM opens from the rail: click a person you share an estate with and
@@ -36,7 +36,7 @@ defmodule PrismWeb.ChatLive do
 
   alias Phoenix.LiveView.JS
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Aqua.Runner
   alias Sanctum.Tenancy.Athanors
 
@@ -61,22 +61,22 @@ defmodule PrismWeb.ChatLive do
      |> assign(:rail_open?, false)
      |> assign(:focus, nil)
      |> assign(:athanor_label, nil)
-     |> assign(:conversations, [])
+     |> assign(:threads, [])
      |> assign(:followed, MapSet.new())
-     |> assign(:conversation, nil)
+     |> assign(:thread, nil)
      |> assign(:pane, nil)
      |> assign(:aloud_for, nil)
      |> assign(:aloud_targets, [])
      |> assign(:aloud_estate, nil)
-     |> assign(:aloud_topics, [])
+     |> assign(:aloud_threads, [])
      |> assign(:notified, nil)}
   end
 
   @doc "The chat's address for an estate, and optionally one of its threads."
   @spec chat_path(String.t() | nil, String.t() | nil) :: String.t()
-  def chat_path(route, conversation_id \\ nil) do
+  def chat_path(route, thread_id \\ nil) do
     query =
-      [a: route, c: conversation_id]
+      [a: route, c: thread_id]
       |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
 
     if query == [], do: "/chat", else: "/chat?" <> URI.encode_query(query)
@@ -106,7 +106,7 @@ defmodule PrismWeb.ChatLive do
          |> assign(:loading?, false)
          |> assign(:athanor, nil)
          |> assign(:focus, nil)
-         |> assign(:conversation, nil)
+         |> assign(:thread, nil)
          |> assign(:estates, [])
          |> assign(:people, [])}
 
@@ -127,11 +127,11 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  defp open_estate(socket, focus, athanor, athanors, conversation_id) do
+  defp open_estate(socket, focus, athanor, athanors, thread_id) do
     ctx = socket.assigns.context
-    conversations = topics(focus)
+    threads = estate_threads(focus)
 
-    case pick(conversations, conversation_id) do
+    case pick(threads, thread_id) do
       {:ok, target} ->
         if socket.assigns.tray_key, do: Prism.Tray.clear(socket.assigns.tray_key, athanor.id)
         PrismWeb.TopbarLive.viewing(self(), athanor.id)
@@ -147,8 +147,8 @@ defmodule PrismWeb.ChatLive do
          |> assign(:athanor, reread(athanor))
          |> assign(:athanor_route, Athanors.route_slug(athanor))
          |> assign(:athanor_label, estate_label(athanor, socket.assigns.mine, ctx))
-         |> assign(:conversations, conversations)
-         |> assign(:followed, Arca.TopicSubscriptionStorage.followed(focus, ctx.user_id))
+         |> assign(:threads, threads)
+         |> assign(:followed, Arca.ThreadSubscriptionStorage.followed(focus, ctx.user_id))
          |> update(:expanded, &MapSet.put(&1, athanor.id))
          |> select(target)
          |> sync_rail(athanors)}
@@ -158,7 +158,7 @@ defmodule PrismWeb.ChatLive do
       :unseen ->
         {:noreply,
          socket
-         |> put_flash(:error, "That conversation isn't in this estate.")
+         |> put_flash(:error, "That thread isn't in this estate.")
          |> push_patch(to: chat_path(Athanors.route_slug(athanor)))}
     end
   end
@@ -196,28 +196,28 @@ defmodule PrismWeb.ChatLive do
   # The thread the address names; `new` a blank pane, whatever the estate
   # holds — the first message starts the thread; the most recent without
   # an address, or nothing in an empty estate. `new` is not an id: ids are
-  # prefixed (`conv_…`), so the word cannot name a thread.
+  # prefixed (`thread_…`), so the word cannot name a thread.
   @blank "new"
 
   @doc "The address of a blank pane in an estate: `+ New` goes here."
   @spec blank() :: String.t()
   def blank, do: @blank
 
-  defp pick(_conversations, @blank), do: {:ok, nil}
+  defp pick(_threads, @blank), do: {:ok, nil}
 
-  defp pick(conversations, id) when is_binary(id) and id != "" do
-    case Enum.find(conversations, &(&1.id == id)) do
+  defp pick(threads, id) when is_binary(id) and id != "" do
+    case Enum.find(threads, &(&1.id == id)) do
       nil -> :unseen
-      conv -> {:ok, conv}
+      thread -> {:ok, thread}
     end
   end
 
-  defp pick(conversations, _id), do: {:ok, List.first(conversations)}
+  defp pick(threads, _id), do: {:ok, List.first(threads)}
 
   # A list that could not be read is an empty estate for the rail's
   # purposes — the pane says what it could not do.
-  defp topics(focus) do
-    case Conversations.list(focus) do
+  defp estate_threads(focus) do
+    case Threads.list(focus) do
       list when is_list(list) -> list
       _ -> []
     end
@@ -248,7 +248,7 @@ defmodule PrismWeb.ChatLive do
     if target, do: Runner.subscribe(target.id, target.athanor_id)
 
     socket
-    |> assign(:conversation, target)
+    |> assign(:thread, target)
     |> announce(target)
     |> switch_pane(target)
   end
@@ -273,9 +273,7 @@ defmodule PrismWeb.ChatLive do
     assign(socket, :room, room)
   end
 
-  defp unsubscribe_current(
-         %{assigns: %{conversation: %{id: id, athanor_id: athanor_id}}} = socket
-       ) do
+  defp unsubscribe_current(%{assigns: %{thread: %{id: id, athanor_id: athanor_id}}} = socket) do
     Runner.unsubscribe(id, athanor_id)
     socket
   end
@@ -312,8 +310,8 @@ defmodule PrismWeb.ChatLive do
           route: Athanors.route_slug(athanor),
           kind: estate_kind(athanor, mine),
           label: estate_label(athanor, mine, ctx),
-          topics: topics(focus),
-          followed: Arca.TopicSubscriptionStorage.followed(focus, ctx.user_id)
+          threads: estate_threads(focus),
+          followed: Arca.ThreadSubscriptionStorage.followed(focus, ctx.user_id)
         }
       end
       |> Enum.sort_by(&{kind_rank(&1.kind), String.downcase(&1.label)})
@@ -326,7 +324,7 @@ defmodule PrismWeb.ChatLive do
       |> Enum.uniq_by(& &1.user_id)
       |> Enum.sort_by(&String.downcase(&1.label))
 
-    # An estate with nothing followed has only its other topics to show, so
+    # An estate with nothing followed has only its other threads to show, so
     # they start unfolded — once, when the estate first joins the rail. A
     # later toggle is the person's and stands through every rebuild.
     listed = MapSet.new(socket.assigns.estates, & &1.athanor.id)
@@ -335,7 +333,7 @@ defmodule PrismWeb.ChatLive do
       Enum.reduce(estates, socket.assigns.expanded, fn estate, acc ->
         cond do
           MapSet.member?(listed, estate.athanor.id) -> acc
-          Enum.any?(estate.topics, &MapSet.member?(estate.followed, &1.id)) -> acc
+          Enum.any?(estate.threads, &MapSet.member?(estate.followed, &1.id)) -> acc
           true -> MapSet.put(acc, other_key(estate.athanor.id))
         end
       end)
@@ -349,11 +347,11 @@ defmodule PrismWeb.ChatLive do
 
   # The estate in view, from what the page already holds for it.
   defp patch_row(%{assigns: %{athanor: %{id: id}}} = socket) do
-    %{conversations: conversations, followed: followed} = socket.assigns
+    %{threads: threads, followed: followed} = socket.assigns
 
     update(socket, :estates, fn estates ->
       for row <- estates do
-        if row.athanor.id == id, do: %{row | topics: conversations, followed: followed}, else: row
+        if row.athanor.id == id, do: %{row | threads: threads, followed: followed}, else: row
       end
     end)
   end
@@ -410,10 +408,10 @@ defmodule PrismWeb.ChatLive do
   defp other_key(athanor_id), do: athanor_id <> ":other"
 
   # Whether `id` names one of the open estate's own threads.
-  defp topic_here?(socket, id) when is_binary(id),
-    do: Enum.any?(socket.assigns.conversations, &(&1.id == id))
+  defp thread_here?(socket, id) when is_binary(id),
+    do: Enum.any?(socket.assigns.threads, &(&1.id == id))
 
-  defp topic_here?(_socket, _id), do: false
+  defp thread_here?(_socket, _id), do: false
 
   defp toggle(socket, key) do
     update(socket, :expanded, fn expanded ->
@@ -440,7 +438,7 @@ defmodule PrismWeb.ChatLive do
     {:noreply, push_patch(socket, to: chat_path(route))}
   end
 
-  def handle_event("open_conversation", %{"route" => route, "id" => id}, socket) do
+  def handle_event("open_thread", %{"route" => route, "id" => id}, socket) do
     # Deliberately does NOT follow: reading a thread is not joining it.
     # On a phone the drawer gives way to the thread.
     {:noreply,
@@ -449,7 +447,7 @@ defmodule PrismWeb.ChatLive do
      |> push_patch(to: chat_path(route, id))}
   end
 
-  def handle_event("new_conversation", _params, socket) do
+  def handle_event("new_thread", _params, socket) do
     {:noreply,
      socket
      |> assign(:rail_open?, false)
@@ -491,10 +489,10 @@ defmodule PrismWeb.ChatLive do
   end
 
   # Saying one of your own lines out loud: pick an estate you belong to,
-  # then one of its topics. The rules (author-only — or your own assistant's
+  # then one of its threads. The rules (author-only — or your own assistant's
   # line in your own athanor — membership on both sides, byte-copied
   # attachments) are `Aqua.Aloud`'s — this UI drives the same
-  # `conversation.aloud` verb a headless client has.
+  # `thread.aloud` verb a headless client has.
   def handle_event("aloud_open", %{"id" => msg_id}, socket) do
     targets =
       socket.assigns.estates
@@ -506,7 +504,7 @@ defmodule PrismWeb.ChatLive do
      |> assign(:aloud_for, msg_id)
      |> assign(:aloud_targets, targets)
      |> assign(:aloud_estate, nil)
-     |> assign(:aloud_topics, [])}
+     |> assign(:aloud_threads, [])}
   end
 
   def handle_event("aloud_pick_estate", %{"athanor" => athanor_id}, socket) do
@@ -515,7 +513,7 @@ defmodule PrismWeb.ChatLive do
         {:noreply,
          socket
          |> assign(:aloud_estate, athanor_id)
-         |> assign(:aloud_topics, topics(focused))}
+         |> assign(:aloud_threads, estate_threads(focused))}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "You are not a member of that estate.")}
@@ -523,23 +521,23 @@ defmodule PrismWeb.ChatLive do
   end
 
   # The open thread may have gone between opening the picker and choosing
-  # a topic — deleted by another member — so it is checked, not assumed.
-  def handle_event("aloud_post", _params, %{assigns: %{conversation: nil}} = socket) do
+  # a thread — deleted by another member — so it is checked, not assumed.
+  def handle_event("aloud_post", _params, %{assigns: %{thread: nil}} = socket) do
     {:noreply,
      socket
      |> assign(:aloud_for, nil)
-     |> put_flash(:error, "That conversation is gone — nothing to say aloud.")}
+     |> put_flash(:error, "That thread is gone — nothing to say aloud.")}
   end
 
-  def handle_event("aloud_post", %{"conversation" => topic_id}, socket) do
-    %{conversation: conv, aloud_for: msg_id, aloud_estate: estate, focus: focus} = socket.assigns
+  def handle_event("aloud_post", %{"thread" => thread_id}, socket) do
+    %{thread: thread, aloud_for: msg_id, aloud_estate: estate, focus: focus} = socket.assigns
 
     result =
-      call_tool(focus, "conversation/aloud", %{
-        "conversation" => conv.id,
+      call_tool(focus, "thread/aloud", %{
+        "thread" => thread.id,
         "message_ids" => [msg_id],
         "target_athanor" => estate,
-        "target_conversation" => topic_id
+        "target_thread" => thread_id
       })
 
     case result do
@@ -562,33 +560,33 @@ defmodule PrismWeb.ChatLive do
   # write is the fact; the page's own set follows it without a re-read.
   # The id comes off the wire and the row is written under the estate in
   # focus, so only one of that estate's own threads may be named.
-  def handle_event("follow_topic", %{"id" => id}, socket) do
+  def handle_event("follow_thread", %{"id" => id}, socket) do
     focus = socket.assigns.focus
 
-    with true <- topic_here?(socket, id),
+    with true <- thread_here?(socket, id),
          {:ok, _} <-
-           PrismWeb.Ops.call_tool(focus, "conversation/follow", %{"conversation" => id}) do
+           PrismWeb.Ops.call_tool(focus, "thread/follow", %{"thread" => id}) do
       {:noreply, socket |> update(:followed, &MapSet.put(&1, id)) |> patch_row()}
     else
-      false -> {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
+      false -> {:noreply, put_flash(socket, :error, "That thread isn't in this estate.")}
       {:error, _} -> {:noreply, put_flash(socket, :error, "Could not follow — try again.")}
     end
   end
 
-  def handle_event("unfollow_topic", %{"id" => id}, socket) do
+  def handle_event("unfollow_thread", %{"id" => id}, socket) do
     focus = socket.assigns.focus
 
-    with true <- topic_here?(socket, id),
+    with true <- thread_here?(socket, id),
          {:ok, _} <-
-           PrismWeb.Ops.call_tool(focus, "conversation/unfollow", %{"conversation" => id}) do
+           PrismWeb.Ops.call_tool(focus, "thread/unfollow", %{"thread" => id}) do
       {:noreply, socket |> update(:followed, &MapSet.delete(&1, id)) |> patch_row()}
     else
-      false -> {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
+      false -> {:noreply, put_flash(socket, :error, "That thread isn't in this estate.")}
       {:error, _} -> {:noreply, put_flash(socket, :error, "Could not unfollow — try again.")}
     end
   end
 
-  def handle_event("delete_conversation", %{"id" => id}, socket) do
+  def handle_event("delete_thread", %{"id" => id}, socket) do
     focus = socket.assigns.focus
 
     # The turn may be running in a thread this tab is not looking at: the
@@ -596,18 +594,18 @@ defmodule PrismWeb.ChatLive do
     # The id comes off the wire, and only one of this estate's own
     # threads may be named — the same guard the follow verbs hold.
     cond do
-      not topic_here?(socket, id) ->
-        {:noreply, put_flash(socket, :error, "That conversation isn't in this estate.")}
+      not thread_here?(socket, id) ->
+        {:noreply, put_flash(socket, :error, "That thread isn't in this estate.")}
 
       true ->
-        case PrismWeb.Ops.call_tool(focus, "conversation/delete", %{"conversation" => id}) do
+        case PrismWeb.Ops.call_tool(focus, "thread/delete", %{"thread" => id}) do
           {:ok, _} ->
-            current = socket.assigns.conversation && socket.assigns.conversation.id
+            current = socket.assigns.thread && socket.assigns.thread.id
 
             if current == id do
               {:noreply, push_patch(socket, to: chat_path(socket.assigns.athanor_route))}
             else
-              {:noreply, socket |> assign(:conversations, topics(focus)) |> patch_row()}
+              {:noreply, socket |> assign(:threads, estate_threads(focus)) |> patch_row()}
             end
 
           {:error, reason} ->
@@ -624,27 +622,27 @@ defmodule PrismWeb.ChatLive do
   # nothing else — the pane holds the tape.
   @impl true
   def handle_info(
-        {:conversation, id, {:message, _row}},
-        %{assigns: %{conversation: %{id: id}}} = socket
+        {:thread, id, {:message, _row}},
+        %{assigns: %{thread: %{id: id}}} = socket
       ) do
-    case Conversations.get(socket.assigns.focus, id) do
-      {:ok, conv} -> {:noreply, socket |> put_conversation(conv) |> patch_row()}
+    case Threads.get(socket.assigns.focus, id) do
+      {:ok, thread} -> {:noreply, socket |> put_thread(thread) |> patch_row()}
       _ -> {:noreply, socket}
     end
   end
 
-  def handle_info({:conversation, _id, _event}, socket), do: {:noreply, socket}
+  def handle_info({:thread, _id, _event}, socket), do: {:noreply, socket}
 
   # The pane is live: this is where a thread switch goes. A pane that
   # mounted on a thread the address has since left is turned at once.
-  def handle_info({:pane, _pane, {:ready, pid, conversation_id}}, socket) do
+  def handle_info({:pane, _pane, {:ready, pid, thread_id}}, socket) do
     case socket.assigns.athanor do
       %{id: athanor_id} ->
         socket = assign(socket, :pane, {athanor_id, pid})
-        current = socket.assigns.conversation && socket.assigns.conversation.id
+        current = socket.assigns.thread && socket.assigns.thread.id
 
-        if current != conversation_id,
-          do: {:noreply, switch_pane(socket, socket.assigns.conversation)},
+        if current != thread_id,
+          do: {:noreply, switch_pane(socket, socket.assigns.thread)},
           else: {:noreply, socket}
 
       nil ->
@@ -653,8 +651,8 @@ defmodule PrismWeb.ChatLive do
   end
 
   # The pane's first message created the thread: the address is this page's.
-  def handle_info({:pane, _pane, {:opened, conv}}, socket) do
-    {:noreply, push_patch(socket, to: chat_path(socket.assigns.athanor_route, conv.id))}
+  def handle_info({:pane, _pane, {:opened, thread}}, socket) do
+    {:noreply, push_patch(socket, to: chat_path(socket.assigns.athanor_route, thread.id))}
   end
 
   # A line the pane offers to say aloud: the picker is this page's.
@@ -728,35 +726,31 @@ defmodule PrismWeb.ChatLive do
 
   # The open thread's fresh row, in place and in order; the room is told
   # again only when its title moved (the first message names a thread).
-  defp put_conversation(socket, conv) do
-    conversations =
-      socket.assigns.conversations
-      |> Enum.reject(&(&1.id == conv.id))
-      |> List.insert_at(0, conv)
+  defp put_thread(socket, thread) do
+    threads =
+      socket.assigns.threads
+      |> Enum.reject(&(&1.id == thread.id))
+      |> List.insert_at(0, thread)
       |> Enum.sort_by(&(&1.last_message_at || &1.inserted_at), {:desc, DateTime})
 
-    socket = assign(socket, :conversations, conversations)
+    socket = assign(socket, :threads, threads)
 
-    case socket.assigns.conversation do
-      %{title: title} when title == conv.title -> assign(socket, :conversation, conv)
-      _ -> socket |> assign(:conversation, conv) |> announce(conv)
+    case socket.assigns.thread do
+      %{title: title} when title == thread.title -> assign(socket, :thread, thread)
+      _ -> socket |> assign(:thread, thread) |> announce(thread)
     end
   end
 
-  defp provisioning_error(athanor) do
-    case Athanors.settings(athanor)["provisioning_error"] do
-      %{} = error -> error
-      _ -> nil
-    end
-  end
+  defp provisioning_note(athanor) do
+    case Athanors.provisioning_failure(athanor) do
+      nil ->
+        nil
 
-  defp provisioning_detail(athanor) do
-    case provisioning_error(athanor) do
-      %{"detail" => detail} when is_binary(detail) ->
-        if String.length(detail) > 120, do: String.slice(detail, 0, 120) <> "…", else: detail
+      %{step: step, detail: detail} ->
+        detail =
+          if String.length(detail) > 120, do: String.slice(detail, 0, 120) <> "…", else: detail
 
-      _ ->
-        ""
+        "— last attempt failed at #{step}: #{detail}"
     end
   end
 
@@ -769,10 +763,10 @@ defmodule PrismWeb.ChatLive do
     ~H"""
     <div id="chat-root" class="flex h-full min-h-0">
       <%!-- The rail: your own athanor, your DMs, your groups and their
-            topics, across every estate you belong to — a column beside the
+            threads, across every estate you belong to — a column beside the
             chat, a drawer over it on a phone. --%>
       <aside
-        id="conversation-list"
+        id="thread-list"
         aria-label="Chats"
         aria-busy={to_string(@loading?)}
         class={[
@@ -785,13 +779,13 @@ defmodule PrismWeb.ChatLive do
           <div class="flex items-center gap-1">
             <button
               type="button"
-              phx-click="new_conversation"
+              phx-click="new_thread"
               disabled={is_nil(@athanor)}
               class="rounded px-2 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200 disabled:opacity-50"
               title={
                 if @athanor,
-                  do: "Start a new conversation in #{@athanor_label}",
-                  else: "Start a new conversation"
+                  do: "Start a new thread in #{@athanor_label}",
+                  else: "Start a new thread"
               }
             >
               + New
@@ -826,7 +820,7 @@ defmodule PrismWeb.ChatLive do
                 phx-click="toggle_estate"
                 phx-value-id={estate.athanor.id}
                 aria-expanded={to_string(unfolded?)}
-                aria-label={"Topics of " <> estate.label}
+                aria-label={"Threads of " <> estate.label}
                 class="w-5 shrink-0 rounded text-center text-gray-600 hover:text-gray-300"
               >
                 <span aria-hidden="true">{if unfolded?, do: "▾", else: "▸"}</span>
@@ -843,22 +837,22 @@ defmodule PrismWeb.ChatLive do
                   DM
                 </span>
                 <span class="ml-auto text-[10px] text-gray-600 normal-case">
-                  {length(estate.topics)}
+                  {length(estate.threads)}
                 </span>
               </button>
             </div>
-            <div :if={unfolded?} id={"estate-topics-" <> estate.athanor.id}>
-              <div :if={estate.topics == []} class="px-3 py-2 text-xs text-gray-600">
-                No conversations yet.
+            <div :if={unfolded?} id={"estate-threads-" <> estate.athanor.id}>
+              <div :if={estate.threads == []} class="px-3 py-2 text-xs text-gray-600">
+                No threads yet.
               </div>
               <% {following, other} =
-                Enum.split_with(estate.topics, &MapSet.member?(estate.followed, &1.id)) %>
+                Enum.split_with(estate.threads, &MapSet.member?(estate.followed, &1.id)) %>
               <ul :if={following != []} class="divide-y divide-gray-800/60">
-                <.topic_row
-                  :for={conv <- following}
-                  conv={conv}
+                <.thread_row
+                  :for={thread <- following}
+                  thread={thread}
                   route={estate.route}
-                  current={@conversation}
+                  current={@thread}
                   estate_id={@athanor && @athanor.id}
                   followed
                 />
@@ -872,18 +866,18 @@ defmodule PrismWeb.ChatLive do
                   aria-expanded={to_string(other_open?)}
                   class="w-full px-4 py-1 text-left text-[10px] uppercase tracking-wider text-gray-600 hover:text-gray-400"
                 >
-                  Other topics ({length(other)})
+                  Other threads ({length(other)})
                 </button>
                 <ul
                   :if={other_open?}
                   id={"estate-other-" <> estate.athanor.id}
                   class="divide-y divide-gray-800/60"
                 >
-                  <.topic_row
-                    :for={conv <- other}
-                    conv={conv}
+                  <.thread_row
+                    :for={thread <- other}
+                    thread={thread}
                     route={estate.route}
-                    current={@conversation}
+                    current={@thread}
                     estate_id={@athanor && @athanor.id}
                     followed={false}
                   />
@@ -924,10 +918,8 @@ defmodule PrismWeb.ChatLive do
             >
               <span class="min-w-0 truncate">
                 This estate is still being set up
-                <span :if={provisioning_error(@athanor)} class="text-amber-300/80">
-                  — last attempt failed at {provisioning_error(@athanor)["step"]}: {provisioning_detail(
-                    @athanor
-                  )}
+                <span :if={note = provisioning_note(@athanor)} class="text-amber-300/80">
+                  {note}
                 </span>
               </span>
               <button
@@ -942,11 +934,11 @@ defmodule PrismWeb.ChatLive do
             <%!-- The estate's pane, as its own LiveView under its own focused
                   context: one per estate, turned to the open thread by
                   message, so a thread switch re-reads the thread alone. --%>
-            {live_render(@socket, PrismWeb.ConversationPaneLive,
+            {live_render(@socket, PrismWeb.ThreadPaneLive,
               id: "pane-" <> @athanor.id,
               session: %{
                 "athanor_id" => @athanor.id,
-                "conversation_id" => @conversation && @conversation.id,
+                "thread_id" => @thread && @thread.id,
                 "ui_mode" => assigns[:ui_mode]
               }
             )}
@@ -957,13 +949,13 @@ defmodule PrismWeb.ChatLive do
         <% end %>
       </div>
 
-      <%!-- Say-aloud picker: which estate, then which of its topics. --%>
+      <%!-- Say-aloud picker: which estate, then which of its threads. --%>
       <.modal id="aloud-picker" show={not is_nil(@aloud_for)} on_cancel={JS.push("aloud_cancel")}>
         <div class="space-y-3">
           <h3 class="text-sm font-medium text-gray-200">Say aloud</h3>
           <p class="text-[11px] text-gray-500">
             A copy of the line lands on an estate's thread, attributed to you.
-            This conversation keeps the original.
+            This thread keeps the original.
           </p>
 
           <div :if={@aloud_targets == []} class="text-xs text-gray-500">
@@ -991,18 +983,18 @@ defmodule PrismWeb.ChatLive do
           </div>
 
           <div :if={@aloud_estate} class="space-y-1">
-            <p class="text-[10px] uppercase tracking-wider text-gray-500">Topic</p>
-            <div :if={@aloud_topics == []} class="text-xs text-gray-500">
-              That estate has no topics yet.
+            <p class="text-[10px] uppercase tracking-wider text-gray-500">Thread</p>
+            <div :if={@aloud_threads == []} class="text-xs text-gray-500">
+              That estate has no threads yet.
             </div>
             <button
-              :for={topic <- @aloud_topics}
+              :for={thread <- @aloud_threads}
               type="button"
               phx-click="aloud_post"
-              phx-value-conversation={topic.id}
+              phx-value-thread={thread.id}
               class="block w-full text-left rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-800/60"
             >
-              {topic.title}
+              {thread.title}
             </button>
           </div>
 
@@ -1054,24 +1046,24 @@ defmodule PrismWeb.ChatLive do
     """
   end
 
-  attr :conv, :map, required: true
+  attr :thread, :map, required: true
   attr :route, :string, required: true
   attr :current, :any, default: nil
   attr :estate_id, :string, default: nil
   attr :followed, :boolean, required: true
 
-  # One topic in the rail. Follow/unfollow is a word, not a glyph — the
+  # One thread in the rail. Follow/unfollow is a word, not a glyph — the
   # action must read as what it does. Following decides emphasis and
   # notification, never access: every row opens on a click. The actions
   # show on hover or focus at a desk, and always on a phone, which has
   # neither.
-  defp topic_row(assigns) do
+  defp thread_row(assigns) do
     assigns =
-      assign(assigns, :open?, assigns.current && assigns.conv.id == assigns.current.id)
+      assign(assigns, :open?, assigns.current && assigns.thread.id == assigns.current.id)
 
     ~H"""
     <li
-      id={"conv-" <> @conv.id}
+      id={"thread-" <> @thread.id}
       class={[
         "group flex items-start gap-2 pl-4 pr-2 text-xs hover:bg-gray-800/50",
         if(@open?, do: "bg-gray-800/80", else: "")
@@ -1079,35 +1071,35 @@ defmodule PrismWeb.ChatLive do
     >
       <button
         type="button"
-        phx-click="open_conversation"
+        phx-click="open_thread"
         phx-value-route={@route}
-        phx-value-id={@conv.id}
+        phx-value-id={@thread.id}
         aria-current={@open? && "true"}
         class="flex-1 min-w-0 py-2 text-left"
       >
         <p class={["truncate", if(@followed, do: "text-gray-200", else: "text-gray-400")]}>
-          {@conv.title}
+          {@thread.title}
         </p>
         <p class="text-[10px] text-gray-600 mt-0.5">
-          {Calendar.strftime(@conv.last_message_at || @conv.inserted_at, "%b %d %H:%M")}
+          {Calendar.strftime(@thread.last_message_at || @thread.inserted_at, "%b %d %H:%M")}
         </p>
       </button>
       <button
-        :if={@estate_id && @conv.athanor_id == @estate_id}
+        :if={@estate_id && @thread.athanor_id == @estate_id}
         type="button"
-        phx-click={if @followed, do: "unfollow_topic", else: "follow_topic"}
-        phx-value-id={@conv.id}
+        phx-click={if @followed, do: "unfollow_thread", else: "follow_thread"}
+        phx-value-id={@thread.id}
         class="shrink-0 py-2 text-[10px] text-gray-500 hover:text-gray-200 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
       >
         {if @followed, do: "Unfollow", else: "Follow"}
       </button>
       <button
-        :if={@estate_id && @conv.athanor_id == @estate_id}
+        :if={@estate_id && @thread.athanor_id == @estate_id}
         type="button"
-        phx-click="delete_conversation"
-        phx-value-id={@conv.id}
+        phx-click="delete_thread"
+        phx-value-id={@thread.id}
         class="shrink-0 py-2 text-gray-500 hover:text-red-400 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
-        data-confirm="Delete this conversation for everyone?"
+        data-confirm="Delete this thread for everyone?"
         aria-label="Delete"
       >
         ×

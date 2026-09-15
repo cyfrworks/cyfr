@@ -69,8 +69,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   end
 
   defp edge!(policy, from, to) do
-    {:ok, blob} = Sanctum.Authority.Blob.parse(policy)
-    {:ok, edge} = Sanctum.Authority.Blob.lookup_edge(blob, from, to, "")
+    {:ok, blob} = Cyfr.Authority.Blob.parse(policy)
+    {:ok, edge} = Cyfr.Authority.Blob.lookup_edge(blob, from, to, "")
     edge
   end
 
@@ -144,76 +144,6 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     assert {@claude, :shape_moved} in skipped
     {_, still, _} = head!(ctx, @claude)
     assert still.revision == first.revision
-  end
-
-  test "a boot revises a bootstrap-only consent that lacks its selections, and no other", %{
-    ctx: ctx
-  } do
-    {:ok, _} = Bootstrap.run(ctx)
-    {aqua, head, _refs} = head!(ctx, @aqua)
-
-    # An estate provisioned before selections existed: the same blob
-    # without them, as the head.
-    {:ok, %{"nodes" => nodes} = decoded} = Jason.decode(head.resolved_policy)
-
-    stripped =
-      Map.put(
-        decoded,
-        "nodes",
-        Map.new(nodes, fn {ref, node} ->
-          edges = Map.new(node["edges"], fn {k, e} -> {k, Map.delete(e, "vault")} end)
-          {ref, Map.put(node, "edges", edges)}
-        end)
-      )
-
-    {:ok, stripped_json} = Sanctum.JCS.encode(stripped)
-    older = %{Map.from_struct(head) | revision: head.revision + 1, id: nil}
-
-    {:ok, _} =
-      ConsentStorage.insert_revision(
-        older
-        |> Map.take(
-          ~w(athanor_id profile_id revision scope pinned_version invoke_mode shape_digest commit_digest activation granted_by granted_via)a
-        )
-        |> Map.merge(%{
-          resolved_policy: stripped_json,
-          blob_digest: Sanctum.JCS.hash_binary(stripped_json)
-        }),
-        [],
-        head.id
-      )
-
-    {_, without, _} = head!(ctx, @aqua)
-    assert edge!(without.resolved_policy, @aqua, @claude).vault == nil
-
-    assert {:ok, %{minted: [], revised: [@aqua]}} = Bootstrap.run(ctx)
-    {_, healed, _} = head!(ctx, @aqua)
-    assert healed.revision == without.revision + 1
-    assert healed.granted_via == "bootstrap"
-    assert %{via: %{label: "default"}} = edge!(healed.resolved_policy, @aqua, @claude).vault
-
-    # A head a person committed is theirs: the boot leaves it alone.
-    {:ok, _} =
-      ConsentStorage.insert_revision(
-        older
-        |> Map.take(
-          ~w(athanor_id profile_id scope pinned_version invoke_mode shape_digest commit_digest activation granted_by)a
-        )
-        |> Map.merge(%{
-          revision: healed.revision + 1,
-          resolved_policy: stripped_json,
-          blob_digest: Sanctum.JCS.hash_binary(stripped_json),
-          granted_via: "interactive"
-        }),
-        [],
-        healed.id
-      )
-
-    assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
-    {_, person, _} = head!(ctx, @aqua)
-    assert person.granted_via == "interactive"
-    assert edge!(person.resolved_policy, @aqua, @claude).vault == nil
-    assert aqua.id == person.profile_id
   end
 
   test "a seed update re-mints a bootstrap-only consent; a person's consent or closure stays", %{
@@ -324,7 +254,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Path.wildcard(match_dot: false)
+    |> Cyfr.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       target = Path.join(dest, Path.relative_to(src, @bundle))

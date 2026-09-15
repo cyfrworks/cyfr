@@ -13,7 +13,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
   import Cyfr.Test.Wait
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Aqua.Runner
   alias Sanctum.Tenancy.Athanors
 
@@ -71,10 +71,10 @@ defmodule PrismWeb.AquaPanelLiveTest do
     ready_estate!(room.id, user.user_id)
     script_model!()
 
-    {:ok, conv} = Conversations.create(in_room)
-    {:ok, _} = Runner.send_message(them, conv.id, "ship friday")
+    {:ok, thread} = Threads.create(in_room)
+    {:ok, _} = Runner.send_message(them, thread.id, "ship friday")
     # The first line names the thread.
-    {:ok, conv} = Conversations.get(in_room, conv.id)
+    {:ok, thread} = Threads.get(in_room, thread.id)
 
     {:ok,
      conn: conn,
@@ -84,13 +84,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
      me: me,
      in_room: in_room,
      them: them,
-     conv: conv}
+     thread: thread}
   end
 
   defp route(athanor), do: Athanors.route_slug(athanor)
 
   # The thread a pane is turned to, from its own state.
-  defp thread_of(pane), do: :sys.get_state(pane.pid).socket.assigns.conversation
+  defp thread_of(pane), do: :sys.get_state(pane.pid).socket.assigns.thread
 
   # A pane turns to a thread by message; look again until it has.
   defp on_thread!(pane, id, tries \\ 50) do
@@ -134,35 +134,35 @@ defmodule PrismWeb.AquaPanelLiveTest do
   defp settled_you!(me) do
     wait_until(
       fn ->
-        match?([_], Conversations.list(me)) and
-          match?({:ok, []}, Aqua.Tape.open_turns(me, hd(Conversations.list(me)).id))
+        match?([_], Threads.list(me)) and
+          match?({:ok, []}, Aqua.Tape.open_turns(me, hd(Threads.list(me)).id))
       end,
       60_000
     )
 
-    [you_conv] = Conversations.list(me)
-    you_conv
+    [you_thread] = Threads.list(me)
+    you_thread
   end
 
   test "the panel opens onto You beside the room, and a send lands in You with the room read into the turn",
-       %{conn: conn, mine: mine, room: room, me: me, in_room: in_room, conv: conv} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), conv.id))
+       %{conn: conn, room: room, me: me, in_room: in_room, thread: thread} do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
 
     {panel, html} = open_panel(view)
     assert html =~ "AQUA · You"
-    assert html =~ "Reading #{room.name} · #{conv.title}"
+    assert html =~ "Reading #{room.name} · #{thread.title}"
 
     pane = child!(panel, "aqua-panel-pane")
     assert thread_of(pane) == nil
     assert render(pane) =~ "Read #{room.name}"
 
-    Cyfr.Test.ScriptedExecution.script([model_reply("They mean Friday.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
     pane |> form("form", %{"message" => "what do they mean?"}) |> render_submit()
 
     # In You, and only there — with the room read into the turn's request
     # beside the task, never into the system prompt.
-    you_conv = settled_you!(me)
+    you_thread = settled_you!(me)
     [request] = model_requests()
     text = request_text(request)
     assert text =~ "## Read from the room"
@@ -171,53 +171,53 @@ defmodule PrismWeb.AquaPanelLiveTest do
     refute request["system"] =~ "ship friday"
 
     assert Enum.any?(
-             Conversations.latest_messages(me, you_conv.id, 10),
+             Threads.latest_messages(me, you_thread.id, 10),
              &(&1.content == "what do they mean?")
            )
 
     refute Enum.any?(
-             Conversations.latest_messages(in_room, conv.id, 10),
+             Threads.latest_messages(in_room, thread.id, 10),
              &(&1.content == "what do they mean?")
            )
 
     # The pane is on the thread its first message created.
-    on_thread!(child!(panel, "aqua-panel-pane"), you_conv.id)
+    on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
   end
 
   test "the panel reads what the page shows: open another thread and it says so",
-       %{conn: conn, room: room, in_room: in_room, conv: conv} do
-    {:ok, second} = Conversations.create(in_room)
-    {:ok, _} = Conversations.update(in_room, second.id, %{title: "Second thread"})
+       %{conn: conn, room: room, in_room: in_room, thread: thread} do
+    {:ok, second} = Threads.create(in_room)
+    {:ok, _} = Threads.update(in_room, second.id, %{title: "Second thread"})
 
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), conv.id))
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     {panel, html} = open_panel(view)
-    assert html =~ "Reading #{room.name} · #{conv.title}"
+    assert html =~ "Reading #{room.name} · #{thread.title}"
 
-    render_click(view, "open_conversation", %{"route" => route(room), "id" => second.id})
+    render_click(view, "open_thread", %{"route" => route(room), "id" => second.id})
     assert render(panel) =~ "Reading #{room.name} · Second thread"
   end
 
   test "an answer in the panel pastes onto the room, attributed, and the room's pane shows it",
-       %{conn: conn, user: user, room: room, me: me, in_room: in_room, conv: conv} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), conv.id))
+       %{conn: conn, user: user, room: room, me: me, in_room: in_room, thread: thread} do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     {panel, _html} = open_panel(view)
     pane = child!(panel, "aqua-panel-pane")
-    Cyfr.Test.ScriptedExecution.script([model_reply("They mean Friday.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("They mean Friday.")])
     pane |> form("form", %{"message" => "what do they mean?"}) |> render_submit()
 
-    you_conv = settled_you!(me)
+    you_thread = settled_you!(me)
 
     answer =
       Enum.find(
-        Conversations.latest_messages(me, you_conv.id, 10),
+        Threads.latest_messages(me, you_thread.id, 10),
         &(&1.content == "They mean Friday.")
       )
 
     assert answer.author == Arca.Schemas.Message.agent_author()
 
-    on_thread!(pane, you_conv.id)
+    on_thread!(pane, you_thread.id)
     assert render(pane) =~ "They mean Friday."
 
     html =
@@ -229,12 +229,12 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     copy =
       Enum.find(
-        Conversations.latest_messages(in_room, conv.id, 10),
+        Threads.latest_messages(in_room, thread.id, 10),
         &(&1.content == "They mean Friday.")
       )
 
     assert copy.author == user.user_id
-    assert Conversations.payload(copy)["shared_agent"] == true
+    assert Threads.payload(copy)["shared_agent"] == true
 
     # The room's own pane on the page heard of it.
     room_pane = child!(view, "pane-" <> room.id)
@@ -251,11 +251,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     pane = child!(panel, "aqua-panel-pane")
     refute render(pane) =~ "with each message"
-    Cyfr.Test.ScriptedExecution.script([model_reply("hello you")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("hello you")])
     pane |> form("form", %{"message" => "hello me"}) |> render_submit()
 
-    you_conv = settled_you!(me)
-    assert you_conv.athanor_id == mine.id
+    you_thread = settled_you!(me)
+    assert you_thread.athanor_id == mine.id
     [request] = model_requests()
     refute request_text(request) =~ "Read from the room"
   end
@@ -265,25 +265,25 @@ defmodule PrismWeb.AquaPanelLiveTest do
   defp panel_thread(panel, me, text) do
     pane = child!(panel, "aqua-panel-pane")
     pane |> form("form", %{"message" => text}) |> render_submit()
-    [you_conv] = Conversations.list(me)
-    {on_thread!(child!(panel, "aqua-panel-pane"), you_conv.id), you_conv}
+    [you_thread] = Threads.list(me)
+    {on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id), you_thread}
   end
 
-  defp intents(pane, conv, user, intents) do
-    send(pane.pid, {:conversation, conv.id, {:intents, intents, user.user_id}})
+  defp intents(pane, thread, user, intents) do
+    send(pane.pid, {:thread, thread.id, {:intents, intents, user.user_id}})
     render(pane)
   end
 
   test "a navigate from the panel never moves the page: a thread of You opens in the panel, another page is a link",
-       %{conn: conn, user: user, mine: mine, room: room, me: me, conv: conv} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), conv.id))
+       %{conn: conn, user: user, mine: mine, room: room, me: me, thread: thread} do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     {panel, _html} = open_panel(view)
-    Cyfr.Test.ScriptedExecution.script([model_reply("ok")])
-    {pane, you_conv} = panel_thread(panel, me, "where are my activities?")
+    Cyfr.Test.ScriptedWorker.script([model_reply("ok")])
+    {pane, you_thread} = panel_thread(panel, me, "where are my activities?")
 
     # Another page: offered as a link, on You, and nothing pushed.
-    html = intents(pane, you_conv, user, [%{kind: "navigate", to: "/activities?id=req_abc"}])
+    html = intents(pane, you_thread, user, [%{kind: "navigate", to: "/activities?id=req_abc"}])
     refute_push_event(pane, "aqua:intents", %{intents: _})
     assert html =~ "AQUA points to"
     assert html =~ PrismWeb.Focus.path(route(mine), "/activities?id=req_abc")
@@ -293,62 +293,62 @@ defmodule PrismWeb.AquaPanelLiveTest do
     refute render(pane) =~ "AQUA points to"
 
     # A thread of You: the panel turns to it.
-    {:ok, second} = Conversations.create(me)
+    {:ok, second} = Threads.create(me)
     to = PrismWeb.ChatLive.chat_path(route(mine), second.id)
-    intents(pane, you_conv, user, [%{kind: "navigate", to: to}])
+    intents(pane, you_thread, user, [%{kind: "navigate", to: to}])
     refute_push_event(pane, "aqua:intents", %{intents: _})
     on_thread!(child!(panel, "aqua-panel-pane"), second.id)
 
     # The page is still the room's, and the room's pane is where it was.
     assert child!(view, "pane-" <> room.id)
-    assert render(panel) =~ "Reading #{room.name} · #{conv.title}"
+    assert render(panel) =~ "Reading #{room.name} · #{thread.title}"
   end
 
   test "a navigate to the chat of You that names no thread is a link, and the panel keeps its thread",
-       %{conn: conn, user: user, mine: mine, room: room, me: me, conv: conv} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), conv.id))
+       %{conn: conn, user: user, mine: mine, room: room, me: me, thread: thread} do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     {panel, _html} = open_panel(view)
-    Cyfr.Test.ScriptedExecution.script([model_reply("ok")])
-    {pane, you_conv} = panel_thread(panel, me, "where were we?")
+    Cyfr.Test.ScriptedWorker.script([model_reply("ok")])
+    {pane, you_thread} = panel_thread(panel, me, "where were we?")
 
     # The estate alone, no `c`: not a thread the panel could turn to.
     to = PrismWeb.ChatLive.chat_path(route(mine))
-    html = intents(pane, you_conv, user, [%{kind: "navigate", to: to}])
+    html = intents(pane, you_thread, user, [%{kind: "navigate", to: to}])
     refute_push_event(pane, "aqua:intents", %{intents: _})
     assert html =~ "AQUA points to"
     assert html =~ to
 
     # The open thread was not blanked.
-    on_thread!(child!(panel, "aqua-panel-pane"), you_conv.id)
-    assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{you_conv.id}"][selected]))
+    on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
+    assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{you_thread.id}"][selected]))
   end
 
   test "⌘. in the panel halts the panel's turn and leaves the room's running",
-       %{conn: conn, mine: mine, room: room, me: me, conv: conv} do
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), conv.id))
+       %{conn: conn, mine: mine, room: room, me: me, thread: thread} do
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     room_id = room.id
     mine_id = mine.id
 
     # Both models are held mid-answer, so both turns are running.
-    Cyfr.Test.ScriptedExecution.script([{:probe, self()}, {:probe, self()}])
+    Cyfr.Test.ScriptedWorker.script([{:probe, self()}, {:probe, self()}])
 
     room_pane = child!(view, "pane-" <> room.id)
     room_pane |> form("form", %{"message" => "@aqua go on"}) |> render_submit()
     assert_receive {:scripted_probe, room_worker, _}, 30_000
-    assert Runner.turn_running?(%{me | athanor_id: room_id}, conv.id)
+    assert Runner.turn_running?(%{me | athanor_id: room_id}, thread.id)
 
     {panel, _html} = open_panel(view)
-    {pane, you_conv} = panel_thread(panel, me, "and you?")
+    {pane, you_thread} = panel_thread(panel, me, "and you?")
     assert_receive {:scripted_probe, panel_worker, _}, 30_000
-    assert Runner.turn_running?(%{me | athanor_id: mine_id}, you_conv.id)
+    assert Runner.turn_running?(%{me | athanor_id: mine_id}, you_thread.id)
 
     # What the hook pushes for ⌘. — to its own pane.
     render_hook(pane, "stop", %{})
-    wait_until(fn -> not Runner.turn_running?(%{me | athanor_id: mine_id}, you_conv.id) end)
-    assert Runner.turn_running?(%{me | athanor_id: room_id}, conv.id)
-    assert {:ok, []} = Aqua.Tape.open_turns(me, you_conv.id)
+    wait_until(fn -> not Runner.turn_running?(%{me | athanor_id: mine_id}, you_thread.id) end)
+    assert Runner.turn_running?(%{me | athanor_id: room_id}, thread.id)
+    assert {:ok, []} = Aqua.Tape.open_turns(me, you_thread.id)
 
     send(room_worker, :continue)
     send(panel_worker, :continue)
@@ -381,11 +381,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
   end
 
   test "the panel keeps its thread from one page to the next, and closed stays closed",
-       %{conn: conn, room: room, me: me, conv: conv} do
-    {:ok, kept} = Conversations.create(me)
-    {:ok, _} = Conversations.update(me, kept.id, %{title: "Kept"})
+       %{conn: conn, room: room, me: me, thread: thread} do
+    {:ok, kept} = Threads.create(me)
+    {:ok, _} = Threads.update(me, kept.id, %{title: "Kept"})
 
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), conv.id))
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     {panel, _html} = open_panel(view)
     panel |> element("#aqua-panel-threads") |> render_change(%{"id" => kept.id})
@@ -400,15 +400,15 @@ defmodule PrismWeb.AquaPanelLiveTest do
     on_thread!(child!(panel, "aqua-panel-pane"), kept.id)
 
     render_click(panel, "close", %{})
-    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), conv.id))
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     panel = child!(view, "aqua-panel")
     refute has_element?(panel, "#aqua-panel-sheet")
   end
 
   test "the page's first paint carries the button alone; a session that no longer establishes says so",
-       %{conn: conn, room: room, conv: conv} do
-    html = conn |> get(PrismWeb.ChatLive.chat_path(route(room), conv.id)) |> html_response(200)
+       %{conn: conn, room: room, thread: thread} do
+    html = conn |> get(PrismWeb.ChatLive.chat_path(route(room), thread.id)) |> html_response(200)
     assert html =~ ~s(id="aqua-panel-button")
     refute html =~ "aqua-panel-sheet"
 

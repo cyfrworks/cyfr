@@ -9,7 +9,7 @@ defmodule Aqua.Orchestrator do
   A pick is a NAME: the roster entry an `@tom` matched, the entry the
   picker sent, the previous turn's agent, or the estate's first. The
   agent lives in the estate in focus — a tape runs its own estate's soul
-  and roles alone — so the name is the whole identity: the conversation
+  and roles alone — so the name is the whole identity: the thread
   row (`orchestrator`), the standing-grant key and the recovery read after
   a restart are written in terms of it.
 
@@ -54,11 +54,11 @@ defmodule Aqua.Orchestrator do
   def resolved(%{"name" => name} = agent) when is_binary(name),
     do: %__MODULE__{name: name, agent: agent}
 
-  @doc "The pick a conversation row recorded, or `nil` when no turn has run in it."
-  @spec from_conversation(%{:orchestrator => String.t() | nil, optional(atom()) => term()}) ::
+  @doc "The pick a thread row recorded, or `nil` when no turn has run in it."
+  @spec from_thread(%{:orchestrator => String.t() | nil, optional(atom()) => term()}) ::
           t() | nil
-  def from_conversation(%{orchestrator: name}) when is_binary(name), do: by_name(name)
-  def from_conversation(_row), do: nil
+  def from_thread(%{orchestrator: name}) when is_binary(name), do: by_name(name)
+  def from_thread(_row), do: nil
 
   @doc "Whether the run-time detail has been read."
   @spec resolved?(t()) :: boolean()
@@ -124,7 +124,7 @@ defmodule Aqua.Orchestrator do
   The authored policy composed with the standing answers people already
   gave (`Aqua.ToolGrants.resolve/2`), so a "never" from three weeks ago
   is not re-offered as a card and a restart does not forget a "for this
-  conversation". Composed from the AUTHORED policy every time — never
+  thread". Composed from the AUTHORED policy every time — never
   from a previous composition — so a decision withdrawn since is gone
   from the next turn. A pick has to be resolved first.
   """

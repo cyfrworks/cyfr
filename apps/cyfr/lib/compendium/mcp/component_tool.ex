@@ -142,7 +142,7 @@ defmodule Compendium.MCP.ComponentTool do
           },
           "type" => %{
             "type" => "string",
-            "enum" => Sanctum.ComponentRef.valid_types(),
+            "enum" => Cyfr.ComponentRef.valid_types(),
             "description" =>
               "Component type (required for create action, optional filter for search/list)"
           },
@@ -388,7 +388,7 @@ defmodule Compendium.MCP.ComponentTool do
          {:invalid_argument, "Missing required argument: reference (format: name:version)"}}
 
       true ->
-        case Sanctum.ComponentRef.parse(reference) do
+        case Cyfr.ComponentRef.parse(reference) do
           {:ok, %{version: nil}} ->
             {:error,
              {:invalid_argument, "Version is required for pushing. Example: c:local.name:1.0.0"}}
@@ -509,10 +509,10 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Delete action - delete a component from the registry
   def handle(%Context{} = ctx, %{"action" => "delete", "reference" => reference}) do
-    case Sanctum.ComponentRef.parse(reference) do
+    case Cyfr.ComponentRef.parse(reference) do
       {:ok, %{version: nil} = cref} ->
         # Check if name is even valid before giving version error
-        case Sanctum.ComponentRef.validate_name(cref.name) do
+        case Cyfr.ComponentRef.validate_name(cref.name) do
           :ok ->
             {:error,
              {:invalid_argument, "Version is required for deletion. Example: c:local.name:1.0.0"}}
@@ -553,7 +553,7 @@ defmodule Compendium.MCP.ComponentTool do
   # ships ("delete" never means "revert").
   def handle(%Context{} = ctx, %{"action" => "reset", "reference" => reference}) do
     with {:ok, %{version: version} = cref} when is_binary(version) <-
-           Sanctum.ComponentRef.parse(reference) do
+           Cyfr.ComponentRef.parse(reference) do
       case Registry.reset(ctx, cref.name, cref.version, cref.namespace) do
         {:ok, :reset} ->
           broadcast_components_changed(ctx)
@@ -588,7 +588,7 @@ defmodule Compendium.MCP.ComponentTool do
   # bundled copy differs from shipped, and what versions this release ships.
   def handle(%Context{} = ctx, %{"action" => "status", "reference" => reference}) do
     with {:ok, %{version: version} = cref} when is_binary(version) <-
-           Sanctum.ComponentRef.parse(reference),
+           Cyfr.ComponentRef.parse(reference),
          {:ok, component} <-
            Arca.ComponentStorage.get_component(ctx, cref.name, cref.version, cref.namespace, nil),
          {:ok, overlay} <- Compendium.Provenance.status(ctx, component),
@@ -652,7 +652,7 @@ defmodule Compendium.MCP.ComponentTool do
             row = entry.component
 
             reference =
-              Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+              Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
                 type: to_string(Map.get(row, :component_type, "")),
                 namespace: Compendium.ComponentPath.normalize_publisher(Map.get(row, :publisher)),
                 name: row.name,
@@ -747,7 +747,7 @@ defmodule Compendium.MCP.ComponentTool do
         %Context{} = ctx,
         %{"action" => "fork", "reference" => reference} = args
       ) do
-    case Sanctum.ComponentRef.parse(reference) do
+    case Cyfr.ComponentRef.parse(reference) do
       {:ok, %{version: nil}} ->
         {:error,
          {:invalid_argument, "Version is required for fork. Example: c:acme.my-tool:1.0.0"}}
@@ -787,7 +787,7 @@ defmodule Compendium.MCP.ComponentTool do
     if String.trim(reason) == "" do
       {:error, {:invalid_argument, "component.deprecate requires a non-empty 'reason'"}}
     else
-      with {:ok, ref} <- Sanctum.ComponentRef.parse(reference),
+      with {:ok, ref} <- Cyfr.ComponentRef.parse(reference),
            :ok <- Shared.ensure_fully_qualified(ref),
            {:ok, bearer} <- Shared.namespace_bearer(ctx, ref.namespace),
            {:ok, body} <-
@@ -817,7 +817,7 @@ defmodule Compendium.MCP.ComponentTool do
       ) do
     reason = Map.get(args, "reason", "")
 
-    with {:ok, ref} <- Sanctum.ComponentRef.parse(reference),
+    with {:ok, ref} <- Cyfr.ComponentRef.parse(reference),
          :ok <- Shared.ensure_fully_qualified(ref),
          {:ok, bearer} <- Shared.namespace_bearer(ctx, ref.namespace),
          {:ok, body} <-
@@ -1137,7 +1137,7 @@ defmodule Compendium.MCP.ComponentTool do
 
     case Phoenix.PubSub.broadcast(
            Emissary.PubSub,
-           Cyfr.Topics.register(register_id, ctx),
+           Cyfr.Bus.register(register_id, ctx),
            {:register_progress, payload}
          ) do
       :ok ->
@@ -1194,7 +1194,7 @@ defmodule Compendium.MCP.ComponentTool do
 
   defp namespace_of(_), do: nil
 
-  # Broadcast to all Prism LiveViews subscribed to prism:components.
+  # Broadcast to all Prism LiveViews subscribed to bus:components.
   # Fires after any state-changing component operation (pull, register, delete, new, publish).
   # A diff's relative segment lists, joined for the wire.
   defp format_diff(%{added: added, removed: removed, changed: changed}) do
@@ -1206,7 +1206,7 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   defp broadcast_components_changed(ctx) do
-    topic = Cyfr.Topics.components(ctx)
+    topic = Cyfr.Bus.components(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)
   end
 
@@ -1219,7 +1219,7 @@ defmodule Compendium.MCP.ComponentTool do
 
     case Phoenix.PubSub.broadcast(
            Emissary.PubSub,
-           Cyfr.Topics.progress(progress_id, ctx),
+           Cyfr.Bus.progress(progress_id, ctx),
            {:progress, payload}
          ) do
       :ok ->
@@ -1264,7 +1264,7 @@ defmodule Compendium.MCP.ComponentTool do
   # A component ref in the `local` namespace: the server's own shipped
   # media, never a registry's.
   defp shipped_ref?(reference) do
-    case Sanctum.ComponentRef.parse(reference) do
+    case Cyfr.ComponentRef.parse(reference) do
       {:ok, %{namespace: namespace}} -> Compendium.ComponentPath.local_publisher?(namespace)
       _ -> false
     end
@@ -1385,7 +1385,7 @@ defmodule Compendium.MCP.ComponentTool do
     |> Map.put(:optional_missing, optional_missing)
   end
 
-  defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
+  defdelegate decode_manifest(value), to: Cyfr.Manifest, as: :decode
 
   # ============================================================================
   # Component Resolution
@@ -1515,7 +1515,7 @@ defmodule Compendium.MCP.ComponentTool do
 
       if type && publisher && name do
         ref =
-          Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+          Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
             type: type,
             namespace: publisher,
             name: name,
@@ -1581,14 +1581,14 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   # A component with no manifest is left alone rather than given one made of
-  # discovered media. Everything else goes through `Compendium.Manifest`,
+  # discovered media. Everything else goes through `Cyfr.Manifest`,
   # which owns manifest decoding — the strict form, because a manifest that
   # will not parse must also be left alone rather than replaced by a
   # media-only map.
   defp parse_manifest_for_enrichment(nil), do: :error
 
   defp parse_manifest_for_enrichment(raw) do
-    case Compendium.Manifest.decode_strict(raw) do
+    case Cyfr.Manifest.decode_strict(raw) do
       {:ok, manifest} -> {:ok, manifest}
       {:error, :malformed_manifest} -> :error
     end

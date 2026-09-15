@@ -35,7 +35,7 @@ defmodule Sanctum.CipherIntegrationTest do
       namespace: "u1",
       athanor_id: athanor_id,
       scope: :athanor,
-      permissions: [:execute, :vault_read, :vault_write],
+      permissions: [:execute, :vault_read],
       auth_method: :oidc,
       authenticated: true
     )

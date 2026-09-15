@@ -23,7 +23,7 @@ defmodule Cyfr.ContextSwapTest do
 
   @scanned [
     "apps/cyfr/lib/aqua",
-    "apps/cyfr/lib/emissary/mcp/conversation_tool.ex",
+    "apps/cyfr/lib/emissary/mcp/thread_tool.ex",
     "apps/cyfr/lib/emissary/mcp/notes_tool.ex",
     "apps/cyfr/lib/prism_web",
     "apps/cyfr/lib/sanctum"
@@ -53,7 +53,7 @@ defmodule Cyfr.ContextSwapTest do
       full = Path.join(root(), path)
 
       if File.dir?(full),
-        do: Path.wildcard(Path.join(full, "**/*.ex")),
+        do: Cyfr.Test.SourceTree.files!(Path.join(full, "**/*.ex")),
         else: [full]
     end)
   end

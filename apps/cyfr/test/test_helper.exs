@@ -9,7 +9,7 @@ excludes =
   [:s3_integration] ++
     Enum.concat(
       if(is_nil(Application.spec(:opus)), do: [:requires_opus], else: []),
-      if(Code.ensure_loaded?(Opus.MCP), do: [], else: [:requires_opus_modules])
+      if(Code.ensure_loaded?(Opus.Runtime), do: [], else: [:requires_opus_modules])
     ) ++
     if File.exists?(Path.expand("../../../CLAUDE.md", __DIR__)),
       do: [],
@@ -31,6 +31,10 @@ File.mkdir_p!(Application.fetch_env!(:cyfr, :base_path))
 seed_path = Application.fetch_env!(:cyfr, :seed_path)
 File.mkdir_p!(Path.join(seed_path, "components"))
 File.cp_r!(Path.expand("../../../seed/aqua", __DIR__), Path.join(seed_path, "aqua"))
+
+# A suite database built from a different schema would run stale, since the
+# baseline still reads as applied; refuse it before any test touches it.
+Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, &Arca.SchemaFingerprint.verify!/0)
 
 # The athanor rows the fixtures name by hand, committed once for the run.
 Sanctum.TestContext.seed_athanors!()

@@ -3,25 +3,22 @@
 
 defmodule PrismWeb.SignInTraceTest do
   @moduledoc """
-  One trace, end to end: the door admits, the mint is synchronous, the real
-  shipped bundle fills in the BACKGROUND with no registry reachable, and the
-  console mounts on the estate that fill left.
+  Sign-in on the product path, end to end, once per way in. A browser opens
+  the sign-in page; the identity provider answers; the door admits; the
+  person's estate is minted at once and the real shipped bundle fills it in
+  the background with no registry reachable; the session is a cookie; and
+  the console mounts on the estate that fill left, its context established
+  from that cookie.
 
-  Every part of this has had a test of its own and the composition has not,
-  which is what §9.1 scores as Phase 1's missing evidence. The parts pass
-  while the whole is untested because each one stubs the next: every console
-  test reaches for `Sanctum.TestContext.shipped!/1` and
-  `Athanors.mark_provisioned/1`, so nothing has ever mounted a page onto an
-  estate an actual fill produced.
+    * Device flow: `/login` starts GitHub's device flow against a stand-in
+      IdP, the page's own poll mints a ticket bound to this browser, and
+      `/auth/device/complete/:ticket` sets the cookie.
+    * OIDC: `/auth/oidcc` goes to a stand-in issuer
+      (`Cyfr.Test.OidcStrategy`), which returns through
+      `/auth/oidcc/callback` with Ueberauth's state check in between.
 
-  Two deliberate departures from the other tests here:
-
-    * `provisioning_inline` goes back to `false`. The suite forces fills
-      inline for determinism, but "mints synchronously and fills in the
-      background" is the claim under test, and inline proves only half of it.
-    * No `shipped!/1`, no `mark_provisioned/1`, no `log_in_user/3`. The
-      session is built from the athanor the mint returned, so the page can
-      only mount if the fill really happened.
+  Fills run in the background here (`provisioning_inline: false`), and no
+  estate is stubbed: the page can mount only because the fill happened.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -29,8 +26,7 @@ defmodule PrismWeb.SignInTraceTest do
 
   @moduletag timeout: 240_000
 
-  alias Sanctum.{Door, SignIn}
-  alias Sanctum.Tenancy.Athanors
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   @repo_root Path.expand("../../../..", __DIR__)
   @providers ~w(claude openai gemini grok openrouter)
@@ -42,67 +38,92 @@ defmodule PrismWeb.SignInTraceTest do
     File.cp_r!(Path.join(@repo_root, "seed/components"), Path.join(seed_dir, "components"))
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    keys = [:base_path, :seed_path, :registry_url, :oci_registry_url, :provisioning_inline]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
+    env = [
+      base_path: test_dir,
+      seed_path: seed_dir,
+      # Both endpoints, because they are separate settings and a pull dials
+      # the OCI one.
+      registry_url: "none",
+      oci_registry_url: "none",
+      provisioning_inline: false
+    ]
 
-    Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :seed_path, seed_dir)
-    # Both endpoints, because they are separate settings and a pull dials
-    # the OCI one.
-    Application.put_env(:cyfr, :registry_url, "none")
-    Application.put_env(:cyfr, :oci_registry_url, "none")
-    Application.put_env(:cyfr, :provisioning_inline, false)
+    restore =
+      restore_env(
+        :cyfr,
+        Keyword.keys(env) ++
+          [:auth_provider, :oidc_issuer, :github_client_id, :device_flow_endpoints]
+      )
+
+    prev_ueberauth = Application.get_env(:ueberauth, Ueberauth)
+    for {key, value} <- env, do: Application.put_env(:cyfr, key, value)
 
     on_exit(fn ->
-      # STOP THE FILLS BEFORE RESTORING THE PATHS. This is the only test that
-      # turns `provisioning_inline` off, so it is the only one with real
-      # background tasks in flight — and `after_sign_in/1` starts a second
-      # one (`retry_groups_async/1`) that this test never waits for. A task
-      # still running when the env is restored provisions against the REAL
-      # `seed_path` and `base_path`, where a failed registration's
-      # `rollback_unit` deletes the unit it was writing. That deleted 38
-      # files out of the repo's own seed tree before this callback existed.
-      for {_, pid, _, _} <-
-            Task.Supervisor.children(Sanctum.ProvisioningSupervisor)
-            |> Enum.map(&{nil, &1, nil, nil}) do
-        Task.Supervisor.terminate_child(Sanctum.ProvisioningSupervisor, pid)
-      end
-
-      for {key, value} <- prev do
-        if is_nil(value),
-          do: Application.delete_env(:cyfr, key),
-          else: Application.put_env(:cyfr, key, value)
-      end
-
+      restore.()
+      Application.put_env(:ueberauth, Ueberauth, prev_ueberauth)
       File.rm_rf!(test_dir)
     end)
 
+    # The sign-in budgets are node-wide counters another test may have spent.
+    Cyfr.RateLimiter.reset()
+
+    # A fill still running when the paths are restored would provision
+    # against the repository's own seed and data trees.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
     :ok
   end
 
-  test "the door admits, the estate is minted, the bundle fills behind it, and the console mounts",
+  test "device flow: the sign-in page, the IdP, the ticket, the cookie, the filled estate",
        %{conn: conn} do
     n = System.unique_integer([:positive])
-    {:ok, _} = Door.Store.allow("wildcard", "*", "ops")
+    polls = stand_in_idp(n)
 
-    info = %{
-      id: "github|https://github.com|trace-#{n}",
-      provider: "github",
-      email: "trace#{n}@example.com",
-      verified: true,
-      name: "Trace #{n}"
-    }
+    # The browser's first visit gives it the session the ticket is bound to.
+    page = get(conn, "/login")
+    {:ok, login, _html} = live(page)
+    login |> element("button[phx-value-provider=github]") |> render_click()
 
-    assert {:ok, :allowed} = Door.admit(info.id, info.email, true)
+    # The page polls on its own: pending once, then the IdP authorizes.
+    {ticket_path, _flash} = assert_redirect(login, 15_000)
+    assert ticket_path =~ "/auth/device/complete/"
+    assert Agent.get(polls, & &1) == 2
 
-    # The mint is the synchronous half: a person is never admitted without
-    # an estate to work in.
-    assert {:ok, user} = SignIn.admitted(info, :allowed)
+    signed_in = page |> recycle() |> get(ticket_path)
+    assert redirected_to(signed_in) == "/"
+    assert get_session(signed_in, :sanctum_session_token)
+
+    assert_console_on_filled_estate(signed_in, "github|https://github.com|#{n}")
+  end
+
+  test "OIDC: the issuer round trip through /auth/oidcc/callback, the cookie, the filled estate",
+       %{conn: conn} do
+    n = System.unique_integer([:positive])
+    Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OIDC)
+    Application.put_env(:cyfr, :oidc_issuer, "https://idp.test")
+    Application.put_env(:ueberauth, Ueberauth, providers: [oidcc: {Cyfr.Test.OidcStrategy, []}])
+
+    to_issuer =
+      get(conn, "/auth/oidcc", %{"sub" => "trace-#{n}", "email" => "trace#{n}@example.com"})
+
+    callback = redirected_to(to_issuer)
+    assert callback =~ "/auth/oidcc/callback"
+
+    signed_in = to_issuer |> recycle() |> get(callback)
+    assert redirected_to(signed_in) == "/"
+    assert get_session(signed_in, :sanctum_session_token)
+
+    assert_console_on_filled_estate(signed_in, "oidcc|https://idp.test|trace-#{n}")
+  end
+
+  # The person the sign-in minted, the fill their estate received with
+  # nothing here performing it, and the console mounted from the cookie.
+  defp assert_console_on_filled_estate(signed_in, identity) do
+    {:ok, user} = Users.get_by_identity(identity)
     athanor_id = user.personal_athanor_id
-    assert is_binary(athanor_id)
     assert {:ok, %{kind: "person"}} = Athanors.get(athanor_id)
 
-    # The fill is the other half, and nothing in this test performs it.
     wait_until(
       fn ->
         case Athanors.get(athanor_id) do
@@ -110,9 +131,9 @@ defmodule PrismWeb.SignInTraceTest do
             true
 
           {:ok, row} ->
-            case Map.get(Athanors.settings(row), "provisioning_error") do
+            case Athanors.provisioning_failure(row) do
               nil -> false
-              err -> flunk("the fill recorded an error instead of finishing: #{inspect(err)}")
+              failure -> flunk("the fill recorded a failure: #{inspect(failure)}")
             end
 
           other ->
@@ -122,48 +143,90 @@ defmodule PrismWeb.SignInTraceTest do
       45_000
     )
 
-    {:ok, filled} = Athanors.get(athanor_id)
+    # What the fill laid down: the shipped bundle, from the seed alone.
+    reader = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
 
-    refute Map.has_key?(Athanors.settings(filled), "provisioning_error"),
-           "the fill recorded an error: #{inspect(Athanors.settings(filled))}"
-
-    ctx =
-      Sanctum.Context.build(
-        user_id: user.id,
-        email: info.email,
-        provider: "github",
-        athanor_id: athanor_id,
-        permissions: Sanctum.Atoms.person_permissions(),
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    # What the fill actually laid down: the shipped bundle, from the seed
-    # alone, with no registry configured at all.
     for name <- @providers do
       assert {:ok, %{publisher: "local"}} =
-               Compendium.Registry.get_latest(ctx, name, "local", "catalyst"),
+               Compendium.Registry.get_latest(reader, name, "local", "catalyst"),
              "catalyst:local.#{name} is not registered after the fill"
     end
 
-    assert {:ok, [_profile]} = Sanctum.Consent.Source.DB.profiles(ctx, "agent:local.aqua")
+    assert {:ok, [_profile]} = Sanctum.Consent.Source.DB.profiles(reader, "agent:local.aqua")
 
-    # And the console mounts on it — the session built from the minted
-    # athanor, never from a stubbed one.
-    {:ok, session} = Sanctum.Session.create(ctx)
+    # `/` lands the person in their own estate — the redirect naming it is
+    # itself the claim — and the page there is not the preparing state.
     Process.put(:prism_test_athanor_id, athanor_id)
+    console = recycle(signed_in)
 
-    conn = Plug.Test.init_test_session(conn, %{PrismWeb.ConnCase.session_key() => session.token})
-
-    # `/` lands the person in their own estate, which is the estate the mint
-    # made and the fill filled — the redirect naming it is itself the claim.
-    assert {:error, {:live_redirect, %{to: landing}}} = live(conn, "/")
+    assert {:error, {:live_redirect, %{to: landing}}} = live(console, "/")
     assert landing =~ "/chat"
-
-    assert {:ok, _view, html} = live(conn, landing)
-
-    # Not the preparing state: this estate was filled before the page opened.
+    assert {:ok, _view, html} = live(console, landing)
     refute html =~ "Preparing"
+  end
+
+  # GitHub's device flow as its endpoints answer: a code, one pending poll, a
+  # token, the profile and the verified primary email. Answers the counter
+  # of token polls.
+  defp stand_in_idp(n) do
+    bypass = Bypass.open()
+    base = "http://localhost:#{bypass.port}"
+    {:ok, polls} = Agent.start_link(fn -> 0 end)
+
+    Application.put_env(:cyfr, :github_client_id, "trace-client")
+
+    Application.put_env(:cyfr, :device_flow_endpoints, %{
+      github: %{
+        device: base <> "/login/device/code",
+        token: base <> "/login/oauth/access_token",
+        userinfo: base <> "/user",
+        emails: base <> "/user/emails"
+      }
+    })
+
+    Bypass.expect_once(bypass, "POST", "/login/device/code", fn conn ->
+      json(conn, %{
+        "device_code" => "dc-#{n}",
+        "user_code" => "TRACE-#{n}",
+        "verification_uri" => "https://github.com/login/device",
+        "expires_in" => 900,
+        "interval" => 0
+      })
+    end)
+
+    Bypass.expect(bypass, "POST", "/login/oauth/access_token", fn conn ->
+      case Agent.get_and_update(polls, &{&1, &1 + 1}) do
+        0 -> json(conn, %{"error" => "authorization_pending"})
+        _ -> json(conn, %{"access_token" => "gho_trace_#{n}", "token_type" => "bearer"})
+      end
+    end)
+
+    Bypass.expect(bypass, "GET", "/user", fn conn ->
+      json(conn, %{"id" => n, "login" => "trace#{n}", "name" => "Trace #{n}"})
+    end)
+
+    Bypass.expect(bypass, "GET", "/user/emails", fn conn ->
+      json(conn, [%{"email" => "trace#{n}@example.com", "primary" => true, "verified" => true}])
+    end)
+
+    polls
+  end
+
+  defp json(conn, body) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.resp(200, Jason.encode!(body))
+  end
+
+  defp restore_env(app, keys) do
+    prev = Map.new(keys, &{&1, Application.get_env(app, &1)})
+
+    fn ->
+      for {key, value} <- prev do
+        if is_nil(value),
+          do: Application.delete_env(app, key),
+          else: Application.put_env(app, key, value)
+      end
+    end
   end
 end

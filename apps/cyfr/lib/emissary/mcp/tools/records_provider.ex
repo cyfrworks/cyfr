@@ -11,7 +11,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   File storage operations (read, write, list, delete, exists) are handled by
   the `cyfr:storage/files@0.1.0` host function for catalysts via
-  `Opus.StorageHandler`, not as an MCP tool. The `retention` tool manages
+  `Cyfr.Execution.GuestStorage`, not as an MCP tool. The `retention` tool manages
   data retention policies (get, set, cleanup).
 
   The `arca://files/{path}` resource is read-only (MCP resources have no
@@ -19,9 +19,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   reads the athanor's whole tree, every scope in
   `Arca.Storage.tenant_roots/0`, attachment blobs included: the athanor is
   its members' own machine. A narrower credential, a key scoped to
-  `:storage_read` alone, reaches `conversations/` and `data/` — what a
-  conversation attached and what an agent could have written — and never
-  the estate's components, its assistant tree or its notes. Conversation
+  `:storage_read` alone, reaches `threads/` and `data/` — what a
+  thread attached and what an agent could have written — and never
+  the estate's components, its assistant tree or its notes. Thread
   transcripts are rows, never reachable here, and an unknown first
   segment is a typed refusal at the Arca gate.
 
@@ -84,7 +84,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         description:
           "Read a file in the athanor's storage by path. A person reads every root (" <>
             Enum.map_join(Arca.Storage.tenant_roots(), ", ", &(&1 <> "/")) <>
-            "); a key scoped to :storage_read reaches conversations/ and data/",
+            "); a key scoped to :storage_read reaches threads/ and data/",
         mimeType: Cyfr.MediaType.binary()
       }
     ]
@@ -135,9 +135,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   # What `:storage_read` opens through this resource: the whole tree for a
   # person (`:admin` — a session holds every permission), and for a
-  # narrower key only the roots an agent or a conversation could have
+  # narrower key only the roots an agent or a thread could have
   # filled.
-  @key_reach ["conversations", "data"]
+  @key_reach ["threads", "data"]
 
   defp within_reach(ctx, [root | _]) do
     if Context.has_permission?(ctx, :admin) or root in @key_reach,

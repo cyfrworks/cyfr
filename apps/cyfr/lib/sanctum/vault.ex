@@ -36,6 +36,7 @@ defmodule Sanctum.Vault do
   require Logger
 
   @kinds ~w(api_key oauth bundle)
+  @rebind_attempts 3
 
   @type entry_view :: %{
           id: String.t(),
@@ -89,28 +90,29 @@ defmodule Sanctum.Vault do
          hint = Map.get(params, :provider_hint, ""),
          aad = CipherAAD.vault_entry(Context.athanor!(ctx), id, hint),
          {:ok, sealed} <- seal(json, aad) do
-      attrs = %{
-        id: id,
-        athanor_id: Context.athanor!(ctx),
-        name: name,
-        kind: kind,
+      binding = %{
         provider_hint: hint,
-        provenance: Map.get(params, :provenance, "user"),
         field_names: Jason.encode!(Enum.sort(Map.keys(fields))),
         oauth_endpoints: encode_optional_map(Map.get(params, :oauth_endpoints)),
-        oauth_scopes: encode_optional_list(Map.get(params, :oauth_scopes)),
-        status: "active",
-        sealed_payload: sealed
+        oauth_scopes: encode_optional_list(Map.get(params, :oauth_scopes))
       }
 
-      with {:ok, entry} <- Arca.VaultStorage.put(attrs),
-           {:ok, digest} <- VaultReader.binding_digest(entry),
-           :ok <-
-             Arca.VaultStorage.update_binding(Context.athanor!(ctx), id, %{
+      with {:ok, digest} <- VaultReader.binding_digest(binding),
+           {:ok, entry} <-
+             binding
+             |> Map.merge(%{
+               id: id,
+               athanor_id: Context.athanor!(ctx),
+               name: name,
+               kind: kind,
+               provenance: Map.get(params, :provenance, "user"),
+               status: "active",
+               sealed_payload: sealed,
                binding_digest: digest
-             }) do
-        broadcast(ctx, id, :create)
-        {:ok, view(%{entry | binding_digest: digest})}
+             })
+             |> Arca.VaultStorage.put() do
+        broadcast(ctx, id, :create, %{name: entry.name})
+        {:ok, view(entry)}
       end
     end
   end
@@ -139,7 +141,7 @@ defmodule Sanctum.Vault do
       # reference entries by name, so the servers a rename breaks are the
       # ones still spelling the old one — a post-hoc read of the row can
       # only ever see the new name.
-      broadcast(ctx, id, :rename, %{old_name: entry.name})
+      broadcast(ctx, id, :rename, %{name: new_name, old_name: entry.name})
       :ok
     end
   end
@@ -153,8 +155,6 @@ defmodule Sanctum.Vault do
   entry's `field_names` — changing the schema is a rebind, and silently
   accepting a different shape here would smuggle a binding change past
   re-consent.
-
-  Version-1 pointer payloads return `:legacy_pointer_retired`; recreate them with credential material.
   """
   @spec rotate(Context.t(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
   def rotate(%Context{} = ctx, %{id: id, fields: fields, expected_payload_rev: expected} = params)
@@ -173,7 +173,7 @@ defmodule Sanctum.Vault do
             Arca.VaultStorage.set_status(Context.athanor!(ctx), id, "active")
           end
 
-          broadcast(ctx, id, :rotate)
+          broadcast(ctx, id, :rotate, %{name: entry.name})
           {:ok, expected + 1}
 
         {:error, _} = err ->
@@ -207,26 +207,63 @@ defmodule Sanctum.Vault do
       if changes == %{} do
         {:error, :no_binding_changes}
       else
-        rebound = Map.merge(Map.from_struct(entry), changes)
-
-        with {:ok, digest} <- VaultReader.binding_digest(rebound),
-             :ok <-
-               Arca.VaultStorage.update_binding(
-                 Context.athanor!(ctx),
-                 id,
-                 Map.put(changes, :binding_digest, digest)
-               ),
-             {:ok, affected} <-
-               Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
-          Enum.each(affected, fn profile_id ->
-            Arca.ProfileStorage.set_status(Context.athanor!(ctx), profile_id, "needs_consent")
-          end)
-
-          broadcast(ctx, id, :rebind)
-          {:ok, %{binding_digest: digest, affected: Enum.sort(affected)}}
+        with {:ok, rebound} <- rebind_entry(ctx, entry, changes, @rebind_attempts) do
+          broadcast(ctx, id, :rebind, %{name: entry.name})
+          {:ok, rebound}
         end
       end
     end
+  end
+
+  # A rebind that lost the race recomputes against what landed.
+  defp rebind_entry(ctx, entry, changes, attempts) do
+    case move_binding(entry, changes) do
+      {:error, :binding_moved} when attempts > 1 ->
+        with {:ok, fresh} <- get_living(ctx, entry.id),
+             do: rebind_entry(ctx, fresh, changes, attempts - 1)
+
+      result ->
+        result
+    end
+  end
+
+  @doc """
+  Move a vault entry's binding (`changes`: `field_names`, `oauth_endpoints`,
+  `oauth_scopes`) in one transaction: the binding moves from the digest
+  `entry` was read at, and every profile whose head consent references the
+  entry is set `needs_consent` with it, so no consent ever covers a binding
+  it did not approve. `{:error, :binding_moved}` when another change landed
+  first or the entry is gone. The caller authorizes and broadcasts.
+  """
+  @spec move_binding(map(), map()) ::
+          {:ok, %{binding_digest: String.t(), affected: [String.t()]}} | {:error, term()}
+  def move_binding(%{athanor_id: athanor_id, id: id} = entry, changes) when is_map(changes) do
+    with {:ok, digest} <- VaultReader.binding_digest(Map.merge(Map.from_struct(entry), changes)) do
+      Arca.Repo.transaction(fn ->
+        with :ok <-
+               Arca.VaultStorage.move_binding(
+                 athanor_id,
+                 id,
+                 entry.binding_digest,
+                 Map.put(changes, :binding_digest, digest)
+               ),
+             {:ok, affected} <- Arca.ConsentStorage.head_profiles_referencing(athanor_id, id),
+             :ok <- block_profiles(athanor_id, affected) do
+          %{binding_digest: digest, affected: Enum.sort(affected)}
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
+    end
+  end
+
+  defp block_profiles(athanor_id, profile_ids) do
+    Enum.reduce_while(profile_ids, :ok, fn profile_id, :ok ->
+      case Arca.ProfileStorage.set_status(athanor_id, profile_id, "needs_consent") do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -241,11 +278,11 @@ defmodule Sanctum.Vault do
   @spec revoke(Context.t(), String.t()) :: {:ok, %{affected: [String.t()]}} | {:error, term()}
   def revoke(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
-         {:ok, _entry} <- get_living(ctx, id),
+         {:ok, entry} <- get_living(ctx, id),
          :ok <- Arca.VaultStorage.set_status(Context.athanor!(ctx), id, "revoked"),
          {:ok, affected} <-
            Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
-      broadcast(ctx, id, :revoke)
+      broadcast(ctx, id, :revoke, %{name: entry.name})
       {:ok, %{affected: Enum.sort(affected)}}
     end
   end
@@ -254,9 +291,9 @@ defmodule Sanctum.Vault do
   @spec delete(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
-         {:ok, _entry} <- get_any(ctx, id),
+         {:ok, entry} <- get_any(ctx, id),
          :ok <- Arca.VaultStorage.tombstone(Context.athanor!(ctx), id) do
-      broadcast(ctx, id, :delete)
+      broadcast(ctx, id, :delete, %{name: entry.name})
       :ok
     end
   end
@@ -387,10 +424,10 @@ defmodule Sanctum.Vault do
     end
   end
 
-  defp broadcast(ctx, entry_id, verb, meta \\ %{}) do
+  defp broadcast(ctx, entry_id, verb, %{name: _} = meta) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Cyfr.Topics.vault_changed(ctx),
+      Cyfr.Bus.vault_changed(ctx),
       {:vault_entry_changed, entry_id, verb}
     )
 
@@ -399,7 +436,7 @@ defmodule Sanctum.Vault do
     # the external-MCP reconciler — still see every mutation.
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Cyfr.Topics.vault_changed_global(),
+      Cyfr.Bus.vault_changed_global(),
       {:vault_entry_changed_global, Context.athanor!(ctx), entry_id, verb, meta}
     )
   end

@@ -5,7 +5,7 @@ defmodule PrismWeb.AquaPanelLive do
   @moduledoc """
   The person's own AQUA, on every page: a floating button and, opened, a
   panel over the page onto their own athanor — the threads of You, one of
-  them open as `PrismWeb.ConversationPaneLive` focused on You, whatever
+  them open as `PrismWeb.ThreadPaneLive` focused on You, whatever
   estate the page is on.
 
   Opened beside a room (the chat page tells it what is in view through
@@ -30,7 +30,7 @@ defmodule PrismWeb.AquaPanelLive do
 
   use PrismWeb, :live_view
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Athanors
   alias Sanctum.Tenancy.Users
@@ -49,8 +49,8 @@ defmodule PrismWeb.AquaPanelLive do
       |> assign(:athanor, nil)
       |> assign(:kept, nil)
       |> assign(:open, false)
-      |> assign(:conversations, [])
-      |> assign(:conversation, nil)
+      |> assign(:threads, [])
+      |> assign(:thread, nil)
       |> assign(:pane, nil)
       |> assign(:room, session["room"])
       |> assign(:room_feed, room_feed)
@@ -93,41 +93,41 @@ defmodule PrismWeb.AquaPanelLive do
 
   defp restore(%{assigns: %{phase: :ready, kept: key}} = socket) do
     case Arca.Cache.get(key) do
-      {:ok, %{open: true, conversation_id: id}} -> open_on(socket, id)
+      {:ok, %{open: true, thread_id: id}} -> open_on(socket, id)
       _ -> socket
     end
   end
 
   defp restore(socket), do: socket
 
-  defp remember(%{assigns: %{kept: key, open: open, conversation: conv}} = socket) do
-    Arca.Cache.put(key, %{open: open, conversation_id: conv && conv.id}, @kept_ttl_ms)
+  defp remember(%{assigns: %{kept: key, open: open, thread: thread}} = socket) do
+    Arca.Cache.put(key, %{open: open, thread_id: thread && thread.id}, @kept_ttl_ms)
     socket
   end
 
   # The list is read when the panel opens, not on every page: closed, the
   # panel costs the page nothing. `nil` is the blank thread; an id the list
   # no longer holds falls back to it.
-  defp open_on(socket, conversation_id) do
-    conversations = Conversations.list(socket.assigns.context)
-    conversation = Enum.find(conversations, &(&1.id == conversation_id))
+  defp open_on(socket, thread_id) do
+    threads = Threads.list(socket.assigns.context)
+    thread = Enum.find(threads, &(&1.id == thread_id))
 
     socket
     |> assign(:open, true)
-    |> assign(:conversations, conversations)
-    |> assign(:conversation, conversation)
-    |> switch_pane(conversation)
+    |> assign(:threads, threads)
+    |> assign(:thread, thread)
+    |> switch_pane(thread)
   end
 
   # The pane is one, turned to a thread by message once it has reported
   # in; closed, the panel has no pane, and the next open mounts one on the
   # kept thread.
-  defp switch_pane(%{assigns: %{pane: pid}} = socket, conversation) when is_pid(pid) do
-    send(pid, {:switch_thread, conversation && conversation.id})
+  defp switch_pane(%{assigns: %{pane: pid}} = socket, thread) when is_pid(pid) do
+    send(pid, {:switch_thread, thread && thread.id})
     socket
   end
 
-  defp switch_pane(socket, _conversation), do: socket
+  defp switch_pane(socket, _thread), do: socket
 
   # ============================================================================
   # Events
@@ -135,7 +135,7 @@ defmodule PrismWeb.AquaPanelLive do
 
   @impl true
   def handle_event("open", _params, socket) do
-    id = socket.assigns.conversation && socket.assigns.conversation.id
+    id = socket.assigns.thread && socket.assigns.thread.id
 
     {:noreply, socket |> open_on(id) |> remember()}
   end
@@ -159,24 +159,24 @@ defmodule PrismWeb.AquaPanelLive do
   def handle_info({:room_in_view, room}, socket), do: {:noreply, assign(socket, :room, room)}
 
   # The pane is live: this is where a thread switch goes.
-  def handle_info({:pane, _pane, {:ready, pid, conversation_id}}, socket) do
+  def handle_info({:pane, _pane, {:ready, pid, thread_id}}, socket) do
     socket = assign(socket, :pane, pid)
-    current = socket.assigns.conversation && socket.assigns.conversation.id
+    current = socket.assigns.thread && socket.assigns.thread.id
 
-    if current != conversation_id,
-      do: {:noreply, switch_pane(socket, socket.assigns.conversation)},
+    if current != thread_id,
+      do: {:noreply, switch_pane(socket, socket.assigns.thread)},
       else: {:noreply, socket}
   end
 
   # The pane's first message created the thread: it is the open one now.
-  def handle_info({:pane, _pane, {:opened, conv}}, socket) do
-    {:noreply, socket |> open_on(conv.id) |> remember()}
+  def handle_info({:pane, _pane, {:opened, thread}}, socket) do
+    {:noreply, socket |> open_on(thread.id) |> remember()}
   end
 
   # The assistant pointed at a thread of You: the panel turns to it rather
   # than moving the page.
-  def handle_info({:pane, _pane, {:open_thread, conversation_id}}, socket) do
-    {:noreply, socket |> open_on(conversation_id) |> remember()}
+  def handle_info({:pane, _pane, {:open_thread, thread_id}}, socket) do
+    {:noreply, socket |> open_on(thread_id) |> remember()}
   end
 
   def handle_info({:pane, _pane, _message}, socket), do: {:noreply, socket}
@@ -255,13 +255,13 @@ defmodule PrismWeb.AquaPanelLive do
             aria-label="Your threads"
             class="min-w-0 flex-1 truncate rounded border border-gray-800 bg-gray-900 px-2 py-1 text-xs text-gray-300"
           >
-            <option value="" selected={is_nil(@conversation)}>New thread</option>
+            <option value="" selected={is_nil(@thread)}>New thread</option>
             <option
-              :for={conv <- @conversations}
-              value={conv.id}
-              selected={@conversation && conv.id == @conversation.id}
+              :for={thread <- @threads}
+              value={thread.id}
+              selected={@thread && thread.id == @thread.id}
             >
-              {conv.title}
+              {thread.title}
             </option>
           </select>
           <button
@@ -283,11 +283,11 @@ defmodule PrismWeb.AquaPanelLive do
           Reading {PrismWeb.RoomFeed.label(@room)}
         </p>
 
-        {live_render(@socket, PrismWeb.ConversationPaneLive,
+        {live_render(@socket, PrismWeb.ThreadPaneLive,
           id: "aqua-panel-pane",
           session: %{
             "athanor_id" => @athanor.id,
-            "conversation_id" => @conversation && @conversation.id,
+            "thread_id" => @thread && @thread.id,
             "ui_mode" => @ui_mode,
             "panel" => true,
             "room_feed" => @room_feed,

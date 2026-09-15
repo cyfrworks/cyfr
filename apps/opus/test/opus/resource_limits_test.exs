@@ -4,8 +4,8 @@
 defmodule Opus.ResourceLimitsTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
@@ -74,7 +74,9 @@ defmodule Opus.ResourceLimitsTest do
       activation: %{@test_node => "sha256:act-limits"}
     }
 
-    {:ok, auth} = Authority.root(profile, blob)
+    {:ok, auth} =
+      Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
+
     auth
   end
 
@@ -84,13 +86,13 @@ defmodule Opus.ResourceLimitsTest do
       assert Authority.limits(auth).max_memory_bytes == 8 * 1024 * 1024
 
       {:error, error_msg} =
-        Opus.Executor.run(ctx, ref, %{"a" => 10, "b" => 10},
+        Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 10, "b" => 10},
           type: :reagent,
           authority: auth
         )
 
       assert error_msg =~ "Component"
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Cyfr.Execution.list(ctx)
       assert Enum.any?(records, &(&1.status == :failed))
     end
 
@@ -98,7 +100,7 @@ defmodule Opus.ResourceLimitsTest do
       auth = authority_with_limits(16 * 1024 * 1024)
 
       {:error, error_msg} =
-        Opus.Executor.run(ctx, ref, %{"a" => 3, "b" => 7},
+        Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 3, "b" => 7},
           type: :reagent,
           authority: auth
         )

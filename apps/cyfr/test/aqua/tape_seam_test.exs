@@ -21,7 +21,7 @@ defmodule Aqua.TapeSeamTest do
 
   defp files(globs) do
     globs
-    |> Enum.flat_map(&Path.wildcard(Path.join(@root, &1)))
+    |> Enum.flat_map(&Cyfr.Test.SourceTree.files!(Path.join(@root, &1)))
     |> Enum.sort()
   end
 

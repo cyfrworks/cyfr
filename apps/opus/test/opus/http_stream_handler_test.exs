@@ -2,10 +2,21 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.HttpStreamHandlerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
+  alias Cyfr.Test.AttemptFixtures
   alias Opus.HttpStreamHandler
   alias Opus.Test.EdgeFixtures
+
+  # A real attached attempt's host client for `component_ref`, taking each
+  # request from `limits`' consented rate.
+  defp attached_host(component_ref, limits) do
+    with :ok <- Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo),
+         do: Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    attempt = AttemptFixtures.attached!(component_ref: component_ref, limits: limits)
+    Opus.HostClient.new(attempt.keys, attempt.runner)
+  end
 
   # ============================================================================
   # build_stream_imports/4
@@ -14,14 +25,13 @@ defmodule Opus.HttpStreamHandlerTest do
   describe "build_stream_imports/4" do
     test "returns {imports, exec_ref} tuple with correct Wasmex import shape" do
       edge = EdgeFixtures.edge()
-      ctx = Sanctum.TestContext.local()
 
       {imports, exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          ctx,
-          "local.test-component:1.0.0"
+          attached_host("catalyst:local.test-component:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-component:1.0.0"
         )
 
       assert is_map(imports)
@@ -46,18 +56,22 @@ defmodule Opus.HttpStreamHandlerTest do
 
   describe "stream edge enforcement" do
     setup do
-      case GenServer.whereis(Opus.RateLimiter) do
-        nil -> {:ok, _} = Opus.RateLimiter.start_link([])
+      case GenServer.whereis(Cyfr.Execution.Rates) do
+        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
         _pid -> :ok
       end
 
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
-      ctx = Sanctum.TestContext.local()
-      component_ref = "test-stream"
+      component_ref = "catalyst:local.test-stream:1.0.0"
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, component_ref)
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          attached_host(component_ref, EdgeFixtures.limits()),
+          component_ref
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
@@ -112,10 +126,13 @@ defmodule Opus.HttpStreamHandlerTest do
       # Need to allow localhost domain first
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["POST"])
 
-      ctx = Sanctum.TestContext.local()
-
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test:1.0.0"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, func} = stream_ns["request"]
@@ -143,10 +160,13 @@ defmodule Opus.HttpStreamHandlerTest do
     setup do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
-      ctx = Sanctum.TestContext.local()
-
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test:1.0.0"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
@@ -181,10 +201,13 @@ defmodule Opus.HttpStreamHandlerTest do
     test "enforces max concurrent streams" do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
-      ctx = Sanctum.TestContext.local()
-
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test:1.0.0"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
@@ -229,10 +252,14 @@ defmodule Opus.HttpStreamHandlerTest do
     test "rejects a body exceeding the node's max_request_size" do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
       limits = EdgeFixtures.limits(max_request_size: 16)
-      ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, limits, ctx, "test-req-size")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          limits,
+          attached_host("catalyst:local.test-req-size:1.0.0", limits),
+          "catalyst:local.test-req-size:1.0.0"
+        )
 
       {:fn, request_fn} = imports["cyfr:http/streaming@0.1.0"]["request"]
 
@@ -252,10 +279,14 @@ defmodule Opus.HttpStreamHandlerTest do
 
     test "rejects multipart on the streaming interface" do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
-      ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test-mp")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          attached_host("catalyst:local.test-mp:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-mp:1.0.0"
+        )
 
       {:fn, request_fn} = imports["cyfr:http/streaming@0.1.0"]["request"]
 
@@ -287,10 +318,14 @@ defmodule Opus.HttpStreamHandlerTest do
         EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
 
       limits = EdgeFixtures.limits(timeout: "0s")
-      ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, limits, ctx, "test-timeout")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          limits,
+          attached_host("catalyst:local.test-timeout:1.0.0", limits),
+          "catalyst:local.test-timeout:1.0.0"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
@@ -348,10 +383,14 @@ defmodule Opus.HttpStreamHandlerTest do
         EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
 
       limits = EdgeFixtures.limits(max_response_size: 8)
-      ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, limits, ctx, "test-collector-cap")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          limits,
+          attached_host("catalyst:local.test-collector-cap:1.0.0", limits),
+          "catalyst:local.test-collector-cap:1.0.0"
+        )
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
@@ -375,6 +414,146 @@ defmodule Opus.HttpStreamHandlerTest do
       Process.exit(server, :kill)
       :gen_tcp.close(listen)
     end
+  end
+
+  describe "what a read reports" do
+    setup do
+      edge =
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          attached_host("catalyst:local.test-read:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-read:1.0.0"
+        )
+
+      %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
+        imports["cyfr:http/streaming@0.1.0"]
+
+      %{request_fn: request_fn, read_fn: read_fn}
+    end
+
+    test "a read carries the provider's status once it answered, and a refusal's body streams",
+         %{request_fn: request_fn, read_fn: read_fn} do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+      body = ~s({"error":{"message":"slow down"}})
+
+      server =
+        spawn(fn ->
+          {:ok, sock} = :gen_tcp.accept(listen, 5_000)
+          _ = :gen_tcp.recv(sock, 0, 1_000)
+
+          :ok =
+            :gen_tcp.send(
+              sock,
+              "HTTP/1.1 429 Too Many Requests\r\ncontent-length: #{byte_size(body)}\r\n" <>
+                "connection: close\r\n\r\n" <> body
+            )
+
+          Process.sleep(200)
+          :gen_tcp.close(sock)
+        end)
+
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://localhost:#{port}/limited",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      reads = read_until_done(read_fn, handle, 100)
+      assert List.last(reads)["status"] == 429
+      assert reads |> Enum.filter(&(&1["data"] != "")) |> Enum.all?(&(&1["status"] == 429))
+      assert Enum.map_join(reads, & &1["data"]) == body
+
+      Process.exit(server, :kill)
+      :gen_tcp.close(listen)
+    end
+
+    test "a request that fails before any response answers request_failed",
+         %{request_fn: request_fn, read_fn: read_fn} do
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://localhost:1/refused",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      decoded = poll_for_error(read_fn, handle, 100)
+      assert decoded["error"]["type"] == "request_failed"
+    end
+
+    test "a read of an open stream with nothing new waits briefly, then answers empty" do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      server =
+        spawn(fn ->
+          {:ok, sock} = :gen_tcp.accept(listen, 5_000)
+          _ = :gen_tcp.recv(sock, 0, 1_000)
+
+          :ok =
+            :gen_tcp.send(
+              sock,
+              "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n"
+            )
+
+          Process.sleep(5_000)
+        end)
+
+      edge =
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+
+      {imports, exec_ref} =
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          attached_host("catalyst:local.test-wait:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-wait:1.0.0"
+        )
+
+      %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
+        imports["cyfr:http/streaming@0.1.0"]
+
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://localhost:#{port}/slow",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      {micros, decoded} = :timer.tc(fn -> read_fn.(handle) |> Jason.decode!() end)
+      assert decoded["data"] == ""
+      assert decoded["done"] == false
+      assert micros >= 90_000
+
+      HttpStreamHandler.cleanup_registry(exec_ref)
+      Process.exit(server, :kill)
+      :gen_tcp.close(listen)
+    end
+  end
+
+  defp read_until_done(_read_fn, _handle, 0), do: flunk("stream never completed")
+
+  defp read_until_done(read_fn, handle, attempts) do
+    decoded = read_fn.(handle) |> Jason.decode!()
+    refute decoded["error"]
+
+    if decoded["done"],
+      do: [decoded],
+      else: [decoded | read_until_done(read_fn, handle, attempts - 1)]
   end
 
   # Drain data frames until the stream surfaces an error; fail loudly if the
@@ -409,14 +588,18 @@ defmodule Opus.HttpStreamHandlerTest do
 
     test "cleanup works on exec_ref from build_stream_imports" do
       edge = EdgeFixtures.edge()
-      ctx = Sanctum.TestContext.local()
 
       # build_stream_imports creates the exec_ref internally;
       # cleanup_registry is called by the executor after completion.
       # We can't access exec_ref directly, but we can verify
       # that build_stream_imports + cleanup_registry round-trips safely.
       {imports, _exec_ref} =
-        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test-cleanup")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          attached_host("catalyst:local.test-cleanup:1.0.0", EdgeFixtures.limits()),
+          "catalyst:local.test-cleanup:1.0.0"
+        )
 
       _stream_ns = imports["cyfr:http/streaming@0.1.0"]
 

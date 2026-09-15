@@ -17,7 +17,7 @@ defmodule PrismWeb.ExecutionsLive do
     "what's running right now / why did this WASM fail / what did the
     formula spawn."
 
-  Both subscribe to `prism:executions` for live updates.
+  Both subscribe to `bus:executions` for live updates.
 
   ## Data shape
 
@@ -48,7 +48,7 @@ defmodule PrismWeb.ExecutionsLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.executions(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.executions(ctx))
     end
 
     {:ok,
@@ -417,7 +417,7 @@ defmodule PrismWeb.ExecutionsLive do
           >
             <option value="" selected={is_nil(@type_filter)}>All types</option>
             <option
-              :for={type <- Sanctum.ComponentRef.executable_types()}
+              :for={type <- Cyfr.ComponentRef.executable_types()}
               value={type}
               selected={@type_filter == type}
             >

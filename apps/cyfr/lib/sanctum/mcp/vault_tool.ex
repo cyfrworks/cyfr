@@ -272,7 +272,7 @@ defmodule Sanctum.MCP.VaultTool do
         # can carry credential material a bare inspect would spell out.
         Logger.warning(
           "[VaultTool] unrenderable reason: " <>
-            inspect(Sanctum.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
+            inspect(Cyfr.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
         )
 
         "the request failed"

@@ -12,8 +12,8 @@ defmodule Sanctum.Test.AuthorityGen do
   import StreamData
   import ExUnitProperties, only: [gen: 2]
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
 
   @types ~w(formula catalyst reagent)
   @names ~w(alpha bravo charlie delta echo)
@@ -193,7 +193,8 @@ defmodule Sanctum.Test.AuthorityGen do
       activation: meta.activation
     }
 
-    {:ok, auth} = Authority.root(profile, blob!(graph_map), Keyword.take(opts, [:ceiling]))
+    ceiling = Keyword.get_lazy(opts, :ceiling, &Sanctum.Policy.Ceiling.platform_ceiling/0)
+    {:ok, auth} = Authority.root(profile, blob!(graph_map), ceiling: ceiling)
     auth
   end
 
@@ -246,15 +247,14 @@ defmodule Sanctum.Test.AuthorityGen do
   end
 
   @doc """
-  Fold a walk through the transition relation, following child outcomes
-  and staying put on deny/invalid. Returns the trace as
+  Fold a walk through the charged transition (`Sanctum.Authority.step/3`),
+  following child outcomes and staying put on deny/invalid. Returns the trace as
   `[{auth_before, step, outcome, auth_after}]`.
   """
   def run_walk(auth, meta, steps) do
     {trace, _final} =
       Enum.map_reduce(steps, auth, fn {fun, target_ref, need} = step, acc ->
-        outcome =
-          Sanctum.Authority.Transition.step(acc, fun, invoke_at(acc, meta, target_ref, need))
+        outcome = Sanctum.Authority.step(acc, fun, invoke_at(acc, meta, target_ref, need))
 
         next =
           case outcome do

@@ -3,62 +3,11 @@
 
 defmodule Compendium.Manifest do
   @moduledoc """
-  Shared manifest decoding utilities.
+  The component manifest's schema: the closed top-level key roster, the
+  declared contracts, and the one validator every write boundary runs.
 
-  Normalizes manifest values from various storage representations
-  (nil, JSON string, map) into a consistent map format.
+  A stored manifest value is decoded to a map by `Cyfr.Manifest`.
   """
-
-  require Logger
-
-  @doc """
-  Decode a manifest value into a map.
-
-  Handles nil (returns empty map), maps (passthrough), and JSON strings.
-  Returns an empty map on decode failure — a malformed manifest degrades to
-  "no declarations", so the failure is logged to avoid a silent capability gap.
-  """
-  @spec decode(nil | map() | binary()) :: map()
-  def decode(nil), do: %{}
-  def decode(manifest) when is_map(manifest), do: manifest
-
-  def decode(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, map} when is_map(map) ->
-        map
-
-      other ->
-        Logger.warning(
-          "[Compendium.Manifest] manifest decode failed (#{inspect(elem_or_self(other))}); " <>
-            "treating as empty — declared capabilities will be missing"
-        )
-
-        %{}
-    end
-  end
-
-  def decode(_), do: %{}
-
-  @doc """
-  Strict counterpart of `decode/1` for write boundaries.
-
-  Registration must never accept a manifest it cannot parse — a malformed
-  manifest would otherwise register a component with zero declared
-  capabilities and skip all manifest validation. Reads of historical rows
-  keep using the lenient `decode/1`.
-  """
-  @spec decode_strict(nil | map() | binary()) :: {:ok, map()} | {:error, :malformed_manifest}
-  def decode_strict(nil), do: {:ok, %{}}
-  def decode_strict(manifest) when is_map(manifest), do: {:ok, manifest}
-
-  def decode_strict(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, map} when is_map(map) -> {:ok, map}
-      _ -> {:error, :malformed_manifest}
-    end
-  end
-
-  def decode_strict(_), do: {:error, :malformed_manifest}
 
   # The closed top-level key roster — every field a manifest may carry,
   # which is also the roster component-guide.md documents. Identity fields
@@ -77,8 +26,6 @@ defmodule Compendium.Manifest do
   # answers on its one export, named so a host can ask for them by name
   # (`Cyfr.Models` reads `model/chat@1`).
   @contract_pattern ~r/\A[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*@[1-9][0-9]*\z/
-
-  @legacy_blocks ~w(setup oauth wasi)
 
   @doc "The closed top-level manifest key roster (docs derive from this)."
   @spec known_keys() :: [String.t()]
@@ -101,7 +48,6 @@ defmodule Compendium.Manifest do
 
   The refusals, in order:
 
-      * unsupported `setup`, `oauth` or `wasi` blocks;
       * unknown top-level keys;
       * malformed `needs` or `caps` blocks;
       * malformed `tincture` or `dependencies` blocks, which feed CSP,
@@ -110,8 +56,7 @@ defmodule Compendium.Manifest do
   """
   @spec validate(map()) :: :ok | {:error, term()}
   def validate(manifest) when is_map(manifest) do
-    with :ok <- reject_legacy_blocks(manifest),
-         :ok <- reject_unknown_keys(manifest),
+    with :ok <- reject_unknown_keys(manifest),
          :ok <- Compendium.Manifest.Needs.validate(manifest),
          :ok <- Compendium.Manifest.Caps.validate(manifest),
          :ok <- validate_tincture_block(manifest),
@@ -182,7 +127,7 @@ defmodule Compendium.Manifest do
   defp valid_agent_catalyst?(nil), do: true
 
   defp valid_agent_catalyst?(ref) when is_binary(ref) and ref != "" do
-    match?({:ok, %{version: nil}}, Sanctum.ComponentRef.parse(ref))
+    match?({:ok, %{version: nil}}, Cyfr.ComponentRef.parse(ref))
   end
 
   defp valid_agent_catalyst?(_), do: false
@@ -334,19 +279,6 @@ defmodule Compendium.Manifest do
   defp valid_dependency_entry?(%{"ref" => ref}) when is_binary(ref), do: true
   defp valid_dependency_entry?(_), do: false
 
-  defp reject_legacy_blocks(manifest) do
-    case Enum.filter(@legacy_blocks, &Map.has_key?(manifest, &1)) do
-      [] ->
-        :ok
-
-      keys ->
-        {:error,
-         {:legacy_manifest_blocks,
-          "Manifest declares retired block(s) #{Enum.join(keys, "/")} — declare needs/caps " <>
-            "instead (see component-guide.md, \"Migrating from setup/oauth\")"}}
-    end
-  end
-
   defp reject_unknown_keys(manifest) do
     case manifest |> Map.keys() |> Enum.filter(&(is_binary(&1) and &1 not in @known_keys)) do
       [] ->
@@ -376,7 +308,4 @@ defmodule Compendium.Manifest do
       %{name: "utilities", description: "General-purpose utilities"}
     ]
   end
-
-  defp elem_or_self({:error, reason}), do: reason
-  defp elem_or_self(other), do: other
 end

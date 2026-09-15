@@ -165,7 +165,7 @@ defmodule Sanctum.Consent.ShapeDigestTest do
     end
 
     test "rejects loose durations in caps" do
-      # Sanctum.Limits.parse_duration/1 tolerates "5mm"; a digest input
+      # Cyfr.Limits.parse_duration/1 tolerates "5mm"; a digest input
       # must not — one duration, one spelling.
       assert {:error, {:invalid_shape, :caps, message}} =
                ShapeDigest.compute(Map.put(@base, :caps, %{"timeout" => "5mm"}))
@@ -198,7 +198,7 @@ defmodule Sanctum.Consent.ShapeDigestTest do
       assert canonical["tool_actions"] == ["a.y", "b.x"]
       refute Map.has_key?(canonical, "release_identity")
 
-      {:ok, digest} = Sanctum.JCS.hash(canonical)
+      {:ok, digest} = Cyfr.JCS.hash(canonical)
       assert digest == digest!(Map.put(@base, :tool_actions, ["b.x", "a.y"]))
     end
   end

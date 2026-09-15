@@ -5,6 +5,20 @@
 
 const mode = process.argv[2] || "well-behaved";
 
+// `exit-at-start` ends before reading anything.
+if (mode === "exit-at-start") process.exit(4);
+
+// `never-ready` reads its input and answers nothing.
+
+// `stubborn` behaves as `well-behaved` but ignores SIGTERM.
+if (mode === "stubborn") process.on("SIGTERM", () => {});
+
+// `ready-after <ms>` answers initialize only once <ms> have passed since it started.
+const readyAt = mode === "ready-after" ? Date.now() + Number(process.argv[3] || 0) : 0;
+
+// `stderr-env` writes its PROBE_OWN value to stderr as it starts.
+if (mode === "stderr-env") process.stderr.write(`starting with ${process.env.PROBE_OWN}\n`);
+
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
@@ -28,6 +42,8 @@ process.stdin.on("data", (chunk) => {
       continue;
     }
 
+    if (mode === "never-ready") continue;
+
     if (msg.method === "initialize") {
       // A peer's OWN request, with an id counter that — like the bridge's —
       // starts at 1. Sent HERE, after initialize arrived and before it is
@@ -38,7 +54,7 @@ process.stdin.on("data", (chunk) => {
         send({ jsonrpc: "2.0", id: 1, method: "roots/list" });
       }
 
-      send({
+      const answer = {
         jsonrpc: "2.0",
         id: msg.id,
         result: {
@@ -46,7 +62,9 @@ process.stdin.on("data", (chunk) => {
           capabilities: {},
           serverInfo: { name: "fake-child", version: "0.0.0" },
         },
-      });
+      };
+      if (mode === "ready-after") setTimeout(() => send(answer), Math.max(0, readyAt - Date.now()));
+      else send(answer);
       continue;
     }
 
@@ -70,14 +88,33 @@ process.stdin.on("data", (chunk) => {
     }
 
     if (msg.method === "tools/call") {
+      // `die-on-call` crashes instead of answering.
+      if (mode === "die-on-call") process.exit(3);
+
+      // `error-env` refuses the call with an error quoting its PROBE_OWN value.
+      if (mode === "error-env") {
+        send({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: `refused with ${process.env.PROBE_OWN}` } });
+        continue;
+      }
+
       // `env-probe` reports what this child can see of its environment —
       // the bridge's secrets must not be in it, its own `env` block must.
+      // `echo-env` answers with the environment variable its argument names.
+      if (mode === "echo-env" || mode === "stderr-env") {
+        const name = msg.params?.arguments?.name;
+        send({
+          jsonrpc: "2.0",
+          id: msg.id,
+          result: { content: [{ type: "text", text: JSON.stringify({ value: process.env[name] ?? null }) }] },
+        });
+        continue;
+      }
+
       const text =
         mode === "env-probe"
           ? JSON.stringify({
               keyring: process.env.CYFR_CRYPTO_KEYRING ?? null,
               dsn: process.env.CYFR_DATABASE_URL ?? null,
-              token: process.env.MCP_BRIDGE_TOKEN ?? null,
               // Every application variable, as a class: none may reach a child.
               cyfr: Object.keys(process.env).filter((k) => k.startsWith("CYFR_")),
               own: process.env.PROBE_OWN ?? null,

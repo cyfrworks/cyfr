@@ -1,18 +1,34 @@
 name: Node CI (mcp-bridge)
 
-# Syntax-check and test the MCP bridge; report npm dependency advisories.
+# Test the MCP bridge and its process helper (cyfr-spawn), prove the image
+# isolates backends from each other and from the bridge and refuses every
+# request it cannot attribute, and report npm dependency advisories.
 
 on:
   push:
     branches: [main]
     paths:
       - 'apps/mcp-bridge/**'
+      - 'apps/spawn/**'
+      # The authentication and spawner-protocol vectors the suites reproduce.
+      - 'tests/fixtures/bridge_auth.json'
+      - 'tests/fixtures/spawn_protocol.json'
+      - 'tests/fixtures/residue-canary.go'
+      - 'tests/bridge-image/**'
       - 'Dockerfile.node'
+      # The isolation test runs the image with the mcp-bridge service's settings.
+      - 'docker-compose.yml'
       - '.github/workflows/node-ci.yml'
   pull_request:
     paths:
       - 'apps/mcp-bridge/**'
+      - 'apps/spawn/**'
+      - 'tests/fixtures/bridge_auth.json'
+      - 'tests/fixtures/spawn_protocol.json'
+      - 'tests/fixtures/residue-canary.go'
+      - 'tests/bridge-image/**'
       - 'Dockerfile.node'
+      - 'docker-compose.yml'
       - '.github/workflows/node-ci.yml'
 
 permissions:
@@ -20,7 +36,7 @@ permissions:
 
 jobs:
   mcp-bridge:
-    name: Check + smoke (mcp-bridge)
+    name: Check + test (mcp-bridge)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -38,101 +54,111 @@ jobs:
         run: npm ci
 
       - name: Syntax check
-        run: node --check server.mjs
+        run: |
+          for module in server.mjs owners.mjs auth.mjs spawn-client.mjs ../../tests/bridge-image/*.mjs; do
+            node --check "$module"
+          done
 
-      # Test framing, request correlation and child lifecycle with a fake stdio server.
+      # The signed control and MCP protocol (authentication, ordering,
+      # versions, leases, nonces, capacity), masking, stdio framing and the
+      # backend lifecycle (spawn, crash, restart, failure, release) through
+      # an in-process fake spawner; the authentication and spawner client
+      # against the shared vectors.
       - name: Unit tests
         run: npm test
 
-      # Boot the bridge with a token and assert the two security-load-bearing
-      # behaviours: /health answers open, and /mcp refuses a missing/wrong
-      # bearer. Also assert the fail-closed boot: no token => exit 1.
-      - name: Smoke test
+      # The bridge starts backends only through cyfr-spawn, which hands it
+      # its channel as fd 3; started any other way it must refuse to run.
+      - name: Refuses to start without the spawner
         run: |
           set -euo pipefail
-          # CYFR_CRYPTO_KEYRING stands in for the app secrets the bridge's
-          # own environment must never forward to a child.
-          export MCP_BRIDGE_TOKEN=ci-smoke-token MCP_BRIDGE_DATA="$RUNNER_TEMP/backends.json" \
-            CYFR_CRYPTO_KEYRING=planted-keyring
-          node server.mjs &
-          BRIDGE_PID=$!
-          for i in $(seq 1 20); do
-            curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1 && break
-            sleep 0.5
-          done
-          curl -fsS http://127.0.0.1:8001/health
-          body='{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8001/mcp \
-            -H 'content-type: application/json' \
-            -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/list' \
-            -d "$body")
-          [ "$code" = "401" ] || { echo "expected 401 without bearer, got $code"; exit 1; }
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8001/mcp \
-            -H 'content-type: application/json' -H 'authorization: Bearer ci-smoke-token' \
-            -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/list' \
-            -d "$body")
-          [ "$code" = "200" ] || { echo "expected 200 with bearer, got $code"; exit 1; }
-          # The bridge's own admin bearer must never reach a spawned child:
-          # add a backend that echoes its environment and assert the token
-          # is absent from what the child saw.
-          add_body='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"add_backend","arguments":{"name":"envprobe","command":"env > \"$RUNNER_TEMP/child-env.txt\"; sleep 2"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
-          curl -s -o /dev/null -X POST http://127.0.0.1:8001/mcp \
-            -H 'content-type: application/json' -H 'authorization: Bearer ci-smoke-token' \
-            -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' \
-            -H 'Mcp-Name: add_backend' \
-            -d "$add_body" || true
-          sleep 1
-          if [ -f "$RUNNER_TEMP/child-env.txt" ] && grep -q "ci-smoke-token" "$RUNNER_TEMP/child-env.txt"; then
-            echo "MCP_BRIDGE_TOKEN leaked into a child environment"
+          key="$(openssl rand -hex 32)"
+          if CYFR_MCP_BRIDGE_KEY="$key" node server.mjs 3<&- 2>"$RUNNER_TEMP/refusal.txt"; then
+            echo "the bridge started without its spawner channel"
             exit 1
           fi
-          if [ -f "$RUNNER_TEMP/child-env.txt" ] && grep -q "planted-keyring" "$RUNNER_TEMP/child-env.txt"; then
-            echo "the bridge's own environment leaked into a child environment"
-            exit 1
-          fi
-          kill "$BRIDGE_PID"
-          if MCP_BRIDGE_TOKEN= MCP_BRIDGE_DATA="$RUNNER_TEMP/backends2.json" node server.mjs; then
-            echo "bridge booted without a token — fail-closed boot is broken"
-            exit 1
-          fi
+          grep -q "fd 3 is not the spawner channel" "$RUNNER_TEMP/refusal.txt"
 
       - name: Audit dependencies (report-only)
         continue-on-error: true
         run: npm audit --audit-level=high
 
-  # Build and scan the MCP bridge image shipped by Compose.
+  spawn:
+    name: vet + test (cyfr-spawn)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/spawn
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: apps/spawn/go.mod
+          cache-dependency-path: apps/spawn/go.sum
+
+      - name: gofmt
+        run: test -z "$(gofmt -l . ../../tests/fixtures)"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -race
+
+      - name: Static build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-spawn" .
+
+  # Build the MCP bridge image shipped by Compose, run it as Compose does to
+  # prove backend isolation and its refusals, and scan it.
   image:
-    name: Build + scan image (mcp-bridge)
+    name: Build, isolate + scan image (mcp-bridge)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+
       - name: Build the image compose would build
         run: docker build -f Dockerfile.node --target mcp-bridge -t cyfr-mcp-bridge:ci .
 
-      - name: Boot smoke as non-root
-        run: |
-          set -euo pipefail
-          docker run -d --name bridge-ci -e MCP_BRIDGE_TOKEN=ci -p 127.0.0.1:8001:8001 cyfr-mcp-bridge:ci
-          for i in $(seq 1 20); do
-            curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1 && break
-            sleep 0.5
-          done
-          curl -fsS http://127.0.0.1:8001/health
-          # The privilege drop is load-bearing: the bridge spawns shell
-          # commands by design and must not do so as root.
-          #
-          # Assert the uid of the server process itself. `docker exec ... id -u`
-          # answers for a NEW process, which starts as the image's default user
-          # — root, because the entrypoint takes ownership of the /data bind
-          # mount before dropping to node, so the image declares no USER. And
-          # PID 1 is the server only under a plain `docker run`: compose puts
-          # docker-init there (`init: true`).
-          uid=$(docker exec bridge-ci sh -c 'for d in /proc/[0-9]*; do [ "$d" = "/proc/$$" ] && continue; { tr "\0" " " < "$d/cmdline" | grep -q server.mjs; } 2>/dev/null || continue; grep -m1 "^Uid:" "$d/status" | cut -f2; exit 0; done; exit 1' || true)
-          [ -n "$uid" ] || { echo "no server.mjs process in the bridge container"; exit 1; }
-          [ "$uid" != "0" ] || { echo "the bridge server is running as root"; exit 1; }
-          echo "bridge server runs as uid $uid"
-          docker rm -f bridge-ci
+      # Two owners' probe backends under the mcp-bridge service's own
+      # settings, driven by requests signed as CYFR signs them
+      # (tests/bridge-image/controller.mjs): each runs under its own pooled
+      # uid (never 0 or the bridge's), neither can read the other's home or
+      # /proc environ or signal it, the spawner holds exactly
+      # SETUID|SETGID|KILL (CapEff 0xe0) and no inet socket, the bridge holds
+      # no capability, the root is read-only, and releasing an owner leaves no
+      # process of its uid, a setsid daemon ignoring SIGTERM included, and no
+      # home. Also: the refused boot without a valid key, the spawner's
+      # refusal of Docker's default capabilities, and retirement on loss and
+      # on stop.
+      - name: Backend isolation
+        env:
+          BRIDGE_IMAGE: cyfr-mcp-bridge:ci
+        run: node --test tests/bridge-image/isolation.test.mjs
+
+      # A forged MAC, a timestamp outside the window, a control message below
+      # the high-water mark, a stale or future epoch, a replayed nonce and a
+      # captured invoke sent again after `docker restart` are refused, and a
+      # sync the uid pool cannot hold spawns nothing.
+      - name: Refusals
+        env:
+          BRIDGE_IMAGE: cyfr-mcp-bridge:ci
+        run: node --test tests/bridge-image/refusals.test.mjs
+
+      # With a pool of one uid: a backend can write outside its home only
+      # into the home root; the entries it leaves there, a directory tree it
+      # made unwritable, System V shared memory, semaphores and message
+      # queues and a POSIX message queue (tests/fixtures/residue-canary.go)
+      # are gone before the next owner runs under the same uid. The spawner
+      # refuses a writable root, a shared /tmp and Docker's default /dev/shm.
+      - name: Residue across uid reuse
+        env:
+          BRIDGE_IMAGE: cyfr-mcp-bridge:ci
+        run: node --test tests/bridge-image/residue.test.mjs
 
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

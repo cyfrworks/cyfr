@@ -18,7 +18,7 @@ defmodule Compendium.DependencyResolver do
   Extract static dependencies from a manifest map.
 
   Parses `dependencies.static` entries, validates each ref via
-  `Sanctum.ComponentRef.parse/1`, and returns a list of dependency maps
+  `Cyfr.ComponentRef.parse/1`, and returns a list of dependency maps
   ready for storage.
 
   Returns `{:ok, [dep_map]}` or `{:error, reason}`.
@@ -45,7 +45,7 @@ defmodule Compendium.DependencyResolver do
                  entry["reason"] || entry[:reason]}
               end
 
-            case Sanctum.ComponentRef.parse(ref_str) do
+            case Cyfr.ComponentRef.parse(ref_str) do
               {:ok, parsed} ->
                 dep = %{
                   dependency_ref: ref_str,
@@ -227,7 +227,7 @@ defmodule Compendium.DependencyResolver do
 
     case result do
       {:ok, component} ->
-        manifest = Compendium.Manifest.decode(component.manifest)
+        manifest = Cyfr.Manifest.decode(component.manifest)
         {:ok, component.id, manifest}
 
       {:error, _} = err ->

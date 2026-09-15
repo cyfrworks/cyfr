@@ -39,7 +39,7 @@ defmodule Aqua.Approvals do
           approval_id: String.t(),
           turn_id: String.t(),
           step_id: String.t(),
-          conversation_id: String.t(),
+          thread_id: String.t(),
           decision: String.t(),
           resolution_kind: String.t() | nil,
           replayed: boolean(),
@@ -48,7 +48,7 @@ defmodule Aqua.Approvals do
 
   @doc """
   Decide a pending approval as the calling person. `choice`: `:decision`
-  (`:approved` | `:declined`), `:scope` (`:once` by default; `:conversation`
+  (`:approved` | `:declined`), `:scope` (`:once` by default; `:thread`
   or `:always` with an approval, `:never` with a decline), `:reason`.
 
   Answers the outcome, with `pending` the turn's approvals still open
@@ -66,7 +66,7 @@ defmodule Aqua.Approvals do
          {:ok, turn} <- Tape.turn(ctx, approval.turn_id),
          {:ok, step} <- Tape.step(ctx, approval.step_id),
          {:ok, card} <- Tape.message(ctx, approval.message_id) do
-      intent = Arca.ConversationStorage.payload(card)["intent"] || %{}
+      intent = Arca.ThreadStorage.payload(card)["intent"] || %{}
 
       cond do
         approval.status != "pending" ->
@@ -94,6 +94,21 @@ defmodule Aqua.Approvals do
       end
     end
   end
+
+  @doc """
+  Whether `approval` was opened for exactly `proposal`: its digest is the
+  proposal's. An approval without a digest matches nothing.
+  """
+  @spec proposal?(
+          %{required(:proposal_digest) => String.t() | nil, optional(atom()) => term()},
+          term()
+        ) ::
+          boolean()
+  def proposal?(%{proposal_digest: digest}, proposal)
+      when is_binary(digest) and digest != "" and is_map(proposal),
+      do: Aqua.Loop.Policy.proposal_digest(proposal) == digest
+
+  def proposal?(_approval, _proposal), do: false
 
   @doc """
   How long a card stays open, in seconds: the estate's
@@ -133,7 +148,7 @@ defmodule Aqua.Approvals do
         Enum.count(approvals, fn approval ->
           with {:ok, turn} <- Tape.turn(ctx, approval.turn_id),
                {:ok, card} <- Tape.message(ctx, approval.message_id) do
-            intent = Arca.ConversationStorage.payload(card)["intent"] || %{}
+            intent = Arca.ThreadStorage.payload(card)["intent"] || %{}
 
             match?(
               {:ok, _},
@@ -255,7 +270,7 @@ defmodule Aqua.Approvals do
       approval_id: approval.id,
       turn_id: approval.turn_id,
       step_id: step.id,
-      conversation_id: approval.conversation_id,
+      thread_id: approval.thread_id,
       decision: approval.status,
       resolution_kind: approval.resolution_kind,
       replayed: replayed?,
@@ -278,13 +293,7 @@ defmodule Aqua.Approvals do
   defp fetch_approval(_ctx, _id), do: {:error, :not_found}
 
   # A card is consumed by the digest of the proposal it showed.
-  defp digest_matches?(%{proposal_digest: ""}, _intent), do: true
-  defp digest_matches?(%{proposal_digest: nil}, _intent), do: true
-
-  defp digest_matches?(%{proposal_digest: digest}, %{"proposal" => proposal})
-       when is_map(proposal),
-       do: Aqua.Loop.Policy.proposal_digest(proposal) == digest
-
+  defp digest_matches?(approval, %{"proposal" => proposal}), do: proposal?(approval, proposal)
   defp digest_matches?(_approval, _intent), do: false
 
   defp expired?(%{expires_at: %DateTime{} = at}),
@@ -304,7 +313,7 @@ defmodule Aqua.Approvals do
     name = turn.orchestrator
 
     with {:ok, orchestrator} <- Orchestrator.resolve(ctx, Orchestrator.by_name(name)),
-         {:ok, rows} <- Aqua.ToolGrants.for_conversation(ctx, turn.conversation_id, name) do
+         {:ok, rows} <- Aqua.ToolGrants.for_thread(ctx, turn.thread_id, name) do
       policy = orchestrator |> Orchestrator.with_grants(rows) |> Orchestrator.tool_policy()
 
       case Map.get(policy, "#{tool}.#{action}") do
@@ -398,7 +407,7 @@ defmodule Aqua.Approvals do
       decision: approval.status,
       scope: Aqua.ApprovalScope.parse(approval.scope),
       resolution_kind: approval.resolution_kind,
-      conversation_id: turn.conversation_id,
+      thread_id: turn.thread_id,
       turn_id: turn.id,
       user_id: ctx.user_id,
       athanor_id: Context.athanor!(ctx),

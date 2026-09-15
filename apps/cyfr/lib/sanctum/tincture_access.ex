@@ -23,7 +23,8 @@ defmodule Sanctum.TinctureAccess do
 
   require Logger
 
-  alias Sanctum.{Context, ComponentRef}
+  alias Cyfr.ComponentRef
+  alias Sanctum.Context
 
   @doc """
   Look up a tincture for authenticated/private access.
@@ -85,7 +86,7 @@ defmodule Sanctum.TinctureAccess do
   # public exactly when an active public profile exists for it — what
   # profile.publish mints and profile.revoke retires.
   defp tincture_public?(ctx, publisher, tincture_name) do
-    ref = Sanctum.ComponentRef.build("tincture", publisher, tincture_name)
+    ref = Cyfr.ComponentRef.build("tincture", publisher, tincture_name)
 
     case Sanctum.Consent.Source.impl().profiles(ctx, ref) do
       {:ok, profiles} ->

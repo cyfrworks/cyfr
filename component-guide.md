@@ -29,8 +29,8 @@ your-project/
         │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
         │   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
         ├── aqua/          # The athanor's AQUA: the soul, its roles, its scrolls
-        ├── conversations/ # Chat attachment files
-        ├── notes/         # What was kept out of a conversation — host-only, never a guest scope
+        ├── threads/ # Chat attachment files
+        ├── notes/         # What was kept out of a thread — host-only, never a guest scope
         ├── payloads/      # Retained execution inputs and results — host-only, by digest
         └── data/          # Files WASM components store — their `data/` scope, and yours
 ```
@@ -38,7 +38,7 @@ your-project/
 Every folder is laid when the athanor is provisioned. The Files page in the
 console, and the `file` tool behind it, show this tree by tier: `data/` is
 open, `components/` and `aqua/` are shaped, `notes/` and
-`conversations/` are read-only there, and `payloads/` is the server's own and
+`threads/` are read-only there, and `payloads/` is the server's own and
 has no name on the page.
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
@@ -72,7 +72,7 @@ data/athanors/{athanor_id}/components/catalysts/local/my-api/0.1.0/
 | OAuth tokens | — | `cyfr:oauth/token` | — | — |
 | File storage | — | `cyfr:storage/files` | — | — |
 | Invoke sub-components | — | — | `cyfr:formula/invoke` | — |
-| Emit events (SSE/LiveView) | — | — | `invoke::emit` | — |
+| Emit events (SSE/LiveView) | — | `cyfr:emit/events` | `invoke::emit` | — |
 | MCP tool access | — | — | Via `invoke::call` | — |
 | Frontend UI | — | — | — | HTML/JS/CSS |
 | Backend component invoke | — | — | — | `cyfr.invoke()` |
@@ -166,7 +166,7 @@ interface compute { compute: func(input: string) -> string; }
 world reagent { export compute; }
 ```
 
-**Catalyst (HTTP + secrets)** — e.g. an API wrapper like claude, openai:
+**Catalyst (HTTP + secrets + streamed events)** — e.g. a model catalyst like claude, openai:
 ```wit
 package cyfr:catalyst@0.1.0;
 interface run { run: func(input: string) -> string; }
@@ -175,6 +175,7 @@ world catalyst {
     import cyfr:http/fetch@0.1.0;
     import cyfr:http/streaming@0.1.0;
     import cyfr:vault/read@0.1.0;
+    import cyfr:emit/events@0.1.0;
 }
 ```
 
@@ -393,6 +394,12 @@ The recommended way to compile is `cyfr build compile`, which reads the source, 
 cyfr build compile catalyst:local.my-api:0.1.0
 ```
 
+A component's first build resolves its crates and saves the `Cargo.lock` it wrote beside the source; every later build runs `--locked` against it, so a dependency the lock does not cover is refused with cargo's message. After adding or changing a dependency, compile once with `--resolve` (the `build` tool's `resolve: true`) to resolve afresh and keep the new lock:
+
+```bash
+cyfr build compile --resolve catalyst:local.my-api:0.1.0
+```
+
 **Manual build** (if you prefer direct cargo-component): `cargo component build --release --target wasm32-wasip2` from the `src/` directory, then `cp target/wasm32-wasip2/release/*.wasm ../{type}.wasm`, `cargo clean`, and `cyfr register`.
 
 ### Parallel Invocation (Formula)
@@ -481,8 +488,6 @@ See the bundled `seed/components/formulas/local/list-models` formula for a produ
 ## Manifest (`cyfr-manifest.json`)
 
 The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (`cyfr profile grant <ref>` or the console's Vault page).
-
-> The retired `setup`, `oauth`, and `wasi` blocks are replaced by `needs` and `caps`. Registration rejects manifests still carrying them — see [Migrating from setup/oauth blocks](#migrating-from-setupoauth-blocks).
 
 ### Field Reference
 
@@ -730,10 +735,10 @@ Host enforces: domain allowlist, rate limits, SSRF prevention, private IP blocki
 ### `cyfr:http/streaming` — 3-step polling SSE
 ```
 request(json) -> string   // Same request format as fetch → returns {"handle": "..."}
-read(handle) -> string    // {"data": "...", "done": false} or {"data": "", "done": true}
+read(handle) -> string    // {"data": "...", "done": false, "status": 200} or {"data": "", "done": true, "status": 200}
 close(handle) -> string   // Clean up — always call when done
 ```
-Protocol: `request` → loop `read` until `done: true` → `close`. Same policy enforcement as fetch.
+Protocol: `request` → loop `read` until `done: true` → `close`. Same policy enforcement as fetch. A `read` waits up to 100 ms for a chunk and answers `"data": ""` when none arrived; `status` is the provider's HTTP status once its response began (a non-2xx body streams like any other), and a request that failed before any response answers `{"error": {"type": "request_failed", ...}}`.
 
 **Buffered SSE parsing** — the standard pattern used by all LLM catalysts (claude, openai, gemini):
 ```rust
@@ -793,12 +798,17 @@ streaming::close(handle);
 | Error | Cause |
 |-------|-------|
 | `stream_limit` | Max 3 concurrent streams per execution |
-| `timeout` | Stream exceeded 60s timeout |
+| `timeout` | The stream outlasted the node's consented `timeout`, or no data arrived for that long |
+| `request_failed` | The request failed before any response (connection refused, TLS, DNS) |
+| `stream_error` | The transport broke mid-stream |
 | `invalid_handle` | Unknown or already-closed handle |
 | `response_too_large` | Cumulative data exceeds `max_response_size` |
 
 ### `cyfr:vault/read` — `get(name) -> result<string, string>`
 Returns `Ok(value)` or `Err("access-denied: {name}")`. Values are served from the bound vault entry's material, projected to the `fields` the need declared — credentials live in host memory and never enter WASM at rest. Requires a granted profile whose vault-entry projection includes `name`.
+
+### `cyfr:emit/events` — `emit(json-event) -> string`
+Push one event (a JSON object) to the execution's event stream before `run` answers — what a caller subscribed to the execution sees as it happens. Answers `{"ok": true, "sequence": "N.n"}`, `{"ok": true}` when streamed text is held back to mask a credential across events, or `{"error": {...}}` (too large for the node's `max_request_size`, over the execution's budget of 3000 a minute, not an object). A refused event never stops the run. Model catalysts emit the `model/chat@1` stream events (see [Model catalysts](#model-catalysts-the-modelchat1-contract)).
 
 ### `cyfr:oauth/token` — `get-access-token(provider) -> result<string, string>`
 Returns `Ok(access_token)` or `Err("authorization_required: ...")`. The host manages the full OAuth lifecycle — client credentials, token exchange, and automatic refresh are handled transparently. WASM only sees short-lived access tokens (masked in output by SecretMasker).
@@ -934,9 +944,21 @@ The contract is three operations of the ordinary catalyst envelope (`{"operation
   "contracts": ["model/chat@1"], "provider": "anthropic",
   "tools": true, "provider_tools": ["web_search"],
   "media_types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"],
-  "streaming": false, "defaults": {"max_tokens": 16384}
+  "streaming": true, "defaults": {"max_tokens": 16384}
 }}
 ```
+
+With a `model`, the same answer carries that model's `context_window` and, where known, `max_output_tokens`:
+
+```json
+{"operation": "describe", "params": {"model": "claude-sonnet-4-6"}}
+```
+```json
+{"status": 200, "data": {"contracts": ["model/chat@1"], "streaming": true, "model": "claude-sonnet-4-6",
+  "context_window": 200000, "max_output_tokens": 64000, "...": "the capabilities above"}}
+```
+
+The window comes from the provider's models API where it reports one (claude, gemini, openrouter — this takes the key) and from a table in the catalyst otherwise (openai, grok), which knows a model only by an id the provider documents for it (and, for openai, its dated snapshots `<id>-YYYY-MM-DD`). A model the catalyst does not know is refused as `unknown_model` (status 404), and so is a model name outside the provider's id grammar — ASCII letters, digits, `.`, `_`, `-`, plus only the separators that provider's ids use, at most 128 bytes, with no `.` or `..` segment — in `describe` and `chat` alike, before the key is read or any request is made. The assistant sizes every request against this answer, and a turn whose model cannot be described does not start.
 
 **`models`** — the models the bound key can reach, in one shape:
 
@@ -1004,9 +1026,21 @@ A refusal is typed, with the provider's own body beside it when the refusal is t
 {"status": 429, "error": {"type": "rate_limited", "message": "…", "provider": {"…": "the provider's body"}}}
 ```
 
-`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `unknown_operation`.
+`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer; the assistant retries it, as it does `rate_limited` and `overloaded`), `unknown_model`, `unknown_operation`.
 
-The catalyst world's `run` returns once, so `describe` reports `streaming: false` and a whole response is answered.
+**Streaming.** While `chat` runs, the catalyst streams the answer as events on its execution's event stream through `cyfr:emit/events.emit`, then answers the whole response as above:
+
+| Event | Fields |
+|-------|--------|
+| `text.delta` | `text` — visible answer text, in order |
+| `tool_call.start` | `index`, `id`, `name` — the call's id is the one the response carries |
+| `tool_call.delta` | `index`, `arguments` — a fragment of the call's JSON arguments |
+| `tool_call.end` | `index` |
+| `usage` | `usage` — as in the response |
+| `stop` | `stop_reason` — as in the response |
+| `error` | `error` — `type` and `message`, as the refusal answered |
+
+Deltas are batched: a batch goes out when it reaches 256 bytes, when it has been held 50 ms, when a read of the provider's stream finds nothing new, and before any other event. The host masks every credential the execution was handed out of each event, holding back the tail of streamed text so a credential split across two deltas is masked whole, and counts every event against the execution's emit budget (3000 a minute); a refused event never stops the run. The assistant shows a chat step's `text.delta` events as the answer arrives and keeps the whole response as the step's rows; tool-call fragments are not shown.
 
 To ship a model catalyst of your own: declare the contract, answer the three operations, and cover the mapping with host-target unit tests (`cargo test` in `src/`, as the bundled ones do). A request that does not parse is refused as `invalid_request` before any key is read; `describe` answers without a key; `chat` and `models` never answer provider-shaped data.
 
@@ -1077,153 +1111,6 @@ A consent covers every release of the component line unless the operator pins a 
 
 ---
 
-## Migrating from setup/oauth blocks
-
-Registration rejects manifests still carrying `setup.policy`, `setup.secrets`, `oauth`, or `wasi`. The migration is mechanical; republish at a new version.
-
-### Field mapping
-
-| Legacy | New |
-|--------|-----|
-| `setup.policy.allowed_domains` | `caps.egress.domains` |
-| `setup.policy.allowed_methods` | `caps.egress.methods` |
-| `setup.policy.allowed_private_ips` | `caps.egress.private_ips` |
-| `setup.policy.allowed_paths` | `caps.storage.paths` |
-| `setup.policy.allowed_actions` | `caps.storage.actions` |
-| `setup.policy.allowed_tools` | `caps.tools` |
-| `setup.policy` duration + numeric fields (`timeout`, `batch_timeout`, `max_memory_bytes`, `max_request_size`, `max_response_size`, `max_concurrent_tasks`, `rate_limit`) | `caps.limits.*` |
-| `setup.secrets` list | one need whose `fields` are exactly the old secret names |
-| `oauth` block | a need of type `oauth:<provider>` + `scopes` |
-| `wasi` | delete — it was never runtime-parsed |
-
-Your binary is untouched: the need's `fields` are the same names it already passes to `cyfr:vault/read.get`, and OAuth catalysts keep calling `get-access-token("<provider>")`.
-
-### Example: API-key catalyst (claude 1.0.0 → 1.1.0)
-
-Before:
-
-```json
-"setup": {
-  "policy": {
-    "allowed_domains": ["api.anthropic.com"],
-    "allowed_methods": ["GET", "POST"],
-    "max_memory_bytes": 67108864,
-    "max_request_size": 1048576,
-    "max_response_size": 5242880,
-    "rate_limit": {"requests": 100, "window": "1m"},
-    "timeout": "3m"
-  },
-  "secrets": [
-    {"description": "API key from https://console.anthropic.com/settings/keys",
-     "name": "ANTHROPIC_API_KEY", "required": true}
-  ]
-},
-"wasi": {"http": true, "secrets": true, "streaming": true}
-```
-
-After:
-
-```json
-"needs": {
-  "api_key": {
-    "type": "api_key:anthropic.com",
-    "reason": "to call the Anthropic API with your key (console.anthropic.com/settings/keys)",
-    "required": true,
-    "fields": ["ANTHROPIC_API_KEY"]
-  }
-},
-"caps": {
-  "egress": {
-    "domains": ["api.anthropic.com"],
-    "methods": ["GET", "POST"]
-  },
-  "limits": {
-    "timeout": "3m",
-    "max_memory_bytes": 67108864,
-    "max_request_size": 1048576,
-    "max_response_size": 5242880,
-    "rate_limit": {"requests": 100, "window": "1m"}
-  }
-}
-```
-
-### Example: OAuth catalyst (gmail 0.1.2 → 0.2.0)
-
-Before:
-
-```json
-"oauth": {
-  "google": {
-    "auth_style": "params",
-    "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
-    "client_id_secret": "GMAIL_CLIENT_ID",
-    "client_secret_secret": "GMAIL_CLIENT_SECRET",
-    "extra_params": {"access_type": "offline", "prompt": "consent"},
-    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
-    "token_url": "https://oauth2.googleapis.com/token"
-  }
-},
-"setup": {
-  "policy": {
-    "allowed_domains": ["gmail.googleapis.com"],
-    "allowed_methods": ["GET"],
-    "timeout": "1m"
-  },
-  "secrets": [
-    {"description": "Google OAuth Client ID from Cloud Console",
-     "name": "GMAIL_CLIENT_ID", "required": true},
-    {"description": "Google OAuth Client Secret from Cloud Console",
-     "name": "GMAIL_CLIENT_SECRET", "required": true}
-  ]
-},
-"wasi": {"http": true, "secrets": false, "streaming": false}
-```
-
-After:
-
-```json
-"needs": {
-  "google": {
-    "type": "oauth:google",
-    "reason": "to read your Gmail inbox",
-    "required": true,
-    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
-  }
-},
-"caps": {
-  "egress": {
-    "domains": ["gmail.googleapis.com"],
-    "methods": ["GET"]
-  },
-  "limits": {"timeout": "1m"}
-}
-```
-
-Note what vanished: the endpoints (`authorize_url`, `token_url`, `auth_style`, `extra_params`) moved to the vault entry, and the client-credential secrets are gone entirely — the operator sets them once per provider via `oauth.set_client`.
-
-### Example: pure caps, no needs (the bundled http catalyst 1.1.0)
-
-A component that takes everything it needs from call arguments declares no `needs` at all:
-
-```json
-"caps": {
-  "egress": {
-    "domains": ["*"],
-    "methods": ["GET", "POST", "HEAD"],
-    "schemes": ["https", "http"]
-  },
-  "limits": {
-    "max_memory_bytes": 67108864,
-    "max_request_size": 1048576,
-    "max_response_size": 5242880,
-    "rate_limit": {"requests": 60, "window": "1m"},
-    "timeout": "30s"
-  }
-}
-```
-
----
-
 ## Bundled Components and Upgrades
 
 The components the server ships (`seed/components/`) are the default every
@@ -1274,7 +1161,7 @@ the server's, and each folder is one of three tiers.
   (scaffold, pull, fork, the AQUA page), and one the server ships is reset,
   never deleted. An edit inside a component re-registers its row; an edit
   under `aqua/` rewrites the agent index.
-- **Read-only** — `notes/` and `conversations/`. Shown and downloaded here,
+- **Read-only** — `notes/` and `threads/`. Shown and downloaded here,
   written by their own surfaces.
 
 The `file` tool (`list`, `read`, `write`, `delete`) is the same surface on
@@ -1372,6 +1259,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `resource_limit` | `max_concurrent_tasks`, emit size, or emit rate exceeded |
 | `timeout` | Exceeded `batch_timeout` |
 | `tool_denied` | MCP tool not covered by the granted tool patterns |
+| `encoding_error` | A tool's result could not be encoded as JSON |
 | `unknown` | The host produced a result in an unexpected shape |
 
 `setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan` and a `cyfr profile grant <ref>` command). Formulas can surface this to users via `emit`.

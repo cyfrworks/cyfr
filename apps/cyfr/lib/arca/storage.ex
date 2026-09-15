@@ -50,12 +50,12 @@ defmodule Arca.Storage do
     the way it does for rows, with a context focused on it. Each scope has
     exactly one spelling module for its intra-root shapes:
     `components/` → `Compendium.ComponentPath`; `aqua/` →
-    `Compendium.AquaPath`; `conversations/` →
-    `Arca.ConversationStorage.blob_root/1` (the conversation domain's one
+    `Compendium.AquaPath`; `threads/` →
+    `Arca.ThreadStorage.blob_root/1` (the thread domain's one
     module owns both planes' spellings); `data/` — what components
     store — has none by design (the guest names its own paths inside it;
     `guest_scopes/0` says which roots a guest may name at all, applied by
-    `Opus.StorageHandler` at the guest boundary, so a `data/` grant can
+    `Cyfr.Execution.GuestStorage` at the guest boundary, so a `data/` grant can
     never see a host scope). The
     global roots keep their literal at their single consumer, with a
     roster-membership witness in that consumer's test.
@@ -77,15 +77,14 @@ defmodule Arca.Storage do
 
       data/
       ├── cyfr.db                        # SQLite database (all structured data)
-      ├── mcp-bridge/                    # the mcp-bridge sidecar's own files — inside the
-      │                                  # root (compose mounts it), never an Arca path
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/                       # blobs/sha256/{hex}; manifests/{registry}/{repo}/{tag}.json
       ├── system/                        # Global: server-internal scratch (health probe)
       └── athanors/{athanor_id}/         # Tenant-scoped: everything the athanor owns
           ├── components/{type}s/{publisher}/{name}/{version}/
           ├── aqua/                      # the athanor's AQUA agent definitions
-          ├── conversations/             # chat attachment blobs
+          ├── threads/                   # chat attachment blobs
+          ├── notes/                     # host-only notes kept out of a thread
           ├── payloads/                  # retained execution bodies — tenant-reserved, system-written
           └── data/                      # what components store — the guest's `data/` scope
 
@@ -196,7 +195,7 @@ defmodule Arca.Storage do
   # - class: `:tenant` roots live under `athanors/{athanor_id}/`;
   #   `:tenant_reserved` roots live there too but only the server's own
   #   machinery may mutate them (`Arca.Overlay`'s internal-write scope or
-  #   an `auth_method: :system` context — the `meta/` origin marks);
+  #   an `auth_method: :system` context);
   #   `:global` roots stay at the storage root.
   # - guest name: what a WASM guest may call the root (`nil` = host-only,
   #   invisible at the guest boundary). A guest scope is a physical
@@ -223,16 +222,16 @@ defmodule Arca.Storage do
   #   `:read` is shown and downloaded here, managed on its own page;
   #   `:system` is the server's own and is not shown at all.
   #
-  # The volume holds more than Arca paths: `cyfr.db` (+ WAL/SHM) and the
-  # `mcp-bridge/` sidecar state live inside `:base_path`, and Caddy keeps
-  # its own named volumes — none of them are, or should become, rows here.
+  # The volume holds more than Arca paths: `cyfr.db` (+ WAL/SHM) lives
+  # inside `:base_path`, and Caddy keeps its own named volumes — none of
+  # them are, or should become, rows here.
   # Arca addresses tenant and global blobs; everything else on the volume
   # is another program's file.
   @layout [
     {"aqua", :tenant, nil, :overlay, :shaped},
     {"components", :tenant, "components", :overlay, :shaped},
-    {"conversations", :tenant, nil, nil, :read},
-    # Host-only notes belong to the athanor in focus and survive conversation
+    {"threads", :tenant, nil, nil, :read},
+    # Host-only notes belong to the athanor in focus and survive thread
     # deletion. Guests have no direct storage scope for this root.
     {"notes", :tenant, nil, nil, :read},
     # An execution's retained input and result bytes, referenced by an
@@ -315,7 +314,7 @@ defmodule Arca.Storage do
   # The guest (WASM) storage vocabulary: the roots a guest may name, each
   # mapped to the tenant scope it stores under — the athanor's root of the
   # same name, a physical sibling of the host scopes (aqua/,
-  # conversations/) so a `data/` grant can never see them.
+  # threads/) so a `data/` grant can never see them.
   @guest_scopes Map.new(
                   for {root, _class, guest, _seed, _tier} <- @layout,
                       guest != nil,
@@ -324,7 +323,7 @@ defmodule Arca.Storage do
 
   @doc """
   The guest storage scopes: what a WASM guest may name in a path, mapped
-  to the tenant scope each one stores under. `Opus.StorageHandler`
+  to the tenant scope each one stores under. `Cyfr.Execution.GuestStorage`
   applies this at the guest boundary; keeping the map here means the
   roots a guest may reach are written down in the one layout table.
   """
@@ -370,11 +369,12 @@ defmodule Arca.Storage do
 
   @doc """
   Whether `name` is spelled like an in-flight atomic write (`<file>.tmp.<n>`,
-  the shape `Arca.Adapters.Local` renames over its target). One predicate,
-  two consumers: the facade reserves the shape on writes so no adapter
-  ever stores content a Local listing would hide, and the Local adapter —
-  the only one that creates the shape — hides it from listings and walks
-  (S3 never stores one, so it filters nothing).
+  the shape `Arca.Adapters.Local` renames over its target, and the staged
+  and retired trees of its `replace_tree/3`). One predicate, two consumers:
+  the facade reserves the shape on writes so no adapter ever stores content
+  a Local listing would hide, and the Local adapter — the only one that
+  creates the shape — hides it from listings and walks (S3 never stores
+  one, so it filters nothing).
   """
   @spec tmp_name?(String.t()) :: boolean()
   def tmp_name?(name) when is_binary(name), do: name =~ ~r/\.tmp\.\d+$/
@@ -529,8 +529,8 @@ defmodule Arca.Storage do
   Whether a guest-facing storage path names a guest scope: the empty string
   (the scope listing), a bare scope (`"data"`, `"components"`), or anything
   under one (`"data/notes.txt"`). One predicate shared by the manifest
-  parser (`Compendium.Manifest.Caps`) and the WIT boundary
-  (`Opus.StorageHandler.validate_path_scope/1`), so a grant no runtime
+  parser (`Compendium.Manifest.Caps`) and the guest storage boundary
+  (`Cyfr.Execution.GuestStorage`), so a grant no runtime
   would honor is refused at parse — and the two layers cannot drift.
 
   ## Examples
@@ -565,7 +565,7 @@ defmodule Arca.Storage do
   Whether this context can name a tenant tree at all: a resolved
   `athanor_id` matching the id grammar. The boundary spelling of the
   invariant `tenant_segments/1` enforces by raising — total predicates
-  (`Arca.exists?/2`) and guest-facing refusals (`Opus.StorageHandler`)
+  (`Arca.exists?/2`) and guest-facing refusals (`Cyfr.Execution.GuestStorage`)
   consume this; everything else keeps the fail-closed raise.
   """
   @spec athanor_ready?(Context.t()) :: boolean()
@@ -905,5 +905,30 @@ defmodule Arca.Storage do
   """
   @callback sweep_stale_tmp(non_neg_integer()) :: {:ok, non_neg_integer()} | {:error, term()}
 
-  @optional_callbacks sweep_stale_tmp: 1
+  @typedoc """
+  One file of a replacement tree: its path relative to the tree, and its
+  bytes or a function answering them (resolved while the tree is staged,
+  one file at a time).
+  """
+  @type tree_file :: {path(), binary() | (-> {:ok, binary()} | {:error, term()})}
+
+  @doc """
+  Optional: replace the directory tree at `path` with `files` so a reader
+  sees the previous tree until the new one is whole, then the new one.
+
+  The adapter stages every file where no reader looks and swaps the staged
+  tree in for the one at `path`. A failure before the swap — a file
+  function's error, a write error — answers that error, leaves the tree at
+  `path` as it was and leaves nothing staged. A path with no tree becomes
+  the new tree.
+
+  An adapter that cannot hide a partial tree from its readers does not
+  export this: `Arca.replace_tree/4` then refuses with
+  `{:error, :atomic_replace_unsupported}` and writes nothing.
+  Implementations must validate every path through their one path
+  builder, as for any other callback.
+  """
+  @callback replace_tree(Context.t(), path(), [tree_file()]) :: :ok | error()
+
+  @optional_callbacks sweep_stale_tmp: 1, replace_tree: 3
 end

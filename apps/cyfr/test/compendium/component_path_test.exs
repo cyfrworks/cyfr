@@ -101,7 +101,7 @@ defmodule Compendium.ComponentPathTest do
   describe "type_plural/1" do
     test "is the one pluralization rule the compile-time roster follows" do
       assert ComponentPath.type_plurals() ==
-               Enum.map(Sanctum.ComponentRef.valid_types(), &ComponentPath.type_plural/1)
+               Enum.map(Cyfr.ComponentRef.valid_types(), &ComponentPath.type_plural/1)
     end
   end
 

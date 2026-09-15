@@ -13,6 +13,11 @@ defmodule Locus.BuilderClient do
   caller cannot tell which path built the artifact. Progress cannot
   stream over one POST; the builder's log lines are replayed into
   `on_progress` at completion.
+
+  A builder at another protocol (`Locus.BuilderProtocol`) is refused as
+  `{:builder_protocol_mismatch, builder_protocol, builder_release}`, its
+  own values or nil when it reported none, whether it refused this
+  server's request or answered in a shape this release does not read.
   """
 
   require Logger
@@ -27,6 +32,49 @@ defmodule Locus.BuilderClient do
   def enabled? do
     is_binary(url()) and url() != ""
   end
+
+  @doc """
+  The toolchains the builder container reports on its `/health`, in the
+  shape of `Locus.Builder.available_toolchains/0`: every language this
+  node speaks, unavailable when the builder does not name it.
+  """
+  @spec toolchains() ::
+          {:ok, map()}
+          | {:error, :builder_unreachable | {:builder_protocol_mismatch, term(), term()}}
+  def toolchains do
+    protocol = Locus.BuilderProtocol.version()
+
+    case Req.request(
+           method: :get,
+           url: url() <> "/health",
+           receive_timeout: 5_000,
+           max_retries: 0
+         ) do
+      {:ok,
+       %Req.Response{status: 200, body: %{"protocol" => ^protocol, "toolchains" => reported}}}
+      when is_map(reported) ->
+        {:ok,
+         Map.new(Locus.Builder.languages(), fn language ->
+           {language, toolchain(reported[Atom.to_string(language)])}
+         end)}
+
+      {:ok, %Req.Response{status: 200, body: %{"toolchains" => _} = body}} ->
+        {:error, mismatch(body)}
+
+      other ->
+        Logger.error("[Locus.BuilderClient] builder health unreadable: #{inspect(other)}")
+        {:error, :builder_unreachable}
+    end
+  end
+
+  defp toolchain(%{"available" => available} = reported),
+    do: %{
+      available: available == true,
+      command: reported["command"],
+      description: reported["description"]
+    }
+
+  defp toolchain(_), do: %{available: false, command: nil, description: nil}
 
   @doc "Compile via the builder service. Same result shape as `Locus.Builder.compile/3`."
   @spec compile(map(), atom(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -43,16 +91,23 @@ defmodule Locus.BuilderClient do
     if total > ceiling do
       {:error, {:source_too_large, total, ceiling}}
     else
-      do_compile_remote(source_files, language, target_type, on_progress)
+      do_compile_remote(
+        source_files,
+        language,
+        target_type,
+        on_progress,
+        Keyword.get(opts, :resolve, false) == true
+      )
     end
   end
 
-  defp do_compile_remote(source_files, language, target_type, on_progress) do
+  defp do_compile_remote(source_files, language, target_type, on_progress, resolve?) do
     body = %{
       "source_files" =>
         Map.new(source_files, fn {path, content} -> {path, Base.encode64(content)} end),
       "language" => Atom.to_string(language),
-      "target_type" => Atom.to_string(target_type)
+      "target_type" => Atom.to_string(target_type),
+      "resolve" => resolve?
     }
 
     on_progress.(:compiling, "Building in the builder container…")
@@ -61,20 +116,25 @@ defmodule Locus.BuilderClient do
       method: :post,
       url: url() <> "/build",
       json: body,
-      headers: [{"authorization", "Bearer " <> (token() || "")}],
+      headers: [
+        {"authorization", "Bearer " <> (token() || "")},
+        {Locus.BuilderProtocol.protocol_header(),
+         Integer.to_string(Locus.BuilderProtocol.version())},
+        {Locus.BuilderProtocol.release_header(), Locus.BuilderProtocol.release()}
+      ],
       receive_timeout: @receive_timeout_ms,
       max_retries: 0,
       compressed: false,
       decode_body: false,
       # The ceiling streams: a misbehaving builder cannot flood this node's
-      # heap before a post-hoc size check would run. `Cyfr.Network`'s
-      # collector is pure and compiled into the builder release too.
-      into: Cyfr.Network.bounded_collector(@max_response_bytes)
+      # heap before a post-hoc size check would run. The collector is a
+      # contracts module, so the builder release carries it.
+      into: Cyfr.BoundedBody.collector(@max_response_bytes)
     ]
 
     case Req.request(request) do
       {:ok, %Req.Response{status: status} = resp} ->
-        case Cyfr.Network.collected_body(resp, @max_response_bytes) do
+        case Cyfr.BoundedBody.read(resp, @max_response_bytes) do
           {:ok, raw} ->
             handle_response(status, decode_json_body(raw), on_progress)
 
@@ -92,20 +152,37 @@ defmodule Locus.BuilderClient do
     end
   end
 
-  defp handle_response(200, %{"ok" => true} = built, on_progress) do
+  @doc false
+  # Public for its test: how each answer of the builder is read.
+  @spec handle_response(integer(), map(), (atom(), String.t() -> any())) ::
+          {:ok, map()} | {:error, term()}
+  def handle_response(401, _body, _on_progress), do: {:error, :builder_unauthorized}
+
+  # Not JSON: a proxy's or a server's own error page, not a builder's answer.
+  def handle_response(status, body, _on_progress) when body == %{},
+    do: {:error, {:builder_unexpected_status, status}}
+
+  def handle_response(status, body, on_progress) do
+    if Map.get(body, "protocol") == Locus.BuilderProtocol.version(),
+      do: handle_current(status, body, on_progress),
+      else: {:error, mismatch(body)}
+  end
+
+  defp handle_current(200, %{"ok" => true} = built, on_progress) do
     replay_logs(built, on_progress)
     decode_result(built)
   end
 
-  defp handle_response(422, %{"error" => error} = built, on_progress) do
+  defp handle_current(status, %{"error" => error} = built, on_progress)
+       when status in [422, 429] do
     replay_logs(built, on_progress)
     {:error, {:builder_failed, error}}
   end
 
-  defp handle_response(401, _body, _on_progress), do: {:error, :builder_unauthorized}
-
-  defp handle_response(status, _body, _on_progress),
+  defp handle_current(status, _body, _on_progress),
     do: {:error, {:builder_unexpected_status, status}}
+
+  defp mismatch(body), do: {:builder_protocol_mismatch, body["protocol"], body["version"]}
 
   defp decode_json_body(raw) do
     case Jason.decode(raw) do
@@ -130,7 +207,8 @@ defmodule Locus.BuilderClient do
   @spec decode_result(map()) :: {:ok, map()} | {:error, term()}
   def decode_result(%{"wasm_base64" => b64} = built) when is_binary(b64) do
     with {:ok, bytes} <- decode64(b64, "wasm_base64"),
-         {:ok, validation} <- validate_wasm(bytes) do
+         {:ok, validation} <- validate_wasm(bytes),
+         {:ok, lockfile} <- lockfile(built["lockfile"]) do
       {:ok,
        %{
          wasm_bytes: bytes,
@@ -138,26 +216,18 @@ defmodule Locus.BuilderClient do
          size: validation.size,
          exports: validation.exports,
          language: built["language"],
-         target_type: built["target_type"]
+         target_type: built["target_type"],
+         lockfile: lockfile
        }}
     end
   end
 
   def decode_result(%{"output_files" => files} = built) when is_map(files) do
     with {:ok, decoded} <- decode_output_files(files) do
-      # Derived from what was actually decoded — never the builder's claim,
-      # for the same reason the wasm branch re-validates. This is a content
-      # hash of the returned file set; the digest a tincture is REGISTERED
-      # under is derived again at registration from the stored bytes
-      # (`Compendium.TinctureValidator`).
-      digest =
-        decoded
-        |> Enum.sort()
-        |> Enum.map(fn {path, bytes} -> [path, 0, bytes] end)
-        |> IO.iodata_to_binary()
-        |> Cyfr.Digest.sha256()
-
-      size = decoded |> Map.values() |> Enum.map(&byte_size/1) |> Enum.sum()
+      # Derived from what was actually decoded, never the builder's claim,
+      # and the same file-set digest registration derives from the stored
+      # bytes.
+      {digest, size} = Cyfr.Digest.file_set(decoded)
 
       {:ok,
        %{
@@ -173,6 +243,18 @@ defmodule Locus.BuilderClient do
 
   def decode_result(built),
     do: {:error, {:builder_malformed_result, Map.keys(built)}}
+
+  # A lock becomes part of the unit's sources, so it is held to the source
+  # ceiling. A build that left none answers without one.
+  defp lockfile(nil), do: {:ok, nil}
+
+  defp lockfile(lockfile) when is_binary(lockfile) do
+    if byte_size(lockfile) <= Locus.Builder.max_source_bytes(),
+      do: {:ok, lockfile},
+      else: {:error, {:builder_malformed_result, ["lockfile"]}}
+  end
+
+  defp lockfile(_lockfile), do: {:error, {:builder_malformed_result, ["lockfile"]}}
 
   defp decode_output_files(files) do
     Enum.reduce_while(files, {:ok, %{}}, fn {path, b64}, {:ok, acc} ->

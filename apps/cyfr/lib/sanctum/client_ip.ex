@@ -157,7 +157,7 @@ defmodule Sanctum.ClientIp do
   defp strip_trusted(chain, cidrs) do
     chain
     |> Enum.reverse()
-    |> Enum.drop_while(fn hop -> Enum.any?(cidrs, &Sanctum.Cidr.match?(hop, &1)) end)
+    |> Enum.drop_while(fn hop -> Enum.any?(cidrs, &Cyfr.Cidr.match?(hop, &1)) end)
     |> List.first(List.last(chain))
   end
 

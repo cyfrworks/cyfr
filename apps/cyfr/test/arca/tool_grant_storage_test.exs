@@ -14,31 +14,30 @@ defmodule Arca.ToolGrantStorageTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     n = System.unique_integer([:positive])
 
-    conversation = %{
+    thread = %{
       athanor_id: "ath_#{n}",
-      scope: "conversation",
+      scope: "thread",
       effect: "allow",
-      conversation_id: "conv_#{n}",
+      thread_id: "thread_#{n}",
       agent_name: "aqua",
       tool: "notes",
       action: "keep",
       granted_by: "local|idp|#{n}"
     }
 
-    {:ok,
-     conversation: conversation, agent: %{conversation | scope: "agent", conversation_id: nil}}
+    {:ok, thread: thread, agent: %{thread | scope: "agent", thread_id: nil}}
   end
 
-  test "the same key written twice is one row carrying the newer answer", %{conversation: row} do
+  test "the same key written twice is one row carrying the newer answer", %{thread: row} do
     assert {:ok, _} = ToolGrantStorage.put(row)
     assert {:ok, stored} = ToolGrantStorage.put(%{row | effect: "deny"})
     assert stored.effect == "deny"
 
     assert [%{effect: "deny"}] =
-             elem(ToolGrantStorage.list_for_conversation(row.athanor_id, row.conversation_id), 1)
+             elem(ToolGrantStorage.list_for_thread(row.athanor_id, row.thread_id), 1)
   end
 
-  test "a duplicate conversation-scope row is refused, not raised", %{conversation: row} do
+  test "a duplicate thread-scope row is refused, not raised", %{thread: row} do
     assert {:ok, _} = ToolGrantStorage.put(row)
     assert {:error, %Ecto.Changeset{} = changeset} = duplicate(row)
     assert unique_violation?(changeset)
@@ -51,7 +50,7 @@ defmodule Arca.ToolGrantStorageTest do
   end
 
   test "an insert that fails inside put/1 leaves the earlier decision standing", %{
-    conversation: row
+    thread: row
   } do
     # The delete and the insert are one transaction: a failed insert must
     # not leave the key with no row at all. Forced here with a primary-key
@@ -64,17 +63,17 @@ defmodule Arca.ToolGrantStorageTest do
       ToolGrantStorage.put(row |> Map.put(:id, other.id) |> Map.put(:effect, "deny"))
     end
 
-    rows = elem(ToolGrantStorage.list_for_conversation(row.athanor_id, row.conversation_id), 1)
+    rows = elem(ToolGrantStorage.list_for_thread(row.athanor_id, row.thread_id), 1)
     assert Enum.find(rows, &(&1.id == first.id)).effect == "allow"
     assert length(rows) == 2
   end
 
-  test "a refused duplicate leaves the earlier row standing", %{conversation: row} do
+  test "a refused duplicate leaves the earlier row standing", %{thread: row} do
     assert {:ok, first} = ToolGrantStorage.put(row)
     assert {:error, _} = duplicate(row)
 
     assert [%{id: id}] =
-             elem(ToolGrantStorage.list_for_conversation(row.athanor_id, row.conversation_id), 1)
+             elem(ToolGrantStorage.list_for_thread(row.athanor_id, row.thread_id), 1)
 
     assert id == first.id
   end

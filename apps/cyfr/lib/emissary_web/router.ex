@@ -236,9 +236,8 @@ defmodule EmissaryWeb.Router do
     get "/callback", OAuthCallbackController, :callback
   end
 
-  # OAuth/OIDC authentication routes. GitHub/Google browser sign-in is
-  # device flow on `/login`; `/auth/:provider` is the OIDC kickoff (and
-  # leftover web OAuth if a client secret is configured). Static paths
+  # Sign-in routes. GitHub/Google sign in by device flow on `/login`;
+  # `/auth/:provider` is the OIDC kickoff. Static paths
   # sit above `/:provider` so they cannot be captured as a provider name.
   scope "/auth", EmissaryWeb do
     pipe_through :browser
@@ -388,14 +387,12 @@ defmodule EmissaryWeb.Router do
       scope "/a/:athanor" do
         # Forward to /chat with the athanor selected.
         live "/", ChatRedirectLive, :index
-        # AQUA page and agents-path redirect.
         live "/aqua", AquaLive, :index
         live "/files", FilesLive, :index
-        live "/agents", AquaRedirectLive, :index
         # /activities: unified activities feed (mcp_log + execution fan-out).
         live "/activities", ActivitiesLive, :index
         # /enforcements: live policy-decision feed (Arca.PolicyLog rows from
-        # Opus.Executor + HTTP egress + tincture rate limiter). Click-through
+        # Cyfr.Execution.Admission + HTTP egress + tincture rate limiter). Click-through
         # to /activities?request_id=… for the request-anchored causal chain.
         live "/enforcements", EnforcementsLive, :index
         # /executions: dedicated Opus execution monitor (parent_execution_id

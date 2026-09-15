@@ -16,8 +16,8 @@ defmodule Cyfr.Ops.Catalog do
   │  Cyfr.Ops.Catalog (GenServer)                          │
   │  ├── Arca.Cache keys: {:mcp_tool, name}                         │
   │  │   └── {:mcp_tool, "retention"} => {Emissary.MCP.Tools.RecordsProvider, %{desc, ...}}   │
-  │  │   └── {:mcp_tool, "execution"} => {Opus.MCP, %{...}}        │
-  │  └── Providers: [Emissary.MCP.Tools.RecordsProvider, Opus.MCP, ...]                       │
+  │  │   └── {:mcp_tool, "execution"} => {Cyfr.Execution.MCP, %{...}}        │
+  │  └── Providers: [Emissary.MCP.Tools.RecordsProvider, Cyfr.Execution.MCP, ...]                       │
   └─────────────────────────────────────────────────────────────────┘
   ```
 
@@ -40,9 +40,10 @@ defmodule Cyfr.Ops.Catalog do
   operation: a component reaches nothing by itself. A guest-planed
   context with an Authority reaches the in-chain set — the actions whose
   annotation names the `:in_chain` plane, derived from the declarations
-  and nothing else — and only through `Sanctum.Authority.Transition.step/3`,
-  which answers for the chain's grants; the identity conjunct is then
-  the caller's own permission. An external-plane caller, a person or a
+  and nothing else — and only through `Sanctum.Authority.step/3`, the
+  transition relation with a spawn's budget charged, which answers for the
+  chain's grants; the identity conjunct is then the caller's own
+  permission. An external-plane caller, a person or a
   key, is judged by the annotations alone: plane, auth, permission,
   consent class, scope. There is no rule that depends on which runner is
   asking.
@@ -260,7 +261,7 @@ defmodule Cyfr.Ops.Catalog do
   """
   def call_in_chain(name, ctx, args, authority, opts \\ [])
 
-  def call_in_chain(name, %Context{} = ctx, args, %Sanctum.Authority{} = authority, opts)
+  def call_in_chain(name, %Context{} = ctx, args, %Cyfr.Authority{} = authority, opts)
       when is_map(args) do
     guest_fn = Keyword.get(opts, :guest_fn, :call)
 
@@ -276,12 +277,12 @@ defmodule Cyfr.Ops.Catalog do
 
     args =
       args
-      |> Map.drop(["parent_execution_id", "root_execution_id", "conversation_id", "attempt"])
+      |> Map.drop(["parent_execution_id", "root_execution_id", "thread_id", "attempt"])
       |> put_lineage(Keyword.get(opts, :lineage))
 
     with :ok <- check_in_chain_reachable(name, args),
          {:ok, target, server} <- in_chain_target(ctx, name, args) do
-      case Sanctum.Authority.Transition.step(authority, guest_fn, target) do
+      case Sanctum.Authority.step(authority, guest_fn, target) do
         {:allow_tool, resource} ->
           warn_on_description_drift(ctx, authority, resource)
 
@@ -318,11 +319,11 @@ defmodule Cyfr.Ops.Catalog do
 
             {:error, reason} ->
               # The slot the transition charged goes back: the row refused it.
-              Sanctum.Authority.Budget.release(authority.budget)
+              Sanctum.Authority.BudgetCounter.release(authority.budget)
 
               {:error,
                "Denied by chain authority: " <>
-                 "#{Sanctum.Authority.Transition.deny_message(reason)} for '#{name}'"}
+                 "#{Cyfr.Authority.Transition.deny_message(reason)} for '#{name}'"}
           end
 
         {:deny, reason} ->
@@ -330,7 +331,7 @@ defmodule Cyfr.Ops.Catalog do
           # `inspect`, which put internal terms on the guest's wire.
           {:error,
            "Denied by chain authority: " <>
-             "#{Sanctum.Authority.Transition.deny_message(reason)} for '#{name}'"}
+             "#{Cyfr.Authority.Transition.deny_message(reason)} for '#{name}'"}
 
         {:invalid, {:malformed_target, fun, tag}} ->
           {:error, "Invalid in-chain call: #{fun}/#{tag}"}
@@ -366,7 +367,7 @@ defmodule Cyfr.Ops.Catalog do
 
   # The hold an outbound execution's admission stamps: the reservation the
   # chain's authority was minted with and the charge row taken at the gate.
-  defp hold_of(%Sanctum.Authority{budget: %{id: reservation_id}}, %{id: id}),
+  defp hold_of(%Cyfr.Authority{budget: %{id: reservation_id}}, %{id: id}),
     do: %{reservation_id: reservation_id, id: id}
 
   defp hold_of(_authority, _charge), do: nil
@@ -419,10 +420,10 @@ defmodule Cyfr.Ops.Catalog do
     # The attempt of the calling execution, so a provider answering the
     # caller its own payload knows which attempt's it is.
     |> Cyfr.MapUtil.put_present("attempt", Map.get(lineage, :attempt))
-    # The conversation an approved card came from — host-stamped like the
+    # The thread an approved card came from — host-stamped like the
     # execution ids, so a tool that records provenance reads it from here
     # and never from what the model wrote.
-    |> Cyfr.MapUtil.put_present("conversation_id", Map.get(lineage, :conversation_id))
+    |> Cyfr.MapUtil.put_present("thread_id", Map.get(lineage, :thread_id))
   end
 
   @doc """
@@ -549,7 +550,7 @@ defmodule Cyfr.Ops.Catalog do
     reachable =
       for {action, %{planes: planes}} <- actions,
           :in_chain in planes,
-          Sanctum.Authority.Transition.tool_granted?(authority, name, action),
+          Cyfr.Authority.Transition.tool_granted?(authority, name, action),
           do: action
 
     case {reachable, get_in(tool_def, ["inputSchema", "properties", "action", "enum"])} do
@@ -581,7 +582,7 @@ defmodule Cyfr.Ops.Catalog do
           Enum.filter(tools, fn t ->
             case String.split(t["name"], ":", parts: 2) do
               [_, remote] ->
-                Sanctum.Authority.Transition.external_tool_granted?(authority, digest, remote)
+                Cyfr.Authority.Transition.external_tool_granted?(authority, digest, remote)
 
               _ ->
                 false
@@ -730,6 +731,10 @@ defmodule Cyfr.Ops.Catalog do
         # dispatchable, whatever the handler would have said. The HTTP path
         # never gets here (Cyfr.Ops.Contract enforces the schema enum first);
         # this refuses the in-process callers.
+        {:error, {:unknown_action, "#{name}.#{action}"}}
+
+      not in_chain? and :external not in Annotations.planes(meta, action) ->
+        # An action a running chain alone may call is not served outside one.
         {:error, {:unknown_action, "#{name}.#{action}"}}
 
       true ->
@@ -950,16 +955,15 @@ defmodule Cyfr.Ops.Catalog do
 
   @doc """
   Audit every internal tool provider for complete per-action annotations.
-  For each tool, checks that every value in
-  `input_schema.properties.action.enum` has a matching key in
-  `annotations.actions` carrying both a non-nil `kind` and a non-empty
-  `planes` list of valid planes.
+  For each tool, every verb in `input_schema.properties.action.enum` and
+  every verb `annotations.actions` declares must carry a valid annotation:
+  a `kind`, a non-empty list of valid `planes`, and valid values for the
+  optional keys, `recovery: :replay_safe` on a read only.
 
   The taxonomy is only as good as its coverage: an unannotated action has
   no risk class and no reachability, so it cannot be reasoned about at
-  either gate. A CI test asserts this returns `:ok` — the boot-time call is
-  advisory (and rescued) precisely so a taxonomy bug cannot take the
-  registry down.
+  either gate. The catalog runs this at boot and refuses to start on any
+  finding.
 
   Skips `Emissary.MCP.ExternalProvider` (its `mcp_servers` definition is
   audited; the upstream-tool proxy is exempt — those are classified as
@@ -993,7 +997,7 @@ defmodule Cyfr.Ops.Catalog do
     # the registry load would break on, not tolerate it.
     actions_meta = Annotations.declared_actions(tool)
 
-    Enum.flat_map(enum, fn verb ->
+    Enum.flat_map(Enum.uniq(enum ++ Map.keys(actions_meta)), fn verb ->
       case audit_action(Map.get(actions_meta, verb)) do
         :ok -> []
         {:error, reason} -> [%{provider: module, tool: tool.name, action: verb, reason: reason}]
@@ -1006,7 +1010,7 @@ defmodule Cyfr.Ops.Catalog do
   @valid_auth [:anonymous, :signed_in, :required]
   @valid_consent [:interactive, :staging]
   @valid_scopes [:platform]
-  @valid_standing [:conversation, false]
+  @valid_standing [:thread, false]
   @valid_recovery [:replay_safe]
 
   defp audit_action(%{} = annotation) do
@@ -1056,7 +1060,7 @@ defmodule Cyfr.Ops.Catalog do
         tool
         |> Annotations.declared_actions()
         |> Enum.filter(fn {_verb, annotation} ->
-          Map.get(annotation, :recovery) == :replay_safe
+          Annotations.recovery_of(annotation) == :replay_safe
         end)
         |> Enum.map(fn {verb, _} -> "#{tool.name}.#{verb}" end)
       end)
@@ -1100,41 +1104,22 @@ defmodule Cyfr.Ops.Catalog do
         end
     end
 
-    # Load all configured providers into Arca.Cache
-    load_providers()
-    schedule_refresh()
-    # Defer provider auditing to handle_continue and log failures without stopping the catalog.
-    {:ok, %{}, {:continue, :audit_action_kinds}}
-  end
-
-  @impl true
-  def handle_continue(:audit_action_kinds, state) do
-    log_action_kinds_audit()
-    {:noreply, state}
-  end
-
-  # Run the action-kind audit and log any missing :kind annotations. The
-  # audit never raises from this hook — drift is surfaced through logs (or,
-  # for tests, by calling `audit_action_kinds/0` directly and asserting on
-  # the result). Wrapped in try/rescue so a malformed tool definition can't
-  # bring down the catalog.
-  defp log_action_kinds_audit do
+    # An action the gates cannot classify is a boot failure, like a
+    # provider that cannot load.
     case audit_action_kinds() do
       :ok ->
         :ok
 
-      {:error, missing} ->
-        lines = Enum.map(missing, &"  - #{&1.tool}.#{&1.action} (#{inspect(&1.provider)})")
+      {:error, findings} ->
+        lines = Enum.map(findings, &"  - #{&1.tool}.#{&1.action}: #{&1.reason}")
 
-        Logger.warning(
-          "[Cyfr.Ops.Catalog] MCP tool actions missing :kind annotation:\n" <>
-            Enum.join(lines, "\n")
-        )
+        raise "tool annotations failed the catalog audit; refusing to boot:\n" <>
+                Enum.join(lines, "\n")
     end
-  rescue
-    e ->
-      Logger.error("[Cyfr.Ops.Catalog] action-kinds audit crashed: #{Exception.message(e)}")
-      :ok
+
+    load_providers()
+    schedule_refresh()
+    {:ok, %{}}
   end
 
   @impl true
@@ -1391,6 +1376,35 @@ defmodule Cyfr.Ops.Catalog do
       [] -> :ok
       missing -> {:error, missing}
     end
+  end
+
+  @doc """
+  Every `tool.action` served outside a running chain: the declared
+  actions whose planes include `:external`.
+  """
+  @spec external_tool_actions() :: [String.t()]
+  def external_tool_actions do
+    for module <- available_providers(),
+        tool <- module.tools(),
+        {action, annotation} <- Annotations.actions_of(tool),
+        :external in Map.get(annotation, :planes, []),
+        do: "#{tool.name}.#{action}"
+  end
+
+  @doc """
+  Every `tool.action` annotated `host: :intercepted`: the actions a
+  formula's host runs under the chain's authority rather than dispatching
+  through the catalog, sorted.
+  """
+  @spec host_intercepted_actions() :: [String.t()]
+  def host_intercepted_actions do
+    Enum.sort(
+      for module <- available_providers(),
+          tool <- module.tools(),
+          {action, _annotation} <- Annotations.actions_of(tool),
+          Annotations.host_intercepted?(tool, action),
+          do: "#{tool.name}.#{action}"
+    )
   end
 
   # Every `tool.action` the loaded providers declare — what a consent

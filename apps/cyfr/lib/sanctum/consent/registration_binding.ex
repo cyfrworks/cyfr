@@ -46,7 +46,7 @@ defmodule Sanctum.Consent.RegistrationBinding do
   end
 
   defp name_level(target_ref) do
-    case Sanctum.ComponentRef.to_name_ref(target_ref) do
+    case Cyfr.ComponentRef.to_name_ref(target_ref) do
       {:ok, name_ref} -> {:ok, name_ref}
       {:error, reason} -> {:error, {:invalid_target, reason}}
     end

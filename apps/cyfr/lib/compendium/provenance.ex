@@ -226,7 +226,7 @@ defmodule Compendium.Provenance do
           | nil
   def upstream_status(%Context{} = ctx, component) do
     with forked when is_binary(forked) <- forked_from(component),
-         {:ok, %Sanctum.ComponentRef{} = cref} <- Sanctum.ComponentRef.parse(forked),
+         {:ok, %Cyfr.ComponentRef{} = cref} <- Cyfr.ComponentRef.parse(forked),
          {:ok, rows} <-
            Arca.ComponentStorage.list_components(ctx,
              name: cref.name,
@@ -285,7 +285,7 @@ defmodule Compendium.Provenance do
   # Lineage lives IN the manifest, deliberately: it travels with the
   # content on push and pull, and provenance stays derived, never stored.
   defp forked_from(row) do
-    case Compendium.Manifest.decode(Map.get(row, :manifest)) do
+    case Cyfr.Manifest.decode(Map.get(row, :manifest)) do
       %{"forked_from" => forked} when is_binary(forked) -> forked
       _ -> nil
     end
@@ -367,7 +367,7 @@ defmodule Compendium.Provenance do
     with {:ok, manifest} <- Arca.get_json(ctx, prefix ++ [ComponentPath.manifest_name()]),
          {:ok, bytes} <- Arca.get(ctx, prefix ++ [ComponentPath.wasm_name(type)]) do
       digest = Compendium.WasmValidator.compute_digest(bytes)
-      Compendium.ReleaseDigest.compute(digest, Compendium.Manifest.decode(manifest))
+      Compendium.ReleaseDigest.compute(digest, Cyfr.Manifest.decode(manifest))
     else
       {:error, :not_found} -> {:error, :not_shipped}
       {:error, reason} -> {:error, reason}

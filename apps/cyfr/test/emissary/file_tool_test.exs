@@ -48,7 +48,7 @@ defmodule Emissary.MCP.FileToolTest do
 
   test "the catalog serves the tree in the console's words", %{ctx: ctx} do
     assert {:ok, %{entries: folders}} = Catalog.call_external("file", ctx, %{"action" => "list"})
-    assert Enum.map(folders, & &1.name) == ~w(data aqua components conversations notes)
+    assert Enum.map(folders, & &1.name) == ~w(data aqua components threads notes)
 
     assert {:ok, %{written: "data/hello.txt", size: 5}} =
              Catalog.call_external("file", ctx, %{

@@ -273,6 +273,29 @@ defmodule Sanctum.Tenancy.PairsTest do
       assert {:ok, ^pair} = Athanors.create_pair(bob, alice)
     end
 
+    test "two DMs minted at once cannot both pass the cap", %{
+      alice: alice,
+      bob: bob,
+      carol: carol
+    } do
+      original = Application.get_env(:cyfr, :caps, [])
+      Application.put_env(:cyfr, :caps, Keyword.put(original, :max_pairs_per_person, 1))
+      on_exit(fn -> Application.put_env(:cyfr, :caps, original) end)
+
+      results =
+        [bob, carol]
+        |> Task.async_stream(&Athanors.create_pair(alice, &1),
+          max_concurrency: 2,
+          timeout: 10_000
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert [{:error, {:limit_reached, :max_pairs_per_person, 1}}, {:ok, _}] =
+               Enum.sort_by(results, &elem(&1, 0))
+
+      assert Enum.count(Athanors.list_for_user(alice), &(&1.roster == "frozen")) == 1
+    end
+
     test "an ended DM frees its place under the pair cap", %{
       alice: alice,
       bob: bob,

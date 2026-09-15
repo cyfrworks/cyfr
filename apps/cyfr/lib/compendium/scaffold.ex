@@ -58,7 +58,7 @@ defmodule Compendium.Scaffold do
             [
               {base_path ++ [Compendium.ComponentPath.manifest_name()],
                manifest_for(name, type, version)},
-              {base_path ++ ["src", "Cargo.toml"], cargo_toml_for(type_atom)},
+              {base_path ++ ["src", "Cargo.toml"], Cyfr.CargoToml.template(type_atom)},
               {base_path ++ ["src", "src", "lib.rs"], lib_rs_for(type_atom)}
             ] ++ wit_files(base_path, type_atom)
         end
@@ -95,7 +95,7 @@ defmodule Compendium.Scaffold do
   defp validate_name(name) when is_binary(name) do
     # The component name grammar lives in one place; a scaffold that accepted
     # a name registration refuses would strand the user one step later.
-    case Sanctum.ComponentRef.validate_name(name) do
+    case Cyfr.ComponentRef.validate_name(name) do
       :ok -> :ok
       {:error, reason} -> {:error, "Invalid component name: '#{name}'. #{reason}"}
     end
@@ -106,7 +106,7 @@ defmodule Compendium.Scaffold do
   defp validate_type(nil), do: {:error, "Missing required argument: type"}
 
   defp validate_type(type) when is_binary(type) do
-    if type in Sanctum.ComponentRef.valid_types() do
+    if type in Cyfr.ComponentRef.valid_types() do
       :ok
     else
       {:error,
@@ -121,7 +121,7 @@ defmodule Compendium.Scaffold do
 
   # Use the shared component version grammar.
   defp validate_version(version) when is_binary(version) do
-    case Sanctum.ComponentRef.validate_version(version) do
+    case Cyfr.ComponentRef.validate_version(version) do
       :ok -> :ok
       {:error, _} -> {:error, "Invalid version: '#{version}'. Must be valid semver (e.g. 0.1.0)"}
     end
@@ -164,7 +164,7 @@ defmodule Compendium.Scaffold do
 
   # The one spelling of a local reference — never hand-interpolated.
   defp local_ref(type, name, version) do
-    Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+    Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
       type: type,
       namespace: Compendium.ComponentPath.default_publisher(),
       name: name,
@@ -339,121 +339,6 @@ defmodule Compendium.Scaffold do
   end
 
   # ============================================================================
-  # Cargo.toml Templates
-  # ============================================================================
-
-  @doc """
-  Canonical Cargo.toml template for a component type.
-
-  Single source of truth for the template — `Locus.Builder` delegates here.
-  `include_oauth_wit: false` omits the `cyfr:oauth` WIT dependency from the
-  catalyst template: the build path materializes only the WIT worlds every
-  catalyst needs, and a user project that uses oauth declares it in its own
-  Cargo.toml (which the builder treats as authoritative for WIT deps).
-  """
-  def cargo_toml_for(type, opts \\ [])
-
-  def cargo_toml_for(:reagent, _opts) do
-    """
-    [package]
-    name = "cyfr-component"
-    version = "0.1.0"
-    edition = "2021"
-
-    [lib]
-    crate-type = ["cdylib"]
-
-    [dependencies]
-    wit-bindgen-rt = "0.25"
-    serde_json = "1.0"
-
-    [package.metadata.component]
-    package = "cyfr:reagent"
-
-    [package.metadata.component.target]
-    world = "reagent"
-    path = "wit"
-
-    [profile.release]
-    opt-level = "s"
-    lto = true
-    codegen-units = 1
-    strip = true
-    """
-  end
-
-  def cargo_toml_for(:catalyst, opts) do
-    wit_deps =
-      [
-        ~s("cyfr:vault" = { path = "wit/deps/cyfr-vault" }),
-        ~s("cyfr:http" = { path = "wit/deps/cyfr-http" }),
-        ~s("cyfr:storage" = { path = "wit/deps/cyfr-storage" })
-      ] ++
-        if Keyword.get(opts, :include_oauth_wit, true),
-          do: [~s("cyfr:oauth" = { path = "wit/deps/cyfr-oauth" })],
-          else: []
-
-    """
-    [package]
-    name = "cyfr-component"
-    version = "0.1.0"
-    edition = "2021"
-
-    [lib]
-    crate-type = ["cdylib"]
-
-    [dependencies]
-    wit-bindgen-rt = "0.25"
-    serde_json = "1.0"
-
-    [package.metadata.component]
-    package = "cyfr:catalyst"
-
-    [package.metadata.component.target]
-    world = "catalyst"
-    path = "wit"
-
-    [package.metadata.component.target.dependencies]
-    #{Enum.join(wit_deps, "\n")}
-
-    [profile.release]
-    opt-level = "s"
-    lto = true
-    codegen-units = 1
-    strip = true
-    """
-  end
-
-  def cargo_toml_for(:formula, _opts) do
-    """
-    [package]
-    name = "cyfr-component"
-    version = "0.1.0"
-    edition = "2021"
-
-    [lib]
-    crate-type = ["cdylib"]
-
-    [dependencies]
-    wit-bindgen-rt = "0.25"
-    serde_json = "1.0"
-
-    [package.metadata.component]
-    package = "cyfr:formula"
-
-    [package.metadata.component.target]
-    world = "formula"
-    path = "wit"
-
-    [profile.release]
-    opt-level = "s"
-    lto = true
-    codegen-units = 1
-    strip = true
-    """
-  end
-
-  # ============================================================================
   # WIT Files
   # ============================================================================
 
@@ -473,9 +358,11 @@ defmodule Compendium.Scaffold do
 
   defp next_steps("catalyst", reference, _template) do
     [
-      "Edit #{Compendium.ComponentPath.manifest_name()} to declare the needs and caps blocks " <>
-        "(storage grants default to none; 'data/' is the component-private scope — " <>
-        "grant 'components/' only when the component genuinely manages component trees)",
+      "Declare the needs and caps blocks in #{Compendium.ComponentPath.manifest_name()} " <>
+        "through Files — the console's Files page or the files tool; a chain's source tool " <>
+        "reads the manifest but never changes it (storage grants default to none; 'data/' " <>
+        "is the component-private scope — grant 'components/' only when the component " <>
+        "genuinely manages component trees)",
       "Edit src/src/lib.rs to implement your catalyst logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"
@@ -484,9 +371,11 @@ defmodule Compendium.Scaffold do
 
   defp next_steps("formula", reference, _template) do
     [
-      "Edit #{Compendium.ComponentPath.manifest_name()} to declare the needs and caps blocks " <>
-        "(storage grants default to none; 'data/' is the component-private scope — " <>
-        "grant 'components/' only when the component genuinely manages component trees)",
+      "Declare the needs and caps blocks in #{Compendium.ComponentPath.manifest_name()} " <>
+        "through Files — the console's Files page or the files tool; a chain's source tool " <>
+        "reads the manifest but never changes it (storage grants default to none; 'data/' " <>
+        "is the component-private scope — grant 'components/' only when the component " <>
+        "genuinely manages component trees)",
       "Edit src/src/lib.rs to implement your formula logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"
@@ -612,12 +501,7 @@ defmodule Compendium.Scaffold do
       {base_path ++ ["package.json"], react_package_json(name)},
       {base_path ++ ["tsconfig.json"], react_tsconfig()},
       {base_path ++ ["vite.config.ts"], react_vite_config()},
-      # The source entry lives under `src/`, not at the version root. A
-      # build writes its own `index.html` at the root — that is what the
-      # tincture serves — so a source entry beside it is overwritten by the
-      # first successful build, and the next build has no entry to start
-      # from. Vite is pointed at `src/` and told to emit back up to `dist/`.
-      {base_path ++ ["src", "index.html"], react_index_html(name)},
+      {base_path ++ ["index.html"], react_index_html(name)},
       {base_path ++ ["src", "main.tsx"], react_main_tsx()},
       {base_path ++ ["src", "App.tsx"], react_app_tsx(name)},
       {base_path ++ ["src", "index.css"], tincture_style_css()},
@@ -634,7 +518,7 @@ defmodule Compendium.Scaffold do
       publisher: Compendium.ComponentPath.default_publisher(),
       description: "TODO: Describe your tincture",
       tincture: %{
-        entry: "index.html",
+        entry: "dist/index.html",
         icon: "palette",
         build: %{tool: "vite"},
         window: %{width: 800, height: 600, resizable: true}
@@ -695,13 +579,8 @@ defmodule Compendium.Scaffold do
     export default defineConfig({
       plugins: [react()],
       base: "./",
-      // The entry is src/index.html; the build lands in dist/ at the
-      // version root, which is what the tincture serves. Keeping them
-      // apart is what lets a tincture be rebuilt more than once.
-      root: "src",
-      publicDir: "../public",
       build: {
-        outDir: "../dist",
+        outDir: "dist",
         emptyOutDir: true,
         target: "esnext",
         minify: "esbuild",
@@ -721,7 +600,7 @@ defmodule Compendium.Scaffold do
     </head>
     <body>
       <div id="root"></div>
-      <script type="module" src="./main.tsx"></script>
+      <script type="module" src="/src/main.tsx"></script>
     </body>
     </html>
     """

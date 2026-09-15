@@ -25,7 +25,7 @@ func init() {
 
 	keyCreateCmd.Flags().String("name", "", "Key name (required in non-interactive mode)")
 	keyCreateCmd.Flags().String("type", "application", "Key type: application, service, admin")
-	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes (execute, vault_read, vault_write, component_read, component_manage, storage_read, storage_write, execution_write, admin)")
+	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes (execute, vault_read, component_read, component_manage, storage_read, storage_write, admin)")
 	keyCreateCmd.Flags().String("rate-limit", "", "Rate limit (e.g., '100/1m')")
 	keyCreateCmd.Flags().StringSlice("ip-allowlist", nil, "Allowed IPs/CIDRs")
 }

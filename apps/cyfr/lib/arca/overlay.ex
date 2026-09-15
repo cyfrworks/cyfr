@@ -30,14 +30,16 @@ defmodule Arca.Overlay do
 
   "Completed" is a fact the tree itself records: every valid directory
   unit carries its sentinel file, and `commit_unit/4` — the one way a
-  unit lands, for scaffold, fork, the tincture store, publish, OCI pull
-  and the shipped copy alike — writes it LAST. A crash or failure
+  unit lands, for scaffold, fork, publish, OCI pull and the shipped copy
+  alike — writes it LAST. A crash or failure
   mid-commit leaves the unit without its sentinel, so it keeps reading
   as incomplete, and an error return rolls the partial back; the next
   commit replaces whatever remains wholesale. No hidden marker file: the
   sentinel is an ordinary, digest-counted member of the unit. A file
   unit is atomic by construction — a single put — and counts as
-  completed when the tenant file exists.
+  completed when the tenant file exists. A build's output replaces one
+  subtree of a completed unit (`replace_subtree/5`) and never touches its
+  sentinel; readers see the previous subtree until the new one is whole.
 
   ## Whose unit it is
 
@@ -173,6 +175,21 @@ defmodule Arca.Overlay do
 
   @impl true
   def exists?(%Context{} = ctx, path), do: tenant().exists?(ctx, path)
+
+  # Under the containing unit's lock, inside a directory unit or outside
+  # the units; the tenant adapter decides whether it can swap at all.
+  @impl true
+  def replace_tree(%Context{} = ctx, path, files) do
+    with_unit_lock(ctx, path, fn ->
+      with :ok <- replaceable(path) do
+        adapter = tenant()
+
+        if Code.ensure_loaded?(adapter) and function_exported?(adapter, :replace_tree, 3),
+          do: adapter.replace_tree(ctx, path, files),
+          else: {:error, :atomic_replace_unsupported}
+      end
+    end)
+  end
 
   @impl true
   def usage(%Context{} = ctx, path), do: tenant().usage(ctx, path)
@@ -477,8 +494,8 @@ defmodule Arca.Overlay do
   @doc """
   Land one whole unit: refuse-or-replace, write the non-sentinel files,
   sentinel LAST — and on any error, delete the partial. Every ingress
-  that lays a unit (scaffold, fork, the tincture store, publish, OCI
-  pull, the shipped copy) commits through here, so sentinel-last,
+  that lays a unit (scaffold, fork, publish, OCI pull, the shipped copy)
+  commits through here, so sentinel-last,
   rollback, cap policy and usage accounting are one implementation, not
   a discipline each caller re-spells.
 
@@ -557,6 +574,53 @@ defmodule Arca.Overlay do
           end
         end)
     end
+  end
+
+  @doc """
+  Replace one subtree of a complete directory unit with `files`, under one
+  hold of the unit's lock. `subtree` is relative to the unit and `files`
+  relative to the subtree; nothing else in the unit — its sentinel
+  included — is touched, and a concurrent writer to the unit waits for the
+  whole replacement.
+
+  The replacement is `Arca.replace_tree/4`: readers see the previous
+  subtree until the new one is whole, then the new one, and a replacement
+  that fails before the swap leaves the previous subtree whole and
+  readable. On an adapter that cannot swap a tree
+  (`c:Arca.Storage.replace_tree/3`, which an object store does not export)
+  it refuses with `{:error, :atomic_replace_unsupported}`.
+
+  `cap:` (required) is `commit_unit/4`'s, checked before any write.
+  `{:error, :not_found}` when the unit is not complete.
+  """
+  @spec replace_subtree(
+          Context.t(),
+          Arca.Storage.path(),
+          Arca.Storage.path(),
+          [{Arca.Storage.path(), binary() | (-> {:ok, binary()} | {:error, term()})}],
+          keyword()
+        ) :: :ok | {:error, term()}
+  def replace_subtree(%Context{} = ctx, unit, [top | _] = subtree, files, opts)
+      when is_list(files) do
+    cap = Keyword.fetch!(opts, :cap)
+
+    case Arca.Storage.locate(unit) do
+      {:dir, ^unit, sentinel} when top != sentinel ->
+        with_unit_lock_at(ctx, unit, fn ->
+          with :ok <- complete_unit(internal_ctx(ctx), unit, sentinel) do
+            Arca.replace_tree(ctx, unit ++ subtree, files, cap: cap)
+          end
+        end)
+
+      other ->
+        raise ArgumentError,
+              "replace_subtree needs a directory unit and a subtree other than its sentinel; " <>
+                "#{inspect(unit)} locates to #{inspect(other)}"
+    end
+  end
+
+  defp complete_unit(ctx, unit, sentinel) do
+    if Arca.exists?(ctx, unit ++ [sentinel]), do: :ok, else: {:error, :not_found}
   end
 
   # A file unit's completing write IS the caller's one atomic put: no
@@ -760,6 +824,22 @@ defmodule Arca.Overlay do
   # ---------------------------------------------------------------------------
   # Write shapes, and the delete refusal
   # ---------------------------------------------------------------------------
+
+  # A tree is replaced inside a directory unit or outside the units: at a
+  # unit, above units, in place of a sentinel or below a file unit it would
+  # take a unit's shape with it.
+  defp replaceable(path) do
+    case Arca.Storage.locate(path) do
+      :not_overlaid ->
+        :ok
+
+      {:dir, unit, sentinel} ->
+        if path in [unit, unit ++ [sentinel]], do: {:error, :invalid_path}, else: :ok
+
+      _above_or_at_a_file_unit ->
+        {:error, :invalid_path}
+    end
+  end
 
   # A put or append must land inside a unit, or outside the units
   # altogether: below a file unit there is no interior to write into, and

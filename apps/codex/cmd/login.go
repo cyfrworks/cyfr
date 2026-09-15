@@ -114,7 +114,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 			return err
 		}
 
-		// Save the session token under `token` and clear the `session_id` alias.
+		// Save the session token as the context's credential.
 		sessionID, _ := pollResult["session_token"].(string)
 		if sessionID == "" {
 			sessionID = client.SessionID
@@ -591,7 +591,7 @@ var logoutCmd = &cobra.Command{
 		// (e.g. session already expired), the user still wants local cleanup.
 		cfg, _ := config.Load()
 		if cfg.Current() != nil {
-			cfg.Current().SessionID = ""
+			cfg.Current().Token = ""
 			if err := cfg.Save(); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not clear the saved session: %v\n", err)
 			}

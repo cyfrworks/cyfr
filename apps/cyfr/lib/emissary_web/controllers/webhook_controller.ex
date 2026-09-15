@@ -22,7 +22,7 @@ defmodule EmissaryWeb.WebhookController do
   HTTP response by `request_id`.
 
   No controller-level timeout: the executor enforces the consented node
-  timeout (`Sanctum.Limits`). A layered controller timeout would just
+  timeout (`Cyfr.Limits`). A layered controller timeout would just
   produce inconsistent error reasons for the same kill.
   """
 
@@ -208,7 +208,7 @@ defmodule EmissaryWeb.WebhookController do
         duration_ms = duration_ms(start_time)
 
         RequestLog.safe_log_failed(ctx, request_id, %{
-          error: "task_spawn_failed: #{inspect(Sanctum.Sanitizer.sanitize(reason))}",
+          error: "task_spawn_failed: #{inspect(Cyfr.Sanitizer.sanitize(reason))}",
           duration_ms: duration_ms,
           routed_to: "opus"
         })
@@ -218,7 +218,7 @@ defmodule EmissaryWeb.WebhookController do
           %{duration_ms: duration_ms},
           telemetry_meta
           |> Map.put(:status, :error)
-          |> Map.put(:error, "task_spawn_failed: #{inspect(Sanctum.Sanitizer.sanitize(reason))}")
+          |> Map.put(:error, "task_spawn_failed: #{inspect(Cyfr.Sanitizer.sanitize(reason))}")
         )
 
         EmissaryWeb.ApiError.send(
@@ -300,7 +300,7 @@ defmodule EmissaryWeb.WebhookController do
             error:
               if(is_binary(reason),
                 do: reason,
-                else: inspect(Sanctum.Sanitizer.sanitize(reason))
+                else: inspect(Cyfr.Sanitizer.sanitize(reason))
               ),
             duration_ms: duration_ms,
             routed_to: "opus"
@@ -331,7 +331,7 @@ defmodule EmissaryWeb.WebhookController do
         # it), and telemetry gets the fixed slug — its consumers must not
         # see internal reasons.
         RequestLog.safe_log_failed(ctx, request_id, %{
-          error: inspect(Sanctum.Sanitizer.sanitize(e)),
+          error: inspect(Cyfr.Sanitizer.sanitize(e)),
           duration_ms: duration_ms,
           routed_to: "opus"
         })

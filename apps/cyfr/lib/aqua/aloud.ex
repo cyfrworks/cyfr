@@ -7,7 +7,7 @@ defmodule Aqua.Aloud do
 
   Talking to your own agent happens in your own estate: your files, your
   credentials, nobody else in the room. Nothing you say there reaches a
-  shared topic by inference, by plumbing, or because an agent was
+  shared thread by inference, by plumbing, or because an agent was
   "summoned" — it reaches one because you said so.
 
   **This is the first deliberate copy in the system**, and it is the only
@@ -32,7 +32,7 @@ defmodule Aqua.Aloud do
       says so (`shared_agent: true` in its payload) and is attributed to
       you, never to the assistant. A room's assistant's lines belong to
       the room and stay refused.
-    * A copy into the SAME conversation. Nothing to say aloud; the line is
+    * A copy into the SAME thread. Nothing to say aloud; the line is
       already there.
 
   Attachments are copied as **bytes** into the target estate's own tree. A
@@ -43,7 +43,7 @@ defmodule Aqua.Aloud do
   estate's quota like any other upload.
   """
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Arca.Schemas.Message
   alias Aqua.Attachments
   alias Sanctum.Context
@@ -54,18 +54,18 @@ defmodule Aqua.Aloud do
   @type error ::
           :not_a_member
           | :not_the_author
-          | :same_conversation
+          | :same_thread
           | :not_found
           | :nothing_to_say
           | term()
 
   @doc """
-  Copy `message_ids` from the conversation the caller is in onto a topic in
+  Copy `message_ids` from the thread the caller is in onto a thread in
   `target_athanor_id`, attributed to the caller.
 
   The source is read under `ctx` as it stands — the estate you are already
   focused on, tenant-keyed like every other read. The **target estate is
-  named**, because a conversation id alone would need a lookup that spans
+  named**, because a thread id alone would need a lookup that spans
   tenants, and there is no such read in this system by design.
 
   Returns the appended rows. The originals are untouched — saying something
@@ -78,7 +78,7 @@ defmodule Aqua.Aloud do
              is_binary(target_athanor_id) and is_binary(target_id) do
     cond do
       source_id == target_id ->
-        {:error, :same_conversation}
+        {:error, :same_thread}
 
       message_ids == [] ->
         {:error, :nothing_to_say}
@@ -91,7 +91,7 @@ defmodule Aqua.Aloud do
              # `member_of/2`) — and adds the archive refusal a raw swap
              # skipped: nothing is said aloud into a closed furnace.
              {:ok, target_ctx} <- Context.focus(ctx, target_athanor_id),
-             {:ok, _} <- Conversations.get(target_ctx, target_id),
+             {:ok, _} <- Threads.get(target_ctx, target_id),
              {:ok, rows} <- take(ctx, source_id, message_ids) do
           copy(ctx, target_ctx, source_id, target_id, rows)
         else
@@ -107,7 +107,7 @@ defmodule Aqua.Aloud do
 
   # Checked on BOTH sides, and on the source too rather than trusting the
   # focus: a context is a struct, and this is the one verb that crosses
-  # estates. The tenant-keyed reads would refuse a foreign conversation
+  # estates. The tenant-keyed reads would refuse a foreign thread
   # anyway; this refuses it by name instead of as a confusing miss.
   #
   # Deliberately NO `platform_admin` arm. An operator's open of an estate
@@ -124,7 +124,7 @@ defmodule Aqua.Aloud do
 
   # In the order they were said, whatever order the caller listed them.
   # Fetched by id rather than by walking the thread: a person may say aloud
-  # something from far up a long conversation.
+  # something from far up a long thread.
   #
   # Author-only, enforced HERE and not in a client: every selected row must
   # be the caller's own, or — when the source is the caller's own athanor —
@@ -133,13 +133,13 @@ defmodule Aqua.Aloud do
   # their own name — refused whole, not filtered, so the person is told
   # rather than quietly published less than they picked (the same posture
   # as a missing attachment).
-  defp take(ctx, conversation_id, message_ids) do
+  defp take(ctx, thread_id, message_ids) do
     found =
       message_ids
       |> Enum.uniq()
       |> Enum.flat_map(fn id ->
-        case Conversations.get_message(ctx, id) do
-          {:ok, %{conversation_id: ^conversation_id} = row} -> [row]
+        case Threads.get_message(ctx, id) do
+          {:ok, %{thread_id: ^thread_id} = row} -> [row]
           _ -> []
         end
       end)
@@ -175,7 +175,7 @@ defmodule Aqua.Aloud do
   end
 
   # The id is minted first so the blobs can be written under it before the
-  # row exists — the same order `PrismWeb.ConversationPaneLive`
+  # row exists — the same order `PrismWeb.ThreadPaneLive`
   # uses, and the reason `append/3` takes an `:id`. The target's viewers
   # hear of the row the way they hear of the runner's own — the copy has
   # to appear on the tape it was said onto.
@@ -185,11 +185,11 @@ defmodule Aqua.Aloud do
     with {:ok, files} <- carry(source_ctx, source_id, row),
          {:ok, refs} <- Attachments.store(target_ctx, target_id, message_id, files) do
       payload =
-        %{"aloud_from" => %{"conversation_id" => source_id, "message_id" => row.id}}
+        %{"aloud_from" => %{"thread_id" => source_id, "message_id" => row.id}}
         |> put_shared_agent(row)
         |> put_refs(refs)
 
-      case Conversations.append(target_ctx, target_id, %{
+      case Threads.append(target_ctx, target_id, %{
              id: message_id,
              author: target_ctx.user_id || Message.system_author(),
              kind: "text",

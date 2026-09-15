@@ -51,7 +51,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       })
 
     {:ok, _} =
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "refsrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -82,7 +82,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       })
 
     {:ok, _} =
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "oldnamesrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -98,12 +98,108 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
     assert_receive {:reconciled, %{server: "oldnamesrv"}}, 2_000
   end
 
+  test "a scheme-prefixed template is matched by the entry it names", %{ctx: ctx} do
+    {:ok, entry} =
+      Vault.create(ctx, %{name: "bearer-token", kind: "api_key", fields: %{"token" => "t1"}})
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(ctx, %{
+        name: "bearersrv",
+        url: "https://127.0.0.1:9/mcp",
+        config_json:
+          Jason.encode!(%{
+            "headers" => %{"authorization" => "Bearer vault:bearer-token"},
+            "timeout_ms" => 1_000
+          })
+      })
+
+    {:ok, _} = Vault.revoke(ctx, entry.id)
+
+    sync_reconciler()
+    assert_receive {:reconciled, %{server: "bearersrv"}}, 2_000
+  end
+
+  test "a stdio server whose env template references the entry is matched and its epoch raised",
+       %{ctx: ctx} do
+    {:ok, entry} =
+      Vault.create(ctx, %{name: "env-token", kind: "api_key", fields: %{"token" => "t1"}})
+
+    {:ok, %{epoch: 1}} =
+      Arca.McpServerStorage.insert(ctx, %{
+        name: "envsrv",
+        transport: "stdio",
+        url: nil,
+        config_json:
+          Jason.encode!(%{
+            "backends" => [
+              %{
+                "name" => "gh",
+                "command" => "npx -y gh",
+                "env" => %{"TOKEN" => "vault:env-token"}
+              }
+            ]
+          })
+      })
+
+    {:ok, _} = Vault.revoke(ctx, entry.id)
+
+    sync_reconciler()
+    assert_receive {:reconciled, %{server: "envsrv"}}, 2_000
+    assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(ctx, "envsrv")
+  end
+
+  test "a signal that names no entry stops every server whose templates reference one",
+       %{ctx: ctx} do
+    for {name, headers} <- [
+          {"vaultsrv", %{"authorization" => "vault:anything"}},
+          {"literalsrv", %{"accept" => "application/json"}}
+        ] do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(ctx, %{
+          name: name,
+          url: "https://127.0.0.1:9/mcp",
+          config_json: Jason.encode!(%{"headers" => headers, "timeout_ms" => 1_000})
+        })
+    end
+
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      Cyfr.Bus.vault_changed_global(),
+      {:vault_entry_changed_global, ctx.athanor_id, "vlt_unnamed", :delete, %{}}
+    )
+
+    sync_reconciler()
+    assert_receive {:reconciled, %{server: "vaultsrv"}}, 2_000
+    refute_receive {:reconciled, %{server: "literalsrv"}}, 200
+  end
+
+  test "an archived athanor has every one of its server processes stopped" do
+    athanor_id = "ath_archive_#{System.unique_integer([:positive])}"
+
+    {:ok, pid} =
+      Emissary.MCP.ExternalServerSupervisor.ensure_started(
+        name: "archivedsrv",
+        url: "https://127.0.0.1:9/mcp",
+        athanor_id: athanor_id
+      )
+
+    watched = Process.monitor(pid)
+
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      Cyfr.Bus.athanor_archived_global(),
+      {:athanor_archived_global, athanor_id}
+    )
+
+    assert_receive {:DOWN, ^watched, :process, ^pid, _}, 2_000
+  end
+
   test "unrelated entries and non-referencing servers are untouched", %{ctx: ctx} do
     {:ok, entry} =
       Vault.create(ctx, %{name: "unrelated", kind: "api_key", fields: %{"k" => "v"}})
 
     {:ok, _} =
-      Arca.McpServerStorage.put(ctx, %{
+      Arca.McpServerStorage.insert(ctx, %{
         name: "quietsrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:

@@ -22,6 +22,8 @@ defmodule Sanctum.Tenancy.Athanors do
   alias Arca.Schemas.{Athanor, Membership}
   alias Sanctum.Tenancy.Caps
 
+  @slug_attempts 3
+
   @doc """
   Insert an athanor. `attrs` must carry `:kind`, `:name`, `:slug` and
   `:created_by`; a person athanor also `:owner_user_id`. `:id` defaults to a
@@ -77,7 +79,7 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Mint a group athanor for `creator_user_id`: the row, its slug (from the
   name, or `:slug`), and the creator's membership — nobody else is added.
-  The per-person cap on groups applies.
+  The per-person cap on groups applies. All of it lands or none does.
   """
   @spec create_group(String.t(), String.t(), keyword()) ::
           {:ok, Athanor.t()} | {:error, term()}
@@ -86,24 +88,71 @@ defmodule Sanctum.Tenancy.Athanors do
     name = String.trim(name)
 
     with :ok <- validate_name(name),
-         :ok <-
-           Caps.check_counted(:max_groups_per_person, fn ->
-             count_groups_created_by(creator_user_id)
-           end),
-         {:ok, slug} <- resolve_slug(Keyword.get(opts, :slug), name),
          {:ok, athanor} <-
-           create(%{kind: "group", name: name, slug: slug, created_by: creator_user_id}),
-         {:ok, _} <-
-           Sanctum.Tenancy.Members.create(%{
-             user_id: creator_user_id,
-             scope: "athanor",
-             athanor_id: athanor.id,
-             added_by: creator_user_id
-           }) do
+           mint_group(creator_user_id, name, Keyword.get(opts, :slug), @slug_attempts) do
       Sanctum.Tenancy.Members.broadcast_change(creator_user_id, athanor.id, :joined)
       {:ok, athanor}
     end
   end
+
+  # The cap, the slug, the row and the creator's seat in one transaction,
+  # serialized per creator by a write to their user row: two creations by
+  # one person cannot both pass the cap, and a seat that fails leaves no
+  # group. A derived slug another creation took first is derived again.
+  defp mint_group(creator_user_id, name, explicit_slug, attempts) do
+    result =
+      Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.mint_group", fn ->
+        Arca.Repo.transaction(fn ->
+          with :ok <- hold_person(creator_user_id),
+               :ok <-
+                 Caps.check_counted(:max_groups_per_person, fn ->
+                   count_groups_created_by(creator_user_id)
+                 end),
+               {:ok, slug} <- resolve_slug(explicit_slug, name),
+               {:ok, athanor} <-
+                 create(%{kind: "group", name: name, slug: slug, created_by: creator_user_id}),
+               {:ok, _} <-
+                 Sanctum.Tenancy.Members.create(%{
+                   user_id: creator_user_id,
+                   scope: "athanor",
+                   athanor_id: athanor.id,
+                   added_by: creator_user_id
+                 }) do
+            athanor
+          else
+            {:error, reason} -> Arca.Repo.rollback(reason)
+          end
+        end)
+      end)
+
+    case result do
+      {:error, %Ecto.Changeset{} = changeset} when is_nil(explicit_slug) and attempts > 1 ->
+        if slug_taken?(changeset),
+          do: mint_group(creator_user_id, name, nil, attempts - 1),
+          else: result
+
+      result ->
+        result
+    end
+  end
+
+  # A write to the row holds it until the transaction ends, on either
+  # adapter.
+  defp hold_person(user_id) do
+    from(u in Arca.Schemas.User,
+      where: u.id == ^user_id,
+      update: [set: [updated_at: u.updated_at]]
+    )
+    |> Arca.Repo.update_all([])
+
+    :ok
+  end
+
+  defp slug_taken?(%Ecto.Changeset{errors: errors}),
+    do:
+      Enum.any?(errors, fn {field, {_message, meta}} ->
+        field in [:kind, :slug] and meta[:constraint] == :unique
+      end)
 
   @doc """
   The pair of `user_a` and `user_b` — found if it exists, minted if not.
@@ -139,7 +188,7 @@ defmodule Sanctum.Tenancy.Athanors do
         {:ok, athanor}
 
       {:error, :not_found} ->
-        with :ok <- check_pair_cap(user_a, user_b), do: mint_pair(key, user_a, user_b)
+        mint_pair(key, user_a, user_b)
 
       {:error, _} = err ->
         err
@@ -148,11 +197,14 @@ defmodule Sanctum.Tenancy.Athanors do
 
   def create_pair(_, _), do: {:error, :invalid_pair}
 
-  # A pair is minted for two, so the cap is asked for both. Without it one
-  # member of a large room could mint an estate per co-member from the
-  # wire — a DM asks nobody else's consent — and spend `CYFR_MAX_ATHANORS`
-  # for everyone.
+  # A pair is minted for two, so the cap is asked for both, inside the mint
+  # with both people's rows held (in one order, so two mints cannot
+  # deadlock). Without it one member of a large room could mint an estate
+  # per co-member from the wire — a DM asks nobody else's consent — and
+  # spend `CYFR_MAX_ATHANORS` for everyone.
   defp check_pair_cap(user_a, user_b) do
+    Enum.each(Enum.sort([user_a, user_b]), &hold_person/1)
+
     Enum.reduce_while([user_a, user_b], :ok, fn user_id, :ok ->
       case Caps.check_counted(:max_pairs_per_person, fn -> count_pairs_of(user_id) end) do
         :ok -> {:cont, :ok}
@@ -200,7 +252,8 @@ defmodule Sanctum.Tenancy.Athanors do
     result =
       Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.mint_pair", fn ->
         Arca.Repo.transaction(fn ->
-          with {:ok, slug} <- resolve_slug(nil, name),
+          with :ok <- check_pair_cap(user_a, user_b),
+               {:ok, slug} <- resolve_slug(nil, name),
                {:ok, athanor} <-
                  create(%{
                    kind: "group",
@@ -407,6 +460,13 @@ defmodule Sanctum.Tenancy.Athanors do
   defp close(%Athanor{id: id}) do
     Sanctum.ApiKey.revoke_all_for_athanor(id)
     cancel_running(id)
+
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      Cyfr.Bus.athanor_archived_global(),
+      {:athanor_archived_global, id}
+    )
+
     :ok
   end
 
@@ -414,13 +474,8 @@ defmodule Sanctum.Tenancy.Athanors do
     if Cyfr.Execution.available?() do
       ctx = Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
 
-      case Cyfr.Execution.list(ctx, status: :running, limit: 500) do
-        {:ok, running} when is_list(running) ->
-          Enum.each(running, fn %{id: id} -> Cyfr.Execution.cancel(ctx, id) end)
-
-        _ ->
-          :ok
-      end
+      {:ok, running} = Cyfr.Execution.list(ctx, status: :running, limit: 500)
+      Enum.each(running, fn %{id: id} -> Cyfr.Execution.cancel(ctx, id) end)
     end
 
     :ok
@@ -554,12 +609,64 @@ defmodule Sanctum.Tenancy.Athanors do
   """
   @spec mark_provisioned(Athanor.t()) :: {:ok, Athanor.t()} | {:error, term()}
   def mark_provisioned(%Athanor{} = athanor) do
-    settings = athanor |> settings() |> Map.delete("provisioning_error")
+    now = DateTime.utc_now()
 
-    update(athanor, %{
-      provisioned_at: DateTime.utc_now(),
-      settings: Jason.encode!(settings)
-    })
+    set_provisioning(athanor,
+      provisioned_at: now,
+      provisioning_failed_at: nil,
+      provisioning_failure: nil,
+      updated_at: now
+    )
+  end
+
+  @doc """
+  Record that a fill failed: when, at which `step`, and `detail`. The
+  record is the server's own — no settings patch writes or clears it — and
+  a completed fill clears it. Members' open views hear of the change.
+  """
+  @spec record_provisioning_failure(Athanor.t(), atom() | String.t(), String.t()) ::
+          {:ok, Athanor.t()} | {:error, term()}
+  def record_provisioning_failure(%Athanor{} = athanor, step, detail) when is_binary(detail) do
+    now = DateTime.utc_now()
+
+    set_provisioning(athanor,
+      provisioning_failed_at: now,
+      provisioning_failure: Jason.encode!(%{"step" => to_string(step), "detail" => detail}),
+      updated_at: now
+    )
+  end
+
+  @doc "The last failed fill on the row, or nil: `%{step, detail, at}`."
+  @spec provisioning_failure(Athanor.t()) ::
+          %{step: String.t(), detail: String.t(), at: DateTime.t()} | nil
+  def provisioning_failure(%Athanor{provisioning_failed_at: %DateTime{} = at} = athanor) do
+    case Jason.decode(athanor.provisioning_failure || "") do
+      {:ok, %{"step" => step, "detail" => detail}} -> %{step: step, detail: detail, at: at}
+      _ -> %{step: "unknown", detail: "", at: at}
+    end
+  end
+
+  def provisioning_failure(%Athanor{}), do: nil
+
+  defp set_provisioning(%Athanor{id: id}, set) do
+    result =
+      Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.set_provisioning", fn ->
+        from(a in Athanor, where: a.id == ^id) |> Arca.Repo.update_all(set: set)
+      end)
+
+    case result do
+      {1, _} ->
+        with {:ok, updated} <- get(id) do
+          Sanctum.Notify.broadcast(id, :athanor_changed, %{name: updated.name})
+          {:ok, updated}
+        end
+
+      {0, _} ->
+        {:error, :not_found}
+
+      {:error, _} = error ->
+        error
+    end
   end
 
   @spec list_by_ids([String.t()]) :: [Athanor.t()]
@@ -675,7 +782,7 @@ defmodule Sanctum.Tenancy.Athanors do
   Merge `patch` into the athanor's settings document, one level deep: a map
   under a key merges into the map already there (so a `"retention"` patch
   naming one window leaves the other windows alone), a `nil` deletes the
-  key, anything else replaces (a `"provisioning_error"` is recorded whole).
+  key, anything else replaces.
   Every member's open views hear of the change on the athanor's notify
   topic.
   """
@@ -810,7 +917,7 @@ defmodule Sanctum.Tenancy.Athanors do
   defp slug_free?(kind, slug), do: match?({:error, :not_found}, get_by_slug(kind, slug))
 
   # Only the groups a person deliberately made. A frozen pair is a
-  # conversation, not a group they created, and counting DMs against
+  # thread, not a group they created, and counting DMs against
   # `CYFR_MAX_GROUPS_PER_PERSON` would make the cap mean "how many people
   # may you talk to" — which is not what an operator setting it intends.
   # DMs have their own ceiling, `CYFR_MAX_PAIRS_PER_PERSON`, counted by
@@ -852,7 +959,7 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Whether `value` is an athanor id (`"ath_..."`) rather than a route slug.
   Discriminating by prefix is sound: the slug grammar (`Sanctum.Slug` /
-  `Sanctum.ComponentRef.personal_slug_regex/0`) admits only lowercase
+  `Cyfr.ComponentRef.personal_slug_regex/0`) admits only lowercase
   alphanumerics and hyphens — a slug can never contain `"_"`.
   """
   @spec athanor_id?(term()) :: boolean()

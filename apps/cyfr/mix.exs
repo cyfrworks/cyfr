@@ -50,13 +50,12 @@ defmodule Cyfr.App.MixProject do
 
   defp deps do
     [
+      {:cyfr_contracts, in_umbrella: true},
       # Sanctum deps
       {:ueberauth, "~> 0.10.8"},
       {:jason, "~> 1.4"},
       # AQUA agent/skill frontmatter (Compendium.AquaAgent)
       {:yaml_elixir, "~> 2.12"},
-      {:ueberauth_github, "~> 0.8.3"},
-      {:ueberauth_google, "~> 0.12.1"},
       {:plug, "~> 1.14"},
       {:phoenix_pubsub, "~> 2.1"},
       # Arca storage/DB deps. Both DB drivers ship in every build; the single

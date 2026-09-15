@@ -5,8 +5,10 @@ defmodule Opus.SeedModelCatalystsTest do
   @moduledoc """
   The five model catalysts the seed ships run under this host: each
   instantiates against the host's catalyst world, declares and answers
-  `model/chat@1` (`describe` without a key, a chat request off the
-  contract refused before the key is read), reads the key its need binds
+  `model/chat@1` (`describe` without a key, streaming, and a named
+  model's window from its table or, taking the key, from the provider; a
+  chat request off the contract refused before the key is read), links
+  the host's `cyfr:emit/events`, reads the key its need binds
   through `cyfr:vault/read`, and answers the catalyst envelope. The
   operation asked for after the key is one no catalyst has, so the key is
   read and nothing is dialled.
@@ -14,16 +16,18 @@ defmodule Opus.SeedModelCatalystsTest do
 
   use ExUnit.Case, async: false
 
-  alias Opus.MCP
+  alias Cyfr.Execution.MCP
   alias Sanctum.Consent.{Bootstrap, Source}
 
   @seed_root Path.expand("../../../../seed", __DIR__)
+  # Each catalyst's key field, and where a named model's window comes
+  # from: a table in the binary, or the provider's API behind the key.
   @models [
-    {"claude", "ANTHROPIC_API_KEY"},
-    {"openai", "OPENAI_API_KEY"},
-    {"gemini", "GEMINI_API_KEY"},
-    {"grok", "GROK_API_KEY"},
-    {"openrouter", "OPENROUTER_API_KEY"}
+    {"claude", "ANTHROPIC_API_KEY", :keyed},
+    {"openai", "OPENAI_API_KEY", {:table, "gpt-5", 400_000}},
+    {"gemini", "GEMINI_API_KEY", :keyed},
+    {"grok", "GROK_API_KEY", {:table, "grok-4.3", 1_000_000}},
+    {"openrouter", "OPENROUTER_API_KEY", :keyed}
   ]
 
   setup do
@@ -52,10 +56,11 @@ defmodule Opus.SeedModelCatalystsTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  for {name, field} <- @models do
+  for {name, field, _window} <- @models do
     test "catalyst:local.#{name} runs under the host and reads its bound key", %{ctx: ctx} do
       name = unquote(name)
       field = unquote(field)
+      {_name, _field, window} = List.keyfind(@models, name, 0)
       ref = "catalyst:local.#{name}"
 
       # The shipped version, found rather than pinned, copied in as a fill
@@ -83,8 +88,30 @@ defmodule Opus.SeedModelCatalystsTest do
 
       assert {:ok, capabilities} = Cyfr.Models.decode_envelope(described)
       assert capabilities["contracts"] == [Cyfr.Models.chat_contract()]
-      assert capabilities["tools"] == true and capabilities["streaming"] == false
+      assert capabilities["tools"] == true and capabilities["streaming"] == true
       assert is_list(capabilities["provider_tools"]) and is_list(capabilities["media_types"])
+
+      describe_model = fn model ->
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"operation" => "describe", "params" => %{"model" => model}}
+        })
+      end
+
+      case window do
+        {:table, model, context_window} ->
+          assert {:ok, %{result: answer}} = describe_model.(model)
+
+          assert {:ok, %{"context_window" => ^context_window}} =
+                   Cyfr.Models.decode_envelope(answer)
+
+          assert {:error, message} = describe_model.("no-such-model")
+          assert message =~ "not a model"
+
+        :keyed ->
+          assert {:error, "Failed to read " <> _} = describe_model.("any-model")
+      end
 
       assert {:error, "'model' is required"} =
                MCP.handle("execution", ctx, %{
@@ -160,10 +187,10 @@ defmodule Opus.SeedModelCatalystsTest do
 
     input = %{"operation" => "nothing.here", "params" => %{}}
 
-    {:ok, before} = Opus.Chain.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, before} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{node_ref: "catalyst:local.claude:" <> _, reason: reason}}} =
-             Opus.run_child(before, "catalyst:local.claude", nil, input, child_opts)
+             Cyfr.Execution.run_child(before, "catalyst:local.claude", nil, input, child_opts)
 
     assert reason == "vault_selection_unbound"
 
@@ -195,23 +222,23 @@ defmodule Opus.SeedModelCatalystsTest do
 
     # The assistant's authority, loaded again, lends the key on its edge;
     # the child reads it and runs to its own refusal.
-    {:ok, authority} = Opus.Chain.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, "Unknown operation: nothing.here"} =
-             Opus.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
+             Cyfr.Execution.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
 
     # Revoking the catalyst's profile cuts the assistant off at the next load.
     {:ok, [claude_profile]} = Source.DB.profiles(ctx, "catalyst:local.claude")
     :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, claude_profile.id, "revoked")
-    {:ok, revoked} = Opus.Chain.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, revoked} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
-             Opus.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
+             Cyfr.Execution.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
   end
 
   defp newest_shipped(plural, name) do
     Path.join(@seed_root, "components/#{plural}/local/#{name}/*")
-    |> Path.wildcard()
+    |> Cyfr.Test.SourceTree.files!()
     |> Enum.map(&Path.basename/1)
     |> Compendium.Semver.sort_desc()
     |> hd()

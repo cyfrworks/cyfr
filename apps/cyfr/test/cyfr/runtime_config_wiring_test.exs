@@ -80,6 +80,68 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
+  describe "CYFR_WORKER_KEY" do
+    test "is the 32-byte root its 64 hexadecimal digits spell, in either case" do
+      root = :crypto.strong_rand_bytes(32)
+
+      for text <- [Base.encode16(root, case: :lower), Base.encode16(root)] do
+        with_env(%{"CYFR_WORKER_KEY" => text}, fn ->
+          assert get_in(read_prod_config!(), [:cyfr, :worker_key]) == root
+        end)
+      end
+    end
+
+    test "unset or blank configures no root" do
+      for value <- [nil, ""] do
+        with_env(%{"CYFR_WORKER_KEY" => value}, fn ->
+          assert get_in(read_prod_config!(), [:cyfr, :worker_key]) == nil
+        end)
+      end
+    end
+
+    test "a malformed key refuses the boot" do
+      for text <- ["abc", String.duplicate("g", 64), Base.encode64(:crypto.strong_rand_bytes(32))] do
+        with_env(%{"CYFR_WORKER_KEY" => text}, fn ->
+          error = assert_raise RuntimeError, fn -> read_prod_config!() end
+          assert Exception.message(error) =~ "CYFR_WORKER_KEY must be exactly 64 hexadecimal"
+        end)
+      end
+    end
+  end
+
+  describe "the MCP bridge's lease and idle period" do
+    test "unset, neither is configured; set, each is taken in milliseconds" do
+      with_env(%{"CYFR_MCP_BRIDGE_LEASE_MS" => nil, "CYFR_MCP_BRIDGE_IDLE_MS" => nil}, fn ->
+        cyfr = read_prod_config!()[:cyfr]
+        refute Keyword.has_key?(cyfr, :mcp_bridge_lease_ms)
+        refute Keyword.has_key?(cyfr, :mcp_bridge_idle_ms)
+      end)
+
+      with_env(
+        %{"CYFR_MCP_BRIDGE_LEASE_MS" => "5000", "CYFR_MCP_BRIDGE_IDLE_MS" => "600000"},
+        fn ->
+          cyfr = read_prod_config!()[:cyfr]
+          assert cyfr[:mcp_bridge_lease_ms] == 5_000
+          assert cyfr[:mcp_bridge_idle_ms] == 600_000
+        end
+      )
+    end
+
+    test "a value that is not a whole number of milliseconds in range refuses the boot" do
+      for {key, bad} <- [
+            {"CYFR_MCP_BRIDGE_LEASE_MS", "999"},
+            {"CYFR_MCP_BRIDGE_LEASE_MS", "30s"},
+            {"CYFR_MCP_BRIDGE_IDLE_MS", "86400001"},
+            {"CYFR_MCP_BRIDGE_IDLE_MS", "15m"}
+          ] do
+        with_env(%{key => bad}, fn ->
+          error = assert_raise RuntimeError, fn -> read_prod_config!() end
+          assert Exception.message(error) =~ key
+        end)
+      end
+    end
+  end
+
   describe "CYFR_DATABASE — the one setting `.env` cannot decide" do
     # Verify .env selection agrees with the compile-time adapter; Ecto cannot switch adapters at runtime.
 

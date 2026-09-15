@@ -9,10 +9,10 @@ defmodule PrismWeb.ChatLiveTest do
 
   import Cyfr.Test.Wait
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
 
   setup do
-    test_path = Path.join(System.tmp_dir!(), "conv_live_#{:rand.uniform(1_000_000)}")
+    test_path = Path.join(System.tmp_dir!(), "thread_live_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
@@ -64,24 +64,24 @@ defmodule PrismWeb.ChatLiveTest do
   defp settled_thread!(ctx) do
     wait_until(
       fn ->
-        match?([_], Conversations.list(ctx)) and
-          match?({:ok, []}, Aqua.Tape.open_turns(ctx, hd(Conversations.list(ctx)).id))
+        match?([_], Threads.list(ctx)) and
+          match?({:ok, []}, Aqua.Tape.open_turns(ctx, hd(Threads.list(ctx)).id))
       end,
       60_000
     )
 
-    [conv] = Conversations.list(ctx)
-    conv
+    [thread] = Threads.list(ctx)
+    thread
   end
 
   # The chat's address for an estate (the shared one by default) and a thread.
-  defp chat_path(athanor, conv_id \\ nil) do
+  defp chat_path(athanor, thread_id \\ nil) do
     athanor = athanor || estate()
-    PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), conv_id)
+    PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), thread_id)
   end
 
-  defp mount_chat(conn, athanor \\ nil, conv_id \\ nil) do
-    {:ok, view, _mount_html} = live(conn, chat_path(athanor, conv_id))
+  defp mount_chat(conn, athanor \\ nil, thread_id \\ nil) do
+    {:ok, view, _mount_html} = live(conn, chat_path(athanor, thread_id))
     {view, settled_render(view)}
   end
 
@@ -92,7 +92,7 @@ defmodule PrismWeb.ChatLiveTest do
   defp pane(view), do: Enum.find(live_children(view), &String.starts_with?(&1.id, "pane-"))
 
   # The thread the estate's one pane is turned to, from its own state.
-  defp pane_thread(view), do: :sys.get_state(pane(view).pid).socket.assigns.conversation
+  defp pane_thread(view), do: :sys.get_state(pane(view).pid).socket.assigns.thread
 
   test "the rail lists every estate you belong to, and opening one moves the tape, not the bench",
        %{conn: conn} do
@@ -153,14 +153,14 @@ defmodule PrismWeb.ChatLiveTest do
         authenticated: true
       )
 
-    {:ok, conv} = Conversations.create(ctx)
-    {:ok, _} = Conversations.append(ctx, conv.id, %{author: alice.user_id, content: "cold open"})
+    {:ok, thread} = Threads.create(ctx)
+    {:ok, _} = Threads.append(ctx, thread.id, %{author: alice.user_id, content: "cold open"})
 
     # A cold mount — no rail click, the session defaulting to the shared estate.
-    {view, html} = mount_chat(conn, group, conv.id)
+    {view, html} = mount_chat(conn, group, thread.id)
     assert html =~ "cold open"
     assert :sys.get_state(view.pid).socket.assigns.athanor.id == group.id
-    assert has_element?(view, "#conv-#{conv.id} button[aria-current=true]")
+    assert has_element?(view, "#thread-#{thread.id} button[aria-current=true]")
   end
 
   test "the rail lists only the estates you hold a seat in", %{conn: conn} do
@@ -187,8 +187,8 @@ defmodule PrismWeb.ChatLiveTest do
 
     # A patch pushed from the first handle_params is applied inside the
     # join, so it is the outcome that is checked: the flash, and the estate's own.
-    {view, html} = mount_chat(conn, nil, "conv_not_here")
-    assert html =~ "That conversation isn"
+    {view, html} = mount_chat(conn, nil, "thread_not_here")
+    assert html =~ "That thread isn"
     assert render(pane(view)) =~ "in Chat"
     assert :sys.get_state(view.pid).socket.assigns.athanor.id == estate().id
   end
@@ -244,18 +244,18 @@ defmodule PrismWeb.ChatLiveTest do
     # With multiple human members, the estate requires an explicit agent mention.
     assert html =~ "Talk to the group"
 
-    Cyfr.Test.ScriptedExecution.script([model_reply("Hi Alice, hi Bob")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Hi Alice, hi Bob")])
 
     pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua hello from alice"})
     |> render_submit()
 
     start_ctx = member_ctx(alice, estate())
-    conv = settled_thread!(start_ctx)
+    thread = settled_thread!(start_ctx)
 
-    # The row exists in the athanor; Bob opens the same conversation and
+    # The row exists in the athanor; Bob opens the same thread and
     # reads the reply the runner — not the sender's socket — wrote.
-    {bob_view, bob_html} = mount_chat(bob_conn, nil, conv.id)
+    {bob_view, bob_html} = mount_chat(bob_conn, nil, thread.id)
     assert bob_html =~ "hello from alice"
     assert render(pane(bob_view)) =~ "Hi Alice, hi Bob"
     assert render(pane(alice_view)) =~ "Hi Alice, hi Bob"
@@ -264,7 +264,7 @@ defmodule PrismWeb.ChatLiveTest do
     agent = Arca.Schemas.Message.agent_author()
 
     assert [%{author: a}, %{kind: "text", author: ^agent}] =
-             Conversations.messages(start_ctx, conv.id) |> Enum.filter(&(&1.kind == "text"))
+             Threads.messages(start_ctx, thread.id) |> Enum.filter(&(&1.kind == "text"))
 
     assert a == alice.user_id
   end
@@ -277,7 +277,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     {alice_view, _} = mount_chat(alice_conn)
 
-    Cyfr.Test.ScriptedExecution.script([
+    Cyfr.Test.ScriptedWorker.script([
       model_call("c1", "notes", %{"action" => "keep", "name" => "plan", "content" => "ship it"})
     ])
 
@@ -291,21 +291,21 @@ defmodule PrismWeb.ChatLiveTest do
       fn ->
         match?(
           [_],
-          Conversations.pending_approvals(start_ctx, hd(Conversations.list(start_ctx)).id)
+          Threads.pending_approvals(start_ctx, hd(Threads.list(start_ctx)).id)
         )
       end,
       60_000
     )
 
-    [conv] = Conversations.list(start_ctx)
-    {bob_view, _} = mount_chat(bob_conn, nil, conv.id)
+    [thread] = Threads.list(start_ctx)
+    {bob_view, _} = mount_chat(bob_conn, nil, thread.id)
 
     assert render(pane(alice_view)) =~ "notes.keep"
     assert render(pane(bob_view)) =~ "notes.keep"
-    [apr] = Conversations.pending_approvals(start_ctx, conv.id)
+    [apr] = Threads.pending_approvals(start_ctx, thread.id)
 
     # Bob approves from his tab; the turn continues and answers.
-    Cyfr.Test.ScriptedExecution.script([model_reply("Kept.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Kept.")])
 
     pane(bob_view)
     |> element("#" <> pane(bob_view).id <> "-card-" <> apr.id <> " button[phx-value-scope=once]")
@@ -314,7 +314,7 @@ defmodule PrismWeb.ChatLiveTest do
     settled_thread!(start_ctx)
     assert render(pane(bob_view)) =~ "Kept."
     assert render(pane(alice_view)) =~ "Kept."
-    {:ok, done} = Conversations.get_message(start_ctx, apr.id)
+    {:ok, done} = Threads.get_message(start_ctx, apr.id)
     assert done.status == "approved"
     assert done.resolved_by == bob.user_id
 
@@ -343,25 +343,26 @@ defmodule PrismWeb.ChatLiveTest do
         authenticated: true
       )
 
-    {:ok, conv} = Conversations.create(ctx)
+    {:ok, thread} = Threads.create(ctx)
 
     {:ok, _} =
-      Conversations.append(ctx, conv.id, %{author: alice.user_id, content: "secret plan"})
+      Threads.append(ctx, thread.id, %{author: alice.user_id, content: "secret plan"})
 
-    # The focused estate, asked for the group's conversation id, opens
+    # The focused estate, asked for the group's thread id, opens
     # nothing of it: the id is not one of its threads, so the page says so
-    # and opens one of its own. (The rail may name the group's topic — Alice
+    # and opens one of its own. (The rail may name the group's thread — Alice
     # is its member — but the tape stays the focused estate's.)
-    {view, html} = mount_chat(alice_conn, nil, conv.id)
-    assert html =~ "That conversation isn"
+    {view, html} = mount_chat(alice_conn, nil, thread.id)
+    assert html =~ "That thread isn"
     refute render(pane(view)) =~ "secret plan"
-    %{athanor: athanor, conversation: open} = :sys.get_state(view.pid).socket.assigns
+    %{athanor: athanor, thread: open} = :sys.get_state(view.pid).socket.assigns
     assert athanor.id == estate().id
-    refute open && open.id == conv.id
+    refute open && open.id == thread.id
 
     # A person outside the group cannot address it at all: the chat leaves
     # for the default estate.
-    assert {:error, {:live_redirect, %{to: "/chat"}}} = live(bob_conn, chat_path(group, conv.id))
+    assert {:error, {:live_redirect, %{to: "/chat"}}} =
+             live(bob_conn, chat_path(group, thread.id))
   end
 
   test "in a group, people talk to each other without AQUA answering; a removed member is shown out",
@@ -381,9 +382,9 @@ defmodule PrismWeb.ChatLiveTest do
     |> render_submit()
 
     ctx = member_ctx(alice, group)
-    [conv] = Conversations.list(ctx)
-    assert {:ok, []} = Aqua.Tape.open_turns(ctx, conv.id)
-    {bob_view, bob_html} = mount_chat(bob_conn, group, conv.id)
+    [thread] = Threads.list(ctx)
+    assert {:ok, []} = Aqua.Tape.open_turns(ctx, thread.id)
+    {bob_view, bob_html} = mount_chat(bob_conn, group, thread.id)
     assert bob_html =~ "lunch at noon?"
     # Two people are here, so the composer says a mention is needed rather
     # than offering to ask the agent directly. Derived from the roster, not
@@ -396,14 +397,14 @@ defmodule PrismWeb.ChatLiveTest do
 
     Process.sleep(50)
     assert render(pane(alice_view)) =~ "sure"
-    assert {:ok, []} = Aqua.Tape.open_turns(ctx, conv.id)
+    assert {:ok, []} = Aqua.Tape.open_turns(ctx, thread.id)
 
     # Bob is removed: his tab is sent away, and a fresh open is refused.
     :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: bob.user_id)
     assert_redirect(bob_view, "/")
 
     {:ok, _view, redirected_html} =
-      case live(bob_conn, chat_path(group, conv.id)) do
+      case live(bob_conn, chat_path(group, thread.id)) do
         {:error, {:live_redirect, %{to: to}}} -> {:ok, nil, to}
         {:error, {:redirect, %{to: to}}} -> {:ok, nil, to}
         {:ok, view, html} -> {:ok, view, html}
@@ -411,7 +412,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     refute redirected_html =~ "lunch at noon?"
 
-    Cyfr.Test.ScriptedExecution.script([model_reply("Booked.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Booked.")])
 
     pane(alice_view)
     |> form("form[phx-submit=submit]", %{"message" => "@aqua book it"})
@@ -438,7 +439,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(group)
     ready_estate!(group.id, alice.user_id)
-    Cyfr.Test.ScriptedExecution.script([model_reply("Read them.")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Read them.")])
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
     bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
     carol_conn = log_in_user(build_conn(), carol, athanor_id: estate().id)
@@ -461,7 +462,7 @@ defmodule PrismWeb.ChatLiveTest do
     |> render_submit()
 
     ctx = member_ctx(alice, group)
-    conv = settled_thread!(ctx)
+    thread = settled_thread!(ctx)
 
     # The files rode the model request as typed blocks on the task.
     [request] = model_requests()
@@ -475,7 +476,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert [%{"filename" => "note.txt", "data" => data}, %{"filename" => "plan.md"}] = attached
     assert Base.decode64!(data) == "hi there"
 
-    [msg | _] = Conversations.messages(ctx, conv.id)
+    [msg | _] = Threads.messages(ctx, thread.id)
     refs = msg |> Aqua.Attachments.refs_of() |> Enum.sort_by(& &1["filename"])
     assert Enum.map(refs, & &1["filename"]) == ["note.txt", "plan.md"]
     assert Enum.map(refs, & &1["size"]) == [8, 6]
@@ -484,10 +485,10 @@ defmodule PrismWeb.ChatLiveTest do
     for ref <- refs do
       refute Map.has_key?(ref, "path")
 
-      assert {:ok, ["conversations", conv_id, msg_id, _name] = blob} =
-               Aqua.Attachments.blob_path(conv.id, msg.id, ref)
+      assert {:ok, ["threads", thread_id, msg_id, _name] = blob} =
+               Aqua.Attachments.blob_path(thread.id, msg.id, ref)
 
-      assert conv_id == conv.id and msg_id == msg.id
+      assert thread_id == thread.id and msg_id == msg.id
       assert Arca.exists?(ctx, blob)
     end
 
@@ -539,7 +540,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert rendered =~ "Still not set up"
     assert rendered =~ "last attempt failed at"
     {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
-    assert Sanctum.Tenancy.Athanors.settings(row)["provisioning_error"]["step"]
+    assert %{step: _} = Sanctum.Tenancy.Athanors.provisioning_failure(row)
 
     # The pane holds its composer while the estate is being prepared, and
     # says why instead of blaming a missing model.
@@ -590,16 +591,16 @@ defmodule PrismWeb.ChatLiveTest do
     # send to keep, and nothing was written.
     assert_push_event(pane(view), "aqua:held_send", %{
       envelope:
-        %{"client_id" => client_id, "message_id" => message_id, "conversation_id" => conv_id} =
+        %{"client_id" => client_id, "message_id" => message_id, "thread_id" => thread_id} =
           envelope
     })
 
     assert render(pane(view)) =~ "Retry"
-    assert [] == Conversations.latest_messages(ctx, conv_id, 10)
+    assert [] == Threads.latest_messages(ctx, thread_id, 10)
 
     # A reload: the hook offers the held send back, and it is held again
     # under the same identity.
-    {reloaded, _} = mount_chat(conn, group, conv_id)
+    {reloaded, _} = mount_chat(conn, group, thread_id)
     render_hook(pane(reloaded), "restore_draft", envelope)
     assert render(pane(reloaded)) =~ "Retry"
 
@@ -607,11 +608,11 @@ defmodule PrismWeb.ChatLiveTest do
       envelope: %{"message_id" => ^message_id}
     })
 
-    assert [] == Conversations.latest_messages(ctx, conv_id, 10)
+    assert [] == Threads.latest_messages(ctx, thread_id, 10)
 
     # The fill completes: every pane holding the send retries on its own,
     # the estate accepts the message once, and the turn runs.
-    Cyfr.Test.ScriptedExecution.script([model_reply("Held, then heard")])
+    Cyfr.Test.ScriptedWorker.script([model_reply("Held, then heard")])
     ready_estate!(group.id, alice.user_id)
     {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
     {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(row)
@@ -620,8 +621,8 @@ defmodule PrismWeb.ChatLiveTest do
     # Both panes offer the send; the turn it opens ends with the reply.
     wait_until(
       fn ->
-        Enum.any?(Conversations.latest_messages(ctx, conv_id, 10), &(&1.id == message_id)) and
-          match?({:ok, []}, Aqua.Tape.open_turns(ctx, conv_id))
+        Enum.any?(Threads.latest_messages(ctx, thread_id, 10), &(&1.id == message_id)) and
+          match?({:ok, []}, Aqua.Tape.open_turns(ctx, thread_id))
       end,
       60_000
     )
@@ -630,7 +631,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert_push_event(view, "aqua:held_send", %{envelope: nil}, 5_000)
     refute render(pane(reloaded)) =~ "Retry"
 
-    rows = Conversations.latest_messages(ctx, conv_id, 50)
+    rows = Threads.latest_messages(ctx, thread_id, 50)
     assert [%{id: ^message_id}] = Enum.filter(rows, &(&1.author == alice.user_id))
     assert Enum.any?(rows, &(&1.content == "Held, then heard"))
     wait_until(fn -> render(pane(reloaded)) =~ "Held, then heard" end)
@@ -638,16 +639,16 @@ defmodule PrismWeb.ChatLiveTest do
     # The harness offering the same send names the same identity: the
     # console and the wire agree on what was accepted.
     assert {:ok, %{replayed: true, message_id: ^message_id}} =
-             Emissary.MCP.ConversationTool.handle("conversation", ctx, %{
+             Emissary.MCP.ThreadTool.handle("thread", ctx, %{
                "action" => "send",
-               "conversation" => conv_id,
+               "thread" => thread_id,
                "message" => "@aqua hold this",
                "client_id" => client_id
              })
 
     assert [%{id: ^message_id}] =
              Enum.filter(
-               Conversations.latest_messages(ctx, conv_id, 50),
+               Threads.latest_messages(ctx, thread_id, 50),
                &(&1.author == alice.user_id)
              )
   end
@@ -718,7 +719,7 @@ defmodule PrismWeb.ChatLiveTest do
        %{conn: conn} do
     conn = log_in_user(conn, test_user(), athanor_id: estate().id)
     {view, html} = mount_chat(conn)
-    hidden = ~r/id="conversation-list"[^>]*max-md:hidden/
+    hidden = ~r/id="thread-list"[^>]*max-md:hidden/
 
     # At rest: a column at a desk, off-screen on a phone.
     assert html =~ hidden
@@ -728,7 +729,7 @@ defmodule PrismWeb.ChatLiveTest do
     pane(view) |> element("button[phx-click=toggle_rail]") |> render_click()
     refute render(view) =~ hidden
 
-    view |> element("#conversation-list button[phx-click=close_rail]") |> render_click()
+    view |> element("#thread-list button[phx-click=close_rail]") |> render_click()
     assert render(view) =~ hidden
   end
 
@@ -739,7 +740,7 @@ defmodule PrismWeb.ChatLiveTest do
     conn = log_in_user(conn, alice, athanor_id: estate().id)
 
     # The focused estate holds a thread Alice does not follow, so its
-    # "Other topics" has something to fold.
+    # "Other threads" has something to fold.
     home_ctx =
       Sanctum.Context.build(
         user_id: alice.user_id,
@@ -750,8 +751,8 @@ defmodule PrismWeb.ChatLiveTest do
         authenticated: true
       )
 
-    {:ok, conv} = Conversations.create(home_ctx)
-    :ok = Arca.TopicSubscriptionStorage.unfollow(home_ctx, conv.id, alice.user_id)
+    {:ok, thread} = Threads.create(home_ctx)
+    :ok = Arca.ThreadSubscriptionStorage.unfollow(home_ctx, thread.id, alice.user_id)
 
     {view, _html} = mount_chat(conn)
     fold = "#estate-#{estate().id} button[phx-click=toggle_other]"
@@ -793,17 +794,17 @@ defmodule PrismWeb.ChatLiveTest do
         authenticated: true
       )
 
-    {:ok, foreign} = Conversations.create(group_ctx)
-    :ok = Arca.TopicSubscriptionStorage.unfollow(group_ctx, foreign.id, alice.user_id)
+    {:ok, foreign} = Threads.create(group_ctx)
+    :ok = Arca.ThreadSubscriptionStorage.unfollow(group_ctx, foreign.id, alice.user_id)
 
     # The focused estate is open; the id belongs to the group.
     {view, _html} = mount_chat(conn)
-    assert render_click(view, "follow_topic", %{"id" => foreign.id}) =~ "That conversation isn"
-    refute Arca.TopicSubscriptionStorage.follows?(estate().id, foreign.id, alice.user_id)
-    refute Arca.TopicSubscriptionStorage.follows?(group.id, foreign.id, alice.user_id)
+    assert render_click(view, "follow_thread", %{"id" => foreign.id}) =~ "That thread isn"
+    refute Arca.ThreadSubscriptionStorage.follows?(estate().id, foreign.id, alice.user_id)
+    refute Arca.ThreadSubscriptionStorage.follows?(group.id, foreign.id, alice.user_id)
 
-    assert render_click(view, "unfollow_topic", %{"id" => foreign.id}) =~
-             "That conversation isn"
+    assert render_click(view, "unfollow_thread", %{"id" => foreign.id}) =~
+             "That thread isn"
   end
 
   test "+ New opens a blank pane, whatever the estate already holds", %{conn: conn} do
@@ -811,14 +812,14 @@ defmodule PrismWeb.ChatLiveTest do
     conn = log_in_user(conn, alice, athanor_id: estate().id)
     home = estate()
     ctx = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: home.id}
-    {:ok, existing} = Conversations.create(ctx)
+    {:ok, existing} = Threads.create(ctx)
 
     {view, _html} = mount_chat(conn, home, existing.id)
     assert pane(view).id == "pane-#{home.id}"
     assert pane_thread(view).id == existing.id
     pid = pane(view).pid
 
-    render_click(view, "new_conversation")
+    render_click(view, "new_thread")
     assert_patch(view, chat_path(home, PrismWeb.ChatLive.blank()))
     settled_render(view)
     # The pane is the estate's one: turned to the blank slate, not remounted.
@@ -837,14 +838,14 @@ defmodule PrismWeb.ChatLiveTest do
     conn = log_in_user(conn, alice, athanor_id: estate().id)
     home = estate()
     ctx = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: home.id}
-    {:ok, first} = Conversations.create(ctx)
-    {:ok, second} = Conversations.create(ctx)
+    {:ok, first} = Threads.create(ctx)
+    {:ok, second} = Threads.create(ctx)
 
     {view, _html} = mount_chat(conn, home, first.id)
     pid = pane(view).pid
     assert pane_thread(view).id == first.id
 
-    render_click(view, "open_conversation", %{
+    render_click(view, "open_thread", %{
       "route" => Sanctum.Tenancy.Athanors.route_slug(home),
       "id" => second.id
     })

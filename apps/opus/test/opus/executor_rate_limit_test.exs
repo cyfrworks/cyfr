@@ -15,9 +15,9 @@ defmodule Opus.ExecutorRateLimitTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     # Start the rate limiter if not already running
-    case GenServer.whereis(Opus.RateLimiter) do
+    case GenServer.whereis(Cyfr.Execution.Rates) do
       nil ->
-        {:ok, _pid} = Opus.RateLimiter.start_link([])
+        {:ok, _pid} = Cyfr.Execution.Rates.start_link([])
 
       _pid ->
         :ok
@@ -68,7 +68,10 @@ defmodule Opus.ExecutorRateLimitTest do
       # math.wasm is a core module so Component Model load may fail,
       # but the important thing is the rate limiter allowed it through.
       result =
-        Opus.Executor.run(ctx, ref, input, type: :reagent, authority: Sanctum.Authority.zero())
+        Cyfr.Execution.Dispatch.run(ctx, ref, input,
+          type: :reagent,
+          authority: Cyfr.Authority.zero()
+        )
 
       case result do
         {:ok, _} ->
@@ -81,9 +84,9 @@ defmodule Opus.ExecutorRateLimitTest do
 
     test "passing the policy gate records one policy_consultation row", %{ctx: ctx, ref: ref} do
       _result =
-        Opus.Executor.run(ctx, ref, %{"a" => 1, "b" => 2},
+        Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 1, "b" => 2},
           type: :reagent,
-          authority: Sanctum.Authority.zero()
+          authority: Cyfr.Authority.zero()
         )
 
       rows =
@@ -111,16 +114,16 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # First request should succeed
       assert {:ok, _} =
-               Opus.RateLimiter.check(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, limit_source)
 
       # Second request should be rate limited
       assert {:error, :rate_limited, retry_after} =
-               Opus.RateLimiter.check(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, limit_source)
 
       assert retry_after > 0
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.athanor_id, component_ref)
+      Cyfr.Execution.Rates.reset(ctx.athanor_id, component_ref)
     end
 
     test "rate limiter tracks per athanor and component", %{ctx: ctx} do
@@ -131,19 +134,19 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # Request to component A
       assert {:ok, _} =
-               Opus.RateLimiter.check(ctx.athanor_id, component_ref_a, limit_source)
+               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref_a, limit_source)
 
       # Request to component B should still work (different component)
       assert {:ok, _} =
-               Opus.RateLimiter.check(ctx.athanor_id, component_ref_b, limit_source)
+               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref_b, limit_source)
 
       # Second request to component A should be rate limited
       assert {:error, :rate_limited, _} =
-               Opus.RateLimiter.check(ctx.athanor_id, component_ref_a, limit_source)
+               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref_a, limit_source)
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.athanor_id, component_ref_a)
-      Opus.RateLimiter.reset(ctx.athanor_id, component_ref_b)
+      Cyfr.Execution.Rates.reset(ctx.athanor_id, component_ref_a)
+      Cyfr.Execution.Rates.reset(ctx.athanor_id, component_ref_b)
     end
 
     test "unlimited requests when no rate limit configured", %{ctx: ctx} do
@@ -154,7 +157,7 @@ defmodule Opus.ExecutorRateLimitTest do
       # Should return :unlimited for all requests
       for _ <- 1..10 do
         assert {:ok, :unlimited} =
-                 Opus.RateLimiter.check(ctx.athanor_id, component_ref, limit_source)
+                 Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, limit_source)
       end
     end
 
@@ -165,18 +168,18 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # Check initial status
       assert {:ok, 0, 5, _window} =
-               Opus.RateLimiter.status(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.status(ctx.athanor_id, component_ref, limit_source)
 
       # Make a request
       assert {:ok, 4} =
-               Opus.RateLimiter.check(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, limit_source)
 
       # Check status again
       assert {:ok, 1, 4, _window} =
-               Opus.RateLimiter.status(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.status(ctx.athanor_id, component_ref, limit_source)
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.athanor_id, component_ref)
+      Cyfr.Execution.Rates.reset(ctx.athanor_id, component_ref)
     end
   end
 end

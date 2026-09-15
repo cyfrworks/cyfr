@@ -310,7 +310,7 @@ defmodule Compendium.Registry.ClientTest do
   describe "token redaction" do
     # The log_token_returning_result pipeline runs on every call to a
     # token-returning endpoint. We can't observe the redaction on the error
-    # path (Sanctum.Sanitizer.sanitize/1 only runs on {:ok, body}), but we
+    # path (Cyfr.Sanitizer.sanitize/1 only runs on {:ok, body}), but we
     # CAN confirm that a probe call with a fake access_token never leaks the
     # raw token value into Logger output — the access_token goes into the
     # request body, and :filter_parameters + the sanitizer cover the

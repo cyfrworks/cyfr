@@ -7,7 +7,7 @@ defmodule Aqua.AloudTest do
   # you are not in.
   use ExUnit.Case, async: false
 
-  alias Arca.ConversationStorage, as: Conversations
+  alias Arca.ThreadStorage, as: Threads
   alias Aqua.Aloud
 
   setup do
@@ -46,17 +46,17 @@ defmodule Aqua.AloudTest do
     base = Sanctum.TestContext.local()
     alice_ctx = %{base | user_id: alice}
 
-    {:ok, private} = Conversations.create(%{alice_ctx | athanor_id: mine.id})
-    {:ok, shared} = Conversations.create(%{alice_ctx | athanor_id: room.id})
-    {:ok, theirs} = Conversations.create(%{base | user_id: bob, athanor_id: elsewhere.id})
+    {:ok, private} = Threads.create(%{alice_ctx | athanor_id: mine.id})
+    {:ok, shared} = Threads.create(%{alice_ctx | athanor_id: room.id})
+    {:ok, theirs} = Threads.create(%{base | user_id: bob, athanor_id: elsewhere.id})
 
     {:ok,
      ctx: %{alice_ctx | athanor_id: mine.id}, private: private, shared: shared, theirs: theirs}
   end
 
-  defp said(ctx, conv, text) do
+  defp said(ctx, thread, text) do
     {:ok, msg} =
-      Conversations.append(%{ctx | athanor_id: conv.athanor_id}, conv.id, %{
+      Threads.append(%{ctx | athanor_id: thread.athanor_id}, thread.id, %{
         author: ctx.user_id,
         kind: "text",
         content: text
@@ -74,7 +74,7 @@ defmodule Aqua.AloudTest do
     b = said(ctx, private, "BA117, apparently")
 
     # Nothing crosses on its own.
-    assert [] = Conversations.messages(%{ctx | athanor_id: shared.athanor_id}, shared.id)
+    assert [] = Threads.messages(%{ctx | athanor_id: shared.athanor_id}, shared.id)
 
     assert {:ok, [posted]} = Aloud.post(ctx, private.id, [b.id], shared.athanor_id, shared.id)
     assert posted.content == "BA117, apparently"
@@ -82,14 +82,14 @@ defmodule Aqua.AloudTest do
     # Only what was chosen — the question stayed private.
     contents =
       %{ctx | athanor_id: shared.athanor_id}
-      |> Conversations.messages(shared.id)
+      |> Threads.messages(shared.id)
       |> Enum.map(& &1.content)
 
     assert contents == ["BA117, apparently"]
 
     # And the original is untouched: saying something aloud is a copy, not
     # a move out of your own thread.
-    assert length(Conversations.messages(%{ctx | athanor_id: private.athanor_id}, private.id)) ==
+    assert length(Threads.messages(%{ctx | athanor_id: private.athanor_id}, private.id)) ==
              2
 
     assert a.id != posted.id
@@ -99,8 +99,8 @@ defmodule Aqua.AloudTest do
     m = said(ctx, private, "here it is")
     {:ok, [posted]} = Aloud.post(ctx, private.id, [m.id], shared.athanor_id, shared.id)
 
-    from = Conversations.payload(posted)["aloud_from"]
-    assert from["conversation_id"] == private.id
+    from = Threads.payload(posted)["aloud_from"]
+    assert from["thread_id"] == private.id
     assert from["message_id"] == m.id
   end
 
@@ -156,27 +156,27 @@ defmodule Aqua.AloudTest do
     end
 
     {:ok, answer} =
-      Conversations.append(ctx, private.id, %{author: "aqua", kind: "text", content: "Try BA117."})
+      Threads.append(ctx, private.id, %{author: "aqua", kind: "text", content: "Try BA117."})
 
     assert {:ok, [copy]} = Aloud.post(ctx, private.id, [answer.id], shared.athanor_id, shared.id)
 
     # Attributed to the person, marked as the assistant's words.
     assert copy.author == ctx.user_id
     assert copy.content == "Try BA117."
-    assert Conversations.payload(copy)["shared_agent"] == true
+    assert Threads.payload(copy)["shared_agent"] == true
 
     # The room's own assistant spoke to the room; nobody carries that out.
     room_ctx = %{ctx | athanor_id: shared.athanor_id}
 
     {:ok, room_answer} =
-      Conversations.append(room_ctx, shared.id, %{author: "aqua", kind: "text", content: "Sure."})
+      Threads.append(room_ctx, shared.id, %{author: "aqua", kind: "text", content: "Sure."})
 
     assert {:error, :not_the_author} =
              Aloud.post(room_ctx, shared.id, [room_answer.id], private.athanor_id, private.id)
 
     # A system line is nobody's to say aloud, at home or not.
     {:ok, note} =
-      Conversations.append(ctx, private.id, %{author: "system", kind: "system", content: "📝"})
+      Threads.append(ctx, private.id, %{author: "system", kind: "system", content: "📝"})
 
     assert {:error, :not_the_author} =
              Aloud.post(ctx, private.id, [note.id], shared.athanor_id, shared.id)
@@ -186,7 +186,7 @@ defmodule Aqua.AloudTest do
     mine = said(ctx, private, "my line")
 
     {:ok, other} =
-      Conversations.append(%{ctx | athanor_id: private.athanor_id}, private.id, %{
+      Threads.append(%{ctx | athanor_id: private.athanor_id}, private.id, %{
         author: "local|idp|somebody-else",
         kind: "text",
         content: "their line"
@@ -199,7 +199,7 @@ defmodule Aqua.AloudTest do
              Aloud.post(ctx, private.id, [mine.id, other.id], shared.athanor_id, shared.id)
 
     target_ctx = %{ctx | athanor_id: shared.athanor_id}
-    assert Conversations.messages(target_ctx, shared.id) == []
+    assert Threads.messages(target_ctx, shared.id) == []
   end
 
   test "an operator who is not a member is refused like anyone else", %{
@@ -250,7 +250,7 @@ defmodule Aqua.AloudTest do
       ])
 
     {:ok, m} =
-      Conversations.append(ctx, private.id, %{
+      Threads.append(ctx, private.id, %{
         id: message_id,
         author: ctx.user_id,
         kind: "text",
@@ -285,7 +285,7 @@ defmodule Aqua.AloudTest do
       ])
 
     {:ok, m} =
-      Conversations.append(ctx, private.id, %{
+      Threads.append(ctx, private.id, %{
         id: message_id,
         author: ctx.user_id,
         kind: "text",
@@ -298,17 +298,17 @@ defmodule Aqua.AloudTest do
     assert {:error, :attachment_missing} =
              Aloud.post(ctx, private.id, [m.id], shared.athanor_id, shared.id)
 
-    assert Conversations.messages(%{ctx | athanor_id: shared.athanor_id}, shared.id) == []
+    assert Threads.messages(%{ctx | athanor_id: shared.athanor_id}, shared.id) == []
   end
 
-  test "refuses a copy into the same conversation and an empty selection", %{
+  test "refuses a copy into the same thread and an empty selection", %{
     ctx: ctx,
     private: private,
     shared: shared
   } do
     m = said(ctx, private, "x")
 
-    assert {:error, :same_conversation} =
+    assert {:error, :same_thread} =
              Aloud.post(ctx, private.id, [m.id], private.athanor_id, private.id)
 
     assert {:error, :nothing_to_say} =

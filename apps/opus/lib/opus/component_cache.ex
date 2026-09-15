@@ -21,12 +21,17 @@ defmodule Opus.ComponentCache do
   Returns a compiled component, using the cache when possible.
 
   If the cache contains a component for `digest` built by the current
-  engine, returns it immediately. Otherwise compiles `wasm_bytes` using
-  `store` and caches the result.
+  engine, returns it immediately and `fetch` is not called. Otherwise
+  `fetch` answers the component's bytes (`{:ok, bytes}`, or an error that
+  is answered as it is), which are compiled using `store` and cached.
   """
-  @spec get_or_compile(String.t(), binary(), Wasmex.Components.Store.t()) ::
-          {:ok, Wasmex.Components.Component.t()} | {:error, term()}
-  def get_or_compile(digest, wasm_bytes, store) when is_binary(digest) and digest != "" do
+  @spec get_or_compile(
+          String.t(),
+          (-> {:ok, binary()} | {:error, term()}),
+          Wasmex.Components.Store.t()
+        ) :: {:ok, Wasmex.Components.Component.t()} | {:error, term()}
+  def get_or_compile(digest, fetch, store)
+      when is_binary(digest) and digest != "" and is_function(fetch, 0) do
     # A compiled component is a NIF resource tied to the engine that built
     # it — validate the engine generation alongside the digest so an engine
     # restart can never serve stale resources to stores from the new one.
@@ -38,13 +43,10 @@ defmodule Opus.ComponentCache do
         {:ok, component}
 
       _ ->
-        case Wasmex.Components.Component.new(store, wasm_bytes) do
-          {:ok, component} ->
-            Arca.Cache.put(cache_key, {generation, component}, @ttl_ms)
-            {:ok, component}
-
-          error ->
-            error
+        with {:ok, wasm_bytes} <- fetch.(),
+             {:ok, component} <- Wasmex.Components.Component.new(store, wasm_bytes) do
+          Arca.Cache.put(cache_key, {generation, component}, @ttl_ms)
+          {:ok, component}
         end
     end
   end

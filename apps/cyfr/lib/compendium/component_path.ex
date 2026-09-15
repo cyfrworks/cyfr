@@ -27,14 +27,14 @@ defmodule Compendium.ComponentPath do
   tenant.
 
   Vocabulary note: paths and the components table say `publisher`;
-  references and identity (`Sanctum.ComponentRef`) say `namespace` — the
+  references and identity (`Cyfr.ComponentRef`) say `namespace` — the
   SAME value under two names, one per vocabulary. This module's
   `normalize_publisher/1` / `default_publisher/0` are the bridge.
   """
 
   @behaviour Arca.Storage.UnitLocator
 
-  @type_plurals Enum.map(Sanctum.ComponentRef.valid_types(), &(&1 <> "s"))
+  @type_plurals Enum.map(Cyfr.ComponentRef.valid_types(), &(&1 <> "s"))
 
   @default_publisher "local"
 
@@ -79,9 +79,9 @@ defmodule Compendium.ComponentPath do
           | :error
   def parse([@components_root, type_plural, publisher, name, version | rest])
       when type_plural in @type_plurals do
-    with :ok <- Sanctum.ComponentRef.validate_namespace(publisher),
-         :ok <- Sanctum.ComponentRef.validate_name(name),
-         :ok <- Sanctum.ComponentRef.validate_version(version) do
+    with :ok <- Cyfr.ComponentRef.validate_namespace(publisher),
+         :ok <- Cyfr.ComponentRef.validate_name(name),
+         :ok <- Cyfr.ComponentRef.validate_version(version) do
       {:ok,
        %{
          type: singular(type_plural),

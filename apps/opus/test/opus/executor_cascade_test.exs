@@ -26,7 +26,7 @@ defmodule Opus.ExecutorCascadeTest do
     record
   end
 
-  describe "cascade_children_failure via handle_failure" do
+  describe "Cyfr.Execution.Cascade.fail_children/1" do
     test "parent formula failure cascades to running children" do
       parent_id = "exec_cascade_#{System.unique_integer([:positive])}"
       child1_id = "exec_child1_#{System.unique_integer([:positive])}"
@@ -54,8 +54,7 @@ defmodule Opus.ExecutorCascadeTest do
         started_at: started_at
       })
 
-      # Build a minimal ExecutionRecord struct to call cascade
-      record = %Opus.ExecutionRecord{
+      record = %Cyfr.Execution.Record{
         id: parent_id,
         reference: "formula:local.agent:0.9.0",
         component_type: :formula,
@@ -65,25 +64,8 @@ defmodule Opus.ExecutorCascadeTest do
         error: "Execution timeout after 300000ms"
       }
 
-      # Invoke the cascade directly via the module's private function exposed through handle_failure path.
-      # We test by directly calling the Arca.Execution functions since cascade is private.
-      children = Execution.list_running_children(parent_id)
-      assert length(children) == 2
-
-      # Simulate what cascade_children_failure does
-      for child <- children do
-        now = DateTime.utc_now()
-        duration_ms = DateTime.diff(now, child.started_at, :millisecond)
-
-        {count, _} =
-          Execution.mark_failed_if_running(child.id, %{
-            completed_at: now,
-            duration_ms: duration_ms,
-            error_message: "Parent execution (#{record.id}) terminated"
-          })
-
-        assert count == 1
-      end
+      assert length(Execution.list_running_children(parent_id)) == 2
+      assert :ok = Cyfr.Execution.Cascade.fail_children(record)
 
       # Verify children are now failed
       assert Execution.list_running_children(parent_id) == []
@@ -128,7 +110,7 @@ defmodule Opus.ExecutorCascadeTest do
         Sanctum.Context.build(
           user_id: "user_cascade_test",
           athanor_id: Sanctum.TestContext.athanor_id(),
-          permissions: [:execution_write],
+          permissions: [],
           scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
@@ -228,25 +210,24 @@ defmodule Opus.ExecutorCascadeTest do
     test "only the abnormal endings cascade" do
       # Successful parents leave asynchronous children running. Failure and
       # cancellation cascade; abandoned children are reaped by lease expiry.
-      source =
-        [__DIR__, "../../lib/opus/executor.ex"]
-        |> Path.join()
-        |> Path.expand()
-        |> File.read!()
+      read = fn path -> [__DIR__, path] |> Path.join() |> Path.expand() |> File.read!() end
+      dispatch = read.("../../../cyfr/lib/cyfr/execution/dispatch.ex")
+      lapse = read.("../../../cyfr/lib/cyfr/execution/lapse.ex")
+      close = read.("../../../cyfr/lib/cyfr/execution/close.ex")
 
       callers =
-        source
+        Enum.join([dispatch, lapse, close], "\n")
         |> String.split("\n")
-        |> Enum.filter(&(String.trim(&1) =~ ~r/^cascade_children_failure(_by_id)?\(/))
+        |> Enum.filter(&(String.trim(&1) =~ ~r/^Cascade\.fail_children(_of)?\(/))
         |> Enum.map(&String.trim/1)
 
-      assert length(callers) == 2,
-             "expected exactly the failure and cancel cascades, got: #{inspect(callers)}"
+      assert length(callers) == 3,
+             "expected exactly the failure, cancel and lapse cascades, got: #{inspect(callers)}"
 
       # ...and the success path returns without one.
-      [_before, finalize] = String.split(source, "defp finalize_execution", parts: 2)
-      [finalize_body | _] = String.split(finalize, "\n  defp ", parts: 2)
-      refute finalize_body =~ "cascade_children_failure"
+      [_before, complete] = String.split(close, "def complete(", parts: 2)
+      [complete_body | _] = String.split(complete, ~r/\n  (@doc|def |defp )/, parts: 2)
+      refute complete_body =~ "Cascade."
     end
 
     test "a completed parent leaves a running child alone" do
@@ -312,7 +293,7 @@ defmodule Opus.ExecutorCascadeTest do
           authenticated: true
         )
 
-      assert {:error, :not_found} = Opus.Executor.cancel(foreign_ctx, exec_id)
+      assert {:error, :not_found} = Cyfr.Execution.Dispatch.cancel(foreign_ctx, exec_id)
 
       # The destructive kill must NOT happen before the tenant check.
       assert Process.alive?(target)
@@ -359,7 +340,7 @@ defmodule Opus.ExecutorCascadeTest do
           authenticated: true
         )
 
-      assert {:ok, %{cancelled: true}} = Opus.Executor.cancel(owner_ctx, exec_id)
+      assert {:ok, %{cancelled: true}} = Cyfr.Execution.Dispatch.cancel(owner_ctx, exec_id)
 
       # The running process is killed and the record is no longer running.
       assert_receive {:DOWN, ^ref, :process, ^target, _}, 1000
@@ -376,14 +357,14 @@ defmodule Opus.ExecutorCascadeTest do
     end
   end
 
-  # Spawn a process that registers itself in the ExecutionRegistry under the
+  # Spawn a process that registers itself in Cyfr.Execution.Registry under the
   # given id (mimicking a live execution) and idles until killed.
   defp register_fake_execution(execution_id) do
     test_pid = self()
 
     target =
       spawn(fn ->
-        {:ok, _} = Registry.register(Opus.ExecutionRegistry, execution_id, %{})
+        {:ok, _} = Registry.register(Cyfr.Execution.Registry, execution_id, %{})
         send(test_pid, :registered)
         Process.sleep(:infinity)
       end)

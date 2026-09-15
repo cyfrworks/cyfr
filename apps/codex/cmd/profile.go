@@ -16,9 +16,6 @@ import (
 func init() {
 	profileGrantCmd.Flags().StringSlice("entry", nil,
 		"Bind a need to a vault entry non-interactively: need=entry_id (repeatable)")
-	profileGrantCmd.Flags().StringSlice("connection", nil,
-		"Deprecated alias for --entry")
-	_ = profileGrantCmd.Flags().MarkDeprecated("connection", "use --entry")
 
 	profileCmd.AddCommand(profileGrantCmd)
 	profileCmd.AddCommand(profileListCmd)
@@ -177,15 +174,14 @@ var profileGrantCmd = &cobra.Command{
 	},
 }
 
-// One vault entry per need: from --entry need=entry_id flags (--connection
-// is the deprecated alias), or asked for interactively. A need left unbound
+// One vault entry per need: from --entry need=entry_id flags, or asked for
+// interactively. A need left unbound
 // is a deliberate choice — an app can be granted with no credentials at all.
 func collectBindings(cmd *cobra.Command, plan map[string]any) ([]map[string]any, error) {
 	preset := map[string]string{}
 
 	flags, _ := cmd.Flags().GetStringSlice("entry")
-	legacy, _ := cmd.Flags().GetStringSlice("connection")
-	for _, pair := range append(flags, legacy...) {
+	for _, pair := range flags {
 		parts := strings.SplitN(pair, "=", 2)
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("--entry expects need=entry_id, got %q", pair)

@@ -35,14 +35,14 @@ defmodule Cyfr.Ops.LiteralDriftTest do
     served = MapSet.new(Cyfr.Ops.Catalog.tool_actions())
 
     go_pairs =
-      for file <- Path.wildcard(Path.join(@root, "apps/codex/**/*.go")),
+      for file <- Cyfr.Test.SourceTree.files!(Path.join(@root, "apps/codex/**/*.go")),
           not String.ends_with?(file, "_test.go"),
           [_, tool, action] <- Regex.scan(@go_call, File.read!(file)),
           do: {Path.relative_to(file, @root), "#{tool}.#{action}"}
 
     ex_pairs =
-      for dir <- ~w(apps/cyfr/lib apps/opus/lib apps/locus/lib),
-          file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
+      for dir <- Cyfr.Test.SourceTree.app_libs(@root),
+          file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
           [_, tool, action] <- Regex.scan(@ex_call, Cyfr.Test.SourceTree.read(file)),
           do: {Path.relative_to(file, @root), "#{tool}.#{action}"}
 

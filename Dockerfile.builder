@@ -3,6 +3,23 @@
 # The app image (Dockerfile) carries no compilers; this one carries no
 # endpoint, no database and no tenant state — sources arrive in the
 # request, artifacts leave in the response.
+#
+# Process model: cyfr-spawn runs as root holding only SETUID, SETGID and
+# KILL (it refuses to start with any other capability), starts the builder
+# release as cyfr-builder, and runs every build under a pooled uid of its
+# own (cyfr-build01…cyfr-build16) with a 0700 home under
+# /var/lib/cyfr-builder/homes. When a build ends every process of its uid
+# is killed and everything the uid left is removed before another build
+# gets it; the builder release refuses to serve builds without cyfr-spawn.
+
+# ---- cyfr-spawn, the process helper: a static Go binary, pinned to the Go
+# release apps/spawn/go.mod names ----
+FROM golang:1.26.6-alpine AS spawn
+WORKDIR /src
+COPY apps/spawn/go.mod apps/spawn/go.sum ./
+RUN go mod download
+COPY apps/spawn/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-spawn .
 
 # ---- Stage 1: release build ----
 FROM hexpm/elixir:1.20.3-erlang-29.0.5-debian-bookworm-20260824 AS relbuilder
@@ -36,16 +53,15 @@ RUN mix compile && mix release builder
 FROM debian:bookworm-slim
 
 LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
-# The release loads (never starts) the cyfr app, whose lib/sanctum modules
-# (Sanctum.Limits reaches the builder via Locus.Builder) are FSL-licensed.
+# The release loads (never starts) the cyfr app, which carries lib/sanctum's
+# FSL-licensed modules.
 LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
 
-# procps carries `kill` and `pgrep`, which Debian does not ship in a slim
-# base and which `Locus.Builder` shells out to when a build overruns its
-# deadline or its caller goes away. Without them every cleanup was an
-# :enoent the code rescued into a warning, so a runaway cargo or npm tree
-# outlived the request that started it.
-RUN apt-get update && apt-get install -y \
+# Debian publishes a fixed package before the base image is rebuilt around
+# it, so take what the archive has at build time: the image scan in
+# test.yml's builder-image job and docker.yml fails on a fixable HIGH or
+# CRITICAL.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
     openssl \
     libncurses6 \
@@ -53,7 +69,6 @@ RUN apt-get update && apt-get install -y \
     libsqlite3-0 \
     curl \
     locales \
-    procps \
     build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
@@ -82,7 +97,7 @@ RUN ARCH=$(dpkg --print-architecture) \
     && /tmp/rustup-init -y --profile minimal \
     && rm /tmp/rustup-init \
     && rustup target add wasm32-wasip1 wasm32-wasip2 \
-    && cargo install cargo-component@${CARGO_COMPONENT_VERSION} \
+    && cargo install --locked cargo-component@${CARGO_COMPONENT_VERSION} \
     && rm -rf /usr/local/cargo/registry /usr/local/cargo/git \
     && mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
 
@@ -102,26 +117,63 @@ RUN ARCH=$(dpkg --print-architecture) \
     && rm /tmp/node.tar.xz \
     && node --version && npm --version
 
-RUN groupadd -r app && useradd -r -g app -d /app app \
-    && chown -R app:app /usr/local/cargo /usr/local/rustup
+# The toolchains stay root-owned: a build reads them and writes only its
+# own home, so no build can alter what the next one compiles with. A build
+# runs with cyfr-spawn's fixed PATH, so the Rust toolchain's commands are
+# linked into /usr/local/bin.
+RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
+
+# The builder release's user and the build pool: each user is alone in its
+# own group and belongs to no other. /run/cyfr-builder holds the release's
+# temporary files and the attach socket builds' relays connect to.
+RUN groupadd -r -g 10001 cyfr-builder \
+    && useradd -r -u 10001 -g cyfr-builder -d /nonexistent -M -s /usr/sbin/nologin cyfr-builder \
+    && for i in $(seq 1 16); do \
+         name="$(printf 'cyfr-build%02d' "$i")"; uid=$((30000 + i)); \
+         groupadd -r -g "$uid" "$name" \
+         && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" || exit 1; \
+       done \
+    && install -d -m 1733 -o root -g root /var/lib/cyfr-builder/homes \
+    && install -d -m 0700 -o cyfr-builder -g cyfr-builder /run/cyfr-builder
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 ENV ELIXIR_ERL_OPTIONS="+fnu"
-ENV RELEASE_TMP=/tmp
 
 WORKDIR /app
 
+COPY --from=spawn /out/cyfr-spawn /usr/local/bin/cyfr-spawn
 COPY --from=relbuilder /app/_build/prod/rel/builder ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
+
+# The crates every scaffolded Rust component depends on, fetched once into
+# a root-owned Cargo home; each build copies its registry cache into the
+# build's own Cargo home (`CYFR_BUILD_CARGO_SEED`). The manifests are the
+# release's own templates, so the seed follows the scaffold.
+ENV CYFR_BUILD_CARGO_SEED=/opt/cyfr/cargo-seed
+RUN /app/bin/builder eval ' \
+      for type <- [:reagent, :catalyst, :formula] do \
+        dir = Path.join("/tmp/cargo-seed", Atom.to_string(type)); \
+        File.mkdir_p!(Path.join(dir, "src")); \
+        File.write!(Path.join(dir, "src/lib.rs"), ""); \
+        File.write!(Path.join(dir, "Cargo.toml"), Locus.Builder.cargo_toml_for(type)) \
+      end' \
+    && for manifest in /tmp/cargo-seed/*/Cargo.toml; do \
+         CARGO_HOME="$CYFR_BUILD_CARGO_SEED" cargo fetch --manifest-path "$manifest" || exit 1; \
+       done \
+    && rm -rf /tmp/cargo-seed
 
 # No `COPY wit/` here: Compendium.WITSource embeds the whole WIT tree at
 # COMPILE time (stage 1 copies it for that), and the runtime never reads
 # it from disk — a release without its ABI fails the build instead.
 
-USER app
+# The release starts no Erlang distribution: a listener any build could
+# reach, authenticated by a cookie any build could read. Its temporary
+# files go where only its own user can reach them.
+ENV RELEASE_DISTRIBUTION=none \
+    RELEASE_TMP=/run/cyfr-builder
 
 ARG CYFR_BUILDER_PORT=4100
 EXPOSE ${CYFR_BUILDER_PORT}
@@ -129,4 +181,7 @@ EXPOSE ${CYFR_BUILDER_PORT}
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:${CYFR_BUILDER_PORT:-4100}/health || exit 1
 
-CMD ["sh", "-c", "exec /app/bin/builder start"]
+# Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
+# `no-new-privileges`, a read-only root, `ipc: none` and the homes and
+# /run/cyfr-builder tmpfs mounts (docker-compose.yml's builder service).
+ENTRYPOINT ["cyfr-spawn", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/builder", "start"]

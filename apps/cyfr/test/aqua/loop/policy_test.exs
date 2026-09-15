@@ -102,6 +102,40 @@ defmodule Aqua.Loop.PolicyTest do
     refute MapSet.member?(touched, "formula:local.other")
   end
 
+  test "a run after a source write and a compile of the same component still needs a card" do
+    launch =
+      resolve!("execution", %{"action" => "run", "reference" => "catalyst:local.widget:0.1.0"})
+
+    consented = fn ref -> String.starts_with?(ref, "catalyst:local.widget") end
+
+    closed =
+      for {action, extra} <- [
+            {"write", %{"content" => "fn main() {}"}},
+            {"edit", %{"edits" => []}},
+            {"delete", %{}}
+          ] do
+        [
+          %{
+            "tool" => "source",
+            "action" => action,
+            "arguments" =>
+              Map.put(extra, "path", "components/catalysts/local/widget/0.1.0/src/lib.rs")
+          },
+          %{
+            "tool" => "build",
+            "action" => "compile",
+            "arguments" => %{"reference" => "catalyst:local.widget:0.1.0"}
+          }
+        ]
+      end
+
+    for calls <- closed do
+      touched = Policy.touched_refs(calls)
+      assert MapSet.member?(touched, "catalyst:local.widget")
+      assert :ask = Policy.decide(launch, @policy, consented?: consented, touched: touched)
+    end
+  end
+
   test "a launch of what the same batch writes to needs a card, whatever has closed" do
     launch =
       resolve!("execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"})

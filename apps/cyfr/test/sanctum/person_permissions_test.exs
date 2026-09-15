@@ -42,7 +42,7 @@ defmodule Sanctum.PersonPermissionsTest do
 
   test "no production builder spells the wildcard" do
     offenders =
-      for path <- Path.wildcard(Path.join(root(), "apps/*/lib/**/*.ex")),
+      for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex")),
           {line, n} <- path |> File.read!() |> Cyfr.Test.CodeLines.code_lines(),
           String.contains?(line, "[:*]"),
           do: "#{Path.relative_to(path, root())}:#{n}: #{String.trim(line)}"

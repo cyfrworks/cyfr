@@ -7,19 +7,11 @@ defmodule Cyfr.WithElseScopeTest do
 
   A clause that rebinds a name the failure arm then reads looks like it
   hands that arm the updated value. It hands it the *outer* one, silently,
-  and the compiler says nothing because the name is bound either way.
-
-  This shipped twice, both times defeating credential masking:
-
-    * `Opus.Executor.do_run/7` rebound the execution pipeline through five
-      stages; every failure arm masked with the pre-pipeline struct, whose
-      `preloaded_fields` is empty — so an execution's unsealed vault
-      material went unmasked onto the row, the terminal SSE event, and the
-      error handed back to MCP clients and parent formulas.
-    * `Emissary.MCP.ExternalServer.do_initialize/1` rebound the state with
-      resolved headers; the failure arm masked with the struct's empty
-      `headers`, so an upstream that echoed the Authorization header into
-      its error body carried the credential out through `state.error`.
+  and the compiler says nothing because the name is bound either way. Where
+  the state carries what a failure is masked or closed with — the run
+  `Cyfr.Execution.Admission.admit/4` threads through its stages, the
+  resolved headers `Emissary.MCP.ExternalServer` masks an upstream error
+  with — the outer value closes the failure with the wrong state.
 
   Names bound by a with expression must not be read by its own else
   unless that arm independently binds them.
@@ -30,7 +22,7 @@ defmodule Cyfr.WithElseScopeTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp source_files do
-    Path.wildcard(Path.join(root(), "apps/*/lib/**/*.ex"))
+    Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
   end
 
   # Every variable name appearing anywhere in an AST fragment. `_`-prefixed
@@ -151,10 +143,9 @@ defmodule Cyfr.WithElseScopeTest do
     #{Enum.map_join(found, "\n", fn {path, line, names} -> "  #{path}:#{line} — #{Enum.map_join(names, ", ", &to_string/1)}" end)}
 
     If the arm wants the updated value, have the clause answer with it and
-    bind it in the else pattern (`{:error, p, reason}`). If it wants the
+    bind it in the else pattern (`{:error, run, reason}`). If it wants the
     outer one, bind the clause result under its own name so the choice is
-    visible. See this module's doc for the two credential leaks this shape
-    produced.
+    visible.
     """
   end
 end

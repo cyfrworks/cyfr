@@ -19,7 +19,7 @@ defmodule PrismWeb.RoomFeed do
   (`Aqua.RoomExcerpt`).
   """
 
-  @typedoc "`athanor_id`, `conversation_id`, and for display `title` and `estate`."
+  @typedoc "`athanor_id`, `thread_id`, and for display `title` and `estate`."
   @type room :: %{optional(String.t()) => String.t() | nil}
 
   @doc "The topic a page announces on — its own, so two tabs never cross."
@@ -39,10 +39,10 @@ defmodule PrismWeb.RoomFeed do
 
   @doc "A room as the page names it, for the session and the feed."
   @spec room(map(), map(), String.t() | nil) :: room()
-  def room(%{id: athanor_id}, %{id: conversation_id, title: title}, estate) do
+  def room(%{id: athanor_id}, %{id: thread_id, title: title}, estate) do
     %{
       "athanor_id" => athanor_id,
-      "conversation_id" => conversation_id,
+      "thread_id" => thread_id,
       "title" => title,
       "estate" => estate
     }
@@ -60,10 +60,10 @@ defmodule PrismWeb.RoomFeed do
 
   @doc "The room as `Aqua.RoomExcerpt.read/2` takes it."
   @spec excerpt_room(map()) :: Aqua.RoomExcerpt.room()
-  def excerpt_room(%{"athanor_id" => athanor_id, "conversation_id" => conversation_id} = room) do
+  def excerpt_room(%{"athanor_id" => athanor_id, "thread_id" => thread_id} = room) do
     %{
       athanor_id: athanor_id,
-      conversation_id: conversation_id,
+      thread_id: thread_id,
       title: room["title"],
       estate: room["estate"]
     }

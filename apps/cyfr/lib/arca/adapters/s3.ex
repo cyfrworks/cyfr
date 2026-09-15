@@ -20,8 +20,7 @@ defmodule Arca.Adapters.S3 do
   and the globals `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`.
 
   An S3 deployment is not a whole-box backup: the bucket holds Arca
-  objects; the volume still holds the database and the sidecars'
-  files (`data/cyfr.db`, `data/mcp-bridge/`).
+  objects; the volume still holds the database (`data/cyfr.db`).
 
   The `athanors/` root keeps every tenant key disjoint from the global
   roots, so an athanor id that happens to equal a reserved root name can
@@ -47,6 +46,15 @@ defmodule Arca.Adapters.S3 do
   (the DEFAULT node `max_response_size`, above which a guest cannot read the
   object back anyway — a node whose manifest raises its own response limit
   does not raise this ceiling; the two deliberately track only the default).
+
+  ## Tree replacement
+
+  This adapter does not export `c:Arca.Storage.replace_tree/3`. An object
+  store has no rename, and a reader resolves each key directly, so a
+  replacement written key by key would be visible part-way. Replacing a
+  tree (`Arca.replace_tree/4`, and so a tincture build saved into its
+  `dist/`) refuses with `{:error, :atomic_replace_unsupported}` and writes
+  nothing.
 
   ## Configuration
 
@@ -106,7 +114,7 @@ defmodule Arca.Adapters.S3 do
     with {:ok, existing} <- read_for_append(ctx, segments) do
       merged = existing <> content
 
-      if byte_size(merged) > Sanctum.Limits.default_max_response_size() do
+      if byte_size(merged) > Cyfr.Limits.default_max_response_size() do
         {:error, :object_too_large}
       else
         put(ctx, segments, merged)

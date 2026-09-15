@@ -1,990 +1,698 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// CYFR mcp-bridge: wraps stdio MCP servers behind one HTTP MCP endpoint.
+// CYFR mcp-bridge: runs the stdio MCP servers CYFR registers with transport
+// `stdio`, one owner per (athanor, server row), and serves each owner's
+// tools over HTTP MCP.
 //
-// Architecture: a single Streamable-HTTP-compatible /mcp endpoint. Tools
-// surfaced through it are (a) admin tools — add_backend / remove_backend /
-// list_backends / restart_backend — that manage the set of stdio children,
-// and (b) every running child's tools, renamed `<backend>__<tool>`. cyfr
-// registers this bridge as a normal HTTP MCP server (`mcp_servers create`)
-// and sees all of the above under the `bridge:` namespace.
+// Two endpoints, both authenticated with `Cyfr-Bridge-Auth` (auth.mjs) under
+// keys derived from CYFR_MCP_BRIDGE_KEY:
 //
-// The children are spawned as `sh -c <command>` (typically `npx -y <pkg>`)
-// and speak MCP JSON-RPC over their stdin/stdout in newline-delimited frames.
+//   POST /control  CYFR's controller: hello, reconcile, sync, renew, release
+//                  and status, signed with the control key. A sync carries
+//                  the owner's backend definitions and their environment
+//                  sealed to the owner and this bridge lifetime. Control
+//                  messages are applied one at a time, in sequence order,
+//                  and each is answered without waiting on a backend: a
+//                  sync is answered once its version is admitted, and the
+//                  owner's state and rev (owners.mjs) in every later renew
+//                  and status say when its backends are ready.
+//   POST /mcp      One owner's MCP requests (server/discover, tools/list,
+//                  tools/call), signed with that owner's key for the
+//                  generation and epoch it runs at. It reaches that owner's
+//                  backends only.
+//
+// A request's header is authenticated, and its lifetime, sequence or owner
+// version and nonce checked, before its body is read; a request refused
+// there has its connection closed with the body unread. The body is then
+// read up to its endpoint's limit and must hash to the hash the header
+// signed.
+//
+// Every response carries `Cyfr-Bridge-Boot`, the id this process minted at
+// start; a request naming another lifetime is refused. Nothing is persisted:
+// keys are derived, and owners, versions and leases arrive in messages.
+//
+// Backends are started only through the spawner (`createBridge({ spawner })`):
+// in the image that is cyfr-spawn, which starts this process with its channel
+// on fd 3 and runs each backend under a uid of its own with a 0700 home and
+// an environment built from nothing but the backend's own block
+// (spawn-client.mjs). The port is reachable from the compose network only.
 
 import express from "express";
-import { spawn } from "node:child_process";
-import { promises as fs } from "node:fs";
-import { readFileSync } from "node:fs";
+import { fstatSync, readFileSync } from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { timingSafeEqual, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import * as auth from "./auth.mjs";
+import { MAX_IDLE_MS, MAX_LEASE_MS, Owners, Refusal, RpcRefusal, validateBackends } from "./owners.mjs";
+import { SpawnerClient } from "./spawn-client.mjs";
 
 // Single source for the bridge version: package.json.
 const VERSION = JSON.parse(
   readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "package.json"), "utf8"),
 ).version;
 
-// SECURITY / TRUST BOUNDARY
-// -------------------------
-// This bridge executes arbitrary `sh -c <command>` on behalf of `add_backend`,
-// so anything that can POST to /mcp gets remote code execution *by design*. It
-// is meant to run on a trusted container network only — docker-compose uses
-// `expose` (never `ports:`), so the port is reachable from sibling containers
-// (cyfr) but not the host. Binding 0.0.0.0 is required for that
-// cross-container reachability; do NOT change it to loopback and do NOT publish
-// the port to the host.
-//
-// Defense-in-depth against a compromised sibling container: /mcp requires a
-// matching `Authorization: Bearer` header. cyfr supplies it via the registered
-// server's headers (e.g. `Authorization: vault:mcp_bridge_token`). `cyfr init`
-// generates the token so the bridge boots closed; without a token the bridge
-// refuses to start unless MCP_BRIDGE_ALLOW_INSECURE=1 explicitly accepts an
-// unauthenticated, shell-spawning endpoint on an isolated network.
-
 const PORT = Number(process.env.MCP_BRIDGE_PORT || 8001);
-const AUTH_TOKEN = process.env.MCP_BRIDGE_TOKEN || "";
-const PERSIST = process.env.MCP_BRIDGE_DATA || "/data/backends.json";
 
-// CYFR_LOG_FORMAT=json enables structured logs; otherwise use text logs.
-if (process.env.CYFR_LOG_FORMAT === "json") {
-  const jsonLine = (level, args) => {
-    const message = args
-      .map((a) => (typeof a === "string" ? a : (a && a.stack) || String(a)))
-      .join(" ");
-    process.stderr.write(
-      JSON.stringify({ timestamp: new Date().toISOString(), level, message, service: "mcp-bridge" }) +
-        "\n",
-    );
-  };
-  console.log = (...args) => jsonLine("info", args);
-  console.warn = (...args) => jsonLine("warning", args);
-  console.error = (...args) => jsonLine("error", args);
-}
+// The spawner's channel, the directory of the attach socket its relays
+// connect to, and the uid pool backends are spawned from.
+const SPAWNER_FD = 3;
+const ATTACH_DIR = "/run/cyfr-bridge";
+const SPAWN_POOL = "backends";
 
 // Inbound /mcp uses the current stateless protocol with per-request metadata.
 const PROTOCOL_VERSION = "2026-07-28";
 
-// Outbound stdio uses the shared fallback protocol revision and initializes child servers.
+// Outbound stdio uses the shared fallback protocol revision (owners.mjs
+// initializes each backend with it).
 const CHILD_PROTOCOL_VERSION = "2025-03-26";
-
-// Ceiling on one child stdout frame (a single line). RPC_TIMEOUT_MS bounds
-// how long a pending call waits, but nothing bounded how much an unhinged
-// child could write into the framing buffer before the first newline.
-const MAX_FRAME_BYTES = 10 * 1024 * 1024;
 
 // Reverse-DNS `_meta` keys defined by the specification.
 const META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
 const META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
 const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
 
-// The tool catalogue changes only when a backend is added, removed or
-// restarted. `private` because the aggregate is per-caller in principle and a
-// shared cache must never serve one caller's view to another.
+// The request header a signed request carries, and the response header
+// naming this lifetime.
+const AUTH_HEADER = "cyfr-bridge-auth";
+const BOOT_HEADER = "cyfr-bridge-boot";
+
+// A request's timestamp may differ from this clock by at most this much.
+const TIMESTAMP_WINDOW_MS = 30_000;
+
+// The most body each endpoint reads. A control message is at most a sync of
+// sixteen backend definitions and their sealed environment; CYFR refuses to
+// send a larger one (Emissary.MCP.Bridge). An MCP request carries one tool
+// call's arguments, at most the 10 MiB request ceiling of a CYFR call
+// (Cyfr.Limits.Ceiling), and its JSON-RPC envelope.
+export const CONTROL_BODY_LIMIT = 1024 * 1024;
+export const MCP_BODY_LIMIT = 10 * 1024 * 1024 + 64 * 1024;
+
+// A tool catalogue changes only when an owner is synced or a backend
+// restarts. `private`: each owner's catalogue is its own.
 const TOOLS_TTL_MS = 60_000;
 const RPC_TIMEOUT_MS = Number(process.env.MCP_BRIDGE_RPC_TIMEOUT_MS || 30_000);
 const INIT_TIMEOUT_MS = Number(process.env.MCP_BRIDGE_INIT_TIMEOUT_MS || 15_000);
 
-// Ceiling on calls awaiting one child at a time. RPC_TIMEOUT_MS drains the
-// queue eventually, but until it fired nothing bounded how many pending
-// entries a flood could park against a slow child.
+// Ceiling on calls awaiting one backend at a time.
 const MAX_IN_FLIGHT = Number(process.env.MCP_BRIDGE_MAX_IN_FLIGHT || 32);
-
-// Ceiling on the number of backends. Every other resource here is bounded
-// (frames, in-flight calls, body size, timeouts); this bounds the one that
-// spawns OS processes.
-const MAX_BACKENDS = Number(process.env.MCP_BRIDGE_MAX_BACKENDS || 32);
-
-const backends = new Map();
-
-// The one name rule, asserted at BOTH doors (admin add and the revival
-// loop): `__` is the tool-routing separator (`dispatchToolCall` splits on
-// the first one) and `:` collides with cyfr's namespaced-tool spelling. A
-// duplicate would make `backends.set` silently replace an earlier entry,
-// leaking its child process.
-function validateBackendName(name) {
-  if (!name) throw new RpcRefusal("name is required");
-  if (name.includes("__") || name.includes(":")) {
-    throw new RpcRefusal("backend name cannot contain `__` or `:`");
-  }
-  if (backends.has(name)) throw new RpcRefusal(`backend '${name}' already exists`);
-  if (backends.size >= MAX_BACKENDS) {
-    throw new RpcRefusal(`backend limit reached (${MAX_BACKENDS})`);
-  }
-}
-
-const ADMIN_TOOLS = [
-  {
-    name: "add_backend",
-    description:
-      "Spawn a new stdio MCP backend (typically an npx package). Its tools will appear prefixed as `<name>__<tool>` after the next tools/list. Persisted to /data/backends.json so it survives restarts.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          description: "Backend identifier; cannot contain `__` or `:`.",
-        },
-        command: {
-          type: "string",
-          description:
-            "Shell command, e.g. `npx -y @modelcontextprotocol/server-filesystem ./data`.",
-        },
-        env: {
-          type: "object",
-          description: "Optional env vars for the child process.",
-          additionalProperties: { type: "string" },
-        },
-      },
-      required: ["name", "command"],
-    },
-  },
-  {
-    name: "remove_backend",
-    description: "Stop and remove a stdio backend; its forwarded tools disappear.",
-    inputSchema: {
-      type: "object",
-      properties: { name: { type: "string" } },
-      required: ["name"],
-    },
-  },
-  {
-    name: "list_backends",
-    description:
-      "List all stdio backends with their status (`ready` | `starting` | `error` | `crashed`) and tool counts.",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
-    name: "restart_backend",
-    description: "Stop and respawn a stdio backend.",
-    inputSchema: {
-      type: "object",
-      properties: { name: { type: "string" } },
-      required: ["name"],
-    },
-  },
-];
-
-// ============================================================================
-// Stdio MCP client (one per child)
-// ============================================================================
-
-// Children inherit only toolchain, home, locale, proxy, CA and npm settings.
-// Additional variables come from each backend's env block. Never expose the
-// bridge admin bearer or data path to a backend. This allowlist reduces what
-// a backend is exposed to; it does not isolate backends from each other or
-// from the bridge: children share the bridge's user and filesystem until
-// each backend runs as a user or container of its own.
-const CHILD_ENV_INHERITED = new Set([
-  "PATH",
-  "HOME",
-  "TMPDIR",
-  "TMP",
-  "TEMP",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "TZ",
-  "SHELL",
-  "USER",
-  "LOGNAME",
-  "NODE_ENV",
-  "XDG_CACHE_HOME",
-  "XDG_CONFIG_HOME",
-  "XDG_DATA_HOME",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "NODE_EXTRA_CA_CERTS",
-]);
-const CHILD_ENV_NEVER = ["MCP_BRIDGE_TOKEN", "MCP_BRIDGE_DATA", "MCP_BRIDGE_ALLOW_INSECURE"];
-
-function childEnvironment(env) {
-  const inherited = {};
-  for (const [name, value] of Object.entries(process.env)) {
-    if (CHILD_ENV_INHERITED.has(name) || name.startsWith("npm_config_")) inherited[name] = value;
-  }
-  const childEnv = { ...inherited, ...(env || {}) };
-  for (const name of CHILD_ENV_NEVER) delete childEnv[name];
-  return childEnv;
-}
-
-function spawnBackend(name, command, env) {
-  validateBackendName(name);
-
-  const childEnv = childEnvironment(env);
-
-  const proc = spawn("sh", ["-c", command], {
-    env: childEnv,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const backend = {
-    command,
-    env: env || {},
-    proc,
-    status: "starting",
-    tools: [],
-    error: null,
-    nextId: 0,
-    pending: new Map(),
-    buffer: "",
-  };
-  backends.set(name, backend);
-
-  proc.stdout.setEncoding("utf8");
-  proc.stdout.on("data", (chunk) => {
-    backend.buffer += chunk;
-
-    let idx;
-    while ((idx = backend.buffer.indexOf("\n")) >= 0) {
-      const line = backend.buffer.slice(0, idx).trim();
-      backend.buffer = backend.buffer.slice(idx + 1);
-      if (!line) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch (e) {
-        console.error(`[${name}] non-JSON stdout: ${line.slice(0, 200)}`);
-        continue;
-      }
-
-      // A `method` means the child is TALKING, not answering: MCP servers
-      // are bidirectional peers and send their own requests
-      // (sampling/createMessage, roots/list, elicitation/create) with their
-      // own id counter, which — like ours — starts at 1. Matching on id
-      // alone resolved our pending `initialize` with a child's `roots/list`,
-      // handing `undefined` to the handshake and skewing every id after it.
-      if (msg.method !== undefined) {
-        // A request expects an answer; a notification does not.
-        if (msg.id != null) {
-          writeFrame(backend, {
-            jsonrpc: "2.0",
-            id: msg.id,
-            error: { code: -32601, message: `method not supported by bridge: ${msg.method}` },
-          });
-        }
-        continue;
-      }
-
-      // Pending calls are keyed by the NUMBER we minted (`++nextId`), and
-      // `Map.has` is strict. Ids round-trip through a string type in more
-      // than one stdio server, so an echoed "1" for 1 matched nothing and
-      // the call hung for the full RPC timeout with no log line.
-      let key = msg.id;
-
-      if (!backend.pending.has(key) && typeof key === "string" && key.trim() !== "") {
-        const asNumber = Number(key);
-        if (Number.isFinite(asNumber) && backend.pending.has(asNumber)) key = asNumber;
-      }
-
-      if (msg.id != null && backend.pending.has(key)) {
-        const { resolve, reject, timer } = backend.pending.get(key);
-        backend.pending.delete(key);
-        if (timer) clearTimeout(timer);
-        if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-        else resolve(msg.result);
-      } else if (msg.id != null) {
-        console.error(`[${name}] response for unknown id ${JSON.stringify(msg.id)}; dropped`);
-      }
-      // Unsolicited notifications from the child are ignored.
-    }
-
-    // Checked AFTER draining, on what is left: this bounds a partial frame
-    // with no newline, which is what the cap is for. Applied to the whole
-    // buffer it also killed healthy backends mid-answer — a large
-    // legitimate result arrives across many chunks and only becomes a
-    // frame once its newline lands.
-    if (backend.buffer.length > MAX_FRAME_BYTES) {
-      console.error(
-        `[${name}] stdout frame exceeded ${MAX_FRAME_BYTES} bytes without a newline; killing backend`
-      );
-      backend.buffer = "";
-      backend.status = "error";
-      backend.error = "stdout frame overflow";
-      proc.kill("SIGKILL");
-    }
-  });
-
-  proc.stderr.setEncoding("utf8");
-  proc.stderr.on("data", (chunk) => {
-    process.stderr.write(`[${name}] ${chunk}`);
-  });
-
-  // Handle errors on every child stream. A closed stdin can raise EPIPE
-  // before the child’s exit event changes its status.
-  for (const [label, stream] of [
-    ["stdin", proc.stdin],
-    ["stdout", proc.stdout],
-    ["stderr", proc.stderr],
-  ]) {
-    stream.on("error", (err) => {
-      if (backend.status !== "removed") {
-        backend.status = "error";
-        backend.error = `${label}: ${err.message}`;
-      }
-      console.error(`[${name}] ${label} error: ${err.message}`);
-      failPending(backend, new Error(backend.error || `${label} error`));
-    });
-  }
-
-  proc.on("error", (err) => {
-    backend.status = "error";
-    backend.error = `spawn error: ${err.message}`;
-    failPending(backend, new Error(backend.error));
-  });
-
-  proc.on("exit", (code, signal) => {
-    if (backend.status !== "removed") {
-      backend.status = "crashed";
-      backend.error = `exited code=${code} signal=${signal}`;
-    }
-    failPending(backend, new Error(backend.error || "child exited"));
-  });
-
-  return backend;
-}
-
-function failPending(backend, err) {
-  for (const { reject, timer } of backend.pending.values()) {
-    if (timer) clearTimeout(timer);
-    reject(err);
-  }
-  backend.pending.clear();
-}
-
-// Centralize child writes so both synchronous failures and asynchronous pipe errors are handled.
-function writeFrame(backend, msg) {
-  try {
-    backend.proc.stdin.write(JSON.stringify(msg) + "\n");
-    return true;
-  } catch (e) {
-    console.error(`[${backend.name}] stdin write failed: ${e.message}`);
-    return false;
-  }
-}
-
-function rpc(backend, method, params, timeoutMs = RPC_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    if (backend.status === "removed" || backend.status === "crashed") {
-      reject(new Error(`backend not running (${backend.status})`));
-      return;
-    }
-    if (backend.pending.size >= MAX_IN_FLIGHT) {
-      reject(new Error(`backend busy: ${backend.pending.size} calls in flight`));
-      return;
-    }
-    const id = ++backend.nextId;
-    const timer = setTimeout(() => {
-      if (backend.pending.has(id)) {
-        backend.pending.delete(id);
-        reject(new Error(`timeout: ${method}`));
-      }
-    }, timeoutMs);
-    backend.pending.set(id, { resolve, reject, timer });
-    const req = {
-      jsonrpc: "2.0",
-      id,
-      method,
-      ...(params !== undefined ? { params } : {}),
-    };
-    if (!writeFrame(backend, req)) {
-      backend.pending.delete(id);
-      clearTimeout(timer);
-      reject(new Error(`backend stdin unavailable: ${method}`));
-    }
-  });
-}
-
-function notify(backend, method, params) {
-  const msg = {
-    jsonrpc: "2.0",
-    method,
-    ...(params !== undefined ? { params } : {}),
-  };
-  writeFrame(backend, msg);
-}
-
-async function initializeBackend(name) {
-  const backend = backends.get(name);
-  if (!backend) throw new RpcRefusal(`backend '${name}' not found`);
-  try {
-    await rpc(
-      backend,
-      "initialize",
-      {
-        protocolVersion: CHILD_PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: "cyfr-mcp-bridge", version: VERSION },
-      },
-      INIT_TIMEOUT_MS,
-    );
-    notify(backend, "notifications/initialized");
-    const toolsRes = await rpc(backend, "tools/list", undefined, INIT_TIMEOUT_MS);
-    backend.tools = toolsRes?.tools || [];
-    backend.status = "ready";
-    backend.error = null;
-    console.log(`[${name}] ready, ${backend.tools.length} tools`);
-  } catch (e) {
-    backend.status = "error";
-    backend.error = e.message;
-    console.error(`[${name}] init failed: ${e.message}`);
-  }
-}
-
-function stopBackend(name, markRemoved = true) {
-  const backend = backends.get(name);
-  if (!backend) return;
-  if (markRemoved) backend.status = "removed";
-  failPending(backend, new Error("backend stopped"));
-  try {
-    backend.proc.kill("SIGTERM");
-  } catch {
-    // Killing an already-exited child throws ESRCH — the outcome we wanted.
-  }
-  // Hard-kill if it ignores SIGTERM. `proc.killed` is the wrong test — Node
-  // sets it once a signal is successfully SENT, so after the SIGTERM above
-  // it is always true and the escalation never fired; a child ignoring
-  // SIGTERM survived remove/restart/shutdown with its only handle dropped.
-  // Exit is the fact that matters: no exit code and no terminating signal
-  // means the child is still running.
-  setTimeout(() => {
-    try {
-      if (backend.proc.exitCode === null && backend.proc.signalCode === null) {
-        backend.proc.kill("SIGKILL");
-      }
-    } catch {
-      // Same ESRCH race as above: exited between the check and the kill.
-    }
-  }, 2000).unref();
-}
-
-// ============================================================================
-// Persistence
-// ============================================================================
-
-async function loadPersisted() {
-  try {
-    const text = await fs.readFile(PERSIST, "utf8");
-    const data = JSON.parse(text);
-    return Array.isArray(data?.backends) ? data.backends : [];
-  } catch (e) {
-    if (e.code === "ENOENT") return [];
-    console.error(`[persist] load error: ${e.message}`);
-    return [];
-  }
-}
-
-let persistQueued = false;
-let persisting = false;
-async function persist() {
-  if (persisting) {
-    persistQueued = true;
-    return;
-  }
-  persisting = true;
-  try {
-    const data = { backends: [] };
-    for (const [name, b] of backends) {
-      if (b.status === "removed") continue;
-      data.backends.push({
-        name,
-        command: b.command,
-        ...(b.env && Object.keys(b.env).length ? { env: b.env } : {}),
-      });
-    }
-    await fs.mkdir(path.dirname(PERSIST), { recursive: true });
-    const tmp = PERSIST + ".tmp";
-    // Backend env blocks carry third-party API keys — owner-only on disk.
-    await fs.writeFile(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
-    await fs.rename(tmp, PERSIST);
-    await fs.chmod(PERSIST, 0o600);
-  } catch (e) {
-    console.error(`[persist] write error: ${e.message}`);
-  } finally {
-    persisting = false;
-    if (persistQueued) {
-      persistQueued = false;
-      persist();
-    }
-  }
-}
-
-// ============================================================================
-// Tool aggregation + dispatch
-// ============================================================================
-
-function aggregatedTools() {
-  const out = ADMIN_TOOLS.map((t) => ({ ...t }));
-  for (const [name, b] of backends) {
-    if (b.status !== "ready") continue;
-    for (const t of b.tools) {
-      out.push({
-        name: `${name}__${t.name}`,
-        description: t.description ? `[${name}] ${t.description}` : `[${name}]`,
-        inputSchema: t.inputSchema || { type: "object" },
-      });
-    }
-  }
-  return out;
-}
-
-async function dispatchToolCall(toolName, args) {
-  // Admin tools
-  if (toolName === "add_backend") return await adminAddBackend(args);
-  if (toolName === "remove_backend") return await adminRemoveBackend(args);
-  if (toolName === "list_backends") return adminListBackends();
-  if (toolName === "restart_backend") return await adminRestartBackend(args);
-
-  // Forwarded child tool: `<backend>__<tool>`
-  const sep = toolName.indexOf("__");
-  if (sep > 0) {
-    const backendName = toolName.slice(0, sep);
-    const remoteName = toolName.slice(sep + 2);
-    const b = backends.get(backendName);
-    if (!b) throw new RpcRefusal(`backend '${backendName}' not found`);
-    if (b.status !== "ready") {
-      throw new RpcRefusal(`backend '${backendName}' not ready: ${b.error || b.status}`);
-    }
-    return await rpc(b, "tools/call", { name: remoteName, arguments: args || {} });
-  }
-
-  throw new RpcRefusal(`unknown tool: ${toolName}`);
-}
-
-async function adminAddBackend(args) {
-  const name = String(args?.name || "").trim();
-  const command = String(args?.command || "").trim();
-  const env = args?.env && typeof args.env === "object" ? args.env : undefined;
-
-  if (!command) throw new RpcRefusal("command is required");
-  validateBackendName(name);
-
-  spawnBackend(name, command, env);
-  await initializeBackend(name);
-
-  // A handshake that failed leaves a live child nobody manages, an entry
-  // that blocks re-adding the same name, and — once persisted — a row the
-  // revival loop re-spawns on every restart, walking `backends` toward
-  // MAX_BACKENDS with corpses. `initializeBackend` swallows its error and
-  // only sets status, so this is where it has to be caught: reap the
-  // child, drop the entry, persist nothing, and tell the caller.
-  const b = backends.get(name);
-
-  if (b.status === "error") {
-    const reason = b.error || "initialize failed";
-    stopBackend(name);
-    backends.delete(name);
-    throw new RpcRefusal(`backend '${name}' failed to start: ${reason}`);
-  }
-
-  await persist();
-
-  return wrapResult({
-    name,
-    status: b.status,
-    tool_count: b.tools.length,
-    error: b.error,
-  });
-}
-
-async function adminRemoveBackend(args) {
-  const name = String(args?.name || "").trim();
-  if (!name) throw new RpcRefusal("name is required");
-  if (!backends.has(name)) throw new RpcRefusal(`backend '${name}' not found`);
-  stopBackend(name);
-  backends.delete(name);
-  await persist();
-  return wrapResult({ removed: name });
-}
-
-function adminListBackends() {
-  const out = [];
-  for (const [name, b] of backends) {
-    out.push({
-      name,
-      command: b.command,
-      status: b.status,
-      tool_count: b.tools.length,
-      error: b.error,
-    });
-  }
-  return wrapResult({ backends: out, count: out.length });
-}
-
-async function adminRestartBackend(args) {
-  const name = String(args?.name || "").trim();
-  if (!name) throw new RpcRefusal("name is required");
-  const existing = backends.get(name);
-  if (!existing) throw new RpcRefusal(`backend '${name}' not found`);
-  const { command, env } = existing;
-  stopBackend(name);
-  backends.delete(name);
-  spawnBackend(name, command, env);
-  await initializeBackend(name);
-  const b = backends.get(name);
-  return wrapResult({
-    name,
-    status: b.status,
-    tool_count: b.tools.length,
-    error: b.error,
-  });
-}
-
-// MCP `tools/call` result is `{ content: [...], isError?: bool }`.
-function wrapResult(value) {
-  return {
-    content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
-  };
-}
-
-function wrapError(message) {
-  return {
-    content: [{ type: "text", text: message }],
-    isError: true,
-  };
-}
-
-// ============================================================================
-// HTTP / MCP transport
-// ============================================================================
-
-const app = express();
-// Match the server’s 28 MB body limit, including base64-encoded attachments.
-// Parse all content types so malformed bodies reach JSON-RPC error handling.
-app.use(express.json({ limit: "28mb", type: () => true }));
-
-// Constant-time bearer check. Returns true when no token is configured
-// (open mode) or when the request carries the matching bearer.
-function authorized(req) {
-  if (!AUTH_TOKEN) return true;
-
-  const header = req.get("authorization") || "";
-  const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const a = Buffer.from(presented);
-  const b = Buffer.from(AUTH_TOKEN);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-// /health is intentionally unauthenticated — it carries no sensitive data and
-// the container healthcheck needs it.
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, backends: backends.size });
-});
-
-// GET and DELETE are unsupported and return 405.
-app.all("/mcp", (req, res, next) => {
-  if (req.method === "POST" || req.method === "OPTIONS") return next();
-  res.set("mcp-protocol-version", PROTOCOL_VERSION);
-  res.set("allow", "POST, OPTIONS");
-  return rpcError(res, 405, null, -32600, `${req.method} is not supported on the MCP endpoint.`);
-});
-
-app.post("/mcp", async (req, res) => {
-  res.set("mcp-protocol-version", PROTOCOL_VERSION);
-
-  // One correlation id per request, echoed back and stamped on error logs —
-  // cyfr sends x-request-id on every call it makes.
-  const requestId = req.get("x-request-id") || randomUUID();
-  res.set("x-request-id", requestId);
-
-  if (!authorized(req)) {
-    // Return a JSON-RPC error and a WWW-Authenticate challenge for HTTP 401 (RFC 9110).
-    res.set("www-authenticate", "Bearer");
-    const id =
-      req.body && typeof req.body === "object" && !Array.isArray(req.body)
-        ? (req.body.id ?? null)
-        : null;
-    return rpcError(res, 401, id, -33001, "unauthorized");
-  }
-
-  const msg = req.body;
-  if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
-    // "The body of the HTTP POST MUST be a single JSON-RPC request or
-    // notification" — an array is a batch and has no handler.
-    return rpcError(res, 400, null, -32600, "Expected a single JSON-RPC message");
-  }
-
-  // Notifications omit id and receive an empty 202 response.
-  // An explicit null id is a request and must receive a JSON-RPC response.
-  if (msg.id === undefined) {
-    return res.status(202).end();
-  }
-
-  const conformance = checkConformance(req, msg);
-  if (conformance) {
-    return rpcError(res, 400, msg.id, conformance.code, conformance.message, conformance.data);
-  }
-
-  try {
-    const result = await handleRpc(msg);
-    return res.json({ jsonrpc: "2.0", id: msg.id, result: stampResult(result) });
-  } catch (err) {
-    if (err instanceof UnknownMethod) {
-      // 404, not 400: a dual-era client reads the status to tell a modern
-      // server missing one method from a legacy server missing the endpoint.
-      return rpcError(res, 404, msg.id, -32601, err.message);
-    }
-    if (err instanceof RpcRefusal) {
-      // A crafted refusal — the message is client-safe by construction
-      // (a backend name, a limit, a missing argument). Same wire shape as
-      // before the split, so existing callers keep parsing it.
-      return res.json({
-        jsonrpc: "2.0",
-        id: msg.id,
-        error: {
-          // -32603 (internal error) — the code cyfr's own fallback uses for
-          // the same condition; -32000 was a second spelling of it.
-          code: -32603,
-          message: err.message,
-        },
-      });
-    }
-    // Anything else is an internal fault: a child-process failure or a bug,
-    // whose message can carry paths, spawn arguments, or upstream stderr.
-    // The detail goes to the log; the wire gets a 500 and a generic sentence.
-    console.error(`[mcp] request=${requestId} error:`, err);
-    return rpcError(res, 500, msg.id, -32603, "internal error");
-  }
-});
-
-// Render JSON parser failures as JSON-RPC errors. Express error middleware
-// must be registered after the routes.
-app.use((err, req, res, next) => {
-  if (res.headersSent) return next(err);
-
-  if (err?.type === "entity.too.large") {
-    return rpcError(res, 413, null, -32600, "Request body too large");
-  }
-  if (err?.status === 400 || err instanceof SyntaxError) {
-    return rpcError(res, 400, null, -32700, "Parse error: body is not valid JSON");
-  }
-  console.error("[mcp-bridge] request error:", err);
-  // Never the error's own message — at this layer it is an internal term.
-  return rpcError(res, 500, null, -32603, "internal error");
-});
 
 class UnknownMethod extends Error {}
 
-// A deliberate refusal whose message is written for the caller — the only
-// thrown errors whose text may reach the wire. Everything else is answered
-// with a generic sentence and logged.
-class RpcRefusal extends Error {}
+const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 
-function rpcError(res, status, id, code, message, data) {
-  return res.status(status).json({
-    jsonrpc: "2.0",
-    id: id ?? null,
-    error: { code, message, ...(data !== undefined ? { data } : {}) },
+// An owner reference as a message names it: valid auth fields, and an epoch
+// where one is required.
+function ownerRef(value, { epoch }) {
+  if (!isObject(value)) throw new Refusal("bad_request", 400);
+  const { athanor, server, e } = value;
+  if (!auth.validField(athanor) || !auth.validField(server)) throw new Refusal("bad_request", 400);
+  if (epoch && !positiveInteger(e)) throw new Refusal("bad_request", 400);
+  return epoch ? { athanor, server, e } : { athanor, server };
+}
+
+function ownerRefs(value, options) {
+  if (!Array.isArray(value)) throw new Refusal("bad_request", 400);
+  return value.map((entry) => ownerRef(entry, options));
+}
+
+function milliseconds(value, max) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Refusal("bad_request", 400);
+  return value;
+}
+
+class BodyTooLarge extends Error {}
+
+// Reads a request's body, refusing one past `limit` bytes as soon as it is.
+function readBody(req, limit) {
+  const declared = req.get("content-length");
+  if (declared !== undefined && !(Number(declared) <= limit)) return Promise.reject(new BodyTooLarge());
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    const finish = (err) => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", finish);
+      req.off("close", onClose);
+      if (err) reject(err);
+      else resolve(Buffer.concat(chunks, size));
+    };
+    const onData = (chunk) => {
+      size += chunk.length;
+      if (size > limit) finish(new BodyTooLarge());
+      else chunks.push(chunk);
+    };
+    const onEnd = () => finish();
+    const onClose = () => finish(new Error("the request closed before its body was read"));
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", finish);
+    req.on("close", onClose);
   });
 }
 
-// Every result declares its type and this server's identity. A client that
-// cannot tell a finished answer from one asking for more input has to guess.
-function stampResult(result) {
-  return {
-    ...result,
-    resultType: "complete",
-    _meta: {
-      ...(result._meta || {}),
-      [META_SERVER_INFO]: { name: "cyfr-mcp-bridge", version: VERSION },
-    },
-  };
-}
+/**
+ * Builds the bridge around a spawner and the root key.
+ *
+ * The spawner starts a backend with `spawn({ argv, env })`, answers `pool()`
+ * with `{size, free, quarantined}`, and returns a handle shaped like a ChildProcess —
+ * `stdin`, `stdout`, `stderr`, `spawn`, `error` and `exit` events — plus
+ * `release(graceMs)`, which retires every process of the backend and
+ * resolves once that is done. `env` is the backend's whole environment
+ * block; the spawner adds only HOME, USER, LOGNAME, TMPDIR and PATH.
+ *
+ * Returns the express `app`, this lifetime's `boot` id, the `owners` table
+ * and `close()`, which releases every owner.
+ */
+export function createBridge({
+  spawner,
+  root,
+  now = Date.now,
+  boot = `bb_${randomBytes(16).toString("hex")}`,
+  rpcTimeoutMs = RPC_TIMEOUT_MS,
+  initTimeoutMs = INIT_TIMEOUT_MS,
+  maxInFlight = MAX_IN_FLIGHT,
+  ...ownerOptions
+}) {
+  const rootKey = Buffer.from(root);
+  const controlKey = auth.controlKey(rootKey);
+  const sealKey = auth.sealKey(rootKey);
+  const owners = new Owners({ spawner, now, rpcTimeoutMs, initTimeoutMs, maxInFlight, ...ownerOptions });
 
-// The per-request checks that replace the handshake. Returns null when the
-// request is well-formed, or the JSON-RPC error to answer with.
-function checkConformance(req, msg) {
-  const meta = (msg.params && msg.params._meta) || {};
-  const header = req.get("mcp-protocol-version");
-  const declared = meta[META_PROTOCOL_VERSION];
+  // The highest (generation, seq) a control message has carried, and the
+  // tail of the control messages being applied.
+  let highWater = { generation: 0, seq: 0 };
+  let controlTail = Promise.resolve();
 
-  if (!header) {
-    return { code: -32020, message: "Missing required MCP-Protocol-Version header." };
+  const above = ({ generation, seq }) =>
+    generation > highWater.generation || (generation === highWater.generation && seq > highWater.seq);
+
+  // Applies control messages one at a time, in the order their bodies were
+  // verified; `apply` raises the high-water mark as it starts.
+  function inOrder(apply) {
+    const run = controlTail.then(apply);
+    controlTail = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
   }
-  if (!declared) {
-    return { code: -32020, message: `Missing required ${META_PROTOCOL_VERSION} in params._meta.` };
+
+  const app = express();
+  app.disable("x-powered-by");
+
+  app.use((req, res, next) => {
+    res.set(BOOT_HEADER, boot);
+    next();
+  });
+
+  // Unauthenticated: it carries no data and the container healthcheck needs it.
+  app.get("/health", (_req, res) => {
+    res.json({ ok: true });
+  });
+
+  // The parsed header of a request carrying one of `kind` whose MAC verifies
+  // within the window, or null.
+  function authenticate(req, kind, keyFor) {
+    const parsed = auth.parseHeader(kind, req.get(AUTH_HEADER));
+    if (!parsed) return null;
+    const { fields } = parsed;
+    if (Math.abs(now() - fields.ts) > TIMESTAMP_WINDOW_MS) return null;
+    let key;
+    try {
+      key = keyFor(fields);
+    } catch {
+      return null;
+    }
+    return auth.verify(key, parsed) ? parsed : null;
   }
-  if (header !== declared) {
-    // A gateway may route on the header, so it must not be able to disagree
-    // with what this server will actually execute.
+
+  function unauthorized(req, endpoint) {
+    console.warn(`[mcp-bridge] ${endpoint} refused an unauthenticated request (request=${req.get("x-request-id") ?? "-"})`);
+  }
+
+  const refuse = (res, refusal) => res.status(refusal.status).json({ error: refusal.code });
+
+  // A request answered before its body is read closes its connection, so
+  // the body is never read.
+  const unread = (res) => res.set("connection", "close");
+
+  // The request's body once it is read within `limit` and hashes to what
+  // its header signed; otherwise null, with the refusal answered by
+  // `tooLarge` or `mismatch`.
+  async function verifiedBody(req, res, parsed, limit, { tooLarge, mismatch }) {
+    let body;
+    try {
+      body = await readBody(req, limit);
+    } catch (err) {
+      if (err instanceof BodyTooLarge && !res.headersSent) tooLarge(unread(res));
+      return null;
+    }
+    if (!auth.bodyMatches(parsed, body)) {
+      mismatch(res);
+      return null;
+    }
+    return body;
+  }
+
+  // ==========================================================================
+  // /control
+  // ==========================================================================
+
+  app.post("/control", async (req, res) => {
+    const parsed = authenticate(req, "control", () => controlKey);
+    if (!parsed) {
+      unauthorized(req, "/control");
+      return unread(res).status(401).json({ error: "unauthorized" });
+    }
+    const { fields } = parsed;
+    if (fields.boot !== "-" && fields.boot !== boot) return refuse(unread(res), new Refusal("stale_boot"));
+    if (!above(fields)) return refuse(unread(res), new Refusal("stale_control"));
+
+    const body = await verifiedBody(req, res, parsed, CONTROL_BODY_LIMIT, {
+      tooLarge: (r) => r.status(413).json({ error: "too_large" }),
+      mismatch: (r) => {
+        unauthorized(req, "/control");
+        r.status(401).json({ error: "unauthorized" });
+      },
+    });
+    if (!body) return;
+
+    let message;
+    try {
+      message = JSON.parse(body.toString("utf8"));
+    } catch {
+      message = null;
+    }
+    if (!isObject(message) || typeof message.type !== "string") return refuse(res, new Refusal("bad_request", 400));
+
+    const expectedBoot = message.type === "hello" ? "-" : boot;
+    if (fields.boot !== expectedBoot) return refuse(res, new Refusal("stale_boot"));
+
+    try {
+      const answer = await inOrder(() => {
+        if (!above(fields)) throw new Refusal("stale_control");
+        highWater = { generation: fields.generation, seq: fields.seq };
+        return control(message, fields);
+      });
+      return res.json(answer);
+    } catch (err) {
+      if (err instanceof Refusal) return refuse(res, err);
+      console.error("[mcp-bridge] control error:", err);
+      return res.status(500).json({ error: "internal" });
+    }
+  });
+
+  async function control(message, { generation: g, cyfr_boot: cyfrBoot }) {
+    switch (message.type) {
+      case "hello": {
+        if (message.g !== g || message.cyfr_boot !== cyfrBoot) throw new Refusal("bad_request", 400);
+        let pool;
+        try {
+          pool = await owners.pool();
+        } catch {
+          throw new Refusal("unavailable", 503);
+        }
+        console.log(`[mcp-bridge] hello from ${cyfrBoot} at generation ${g}`);
+        return { boot, pool: { size: pool.size, free: pool.free } };
+      }
+      case "reconcile":
+        return owners.reconcile(ownerRefs(message.keep, { epoch: true }), g);
+      case "sync": {
+        const { athanor, server } = ownerRef(message.owner, { epoch: false });
+        const e = message.e;
+        if (!positiveInteger(e) || typeof message.sealed !== "string") throw new Refusal("bad_request", 400);
+        const leaseMs = milliseconds(message.lease_ms, MAX_LEASE_MS);
+        const idleMs = milliseconds(message.idle_ms, MAX_IDLE_MS);
+        const backends = validateBackends(message.backends);
+        const openEnv = () => {
+          const plaintext = auth.open(sealKey, { athanor, server, generation: g, epoch: e }, boot, message.sealed);
+          if (!plaintext) throw new Refusal("bad_request", 400);
+          try {
+            return JSON.parse(plaintext.toString("utf8"));
+          } catch {
+            throw new Refusal("bad_request", 400);
+          }
+        };
+        return owners.sync({ athanor, server, g, e, leaseMs, idleMs, backends, openEnv });
+      }
+      case "renew":
+        return owners.renew(ownerRefs(message.owners, { epoch: true }), g, milliseconds(message.lease_ms, MAX_LEASE_MS));
+      case "release":
+        return owners.release(ownerRefs(message.owners, { epoch: true }), g);
+      case "status":
+        return owners.status(ownerRefs(message.owners, { epoch: false }));
+      default:
+        throw new Refusal("bad_request", 400);
+    }
+  }
+
+  // ==========================================================================
+  // /mcp
+  // ==========================================================================
+
+  // GET and DELETE are unsupported and return 405.
+  app.all("/mcp", (req, res, next) => {
+    if (req.method === "POST" || req.method === "OPTIONS") return next();
+    res.set("mcp-protocol-version", PROTOCOL_VERSION);
+    res.set("allow", "POST, OPTIONS");
+    return rpcError(res, 405, null, -32600, `${req.method} is not supported on the MCP endpoint.`);
+  });
+
+  app.post("/mcp", async (req, res) => {
+    res.set("mcp-protocol-version", PROTOCOL_VERSION);
+
+    // One correlation id per request, echoed back and stamped on error logs —
+    // cyfr sends x-request-id on every call it makes.
+    const requestId = req.get("x-request-id") || randomUUID();
+    res.set("x-request-id", requestId);
+
+    const parsed = authenticate(req, "invoke", (f) =>
+      auth.ownerKey(rootKey, { athanor: f.athanor, server: f.server, generation: f.generation, epoch: f.epoch }),
+    );
+    if (!parsed) {
+      unauthorized(req, "/mcp");
+      return rpcError(unread(res), 401, null, -33001, "unauthorized");
+    }
+    const { fields } = parsed;
+    if (fields.boot !== boot) return refuse(unread(res), new Refusal("stale_boot"));
+
+    const invoke = {
+      athanor: fields.athanor,
+      server: fields.server,
+      g: fields.generation,
+      e: fields.epoch,
+      ts: fields.ts,
+      nonce: fields.nonce,
+    };
+    try {
+      owners.admit(invoke);
+    } catch (err) {
+      if (err instanceof Refusal) return refuse(unread(res), err);
+      throw err;
+    }
+
+    const body = await verifiedBody(req, res, parsed, MCP_BODY_LIMIT, {
+      tooLarge: (r) => rpcError(r, 413, null, -32600, "Request body too large"),
+      mismatch: (r) => {
+        unauthorized(req, "/mcp");
+        rpcError(r, 401, null, -33001, "unauthorized");
+      },
+    });
+    if (!body) return;
+
+    // Admitted again with its body verified, which records its nonce.
+    let owner;
+    try {
+      owner = owners.admit(invoke, { record: true });
+    } catch (err) {
+      if (err instanceof Refusal) return refuse(res, err);
+      throw err;
+    }
+
+    let msg;
+    try {
+      msg = JSON.parse(body.toString("utf8"));
+    } catch {
+      return rpcError(res, 400, null, -32700, "Parse error: body is not valid JSON");
+    }
+    if (!isObject(msg)) {
+      // "The body of the HTTP POST MUST be a single JSON-RPC request or
+      // notification" — an array is a batch and has no handler.
+      return rpcError(res, 400, null, -32600, "Expected a single JSON-RPC message");
+    }
+
+    // Notifications omit id and receive an empty 202 response.
+    // An explicit null id is a request and must receive a JSON-RPC response.
+    if (msg.id === undefined) {
+      return res.status(202).end();
+    }
+
+    const conformance = checkConformance(req, msg);
+    if (conformance) {
+      return rpcError(res, 400, msg.id, conformance.code, conformance.message, conformance.data);
+    }
+
+    try {
+      const result = await handleRpc(owner, msg);
+      return res.json({ jsonrpc: "2.0", id: msg.id, result: stampResult(result) });
+    } catch (err) {
+      if (err instanceof UnknownMethod) {
+        // 404, not 400: a dual-era client reads the status to tell a modern
+        // server missing one method from a legacy server missing the endpoint.
+        return rpcError(res, 404, msg.id, -32601, err.message);
+      }
+      if (err instanceof RpcRefusal) {
+        return res.json({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: err.message } });
+      }
+      // Anything else is an internal fault; the wire gets a generic sentence.
+      console.error(`[mcp] request=${requestId} error:`, err);
+      return rpcError(res, 500, msg.id, -32603, "internal error");
+    }
+  });
+
+  // Render a handler's failure as a JSON-RPC error. Express error middleware
+  // must be registered after the routes.
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    console.error("[mcp-bridge] request error:", err);
+    // Never the error's own message — at this layer it is an internal term.
+    return rpcError(res, 500, null, -32603, "internal error");
+  });
+
+  function rpcError(res, status, id, code, message, data) {
+    return res.status(status).json({
+      jsonrpc: "2.0",
+      id: id ?? null,
+      error: { code, message, ...(data !== undefined ? { data } : {}) },
+    });
+  }
+
+  // Every result declares its type and this server's identity. A client that
+  // cannot tell a finished answer from one asking for more input has to guess.
+  function stampResult(result) {
     return {
-      code: -32020,
-      message: `MCP-Protocol-Version header (${header}) does not match ${META_PROTOCOL_VERSION} (${declared}).`,
+      ...result,
+      resultType: "complete",
+      _meta: {
+        ...(result._meta || {}),
+        [META_SERVER_INFO]: { name: "cyfr-mcp-bridge", version: VERSION },
+      },
     };
   }
-  if (header !== PROTOCOL_VERSION) {
-    return {
-      code: -32022,
-      message: `Unsupported protocol version ${header}.`,
-      data: { supported: [PROTOCOL_VERSION], requested: header },
-    };
-  }
-  if (typeof meta[META_CLIENT_CAPABILITIES] !== "object" || meta[META_CLIENT_CAPABILITIES] === null) {
-    return { code: -32602, message: `Missing required ${META_CLIENT_CAPABILITIES} in params._meta.` };
-  }
 
-  const methodHeader = req.get("mcp-method");
-  if (methodHeader !== msg.method) {
-    return {
-      code: -32020,
-      message: `Mcp-Method header (${methodHeader ?? "absent"}) does not match the request body.`,
-    };
-  }
+  // The per-request checks that replace the handshake. Returns null when the
+  // request is well-formed, or the JSON-RPC error to answer with.
+  function checkConformance(req, msg) {
+    const meta = (msg.params && msg.params._meta) || {};
+    const header = req.get("mcp-protocol-version");
+    const declared = meta[META_PROTOCOL_VERSION];
 
-  const subject = namedSubject(msg);
-  if (subject !== null) {
-    const nameHeader = decodeHeaderValue(req.get("mcp-name"));
-    if (nameHeader !== subject) {
+    if (!header) {
+      return { code: -32020, message: "Missing required MCP-Protocol-Version header." };
+    }
+    if (!declared) {
+      return { code: -32020, message: `Missing required ${META_PROTOCOL_VERSION} in params._meta.` };
+    }
+    if (header !== declared) {
+      // A gateway may route on the header, so it must not be able to disagree
+      // with what this server will actually execute.
       return {
         code: -32020,
-        message: `Mcp-Name header (${nameHeader ?? "absent"}) does not match the request body.`,
+        message: `MCP-Protocol-Version header (${header}) does not match ${META_PROTOCOL_VERSION} (${declared}).`,
       };
     }
-  }
-
-  return null;
-}
-
-// `tools/call` names its subject in `params.name`. The bridge serves no
-// resources or prompts, so there is nothing else that names one.
-function namedSubject(msg) {
-  if (msg.method === "tools/call" && typeof msg.params?.name === "string") {
-    return msg.params.name;
-  }
-  return null;
-}
-
-// A value outside visible ASCII travels as `=?base64?<encoded>?=`, and the
-// comparison has to happen after decoding or every legitimate encoded name is
-// rejected.
-function decodeHeaderValue(value) {
-  if (typeof value !== "string") return value ?? null;
-  if (!value.startsWith("=?base64?") || !value.endsWith("?=")) return value;
-  try {
-    return Buffer.from(value.slice(9, -2), "base64").toString("utf8");
-  } catch {
-    return null;
-  }
-}
-
-async function handleRpc(msg) {
-  switch (msg.method) {
-    // Replaces `initialize`: version and capability discovery that establishes
-    // nothing. `initialize`, `notifications/initialized` and `ping` are gone
-    // from this revision and answer 404 like any other unknown method.
-    case "server/discover":
+    if (header !== PROTOCOL_VERSION) {
       return {
-        supportedVersions: [PROTOCOL_VERSION],
-        capabilities: { tools: { listChanged: false }, extensions: {} },
-        instructions:
-          "Wraps stdio MCP servers behind one HTTP endpoint. " +
-          "add_backend/remove_backend/list_backends/restart_backend manage the " +
-          "children; every child tool appears as `<backend>__<tool>`.",
-        ttlMs: TOOLS_TTL_MS,
-        cacheScope: "private",
+        code: -32022,
+        message: `Unsupported protocol version ${header}.`,
+        data: { supported: [PROTOCOL_VERSION], requested: header },
       };
-    case "tools/list":
-      return { tools: aggregatedTools(), ttlMs: TOOLS_TTL_MS, cacheScope: "private" };
-    case "tools/call": {
-      const { name, arguments: args } = msg.params || {};
-      if (!name) throw new RpcRefusal("tools/call: missing 'name'");
-      try {
-        return await dispatchToolCall(name, args || {});
-      } catch (err) {
-        // Return tool refusals with isError=true. Only Refusal messages are safe
-        // for clients; other errors may contain internal paths, arguments or stderr.
-        if (err instanceof RpcRefusal) return wrapError(err.message);
+    }
+    if (typeof meta[META_CLIENT_CAPABILITIES] !== "object" || meta[META_CLIENT_CAPABILITIES] === null) {
+      return { code: -32602, message: `Missing required ${META_CLIENT_CAPABILITIES} in params._meta.` };
+    }
 
-        console.error(`[tools/call ${name}] internal error: ${err?.stack || err}`);
-        return wrapError("tool call failed");
+    const methodHeader = req.get("mcp-method");
+    if (methodHeader !== msg.method) {
+      return {
+        code: -32020,
+        message: `Mcp-Method header (${methodHeader ?? "absent"}) does not match the request body.`,
+      };
+    }
+
+    const subject = namedSubject(msg);
+    if (subject !== null) {
+      const nameHeader = decodeHeaderValue(req.get("mcp-name"));
+      if (nameHeader !== subject) {
+        return {
+          code: -32020,
+          message: `Mcp-Name header (${nameHeader ?? "absent"}) does not match the request body.`,
+        };
       }
     }
-    default:
-      throw new UnknownMethod(`unsupported method: ${msg.method}`);
+
+    return null;
   }
+
+  // `tools/call` names its subject in `params.name`. The bridge serves no
+  // resources or prompts, so there is nothing else that names one.
+  function namedSubject(msg) {
+    if (msg.method === "tools/call" && typeof msg.params?.name === "string") {
+      return msg.params.name;
+    }
+    return null;
+  }
+
+  // A value outside visible ASCII travels as `=?base64?<encoded>?=`, and the
+  // comparison has to happen after decoding or every legitimate encoded name is
+  // rejected.
+  function decodeHeaderValue(value) {
+    if (typeof value !== "string") return value ?? null;
+    if (!value.startsWith("=?base64?") || !value.endsWith("?=")) return value;
+    try {
+      return Buffer.from(value.slice(9, -2), "base64").toString("utf8");
+    } catch {
+      return null;
+    }
+  }
+
+  async function handleRpc(owner, msg) {
+    switch (msg.method) {
+      // Version and capability discovery that establishes nothing.
+      // `initialize`, `notifications/initialized` and `ping` are not in this
+      // revision and answer 404 like any other unknown method.
+      case "server/discover":
+        return {
+          supportedVersions: [PROTOCOL_VERSION],
+          capabilities: { tools: { listChanged: false }, extensions: {} },
+          instructions:
+            "Runs this server's stdio MCP backends; every backend tool appears as `<backend>__<tool>`.",
+          ttlMs: TOOLS_TTL_MS,
+          cacheScope: "private",
+        };
+      case "tools/list":
+        return { tools: owners.tools(owner), ttlMs: TOOLS_TTL_MS, cacheScope: "private" };
+      case "tools/call": {
+        const { name, arguments: args } = msg.params || {};
+        if (!name) throw new RpcRefusal("tools/call: missing 'name'");
+        try {
+          return await owners.callTool(owner, name, args || {});
+        } catch (err) {
+          // Tool refusals return isError=true; only a refusal's text is
+          // client-safe.
+          if (err instanceof RpcRefusal) return { content: [{ type: "text", text: err.message }], isError: true };
+          console.error(`[tools/call] internal error: ${err?.stack || err}`);
+          return { content: [{ type: "text", text: "tool call failed" }], isError: true };
+        }
+      }
+      default:
+        throw new UnknownMethod(`unsupported method: ${msg.method}`);
+    }
+  }
+
+  return { app, boot, owners, close: () => owners.close() };
 }
 
 // ============================================================================
 // Boot
 // ============================================================================
 
-let httpServer = null;
-
-async function shutdown(signal) {
-  console.log(`[mcp-bridge] ${signal} — stopping ${backends.size} backends`);
-  // Stop accepting and let in-flight requests drain; the children are
-  // SIGTERMed in parallel, so pending calls against them fail promptly.
-  if (httpServer) httpServer.close(() => process.exit(0));
-  for (const name of [...backends.keys()]) stopBackend(name);
-  // Hard stop inside compose's stop_grace_period if a request never drains.
-  setTimeout(() => process.exit(0), 10_000).unref();
+// fd 3 is the spawner's channel only when cyfr-spawn started this process.
+function spawnerChannelPresent() {
+  try {
+    return fstatSync(SPAWNER_FD).isSocket();
+  } catch {
+    return false;
+  }
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
-
-// This process supervises children and is itself supervised (compose
-// restart: unless-stopped): an unexpected failure crashes loudly and lets
-// the supervisor restart a clean instance, rather than limping on with
-// unknown state.
-process.on("uncaughtException", (err) => {
-  console.error("[mcp-bridge] FATAL uncaught exception:", err);
-  process.exit(1);
-});
-process.on("unhandledRejection", (reason) => {
-  console.error("[mcp-bridge] FATAL unhandled rejection:", reason);
-  process.exit(1);
-});
-
-(async () => {
-  // Validate the admin token before reading or starting persisted backend commands.
-  if (!AUTH_TOKEN) {
-    // add_backend spawns arbitrary `sh -c`, so an unauthenticated /mcp is
-    // remote code execution for anyone who can reach the port. Refuse to
-    // boot open unless the operator explicitly opts in — `cyfr init`
-    // always provisions MCP_BRIDGE_TOKEN, so the happy path never hits this.
-    if (process.env.MCP_BRIDGE_ALLOW_INSECURE === "1") {
-      console.warn(
-        "[mcp-bridge] WARNING: MCP_BRIDGE_TOKEN is unset and " +
-          "MCP_BRIDGE_ALLOW_INSECURE=1 — /mcp is unauthenticated and relies " +
-          "solely on network isolation."
+async function main() {
+  // CYFR_LOG_FORMAT=json enables structured logs; otherwise use text logs.
+  if (process.env.CYFR_LOG_FORMAT === "json") {
+    const jsonLine = (level, args) => {
+      const message = args
+        .map((a) => (typeof a === "string" ? a : (a && a.stack) || String(a)))
+        .join(" ");
+      process.stderr.write(
+        JSON.stringify({ timestamp: new Date().toISOString(), level, message, service: "mcp-bridge" }) +
+          "\n",
       );
-    } else {
-      console.error(
-        "[mcp-bridge] FATAL: MCP_BRIDGE_TOKEN is unset. /mcp dispatches " +
-          "shell-spawning admin tools, so running without a bearer token is " +
-          "remote code execution for anything that can reach this port. Set " +
-          "MCP_BRIDGE_TOKEN (cyfr init generates one), or set " +
-          "MCP_BRIDGE_ALLOW_INSECURE=1 to accept that risk on an isolated network."
-      );
-      process.exit(1);
-    }
+    };
+    console.log = (...args) => jsonLine("info", args);
+    console.warn = (...args) => jsonLine("warning", args);
+    console.error = (...args) => jsonLine("error", args);
   }
 
-  const persisted = await loadPersisted();
-  for (const entry of persisted) {
-    if (!entry?.name || !entry?.command) continue;
-    console.log(`[mcp-bridge] reviving '${entry.name}': ${entry.command}`);
-    // The revival loop is the second door into spawnBackend: a hand-edited
-    // persistence file with a routing-ambiguous or duplicate name must be
-    // refused here exactly as the admin door refuses it, not spawned.
-    try {
-      spawnBackend(entry.name, entry.command, entry.env);
-    } catch (e) {
-      console.error(`[mcp-bridge] not reviving '${entry.name}': ${e.message}`);
-      continue;
-    }
-    // Fire-and-forget — children come online in parallel.
-    initializeBackend(entry.name).catch(() => {});
+  // Backends are started only through the spawner, which hands this process
+  // its channel as fd 3. Without it there is no way to run a backend under a
+  // uid of its own, so the bridge does not start.
+  if (!spawnerChannelPresent()) {
+    console.error(
+      "[mcp-bridge] FATAL: fd 3 is not the spawner channel. Start the bridge through " +
+        "`cyfr-spawn serve … -- node server.mjs` (the image's entrypoint).",
+    );
+    process.exit(1);
   }
 
-  httpServer = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[mcp-bridge] /mcp on :${PORT} (data: ${PERSIST}, auth: ${AUTH_TOKEN ? "on" : "off"})`);
+  let root;
+  try {
+    root = auth.decodeRoot(process.env.CYFR_MCP_BRIDGE_KEY);
+  } catch {
+    console.error(
+      "[mcp-bridge] FATAL: CYFR_MCP_BRIDGE_KEY must be 64 hexadecimal digits (32 random bytes), " +
+        "the same value CYFR is configured with. `cyfr init` generates it into .env.",
+    );
+    process.exit(1);
+  }
+
+  // This process supervises children and is itself supervised (compose
+  // restart: unless-stopped): an unexpected failure crashes loudly and lets
+  // the supervisor restart a clean instance.
+  process.on("uncaughtException", (err) => {
+    console.error("[mcp-bridge] FATAL uncaught exception:", err);
+    process.exit(1);
   });
-})();
+  process.on("unhandledRejection", (reason) => {
+    console.error("[mcp-bridge] FATAL unhandled rejection:", reason);
+    process.exit(1);
+  });
+
+  const channel = new net.Socket({ fd: SPAWNER_FD, readable: true, writable: true });
+  const spawner = new SpawnerClient({ channel, attachDir: ATTACH_DIR, pool: SPAWN_POOL });
+  // The spawner retires every backend when its channel closes; nothing this
+  // process started can be managed after that.
+  spawner.on("lost", () => {
+    console.error("[mcp-bridge] FATAL: the spawner channel closed");
+    process.exit(1);
+  });
+  await spawner.listen();
+
+  const bridge = createBridge({ spawner, root });
+
+  let httpServer = null;
+  let stopping = false;
+  async function shutdown(signal) {
+    if (stopping) return;
+    stopping = true;
+    console.log(`[mcp-bridge] ${signal} — stopping ${bridge.owners.size} owners`);
+    // Hard stop inside compose's stop_grace_period if a request never drains.
+    setTimeout(() => process.exit(0), 12_000).unref();
+    // Stop accepting and let in-flight requests drain while the backends are
+    // retired in parallel, so pending calls against them fail promptly.
+    const drained = new Promise((resolve) => (httpServer ? httpServer.close(() => resolve()) : resolve()));
+    await Promise.all([drained, bridge.close()]);
+    process.exit(0);
+  }
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
+  httpServer = bridge.app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[mcp-bridge] /control and /mcp on :${PORT} (boot ${bridge.boot}, child protocol ${CHILD_PROTOCOL_VERSION})`);
+  });
+}
+
+if (import.meta.main) main();

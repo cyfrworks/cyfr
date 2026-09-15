@@ -3,10 +3,9 @@
 
 defmodule PrismWeb.LoginLiveTest do
   @moduledoc """
-  Prism sign-in uses GitHub/Google device flow on this page, not the
-  leftover Ueberauth web-callback at `/auth/:provider`. A GitHub OAuth
-  app that only has a client id (device flow) must not be sent there —
-  that path `fetch_env!`s `Ueberauth.Strategy.Github.OAuth` and 500s.
+  Prism sign-in for GitHub and Google is device flow on this page; they
+  have no browser callback. A deployment on its own issuer links to
+  `/auth/oidcc`.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -181,6 +180,51 @@ defmodule PrismWeb.LoginLiveTest do
       landed = get(browser, path)
       assert redirected_to(landed) == "/"
       assert get_session(landed, :sanctum_session_token) == session.token
+    end
+
+    test "a boot that lost the control plane stops a waiting sign-in at its next poll, asking no provider",
+         %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/login")
+
+      view
+      |> element("button[phx-click=start][phx-value-provider=github]")
+      |> render_click()
+
+      Cyfr.ControlPlane.mark(:lost)
+      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      Application.delete_env(:cyfr, :device_flow_last_ip)
+      on_exit(fn -> Application.delete_env(:cyfr, :device_flow_last_ip) end)
+
+      send(view.pid, :login_poll)
+      html = render(view)
+
+      assert html =~ "not accepting sign-ins"
+      refute html =~ "Waiting for authorization"
+      assert Application.get_env(:cyfr, :device_flow_last_ip) == nil
+
+      # Stopped: a later tick asks nothing either, owner again or not.
+      Cyfr.ControlPlane.mark(:unclaimed)
+      send(view.pid, :login_poll)
+      _ = render(view)
+      assert Application.get_env(:cyfr, :device_flow_last_ip) == nil
+    end
+
+    test "a page open on a boot that lost the control plane starts no sign-in", %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/login")
+
+      Cyfr.ControlPlane.mark(:lost)
+      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      Application.delete_env(:cyfr, :device_flow_last_ip)
+      on_exit(fn -> Application.delete_env(:cyfr, :device_flow_last_ip) end)
+
+      html =
+        view
+        |> element("button[phx-click=start][phx-value-provider=github]")
+        |> render_click()
+
+      assert html =~ "not accepting sign-ins"
+      refute html =~ "WXYZ-1234"
+      assert Application.get_env(:cyfr, :device_flow_last_ip) == nil
     end
 
     test "a missing device-complete ticket returns to login", %{conn: conn} do

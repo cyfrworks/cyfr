@@ -35,16 +35,12 @@ var updateCmd = &cobra.Command{
 		fmt.Println("Updating project scaffold files...")
 
 		// Pull latest Docker images for the whole stack (cyfr, plus caddy when
-		// TLS mode is on) via compose so they're kept in sync. mcp-bridge
-		// is built locally and skipped by `compose pull`. Non-fatal — the
-		// project runs via Docker.
+		// TLS mode is on and the builder when .env points builds at it) via
+		// compose so they're kept in sync. mcp-bridge is built locally and
+		// skipped by `compose pull`. Non-fatal — the project runs via Docker.
 		if _, err := exec.LookPath("docker"); err == nil {
 			fmt.Println("Pulling latest Docker images...")
-			pullArgs := []string{"compose"}
-			if envFlagTrue(".env", "CYFR_BEHIND_PROXY") {
-				pullArgs = append(pullArgs, "--profile", "tls")
-			}
-			pullArgs = append(pullArgs, "pull")
+			pullArgs := append(append([]string{"compose"}, profileArgs(composeProfiles(".env"))...), "pull")
 			pull := exec.Command("docker", pullArgs...)
 			pull.Stdout = os.Stdout
 			pull.Stderr = os.Stderr

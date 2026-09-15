@@ -88,15 +88,15 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` and `CYFR_MCP_BRIDGE_KEY` are generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
-**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your conversation with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an estate with one person in it answers every message, and any room with two or more answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own estate that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen estate minted by clicking a person in the chat rail (anyone you share an estate with is there; it ends when either person leaves — clicking again starts a new, empty one), following a topic decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
+**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your thread with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an estate with one person in it answers every message, and any room with two or more answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own estate that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen estate minted by clicking a person in the chat rail (anyone you share an estate with is there; it ends when either person leaves — clicking again starts a new, empty one), following a thread decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
 Around the chat:
 
-- **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and every group and topic you belong to (`/chat?a=<estate>&c=<thread>` deep-links one). The estate's **AQUA** page at `/a/<estate>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a conversation is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search` and `forget` — and a schedule with `keep_outcome` in its metadata files each run's output as one.
+- **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and the threads of every group you belong to (`/chat?a=<estate>&c=<thread>` deep-links one). The estate's **AQUA** page at `/a/<estate>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a thread is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search` and `forget` — and a schedule with `keep_outcome` in its metadata files each run's output as one.
 - **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
 - **The drawer** — off the chat, on every screen size: **AQUA**, **Apps** (tinctures), **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the grant sheet binds a sealed vault entry to the model's catalyst — no developer view needed.
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
@@ -128,7 +128,6 @@ your-project/
     ├── cyfr.db             # Vault entries, consents, execution records
     ├── cache/              # Immutable cached artifacts (OCI blobs)
     ├── system/             # Server-internal scratch (health probes)
-    ├── mcp-bridge/         # The mcp-bridge sidecar's own files (not managed by cyfr)
     └── athanors/           # One tree per athanor — each person's and each group's
         └── <athanor id>/
             ├── components/ # {type}s/{publisher}/{name}/{version}/
@@ -137,8 +136,8 @@ your-project/
             │   ├── formulas/    # Bundled formulas: list-models
             │   └── tinctures/   # Bundled example tinctures + your own
             ├── aqua/       # The athanor's own AQUA: the soul, its roles, its scrolls
-            ├── conversations/  # Chat attachment files
-            ├── notes/      # What was kept out of a conversation — host-only, no guest scope
+            ├── threads/  # Chat attachment files
+            ├── notes/      # What was kept out of a thread — host-only, no guest scope
             ├── payloads/   # Retained execution inputs and results — host-only, by digest
             └── data/       # Files WASM components store — their `data/` scope, and yours
 ```
@@ -146,7 +145,7 @@ your-project/
 > Every folder exists from the moment the athanor is provisioned. The Files
 > page (and the `file` tool) shows the tree the way a phone shows its files:
 > `data/` is yours to fill and clear, `components/` and `aqua/` hold shaped
-> units whose files you edit in place, `notes/` and `conversations/` are read
+> units whose files you edit in place, `notes/` and `threads/` are read
 > there and managed on their own pages, and the server's own storage
 > (`payloads/`, the seed, the cache) is not a folder at all.
 
@@ -225,7 +224,7 @@ cyfr run c:local.my-api
 cyfr push c:local.my-api:1.0.0
 ```
 
-The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, cleans build artifacts, and pulls any missing dependencies.
+The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, cleans build artifacts, and pulls any missing dependencies. A Rust build is locked to the component's `Cargo.lock` after its first build; compile with `--resolve` after changing a dependency.
 
 `cyfr push` pushes a local component to the registry under your **claimed personal namespace** — `c:local.my-api` is pushed as `c:<your-namespace>.my-api`. Run `cyfr login` first to authenticate and claim your namespace; pushing without one returns a "claim a personal namespace" error.
 
@@ -246,8 +245,8 @@ cyfr build compile t:local.stock-dashboard:0.1.0
 # Open it in Prism (the athanor in focus is in the URL)
 open http://localhost:4000/a/@alice/tinctures
 
-# Make it publicly reachable at /t/@alice/local/stock-dashboard
-cyfr tincture visibility set local stock-dashboard true
+# Check whether it is publicly reachable at /t/@alice/local/stock-dashboard
+cyfr tincture visibility get local stock-dashboard
 ```
 
 **Data.** Tinctures are self-contained frontends — CYFR serves their web content, not a database. Pull backend data at runtime by calling formulas or catalysts through the auto-injected `cyfr` SDK; if you need static seed data, ship a `data.db` (or any file) as a static asset and read it client-side.
@@ -264,7 +263,7 @@ await cyfr.setTitle("Stock Dashboard");
 await cyfr.ready();
 ```
 
-Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. Tinctures default to private — use `cyfr tincture visibility set` to publish one. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
+Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. Tinctures default to private; publishing one is a consent decision — the profile tool's `publish` (plan → preview → commit) mints its public profile, and revoking that profile unpublishes it. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
 
 ### Fork a Component
 
@@ -306,8 +305,9 @@ cyfr mcp list
 # Server tools appear as github:tool_name in your tool list
 ```
 
-Header values support vault references (`vault:ENTRY_NAME`) — the named vault entry's
-single field is resolved at request time, so credentials stay encrypted at rest and never
+Header values support vault references (`vault:ENTRY_NAME`, or with a scheme,
+`Bearer vault:ENTRY_NAME`) — the named vault entry's single field is resolved at request
+time, after the scheme when there is one, so credentials stay encrypted at rest and never
 appear in the server config.
 
 ## Deploy to a Server
@@ -317,7 +317,7 @@ CYFR is self-hosted as a small `docker compose` stack:
 | service | what it is |
 |---|---|
 | `cyfr` | the one endpoint on `:4000`: Prism (chat + console, a PWA), API, MCP, tinctures |
-| `mcp-bridge` | the HTTP MCP gateway. Wraps stdio/`npx` MCP servers (filesystem, github, …) behind one endpoint and surfaces their tools through cyfr. Built locally from `Dockerfile.node`; backends live in `./data/mcp-bridge/backends.json` |
+| `mcp-bridge` | runs the stdio/`npx` MCP servers (filesystem, github, …) an athanor adds, each backend under a uid of its own, and serves their tools to cyfr. Built locally from `Dockerfile.node`; it keeps no state |
 | `caddy` *(profile: `tls`)* | TLS terminator + reverse proxy in front of `cyfr:4000`. Started only when `CYFR_BEHIND_PROXY=true` in `.env` |
 
 Two modes:
@@ -371,22 +371,33 @@ Then open `https://<your-domain>/` (TLS) or `http://localhost:4000/` (direct), s
 
 **Upgrading.** `cyfr update` pulls the latest images, then `cyfr up`. From a source checkout: `docker compose pull && docker compose up -d` (add `--profile tls` if you're running with caddy). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server.
 
-### Wrapping stdio / npx MCP servers (filesystem, github, …)
+### Stdio / npx MCP servers (filesystem, github, …)
 
-CYFR can only register **HTTP** MCP servers. To use a stdio MCP server (anything that launches with `npx -y …`), the `mcp-bridge` container wraps it: it spawns the child process and exposes a single HTTP MCP endpoint that surfaces all the children's tools, prefixed by backend name.
+CYFR reaches an **http** MCP server at its URL. A **stdio** MCP server (anything that launches with `npx -y …`) runs on the `mcp-bridge` container instead: CYFR tells the bridge what to run and signs every message to it.
 
-Prism wires this up for you:
+Adding one from Prism:
 
-1. Open **MCP Servers** in the sidebar, click **+ Setup MCP Bridge**. That registers the gateway with CYFR (one external MCP entry named `bridge`, URL `http://mcp-bridge:8001/mcp` resolved inside the compose network — the browser never connects to it directly). The preset sets `"console": true` in the server's config, which is what lets this page call the bridge's admin tools: an external server's tools are otherwise reachable only from inside a running chain, so a manual registration that should be manageable from Prism needs the same flag.
-2. Below the server list, a **Bridge backends** section appears. Click **Add backend**, pick a name (e.g. `fs`) and a command (e.g. `npx -y @modelcontextprotocol/server-filesystem ./data`).
-3. The child boots, its tools surface as `bridge:fs__read_file`, `bridge:fs__write_file`, … on CYFR's tool list. AQUA can use them like any other external MCP tool.
+1. Open **MCP Servers** in the sidebar and click **Add stdio server**.
+2. Give the server a name (e.g. `github`), a backend name, the command (e.g. `npx -y @modelcontextprotocol/server-github`), and its env, one `NAME=value` per line. A credential is always a vault template — `GITHUB_PERSONAL_ACCESS_TOKEN=vault:github-token`, naming a single-field entry on the **Vault** page; only `NODE_ENV`, `LOG_LEVEL`, `TZ`, `LANG`, `LC_ALL`, `NO_COLOR` and `DEBUG` may hold a literal, and a command may never name a vault entry, because every process in the bridge can read command lines.
+3. On first use the bridge starts the backend and its tools surface as `github:github__search_repositories`, … on CYFR's tool list. AQUA uses them like any other external MCP tool. A backend that takes longer than 15 s to start (an `npx -y` download, say) has its tools added to the list once it is ready, without a refresh.
 
-Backends persist to `./data/mcp-bridge/backends.json` so they survive container restarts. Remove or restart them from the same page.
+From the CLI or MCP, the same server is `cyfr mcp add github '{"transport":"stdio","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:github-token"}}]}'`; a server may define up to four backends.
+
+Defining or changing a server — `mcp_servers.create` and `update`, http or stdio — takes a signed-in session: Prism, or the CLI after `cyfr login`. A definition decides what the server runs and where it sends the vault entries it names, which is a person's decision like granting a vault entry to a component. An admin API key can list, inspect, test, refresh, restart, enable, disable and delete servers, but defines none.
+
+How it holds together:
+
+- **One key.** `CYFR_MCP_BRIDGE_KEY` (32 random bytes as 64 hex digits) is in `.env`; `cyfr init` generates it and compose gives it to both `cyfr` and `mcp-bridge`. The bridge refuses to start without it, and cyfr refuses stdio servers without it (and `CYFR_MCP_BRIDGE_URL`, which compose sets). It is the only setting the bridge needs.
+- **Nothing on disk.** The bridge persists nothing. CYFR sends a server's definition when the server is first used — its env resolved from the vault and sealed to that server and that bridge lifetime — and again for every running server when the bridge restarts. When CYFR restarts, the bridge releases what the previous boot ran, and each server starts again on its next use. Backends run only while CYFR keeps renewing their lease (30 s; `CYFR_MCP_BRIDGE_LEASE_MS` sets it); a server whose backends are slow to start never delays another server's renewal.
+- **Idle backends stop.** A backend with no tool call for 15 minutes (`CYFR_MCP_BRIDGE_IDLE_MS` sets it) is stopped and its pool slot freed; its tools stay listed, and the next call starts it again — for an `npx -y` package, downloading it again.
+- **Isolation.** Each backend runs under a pooled uid of its own with a private home, an environment built only from its server's env, and no capability. One athanor's backends hold at most a quarter of the pool, and so do the backends of every server one person created, across all their athanors. A server's requests reach only its own backends, and every result is masked with that server's credentials. Backends share the network, CPU and memory, and can see each other's command lines.
+- **Changes take effect at once.** Updating, disabling, deleting or restarting a server, or rotating, revoking or renaming a vault entry its env names, stops its backends before anything else can reach them; the next use starts them again with the new definition. `mcp_servers.get` shows each backend's status, restarts and a masked stderr tail; **Restart** on the expanded row starts a stdio server's backends afresh.
+- Stdio servers are not available when `CYFR_CLUSTER` is on.
 
 ### Operator notes for shared and open-door servers
 
 - **The seed `local.http` catalyst asks for wildcard egress** (`domains: ["*"]`, http+https; private IPs stay denied) and first-run provisioning consents the bundle automatically — on a server whose allowlist is `*`, that is a consented HTTP relay per signed-in stranger. The minted grant is pinned byte-for-byte by `test/sanctum/consent/bootstrap_golden_test.exs`, so widening or narrowing it is always a reviewed diff; narrow the seed manifest before opening the door if that posture is too generous for your deployment.
-- **Audit sinks receive identity fields, email included.** The door's refusal telemetry carries the attempted email (that is the audit content — who was turned away), and `Sanctum.Sanitizer` deliberately does not redact identity fields on the audit plane. Point `config :cyfr, :audit_sinks` at a SIEM only if it may hold PII.
+- **Audit sinks receive identity fields, email included.** The door's refusal telemetry carries the attempted email (that is the audit content — who was turned away), and `Cyfr.Sanitizer` deliberately does not redact identity fields on the audit plane. Point `config :cyfr, :audit_sinks` at a SIEM only if it may hold PII.
 - **A first sign-in needs cyfr.run reachable once** (to find or claim the person's namespace) and pulls the AQUA formula's provider catalysts from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds.
 
 ### Reaching Prism on the server
@@ -477,18 +488,18 @@ restored, a member adds them again.
 
 `cyfr admin allow '*'` admits any identity your provider authenticates —
 that is the public-hosting configuration, and it is the one where the limits
-matter. They are all optional and **off unless set** — except the DM cap,
-which ships at 200 and is turned off with `0`; a private box needs none of
-the others.
+matter. They are all optional and **off unless set** — except the group,
+DM and thread caps, which ship at 50, 200 and 1000 and are each turned off
+with `0`; a private box needs none of the others.
 
 | Variable | Bounds |
 |---|---|
 | `CYFR_MAX_ATHANORS` | athanors on this server, active ones only — an archived furnace frees its place |
 | `CYFR_MINT_PER_HOUR` | personal athanors minted per hour, i.e. how fast strangers can arrive |
-| `CYFR_MAX_GROUPS_PER_PERSON` | groups one person may **create** (they may belong to more) |
+| `CYFR_MAX_GROUPS_PER_PERSON` | groups one person may **create** (default 50; they may belong to more) |
 | `CYFR_MAX_PAIRS_PER_PERSON` | DMs one person may hold open (default 200). A DM is minted for two, so either person at the ceiling refuses it; an ended DM frees its place |
 | `CYFR_MAX_MEMBERS_PER_GROUP` | seats in one group, invitations included |
-| `CYFR_MAX_CONVERSATIONS_PER_ATHANOR` | threads one estate may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |
+| `CYFR_MAX_THREADS_PER_ATHANOR` | threads one estate may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |
 | `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — everything in its tree, its copies of the shipped bundle included; copying a shipped version in is never refused by the cap, but its bytes count from then on |
 
 A new athanor is provisioned with its own copy of the shipped bundle and
@@ -568,8 +579,13 @@ CYFR_S3_SECRET_ACCESS_KEY=...
 All four required vars must be set or the server refuses to start.
 
 > On S3 the bucket holds the Arca objects only — the `data/` volume still
-> holds the database and the sidecars' files (`cyfr.db`, `mcp-bridge/`), so
-> backing up an S3 deployment means both.
+> holds the database (`cyfr.db`), so backing up an S3 deployment means both.
+
+> A built tincture's compile (one whose manifest declares `tincture.build`)
+> is not saved on S3: a build replaces the tincture's `dist/` so that nobody
+> is served a partial build, and an object store cannot swap a tree. The
+> compile answers that it was not saved and the previous build stays served.
+> WASM components compile as usual.
 
 ### Proxy trust and rate limits
 
@@ -592,7 +608,7 @@ What to back up depends on the backends you configured:
 
 | Backend | What holds state | Backup |
 |---|---|---|
-| SQLite (default) | `./data` (database, encrypted secrets, every athanor's components and files, caches, mcp-bridge config) | Stop the stack (`cyfr down`), copy `./data`, restart. Copying while running risks a torn SQLite snapshot. |
+| SQLite (default) | `./data` (database, encrypted secrets, every athanor's components and files, caches) | Stop the stack (`cyfr down`), copy `./data`, restart. Copying while running risks a torn SQLite snapshot. |
 | Postgres | your database + `./data` for files | `pg_dump` on your schedule + the `./data` copy above |
 | S3 | the bucket + the database | enable bucket versioning/replication; back the database up as above |
 
@@ -658,7 +674,6 @@ Commands marked with `[i]` support interactive selection when run without argume
 | Command | Description |
 |---------|-------------|
 | `cyfr tincture visibility get <publisher> <name>` | Check whether a tincture is private to Prism or publicly reachable |
-| `cyfr tincture visibility set <publisher> <name> <true\|false>` | Control whether a tincture is public at `/t/<athanor>/<publisher>/<name>` |
 
 ### MCP Servers
 
@@ -687,7 +702,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
 | `cyfr aqua list/get/status/reset/skills` | Read the AQUA soul, roles, guides and scrolls, see which files are shipped, edited or yours, and reset to shipped `[i]` |
-| `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `conversations/` read-only |
+| `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `threads/` read-only |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
 | `cyfr registry probe` | Force a re-probe against cyfr.run (re-mints push tokens) |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |

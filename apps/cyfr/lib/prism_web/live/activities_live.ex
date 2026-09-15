@@ -16,7 +16,7 @@ defmodule PrismWeb.ActivitiesLive do
 
   use PrismWeb, :live_view
 
-  alias Cyfr.Topics
+  alias Cyfr.Bus
 
   alias Phoenix.LiveView.JS
 
@@ -29,7 +29,7 @@ defmodule PrismWeb.ActivitiesLive do
     if connected?(socket) do
       ctx = socket.assigns[:context]
 
-      for topic <- [Topics.requests(ctx), Topics.tinctures(ctx), Topics.schedule_runs(ctx)] do
+      for topic <- [Bus.requests(ctx), Bus.tinctures(ctx), Bus.schedule_runs(ctx)] do
         Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
       end
     end
@@ -311,7 +311,7 @@ defmodule PrismWeb.ActivitiesLive do
         name = input["tincture_name"] || input[:tincture_name]
 
         if publisher && name,
-          do: Sanctum.ComponentRef.build("tincture", publisher, name),
+          do: Cyfr.ComponentRef.build("tincture", publisher, name),
           else: "tincture/invoke"
 
       "schedule" ->

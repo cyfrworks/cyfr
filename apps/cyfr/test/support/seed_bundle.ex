@@ -60,7 +60,7 @@ defmodule Cyfr.Test.SeedBundle do
       versions =
         [@repo_seed, "components", "catalysts", "local", name, "*"]
         |> Path.join()
-        |> Path.wildcard()
+        |> Cyfr.Test.SourceTree.files!()
         |> Enum.map(&Path.basename/1)
         |> Compendium.Semver.sort_desc()
 
@@ -87,7 +87,7 @@ defmodule Cyfr.Test.SeedBundle do
   defp copy_unit!(src, dest) do
     src
     |> Path.join("**")
-    |> Path.wildcard(match_dot: false)
+    |> Cyfr.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn file ->
       target = Path.join(dest, Path.relative_to(file, src))

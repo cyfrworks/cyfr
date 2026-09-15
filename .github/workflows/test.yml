@@ -3,12 +3,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apps/cyfr/**'
-      - 'apps/opus/**'
-      - 'apps/locus/**'
-      # ClientProtocolDriftTest and StackShapeTest read server.mjs literals;
-      # a bridge-only change must run the Elixir suite that pins them.
-      - 'apps/mcp-bridge/**'
+      # Every app: the Elixir suite also pins the CLI's grammar and the
+      # bridge's protocol literals (ClientProtocolDriftTest, StackShapeTest).
+      - 'apps/**'
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
@@ -28,7 +25,6 @@ on:
       - 'seed/**'
       # Surfaces the vocabulary gate scans: it cannot turn red on a change it
       # never runs on.
-      - 'apps/codex/**'
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
@@ -37,12 +33,9 @@ on:
       - '.dockerignore'
   pull_request:
     paths:
-      - 'apps/cyfr/**'
-      - 'apps/opus/**'
-      - 'apps/locus/**'
-      # ClientProtocolDriftTest and StackShapeTest read server.mjs literals;
-      # a bridge-only change must run the Elixir suite that pins them.
-      - 'apps/mcp-bridge/**'
+      # Every app: the Elixir suite also pins the CLI's grammar and the
+      # bridge's protocol literals (ClientProtocolDriftTest, StackShapeTest).
+      - 'apps/**'
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
@@ -62,7 +55,6 @@ on:
       - 'seed/**'
       # Surfaces the vocabulary gate scans: it cannot turn red on a change it
       # never runs on.
-      - 'apps/codex/**'
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
@@ -144,7 +136,14 @@ jobs:
       # target; the shipped binaries are not rebuilt here.
       - name: Test the model catalysts
         run: |
-          for chat in seed/components/catalysts/local/*/*/src/src/chat.rs; do
+          shopt -s nullglob
+          chats=(seed/components/catalysts/local/*/*/src/src/chat.rs)
+          # A glob that matches nothing would test nothing; refuse it.
+          if [ "${#chats[@]}" -eq 0 ]; then
+            echo "::error::no model catalyst source matched — the step would test nothing"
+            exit 1
+          fi
+          for chat in "${chats[@]}"; do
             src="$(dirname "$(dirname "$chat")")"
             (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/catalyst-guest-target")
           done
@@ -153,7 +152,13 @@ jobs:
       # guest edit without a rebuild fails here, toolchain or not.
       - name: Every stamped seed guest is built from its source
         run: |
-          for stamp in seed/components/*/local/*/*/src/build.stamp; do
+          shopt -s nullglob
+          stamps=(seed/components/*/local/*/*/src/build.stamp)
+          if [ "${#stamps[@]}" -eq 0 ]; then
+            echo "::error::no seed build stamp matched — the step would check nothing"
+            exit 1
+          fi
+          for stamp in "${stamps[@]}"; do
             scripts/build-seed-guest.sh "$(dirname "$(dirname "$stamp")")" --check
           done
       # The loop above only visits directories that already carry a stamp, so
@@ -163,11 +168,19 @@ jobs:
       - name: Every seed guest carries a stamp, and its crate version is its own
         run: |
           set -uo pipefail
+          shopt -s nullglob
           bad=""
-          for manifest in seed/components/*/local/*/*/cyfr-manifest.json; do
+          guests=0
+          manifests=(seed/components/*/local/*/*/cyfr-manifest.json)
+          if [ "${#manifests[@]}" -eq 0 ]; then
+            echo "::error::no seed component manifest matched — the step would check nothing"
+            exit 1
+          fi
+          for manifest in "${manifests[@]}"; do
             vdir="$(dirname "$manifest")"
             # A guest is a directory with Rust sources; tinctures have none.
             [ -f "$vdir/src/Cargo.toml" ] || continue
+            guests=$((guests + 1))
             version="$(basename "$vdir")"
             if [ ! -f "$vdir/src/build.stamp" ]; then
               bad="$bad"$'\n'"$vdir: no src/build.stamp"
@@ -177,6 +190,10 @@ jobs:
               bad="$bad"$'\n'"$vdir: Cargo.toml says $crate"
             fi
           done
+          if [ "$guests" -eq 0 ]; then
+            echo "::error::no seed guest has Rust sources — the step would check nothing"
+            exit 1
+          fi
           bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
           if [ -n "$bad" ]; then
             echo "::error::seed guests must carry a build stamp and a crate version equal to their directory"
@@ -248,6 +265,91 @@ jobs:
         if: failure()
         run: docker logs minio
 
+  builder-image:
+    name: Builder image (lock lifecycle, diagnostics, tincture, build isolation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the builder image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.builder
+          load: true
+          tags: cyfr-builder:smoke
+          cache-from: type=gha,scope=builder
+          cache-to: type=gha,scope=builder,mode=max
+      # docker-compose.yml's builder service with its own settings (layered
+      # with tests/builder-image/compose.builder.yml for the image and a
+      # loopback port). Builds fetch from crates.io and the npm registry.
+      - name: Build a component through its lock lifecycle, and a tincture
+        run: python3 scripts/builder-smoke.py cyfr-builder:smoke
+
+      # Under the same settings: cyfr-spawn holds exactly SETUID|SETGID|KILL
+      # and the release none, with no distribution listener, and the release
+      # refuses to serve without cyfr-spawn; a build runs under a pooled uid
+      # in a 0700 home, cannot read or signal the release (whose environ
+      # holds the token), list the home root or read a concurrent build's
+      # tree; a daemon a build.rs starts is gone, with the home, when the
+      # response arrives; and with a pool of one uid nothing a build leaves
+      # outside its home (tests/fixtures/residue-canary.go) reaches the next.
+      - name: Build isolation and uid reuse
+        run: python3 tests/builder-image/isolation.py cyfr-builder:smoke
+
+      # The same scan docker.yml runs before publishing the builder image.
+      - name: Scan the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cyfr-builder:smoke
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+
+  bridge-e2e:
+    name: MCP bridge failures and leaks (cyfr + mcp-bridge images)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the app image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          tags: cyfr:bridge-e2e
+          cache-from: type=gha,scope=cyfr-bridge-e2e
+          cache-to: type=gha,scope=cyfr-bridge-e2e,mode=max
+      - name: Build the bridge image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.node
+          target: mcp-bridge
+          load: true
+          tags: cyfr-mcp-bridge:bridge-e2e
+          cache-from: type=gha,scope=mcp-bridge-e2e
+          cache-to: type=gha,scope=mcp-bridge-e2e,mode=max
+      # Both images under docker compose with the services' own settings and
+      # a 5 s bridge lease (tests/bridge-image/compose.e2e.yml): a crash of
+      # cyfr between an update's commit and its sync, a sync held back across
+      # a bridge restart, a revoke while the control channel is down, a dead
+      # controller, a killed spawner and a crash-looping backend, each with
+      # what cyfr and the bridge observe; and a canary vault entry echoed by
+      # a backend that reaches no log, request-log row, execution payload or
+      # file under cyfr's data volume.
+      - name: Failures and leaks
+        env:
+          CYFR_IMAGE: cyfr:bridge-e2e
+          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
+        run: node --test tests/bridge-image/e2e.test.mjs
+
   arca-seam:
     name: Arca single-seam (no untagged filesystem I/O)
     runs-on: ubuntu-latest
@@ -262,6 +364,12 @@ jobs:
         run: |
           set -uo pipefail
           fail=0
+          sources="$(git ls-files 'apps/*/lib/*.ex' 'apps/*/lib/**/*.ex')"
+          # A scan that reads nothing would pass; refuse it.
+          if [ -z "$sources" ]; then
+            echo "::error::no application sources matched — the scan would read nothing"
+            exit 1
+          fi
           while IFS= read -r f; do
             case "$f" in
               */arca/adapters/*) continue ;;
@@ -281,7 +389,7 @@ jobs:
               echo "$bad"
               fail=1
             fi
-          done < <(git ls-files 'apps/cyfr/lib/*.ex' 'apps/cyfr/lib/**/*.ex' 'apps/opus/lib/*.ex' 'apps/opus/lib/**/*.ex' 'apps/locus/lib/*.ex' 'apps/locus/lib/**/*.ex')
+          done <<< "$sources"
           if [ "$fail" -ne 0 ]; then
             echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D|E>."
             exit 1
@@ -300,10 +408,72 @@ jobs:
       - name: Seed ships no build droppings
         run: |
           set -uo pipefail
-          hits="$(find seed -type d \( -name target -o -name node_modules -o -name .git \) -print || true)"
+          # A scan of a missing tree finds nothing; refuse it.
+          for root in seed/components seed/aqua; do
+            if [ -z "$(git ls-files -- "$root" | head -1)" ]; then
+              echo "::error::$root holds no tracked file — the scan would read nothing"
+              exit 1
+            fi
+          done
+          hits="$(find seed -type d \( -name target -o -name node_modules -o -name .git \) -print)"
           if [ -n "$hits" ]; then
             echo "::error::build droppings under seed/ — install media must be clean"
             echo "$hits"
+            exit 1
+          fi
+      # A tincture ships its entry file and every asset the entry loads: a
+      # declared build's output (`dist/`) is part of the seed media, so a
+      # checkout that lacks any of it cannot register or serve the tincture.
+      # Paths are matched literally, never as git pathspec globs.
+      - name: Every seed tincture's entry and built assets are tracked
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          tracked() { git ls-files --error-unmatch -- ":(literal)$1" >/dev/null 2>&1; }
+          bad=""
+          manifests=(seed/components/tinctures/local/*/*/cyfr-manifest.json)
+          if [ "${#manifests[@]}" -eq 0 ]; then
+            echo "::error::no seed tincture manifest matched — the step would check nothing"
+            exit 1
+          fi
+          for manifest in "${manifests[@]}"; do
+            vdir="$(dirname "$manifest")"
+            entry="$(jq -r '.tincture.entry // "index.html"' "$manifest")" || { bad="$bad"$'\n'"$manifest: unreadable"; continue; }
+            case "/$entry/" in
+              */../*|*/./*|//*) bad="$bad"$'\n'"$manifest: entry '$entry' leaves the version directory"; continue ;;
+            esac
+            if ! tracked "$vdir/$entry"; then
+              bad="$bad"$'\n'"$vdir/$entry: entry not tracked"
+              continue
+            fi
+            # A built tincture is served from its build output, all of it tracked.
+            if jq -e '.tincture.build' "$manifest" >/dev/null; then
+              case "$entry" in
+                dist/*) ;;
+                *) bad="$bad"$'\n'"$manifest: a built tincture's entry lives under dist/, not '$entry'" ;;
+              esac
+              untracked="$(git ls-files --others -- "$vdir/dist")"
+              if [ -n "$untracked" ]; then
+                bad="$bad"$'\n'"$untracked"
+              fi
+            fi
+            # Every local script, stylesheet and link the entry names.
+            base="$(dirname "$vdir/$entry")"
+            refs="$( (grep -oE '(src|href)="[^"]+"' "$vdir/$entry" || true) | sed -E 's/^(src|href)="([^"?#]*).*/\2/')"
+            while IFS= read -r ref; do
+              case "$ref" in
+                ''|'#'*|/*|*:*) continue ;;
+              esac
+              ref="${ref#./}"
+              if ! tracked "$base/$ref"; then
+                bad="$bad"$'\n'"$base/$ref: named by $vdir/$entry, not tracked"
+              fi
+            done <<< "$refs"
+          done
+          bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
+          if [ -n "$bad" ]; then
+            echo "::error::seed tincture entries or their assets are not tracked"
+            echo "$bad"
             exit 1
           fi
       # Require new version directories for seed changes; existing bundle versions are immutable.
@@ -325,6 +495,11 @@ jobs:
               echo "no comparable base for this push — nothing to check"
               exit 0
             fi
+          fi
+          # A diff of a tree that is not there is empty; refuse it.
+          if [ -z "$(git ls-files -- seed/components | head -1)" ]; then
+            echo "::error::seed/components holds no tracked file — the check would compare nothing"
+            exit 1
           fi
           # The rule is about paths, not file identity: every query runs with
           # --no-renames. Rename detection reports a rename under its
@@ -373,6 +548,11 @@ jobs:
           failures="$(mktemp)"
           git grep -hoE 'compile_env\(:cyfr, *:[a-z_0-9]+' -- 'apps/**/*.ex' 'apps/**/*.exs' \
             | sed 's/.*:cyfr, *://' | sort -u > "$keys"
+          # A scan that finds no compile-time key reads nothing; refuse it.
+          if [ ! -s "$keys" ]; then
+            echo "::error::no compile_env reads matched — the scan would check nothing"
+            exit 1
+          fi
 
           while IFS= read -r key; do
             [ -n "$key" ] || continue
@@ -402,9 +582,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # The tenancy unit is the athanor and nothing else. This asserts the old
-      # org/project vocabulary — identifiers, modules, scope atoms, env vars,
-      # ports — cannot creep back into code, config, or operator-facing docs.
+      # The tenancy unit is the athanor and a conversation is a thread. This
+      # asserts the old vocabularies — org/project, conversation/topic
+      # subscription, the prism: PubSub prefix — cannot creep back into code,
+      # config, or operator-facing docs.
       # Free-word "org"/"project" is deliberately not gated (OCI annotations,
       # Mix.Project, Go module paths, "project directory" prose are legitimate).
       - name: Tier A/B fossil patterns must be absent
@@ -442,6 +623,10 @@ jobs:
             'CYFR_PORTA_' \
             'cyfr-porta' \
             'apps/porta/' \
+            '[Cc]onversation|CONVERSATION' \
+            'topic_subscription|TopicSubscription' \
+            'Cyfr\.Topics\b' \
+            'prism:[a-z_]' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then
@@ -536,12 +721,10 @@ jobs:
           }
           assert_spelling docker-compose.yml './data:/app/data'
           assert_spelling docker-compose.yml './aqua:/app/seed/aqua'
-          assert_spelling docker-compose.yml './data/mcp-bridge:/data'
           assert_spelling Dockerfile 'CYFR_SEED_PATH=/app/seed'
           assert_spelling Dockerfile 'COPY seed/components/'
           assert_spelling docker-entrypoint.sh '/app/seed/aqua'
           assert_spelling apps/codex/cmd/lifecycle.go '"data"'
-          assert_spelling apps/codex/cmd/lifecycle.go '"data/mcp-bridge"'
           assert_spelling apps/codex/cmd/lifecycle.go '"aqua"'
           assert_spelling scripts/scaffold-tarball.sh '-C seed aqua'
           exit $fail

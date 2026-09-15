@@ -177,7 +177,7 @@ defmodule Compendium.Component do
   Parse a component reference — canonical (`type:namespace.name:version`)
   or the flexible short forms (`c:local.tool`) — into
   `{:ok, namespace, name, version, type}` for registry lookup. The one
-  grammar for every resolver (`Sanctum.ComponentRef.normalize_flexible/1`,
+  grammar for every resolver (`Cyfr.ComponentRef.normalize_flexible/1`,
   fields validated); the namespace doubles as the publisher filter, and
   version may be nil.
   """
@@ -185,8 +185,8 @@ defmodule Compendium.Component do
           {:ok, String.t(), String.t(), String.t() | nil, String.t() | nil}
           | {:error, String.t()}
   def parse_reference(reference) when is_binary(reference) do
-    case Sanctum.ComponentRef.normalize_flexible(reference) do
-      {:ok, %Sanctum.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
+    case Cyfr.ComponentRef.normalize_flexible(reference) do
+      {:ok, %Cyfr.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
         {:ok, namespace, name, version, type}
 
       {:error, reason} ->
@@ -197,7 +197,7 @@ defmodule Compendium.Component do
   def parse_reference(_), do: {:error, "Reference must be a string"}
 
   defp canonical_ref(ref) do
-    Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+    Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
       type: ref.type,
       namespace: ref.namespace,
       name: ref.name,
@@ -249,7 +249,7 @@ defmodule Compendium.Component do
     end)
   end
 
-  defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
+  defdelegate decode_manifest(value), to: Cyfr.Manifest, as: :decode
 
   # ============================================================================
   # Private — Setup Plan Helpers

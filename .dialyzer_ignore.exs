@@ -18,6 +18,9 @@
   {"lib/compendium/provenance.ex", :extra_range},
   {"lib/compendium/registry/client.ex", :pattern_match_cov},
   {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
+  {"lib/cyfr/execution/events/sequence.ex", :missing_range},
+  {"lib/cyfr/execution/rates.ex", :missing_range},
+  {"lib/cyfr/execution/record.ex", :extra_range},
   {"lib/cyfr/json_formatter.ex", :unknown_type},
   {"lib/cyfr/network.ex", :pattern_match_cov},
   {"lib/cyfr/retention_scheduler.ex", :pattern_match},
@@ -30,24 +33,22 @@
   {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
   {"lib/emissary_web/plugs/webhook_rate_limit.ex", :pattern_match},
   {"lib/emissary_web/sse.ex", :missing_range},
-  {"lib/opus.ex", :extra_range},
+  # The step bench's harness, `Cyfr.Test.StepBench`, is test support: it is
+  # compiled only under MIX_ENV=test, the one environment the task runs in.
+  {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},
   {"lib/opus/component_cache.ex", :unknown_type},
-  {"lib/opus/execution_event_buffer/sequence.ex", :missing_range},
-  {"lib/opus/execution_record.ex", :extra_range},
-  {"lib/opus/executor.ex", :pattern_match_cov},
   {"lib/opus/formula_handler.ex", :missing_range},
   {"lib/opus/http_handler.ex", :pattern_match},
   {"lib/opus/http_handler.ex", :pattern_match_cov},
-  {"lib/opus/rate_limiter.ex", :missing_range},
   {"lib/opus/runtime.ex", :call},
   {"lib/opus/runtime.ex", :extra_range},
   {"lib/opus/runtime.ex", :pattern_match},
   {"lib/prism_web/controllers/legal_accept_controller.ex", :pattern_match_cov},
   {"lib/prism_web/minimal_page.ex", :extra_range},
   {"lib/sanctum/auth/device_flow.ex", :pattern_match},
-  {"lib/sanctum/cidr.ex", :pattern_match_cov},
+  {"lib/cyfr/cidr.ex", :pattern_match_cov},
   {"lib/sanctum/consent/shape_diff.ex", :guard_fail},
-  {"lib/sanctum/jcs.ex", :no_return},
+  {"lib/cyfr/jcs.ex", :no_return},
   {"lib/sanctum/mcp/key_tool.ex", :guard_fail},
   {"lib/sanctum/mcp/session_tool.ex", :guard_fail},
   {"lib/sanctum/mcp/webhook_tool.ex", :pattern_match},
@@ -56,7 +57,7 @@
   {"lib/sanctum/session.ex", :extra_range},
   {"lib/sanctum/sign_in.ex", :missing_range},
   {"lib/sanctum/sign_in.ex", :pattern_match},
-  # Six opaque-term warnings dialyxir cannot classify: its own formatter
+  # Three opaque-term warnings dialyxir cannot classify: its own formatter
   # raises on them (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
   # dialyzer text, so a `{file, kind}` filter never sees a kind to match.
   # Matched by regex instead. Every one is a struct built in one module and
@@ -64,6 +65,5 @@
   # noise from the loose `%__MODULE__{}` schema types, not a defect.
   ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque},
   ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque},
-  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque},
-  ~r{lib/opus/executor\.ex:\d+:\d+:.*opaque}
+  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}
 ]

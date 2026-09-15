@@ -23,23 +23,48 @@ defmodule Locus.BuilderServiceTest do
     :ok
   end
 
-  defp post_build(body, headers) do
+  @protocol [
+    {"cyfr-builder-protocol", Integer.to_string(Locus.BuilderProtocol.version())},
+    {"cyfr-version", Locus.BuilderProtocol.release()}
+  ]
+
+  defp post_build(body, headers, protocol \\ @protocol) do
     conn =
       :post
       |> conn("/build", Jason.encode!(body))
       |> put_req_header("content-type", "application/json")
 
-    headers
+    (protocol ++ headers)
     |> Enum.reduce(conn, fn {k, v}, acc -> put_req_header(acc, k, v) end)
     |> Locus.BuilderService.call(@opts)
   end
 
-  test "health answers without auth and names the toolchains" do
+  test "health answers without auth and names the toolchains, the protocol and the release" do
     conn = :get |> conn("/health") |> Locus.BuilderService.call(@opts)
 
     assert conn.status == 200
-    assert %{"ok" => true, "toolchains" => toolchains} = Jason.decode!(conn.resp_body)
+    assert %{"ok" => true, "toolchains" => toolchains} = body = Jason.decode!(conn.resp_body)
     assert is_map(toolchains)
+    assert body["protocol"] == Locus.BuilderProtocol.version()
+    assert body["version"] == Locus.BuilderProtocol.release()
+  end
+
+  test "a request at another protocol, or without one, is refused naming both ends before it is read" do
+    auth = [{"authorization", "Bearer " <> @token}]
+
+    for protocol <- [[], [{"cyfr-builder-protocol", "0"}, {"cyfr-version", "0.1.0"}]] do
+      conn = post_build(%{"language" => "rust"}, auth, protocol)
+
+      assert conn.status == 409
+      assert %{"ok" => false, "error" => error} = body = Jason.decode!(conn.resp_body)
+      assert error =~ "this builder speaks builder protocol #{Locus.BuilderProtocol.version()}"
+      assert error =~ Locus.BuilderProtocol.release()
+      assert body["protocol"] == Locus.BuilderProtocol.version()
+      assert conn.body_params == %Plug.Conn.Unfetched{aspect: :body_params}
+    end
+
+    conn = post_build(%{}, auth, [{"cyfr-builder-protocol", "0"}, {"cyfr-version", "0.1.0"}])
+    assert Jason.decode!(conn.resp_body)["error"] =~ "builder protocol 0 (release 0.1.0)"
   end
 
   test "a build without a token is refused" do
@@ -103,6 +128,35 @@ defmodule Locus.BuilderServiceTest do
 
     assert conn.status == 400
     assert Jason.decode!(conn.resp_body)["error"] =~ "unknown language"
+  end
+
+  test "a type is built only from its own language" do
+    for {language, type} <- [{"rust", "tincture"}, {"javascript", "reagent"}] do
+      body = %{
+        "source_files" => %{"src/lib.rs" => Base.encode64("fn main() {}")},
+        "language" => language,
+        "target_type" => type
+      }
+
+      conn = post_build(body, [{"authorization", "Bearer " <> @token}])
+
+      assert conn.status == 400, "#{language} + #{type} was not refused"
+      assert Jason.decode!(conn.resp_body)["error"] =~ "is not built from"
+    end
+  end
+
+  test "a resolve that is not a boolean is refused" do
+    body = %{
+      "source_files" => %{"src/lib.rs" => Base.encode64("fn main() {}")},
+      "language" => "rust",
+      "target_type" => "reagent",
+      "resolve" => "yes"
+    }
+
+    conn = post_build(body, [{"authorization", "Bearer " <> @token}])
+
+    assert conn.status == 400
+    assert Jason.decode!(conn.resp_body)["error"] =~ "resolve must be a boolean"
   end
 
   test "sources that are not base64 are refused" do

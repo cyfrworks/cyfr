@@ -116,7 +116,7 @@ defmodule Sanctum.Consent.Plan do
 
   @doc false
   def name_ref(ref) do
-    case Compendium.Activation.key_for_ref(ref) do
+    case Cyfr.ComponentRef.to_name_ref(ref) do
       {:ok, name_ref} -> {:ok, name_ref}
       {:error, reason} -> {:error, {:invalid_ref, reason}}
     end
@@ -124,7 +124,7 @@ defmodule Sanctum.Consent.Plan do
 
   @doc false
   def fetch_component(ctx, source_ref) do
-    with {:ok, parsed} <- Sanctum.ComponentRef.parse(source_ref),
+    with {:ok, parsed} <- Cyfr.ComponentRef.parse(source_ref),
          {:ok, component} <-
            Compendium.Registry.get_latest(ctx, parsed.name, parsed.namespace, parsed.type) do
       {:ok, component}
@@ -138,7 +138,7 @@ defmodule Sanctum.Consent.Plan do
   # ---------------------------------------------------------------------------
 
   defp decode_manifest(component) do
-    Compendium.Manifest.decode(Map.get(component, :manifest) || Map.get(component, "manifest"))
+    Cyfr.Manifest.decode(Map.get(component, :manifest) || Map.get(component, "manifest"))
   end
 
   # Declared needs become the sheet's rows — the operator sees each
@@ -149,7 +149,7 @@ defmodule Sanctum.Consent.Plan do
       nil ->
         [
           %{
-            need: Sanctum.Authority.Blob.ingress_key(),
+            need: Cyfr.Authority.Blob.ingress_key(),
             reason: "credentials this component may use when invoked",
             required: false
           }
@@ -217,9 +217,9 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp node_manifest(ctx, node_key) do
-    with {:ok, ref} <- Sanctum.ComponentRef.parse(node_key),
+    with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
          {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-      {:ok, Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
+      {:ok, Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
     end
   end
 
@@ -261,9 +261,9 @@ defmodule Sanctum.Consent.Plan do
       {:ok, profiles} ->
         for %{kind: :owner, status: :active} = profile <- profiles,
             {:ok, head} <- [Source.impl().head_consent(ctx, profile.id)],
-            {:ok, blob} <- [Sanctum.Authority.Blob.parse(head.resolved_policy)],
-            {:ok, ingress} <- [Sanctum.Authority.Blob.ingress(blob, dep)],
-            Sanctum.Authority.Blob.bound_vault?(ingress.vault),
+            {:ok, blob} <- [Cyfr.Authority.Blob.parse(head.resolved_policy)],
+            {:ok, ingress} <- [Cyfr.Authority.Blob.ingress(blob, dep)],
+            Cyfr.Authority.Blob.bound_vault?(ingress.vault),
             {:ok, entry} <-
               [
                 Sanctum.VaultReader.usable(

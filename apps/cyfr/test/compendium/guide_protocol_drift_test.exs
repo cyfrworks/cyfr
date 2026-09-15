@@ -124,14 +124,22 @@ defmodule Compendium.GuideProtocolDriftTest do
   # writes formulas that branch on these. The guide once documented two
   # types no code produced (`invalid_type`, `execution_failed`) and omitted
   # five that are — so generated error handling matched nothing.
-  test "component-guide's invoke error table matches Opus.FormulaHandler's vocabulary" do
+  # A formula's invoke errors are rendered in two places: the runner's
+  # `Opus.FormulaHandler`, and CYFR's answer to a child or catalog tool call
+  # it refuses (`Cyfr.Execution.Host.Children`).
+  test "component-guide's invoke error table matches the invoke error vocabulary" do
     handler =
-      File.read!(Path.join(@project_root, "apps/opus/lib/opus/formula_handler.ex"))
+      ["apps/opus/lib/opus/formula_handler.ex", "apps/cyfr/lib/cyfr/execution/host/children.ex"]
+      |> Enum.map_join("\n", &File.read!(Path.join(@project_root, &1)))
 
     produced =
-      Regex.scan(~r/encode_error(?:_with_remediation)?\(:(\w+)/, handler)
+      [
+        ~r/(?:encode_error(?:_with_remediation)?|guest_error)\(:(\w+)/,
+        ~r/"type" => "(\w+)"/,
+        ~r/\{:guest_error, "(\w+)"/
+      ]
+      |> Enum.flat_map(&Regex.scan(&1, handler))
       |> Enum.map(fn [_, t] -> t end)
-      |> Kernel.++(Regex.scan(~r/"type" => "(\w+)"/, handler) |> Enum.map(fn [_, t] -> t end))
       |> Enum.uniq()
       |> Enum.sort()
 
@@ -147,7 +155,7 @@ defmodule Compendium.GuideProtocolDriftTest do
 
     assert documented == produced,
            "component-guide.md's invoke error table drifted from " <>
-             "Opus.FormulaHandler: documented #{inspect(documented)}, " <>
+             "the invoke error vocabulary: documented #{inspect(documented)}, " <>
              "produced #{inspect(produced)}"
   end
 end

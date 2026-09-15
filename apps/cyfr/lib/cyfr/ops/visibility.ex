@@ -11,6 +11,9 @@ defmodule Cyfr.Ops.Visibility do
   reading the action's annotation (`auth`, `permission`, `consent`), so a
   caller is shown exactly the doors dispatch would open for them:
 
+  - An external-plane caller sees only actions whose planes include
+    `:external`; a running chain's view is pruned to its own plane by
+    `Cyfr.Ops.Catalog`.
   - `auth: :anonymous` actions are visible to everyone.
   - `permission:` actions require the named permission.
   - `consent:` actions require an admitted surface: `:interactive` accepts
@@ -109,12 +112,21 @@ defmodule Cyfr.Ops.Visibility do
   # Unclassified action: invisible, matching the dispatch refusal.
   defp visible_action?(nil, _ctx), do: false
 
+  defp visible_action?(annotation, ctx),
+    do: plane_visible?(annotation, ctx) and access_visible?(annotation, ctx)
+
+  # Outside a running chain, only external-plane actions are served.
+  defp plane_visible?(annotation, %Context{plane: :external}),
+    do: :external in Map.get(annotation, :planes, [])
+
+  defp plane_visible?(_annotation, _guest_ctx), do: true
+
   # A caller with no credential — or a session ahead of its claim — sees
   # only what dispatch would let it call.
-  defp visible_action?(annotation, %Context{authenticated: false} = ctx),
+  defp access_visible?(annotation, %Context{authenticated: false} = ctx),
     do: admits?(annotation, ctx)
 
-  defp visible_action?(annotation, ctx),
+  defp access_visible?(annotation, ctx),
     do:
       scope_visible?(annotation, ctx) and permission_visible?(annotation, ctx) and
         consent_visible?(annotation, ctx)

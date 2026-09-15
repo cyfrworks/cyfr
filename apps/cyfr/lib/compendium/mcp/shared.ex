@@ -64,13 +64,13 @@ defmodule Compendium.MCP.Shared do
   def namespace_bearer(_, _), do: {:error, "authentication required"}
 
   # deprecate/yank require a fully-qualified ref (all four fields).
-  # Sanctum.ComponentRef.parse/1 can succeed with version=nil for
+  # Cyfr.ComponentRef.parse/1 can succeed with version=nil for
   # `c:alice.foo` (latest); these actions must target a specific version.
-  def ensure_fully_qualified(%Sanctum.ComponentRef{version: nil}),
+  def ensure_fully_qualified(%Cyfr.ComponentRef{version: nil}),
     do: {:error, "deprecate/yank require a pinned version, e.g. c:alice.foo:1.0.0"}
 
-  def ensure_fully_qualified(%Sanctum.ComponentRef{version: ""}),
+  def ensure_fully_qualified(%Cyfr.ComponentRef{version: ""}),
     do: {:error, "deprecate/yank require a pinned version, e.g. c:alice.foo:1.0.0"}
 
-  def ensure_fully_qualified(%Sanctum.ComponentRef{}), do: :ok
+  def ensure_fully_qualified(%Cyfr.ComponentRef{}), do: :ok
 end

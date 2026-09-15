@@ -557,9 +557,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp detect_provider_from_ref(ref) when is_binary(ref) do
     # The grammar's own parser. `~r/catalyst:[^.]+\\.([^:]+)/` reads up to the
     # FIRST dot, so a publisher with one in it — `stripe.com` — gave
-    # "com.api" as the provider. `Sanctum.ComponentRef` exists because the
+    # "com.api" as the provider. `Cyfr.ComponentRef` exists because the
     # split is the last dot, not the first.
-    case Sanctum.ComponentRef.parse(ref) do
+    case Cyfr.ComponentRef.parse(ref) do
       {:ok, %{type: "catalyst", name: name}} -> name
       _ -> nil
     end

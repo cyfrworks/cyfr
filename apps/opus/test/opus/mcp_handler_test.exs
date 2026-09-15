@@ -5,22 +5,23 @@ defmodule Opus.FormulaHandlerMcpTest do
   @moduledoc """
   Tests FormulaHandler MCP dispatch.
 
-  Every dispatch runs under a chain authority: non-execution tools go
-  through `Cyfr.Ops.Catalog.call_in_chain/5`, where the grant is the consented
-  edge's tool list — exact `tool.action` entries, deny-by-default.
+  Every dispatch is a host call of the formula's attempt, decided by CYFR
+  under the authority it holds for that attempt: a catalog tool goes
+  through `Cyfr.Ops.Catalog.call_in_chain/5`, where the grant is the
+  consented edge's tool list — exact `tool.action` entries,
+  deny-by-default.
   """
   use ExUnit.Case, async: false
 
   alias Opus.FormulaHandler
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Blob
-  alias Sanctum.Context
+  alias Opus.Test.FormulaHost
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Blob
 
   @mcp_node "formula:local.mcp-root"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
 
     test_dir = Path.join(System.tmp_dir!(), "formula_handler_mcp_test_#{:rand.uniform(100_000)}")
@@ -34,7 +35,6 @@ defmodule Opus.FormulaHandlerMcpTest do
     end
 
     ctx = Sanctum.TestContext.local()
-    execution_id = "exec_test_#{:rand.uniform(100_000)}"
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
@@ -44,7 +44,9 @@ defmodule Opus.FormulaHandlerMcpTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
-    {:ok, ctx: ctx, execution_id: execution_id, test_dir: test_dir}
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    {:ok, ctx: ctx, test_dir: test_dir}
   end
 
   defp authority(opts \\ []) do
@@ -79,40 +81,43 @@ defmodule Opus.FormulaHandlerMcpTest do
       activation: %{@mcp_node => "sha256:act-mcp"}
     }
 
-    {:ok, auth} = Authority.root(profile, blob)
+    {:ok, auth} =
+      Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
+
     auth
   end
 
-  defp execute(json, ctx, eid, auth) do
-    FormulaHandler.execute(json, Context.enter_guest(ctx),
-      parent_execution_id: eid,
-      authority: auth
-    )
-  end
+  # The host client of a formula's attempt under `auth`, admitted in `ctx`.
+  defp host!(ctx, auth),
+    do: FormulaHost.attached!(ctx: ctx, authority: auth, component_ref: "#{@mcp_node}:0.1.0").host
+
+  defp execute(json, host, auth), do: FormulaHandler.execute(json, host, FormulaHost.opts(auth))
+
+  defp execute!(json, ctx, auth), do: execute(json, host!(ctx, auth), auth)
 
   # ============================================================================
   # Request Parsing
   # ============================================================================
 
   describe "execute/3 - request parsing" do
-    test "returns error for invalid JSON", %{ctx: ctx, execution_id: eid} do
-      result = execute("not json", ctx, eid, authority())
+    test "returns error for invalid JSON", %{ctx: ctx} do
+      result = execute!("not json", ctx, authority())
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_json"
       assert decoded["error"]["message"] =~ "Invalid JSON"
     end
 
-    test "returns error for missing tool field", %{ctx: ctx, execution_id: eid} do
-      result = execute(~s({"action": "search"}), ctx, eid, authority())
+    test "returns error for missing tool field", %{ctx: ctx} do
+      result = execute!(~s({"action": "search"}), ctx, authority())
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
       assert decoded["error"]["message"] =~ "tool"
     end
 
-    test "returns error for missing action field", %{ctx: ctx, execution_id: eid} do
-      result = execute(~s({"tool": "component"}), ctx, eid, authority())
+    test "returns error for missing action field", %{ctx: ctx} do
+      result = execute!(~s({"tool": "component"}), ctx, authority())
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -124,7 +129,7 @@ defmodule Opus.FormulaHandlerMcpTest do
   # ============================================================================
 
   describe "execute/3 - tool grant enforcement" do
-    test "denies a tool the edge does not grant", %{ctx: ctx, execution_id: eid} do
+    test "denies a tool the edge does not grant", %{ctx: ctx} do
       request =
         Jason.encode!(%{
           "tool" => "component",
@@ -132,7 +137,7 @@ defmodule Opus.FormulaHandlerMcpTest do
           "args" => %{"query" => "test"}
         })
 
-      result = execute(request, ctx, eid, authority(tools: ["storage.read"]))
+      result = execute!(request, ctx, authority(tools: ["storage.read"]))
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
@@ -140,16 +145,16 @@ defmodule Opus.FormulaHandlerMcpTest do
       assert decoded["error"]["message"] =~ "component"
     end
 
-    test "denies every tool when the edge grants none", %{ctx: ctx, execution_id: eid} do
+    test "denies every tool when the edge grants none", %{ctx: ctx} do
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{}})
-      result = execute(request, ctx, eid, authority(tools: []))
+      result = execute!(request, ctx, authority(tools: []))
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
       assert decoded["error"]["message"] =~ "Denied by chain authority"
     end
 
-    test "allows a granted tool action", %{ctx: ctx, execution_id: eid} do
+    test "allows a granted tool action", %{ctx: ctx} do
       request =
         Jason.encode!(%{
           "tool" => "component",
@@ -157,7 +162,7 @@ defmodule Opus.FormulaHandlerMcpTest do
           "args" => %{"query" => "test"}
         })
 
-      result = execute(request, ctx, eid, authority(tools: ["component.search"]))
+      result = execute!(request, ctx, authority(tools: ["component.search"]))
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "completed"
@@ -169,7 +174,7 @@ defmodule Opus.FormulaHandlerMcpTest do
   # ============================================================================
 
   describe "execute/3 - telemetry" do
-    test "emits telemetry event on tool call", %{ctx: ctx, execution_id: eid} do
+    test "emits telemetry event on tool call", %{ctx: ctx} do
       # Attach a telemetry handler to capture the event
       ref = make_ref()
       test_pid = self()
@@ -190,18 +195,20 @@ defmodule Opus.FormulaHandlerMcpTest do
           "args" => %{"query" => "test"}
         })
 
-      _result = execute(request, ctx, eid, authority(tools: ["component.search"]))
+      auth = authority(tools: ["component.search"])
+      host = host!(ctx, auth)
+      _result = execute(request, host, auth)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :mcp_tool, :call], measurements, metadata}
       assert is_integer(measurements.duration_ms)
-      assert metadata.execution_id == eid
+      assert metadata.execution_id == host.execution_id
       assert metadata.tool_action == "component.search"
       assert metadata.status in [:ok, :error]
 
       :telemetry.detach("test-mcp-tool-#{inspect(ref)}")
     end
 
-    test "emits telemetry with error status for denied tool", %{ctx: ctx, execution_id: eid} do
+    test "emits telemetry with error status for denied tool", %{ctx: ctx} do
       ref = make_ref()
       test_pid = self()
 
@@ -215,7 +222,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       )
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{}})
-      _result = execute(request, ctx, eid, authority(tools: []))
+      _result = execute!(request, ctx, authority(tools: []))
 
       assert_receive {:telemetry_status, :error}
 
@@ -229,8 +236,7 @@ defmodule Opus.FormulaHandlerMcpTest do
 
   describe "execute/3 - dispatch via the catalog" do
     test "webhook.list routes to the provider, whose identity conjunct still refuses", %{
-      ctx: ctx,
-      execution_id: eid
+      ctx: ctx
     } do
       # The edge grant clears the authority conjunct, but the dispatch
       # still carries the caller's identity: an identity without
@@ -238,42 +244,42 @@ defmodule Opus.FormulaHandlerMcpTest do
       # provider through the registry never bypasses the identity conjunct.
       restricted = %{ctx | permissions: MapSet.new([:execute])}
       request = Jason.encode!(%{"tool" => "webhook", "action" => "list", "args" => %{}})
-      result = execute(request, restricted, eid, authority(tools: ["webhook.list"]))
+      result = execute!(request, restricted, authority(tools: ["webhook.list"]))
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
       assert decoded["error"]["message"] =~ "storage_read"
     end
 
-    test "routes execution.list through the catalog", %{ctx: ctx, execution_id: eid} do
+    test "routes execution.list through the catalog", %{ctx: ctx} do
       request = Jason.encode!(%{"tool" => "execution", "action" => "list", "args" => %{}})
-      result = execute(request, ctx, eid, authority(tools: ["execution.list"]))
+      result = execute!(request, ctx, authority(tools: ["execution.list"]))
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "completed"
     end
 
     @tag :requires_locus
-    test "routes build.toolchains through the catalog", %{ctx: ctx, execution_id: eid} do
+    test "routes build.toolchains through the catalog", %{ctx: ctx} do
       request = Jason.encode!(%{"tool" => "build", "action" => "toolchains", "args" => %{}})
-      result = execute(request, ctx, eid, authority(tools: ["build.toolchains"]))
+      result = execute!(request, ctx, authority(tools: ["build.toolchains"]))
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "completed"
       assert is_map(decoded["output"]["toolchains"])
     end
 
-    test "routes aqua.list through the catalog", %{ctx: ctx, execution_id: eid} do
+    test "routes aqua.list through the catalog", %{ctx: ctx} do
       request = Jason.encode!(%{"tool" => "aqua", "action" => "list", "args" => %{}})
-      result = execute(request, ctx, eid, authority(tools: ["aqua.list"]))
+      result = execute!(request, ctx, authority(tools: ["aqua.list"]))
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "completed"
     end
 
-    test "routes tools.list through the catalog", %{ctx: ctx, execution_id: eid} do
+    test "routes tools.list through the catalog", %{ctx: ctx} do
       request = Jason.encode!(%{"tool" => "tools", "action" => "list", "args" => %{}})
-      result = execute(request, ctx, eid, authority(tools: ["tools.list"]))
+      result = execute!(request, ctx, authority(tools: ["tools.list"]))
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "completed"
@@ -286,9 +292,9 @@ defmodule Opus.FormulaHandlerMcpTest do
   # ============================================================================
 
   describe "execute/3 - unknown tool dispatch" do
-    test "returns dispatch error for unknown tool", %{ctx: ctx, execution_id: eid} do
+    test "returns dispatch error for unknown tool", %{ctx: ctx} do
       request = Jason.encode!(%{"tool" => "unknown_service", "action" => "action", "args" => %{}})
-      result = execute(request, ctx, eid, authority(tools: ["unknown_service.action"]))
+      result = execute!(request, ctx, authority(tools: ["unknown_service.action"]))
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
@@ -301,7 +307,7 @@ defmodule Opus.FormulaHandlerMcpTest do
   # ============================================================================
 
   describe "execute/3 - parent execution id threading" do
-    test "threads parent_execution_id for execution.run calls", %{ctx: ctx, execution_id: eid} do
+    test "threads parent_execution_id for execution.run calls", %{ctx: ctx} do
       # This will fail at the executor level (no such component), but the
       # invoke must get past the transition decision — never a denial.
       request =
@@ -311,7 +317,7 @@ defmodule Opus.FormulaHandlerMcpTest do
           "args" => %{"reference" => "reagent:test.nonexistent:0.1.0", "input" => %{}}
         })
 
-      result = execute(request, ctx, eid, authority())
+      result = execute!(request, ctx, authority())
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
@@ -323,16 +329,22 @@ defmodule Opus.FormulaHandlerMcpTest do
   # ============================================================================
 
   describe "host interception" do
-    test "the host has an arm for exactly the execution actions the catalog intercepts" do
-      execution = Enum.find(Opus.MCP.tools(), &(&1.name == "execution"))
+    test "the host has an arm for exactly the actions an assignment names as intercepted" do
+      execution = Enum.find(Cyfr.Execution.MCP.tools(), &(&1.name == "execution"))
       actions = execution |> Cyfr.Ops.Annotations.actions_of() |> Map.keys()
+      intercepted = FormulaHost.intercepted()
 
-      assert Enum.any?(actions, &Cyfr.Ops.Annotations.host_intercepted?(execution, &1))
+      assert intercepted != []
+
+      for name <- intercepted do
+        assert match?({:ok, _}, FormulaHandler.child_runner(name)),
+               "#{name} is intercepted but the host has no arm for it"
+      end
 
       for action <- actions do
-        assert match?({:ok, _}, FormulaHandler.child_runner(action)) ==
-                 Cyfr.Ops.Annotations.host_intercepted?(execution, action),
-               "execution.#{action}: the host's arm and the catalog's annotation disagree"
+        assert match?({:ok, _}, FormulaHandler.child_runner("execution.#{action}")) ==
+                 "execution.#{action}" in intercepted,
+               "execution.#{action}: the host's arm and the assignment's intercepted set disagree"
       end
     end
   end

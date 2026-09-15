@@ -31,12 +31,14 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     # own refusal, a sentence about the value offered.
     "apps/cyfr/lib/cyfr/schedules/provider.ex" => 20,
     "apps/cyfr/lib/sanctum/mcp/webhook_tool.ex" => 18,
-    "apps/opus/lib/opus/mcp.ex" => 14,
+    "apps/cyfr/lib/cyfr/execution/mcp.ex" => 14,
     "apps/cyfr/lib/emissary/mcp/tools/system_provider.ex" => 12,
     "apps/cyfr/lib/sanctum/mcp/key_tool.ex" => 11,
     # The tenth is the CYFR_BUILDS=false refusal: a configuration this
     # server chose, not a resource that is missing, invalid or briefly away.
-    "apps/locus/lib/locus/mcp.ex" => 10,
+    # The eleventh is a builder of another protocol or release, named with
+    # both sides' versions so an operator can match the images.
+    "apps/locus/lib/locus/mcp.ex" => 11,
     "apps/cyfr/lib/sanctum/mcp/profile_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp/component_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp.ex" => 7,
@@ -57,8 +59,9 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
   # Every module that defines a tool: those are the ones whose refusals
   # reach a renderer, and the only ones this roster is about.
   defp tool_modules do
-    ["apps/cyfr/lib/**/*.ex", "apps/opus/lib/**/*.ex", "apps/locus/lib/**/*.ex"]
-    |> Enum.flat_map(&(root() |> Path.join(&1) |> Path.wildcard()))
+    root()
+    |> Cyfr.Test.SourceTree.app_libs()
+    |> Enum.flat_map(&Cyfr.Test.SourceTree.files!(Path.join([root(), &1, "**/*.ex"])))
     |> Enum.filter(fn path ->
       source = Cyfr.Test.SourceTree.read(path)
       String.contains?(source, "def definition") or String.contains?(source, "def handle(")

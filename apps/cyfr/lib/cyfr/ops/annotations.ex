@@ -80,42 +80,42 @@ defmodule Cyfr.Ops.Annotations do
   def scope(source, action), do: field(source, action, :scope)
 
   @doc """
-  The action's standing rule — `:conversation`, `false`, or nil when the
+  The action's standing rule — `:thread`, `false`, or nil when the
   action declares none (any standing scope).
   """
-  @spec standing(source(), String.t() | nil) :: :conversation | false | nil
+  @spec standing(source(), String.t() | nil) :: :thread | false | nil
   def standing(source, action), do: field(source, action, :standing)
 
   @doc """
   The `recovery` annotation of an action: `:replay_safe` for a read
   reviewed as safe to re-dispatch after an uncertain recovery, nil for
-  every other action.
+  every other action — a write annotated replay-safe included.
   """
   @spec recovery(map(), String.t()) :: :replay_safe | nil
-  def recovery(source, action) do
-    case field(source, action, :recovery) do
-      :replay_safe -> :replay_safe
-      _ -> nil
-    end
-  end
+  def recovery(source, action), do: recovery_of(annotation(source, action))
+
+  @doc "`recovery/2` for one action's annotation map."
+  @spec recovery_of(map() | nil) :: :replay_safe | nil
+  def recovery_of(%{kind: :read, recovery: :replay_safe}), do: :replay_safe
+  def recovery_of(_annotation), do: nil
 
   @doc """
   The one codec for a `standing` value as it travels: the annotation's
   atom, the wire's string, or nothing. `standing/1` decodes any spelling
-  to `:conversation` (a standing allow for one conversation only),
+  to `:thread` (a standing allow for one thread only),
   `false` (none at all) or `nil` (either scope); `standing_to_wire/1` is
   the string the intent carries.
   """
-  @spec standing(term()) :: :conversation | false | nil
-  def standing(:conversation), do: :conversation
-  def standing("conversation"), do: :conversation
+  @spec standing(term()) :: :thread | false | nil
+  def standing(:thread), do: :thread
+  def standing("thread"), do: :thread
   def standing(false), do: false
   def standing(_), do: nil
 
   @spec standing_to_wire(term()) :: String.t() | false | nil
   def standing_to_wire(value) do
     case standing(value) do
-      :conversation -> "conversation"
+      :thread -> "thread"
       false -> false
       nil -> nil
     end

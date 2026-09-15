@@ -162,6 +162,38 @@ defmodule Arca.VaultStorage do
   end
 
   @doc """
+  Move a living entry's binding from the digest it was read at: `changes`
+  as for `update_binding/3`, written only while the row's `binding_digest`
+  is still `from_digest`. `{:error, :binding_moved}` when another change
+  landed first or the entry is gone.
+  """
+  @spec move_binding(String.t(), String.t(), String.t() | nil, map()) ::
+          :ok | {:error, term()}
+  def move_binding(athanor_id, id, from_digest, changes) when is_map(changes) do
+    Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.move_binding", fn ->
+      set =
+        changes
+        |> Map.take([:field_names, :oauth_endpoints, :oauth_scopes, :binding_digest])
+        |> Map.to_list()
+        |> Keyword.put(:updated_at, DateTime.utc_now() |> DateTime.truncate(:microsecond))
+
+      query =
+        from(v in VaultEntry, where: v.id == ^id and v.status != "tombstoned")
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+
+      query =
+        if is_nil(from_digest),
+          do: from(v in query, where: is_nil(v.binding_digest)),
+          else: from(v in query, where: v.binding_digest == ^from_digest)
+
+      case Arca.Repo.update_all(query, set: set) do
+        {1, _} -> :ok
+        {0, _} -> {:error, :binding_moved}
+      end
+    end)
+  end
+
+  @doc """
   Replace the sealed payload iff `payload_rev` still equals `expected_rev`
   (compare-and-swap). The winning writer bumps the revision; a loser gets
   `{:error, :payload_conflict}` and must re-read.

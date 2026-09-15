@@ -36,6 +36,31 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
+  describe "milliseconds/3 — a whole number in range, or the default" do
+    test "unset and blank keep the default; a whole number in range is taken" do
+      assert {:ok, nil} = RuntimeConfig.milliseconds(env(%{}), "K", 1_000..60_000)
+      assert {:ok, nil} = RuntimeConfig.milliseconds(env(%{"K" => " "}), "K", 1_000..60_000)
+      assert {:ok, 1_000} = RuntimeConfig.milliseconds(env(%{"K" => "1000"}), "K", 1_000..60_000)
+
+      assert {:ok, 60_000} =
+               RuntimeConfig.milliseconds(env(%{"K" => "60000"}), "K", 1_000..60_000)
+    end
+
+    test "a unit, a fraction, a sign or a value out of range is an error naming the key" do
+      for bad <- ~w(999 60001 30s 1e4 1.5 -5000 +5000 0x10 five) do
+        assert {:error, message} =
+                 RuntimeConfig.milliseconds(
+                   env(%{"CYFR_MCP_BRIDGE_IDLE_MS" => bad}),
+                   "CYFR_MCP_BRIDGE_IDLE_MS",
+                   1_000..60_000
+                 )
+
+        assert message =~ "CYFR_MCP_BRIDGE_IDLE_MS"
+        assert message =~ bad
+      end
+    end
+  end
+
   describe "resolve_auth_provider/1 — set-or-default, fail loud" do
     test "unset + no credentials => no auth (default)" do
       assert {:ok, nil} = RuntimeConfig.resolve_auth_provider(env(%{}))

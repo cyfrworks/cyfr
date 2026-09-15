@@ -25,7 +25,7 @@ defmodule Aqua.ApprovalScopeTest do
 
   test "the standing scopes are the two that answer for unseen calls" do
     assert Enum.filter(ApprovalScope.all(), &ApprovalScope.standing?/1) == [
-             :conversation,
+             :thread,
              :always
            ]
   end

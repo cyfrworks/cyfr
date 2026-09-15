@@ -30,6 +30,7 @@ defmodule Cyfr.ControlPlane do
   # and the ceiling on that wait relative to this boot's lease.
   @wait_slack_ms 250
   @ownership_key {__MODULE__, :ownership}
+  @generation_key {__MODULE__, :generation}
 
   @typedoc """
   What this boot holds: a lease until a deadline, the plane outright (a
@@ -47,6 +48,35 @@ defmodule Cyfr.ControlPlane do
       :unclaimed -> not claim_enabled?()
     end
   end
+
+  @doc """
+  The generation of the claim this boot last won (`Cyfr.ControlPlane.Claim`).
+  Work this boot issues under its generation is fenced against a later
+  holder's.
+
+  `:none` for a boot that claims no control plane — a cluster node, or one
+  whose claim is switched off. A boot that claims one but holds no
+  generation — before its claim is won, or after its server stopped —
+  answers `{:error, :unavailable}`, never `:none`: its generation is not
+  known, so nothing may be issued or checked under one.
+  """
+  @spec generation() :: {:ok, pos_integer()} | :none | {:error, :unavailable}
+  def generation do
+    case :persistent_term.get(@generation_key, nil) do
+      generation when is_integer(generation) -> {:ok, generation}
+      :none -> :none
+      nil -> if claim_enabled?(), do: {:error, :unavailable}, else: :none
+    end
+  end
+
+  @doc """
+  Run one unit of background work only while this boot owns the control
+  plane: answers `fun.()`, or `:not_owner` without calling it. A background
+  worker asks on every tick, so its work stops when ownership lapses and
+  goes on when ownership is regained.
+  """
+  @spec when_owner((-> result)) :: result | :not_owner when result: var
+  def when_owner(fun) when is_function(fun, 0), do: if(owner?(), do: fun.(), else: :not_owner)
 
   @doc "`:ok` to admit work, `{:error, :control_plane_lost}` to refuse it."
   @spec assert_owner() :: :ok | {:error, :control_plane_lost}
@@ -80,12 +110,14 @@ defmodule Cyfr.ControlPlane do
 
     cond do
       cluster? ->
+        :persistent_term.put(@generation_key, :none)
         mark({:held, :forever})
         {:ok, state}
 
       true ->
         case claim_or_wait(me, lease_ms) do
-          {:ok, expires_at} ->
+          {:ok, expires_at, generation} ->
+            :persistent_term.put(@generation_key, generation)
             mark({:held, expires_at})
             Process.send_after(self(), :renew, renew_ms)
             {:ok, %{state | expires_at: expires_at}}
@@ -99,7 +131,8 @@ defmodule Cyfr.ControlPlane do
                     "the same turn and fill the same estate."
 
           {:error, reason} ->
-            raise "[Cyfr] FATAL: the control-plane claim could not be written (#{inspect(reason)})."
+            raise "[Cyfr] FATAL: the control-plane claim could not be read or written " <>
+                    "(#{inspect(reason)})."
         end
     end
   end
@@ -146,6 +179,7 @@ defmodule Cyfr.ControlPlane do
 
   def terminate(_reason, state) do
     mark(:lost)
+    :persistent_term.erase(@generation_key)
 
     case Claim.release(state.me) do
       :ok ->
@@ -195,8 +229,9 @@ defmodule Cyfr.ControlPlane do
   # absent or expired row, never a live one another boot holds.
   defp reclaim(state) do
     case Claim.claim(state.me, state.lease_ms) do
-      {:ok, expires_at} ->
+      {:ok, expires_at, generation} ->
         Logger.warning("[Cyfr.ControlPlane] ownership regained")
+        :persistent_term.put(@generation_key, generation)
         mark({:held, expires_at})
         %{state | expires_at: expires_at}
 

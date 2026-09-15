@@ -3,7 +3,7 @@
 
 defmodule Aqua.Loop.Turn do
   @moduledoc """
-  What a loop runs, rebuilt from rows: the turn and its conversation, the
+  What a loop runs, rebuilt from rows: the turn and its thread, the
   agent as the turn pinned it — the revision bytes, whose capability
   digest must equal the one the turn started under — the roster and the
   roles the soul may clone into, the effective policy composed with the
@@ -17,7 +17,7 @@ defmodule Aqua.Loop.Turn do
 
   alias Aqua.Loop.Request
   alias Aqua.Tape
-  alias Sanctum.Authority
+  alias Cyfr.Authority
   alias Sanctum.Context
 
   @default_deadline_ms 15 * 60 * 1000
@@ -29,7 +29,7 @@ defmodule Aqua.Loop.Turn do
     :ctx,
     :guest,
     :turn,
-    :conversation,
+    :thread,
     :agent,
     :roster,
     :roles,
@@ -54,21 +54,28 @@ defmodule Aqua.Loop.Turn do
   `opts`: `:authority` (the turn's pinned authority, required),
   `:catalyst` and `:model` (a clone's fallbacks, the parent's),
   `:excerpt?` (read the room excerpt the turn's options name).
+
+  Refuses an agent that names no model (`:no_model`), a catalyst the
+  estate does not hold or that does not speak `model/chat@1`, and a
+  model its catalyst cannot describe (`Cyfr.Models.capabilities/5`; a
+  typed refusal is `{:model_refused, catalyst, error}`, and a catalyst
+  whose consent lacks its key `{:setup_required, catalyst}`).
   """
   @spec build(Context.t(), Tape.turn(), keyword()) :: {:ok, t()} | {:error, term()}
   def build(%Context{} = ctx, turn, opts) do
     authority = Keyword.fetch!(opts, :authority)
 
-    with {:ok, conversation} <- Tape.conversation(ctx, turn.conversation_id),
+    with {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          {:ok, agent} <- agent(ctx, turn, roster),
          soul? = Compendium.AgentSource.soul?(agent["name"]),
          roles = if(soul?, do: roles(roster), else: []),
          {:ok, grants} <-
-           Aqua.ToolGrants.for_agents(ctx, turn.conversation_id, [agent["name"]]),
+           Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
          policy =
            Aqua.ToolGrants.resolve(agent["tool_policy"] || %{}, grants[agent["name"]] || []),
-         {:ok, catalyst, model} <- model(ctx, turn, agent, opts) do
+         {:ok, catalyst, model} <- model(ctx, turn, agent, opts),
+         {:ok, capabilities} <- capabilities(ctx, authority, catalyst, model, turn) do
       options = decode(turn.options)
       several? = not Sanctum.Tenancy.Members.solo?(Context.athanor!(ctx))
 
@@ -76,7 +83,7 @@ defmodule Aqua.Loop.Turn do
         ctx: ctx,
         guest: Context.enter_guest(ctx),
         turn: turn,
-        conversation: conversation,
+        thread: thread,
         agent: agent,
         roster: roster,
         roles: roles,
@@ -84,10 +91,7 @@ defmodule Aqua.Loop.Turn do
         authority: authority,
         catalyst: catalyst,
         model: model,
-        capabilities:
-          Cyfr.Models.capabilities(ctx, catalyst, model, authority.consent_id,
-            run: capability_probe(ctx, authority, catalyst, turn)
-          ),
+        capabilities: capabilities,
         system:
           Aqua.Prompt.compose(ctx,
             agent: agent,
@@ -209,9 +213,10 @@ defmodule Aqua.Loop.Turn do
   # The model
   # ---------------------------------------------------------------------------
 
-  # The agent's catalyst resolved against the working estate's listing; a
-  # clone falls back to the parent's. A named catalyst the estate does
-  # not hold refuses the turn.
+  # The catalyst release a turn runs on: once its row pins one, exactly
+  # that release; before, the agent's catalyst resolved against the working
+  # estate's listing, a clone falling back to the parent's. It must be
+  # installed and speak `model/chat@1`.
   defp model(ctx, turn, agent, opts) do
     listing =
       case Aqua.AgentConfig.catalyst_listing(ctx) do
@@ -219,18 +224,50 @@ defmodule Aqua.Loop.Turn do
         {:error, _} -> []
       end
 
-    fallback = {Keyword.get(opts, :catalyst), Keyword.get(opts, :model)}
+    with {:ok, catalyst, model} <- catalyst(listing, turn, agent, opts),
+         :ok <- speaks_chat(listing, catalyst) do
+      if is_binary(model), do: {:ok, catalyst, model}, else: {:error, :no_model}
+    end
+  end
+
+  defp catalyst(listing, %{catalyst_ref: pinned} = turn, agent, _opts) when is_binary(pinned) do
+    if Enum.any?(listing, &(&1["component_ref"] == pinned)),
+      do: {:ok, pinned, turn.model || agent["model"]},
+      else: {:error, {:catalyst_not_in_estate, pinned}}
+  end
+
+  defp catalyst(listing, turn, agent, opts) do
     model = turn.model || agent["model"]
 
-    case {Aqua.AgentConfig.resolve_catalyst(listing, agent["catalyst_ref"]), fallback} do
+    case {Aqua.AgentConfig.resolve_catalyst(listing, agent["catalyst_ref"]),
+          Keyword.get(opts, :catalyst)} do
       {{:ok, catalyst}, _} ->
         {:ok, catalyst, model}
 
-      {{:error, _}, {catalyst, parent_model}} when is_binary(catalyst) ->
-        {:ok, catalyst, model || parent_model}
+      {{:error, _}, parent} when is_binary(parent) ->
+        {:ok, parent, model || Keyword.get(opts, :model)}
 
       {{:error, _}, _} ->
         {:error, {:catalyst_not_in_estate, agent["catalyst_ref"]}}
+    end
+  end
+
+  defp speaks_chat(listing, catalyst) do
+    row = Enum.find(listing, &(&1["component_ref"] == catalyst)) || %{}
+
+    if Cyfr.Models.speaks_chat?(row["manifest"]),
+      do: :ok,
+      else: {:error, {:catalyst_not_chat, catalyst}}
+  end
+
+  defp capabilities(ctx, authority, catalyst, model, turn) do
+    case Cyfr.Models.capabilities(ctx, catalyst, model, authority.consent_id,
+           run: capability_probe(ctx, authority, catalyst, turn)
+         ) do
+      {:ok, capabilities} -> {:ok, capabilities}
+      {:error, {:model_refused, error}} -> {:error, {:model_refused, catalyst, error}}
+      {:error, {:describe_failed, {:setup_required, _}}} -> {:error, {:setup_required, catalyst}}
+      {:error, _} = error -> error
     end
   end
 
@@ -242,14 +279,14 @@ defmodule Aqua.Loop.Turn do
 
     fn input ->
       task =
-        Task.Supervisor.async_nolink(Aqua.TaskSupervisor, fn ->
+        Aqua.Loop.Worker.async(fn ->
           Cyfr.Execution.run_child(authority, catalyst, nil, input,
             ctx: guest,
             parent_execution_id: turn.root_execution_id,
             root_execution_id: turn.root_execution_id,
-            parent_reference: Compendium.AgentSource.ref(turn.orchestrator),
             declared_needs: [],
-            retention_class: "chat_step"
+            retention_class: "chat_step",
+            envelope: true
           )
         end)
 
@@ -278,7 +315,7 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp deadline_ms(%Authority{} = authority) do
-    case Sanctum.Limits.timeout_ms(Authority.limits(authority)) do
+    case Cyfr.Limits.timeout_ms(Authority.limits(authority)) do
       {:ok, ms} when ms > 0 -> ms
       _ -> @default_deadline_ms
     end
@@ -301,7 +338,7 @@ defmodule Aqua.Loop.Turn do
   def current_policy(%__MODULE__{ctx: ctx, turn: turn, agent: agent}) do
     name = agent["name"]
 
-    with {:ok, grants} <- Aqua.ToolGrants.for_agents(ctx, turn.conversation_id, [name]) do
+    with {:ok, grants} <- Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [name]) do
       {:ok, Aqua.ToolGrants.resolve(agent["tool_policy"] || %{}, grants[name] || [])}
     end
   end
@@ -318,12 +355,12 @@ defmodule Aqua.Loop.Turn do
   defp decode(%{} = map), do: map
 
   defp excerpt(ctx, %{
-         "room" => %{"athanor_id" => athanor_id, "conversation_id" => conv_id} = room
+         "room" => %{"athanor_id" => athanor_id, "thread_id" => thread_id} = room
        })
-       when is_binary(athanor_id) and is_binary(conv_id) do
+       when is_binary(athanor_id) and is_binary(thread_id) do
     case Aqua.RoomExcerpt.read(ctx, %{
            athanor_id: athanor_id,
-           conversation_id: conv_id,
+           thread_id: thread_id,
            estate: room["estate"],
            title: room["title"]
          }) do
@@ -335,14 +372,14 @@ defmodule Aqua.Loop.Turn do
   defp excerpt(_ctx, _options), do: nil
 
   # The initiating message's attachments as typed blocks.
-  defp attachments(ctx, %{message_id: message_id, conversation_id: conversation_id})
+  defp attachments(ctx, %{message_id: message_id, thread_id: thread_id})
        when is_binary(message_id) do
     case Tape.message(ctx, message_id) do
       {:ok, row} ->
         refs = Aqua.Attachments.attachments_of([row])
 
         ctx
-        |> Aqua.Attachments.load(conversation_id, refs)
+        |> Aqua.Attachments.load(thread_id, refs)
         |> Enum.map(fn %{"media_type" => media, "data" => data, "filename" => name} ->
           %{
             "type" =>

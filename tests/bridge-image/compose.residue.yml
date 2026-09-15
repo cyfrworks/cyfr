@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml and compose.isolation.yml by
+# residue.test.mjs: the image's entrypoint with a pool of one uid, so a
+# second owner runs under the uid the first one released, and the residue
+# canary (tests/fixtures/residue-canary.go) the probe backend runs.
+services:
+  mcp-bridge:
+    entrypoint: ["cyfr-spawn", "serve", "--pool", "backends:20001-20001", "--home-root", "/var/lib/cyfr-bridge/homes", "--client-user", "cyfr-bridge", "--", "node", "server.mjs"]
+    volumes:
+      - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro

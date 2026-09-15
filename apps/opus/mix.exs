@@ -39,6 +39,7 @@ defmodule Opus.MixProject do
       {:wasmex, "~> 0.13.0"},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
+      {:cyfr_contracts, in_umbrella: true},
       {:cyfr, in_umbrella: true}
     ]
   end

@@ -5,7 +5,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   @moduledoc """
   The page the soul reads first — `about-you` in a person's athanor,
   `about-us` in a group's, pinned through the `notes` tool — and the notes
-  kept here out of the conversations. Both are written through the tool a
+  kept here out of the threads. Both are written through the tool a
   card in chat goes through, so one gate answers for both; a write here
   changes nothing another section shows, so the section reloads itself.
   """
@@ -138,11 +138,11 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   defp about_title("about-you"), do: "About you"
   defp about_title(_page), do: "About us"
 
-  defp provenance_line(%{kept_by: by, kept_at: at, conversation: conversation}) do
+  defp provenance_line(%{kept_by: by, kept_at: at, thread: thread}) do
     [
       "kept by " <> if(is_binary(by), do: principal_label(by), else: "someone"),
       is_binary(at) && "on " <> at,
-      is_binary(conversation) && "from a conversation"
+      is_binary(thread) && "from a thread"
     ]
     |> Enum.filter(&is_binary/1)
     |> Enum.join(" · ")
@@ -238,7 +238,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
         </p>
       </section>
 
-      <%!-- What was kept here, out of the conversations. --%>
+      <%!-- What was kept here, out of the threads. --%>
       <details
         :if={@loaded}
         id="aqua-notes"

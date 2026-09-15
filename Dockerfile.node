@@ -2,11 +2,21 @@
 # Node-based services for the CYFR stack. Build context: repo root.
 #
 # One target:
-#   --target mcp-bridge  → the HTTP MCP gateway that wraps stdio/npx MCP
-#                          servers; registered with cyfr like any other
-#                          HTTP MCP. Source under apps/mcp-bridge/.
+#   --target mcp-bridge  → runs the stdio MCP servers CYFR registers with
+#                          transport stdio and serves their tools over HTTP
+#                          MCP. Source under apps/mcp-bridge/, its process
+#                          helper under apps/spawn/.
 #
 # e.g.  docker build -f Dockerfile.node --target mcp-bridge -t cyfr-mcp-bridge .
+
+# cyfr-spawn, the bridge's process helper: a static Go binary. Pinned to the
+# Go release apps/spawn/go.mod names.
+FROM golang:1.26.6-alpine AS spawn
+WORKDIR /src
+COPY apps/spawn/go.mod apps/spawn/go.sum ./
+RUN go mod download
+COPY apps/spawn/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-spawn .
 
 # Pinned to the same Node LTS the builder image ships (Dockerfile.builder
 # NODE_VERSION) — `24-alpine` floated with every upstream release.
@@ -19,30 +29,45 @@ FROM node:24.21.0-alpine AS base
 RUN apk --no-cache upgrade
 
 # ===========================================================================
-# mcp-bridge — HTTP MCP gateway. Single /mcp endpoint that surfaces:
-#   • admin tools: add_backend / remove_backend / list_backends / restart_backend
-#   • forwarded child tools, renamed `<backend>__<tool>`
-# Children are stdio MCP servers (typically `npx -y <pkg>`) managed at
-# runtime via the admin tools. State lives in /data/backends.json (bind-
-# mounted from ./data/mcp-bridge on the host).
+# mcp-bridge — runs stdio MCP servers (typically `npx -y <pkg>`) for CYFR.
+# CYFR's controller syncs each server row's backends over /control and each
+# server's process calls its own backends' tools, `<backend>__<tool>`, over
+# /mcp; both are signed under CYFR_MCP_BRIDGE_KEY. The bridge keeps no state.
+#
+# Process model: cyfr-spawn runs as root holding only SETUID, SETGID and
+# KILL (it refuses to start with any other capability), starts the bridge
+# as cyfr-bridge, and runs every child under a pooled uid of its own
+# (cyfr-b001…cyfr-b032) with a 0700 home under /var/lib/cyfr-bridge/homes.
+# A uid returns to the pool only once none of its processes, files, IPC
+# objects or message queues remain.
 # ===========================================================================
 FROM base AS mcp-bridge
 LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+# The bridge's user and the backend pool: each user is alone in its own
+# group and belongs to no other.
+RUN addgroup -S -g 10001 cyfr-bridge \
+    && adduser -S -D -H -h /nonexistent -s /sbin/nologin -u 10001 -G cyfr-bridge cyfr-bridge \
+    && for i in $(seq 1 32); do \
+         name="$(printf 'cyfr-b%03d' "$i")"; uid=$((20000 + i)); \
+         addgroup -S -g "$uid" "$name" \
+         && adduser -S -D -H -h /nonexistent -s /sbin/nologin -u "$uid" -G "$name" "$name" || exit 1; \
+       done \
+    && install -d -m 1733 -o root -g root /var/lib/cyfr-bridge/homes
+
 WORKDIR /app
 COPY apps/mcp-bridge/package.json apps/mcp-bridge/package-lock.json ./
 RUN npm ci --omit=dev
-COPY apps/mcp-bridge/server.mjs ./
-# This image contains only the Apache-2.0 bridge. Bundle the repo-level
+COPY apps/mcp-bridge/server.mjs apps/mcp-bridge/owners.mjs apps/mcp-bridge/auth.mjs apps/mcp-bridge/spawn-client.mjs ./
+COPY --from=spawn /out/cyfr-spawn /usr/local/bin/cyfr-spawn
+# This image contains only Apache-2.0 components. Bundle the repo-level
 # license docs so operators can see the full CYFR product license boundary.
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 ENV NODE_ENV=production
 EXPOSE 8001
-# The bridge is remote code execution by design; it must not run as root.
-# The entrypoint chowns the /data bind mount (docker may create it
-# root-owned) and drops to the image's unprivileged node user via su-exec.
-RUN apk add --no-cache su-exec
-COPY apps/mcp-bridge/docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["node", "server.mjs"]
+# Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
+# `no-new-privileges`, a read-only root, `ipc: none`, the homes and attach
+# tmpfs mounts and CYFR_MCP_BRIDGE_KEY (docker-compose.yml's mcp-bridge
+# service).
+ENTRYPOINT ["cyfr-spawn", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/cyfr-bridge/homes", "--client-user", "cyfr-bridge", "--", "node", "server.mjs"]

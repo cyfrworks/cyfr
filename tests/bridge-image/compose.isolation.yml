@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml by the bridge image tests. The mcp-bridge
+# service keeps every setting compose gives it; this adds only the image
+# under test, a loopback port for the test to call, the probe backend and a
+# planted secret in the bridge's own environment. The test supplies
+# CYFR_MCP_BRIDGE_KEY through the environment compose interpolates.
+services:
+  mcp-bridge:
+    image: ${BRIDGE_IMAGE:?set BRIDGE_IMAGE}
+    pull_policy: never
+    ports:
+      - "127.0.0.1::8001"
+    volumes:
+      - ${PROBE_DIR:?set PROBE_DIR}:/probe:ro
+    environment:
+      - CYFR_CRYPTO_KEYRING=planted-keyring-value

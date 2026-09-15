@@ -28,7 +28,7 @@ defmodule PrismWeb.WebhooksLive do
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.webhooks(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.webhooks(ctx))
     end
 
     {:ok,

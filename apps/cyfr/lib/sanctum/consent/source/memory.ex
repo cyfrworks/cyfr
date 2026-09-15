@@ -42,7 +42,7 @@ defmodule Sanctum.Consent.Source.Memory do
   # `put_new_lazy`, so a test that IS about the mismatch — or about a row
   # with no digest at all — sets the key explicitly and keeps it.
   defp stamp_blob_digest(%{resolved_policy: policy} = consent) when is_binary(policy) do
-    Map.put_new_lazy(consent, :blob_digest, fn -> Sanctum.JCS.hash_binary(policy) end)
+    Map.put_new_lazy(consent, :blob_digest, fn -> Cyfr.JCS.hash_binary(policy) end)
   end
 
   defp stamp_blob_digest(consent), do: consent

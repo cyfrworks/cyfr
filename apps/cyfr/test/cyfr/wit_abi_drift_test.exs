@@ -6,7 +6,7 @@ defmodule Cyfr.WitAbiDriftTest do
   The guest ABI is written down twice, and nothing bound the two together.
 
   `wit/` is the contract: `Compendium.WITSource` embeds it at compile time,
-  `Locus.Builder` copies it into the build sandbox, and `Compendium.Scaffold`
+  `Locus.Builder` copies it into the build sandbox, and `Cyfr.CargoToml`
   points a generated `Cargo.toml` at it — so a component is compiled against
   those interface names. The host side of the same contract is a set of
   string keys in `Opus`: the import map a component's world is instantiated
@@ -32,7 +32,7 @@ defmodule Cyfr.WitAbiDriftTest do
   defp opus_abi_names do
     @opus_lib
     |> Path.join("**/*.ex")
-    |> Path.wildcard()
+    |> Cyfr.Test.SourceTree.files!()
     |> Enum.flat_map(fn path ->
       ~r/"(cyfr:[a-z]+\/[a-z-]+@\d+\.\d+\.\d+)"/
       |> Regex.scan(File.read!(path))
@@ -47,7 +47,7 @@ defmodule Cyfr.WitAbiDriftTest do
   defp wit_abi_names do
     @wit_root
     |> Path.join("**/*.wit")
-    |> Path.wildcard()
+    |> Cyfr.Test.SourceTree.files!()
     |> Enum.flat_map(fn path ->
       source = File.read!(path)
 
@@ -98,7 +98,7 @@ defmodule Cyfr.WitAbiDriftTest do
     imported =
       @wit_root
       |> Path.join("*/world.wit")
-      |> Path.wildcard()
+      |> Cyfr.Test.SourceTree.files!()
       |> Enum.flat_map(fn path ->
         ~r/import\s+(cyfr:[a-z]+\/[a-z-]+@\d+\.\d+\.\d+)\s*;/
         |> Regex.scan(File.read!(path))
@@ -121,22 +121,22 @@ defmodule Cyfr.WitAbiDriftTest do
            """
   end
 
-  # `Compendium.Scaffold` hand-writes the catalyst WIT dependency table
+  # `Cyfr.CargoToml` hand-writes the catalyst WIT dependency table
   # into a generated Cargo.toml; the build sandbox materializes whatever
-  # sits under `wit/catalyst/deps/`. A new dep directory that the scaffold
+  # sits under `wit/catalyst/deps/`. A new dep directory that the template
   # never declares fails a build with a message about the world, not
   # about the missing declaration — this binds the two.
   test "the scaffold's Cargo.toml declares exactly the catalyst WIT deps" do
     declared =
       ~r/"(cyfr:[a-z-]+)" = \{ path = "wit\/deps\/(cyfr-[a-z-]+)" \}/
-      |> Regex.scan(Compendium.Scaffold.cargo_toml_for(:catalyst, include_oauth_wit: true))
+      |> Regex.scan(Cyfr.CargoToml.template(:catalyst, include_oauth_wit: true))
       |> Enum.map(fn [_, _pkg, dir] -> dir end)
       |> Enum.sort()
 
     on_disk =
       @wit_root
       |> Path.join("catalyst/deps/*")
-      |> Path.wildcard()
+      |> Cyfr.Test.SourceTree.files!()
       |> Enum.map(&Path.basename/1)
       |> Enum.sort()
 
@@ -154,7 +154,7 @@ defmodule Cyfr.WitAbiDriftTest do
   test "the worlds registration demands are the ones the engine calls" do
     runtime = File.read!(Path.join(@opus_lib, "opus/runtime.ex"))
 
-    for type <- Sanctum.ComponentRef.executable_types() do
+    for type <- Cyfr.ComponentRef.executable_types() do
       expected = Compendium.WITSource.expected_exports(type)
 
       assert expected != [],

@@ -13,8 +13,6 @@ defmodule Opus.SharedEngine do
   The engine is created once at startup; if creation fails, the application
   crashes (no silent fallback).
 
-  Must be started before `Opus.ExecutionSemaphore` in the supervisor tree.
-
   ## Fuel Enforcement
 
   Fuel-based CPU limits require `consume_fuel: true` on the engine AND
@@ -27,11 +25,11 @@ defmodule Opus.SharedEngine do
 
   Wasmex also exposes no epoch interruption, and component calls run on a
   detached native thread (wasmex spawns the call and drops the JoinHandle),
-  so the wall-clock timeout kill in `Opus.Executor` cannot preempt a
+  so the wall-clock timeout kill in `Opus.Runner` cannot preempt a
   component that never yields (e.g. a tight compute loop). Killing the
   waiting BEAM process frees the execution slot, but the native thread
   keeps spinning one CPU core until node restart. Mitigations: the
-  per-tenant cap in `Opus.ExecutionSemaphore` bounds how many such loops
+  per-tenant cap in `Cyfr.Execution.Semaphore` bounds how many such loops
   one tenant can start, and the container CPU quota (docker-compose
   `cpus:`) bounds aggregate damage. A real fix needs epoch interruption
   support in wasmex.

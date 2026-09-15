@@ -5,13 +5,13 @@ defmodule Sanctum.Tenancy.Caps do
   @moduledoc """
   The public-door caps: how many athanors a server holds, how many groups a
   person may create, how many DMs a person may hold open, how many members
-  a group may hold, how many conversations an athanor may hold, how many
+  a group may hold, how many threads an athanor may hold, how many
   personal athanors may be minted per hour, and how many bytes an athanor
   may store.
 
   Read from `config :cyfr, :caps` (`CYFR_MAX_ATHANORS`,
   `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_PAIRS_PER_PERSON`,
-  `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MAX_CONVERSATIONS_PER_ATHANOR`,
+  `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MAX_THREADS_PER_ATHANOR`,
   `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES`). A `nil` cap is off. A private box needs
   none of them; a `*` server sets them — and a default install therefore
   has NO total-byte ceiling on authenticated guest writes (only the
@@ -19,10 +19,10 @@ defmodule Sanctum.Tenancy.Caps do
   operator exposing the box sets `CYFR_ATHANOR_STORAGE_BYTES`
   deliberately.
 
-  The pair cap and the conversation cap ship on: `config/runtime.exs`
-  defaults them to 200 and 1000 (`0` turns either off). A conversation is
+  The group, pair and thread caps ship on: `config/runtime.exs` defaults
+  them to 50, 200 and 1000 (`0` turns any of them off). A thread is
   a row any member — or any headless client of theirs — can mint from the
-  wire (`conversation.create`), each with a follow row of its own, so an
+  wire (`thread.create`), each with a follow row of its own, so an
   estate's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone
   the caller shares a room with, and nobody else's consent is asked, so
   one member of a large room could otherwise spend `CYFR_MAX_ATHANORS`
@@ -46,7 +46,7 @@ defmodule Sanctum.Tenancy.Caps do
           | :max_groups_per_person
           | :max_pairs_per_person
           | :max_members_per_group
-          | :max_conversations_per_athanor
+          | :max_threads_per_athanor
           | :mint_per_hour
           | :athanor_storage_bytes
 
@@ -55,7 +55,7 @@ defmodule Sanctum.Tenancy.Caps do
     :max_groups_per_person,
     :max_pairs_per_person,
     :max_members_per_group,
-    :max_conversations_per_athanor,
+    :max_threads_per_athanor,
     :mint_per_hour,
     :athanor_storage_bytes
   ]
@@ -151,7 +151,7 @@ defmodule Sanctum.Tenancy.Caps do
   # Read-then-write without a lock (the cached total, then the caller's
   # write): N concurrent writes can each pass before any lands, so the cap
   # can overshoot by at most (per-tenant execution slots × max write size)
-  # — bounded and accepted, the same call Opus.RateLimiter documents for
+  # — bounded and accepted, the same call Cyfr.Execution.Rates documents for
   # its window.
   def check_storage(%Sanctum.Context{} = ctx, incoming) when is_integer(incoming) do
     case get(:athanor_storage_bytes) do

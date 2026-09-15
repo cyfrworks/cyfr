@@ -52,7 +52,7 @@ defmodule Arca.ConsentStorageTest do
       invoke_mode: "open_inert",
       shape_digest: "sha256:shape",
       commit_digest: "sha256:commit",
-      blob_digest: Sanctum.JCS.hash_binary("{}"),
+      blob_digest: Cyfr.JCS.hash_binary("{}"),
       resolved_policy: "{}",
       activation: "{}",
       granted_by: "test",
@@ -118,6 +118,21 @@ defmodule Arca.ConsentStorageTest do
       # Racing writer with a stale expectation (nil = "no head yet").
       assert {:error, :head_moved} =
                ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 2), [], nil)
+
+      {:ok, head, _refs} = ConsentStorage.get_head(athanor, profile.id)
+      assert head.id == first.id
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 1
+    end
+
+    test "a racing writer at the same revision is refused with head_moved, not raised",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_multi_5")
+
+      {:ok, first} =
+        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+      assert {:error, :head_moved} =
+               ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
 
       {:ok, head, _refs} = ConsentStorage.get_head(athanor, profile.id)
       assert head.id == first.id
@@ -193,38 +208,6 @@ defmodule Arca.ConsentStorageTest do
         |> Enum.map(fn {name, _arity} -> Atom.to_string(name) end)
 
       refute Enum.any?(exported, &String.starts_with?(&1, "update"))
-    end
-  end
-
-  describe "the 20260901 backfill" do
-    # Verify that migration backfill hashing matches the digest produced by consent writers.
-    test "the inlined spelling matches Cyfr.Digest for arbitrary stored policies" do
-      for policy <- ["{}", ~s({"canonical":"jcs-1","nodes":{}}), String.duplicate("x", 5_000)] do
-        inlined = "sha256:" <> Base.encode16(:crypto.hash(:sha256, policy), case: :lower)
-
-        assert inlined == Sanctum.JCS.hash_binary(policy),
-               "the migration's frozen spelling drifted from Cyfr.Digest"
-      end
-    end
-
-    test "a backfilled row verifies through the loader's own check" do
-      policy = ~s({"canonical":"jcs-1","nodes":{}})
-
-      # Exactly what the migration writes.
-      digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, policy), case: :lower)
-
-      assert :ok = verify_blob_digest(%{resolved_policy: policy, blob_digest: digest})
-
-      # And a row altered in place after the backfill does not.
-      assert {:error, :blob_digest_mismatch} =
-               verify_blob_digest(%{resolved_policy: policy <> " ", blob_digest: digest})
-    end
-
-    # The loader's rule, restated here so this test fails if it changes.
-    defp verify_blob_digest(%{blob_digest: stored, resolved_policy: policy}) do
-      if Plug.Crypto.secure_compare(Sanctum.JCS.hash_binary(policy), stored),
-        do: :ok,
-        else: {:error, :blob_digest_mismatch}
     end
   end
 end

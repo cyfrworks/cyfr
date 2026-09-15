@@ -47,6 +47,13 @@ defmodule Arca.OverlayTest.GatedCleanSlateAdapter do
   end
 end
 
+defmodule Arca.OverlayTest.NoSwapAdapter do
+  @moduledoc false
+  # A tenant adapter that exports no `replace_tree/3` — an object store's
+  # shape. Everything else answers as the Local adapter does.
+  use Arca.Storage.TestDouble
+end
+
 defmodule Arca.OverlayTest.DownAdapter do
   @moduledoc false
   # A tenant adapter whose listings are down — the outage shape an object
@@ -833,7 +840,7 @@ defmodule Arca.OverlayTest do
   describe "always-on decorator" do
     test "paths outside the overlaid roots pass through verbatim", %{ctx: ctx} do
       :ok = Arca.put(ctx, ["data", "sub", "file.txt"], "guest bytes")
-      :ok = Arca.put(ctx, ["conversations", "conv_1", "blob.bin"], "blob")
+      :ok = Arca.put(ctx, ["threads", "thread_1", "blob.bin"], "blob")
 
       assert {:ok, "guest bytes"} = Arca.get(ctx, ["data", "sub", "file.txt"])
       assert {:ok, [{"sub", :dir}]} = Arca.list_typed(ctx, ["data"])
@@ -844,8 +851,8 @@ defmodule Arca.OverlayTest do
       assert {:ok, leaves} = Arca.list_recursive(ctx, [])
       assert ["data", "sub", "file.txt"] in leaves
 
-      assert :ok = Arca.delete_tree(ctx, ["conversations"])
-      refute Arca.exists?(ctx, ["conversations", "conv_1", "blob.bin"])
+      assert :ok = Arca.delete_tree(ctx, ["threads"])
+      refute Arca.exists?(ctx, ["threads", "thread_1", "blob.bin"])
     end
 
     test "configuring the overlay as the adapter raises instead of recursing", %{ctx: ctx} do
@@ -1040,6 +1047,247 @@ defmodule Arca.OverlayTest do
     end
   end
 
+  describe "replace_subtree/5 — one subtree of a unit, under its lock" do
+    @built ["components", "tinctures", "local", "built", "1.0.0"]
+    @first_build [{["assets", "old.js"], "old"}, {["index.html"], "one"}]
+
+    # The subtree as a reader reads it, in path order.
+    defp dist(ctx) do
+      {:ok, pairs} = Arca.read_subtree(ctx, @built ++ ["dist"])
+      Enum.sort(pairs)
+    end
+
+    # What the unit's directory holds on disk, hidden names included: a
+    # staged or retired tree left behind would show here.
+    defp on_disk(ctx) do
+      ctx |> Arca.Adapters.Local.build_path(@built) |> File.ls!() |> Enum.sort()
+    end
+
+    setup %{ctx: ctx} do
+      {:ok, _} =
+        Arca.Overlay.commit_unit(
+          ctx,
+          @built,
+          {:files,
+           [
+             {["cyfr-manifest.json"], ~s({"type":"tincture"})},
+             {["src", "main.tsx"], "source"},
+             {["dist", "index.html"], "one"},
+             {["dist", "assets", "old.js"], "old"}
+           ]},
+          cap: :exempt
+        )
+
+      :ok
+    end
+
+    test "the subtree is replaced whole and the rest of the unit is untouched", %{ctx: ctx} do
+      assert :ok =
+               Arca.Overlay.replace_subtree(
+                 ctx,
+                 @built,
+                 ["dist"],
+                 [{["index.html"], "two"}, {["assets", "new.js"], "new"}],
+                 cap: {:checked, 6}
+               )
+
+      assert {:ok, "two"} = Arca.get(ctx, @built ++ ["dist", "index.html"])
+      assert {:ok, "new"} = Arca.get(ctx, @built ++ ["dist", "assets", "new.js"])
+      assert {:error, :not_found} = Arca.get(ctx, @built ++ ["dist", "assets", "old.js"])
+      assert {:ok, "source"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
+      assert {:ok, ~s({"type":"tincture"})} = Arca.get(ctx, @built ++ ["cyfr-manifest.json"])
+      assert on_disk(ctx) == ["cyfr-manifest.json", "dist", "src"]
+    end
+
+    test "a replacement that fails part-way leaves the previous subtree whole and nothing staged",
+         %{ctx: ctx} do
+      assert dist(ctx) == @first_build
+
+      assert {:error, :disk_full} =
+               Arca.Overlay.replace_subtree(
+                 ctx,
+                 @built,
+                 ["dist"],
+                 [
+                   {["index.html"], "two"},
+                   {["assets", "new.js"], fn -> {:error, :disk_full} end}
+                 ],
+                 cap: :exempt
+               )
+
+      assert dist(ctx) == @first_build
+      assert on_disk(ctx) == ["cyfr-manifest.json", "dist", "src"]
+    end
+
+    test "readers see the previous subtree until the new one is whole, then the new one",
+         %{ctx: ctx} do
+      test_pid = self()
+
+      replacing =
+        Task.async(fn ->
+          Arca.Overlay.replace_subtree(
+            ctx,
+            @built,
+            ["dist"],
+            [
+              {["index.html"], "two"},
+              {["assets", "new.js"],
+               fn ->
+                 send(test_pid, {:staging, self()})
+
+                 receive do
+                   :proceed -> {:ok, "new"}
+                 end
+               end}
+            ],
+            cap: :exempt
+          )
+        end)
+
+      # The new index.html is already staged; no reader sees it, or a
+      # subtree without the previous build's assets.
+      assert_receive {:staging, replacer}, 5_000
+
+      reader = Task.async(fn -> dist(ctx) end)
+      assert Task.await(reader) == @first_build
+      assert {:ok, "one"} = Arca.get(ctx, @built ++ ["dist", "index.html"])
+
+      assert {:ok, entries} = Arca.list_typed(ctx, @built)
+
+      assert entries |> Enum.map(&elem(&1, 0)) |> Enum.sort() == [
+               "cyfr-manifest.json",
+               "dist",
+               "src"
+             ]
+
+      send(replacer, :proceed)
+      assert :ok = Task.await(replacing, 30_000)
+
+      assert dist(ctx) == [{["assets", "new.js"], "new"}, {["index.html"], "two"}]
+    end
+
+    test "repeated replacements leave no stale assets and nothing staged", %{ctx: ctx} do
+      for n <- 1..3 do
+        build = [{["assets", "app-#{n}.js"], "js #{n}"}, {["index.html"], "build #{n}"}]
+
+        assert :ok = Arca.Overlay.replace_subtree(ctx, @built, ["dist"], build, cap: :exempt)
+
+        assert dist(ctx) == build
+        assert on_disk(ctx) == ["cyfr-manifest.json", "dist", "src"]
+      end
+
+      assert {:ok, "source"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
+    end
+
+    test "an adapter that cannot swap a tree refuses and leaves the subtree as it was",
+         %{ctx: ctx} do
+      original = Application.get_env(:cyfr, :storage_adapter)
+      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.NoSwapAdapter)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :storage_adapter, original),
+          else: Application.delete_env(:cyfr, :storage_adapter)
+      end)
+
+      assert {:error, :atomic_replace_unsupported} =
+               Arca.Overlay.replace_subtree(ctx, @built, ["dist"], [{["index.html"], "two"}],
+                 cap: :exempt
+               )
+
+      assert dist(ctx) == @first_build
+    end
+
+    test "a tree is replaced only inside a unit, never at one, above one or at its sentinel",
+         %{ctx: ctx} do
+      for path <- [
+            @built,
+            @built ++ ["cyfr-manifest.json"],
+            ["components", "tinctures", "local", "built"],
+            ["aqua", "roles", "a.md"]
+          ] do
+        assert {:error, :invalid_path} =
+                 Arca.replace_tree(ctx, path, [{["x"], "x"}], cap: :exempt),
+               "#{Enum.join(path, "/")} was replaced"
+      end
+
+      assert {:error, :reserved_name} =
+               Arca.replace_tree(ctx, @built ++ ["dist"], [{["a.tmp.1"], "x"}], cap: :exempt)
+
+      assert {:error, :invalid_path} =
+               Arca.replace_tree(ctx, @built ++ ["dist"], [{[], "x"}], cap: :exempt)
+
+      assert dist(ctx) == @first_build
+      assert {:ok, ~s({"type":"tincture"})} = Arca.get(ctx, @built ++ ["cyfr-manifest.json"])
+    end
+
+    test "an incomplete unit has nothing to lay a subtree into", %{ctx: ctx} do
+      :ok = Arca.delete_tree(ctx, @built)
+      :ok = Arca.put(ctx, @built ++ ["src", "main.tsx"], "orphan")
+
+      assert {:error, :not_found} =
+               Arca.Overlay.replace_subtree(ctx, @built, ["dist"], [{["index.html"], "x"}],
+                 cap: :exempt
+               )
+
+      refute Arca.exists?(ctx, @built ++ ["dist", "index.html"])
+    end
+
+    test "the sentinel is not a subtree" do
+      assert_raise ArgumentError, fn ->
+        Arca.Overlay.replace_subtree(
+          Sanctum.TestContext.local(),
+          @built,
+          ["cyfr-manifest.json"],
+          [],
+          cap: :exempt
+        )
+      end
+    end
+
+    test "a writer to the same unit waits for the whole replacement", %{ctx: ctx} do
+      test_pid = self()
+
+      replacing =
+        Task.async(fn ->
+          Arca.Overlay.replace_subtree(
+            ctx,
+            @built,
+            ["dist"],
+            [
+              {["index.html"],
+               fn ->
+                 send(test_pid, {:writing, self()})
+
+                 receive do
+                   :proceed -> {:ok, "two"}
+                 end
+               end}
+            ],
+            cap: :exempt
+          )
+        end)
+
+      assert_receive {:writing, replacer}, 5_000
+
+      writer = Task.async(fn -> Arca.put(ctx, @built ++ ["src", "main.tsx"], "edited") end)
+
+      wait_until(
+        fn -> queued_on_unit_lock?() end,
+        5_000,
+        "the writer to queue behind the replacement on the unit lock"
+      )
+
+      assert {:ok, "source"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
+
+      send(replacer, :proceed)
+      assert :ok = Task.await(replacing, 30_000)
+      assert :ok = Task.await(writer, 30_000)
+      assert {:ok, "edited"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
+      assert {:ok, "two"} = Arca.get(ctx, @built ++ ["dist", "index.html"])
+    end
+  end
+
   describe "commit_unit/4 — the one way a unit lands" do
     @own_dir ["components", "catalysts", "local", "committed", "1.0.0"]
 
@@ -1053,10 +1301,9 @@ defmodule Arca.OverlayTest do
       root = Path.expand("../../../..", __DIR__)
 
       offenders =
-        [
-          Path.join(root, "apps/*/lib/**/*.ex")
-        ]
-        |> Enum.flat_map(&Path.wildcard/1)
+        root
+        |> Path.join("apps/*/lib/**/*.ex")
+        |> Cyfr.Test.SourceTree.files!()
         |> Enum.flat_map(fn path ->
           source = File.read!(path)
 

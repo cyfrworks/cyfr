@@ -18,8 +18,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
   alias Sanctum.Tenancy.Athanors
 
   setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
 
     n = System.unique_integer([:positive])
     creator = "github|https://github.com|ready-#{n}"
@@ -36,8 +35,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # The suite fills inline, so the attempt has already happened and its
     # outcome — success or a recorded failure — is on the row.
     {:ok, group} = Athanors.get(group.id)
-    settings = Athanors.settings(group)
-    assert group.provisioned_at || Map.has_key?(settings, "provisioning_error")
+    assert group.provisioned_at || Athanors.provisioning_failure(group)
   end
 
   test "a filled estate is ready", %{ctx: ctx, group: group} do
@@ -48,15 +46,15 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
   test "a turn on an estate still being filled says so", %{ctx: ctx, group: group} do
     {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: group.id)
-    {:ok, conv} = Arca.ConversationStorage.create(ctx)
+    {:ok, thread} = Arca.ThreadStorage.create(ctx)
 
     # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =
-             Aqua.Runner.send_message(ctx, conv.id, "@aqua hello",
+             Aqua.Runner.send_message(ctx, thread.id, "@aqua hello",
                orchestrators: [%{"name" => "aqua", "title" => "AQUA"}]
              )
 
-    assert [] = Arca.ConversationStorage.messages(ctx, conv.id)
+    assert [] = Arca.ThreadStorage.messages(ctx, thread.id)
 
     # And the refusal has a sentence every surface renders the same way.
     assert Cyfr.Ops.Error.render(:not_provisioned) =~ "still being prepared"
@@ -105,7 +103,9 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     # The fill that just ran failed (this suite ships no bundle), so clear
     # the record: what is under test is the claim, not the backoff.
-    {:ok, own} = Athanors.put_settings(own, %{"provisioning_error" => nil})
+    {:ok, own} = Athanors.mark_provisioned(own)
+    {:ok, own} = Athanors.update(own, %{provisioned_at: nil})
+
     refute own.provisioned_at
 
     parent = self()
@@ -121,7 +121,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user)
     assert {:ok, %{provisioned_at: nil}} = Athanors.get(own.id)
-    assert Athanors.settings(Athanors.get(own.id) |> elem(1))["provisioning_error"] == nil
+    assert Athanors.provisioning_failure(Athanors.get(own.id) |> elem(1)) == nil
 
     send(holder, :release)
   end
@@ -155,34 +155,48 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     {:ok, failed} = Athanors.get(group.id)
     refute failed.provisioned_at
-    assert %{"at" => first_at} = Athanors.settings(failed)["provisioning_error"]
+    assert %{at: first_at} = Athanors.provisioning_failure(failed)
 
     # Everything the reload would do, several times over.
     for _ <- 1..5, do: assert({:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx))
 
     {:ok, again} = Athanors.get(group.id)
-    assert Athanors.settings(again)["provisioning_error"]["at"] == first_at
+    assert Athanors.provisioning_failure(again).at == first_at
 
     # A person who asks is never told to wait: the explicit verb fills now.
     assert {:error, {:provisioning_failed, _, _}} = Sanctum.Provisioning.provision(again, ctx)
     {:ok, retried} = Athanors.get(group.id)
-    assert Athanors.settings(retried)["provisioning_error"]["at"] != first_at
+    assert Athanors.provisioning_failure(retried).at != first_at
   end
 
-  test "settings a member wrote cannot break the readiness read", %{ctx: ctx, group: group} do
-    # `settings` is a document any member writes through `athanor.settings`,
-    # so nothing reading it may assume the shape provisioning left. A
-    # timestamp that is not one reads as "no recent failure", and the next
-    # attempt replaces it with one that is.
-    for junk <- [42, "not a date", %{"nested" => true}, nil, []] do
-      {:ok, _} = Athanors.put_settings(group, %{"provisioning_error" => %{"at" => junk}})
-      assert {:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx)
-      assert Sanctum.Provisioning.provisioned?(ctx) == false
-    end
-
-    # The whole record being nonsense is no different.
-    {:ok, _} = Athanors.put_settings(group, %{"provisioning_error" => "wat"})
+  test "the failure record is the server's: settings neither forge nor clear it",
+       %{ctx: ctx, group: group} do
     assert {:error, :not_provisioned} = Sanctum.Provisioning.ready(ctx)
+    {:ok, failed} = Athanors.get(group.id)
+    assert %{at: failed_at} = Athanors.provisioning_failure(failed)
+
+    # A member's settings patch naming the old document key reaches nothing
+    # the backoff reads.
+    future = DateTime.utc_now() |> DateTime.add(365, :day) |> DateTime.to_iso8601()
+
+    for patch <- [%{"provisioning_error" => %{"at" => future}}, %{"provisioning_error" => nil}] do
+      {:ok, patched} = Athanors.put_settings(failed, patch)
+      assert Athanors.provisioning_failure(patched).at == failed_at
+    end
+  end
+
+  test "a boot that does not own the control plane starts no fill", %{ctx: ctx, group: group} do
+    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+
+    Cyfr.ControlPlane.mark(:lost)
+    assert {:error, :not_provisioned} = Provisioning.ready(ctx)
+    {:ok, untouched} = Athanors.get(group.id)
+    refute untouched.provisioned_at || Athanors.provisioning_failure(untouched)
+
+    Cyfr.ControlPlane.mark(:unclaimed)
+    assert {:error, :not_provisioned} = Provisioning.ready(ctx)
+    {:ok, attempted} = Athanors.get(group.id)
+    assert attempted.provisioned_at || Athanors.provisioning_failure(attempted)
   end
 
   test "a context with no athanor is never ready" do

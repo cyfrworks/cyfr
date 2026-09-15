@@ -8,8 +8,8 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
   # Unknown and inaccessible ids return the same 404. This fixture uses the
   # shared test user and exercises an unknown execution id.
   describe "GET /api/executions/:id/events" do
-    # The controller returns 503 when Opus.ExecutionEventBuffer isn't loaded
-    # as an umbrella sibling. cyfr's per-app test runs (`mix cmd --app cyfr`)
+    # The controller returns 503 when no execution engine is available.
+    # cyfr's per-app test runs (`mix cmd --app cyfr`)
     # don't load Opus, so this assertion is only meaningful in umbrella-root
     # test runs where `:requires_opus` is included.
     @describetag :requires_opus

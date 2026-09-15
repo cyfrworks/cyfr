@@ -24,7 +24,10 @@ defmodule Cyfr.GenServerCatchallTest do
     {Arca.AuditHandler, "AuditHandler"},
     {Prism.TinctureRegistry, "TinctureRegistry"},
     {Cyfr.RecordSink, "RecordSink"},
-    {Cyfr.RateLimiter, "RateLimiter"}
+    {Cyfr.RateLimiter, "RateLimiter"},
+    {Cyfr.Execution.Rates, "Rates"},
+    {Cyfr.Execution.Semaphore, "Semaphore"},
+    {Cyfr.Execution.Events.Sequence, "Events.Sequence"}
   ]
 
   # Named adopters not probed live, each with the reason it cannot be:
@@ -33,7 +36,9 @@ defmodule Cyfr.GenServerCatchallTest do
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
     Cyfr.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
     Cyfr.ControlPlane => "gated by :control_plane_claim_enabled",
+    Cyfr.Execution.Sweeper => "gated by :execution_sweeper_enabled",
     Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
+    Emissary.MCP.Bridge => "started only when an MCP bridge URL and key are configured",
     Emissary.MCP.RunningTasks => "probing would race real request tracking",
     Arca.Overlay.UnitLock => "holds live commit locks — a probe interleaves them",
     Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",
@@ -74,6 +79,60 @@ defmodule Cyfr.GenServerCatchallTest do
     end
   end
 
+  describe "an execution's event buffer" do
+    # One unnamed buffer per execution, so it is probed on an instance of
+    # its own. It reads the execution's row for its durable prefix when it
+    # starts, so it needs the sandbox connection.
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      :ok
+    end
+
+    for message <- [@unexpected_msg, {:random, "payload"}] do
+      test "survives #{inspect(message)} and logs it" do
+        id = "exec_catchall_#{System.unique_integer([:positive])}"
+        {:ok, pid} = GenServer.start_link(Cyfr.Execution.Events, {id, "ath_catchall"}, [])
+
+        assert capture_log(fn ->
+                 send(pid, unquote(Macro.escape(message)))
+                 :sys.get_state(pid)
+               end) =~ "unexpected message"
+
+        assert Process.alive?(pid)
+        GenServer.stop(pid)
+      end
+    end
+  end
+
+  describe "an execution's attempt" do
+    # One unnamed attempt per open execution, registered under its id, so
+    # it is probed on an instance of its own.
+    for message <- [@unexpected_msg, {:random, "payload"}] do
+      test "survives #{inspect(message)} and logs it" do
+        ctx = Sanctum.TestContext.local()
+        record = Cyfr.Execution.Record.new(ctx, "catalyst:local.catchall:0.1.0", %{})
+
+        {:ok, pid} =
+          Cyfr.Execution.Attempt.open(
+            execution_id: record.id,
+            attempt: record.attempt,
+            ctx: ctx,
+            authority: Cyfr.Authority.zero(),
+            component_ref: "catalyst:local.catchall:0.1.0",
+            close: %Cyfr.Execution.Close{ctx: ctx, record: record}
+          )
+
+        assert capture_log(fn ->
+                 send(pid, unquote(Macro.escape(message)))
+                 :sys.get_state(pid)
+               end) =~ "unexpected message"
+
+        assert Process.alive?(pid)
+      end
+    end
+  end
+
   describe "the roster derives from the adopters" do
     # Static analysis over every lib file, like its sibling seam tests.
     # They read the whole tree concurrently under a full-suite run and the
@@ -89,7 +148,7 @@ defmodule Cyfr.GenServerCatchallTest do
         )
 
       adopters =
-        for path <- Path.wildcard(Path.join(root, "apps/cyfr/lib/**/*.ex")),
+        for path <- Cyfr.Test.SourceTree.files!(Path.join(root, "apps/cyfr/lib/**/*.ex")),
             source = Cyfr.Test.SourceTree.read(path),
             String.contains?(source, "Cyfr.UnexpectedMessage.log(__MODULE__"),
             # Two spellings register the app-wide name, and matching only the

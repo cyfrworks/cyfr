@@ -161,7 +161,8 @@ defmodule Compendium.ScaffoldTest do
       assert result.status == "created"
       assert result.reference == "catalyst:local.weather-api:0.1.0"
       assert is_list(result.files)
-      assert is_list(result.next_steps)
+      assert Enum.any?(result.next_steps, &(&1 =~ "cyfr-manifest.json through Files"))
+      refute Enum.any?(result.next_steps, &(&1 =~ "Edit cyfr-manifest.json"))
 
       base =
         Arca.Adapters.Local.build_path(
@@ -273,10 +274,9 @@ defmodule Compendium.ScaffoldTest do
       assert File.exists?(Path.join(base, "package.json"))
       assert File.exists?(Path.join(base, "tsconfig.json"))
       assert File.exists?(Path.join(base, "vite.config.ts"))
-      # The source entry sits under src/, where a build cannot overwrite it:
-      # the build writes its own index.html at the version root.
-      assert File.exists?(Path.join([base, "src", "index.html"]))
-      refute File.exists?(Path.join(base, "index.html"))
+      # The source entry sits at the root; the build it feeds lands in dist/.
+      assert File.exists?(Path.join(base, "index.html"))
+      refute File.exists?(Path.join(base, "dist"))
       assert File.exists?(Path.join([base, "src", "main.tsx"]))
       assert File.exists?(Path.join([base, "src", "App.tsx"]))
       assert File.exists?(Path.join([base, "src", "index.css"]))
@@ -301,7 +301,7 @@ defmodule Compendium.ScaffoldTest do
 
       assert manifest["type"] == "tincture"
       assert get_in(manifest, ["tincture", "build", "tool"]) == "vite"
-      assert get_in(manifest, ["tincture", "entry"]) == "index.html"
+      assert get_in(manifest, ["tincture", "entry"]) == "dist/index.html"
     end
 
     test "package.json has correct dependencies", %{ctx: ctx} do
@@ -411,26 +411,6 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, _} = Scaffold.create(ctx_other, "dup-check", "catalyst", "0.1.0")
       assert {:error, msg} = Scaffold.create(ctx_other, "dup-check", "catalyst", "0.1.0")
       assert msg =~ "already exists"
-    end
-  end
-
-  describe "cargo_toml_for/2 (canonical template, delegated to by Locus.Builder)" do
-    test "reagent/formula templates are identical regardless of the oauth option" do
-      for type <- [:reagent, :formula] do
-        assert Scaffold.cargo_toml_for(type) ==
-                 Scaffold.cargo_toml_for(type, include_oauth_wit: false)
-      end
-    end
-
-    test "catalyst variants differ ONLY by the cyfr:oauth WIT dep line" do
-      oauth_line = ~s("cyfr:oauth" = { path = "wit/deps/cyfr-oauth" }\n)
-
-      with_oauth = Scaffold.cargo_toml_for(:catalyst)
-      without_oauth = Scaffold.cargo_toml_for(:catalyst, include_oauth_wit: false)
-
-      assert with_oauth =~ oauth_line
-      refute without_oauth =~ "cyfr:oauth"
-      assert String.replace(with_oauth, oauth_line, "") == without_oauth
     end
   end
 end

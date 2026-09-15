@@ -9,6 +9,11 @@ defmodule Opus.AsyncTracker do
   Provides spawn/await/await-all/await-any/poll primitives. On
   termination, all orphaned tasks are killed via Task.Supervisor shutdown.
 
+  A spawned child's task waits for the runner the child runs in, in the
+  formula's runner group (`Opus.WorkerService.start_child/2`); a task that
+  is cancelled, timed out or killed with the tracker takes that runner with
+  it, and the worker service reports the child's attempt to CYFR.
+
   ## Process Tree
 
       Formula Execution
@@ -73,6 +78,13 @@ defmodule Opus.AsyncTracker do
 
     GenServer.call(tracker, {:spawn, task_fun, reference})
   end
+
+  @doc """
+  Whether a spawn would find room under the task cap: live tasks and
+  undrained results together below `max_tasks`.
+  """
+  @spec room?(pid()) :: boolean()
+  def room?(tracker), do: GenServer.call(tracker, :room?)
 
   @doc """
   Block until a specific task completes. Returns the task result.
@@ -147,16 +159,7 @@ defmodule Opus.AsyncTracker do
     # spawn/complete/never-await loop would otherwise grow per-execution
     # memory without bound for the whole run. The guest frees a slot by
     # awaiting (or polling then awaiting) what it spawned.
-    active_count = map_size(state.tasks) + map_size(state.results)
-
-    # `>= state.max_tasks`, with no `> 0` escape: the cap comes from the
-    # consented `max_concurrent_tasks`, where 0 is how "this component may not
-    # spawn" is spelled — `Sanctum.Authority` reads it that way for the invoke
-    # budget. Treating 0 as "unlimited" turned the tightest possible grant
-    # into the loosest.
-    if active_count >= state.max_tasks do
-      {:reply, {:error, :max_tasks_exceeded}, state}
-    else
+    if has_room?(state) do
       task_id = "task_#{state.next_id}"
       task = Task.Supervisor.async_nolink(state.supervisor, fun)
 
@@ -174,8 +177,12 @@ defmodule Opus.AsyncTracker do
       }
 
       {:reply, {:ok, task_id}, new_state}
+    else
+      {:reply, {:error, :max_tasks_exceeded}, state}
     end
   end
+
+  def handle_call(:room?, _from, state), do: {:reply, has_room?(state), state}
 
   @impl true
   def handle_call({:await, task_id, timeout_ms}, _from, state) do
@@ -404,6 +411,11 @@ defmodule Opus.AsyncTracker do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  # Undrained results count against the cap as live tasks do, and the cap
+  # is compared with no `> 0` escape: 0 is how the consented
+  # `max_concurrent_tasks` spells "this component may not spawn".
+  defp has_room?(state), do: map_size(state.tasks) + map_size(state.results) < state.max_tasks
 
   defp find_task_by_ref(ref, state) do
     Enum.find(state.tasks, fn {_id, entry} -> entry.ref == ref end)

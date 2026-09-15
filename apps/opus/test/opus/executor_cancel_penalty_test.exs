@@ -2,14 +2,13 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.ExecutorCancelPenaltyTest do
-  # N cancels of a spinning guest, through the executor's own cancel path,
-  # charge the tenant by execution before each kill until the penalty box
-  # refuses the tenant's next root.
+  # N cancels of a registered holder spinning in native code, through the
+  # cancel path, charge the tenant by execution before each kill until the
+  # penalty box refuses the tenant's next root.
   use ExUnit.Case, async: false
 
   alias Arca.Execution
-  alias Opus.ExecutionSemaphore
-  alias Opus.Executor
+  alias Cyfr.Execution.{Dispatch, Semaphore}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -19,8 +18,8 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     # The penalty box outlives a force-release: what this suite fills for
     # its tenant, it empties.
     on_exit(fn ->
-      ExecutionSemaphore.force_release_all()
-      ExecutionSemaphore.forgive_unreaped(ctx.athanor_id)
+      Semaphore.force_release_all()
+      Semaphore.forgive_unreaped(ctx.athanor_id)
     end)
 
     {:ok, ctx: ctx}
@@ -50,7 +49,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
 
     pid =
       spawn(fn ->
-        {:ok, _} = Registry.register(Opus.ExecutionRegistry, execution_id, :running)
+        {:ok, _} = Registry.register(Cyfr.Execution.Registry, execution_id, :running)
         send(parent, {:registered, execution_id})
         Process.sleep(:infinity)
       end)
@@ -59,19 +58,19 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     pid
   end
 
-  test "N cancels through the executor trip the tenant's penalty box", %{ctx: ctx} do
-    threshold = max(2, div(ExecutionSemaphore.status().tenant_max, 2))
+  test "N cancels trip the tenant's penalty box", %{ctx: ctx} do
+    threshold = max(2, div(Semaphore.status().tenant_max, 2))
 
     for _ <- 1..threshold do
       id = running!(ctx)
       pid = spinning!(id)
       ref = Process.monitor(pid)
 
-      assert {:ok, %{cancelled: true, execution_id: ^id}} = Executor.cancel(ctx, id)
+      assert {:ok, %{cancelled: true, execution_id: ^id}} = Dispatch.cancel(ctx, id)
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
     end
 
     assert {:error, :tenant_unreaped_limit} =
-             ExecutionSemaphore.acquire(1_000, :root, ctx.athanor_id)
+             Semaphore.acquire(1_000, :root, ctx.athanor_id)
   end
 end

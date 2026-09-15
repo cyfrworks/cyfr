@@ -4,8 +4,8 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Sanctum.Authority
-  alias Sanctum.Authority.Transition
+  alias Cyfr.Authority
+  alias Cyfr.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # Depth caps apply at the configured level; all spawns share one root invoke budget.
@@ -44,7 +44,7 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
       # max_concurrent_tasks bounded by the ceiling, never raised to it.
       generated = graph["nodes"][meta.source]["limits"]["max_concurrent_tasks"]
       cap = min(generated, 3)
-      assert Authority.budget(auth).cap == cap
+      assert Sanctum.Authority.budget(auth).cap == cap
 
       # Descend for free via synchronous calls…
       bottom =
@@ -72,7 +72,7 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
 
           match?(
             {:child_zero, _},
-            Transition.step(
+            Sanctum.Authority.step(
               bottom,
               :spawn,
               Gen.invoke_at(bottom, meta, "formula:evil.corp.s#{i}", need)
@@ -81,11 +81,11 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
         end)
 
       assert successes == cap
-      assert Authority.budget(auth) == %{in_flight: cap, cap: cap}
+      assert Sanctum.Authority.budget(auth) == %{in_flight: cap, cap: cap}
 
       # The pool is shared: the ROOT cannot spawn either.
       assert {:deny, :invoke_budget_exhausted} =
-               Transition.step(
+               Sanctum.Authority.step(
                  auth,
                  :spawn,
                  Gen.invoke_at(
@@ -97,11 +97,11 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
                )
 
       # Releasing re-admits exactly as many as were released.
-      Enum.each(1..cap, fn _ -> Authority.release_invoke(auth) end)
-      assert Authority.budget(auth).in_flight == 0
+      Enum.each(1..cap, fn _ -> Sanctum.Authority.release_invoke(auth) end)
+      assert Sanctum.Authority.budget(auth).in_flight == 0
 
       assert {:child_zero, _} =
-               Transition.step(
+               Sanctum.Authority.step(
                  bottom,
                  :spawn,
                  Gen.invoke_at(

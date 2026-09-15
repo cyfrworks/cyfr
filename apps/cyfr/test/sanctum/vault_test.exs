@@ -4,7 +4,6 @@
 defmodule Sanctum.VaultTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.CipherAAD
   alias Sanctum.Vault
   alias Sanctum.VaultReader
 
@@ -57,7 +56,7 @@ defmodule Sanctum.VaultTest do
           invoke_mode: "open_inert",
           shape_digest: "sha256:shape",
           commit_digest: "sha256:commit",
-          blob_digest: Sanctum.JCS.hash_binary("{}"),
+          blob_digest: Cyfr.JCS.hash_binary("{}"),
           resolved_policy: "{}",
           activation: "{}",
           granted_by: "test",
@@ -174,31 +173,6 @@ defmodule Sanctum.VaultTest do
       {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
       assert entry.status == "active"
     end
-
-    test "a retired v1 pointer row cannot rotate — recreate the entry", %{ctx: ctx} do
-      id = Cyfr.UUID7.generate_id("vlt")
-      aad = CipherAAD.vault_entry(ctx.athanor_id, id, "legacy")
-      pointer = ~s({"v":1,"legacy":{"secrets":[{"name":"PTR_KEY","scope":"project"}]}})
-      {:ok, sealed} = Sanctum.Cipher.encrypt(pointer, aad)
-
-      {:ok, _} =
-        Arca.VaultStorage.put(%{
-          id: id,
-          athanor_id: ctx.athanor_id,
-          name: "legacy:ptr",
-          provider_hint: "legacy",
-          kind: "bundle",
-          field_names: Jason.encode!(["PTR_KEY"]),
-          sealed_payload: sealed
-        })
-
-      assert {:error, :legacy_pointer_retired} =
-               Vault.rotate(ctx, %{
-                 id: id,
-                 fields: %{"PTR_KEY" => "typed-fresh"},
-                 expected_payload_rev: 0
-               })
-    end
   end
 
   describe "rebind requires re-consent" do
@@ -221,6 +195,31 @@ defmodule Sanctum.VaultTest do
 
       {:ok, reloaded} = Arca.ProfileStorage.get(ctx.athanor_id, profile.id)
       assert reloaded.status == "needs_consent"
+    end
+
+    test "a binding moves only from the digest it was read at, and a rebind keeps what landed first",
+         %{ctx: ctx} do
+      view = create!(ctx)
+      {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      assert is_binary(entry.binding_digest)
+
+      assert {:error, :binding_moved} =
+               Arca.VaultStorage.move_binding(ctx.athanor_id, view.id, "sha256:stale", %{
+                 oauth_scopes: ~s(["x"])
+               })
+
+      assert {:ok, _} = Vault.rebind(ctx, %{id: view.id, oauth_scopes: ["a"]})
+
+      assert {:ok, %{binding_digest: digest}} =
+               Vault.rebind(ctx, %{
+                 id: view.id,
+                 oauth_endpoints: %{"token_url" => "https://other.example/token"}
+               })
+
+      {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      assert row.oauth_scopes == ~s(["a"])
+      assert row.binding_digest == digest
+      assert {:ok, ^digest} = VaultReader.binding_digest(row)
     end
 
     test "a rebind with no binding fields is refused", %{ctx: ctx} do
@@ -259,7 +258,7 @@ defmodule Sanctum.VaultTest do
 
   describe "broadcasts" do
     test "every mutation announces itself on the tenant vault topic", %{ctx: ctx} do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.vault_changed(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.vault_changed(ctx))
 
       view = create!(ctx)
       assert_receive {:vault_entry_changed, _, :create}
@@ -276,25 +275,26 @@ defmodule Sanctum.VaultTest do
       assert_receive {:vault_entry_changed, _, :revoke}
     end
 
-    test "a rename is a resolution change, so the global signal carries it too", %{ctx: ctx} do
-      # External MCP servers hold `vault:<name>` header references that
-      # `VaultReader.unseal_by_name/2` resolves at request time, so renaming a
-      # different entry onto a name changes what a running server dispenses
-      # without touching any entry's material. That is exactly what the global
-      # signal exists to tell the reconciler about, and rename was the one
-      # mutation that stayed quiet.
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.vault_changed_global())
+    test "every global signal names its entry, and a rename names the name it vacated too", %{
+      ctx: ctx
+    } do
+      # External MCP servers hold header templates that resolve an entry by
+      # NAME at request time, so the reconciler matches servers by the names
+      # a signal carries — a deleted row can no longer be read for its name,
+      # and a template may still spell the name a rename vacated.
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.vault_changed_global())
 
       view = create!(ctx)
-      assert_receive {:vault_entry_changed_global, _, _, :create, %{}}
-
       original_name = view.name
+      assert_receive {:vault_entry_changed_global, _, _, :create, %{name: ^original_name}}
+
       :ok = Vault.rename(ctx, view.id, "moved")
 
-      # The signal carries the VACATED name: a server's header template
-      # still spells it, and the row can only ever show the new one — the
-      # reconciler cannot find the name-losing servers without it.
-      assert_receive {:vault_entry_changed_global, _, _, :rename, %{old_name: ^original_name}}
+      assert_receive {:vault_entry_changed_global, _, _, :rename,
+                      %{name: "moved", old_name: ^original_name}}
+
+      :ok = Vault.delete(ctx, view.id)
+      assert_receive {:vault_entry_changed_global, _, _, :delete, %{name: "moved"}}
 
       assert :rename in Emissary.MCP.ExternalServerReconciler.relevant_verbs()
     end

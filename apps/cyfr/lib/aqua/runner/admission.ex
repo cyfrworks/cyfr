@@ -25,7 +25,7 @@ defmodule Aqua.Runner.Admission do
   def max_message_bytes, do: @max_message_bytes
 
   @doc """
-  Admit `text` from `ctx` into the conversation, or refuse it with the
+  Admit `text` from `ctx` into the thread, or refuse it with the
   reason the sender is told: `:empty`, `:message_too_long`, `:archived`,
   `:not_member`, `:no_orchestrator`. `opts`: `:attachments`,
   `:orchestrators` (the sender's roster), `:orchestrator` (an explicit

@@ -3,28 +3,29 @@
 
 defmodule Opus.HttpStreamHandlerBoundaryTest do
   @moduledoc """
-  The streaming imports keep the same promise as their siblings: a host
-  function never raises into WASM.
-
-  `Opus.HttpHandler.execute/5` and `Opus.StorageHandler.dispatch_caught/6`
-  both rescue at their boundary and hand the guest a typed error; the
-  streaming three did not, and two of them pattern-matched hard —
-  `{:ok, buffer} = Agent.start_link(…)` and
-  `{:ok, pid} = Task.Supervisor.start_child(…)`. Under memory pressure, or
-  with `Opus.TaskSupervisor` mid-restart, that MatchError killed the Wasmex
-  process and failed the whole execution instead of returning a
-  `stream_error` the guest could act on.
+  The streaming imports keep the promise every host import keeps: a host
+  function never raises into WASM. A malformed request, a handle that does
+  not exist and a stream that cannot be started each answer the guest a
+  typed error, with a host client that holds no context of its own.
   """
   use ExUnit.Case, async: false
 
   alias Opus.HttpStreamHandler
 
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    :ok
+  end
+
   defp imports do
+    attempt = Cyfr.Test.AttemptFixtures.attached!(component_ref: "catalyst:local.streamer:0.1.0")
+
     {imports, exec_ref} =
       HttpStreamHandler.build_stream_imports(
         nil,
-        Sanctum.Limits.defaults(:catalyst),
-        Sanctum.TestContext.local(),
+        Cyfr.Limits.defaults(:catalyst),
+        Opus.HostClient.new(attempt.keys, attempt.runner),
         "catalyst:local.streamer:0.1.0"
       )
 

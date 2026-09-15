@@ -6,7 +6,7 @@ defmodule Cyfr.Files do
   The athanor's files as a person sees them: one tree whose folders are
   the console tier of the storage layout (`Arca.Storage.console_folders/0`),
   spoken in the console's names — `data/`, `components/`, `aqua/`,
-  `notes/`, `conversations/`. The server's own storage has no name here
+  `notes/`, `threads/`. The server's own storage has no name here
   and is never listed; another athanor's tree is unreachable because the
   athanor is the context's, never the path's.
 
@@ -20,7 +20,7 @@ defmodule Cyfr.Files do
       (scaffold, pull, fork, the AQUA page); a unit the server ships is
       restored, never deleted. A write here keeps the registry and the
       agent index in step with the tree.
-    * `:read` (`notes/`, `conversations/`) — listed, read and downloaded;
+    * `:read` (`notes/`, `threads/`) — listed, read and downloaded;
       written only by their own surfaces.
 
   Every operation answers the typed refusals `Cyfr.Ops.Error` renders,
@@ -132,6 +132,7 @@ defmodule Cyfr.Files do
   Put `content` at `path` — `utf8` text, or bytes as `base64`. The tier
   decides whether the write may land, the storage cap whether it fits,
   and a write inside a shaped unit keeps the unit's row or index in step.
+  A component's manifest must decode and validate as one.
   """
   @spec write(Context.t(), String.t(), String.t(), String.t()) ::
           {:ok, %{written: String.t(), size: non_neg_integer()}} | {:error, term()}
@@ -141,9 +142,29 @@ defmodule Cyfr.Files do
          :ok <- check_write_size(bytes),
          {:ok, segments, physical, tier} <- resolve_file(path),
          :ok <- writable(tier, physical, segments),
+         :ok <- valid_content(physical, bytes),
          :ok <- put(ctx, physical, path, bytes) do
       refresh_unit(ctx, physical)
       {:ok, %{written: join(segments), size: byte_size(bytes)}}
+    end
+  end
+
+  @doc """
+  Rewrite a text file inside a unit as one locked read-modify-write. `fun`
+  receives the file's current text and answers `{:ok, text}` to write it,
+  or `{:error, reason}` to leave the file as it is and answer that. The
+  read and the write hold the unit's lock together, so a concurrent writer
+  to the unit waits rather than being overwritten. The tier, size and
+  content checks and the unit refresh are `write/4`'s.
+  """
+  @spec update(Context.t(), String.t(), (String.t() -> {:ok, String.t()} | {:error, term()})) ::
+          {:ok, %{written: String.t()}} | {:error, term()}
+  def update(%Context{} = ctx, path, fun) when is_binary(path) and is_function(fun, 1) do
+    with {:ok, segments, physical, tier} <- resolve_file(path),
+         :ok <- writable(tier, physical, segments),
+         :ok <- locked_update(ctx, physical, path, fun) do
+      refresh_unit(ctx, physical)
+      {:ok, %{written: join(segments)}}
     end
   end
 
@@ -297,22 +318,45 @@ defmodule Cyfr.Files do
 
   defp put(ctx, physical, path, bytes) do
     case Arca.put(ctx, physical, bytes) do
-      :ok ->
-        :ok
+      :ok -> :ok
+      {:error, reason} -> write_error(path, reason)
+    end
+  end
 
-      {:error, :invalid_path} ->
+  defp locked_update(ctx, physical, path, fun) do
+    rewrite = fn current ->
+      with :ok <- text(current, path),
+           {:ok, next} <- fun.(current),
+           :ok <- check_write_size(next),
+           :ok <- valid_content(physical, next) do
+        {:ok, next}
+      end
+    end
+
+    case Arca.Overlay.update(ctx, physical, rewrite) do
+      :ok -> :ok
+      {:error, :not_found} -> {:error, {:not_found, "File", path}}
+      {:error, :not_overlaid} -> {:error, {:invalid_argument, "'#{path}' is not inside a unit"}}
+      {:error, {:invalid_argument, _} = refusal} -> {:error, refusal}
+      {:error, reason} -> write_error(path, reason)
+    end
+  end
+
+  defp write_error(path, reason) do
+    case reason do
+      :invalid_path ->
         {:error, {:invalid_argument, "'#{path}' is not a place a file can go"}}
 
-      {:error, :reserved_name} ->
+      :reserved_name ->
         {:error, {:invalid_argument, "'#{path}' uses a name the server reserves"}}
 
-      {:error, {:limit_reached, :athanor_storage_bytes, cap}} ->
+      {:limit_reached, :athanor_storage_bytes, cap} ->
         {:error, {:invalid_argument, cap_message(cap)}}
 
-      {:error, :storage_unverifiable} ->
+      :storage_unverifiable ->
         {:error, {:unavailable, "Storage usage"}}
 
-      {:error, reason} ->
+      reason ->
         storage_error("write", path, reason)
     end
   end
@@ -430,6 +474,40 @@ defmodule Cyfr.Files do
     do: {:error, {:invalid_argument, "A write is at most #{@max_write} bytes"}}
 
   defp check_write_size(_bytes), do: :ok
+
+  defp text(bytes, path) do
+    if text?(bytes),
+      do: :ok,
+      else: {:error, {:invalid_argument, "'#{path}' is not text — write it whole instead"}}
+  end
+
+  # A component's manifest is what registers it, so what lands there must
+  # be one.
+  defp valid_content(physical, bytes) do
+    case Arca.Storage.locate(physical) do
+      {:dir, ["components" | _] = unit, sentinel} ->
+        if physical == unit ++ [sentinel], do: valid_manifest(bytes, sentinel), else: :ok
+
+      _not_a_component ->
+        :ok
+    end
+  end
+
+  defp valid_manifest(bytes, name) do
+    with {:ok, manifest} <- Cyfr.Manifest.decode_strict(bytes),
+         :ok <- Compendium.Manifest.validate(manifest) do
+      :ok
+    else
+      {:error, :malformed_manifest} ->
+        {:error, {:invalid_argument, "#{name} is not a JSON object"}}
+
+      {:error, {_block, message}} when is_binary(message) ->
+        {:error, {:invalid_argument, "#{name}: #{message}"}}
+
+      {:error, reason} ->
+        {:error, {:invalid_argument, "#{name}: #{inspect(reason)}"}}
+    end
+  end
 
   defp text?(bytes), do: String.valid?(bytes) and not String.contains?(bytes, <<0>>)
 end
