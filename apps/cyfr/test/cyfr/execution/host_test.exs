@@ -127,7 +127,8 @@ defmodule Cyfr.Execution.HostTest do
       assert {:error, {:setup_required, %{reason: "consent_moved"}}} =
                Attempt.await(fixture.pid, fixture.close)
 
-      assert row(fixture).status == "failed"
+      assert %{status: "failed", error_message: message} = row(fixture)
+      assert message =~ ": consent_moved"
     end
   end
 

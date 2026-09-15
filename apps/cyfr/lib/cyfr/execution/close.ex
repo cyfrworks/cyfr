@@ -367,8 +367,9 @@ defmodule Cyfr.Execution.Close do
     end
   end
 
+  # The payload's reason is already the sentence `setup_reason/1` gave it.
   defp failure_message({:setup_required, %{node_ref: node_ref, reason: reason}}),
-    do: "Setup required for #{node_ref}: #{setup_reason(reason)}"
+    do: "Setup required for #{node_ref}: #{reason}"
 
   defp failure_message(reason), do: "Execution failed: #{client_reason(reason)}"
 
