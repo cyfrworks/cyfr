@@ -9,10 +9,11 @@ defmodule Aqua.Runner do
   `Aqua.RunnerSupervisor` and found through `Aqua.RunnerRegistry`. A
   browser session never owns a turn: the runner admits a send, accepts
   it on the tape with the turn it opens, runs the loop in a worker of
-  its own (`Aqua.Loop`, the process that holds the turn's root), and
-  keeps what a viewer joining now needs — whether a turn runs, the tool
-  activity, the usage, the standing grants. Every row is the tape's;
-  every viewer reads the same topic.
+  its own (`Aqua.Loop`, the process that holds the turn's root, which
+  dies with the runner — `Aqua.Loop.Worker`), and keeps what a viewer
+  joining now needs — whether a turn runs, the tool activity, the usage,
+  the standing grants. Every row is the tape's; every viewer reads the
+  same topic.
 
   ## Admission
 
@@ -547,10 +548,12 @@ defmodule Aqua.Runner do
   end
 
   # Viewers hear the turn start before the loop can announce anything of it.
+  # The loop is a worker of this process: it, and every worker under it,
+  # is killed when the runner ends.
   defp run(state, entry, fun) do
     broadcast(state, {:turn_starting, entry.user_id})
     broadcast(state, {:turn_started, entry.turn_id})
-    task = Task.Supervisor.async_nolink(Aqua.TaskSupervisor, fun)
+    task = Aqua.Loop.Worker.async(fun)
 
     state = %{
       state

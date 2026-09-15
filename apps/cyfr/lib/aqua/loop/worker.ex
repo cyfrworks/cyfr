@@ -3,11 +3,12 @@
 
 defmodule Aqua.Loop.Worker do
   @moduledoc """
-  A loop's worker: a task under `Aqua.TaskSupervisor` whose death is
-  answered to the loop that awaits it rather than taking the loop down,
-  and which never outlives that loop. When the process that started it
-  ends, for any reason, the worker is killed — and with it any clone loop
-  it runs, whose own workers follow.
+  A worker: a task under `Aqua.TaskSupervisor` whose death is answered to
+  the process that awaits it rather than taking that process down, and
+  which never outlives that process — a runner's loop, a loop's call.
+  When the process that started it ends, for any reason, the worker is
+  killed, and with it every worker it started in turn: a runner's death
+  takes its loop, the loop's calls and any clone loop they run.
   """
 
   @doc "Start `fun` as a worker of the calling process; await it as any `Task`."

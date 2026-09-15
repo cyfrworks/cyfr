@@ -8,7 +8,7 @@ defmodule Aqua.RunnerTest do
   one turn runs at a time, the sender's own line steers it and another
   member's waits; a stop cuts the turn and drops the queue; a card pauses
   the turn and its decision continues it; a runner that starts finds the
-  open turns and does what their rows say.
+  open turns and does what their rows say. A runner's loop dies with it.
   """
 
   use ExUnit.Case, async: false
@@ -125,6 +125,23 @@ defmodule Aqua.RunnerTest do
 
     {:ok, _} = Members.ensure(other.id, scope: "athanor", athanor_id: ctx.athanor_id)
     %{ctx | user_id: other.id}
+  end
+
+  # The runner, its loop, and the loop's call that is waiting on the test.
+  defp running!(thread) do
+    assert_receive {:scripted_probe, call, _}, 60_000
+    runner = Runner.whereis(thread.id)
+    %{live: %{task: %Task{pid: loop}}} = :sys.get_state(runner)
+    %{runner: runner, loop: loop, call: call}
+  end
+
+  defp kill_and_await!(%{runner: runner} = pids) do
+    refs = for {_name, pid} <- pids, into: %{}, do: {Process.monitor(pid), pid}
+    Process.exit(runner, :kill)
+    for {ref, _pid} <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
+    # The supervisor has answered the runner's exit: restarted it or not.
+    _ = :sys.get_state(Aqua.RunnerSupervisor)
+    :ok
   end
 
   test "a send is admitted in order, and refused with nothing written", %{
@@ -672,5 +689,73 @@ defmodule Aqua.RunnerTest do
     rows = Threads.messages(ctx, other_thread.id)
     assert Enum.any?(rows, &(&1.kind == "turn_aborted"))
     assert Enum.any?(rows, &(&1.content == "taken over"))
+  end
+
+  describe "a runner that dies" do
+    test "mid model call takes its loop and the call with it; its restart takes the turn over",
+         %{ctx: ctx, thread: thread} do
+      script!([{:probe, self()}, reply("taken over")])
+
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      pids = running!(thread)
+      :ok = kill_and_await!(pids)
+
+      assert_receive {:thread, _, {:turn_finished}}, 60_000
+      refute Runner.whereis(thread.id) in [nil, pids.runner]
+
+      # Released now, the dead call would have answered with the reply the
+      # successor already took.
+      send(pids.call, :continue)
+
+      assert {:ok, %{status: "completed", recovery_attempts: 1} = turn} = Tape.turn(ctx, turn_id)
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert [%{outcome: "error", error: "not reproducible"}, %{outcome: "ok"}] =
+               Enum.filter(steps, &(&1.kind == "model"))
+
+      agent = Arca.Schemas.Message.agent_author()
+
+      assert ["taken over"] =
+               for(
+                 %{author: ^agent, turn_id: ^turn_id} = row <- Threads.messages(ctx, thread.id),
+                 do: row.content
+               )
+
+      assert Enum.count(ScriptedExecution.calls(), &(&1.input["operation"] == "chat")) == 2
+    end
+
+    test "mid tool dispatch takes its loop and the call with it; its restart stops on the unknown outcome",
+         %{ctx: ctx, thread: thread} do
+      start_supervised!(
+        {ScriptedExecution,
+         ref: [@model, "catalyst:local.http"],
+         script: [
+           call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+           {:probe, self()},
+           reply("never sent")
+         ]}
+      )
+
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua fetch")
+      pids = running!(thread)
+      :ok = kill_and_await!(pids)
+
+      assert_receive {:thread, _, {:turn_paused, ^turn_id, :uncertain}}, 60_000
+      send(pids.call, :continue)
+
+      assert {:ok, %{status: "paused", recovery_attempts: 1} = turn} = Tape.turn(ctx, turn_id)
+      {:ok, steps} = Tape.steps(ctx, turn)
+      assert [%{dispatch_state: "uncertain"}] = Enum.filter(steps, &(&1.action == "get"))
+
+      # One call reached the tool, and nothing after it: no second model
+      # round, and the dead call's answer never landed.
+      assert ["chat", fetch] =
+               ScriptedExecution.calls()
+               |> Enum.map(& &1.input["operation"])
+               |> Enum.reject(&(&1 == "describe"))
+
+      refute fetch == "chat"
+      assert %{running: false, paused: true} = Runner.state(thread.id, ctx.athanor_id)
+    end
   end
 end
