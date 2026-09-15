@@ -70,12 +70,11 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }}
           cache-to: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }},mode=max
 
-      # The builder image is scanned before it is pushed: a fixable HIGH or
+      # Every image is scanned before it is pushed: a fixable HIGH or
       # CRITICAL finding fails the release. The findings .trivyignore.yaml
       # lists are npm's bundled dependencies, which the builder runs for
       # tincture builds as the bridge runs them for its backends.
-      - name: Scan the builder image
-        if: matrix.image == 'cyfr-builder'
+      - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
