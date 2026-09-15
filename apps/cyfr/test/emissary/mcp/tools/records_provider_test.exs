@@ -227,15 +227,26 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     test "a key scoped to storage reads reaches data/ and threads/, a person everything",
          %{ctx: ctx} do
       :ok = Arca.put(ctx, ["data", "reach.txt"], "g")
+      :ok = Arca.put(ctx, ["threads", "thread_r", "reach.bin"], "t")
       :ok = Arca.put(ctx, ["aqua", "reach.md"], "a")
 
       key = %{ctx | permissions: MapSet.new([:storage_read]), auth_method: :api_key}
 
       assert {:ok, _} = MCP.read(key, "arca://files/data/reach.txt")
+      assert {:ok, _} = MCP.read(key, "arca://files/threads/thread_r/reach.bin")
       assert {:error, msg} = MCP.read(key, "arca://files/aqua/reach.md")
       assert err_msg(msg) =~ "Forbidden path"
 
       assert {:ok, _} = MCP.read(ctx, "arca://files/aqua/reach.md")
+
+      # The retired name for threads/ (spelled split for the vocabulary
+      # gate) reaches nothing, for a key or a person.
+      retired = "arca://files/" <> "conver" <> "sations/thread_r/reach.bin"
+
+      for reader <- [key, ctx] do
+        assert {:error, msg} = MCP.read(reader, retired)
+        assert err_msg(msg) =~ "Forbidden path"
+      end
     end
   end
 

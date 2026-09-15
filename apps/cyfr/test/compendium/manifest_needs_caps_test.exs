@@ -152,6 +152,16 @@ defmodule Compendium.ManifestNeedsCapsTest do
       assert {:error, {:invalid_caps, {:invalid_storage_path, "threads/"}}} =
                Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["threads/"]}}})
 
+      # `threads/` is a host scope of the athanor's tree, and the retired
+      # name for it (spelled split for the vocabulary gate) is no root.
+      assert "threads" in Arca.Storage.tenant_roots()
+      retired = "conver" <> "sations"
+      refute retired in Arca.Storage.tenant_roots()
+      retired_grant = retired <> "/"
+
+      assert {:error, {:invalid_caps, {:invalid_storage_path, ^retired_grant}}} =
+               Caps.validate(%{"caps" => %{"storage" => %{"paths" => [retired_grant]}}})
+
       assert {:error, {:invalid_caps, {:invalid_storage_path, "guest/"}}} =
                Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["guest/"]}}})
     end

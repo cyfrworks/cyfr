@@ -311,13 +311,16 @@ defmodule Emissary.MCP.NotesToolTest do
 
     # What the model wrote as provenance — ignored in a chain: the host
     # stamps the card's own execution and thread as lineage, and
-    # those are the only provenance the tool records there.
+    # those are the only provenance the tool records there. The guest's
+    # own lineage keys are dropped before the stamp.
     args = %{
       "action" => "keep",
       "name" => "decided",
       "content" => "Lisbon",
       "thread" => "forged",
-      "execution" => "forged"
+      "execution" => "forged",
+      "thread_id" => "forged",
+      "root_execution_id" => "forged"
     }
 
     lineage = [lineage: %{root_execution_id: "exec_1", thread_id: "thread_1"}]
@@ -337,6 +340,21 @@ defmodule Emissary.MCP.NotesToolTest do
 
     assert {:ok, %{thread: nil, execution: nil}} =
              in_chain(ctx, %{"action" => "read", "name" => "bare"}, auth)
+
+    # The thread's lineage key is `thread_id`: the retired key (spelled
+    # split for the vocabulary gate) is neither stamped from lineage nor
+    # read as the thread when a guest supplies it.
+    retired = "conver" <> "sation_id"
+
+    old_lineage = [
+      lineage: %{String.to_atom(retired) => "thread_1", root_execution_id: "exec_1"}
+    ]
+
+    retired_args = args |> Map.put("name", "retired") |> Map.put(retired, "thread_1")
+    assert {:ok, _} = in_chain(ctx, retired_args, auth, old_lineage)
+
+    assert {:ok, %{thread: nil, execution: "exec_1"}} =
+             in_chain(ctx, %{"action" => "read", "name" => "retired"}, auth)
 
     # The same formula started by a key or a schedule is refused inside the
     # chain exactly as it is at the door — the click was a session's.

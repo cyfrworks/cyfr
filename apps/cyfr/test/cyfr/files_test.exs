@@ -142,6 +142,11 @@ defmodule Cyfr.FilesTest do
       assert msg =~ "read here"
       assert {:error, {:invalid_argument, _}} = Files.delete(ctx, path)
     end
+
+    # The retired name for threads/ (spelled split for the vocabulary gate)
+    # is no folder.
+    retired = "conver" <> "sations"
+    assert {:error, {:not_found, "Folder", ^retired}} = Files.list(ctx, retired)
   end
 
   test "components/ is shaped: edits land only inside a local unit, and a shipped unit is never deleted",

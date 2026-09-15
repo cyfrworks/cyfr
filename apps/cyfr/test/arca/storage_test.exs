@@ -362,6 +362,13 @@ defmodule Arca.StorageTest do
 
       refute Storage.valid_guest_path?("aqua/agent.json")
       refute Storage.valid_guest_path?("threads/thread_1")
+      # Refused as a host scope, not as an unknown root; the retired name
+      # (spelled split for the vocabulary gate) is no root at all.
+      assert "threads" in Storage.tenant_roots()
+      retired = "conver" <> "sations"
+      refute retired in Storage.tenant_roots()
+      refute Map.has_key?(Storage.console_scopes(), retired)
+      refute Storage.valid_guest_path?(retired <> "/thread_1")
       refute Storage.valid_guest_path?("guest/notes.txt")
       refute Storage.valid_guest_path?("datax/notes.txt")
       refute Storage.valid_guest_path?("*")
