@@ -21,6 +21,12 @@ defmodule Cyfr.Execution.Close do
 
   A close struct is data only: the row's record, the context the run was
   admitted in, the node's limits and whether the row has been admitted.
+
+  A run whose row was never admitted is admitted on failure, so a refusal
+  is on record like any other run. When one of the admission barriers
+  refuses that row (`Arca.Execution.barrier_refusal?/1`), nothing is
+  recorded: no row, no lifecycle telemetry and no error log, and the
+  refusal is answered (`barred/1`).
   """
 
   require Logger
@@ -294,29 +300,46 @@ defmodule Cyfr.Execution.Close do
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
 
+  @doc """
+  The answer to a run an admission barrier refused before its row existed
+  (`Arca.Execution.barrier_refusal?/1`): a child whose parent ended is
+  refused with the sentence its caller is shown, and every other barrier's
+  refusal is answered as itself.
+  """
+  @spec barred(atom()) :: {:error, atom() | String.t()}
+  def barred(:parent_ended),
+    do: {:error, "Execution refused: its parent execution is no longer running"}
+
+  def barred(reason) when is_atom(reason), do: {:error, reason}
+
   # The terminal failure write. A row not yet admitted is admitted first,
-  # so a refusal is on record like any other run.
-  defp close_failed(close, secrets, message) do
-    record = close.record
-    message = SecretMasker.mask(message, secrets)
-    failed_record = Record.fail(record, message)
+  # so a refusal is on record like any other run, unless a barrier refuses
+  # it.
+  defp close_failed(%__MODULE__{started: false, record: record} = close, secrets, message) do
+    case Record.write_started(record, close.admission) do
+      :ok ->
+        Telemetry.execute_start(record)
+        close_failed(%{close | started: true}, secrets, message)
 
-    unless close.started do
-      case Record.write_started(record, close.admission) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
+      {:error, reason} ->
+        if Arca.Execution.barrier_refusal?(reason) do
+          barred(reason)
+        else
           Logger.error(
             "[Cyfr.Execution.Close] Failed to write started record #{record.id}: " <>
               "#{inspect(reason)}. Audit trail is incomplete — this execution will not " <>
               "appear in logs."
           )
-      end
 
-      Telemetry.execute_start(record)
+          Telemetry.execute_start(record)
+          close_failed(%{close | started: true}, secrets, message)
+        end
     end
+  end
 
+  defp close_failed(close, secrets, message) do
+    message = SecretMasker.mask(message, secrets)
+    failed_record = Record.fail(close.record, message)
     ended_failed(failed_record, Record.write_failed(failed_record), message)
   end
 

@@ -242,9 +242,12 @@ defmodule Cyfr.Execution.Admission do
   `:charge` naming its row).
 
   Answers `{:ok, admitted}`. A reference that cannot be resolved or typed
-  answers `{:error, reason}` with no row, and so does a child whose parent
-  attempt no longer owns its running parent when the row would be admitted:
-  nothing may run, or be recorded, under a parent that ended. Any other
+  answers `{:error, reason}` with no row. A row an admission barrier
+  refuses (`Arca.Execution.barrier_refusal?/1`) — an expired hold, a
+  superseded step, an occurrence not claimed, or a child whose parent
+  attempt no longer owns its running parent — is not written, and the
+  refusal is answered (`Cyfr.Execution.Close.barred/1`) with no lifecycle
+  telemetry: nothing may run, or be recorded, past a barrier. Any other
   later refusal closes the row failed first and answers what
   `Cyfr.Execution.Close.fail/3` answers.
   """
@@ -295,11 +298,10 @@ defmodule Cyfr.Execution.Admission do
            {:ok, admitted} <- stage(run, &open_attempt(&1, input)) do
         {:ok, admitted}
       else
-        {:error, _run, :parent_ended} ->
-          {:error, "Execution refused: its parent execution is no longer running"}
-
         {:error, run, reason} ->
-          Close.fail(run.close, [], reason)
+          if Arca.Execution.barrier_refusal?(reason),
+            do: Close.barred(reason),
+            else: Close.fail(run.close, [], reason)
       end
     end
   end

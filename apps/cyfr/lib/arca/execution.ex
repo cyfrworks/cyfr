@@ -182,6 +182,15 @@ defmodule Arca.Execution do
   end
 
   @doc """
+  Whether `reason` is the refusal of one of `admit/2`'s barriers: an
+  expired hold, a superseded step, a parent that ended or an occurrence
+  not claimed.
+  """
+  @spec barrier_refusal?(term()) :: boolean()
+  def barrier_refusal?(reason),
+    do: reason in [:hold_expired, :step_superseded, :parent_ended, :occurrence_not_claimed]
+
+  @doc """
   Admit an execution: the row, its first attempt and, for a root, its
   budget reservation, in one transaction. `attrs` are the start
   changeset's; `opts`:
@@ -211,7 +220,8 @@ defmodule Arca.Execution do
 
   Answers `{:ok, %{execution: t(), attempt: ExecutionAttempt.t()}}`; the
   execution's `event_seq` is the number of the `execution.started` event
-  the transaction appended, for the caller to publish.
+  the transaction appended, for the caller to publish. A barrier's refusal
+  (`barrier_refusal?/1`) writes nothing.
   """
   @spec admit(map(), keyword()) ::
           {:ok, %{execution: struct(), attempt: struct()}} | {:error, term()}
