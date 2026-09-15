@@ -52,18 +52,40 @@ defmodule Cyfr.Execution.Host do
   | `attach` | `assignment` (token) | the run's vault fields, name to value |
   | `renew` | `attempts` (ids) | attempt id to `{"lease_until": ms}`, `"cancel"` or `"lost"` |
   | `complete` | `outcome` (`status` `completed`, `output`) | `output`, masked |
-  | `fail` | `outcome` (`status` `failed`, `error`) | `true` |
+  | `fail` | `outcome` (`status` `failed`, `error`, optional `abandoned`) | `true` |
   | `push_deltas` | `deltas` (each `execution_id`, `attempt`, `fence`, `event` text) | one emit reply per delta |
   | `oauth_token` | `provider` | the token |
   | `take_rate` | `bucket` | `true` |
 
   An outcome names its `execution_id`, `attempt` and `fence`.
+
+  ## A runner in this BEAM
+
+  `admitted/2` answers a host call's attached runner what it runs the
+  attempt with beyond its assignment (`t:Cyfr.Execution.Attempt.admitted/0`):
+  the context its guest's in-process calls run in, the run's authority and
+  the component's bytes. It is checked as every call but attach is, needs
+  no fresh nonce, and answers terms, not JSON.
+
+  ## A worker service's report
+
+  `runner_exited/2` takes a report's header (`Cyfr.WorkerAuth.report_header/3`)
+  and its JSON body, `{"op": "runner_exited", "args": {"attempts": [ids]}}`,
+  and answers JSON. The header must verify under the dispatch key
+  (`Cyfr.WorkerAuth.verify_report/4`); a report is idempotent, so its nonce
+  is not checked. Each named attempt dispatched to the reporting worker
+  service that still owns its running execution is lapsed
+  (`Cyfr.Execution.Lapse`), and the attempt process open for each is
+  stopped without closing its run (`Cyfr.Execution.Attempt.stop_unclosed/2`).
+  It answers `{"ok": true}`, `{"error": "lost"}` for a report that does not
+  verify, and `{"error": "unavailable"}` when the store cannot list the
+  attempts.
   """
 
   require Logger
 
   alias Cyfr.{Assignment, Delta, WorkerAuth}
-  alias Cyfr.Execution.{Attempt, Keys, Outcome, Record}
+  alias Cyfr.Execution.{Attempt, Keys, Lapse, Outcome, Record}
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @refusals [
@@ -96,6 +118,66 @@ defmodule Cyfr.Execution.Host do
       )
 
       encode({:error, :lost})
+  end
+
+  @doc """
+  What the attached runner of a host call runs its attempt with beyond its
+  assignment: `header` and the JSON body `{"op": "admitted", "args": {}}`
+  it signs. Answers `{:ok, admitted}` or `{:error, :lost | :unavailable}`.
+  """
+  @spec admitted(String.t(), String.t()) ::
+          {:ok, Attempt.admitted()} | {:error, :lost | :unavailable}
+  def admitted(header, body) when is_binary(header) and is_binary(body) do
+    with {:ok, caller} <- verify(header, body, System.system_time(:millisecond)),
+         {:ok, %{"op" => "admitted", "args" => %{}}} <- Jason.decode(body) do
+      Attempt.admitted(caller.execution_id, caller)
+    else
+      _ -> {:error, :lost}
+    end
+  end
+
+  @doc "Answer one worker service report of a runner's exit: `header` and the JSON `body` it signs."
+  @spec runner_exited(String.t(), String.t()) :: String.t()
+  def runner_exited(header, body) when is_binary(header) and is_binary(body) do
+    now = System.system_time(:millisecond)
+
+    answer =
+      with {:ok, report} <- verify_report(header, body, now),
+           {:ok, attempts} <- reported_attempts(body),
+           :ok <- Lapse.dispatched(report.worker, attempts) do
+        Enum.each(attempts, &Attempt.stop_unclosed(&1, report.worker))
+      end
+
+    encode(answer)
+  rescue
+    exception ->
+      Logger.error(
+        "[Cyfr.Execution.Host] runner exit report raised: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      encode({:error, :unavailable})
+  end
+
+  defp verify_report(header, body, now) do
+    case WorkerAuth.verify_report(Keys.dispatch_key(), header, body, now) do
+      {:ok, report} ->
+        {:ok, report}
+
+      {:error, reason} ->
+        Logger.warning("[Cyfr.Execution.Host] runner exit report refused: #{reason}")
+        {:error, :lost}
+    end
+  end
+
+  defp reported_attempts(body) do
+    with {:ok, %{"op" => "runner_exited", "args" => %{"attempts" => attempts}}}
+         when is_list(attempts) <- Jason.decode(body),
+         true <- Enum.all?(attempts, &(is_binary(&1) and &1 != "")) do
+      {:ok, Enum.uniq(attempts)}
+    else
+      _ -> {:error, :lost}
+    end
   end
 
   defp verify(header, body, now) do
@@ -223,8 +305,9 @@ defmodule Cyfr.Execution.Host do
   defp outcome(%{"execution_id" => id, "attempt" => attempt, "fence" => fence} = wire, status)
        when is_binary(id) and is_binary(attempt) and is_integer(fence) and fence > 0 do
     error = Map.get(wire, "error")
+    abandoned = Map.get(wire, "abandoned", false)
 
-    if is_nil(error) or is_binary(error) do
+    if (is_nil(error) or is_binary(error)) and is_boolean(abandoned) do
       {:ok,
        %Outcome{
          execution_id: id,
@@ -232,7 +315,8 @@ defmodule Cyfr.Execution.Host do
          fence: fence,
          status: status,
          output: Map.get(wire, "output"),
-         error: error
+         error: error,
+         abandoned: abandoned and status == :failed
        }}
     else
       {:error, :lost}

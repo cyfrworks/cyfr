@@ -10,6 +10,19 @@ defmodule Opus.GenServerCatchallTest do
 
   import ExUnit.CaptureLog
 
+  describe "WorkerService catch-all" do
+    test "survives an unexpected message and logs it" do
+      pid = Process.whereis(Opus.WorkerService)
+
+      assert capture_log(fn ->
+               send(pid, {:something, :entirely, :unexpected})
+               :sys.get_state(pid)
+             end) =~ "unexpected message"
+
+      assert Process.whereis(Opus.WorkerService) == pid
+    end
+  end
+
   describe "AsyncTracker catch-all" do
     test "survives unexpected message and logs warning" do
       {:ok, pid} = Opus.AsyncTracker.start_link(parent_execution_id: "test_catchall")

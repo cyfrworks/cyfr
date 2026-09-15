@@ -4,9 +4,7 @@
 defmodule Opus.TimeoutTest do
   use ExUnit.Case, async: false
 
-  alias Opus.Executor
-
-  alias Cyfr.Execution.MCP
+  alias Cyfr.Execution.{Dispatch, MCP}
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
@@ -54,10 +52,10 @@ defmodule Opus.TimeoutTest do
   end
 
   describe "timeout enforcement" do
-    test "Executor accepts timeout_ms option", %{ctx: ctx, ref: ref} do
-      # Executor.run accepts timeout_ms — execution may fail at Component Model
+    test "a dispatched run accepts the timeout_ms option", %{ctx: ctx, ref: ref} do
+      # A run accepts timeout_ms — execution may fail at Component Model
       # load (math.wasm is a core module) but the timeout option is accepted
-      result = Executor.run(ctx, ref, %{"a" => 10, "b" => 20}, timeout_ms: 5000)
+      result = Dispatch.run(ctx, ref, %{"a" => 10, "b" => 20}, timeout_ms: 5000)
 
       # The error should be about Component Model, not about timeout
       case result do
@@ -84,10 +82,9 @@ defmodule Opus.TimeoutTest do
       # Verify the timeout mechanism exists
       assert Code.ensure_loaded?(Task)
 
-      # Verify Executor module is loaded and has the run function
-      assert Code.ensure_loaded?(Executor)
-      # Executor exports run/3 and run/4 (with optional opts)
-      assert function_exported?(Executor, :run, 3) or function_exported?(Executor, :run, 4)
+      # Dispatch is loaded and exports run/3 and run/4 (with optional opts)
+      assert Code.ensure_loaded?(Dispatch)
+      assert function_exported?(Dispatch, :run, 3) or function_exported?(Dispatch, :run, 4)
     end
 
     test "policy-derived timeout is used when available", %{ctx: ctx, ref: ref} do

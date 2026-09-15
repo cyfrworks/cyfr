@@ -7,7 +7,7 @@ defmodule Cyfr.Execution.AttestationTest do
   alias Cyfr.Execution.Attestation
 
   describe "attestation/1" do
-    # `Opus.Executor` reads this instead of `verify/3` alone because only one
+    # `Cyfr.Execution.Admission` reads this instead of `verify/3` alone because only one
     # of the four answers is the operator's call. Before it existed the whole
     # check hung on the caller's `:verify` argument, whose one producer is a
     # client's own MCP tool call — so children, schedules and tincture

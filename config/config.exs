@@ -80,6 +80,11 @@ config :phoenix, :json_library, Jason
 # Configure the execution implementation before endpoint startup; unavailable code reports no engine.
 config :cyfr, :execution_impl, Opus
 
+# The worker services runs are dispatched to (`Cyfr.Execution.Dispatch`),
+# each a `Cyfr.WorkerAPI` module; a run goes to the first one loaded. With
+# none loaded, a run is refused as :execution_unavailable.
+config :cyfr, :workers, [Opus.WorkerService]
+
 # The byte store behind retained execution payloads
 # (`Arca.ExecutionPayloads.Store`): the athanor's own tree by default.
 config :cyfr, :execution_payload_store, Arca.ExecutionPayloads.Store.Overlay

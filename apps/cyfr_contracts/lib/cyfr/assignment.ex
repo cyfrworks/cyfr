@@ -64,6 +64,14 @@ defmodule Cyfr.Assignment do
   The rest of a claim is the caller's: that the audience is the presenting
   worker, that the generation is current, and that the attempt row is
   running at this fence and unclaimed.
+
+  ## Reading
+
+  A worker service holds no assign key, so it reads the assignment it is
+  started with through `read/1`, which decodes the token's payload as
+  `verify/3` does without checking its MAC or its claim deadline. What it
+  answers authorizes nothing: CYFR verifies the token when the runner
+  attaches.
   """
 
   alias Cyfr.Actor
@@ -180,6 +188,20 @@ defmodule Cyfr.Assignment do
          {:ok, assignment} <- decode(wire),
          :ok <- claimable(assignment, now) do
       {:ok, assignment}
+    end
+  end
+
+  @doc """
+  The assignment a token carries, without verifying its MAC or its claim
+  deadline. Refused, as `verify/3` refuses them: `:malformed` and
+  `:unknown_version`.
+  """
+  @spec read(term()) :: {:ok, t()} | {:error, :malformed | :unknown_version}
+  def read(token) do
+    with {:ok, payload, _mac} <- split(token),
+         {:ok, wire} <- json_object(payload),
+         :ok <- known_version(wire) do
+      decode(wire)
     end
   end
 

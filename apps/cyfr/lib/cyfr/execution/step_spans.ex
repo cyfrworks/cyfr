@@ -9,9 +9,10 @@ defmodule Cyfr.Execution.StepSpans do
   its caller waits on it.
 
   The port starts a clock when it is called and hands it to the engine in
-  the call's options as `:step_spans`. The engine marks the guest's start,
-  its first streamed delta and its completed write against that clock,
-  from whichever process each happens in. Each event is emitted at most
+  the call's options as `:step_spans`. The run's attempt marks the guest's
+  start when its runner attaches, and its first streamed delta and its
+  completed write as they happen (`Cyfr.Execution.Attempt`), from
+  whichever process each happens in. Each event is emitted at most
   once per call, and only for a moment that happened: a guest that never
   started emits no admission, a guest that streams nothing emits no
   first delta, and a run that fails emits no completion.
@@ -23,7 +24,7 @@ defmodule Cyfr.Execution.StepSpans do
 
   | Event | From | To |
   |---|---|---|
-  | `[:cyfr, :execution, :child, :admission]` | the port is called | the guest starts |
+  | `[:cyfr, :execution, :child, :admission]` | the port is called | the guest starts: its runner attaches |
   | `[:cyfr, :execution, :child, :first_delta]` | the guest starts | its first `text.delta` or `tool_call.*` event is pushed to its stream |
   | `[:cyfr, :execution, :child, :completion]` | the guest starts | its completed row is written |
   | `[:cyfr, :execution, :run_child]` | the port is called | the port returns, whatever it answers |

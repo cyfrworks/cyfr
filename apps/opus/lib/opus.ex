@@ -153,7 +153,7 @@ defmodule Opus do
   """
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   @impl Cyfr.Execution
-  defdelegate cancel(ctx, execution_id), to: Opus.Executor
+  defdelegate cancel(ctx, execution_id), to: Cyfr.Execution.Dispatch
 
   @impl Cyfr.Execution
   defdelegate claim_turn_root(ctx, agent_ref, opts \\ []), to: Cyfr.Execution.TurnRoot, as: :claim
@@ -176,13 +176,17 @@ defmodule Opus do
   """
   @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   @impl Cyfr.Execution
-  defdelegate cancel_for_restart(ctx, execution_id, payload), to: Opus.Executor
+  defdelegate cancel_for_restart(ctx, execution_id, payload), to: Cyfr.Execution.Dispatch
 
-  @doc "Whether the engine can admit work: the execution slots and its WASM engine are up."
+  @doc """
+  Whether the engine can admit work: the execution slots, its WASM engine
+  and its worker service are up.
+  """
   @impl Cyfr.Execution
   @spec ready?() :: boolean()
   def ready?,
     do:
       is_pid(Process.whereis(Cyfr.Execution.Semaphore)) and
-        is_pid(Process.whereis(Opus.SharedEngine))
+        is_pid(Process.whereis(Opus.SharedEngine)) and
+        is_pid(Process.whereis(Opus.WorkerService))
 end

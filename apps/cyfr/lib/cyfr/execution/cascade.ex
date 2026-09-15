@@ -10,7 +10,9 @@ defmodule Cyfr.Execution.Cascade do
   is not linked to its parent. Each such child is failed with
   `"Parent execution (<parent id>) terminated"`, fenced on the attempt that
   owns it, and gets `[:cyfr, :opus, :execute, :exception]` and an
-  `execution.failed` event. A child that closed first is left as it closed.
+  `execution.failed` event; then what runs it is stopped
+  (`Cyfr.Execution.Dispatch.stop/2`), so neither its waiter nor its runner
+  outlives the parent. A child that closed first is left as it closed.
 
   A parent that completes normally leaves its children to finish on their
   own; an abandoned one is reaped when its lease lapses
@@ -19,7 +21,7 @@ defmodule Cyfr.Execution.Cascade do
 
   require Logger
 
-  alias Cyfr.Execution.{Events, Record, Telemetry}
+  alias Cyfr.Execution.{Dispatch, Events, Record, Telemetry}
 
   @doc """
   Fail the running children of a failed formula's record. Catalysts and
@@ -71,6 +73,8 @@ defmodule Cyfr.Execution.Cascade do
         "status" => "failed",
         "error" => error_msg
       })
+
+      Dispatch.stop(child.id, child.athanor_id)
     end
   end
 end

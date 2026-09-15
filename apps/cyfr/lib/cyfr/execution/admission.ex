@@ -23,10 +23,12 @@ defmodule Cyfr.Execution.Admission do
 
   A run is admitted by `admit/4`: its reference resolved and typed, its
   consented limits, rates and policy enforced, its bytes fetched and their
-  attestation checked, its row admitted, its assignment signed and its
-  `Cyfr.Execution.Attempt` opened. A refusal at any stage after the row is
-  built closes the row failed (`Cyfr.Execution.Close`) before it answers.
-  The run's vault edge is unsealed when its runner attaches.
+  attestation checked, its row admitted for the worker service it is
+  dispatched to and its `Cyfr.Execution.Attempt` opened. A refusal at any
+  stage after the row is built closes the row failed
+  (`Cyfr.Execution.Close`) before it answers. `Cyfr.Execution.Dispatch`
+  signs the run's assignment and starts it on the worker service; the
+  run's vault edge is unsealed when its runner attaches.
   """
 
   require Logger
@@ -51,19 +53,16 @@ defmodule Cyfr.Execution.Admission do
   @type root :: %{authority: Authority.t(), stamp: map() | nil, profile: map()}
 
   @typedoc """
-  An admitted run: its execution id, its open attempt, the signed
-  assignment its runner attaches with and that attempt's key
-  (`t:Cyfr.Execution.Assignments.issued/0`), the verified component bytes,
-  the options the runtime runs them under (the consented limits and
-  resources, the run's identity and lineage) and the state its waiter
-  closes it lost with (`Cyfr.Execution.Attempt.await/2`).
+  An admitted run: its execution id, its open attempt, what its assignment
+  is signed from (`t:Cyfr.Execution.Assignments.admitted/0`), its
+  consented timeout and the state its waiter closes it lost with
+  (`Cyfr.Execution.Dispatch.await/2`).
   """
   @type admitted :: %{
           execution_id: String.t(),
           attempt: pid(),
-          dispatch: Assignments.issued(),
-          wasm_bytes: binary(),
-          runtime: keyword(),
+          assignment: Assignments.admitted(),
+          timeout_ms: pos_integer(),
           close: Close.t()
         }
 
@@ -223,17 +222,22 @@ defmodule Cyfr.Execution.Admission do
   profile, the profile's and the caller's address buckets) must have room;
   the policy consultation is recorded; the bytes must match the registry
   digest and their attestation must satisfy `opts[:verify]` and the
-  signed-pulls setting; the row is admitted with its barriers; its
-  assignment is signed; and the attempt opens, owned by the calling
-  process.
+  signed-pulls setting; the row is admitted with its barriers; and the
+  attempt opens, owned by the calling process.
 
   Options: `:authority` (required — admitting without one raises, and the
   raise closes the row failed), `:type`, `:verify`, `:execution_id`,
   `:parent_execution_id`, `:root_execution_id`, `:profile_id`,
   `:retention_class`, `:retained_input`, `:schedule_id`,
   `:activation_stamp`, `:activation_digest`, `:dep_ref`, `:need`,
-  `:client_ip`, the barriers `:charge`, `:step` and `:occurrence_id`, and
-  `:step_spans`.
+  `:client_ip`, the barriers `:charge`, `:step` and `:occurrence_id`,
+  `:step_spans`, and what the attempt is opened with
+  (`Cyfr.Execution.Attempt.open/1`): `:runner_id` (the boot id of the
+  worker service the run is dispatched to, which is also the row's runner
+  and the assignment's audience), `:worker` (that worker service's
+  `Cyfr.WorkerAPI` module) and `:held_invoke` (true when the calling
+  process holds the charged invoke-budget slot of a spawned child, with
+  `:charge` naming its row).
 
   Answers `{:ok, admitted}`. A reference that cannot be resolved or typed
   answers `{:error, reason}` with no row; any later refusal closes the row
@@ -275,15 +279,14 @@ defmodule Cyfr.Execution.Admission do
           step_spans: opts[:step_spans],
           setup_stream: opts[:root_execution_id] || opts[:parent_execution_id],
           signature_verified: component["signature_verified"] || false,
-          admission: Keyword.take(opts, [:charge, :step, :occurrence_id])
+          admission: Keyword.take(opts, [:charge, :step, :occurrence_id, :runner_id])
         }
       }
 
       with {:ok, run} <- stage(run, &enforce_policy(&1, input)),
            {:ok, run} <- stage(run, &fetch_and_verify/1),
            {:ok, run} <- stage(run, &admit_row/1),
-           {:ok, run} <- stage(run, &sign_assignment(&1, input)),
-           {:ok, admitted} <- stage(run, &open_attempt/1) do
+           {:ok, admitted} <- stage(run, &open_attempt(&1, input)) do
         {:ok, admitted}
       else
         {:error, run, reason} -> Close.fail(run.close, [], reason)
@@ -735,42 +738,8 @@ defmodule Cyfr.Execution.Admission do
     end
   end
 
-  defp sign_assignment(run, input) do
-    record = run.close.record
-
-    issued =
-      Assignments.issue(%{
-        ctx: run.ctx,
-        record: record,
-        authority: run.opts[:authority],
-        component: %{
-          ref: run.component_ref,
-          type: Atom.to_string(run.component_type),
-          digest: run.component["digest"],
-          declared_needs: declared_needs(run),
-          activation_digest: activation_digest(run)
-        },
-        input: input,
-        timeout_ms: run.timeout_ms,
-        step: run.opts[:step]
-      })
-
-    case issued do
-      {:ok, dispatch} ->
-        {:ok, Map.put(run, :dispatch, dispatch)}
-
-      {:error, reason} ->
-        Logger.error(
-          "[Cyfr.Execution.Admission] assignment of #{record.id} was not signed: " <>
-            inspect(reason)
-        )
-
-        {:error, "the execution assignment could not be signed"}
-    end
-  end
-
   # The attempt opens last, once nothing after it can refuse the run.
-  defp open_attempt(run) do
+  defp open_attempt(run, input) do
     record = run.close.record
     root_execution_id = run.opts[:root_execution_id] || record.id
 
@@ -789,7 +758,12 @@ defmodule Cyfr.Execution.Admission do
         # its own.
         stream_id: if(run.component_type == :formula, do: root_execution_id, else: record.id),
         budget_id: root_execution_id,
-        step_spans: run.opts[:step_spans]
+        step_spans: run.opts[:step_spans],
+        worker: run.opts[:worker],
+        runner_id: run.opts[:runner_id],
+        wasm_bytes: run.wasm_bytes,
+        held_invoke: run.opts[:held_invoke] == true,
+        charge: if(run.opts[:held_invoke] == true, do: run.opts[:charge])
       )
 
     case opened do
@@ -798,9 +772,8 @@ defmodule Cyfr.Execution.Admission do
          %{
            execution_id: record.id,
            attempt: pid,
-           dispatch: run.dispatch,
-           wasm_bytes: run.wasm_bytes,
-           runtime: runtime_options(run),
+           assignment: assignment(run, input),
+           timeout_ms: run.timeout_ms,
            close: run.close
          }}
 
@@ -813,28 +786,26 @@ defmodule Cyfr.Execution.Admission do
     end
   end
 
-  # What the runtime runs the admitted bytes under. The declared needs and
-  # the activation digest are the resolver's, from the manifest the host
+  # What the run's assignment is signed from. The declared needs and the
+  # activation digest are the resolver's, from the manifest the host
   # fetched, never the guest's.
-  defp runtime_options(run) do
-    record = run.close.record
-
-    [
-      component_type: run.component_type,
-      timeout_ms: run.timeout_ms,
-      max_memory_bytes: run.limits.max_memory_bytes,
-      edge: run.edge,
-      limits: run.limits,
-      component_ref: run.component_ref,
+  defp assignment(run, input) do
+    %{
       ctx: run.ctx,
-      execution_id: record.id,
-      execution_attempt: record.attempt,
-      root_execution_id: run.opts[:root_execution_id],
-      reference: run.reference,
-      digest: run.component["digest"],
-      declared_needs: declared_needs(run),
-      activation_digest: activation_digest(run)
-    ]
+      record: run.close.record,
+      authority: run.opts[:authority],
+      component: %{
+        ref: run.component_ref,
+        type: Atom.to_string(run.component_type),
+        digest: run.component["digest"],
+        declared_needs: declared_needs(run),
+        activation_digest: activation_digest(run)
+      },
+      input: input,
+      timeout_ms: run.timeout_ms,
+      step: run.opts[:step],
+      audience: run.opts[:runner_id] || Record.runner_id()
+    }
   end
 
   defp activation_digest(run),

@@ -3,7 +3,7 @@
 
 defmodule Opus.AuthorityPlumbingTest do
   # Verify authority survives the runtime-option allowlist and that
-  # authority_required fails closed in both executor and runtime.
+  # authority_required fails closed in both admission and runtime.
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
@@ -70,13 +70,13 @@ defmodule Opus.AuthorityPlumbingTest do
   # here fails at component compile. That is irrelevant: the witness fires
   # and the required-check runs before compilation is attempted.
 
-  test "an :authority passed to Executor.run reaches the runtime intact", %{ctx: ctx} do
+  test "an :authority passed to a dispatched run reaches the runtime intact", %{ctx: ctx} do
     attach_witness()
     authority = Cyfr.Authority.zero()
     execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
 
     _result =
-      Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+      Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
         execution_id: execution_id,
         authority: authority
@@ -93,7 +93,7 @@ defmodule Opus.AuthorityPlumbingTest do
     # Admission raises for a missing authority, and the raise closes the
     # run failed before it reaches the runtime.
     assert {:error, message} =
-             Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
+             Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
 
     assert message =~ "without an authority is not a thing"
     refute_receive {:authority_entered, _}, 500
@@ -103,7 +103,7 @@ defmodule Opus.AuthorityPlumbingTest do
     attach_witness()
 
     assert {:error, message} =
-             Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+             Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
                type: :reagent,
                authority_required: true
              )
@@ -117,7 +117,7 @@ defmodule Opus.AuthorityPlumbingTest do
     authority = Cyfr.Authority.zero()
 
     _result =
-      Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+      Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
         authority: authority,
         authority_required: true

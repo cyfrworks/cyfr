@@ -8,7 +8,7 @@ defmodule Compendium.RegistryCacheInvalidationTest do
   alias Compendium.Registry
   alias Sanctum.Context
 
-  # Opus.Executor writes component metadata under the shape in
+  # Cyfr.Execution.Admission writes component metadata under the shape in
   # Arca.Cache.Keys; the registry sweep must use the same shape or a
   # re-register / delete leaves stale metadata serving for its full TTL.
   # Compiled components are content-addressed (keyed by digest) and are not

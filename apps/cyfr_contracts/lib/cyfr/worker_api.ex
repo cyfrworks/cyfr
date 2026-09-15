@@ -33,10 +33,12 @@ defmodule Cyfr.WorkerAPI do
   @doc """
   Start an assignment on a runner. `input` is the execution's input bytes,
   bound by the assignment's `input_digest`, and `sealed_keys` is the
-  attempt key sealed with the dispatch seal key. The runner attaches
+  attempt key sealed with the dispatch seal key
+  (`Cyfr.WorkerAuth.seal_attempt_key/2`). The runner attaches
   (`c:Cyfr.HostAPI.attach/2`) before it runs anything. `:malformed` means
-  the assignment cannot be read, the input does not match its digest or
-  the keys do not open.
+  the assignment cannot be read or is addressed to another worker service,
+  the input does not match its digest or the keys do not open as its
+  attempt.
   """
   @callback start(Cyfr.Assignment.token(), input :: binary(), sealed_keys :: String.t()) ::
               :ok | {:error, :malformed}

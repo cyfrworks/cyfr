@@ -174,7 +174,9 @@ defmodule Cyfr.HostAPI do
 
   @doc """
   Report that a runner of the reporting worker service exited, with the
-  attempts it had claimed. CYFR lapses each of them that is still running.
+  attempts it was started with and had not closed. CYFR lapses each of
+  them that was dispatched to that worker service and is still running,
+  and stops what it holds for each.
   """
   @callback runner_exited(report :: WorkerAuth.dispatch(), attempts :: [String.t()]) ::
               :ok | {:error, :unavailable}

@@ -76,7 +76,7 @@ defmodule Cyfr.Execution.Attestation do
     * `{:unknown_source, s}` — anything else; a verifier fails CLOSED, so a
       new source value must be classified here before its components run.
 
-  `Opus.Executor` needs the three-way answer because only `:unsigned` is the
+  `Cyfr.Execution.Admission` needs the three-way answer because only `:unsigned` is the
   operator's call (`CYFR_REQUIRE_SIGNED_PULLS`); a pinned-signer mismatch and
   an unclassified source refuse regardless.
   """

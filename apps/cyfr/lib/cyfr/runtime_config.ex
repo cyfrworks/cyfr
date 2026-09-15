@@ -192,7 +192,7 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   Whether unsigned OCI components are refused. Read at both ends of a
   component's life — `Compendium.OCI.Client` refuses the pull, and
-  `Opus.Executor` refuses to execute a row that carries no verified
+  `Cyfr.Execution.Admission` refuses to run a row that carries no verified
   signature (a component pulled before the knob was set).
   """
   @spec require_signed_pulls?() :: boolean()

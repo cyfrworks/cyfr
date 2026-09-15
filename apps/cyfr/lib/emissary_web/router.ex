@@ -392,7 +392,7 @@ defmodule EmissaryWeb.Router do
         # /activities: unified activities feed (mcp_log + execution fan-out).
         live "/activities", ActivitiesLive, :index
         # /enforcements: live policy-decision feed (Arca.PolicyLog rows from
-        # Opus.Executor + HTTP egress + tincture rate limiter). Click-through
+        # Cyfr.Execution.Admission + HTTP egress + tincture rate limiter). Click-through
         # to /activities?request_id=… for the request-anchored causal chain.
         live "/enforcements", EnforcementsLive, :index
         # /executions: dedicated Opus execution monitor (parent_execution_id

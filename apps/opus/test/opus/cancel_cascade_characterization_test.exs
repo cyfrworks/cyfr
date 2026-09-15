@@ -6,16 +6,18 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   Cancelling a formula ends everything it started. With a spawned child
   and a `run_stream` child in flight, a cancel leaves the formula's row
   cancelled with one terminal event and each child failed "Parent
-  execution (…) terminated" with one terminal event; once the children
-  held at their guest's entry are let go, no process of the run is alive
-  and the in-flight count, the execution slots and the charge rows are
-  back where they were. A cancel racing the formula's own completion
-  leaves exactly one terminal outcome.
+  execution (…) terminated" with one terminal event; without the children
+  held at their guest's entry ever being let go, no process of the run is
+  left alive — no waiter, attempt, runner, component process or formula
+  tracker, the `run_stream` child's driver included — and the in-flight
+  count, the execution slots and the charge rows are back where they were.
+  A cancel racing the formula's own completion leaves exactly one terminal
+  outcome.
 
   The formula is the `nested-probe`, spawning one child and awaiting it;
-  its children are the probe too, held at the entry to their guest until
-  the test lets them go. The probe issues one operation per run, so the
-  `run_stream` child is started by the test through the formula's own
+  its children are the probe too, held at the entry to their guest. The
+  probe issues one operation per run, so the `run_stream` child is started
+  by the test through the formula's own
   `call` host function (`Opus.FormulaHandler.execute/3`), with the
   formula's authority, attempt and lineage, while the formula awaits its
   spawned child.
@@ -76,8 +78,8 @@ defmodule Opus.CancelCascadeCharacterizationTest do
 
     root = start_root(ctx, root_id, %{"op" => "spawn_await", "request" => run("run")})
 
-    assert_receive {:entered, ^root_id, authority}, 30_000
-    assert_receive {:held, spawned_runner, spawned_id}, 30_000
+    assert_receive {:entered, ^root_id, root_component, authority}, 30_000
+    assert_receive {:held, spawned_component, spawned_id}, 30_000
     row = Arca.Repo.get!(Arca.Execution, root_id)
 
     streamed =
@@ -92,24 +94,26 @@ defmodule Opus.CancelCascadeCharacterizationTest do
       )
 
     assert %{"output" => %{"execution_id" => stream_id}} = Jason.decode!(streamed)
-    assert_receive {:held, stream_runner, ^stream_id}, 30_000
+    assert_receive {:held, stream_component, ^stream_id}, 30_000
 
     assert Sanctum.Authority.budget(authority).in_flight == 2
 
-    [{_, root_meta}] = Registry.lookup(Cyfr.Execution.Registry, root_id)
-    [{spawned_driver, _}] = Registry.lookup(Cyfr.Execution.Registry, spawned_id)
-    [{stream_driver, _}] = Registry.lookup(Cyfr.Execution.Registry, stream_id)
+    runners = runners([root_id, spawned_id, stream_id])
 
-    processes = [
-      root,
-      root_meta.runner_pid,
-      root_meta.tracker_pid,
-      spawned_driver,
-      spawned_runner,
-      stream_driver,
-      stream_runner
-    ]
+    processes =
+      [root, root_component, spawned_component, stream_component] ++
+        for id <- [root_id, spawned_id, stream_id],
+            process <- [
+              waiter(id),
+              Cyfr.Execution.Attempt.whereis(id),
+              runners[id].pid
+            ],
+            do: process
 
+    tracker = runners[root_id].cleanup.formula_tracker_pid
+    processes = [tracker | processes]
+
+    assert Enum.all?(processes, &is_pid/1)
     assert Enum.all?(processes, &Process.alive?/1)
 
     assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
@@ -124,8 +128,6 @@ defmodule Opus.CancelCascadeCharacterizationTest do
       assert child.parent_execution_id == root_id
       assert ["execution.failed"] = terminal_events(ctx, child_id)
     end
-
-    for runner <- [spawned_runner, stream_runner], do: send(runner, :continue)
 
     wait_until(fn -> not Enum.any?(processes, &Process.alive?/1) end, 30_000)
     wait_until(fn -> Cyfr.Execution.Semaphore.status().active == slots_before end)
@@ -187,7 +189,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     end
   end
 
-  # A root run of the probe in a process of its own, which a cancel kills.
+  # A root run of the probe in a process of its own, which waits on it.
   defp start_root(ctx, root_id, input) do
     test_pid = self()
 
@@ -215,7 +217,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
           held? =
             case Arca.Repo.get(Arca.Execution, id) do
               %{id: ^root_id} ->
-                send(test_pid, {:entered, id, authority})
+                send(test_pid, {:entered, id, self(), authority})
                 hold_root?
 
               %{parent_execution_id: ^root_id} ->
@@ -254,6 +256,20 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   end
 
   defp run_json(action), do: Jason.encode!(run(action))
+
+  # The process registered under `id`: its run's waiter.
+  defp waiter(id) do
+    [{pid, {:dispatched, Opus.WorkerService}}] = Registry.lookup(Cyfr.Execution.Registry, id)
+    pid
+  end
+
+  # The worker service's runner of each execution, as it tracks them.
+  defp runners(ids) do
+    for {_ref, runner} <- :sys.get_state(Opus.WorkerService).runners,
+        runner.execution_id in ids,
+        into: %{},
+        do: {runner.execution_id, runner}
+  end
 
   defp terminal_events(ctx, id) do
     {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, id, 0)

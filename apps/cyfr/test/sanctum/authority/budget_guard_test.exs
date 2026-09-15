@@ -83,6 +83,67 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     assert BudgetCounter.snapshot(budget).in_flight == 0
   end
 
+  # A process that guards one charged slot and waits.
+  defp holding!(budget) do
+    :ok = BudgetCounter.try_acquire(budget)
+    test_pid = self()
+
+    holder =
+      spawn(fn ->
+        BudgetGuard.guard(budget)
+        send(test_pid, :guarded)
+
+        receive do
+          :never -> :ok
+        end
+      end)
+
+    assert_receive :guarded, 1_000
+    holder
+  end
+
+  describe "handover/3" do
+    test "the slot moves: the old holder's death releases nothing, the new holder's releases it",
+         %{budget: budget} do
+      from = holding!(budget)
+
+      to =
+        spawn(fn ->
+          receive do
+            :never -> :ok
+          end
+        end)
+
+      assert :ok = BudgetGuard.handover(budget, from, to)
+
+      ref = Process.monitor(from)
+      Process.exit(from, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^from, :killed}, 1_000
+      :sys.get_state(BudgetGuard)
+      assert BudgetCounter.snapshot(budget).in_flight == 1
+
+      Process.exit(to, :kill)
+
+      wait_until(
+        fn -> BudgetCounter.snapshot(budget).in_flight == 0 end,
+        2_000,
+        "the new holder's slot to come back"
+      )
+    end
+
+    test "a slot its holder already gave back is not taken over", %{budget: budget} do
+      from = holding!(budget)
+      ref = Process.monitor(from)
+      Process.exit(from, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^from, :killed}, 1_000
+      :sys.get_state(BudgetGuard)
+      assert BudgetCounter.snapshot(budget).in_flight == 0
+
+      assert :released = BudgetGuard.handover(budget, from, self())
+      refute Map.has_key?(:sys.get_state(BudgetGuard).guards, {budget.id, self()})
+    end
+  end
+
   test "a release with no guard registered releases directly", %{budget: budget} do
     :ok = BudgetCounter.try_acquire(budget)
     :ok = BudgetGuard.release(budget, self())

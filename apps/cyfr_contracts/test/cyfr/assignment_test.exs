@@ -7,7 +7,8 @@ defmodule Cyfr.AssignmentTest do
   the assign key only. A token is refused when its MAC or payload was
   changed, when it was MAC'd with the dispatch key (a worker cannot mint
   one), when its claim deadline has passed, when its version is unknown,
-  and when its payload has an unknown, missing or mistyped member.
+  and when its payload has an unknown, missing or mistyped member. A worker
+  reads a token without the assign key, and reading grants nothing.
   """
   use ExUnit.Case, async: true
 
@@ -261,6 +262,27 @@ defmodule Cyfr.AssignmentTest do
 
       assert {:error, :malformed} = Assignment.verify(token_over("[1]", key), key, @now)
       assert {:error, :malformed} = Assignment.verify(token_over("not json", key), key, @now)
+    end
+
+    test "reads without the assign key, and what it reads still does not verify forged",
+         %{assign_key: key, authority: authority} do
+      assignment = assignment(authority)
+      token = sign!(assignment, key)
+
+      assert {:ok, ^assignment} = Assignment.read(token)
+      assert {:ok, ^assignment} = Assignment.read(token_over(payload(token), "any key"))
+      assert {:ok, _} = Assignment.read(sign!(assignment(authority, %{claim_by: 0}), key))
+
+      widened = resigned(token, "a worker's key", &Map.put(&1, "fence", 2))
+      assert {:ok, %Assignment{fence: 2}} = Assignment.read(widened)
+      assert {:error, :bad_mac} = Assignment.verify(widened, key, @now)
+
+      assert {:error, :unknown_version} =
+               Assignment.read(resigned(token, key, &Map.put(&1, "v", 2)))
+
+      assert {:error, :malformed} = Assignment.read(resigned(token, key, &Map.delete(&1, "v")))
+      assert {:error, :malformed} = Assignment.read(token_over("not json", key))
+      assert {:error, :malformed} = Assignment.read(nil)
     end
 
     test "decodes an absent optional member as nil", %{assign_key: key, authority: authority} do

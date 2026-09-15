@@ -42,10 +42,11 @@ defmodule Cyfr.Authority do
   ## Wire
 
   An Authority is plain data end to end — `to_wire/1` gives the JCS-ready
-  map of its twelve fields — so a worker on another node can run under
-  exactly the authority the root resolved. Reading a wire map back
-  re-establishes the platform ceiling and the reservation's cap, which
-  this module does not hold.
+  map of its twelve fields — so a runner can read the authority its
+  assignment carries (`from_wire/1`) for its own egress checks. The copy
+  grants nothing: CYFR decides from its own. The policy comes back as it
+  was clamped when its root was built, and the budget as its id with a
+  cap of 0, since the cap is the reservation row's.
   """
 
   alias Cyfr.Authority.Blob
@@ -322,6 +323,50 @@ defmodule Cyfr.Authority do
     }
   end
 
+  @doc """
+  An Authority back from `to_wire/1`'s map, or from the map an assignment
+  carries, which omits every member whose value is nil: an absent member
+  reads as nil.
+
+  Fail-closed: a member other than the twelve, a malformed cursor, policy,
+  edge or budget, an identity field that is not a non-empty string, a
+  chain or activation of the wrong shape and a depth beyond the depth cap
+  are each an error, never a looser Authority. The budget carries its id
+  alone and comes back with a cap of 0, so no spawn can be charged
+  through a decoded copy.
+  """
+  @spec from_wire(term()) :: {:ok, t()} | {:error, term()}
+  def from_wire(%{} = wire) when not is_struct(wire) do
+    with :ok <- wire_keys(wire),
+         :ok <- wire_identity(wire),
+         {:ok, profile_kind} <- wire_enum(wire["profile_kind"], @valid_kinds, true),
+         {:ok, invoke_mode} <- wire_enum(wire["invoke_mode"], @valid_invoke_modes, false),
+         {:ok, policy} <- wire_policy(wire["policy"]),
+         {:ok, cursor} <- wire_cursor(wire["cursor"]),
+         {:ok, resources} <- wire_resources(wire["resources"]),
+         {:ok, budget} <- wire_budget(wire["budget"]),
+         :ok <- wire_chain(wire["chain"]),
+         :ok <- wire_activation(wire["activation"]),
+         :ok <- wire_depth(wire["depth"]) do
+      {:ok,
+       %__MODULE__{
+         profile_id: wire["profile_id"],
+         consent_id: wire["consent_id"],
+         source_ref: wire["source_ref"],
+         profile_kind: profile_kind,
+         policy: policy,
+         activation: wire["activation"],
+         invoke_mode: invoke_mode,
+         cursor: cursor,
+         resources: resources,
+         chain: wire["chain"],
+         depth: wire["depth"],
+         budget: budget
+       }}
+    end
+  end
+
+  def from_wire(other), do: {:error, {:invalid_wire, other}}
   # ============================================================================
   # Private
   # ============================================================================
@@ -375,4 +420,85 @@ defmodule Cyfr.Authority do
       {:error, :missing_ingress} -> {:error, {:missing_ingress, source_ref}}
     end
   end
+
+  @wire_keys ~w(profile_id consent_id source_ref profile_kind policy activation invoke_mode cursor resources chain depth budget)
+
+  defp wire_keys(wire) do
+    case Map.keys(wire) -- @wire_keys do
+      [] -> :ok
+      unknown -> {:error, {:invalid_wire_keys, Enum.sort(unknown)}}
+    end
+  end
+
+  defp wire_identity(wire) do
+    case Enum.find(~w(profile_id consent_id source_ref), &(not optional_id?(wire[&1]))) do
+      nil -> :ok
+      key -> {:error, {:invalid_wire_value, key}}
+    end
+  end
+
+  defp optional_id?(nil), do: true
+  defp optional_id?(value), do: is_binary(value) and value != ""
+
+  defp wire_enum(nil, _allowed, true), do: {:ok, nil}
+
+  defp wire_enum(value, allowed, _nil_ok) when is_binary(value) do
+    case Enum.find(allowed, &(Atom.to_string(&1) == value)) do
+      nil -> {:error, {:invalid_wire_value, value}}
+      atom -> {:ok, atom}
+    end
+  end
+
+  defp wire_enum(value, _allowed, _nil_ok), do: {:error, {:invalid_wire_value, value}}
+
+  defp wire_policy(nil), do: {:ok, :none}
+
+  defp wire_policy(%{} = map) do
+    case Blob.parse(map) do
+      {:ok, blob} -> {:ok, blob}
+      {:error, reason} -> {:error, {:invalid_wire_policy, reason}}
+    end
+  end
+
+  defp wire_policy(other), do: {:error, {:invalid_wire_policy, other}}
+
+  defp wire_cursor("unbound"), do: {:ok, :unbound}
+  defp wire_cursor(%{"bound" => ref}) when is_binary(ref) and ref != "", do: {:ok, {:bound, ref}}
+  defp wire_cursor(other), do: {:error, {:invalid_wire_cursor, other}}
+
+  defp wire_resources(nil), do: {:ok, :none}
+
+  defp wire_resources(%{} = map) do
+    case Blob.parse_edge(map) do
+      {:ok, edge} -> {:ok, edge}
+      {:error, reason} -> {:error, {:invalid_wire_resources, reason}}
+    end
+  end
+
+  defp wire_resources(other), do: {:error, {:invalid_wire_resources, other}}
+
+  defp wire_budget(%{"id" => id} = map) when is_binary(id) and id != "" and map_size(map) == 1,
+    do: {:ok, %Budget{id: id, cap: 0}}
+
+  defp wire_budget(other), do: {:error, {:invalid_wire_budget, other}}
+
+  defp wire_chain(list) when is_list(list) do
+    if Enum.all?(list, &(is_binary(&1) and &1 != "")),
+      do: :ok,
+      else: {:error, {:invalid_wire_chain, list}}
+  end
+
+  defp wire_chain(other), do: {:error, {:invalid_wire_chain, other}}
+
+  defp wire_activation(activation) do
+    if valid_activation?(activation),
+      do: :ok,
+      else: {:error, {:invalid_wire_activation, activation}}
+  end
+
+  # Bounded by the same cap `Cyfr.Authority.Transition` checks before every
+  # invoke, so a wire map can neither hand back an authority past the cap
+  # nor restart its count.
+  defp wire_depth(depth) when is_integer(depth) and depth >= 0 and depth <= @depth_cap, do: :ok
+  defp wire_depth(other), do: {:error, {:invalid_wire_depth, other}}
 end

@@ -3,21 +3,16 @@
 
 defmodule Cyfr.Execution.Sweeper do
   @moduledoc """
-  Periodic sweep to mark stale "running" executions as failed.
+  Periodic sweep that lapses running executions whose lease lapsed.
 
-  Runs every 60 seconds, checking for execution records still "running"
-  whose lease has lapsed. A running row is leased by the node executing it
-  (`execution_attempts.runner_id`, `lease_until`) and the executor renews the lease
-  while the work runs; a lapsed lease means the runner stopped renewing —
-  crashed, or a whole node gone. This handles:
-
-  - Process crashes that bypass cleanup code
-  - BEAM restarts
-  - Another node's crash, when several nodes share the database
-  - Edge cases where a runner's failure handling couldn't complete
-
-  A lapsed lease held by *this* node is double-checked against the local
-  execution registry — a live process is left alone (it will renew).
+  Runs every 60 seconds. A running row's attempt carries a lease
+  (`execution_attempts.lease_until`) that its runner renews while the work
+  runs, or that a turn root's keeper renews; a lapsed lease means nothing
+  renewed it — the runner or its worker service is gone, a partition
+  outlasted the lease, or a boot restarted. Each such execution is lapsed
+  (`Cyfr.Execution.Lapse`), wherever it was dispatched, and the attempt
+  process still open for it is stopped (`Cyfr.Execution.Attempt.stop_unclosed/2`),
+  so its waiter answers the lapsed row.
 
   A tick sweeps only while this boot owns the control plane
   (`Cyfr.ControlPlane.when_owner/1`). The process starts only when
@@ -27,7 +22,7 @@ defmodule Cyfr.Execution.Sweeper do
   use GenServer
   require Logger
 
-  alias Cyfr.Execution.{Cascade, Events, Record, Telemetry}
+  alias Cyfr.Execution.{Attempt, Lapse}
 
   @sweep_interval_ms 60_000
 
@@ -79,68 +74,10 @@ defmodule Cyfr.Execution.Sweeper do
           []
       end
 
-    me = Record.runner_id()
-
     for record <- stale do
-      # Another node's lapsed lease is that node's crash; our own is
-      # checked against the live process — a running one just renews late.
-      should_sweep =
-        record.runner_id != me or
-          case Registry.lookup(Cyfr.Execution.Registry, record.id) do
-            [{pid, _}] -> not Process.alive?(pid)
-            _ -> true
-          end
-
-      if should_sweep do
-        try do
-          mark_failed(record)
-        rescue
-          e ->
-            Logger.error(
-              "[Cyfr.Execution.Sweeper] Failed to mark #{record.id} as failed: #{Exception.message(e)}"
-            )
-        end
-      end
+      if Lapse.lapse(record), do: Attempt.stop_unclosed(record.attempt, record.runner_id)
     end
 
     :ok
-  end
-
-  defp mark_failed(record) do
-    now = DateTime.utc_now()
-    duration_ms = DateTime.diff(now, record.started_at, :millisecond)
-    error_msg = "Execution terminated: runner stopped without cleanup"
-
-    # Fenced on what this sweep observed: the attempt that owns the row and
-    # the exact lease it saw lapse. A renewal that landed between the scan
-    # and this write changed `lease_until`, and the update matches nothing —
-    # a live execution is never failed by a stale observation.
-    {count, event_seq} =
-      Arca.Execution.mark_failed_if_running(
-        record.id,
-        %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
-        attempt: record.attempt,
-        lease_until: record.lease_until,
-        event: "execution.lapsed"
-      )
-
-    if count > 0 do
-      Logger.info(
-        "[Cyfr.Execution.Sweeper] Marked #{record.id} as failed (stale #{duration_ms}ms)"
-      )
-
-      Telemetry.row_failed(record, error_msg, duration_ms)
-
-      Events.publish(record.id, record, "execution.lapsed", event_seq, %{
-        "status" => "failed",
-        "error" => error_msg
-      })
-
-      # Cascade to children for executions that run children: formulas
-      # and turn roots.
-      if record.component_type in ["formula", "agent"] do
-        Cascade.fail_children_of(record.id)
-      end
-    end
   end
 end

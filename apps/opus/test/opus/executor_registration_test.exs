@@ -47,7 +47,7 @@ defmodule Opus.ExecutorRegistrationTest do
     {:ok, ctx: ctx}
   end
 
-  # Every execution process must register for cancellation, including synchronous runs and children.
+  # Every run's waiter registers for cancellation, including synchronous runs and children.
 
   test "a synchronous run leaves no registry entry behind", %{ctx: ctx} do
     execution_id = "exec_reg_sync_#{System.unique_integer([:positive])}"
@@ -56,7 +56,7 @@ defmodule Opus.ExecutorRegistrationTest do
     # fails at compile — irrelevant here: registration wraps the execution
     # window either way, and the entry must be gone afterwards.
     _result =
-      Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+      Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
         execution_id: execution_id
       )
@@ -71,12 +71,12 @@ defmodule Opus.ExecutorRegistrationTest do
     owner =
       spawn_link(fn ->
         # Mirrors Cyfr.Execution.MCP run_stream / cron: the task registers itself,
-        # then drives the executor in the same process.
+        # then dispatches the run from the same process.
         {:ok, _} = Registry.register(Cyfr.Execution.Registry, execution_id, :running)
         send(parent, :registered)
 
         result =
-          Opus.Executor.run(ctx, @test_ref, %{"a" => 2, "b" => 3},
+          Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 2, "b" => 3},
             type: :reagent,
             execution_id: execution_id
           )
@@ -91,22 +91,22 @@ defmodule Opus.ExecutorRegistrationTest do
     assert_receive :registered, 5_000
     assert_receive {:done, _result}, 30_000
 
-    # The executor's own register/unregister must not steal or clear the
+    # The dispatch's own register/unregister must not steal or clear the
     # streaming task's entry — it stays until the owner process exits.
     assert [{^owner, _}] = Registry.lookup(Cyfr.Execution.Registry, execution_id)
 
     send(owner, :stop)
   end
 
-  describe "cancelling reaches the process running the component" do
+  describe "killing reaches the process running the component" do
     test "a linked child that traps exits survives its parent's kill" do
-      # The shape the executor uses: the runner is spawn_link'd from the
-      # process that registers, and it sets trap_exit so a Wasmex crash
-      # becomes a message instead of killing it. A link-propagated exit is
-      # trappable whatever its reason — :killed included — so killing the
-      # registered process does NOT stop the runner. Only a direct
-      # `Process.exit(runner, :kill)` is untrappable. This is why cancel has
-      # to name the runner rather than its parent.
+      # The shape a runner uses: the component process is spawn_link'd from
+      # the runner, and it sets trap_exit so a Wasmex crash becomes a
+      # message instead of killing it. A link-propagated exit is trappable
+      # whatever its reason — :killed included — so killing the runner does
+      # NOT stop the component process. Only a direct
+      # `Process.exit(component, :kill)` is untrappable, which is why the
+      # worker service kills it by name.
       parent_of_all = self()
 
       registered =
@@ -135,54 +135,6 @@ defmodule Opus.ExecutorRegistrationTest do
       # ...and the direct kill the fix uses does stop it.
       Process.exit(runner, :kill)
       assert_receive {:DOWN, ^ref, :process, ^runner, _}, 5_000
-    end
-
-    test "cancel kills the runner the entry names, not only its parent" do
-      # Staged rather than driven through a real component: the repo ships no
-      # Component Model fixture (math.wasm is a core module and fails at
-      # compile), so this builds the exact registry shape `execute_with_timeout`
-      # publishes and asserts what `cancel/3` does with it.
-      admin = Sanctum.TestContext.local()
-
-      record =
-        Cyfr.Execution.Record.new(admin, "reagent:local.cancel-me:0.1.0", %{},
-          component_type: :reagent
-        )
-
-      :ok = Cyfr.Execution.Record.write_started(record)
-
-      parent = self()
-
-      runner =
-        spawn(fn ->
-          Process.flag(:trap_exit, true)
-          send(parent, {:runner_up, self()})
-          Process.sleep(:infinity)
-        end)
-
-      assert_receive {:runner_up, ^runner}, 5_000
-      ref = Process.monitor(runner)
-
-      owner =
-        spawn(fn ->
-          {:ok, _} =
-            Registry.register(Cyfr.Execution.Registry, record.id, %{
-              status: :running,
-              runner_pid: runner
-            })
-
-          send(parent, :registered)
-          Process.sleep(:infinity)
-        end)
-
-      assert_receive :registered, 5_000
-
-      assert {:ok, %{cancelled: true}} = Opus.Executor.cancel(admin, record.id)
-
-      # The runner traps exits, so the link from its parent could never stop
-      # it — cancel has to name it.
-      assert_receive {:DOWN, ^ref, :process, ^runner, :killed}, 5_000
-      refute Process.alive?(owner)
     end
   end
 end

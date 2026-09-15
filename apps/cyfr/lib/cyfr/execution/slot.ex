@@ -5,9 +5,9 @@ defmodule Cyfr.Execution.Slot do
   @moduledoc """
   One execution slot for the calling process: the semaphore's slot and
   the registry entry that lets a cancel find the process, taken and
-  released together. The WASM path takes one around a component call; a
-  host loop takes a `:root` slot around a turn without entering the
-  WASM path. Both are keyed on `self()`: the process that acquires is
+  released together. A run's `Cyfr.Execution.Attempt` takes one, with no
+  registration, for as long as the run is open; a host loop takes a
+  `:root` slot around a turn without entering the WASM path. Both are keyed on `self()`: the process that acquires is
   the process that releases, and the semaphore's monitor releases for a
   process that dies.
   """

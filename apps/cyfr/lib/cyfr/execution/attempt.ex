@@ -9,8 +9,10 @@ defmodule Cyfr.Execution.Attempt do
   the call before they reach here.
 
   `Cyfr.Execution.Admission` opens it once the run's row is admitted,
-  registered under the execution's id in `Cyfr.Execution.Attempt.Registry`
-  and supervised by `Cyfr.Execution.Attempt.Supervisor`. It holds:
+  registered under the execution's id (with the attempt id as its value)
+  in `Cyfr.Execution.Attempt.Registry` and supervised by
+  `Cyfr.Execution.Attempt.Supervisor`. The process that opens it is its
+  waiter (`Cyfr.Execution.Dispatch.await/2`). It holds:
 
   - the close state (`Cyfr.Execution.Close`): the admitted row, the
     admission context and the node's limits, which only this process
@@ -24,21 +26,35 @@ defmodule Cyfr.Execution.Attempt do
     and the text it holds back;
   - the context a guest's calls run in (the admission context on the guest
     plane), the node's reference, the need its edge was reached through
-    and its limits.
+    and its limits;
+  - the worker service the run is dispatched to (its `Cyfr.WorkerAPI`
+    module and boot id) and the component's bytes its runner runs;
+  - what the run holds while it is open: its execution slot
+    (`take_slot/3`), and, for a spawned child, the invoke-budget slot its
+    waiter charged (taken over from the waiter) and its charge row.
 
   Its calls are serialized, so a token is either in the masking set before
   the run closes or is never dispensed, and a close waits for an emit in
   flight. A close sends the emitter's held text, masked, then runs
-  `Cyfr.Execution.Close` in this process with the full set, tells the
-  waiter (`await/2`) the result, answers the runner and stops: what it
-  held goes with it.
+  `Cyfr.Execution.Close` in this process with the full set, gives back what
+  the run held, tells the waiter the result, answers the runner and stops.
 
-  It stops without closing the run, sending nothing it held, when its
-  opener exits, when the waiter abandons it (`abandon/1`), and when a call
-  finds the attempt no longer holds its row: another attempt took it over,
-  it was cancelled or it lapsed. A waiter whose attempt stops that way
-  closes the run lost (`await/2`, `Cyfr.Execution.Close.lost/1`), which
-  writes nothing over a row the attempt no longer holds.
+  A run whose runner was not started is closed failed (`refuse/2`).
+
+  It stops without closing the run, sending nothing it held and giving
+  back what the run held, when a call finds the attempt no longer holds its
+  row (another attempt took it over, it was cancelled or it lapsed), when
+  its runner is gone (`stop_unclosed/2`), and when its waiter exits. A
+  waiter that exits kills the run: the attempt asks its worker service to
+  kill the runner (`c:Cyfr.WorkerAPI.kill/1`), counts a kill of a runner
+  that had attached against the athanor
+  (`Cyfr.Execution.Semaphore.note_unreaped/2`), and lapses its row
+  (`Cyfr.Execution.Lapse`). A waiter whose attempt stops without closing
+  closes the run lost (`Cyfr.Execution.Close.lost/1`), which writes nothing
+  over a row the attempt no longer holds.
+
+  A process killed outright gives back its slots through their monitors,
+  and its charge row through the reservation sweep.
   """
 
   use GenServer, restart: :temporary
@@ -48,7 +64,7 @@ defmodule Cyfr.Execution.Attempt do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Delta
-  alias Cyfr.Execution.{Close, Emit, Outcome}
+  alias Cyfr.Execution.{Charge, Close, Emit, Lapse, Outcome, Slot, StepSpans}
   alias Sanctum.Context
 
   @registry __MODULE__.Registry
@@ -75,7 +91,20 @@ defmodule Cyfr.Execution.Attempt do
     :owner,
     :waiter
   ]
-  defstruct @enforce_keys ++ [:need, :claimed_by, secrets: %{}, tokens: [], nonces: %{}]
+  defstruct @enforce_keys ++
+              [
+                :need,
+                :claimed_by,
+                :worker,
+                :runner_id,
+                :wasm_bytes,
+                :slot,
+                :charge,
+                held_invoke: false,
+                secrets: %{},
+                tokens: [],
+                nonces: %{}
+              ]
 
   @typedoc "A verified host call's header fields (`Cyfr.WorkerAuth.host_call/0`)."
   @type caller :: Cyfr.WorkerAuth.host_call()
@@ -88,9 +117,16 @@ defmodule Cyfr.Execution.Attempt do
           | {:oauth_token, String.t()}
           | {:take_rate, String.t()}
 
+  @typedoc """
+  What a runner in this BEAM runs its attempt with beyond its assignment:
+  the context its guest's in-process calls run in (the admission context on
+  the guest plane), the run's authority and the component's bytes.
+  """
+  @type admitted :: %{ctx: Context.t(), authority: Authority.t(), wasm_bytes: binary()}
+
   @doc """
   Open the attempt of an admitted execution. The calling process is its
-  waiter (`await/2`), and the attempt stops when it exits.
+  waiter, and the attempt stops when it exits.
 
   Required options: `:execution_id`, `:attempt` (the attempt id that owns
   the row), `:ctx` (the admission context), `:authority`, `:component_ref`
@@ -99,7 +135,12 @@ defmodule Cyfr.Execution.Attempt do
   its edge was reached through), `:limits` (default the authority's node
   limits), `:stream_id` (the stream its guest's events go on, default the
   execution's), `:budget_id` (the root whose emit budget they draw on,
-  default the execution's) and `:step_spans`.
+  default the execution's), `:step_spans`, `:worker` and `:runner_id` (the
+  `Cyfr.WorkerAPI` module and the boot id of the worker service the run is
+  dispatched to), `:wasm_bytes` (the component's bytes), `:held_invoke`
+  (true when the waiter holds a charged invoke-budget slot of the
+  authority's budget, which the attempt takes over) and `:charge` (the
+  charge row that slot holds, `%{id: charge_id}`).
 
   Answers `{:error, {:already_started, pid}}` when the execution already
   has an open attempt.
@@ -121,7 +162,8 @@ defmodule Cyfr.Execution.Attempt do
 
   @doc false
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: via(Keyword.fetch!(opts, :execution_id)))
+    via = {:via, Registry, {@registry, Keyword.fetch!(opts, :execution_id), opts[:attempt]}}
+    GenServer.start_link(__MODULE__, opts, name: via)
   end
 
   @doc "The process of the open attempt of `execution_id`, or nil."
@@ -134,23 +176,60 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   @doc """
+  Take the run's execution slot of `class` in this attempt, waiting at
+  most `timeout` ms (`Cyfr.Execution.Slot.acquire/4`). Answers `:ok` when
+  the attempt holds it; a refusal closes the run failed with the refusal's
+  sentence and answers `:closed`.
+  """
+  @spec take_slot(pid(), Cyfr.Execution.Semaphore.class(), timeout()) :: :ok | :closed
+  def take_slot(pid, class, timeout) when is_pid(pid) do
+    GenServer.call(pid, {:take_slot, class, timeout}, :infinity)
+  catch
+    :exit, _reason -> :closed
+  end
+
+  @doc """
+  Close the run of the attempt `pid` failed with `sentence`, for a run
+  whose runner was not started, and stop; the waiter hears the result.
+  Answers `:closed`.
+  """
+  @spec refuse(pid(), String.t()) :: :closed
+  def refuse(pid, sentence) when is_pid(pid) and is_binary(sentence) do
+    GenServer.call(pid, {:refuse, sentence}, :infinity)
+  catch
+    :exit, _reason -> :closed
+  end
+
+  @doc """
   Attach the caller's runner, whose claim on the attempt row is written
   (`Arca.ExecutionAttempts.claim/4`), and answer the fields the run's vault
   edge projects: an empty map when it grants none.
 
   The first attach unseals the edge while its consent is still the
-  profile's head. A selection the loader could not resolve, a consent that
-  moved and an edge whose material cannot be produced each close the run
-  failed as `{:setup_required, payload}`, which is answered. An attach by
-  the runner already attached answers the same fields; one by any other
-  runner is `:replayed`. A caller naming another attempt or fence, or an
-  attempt that is not open, is `:lost`.
+  profile's head, and marks the guest's start on the run's clock
+  (`Cyfr.Execution.StepSpans.guest_started/1`). A selection the loader
+  could not resolve, a consent that moved and an edge whose material cannot
+  be produced each close the run failed as `{:setup_required, payload}`,
+  which is answered. An attach by the runner already attached answers the
+  same fields; one by any other runner is `:replayed`. A caller naming
+  another attempt or fence, or an attempt that is not open, is `:lost`.
   """
   @spec attach(String.t(), caller()) ::
           {:ok, %{optional(String.t()) => String.t()}}
           | {:error, :lost | :replayed | {:setup_required, map()}}
   def attach(execution_id, caller) when is_binary(execution_id) and is_map(caller) do
     call(execution_id, {:attach, caller})
+  end
+
+  @doc """
+  What the caller's runner runs the attempt with beyond its assignment
+  (`t:admitted/0`), for a runner in this BEAM. The caller must be the
+  attached runner at this attempt and fence, and the row must still be held
+  by it; otherwise `:lost`, or `:unavailable` when the store cannot answer.
+  """
+  @spec admitted(String.t(), caller()) :: {:ok, admitted()} | {:error, :lost | :unavailable}
+  def admitted(execution_id, caller) when is_binary(execution_id) and is_map(caller) do
+    call(execution_id, {:admitted, caller})
   end
 
   @doc """
@@ -165,6 +244,8 @@ defmodule Cyfr.Execution.Attempt do
     `{:ok, masked_output}`, or `{:error, {:failed, message}}` when the close
     recorded a failure instead.
   - `{:fail, outcome}` closes the run failed with the outcome's error: `:ok`.
+    An `abandoned` outcome is first counted against the athanor as a kill
+    whose native work may still run (`Cyfr.Execution.Semaphore.note_unreaped/2`).
   - `{:push_deltas, deltas}` emits each delta's event on the attempt's
     stream, masked with its set: `{:ok, replies}`, one reply per delta, the
     JSON a guest's `emit` returns. A delta naming another attempt is
@@ -187,35 +268,21 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   @doc """
-  Wait, in the process that opened it, for the attempt `pid` to close its
-  run, and answer the run's result: `{:ok, result}` or `{:error, reason}`
-  as `Cyfr.Execution.Close` answered. An attempt that stops without
-  closing its run is closed lost with `close` (`Cyfr.Execution.Close.lost/1`).
+  Stop the open attempt `attempt`, dispatched to the worker service boot
+  `runner_id`, without closing its run: its runner exited, or its row
+  lapsed. An attempt dispatched elsewhere, or none open, is left alone.
   """
-  @spec await(pid(), Close.t()) :: {:ok, map()} | {:error, term()}
-  def await(pid, %Close{} = close) when is_pid(pid) do
-    ref = Process.monitor(pid)
-
-    receive do
-      {__MODULE__, ^pid, result} ->
-        Process.demonitor(ref, [:flush])
-        result
-
-      {:DOWN, ^ref, :process, ^pid, _reason} ->
-        Close.lost(close)
+  @spec stop_unclosed(String.t(), String.t()) :: :ok
+  def stop_unclosed(attempt, runner_id) when is_binary(attempt) and is_binary(runner_id) do
+    for pid <- Registry.select(@registry, [{{:_, :"$1", attempt}, [], [:"$1"]}]) do
+      try do
+        GenServer.call(pid, {:stop_unclosed, attempt, runner_id}, :infinity)
+      catch
+        :exit, _reason -> :ok
+      end
     end
-  end
 
-  @doc """
-  Stop the attempt of `execution_id` without closing its run, for a waiter
-  whose runner could not run it. It sends nothing it held.
-  """
-  @spec abandon(String.t()) :: :ok
-  def abandon(execution_id) when is_binary(execution_id) do
-    case call(execution_id, :abandon) do
-      {:error, :lost} -> :ok
-      :ok -> :ok
-    end
+    :ok
   end
 
   defp call(execution_id, message) do
@@ -241,6 +308,7 @@ defmodule Cyfr.Execution.Attempt do
     authority = Keyword.fetch!(opts, :authority)
     ctx = Context.enter_guest(Keyword.fetch!(opts, :ctx))
     owner = Keyword.fetch!(opts, :owner)
+    owner_ref = Process.monitor(owner)
 
     state = %__MODULE__{
       execution_id: execution_id,
@@ -259,14 +327,42 @@ defmodule Cyfr.Execution.Attempt do
           step_spans: Keyword.get(opts, :step_spans)
         ),
       close: Keyword.fetch!(opts, :close),
-      owner: Process.monitor(owner),
-      waiter: owner
+      owner: owner_ref,
+      waiter: owner,
+      worker: Keyword.get(opts, :worker),
+      runner_id: Keyword.get(opts, :runner_id),
+      wasm_bytes: Keyword.get(opts, :wasm_bytes),
+      charge: Keyword.get(opts, :charge),
+      held_invoke: take_over_invoke(Keyword.get(opts, :held_invoke, false), authority, owner)
     }
 
     {:ok, state}
   end
 
+  # The waiter holds the slot under the invoke-budget guard until here; a
+  # waiter that died first had its slot given back already.
+  defp take_over_invoke(true, authority, owner),
+    do: Sanctum.Authority.take_over_invoke(authority, owner) == :ok
+
+  defp take_over_invoke(false, _authority, _owner), do: false
+
   @impl true
+  def handle_call({:take_slot, class, timeout}, _from, state) do
+    case Slot.acquire(class, state.ctx.athanor_id, timeout, nil) do
+      {:ok, token} ->
+        {:reply, :ok, %{state | slot: token}}
+
+      {:error, sentence} ->
+        close_run(state, fn _result -> :closed end, fn ->
+          Close.fail(state.close, [], sentence)
+        end)
+    end
+  end
+
+  def handle_call({:refuse, sentence}, _from, state) do
+    close_run(state, fn _result -> :closed end, fn -> Close.fail(state.close, [], sentence) end)
+  end
+
   def handle_call({:attach, caller}, _from, state) do
     cond do
       not names_attempt?(state, caller) ->
@@ -283,12 +379,24 @@ defmodule Cyfr.Execution.Attempt do
     end
   end
 
+  def handle_call({:admitted, caller}, _from, state) do
+    with :ok <- claimant(state, caller) do
+      case held(caller) do
+        :ok -> {:reply, {:ok, admitted(state)}, state}
+        :gone -> {:stop, :normal, {:error, :lost}, release_holds(state)}
+        :unavailable -> {:reply, {:error, :unavailable}, state}
+      end
+    else
+      :lost -> {:reply, {:error, :lost}, state}
+    end
+  end
+
   def handle_call({:call, caller, op}, _from, state) do
     with :ok <- claimant(state, caller),
          {:ok, noted} <- fresh_nonce(state, caller) do
       case held(caller) do
         :ok -> run(op, noted)
-        :gone -> {:stop, :normal, {:error, :lost}, noted}
+        :gone -> {:stop, :normal, {:error, :lost}, release_holds(noted)}
         :unavailable -> {:reply, {:error, :unavailable}, noted}
       end
     else
@@ -296,16 +404,87 @@ defmodule Cyfr.Execution.Attempt do
     end
   end
 
-  def handle_call(:abandon, _from, state), do: {:stop, :normal, :ok, state}
+  def handle_call({:stop_unclosed, attempt, runner_id}, _from, state) do
+    if state.attempt == attempt and state.runner_id == runner_id,
+      do: {:stop, :normal, :ok, release_holds(state)},
+      else: {:reply, :ok, state}
+  end
 
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %__MODULE__{owner: ref} = state) do
-    {:stop, :normal, state}
+    kill_runner(state)
+    lapse(state)
+    {:stop, :normal, release_holds(state)}
   end
 
   def handle_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
+  end
+
+  defp admitted(state),
+    do: %{ctx: state.ctx, authority: state.authority, wasm_bytes: state.wasm_bytes}
+
+  # ---------------------------------------------------------------------------
+  # Holds
+  # ---------------------------------------------------------------------------
+
+  # What the run held while open goes back when the attempt stops: its
+  # execution slot, its invoke-budget slot and its charge row.
+  defp release_holds(state) do
+    if state.slot, do: Slot.release(state.slot)
+    if state.held_invoke, do: Sanctum.Authority.release_invoke(state.authority)
+    if state.charge, do: give_back_charge(state)
+    %{state | slot: nil, held_invoke: false, charge: nil}
+  end
+
+  # A charge row the store cannot give back now is reclaimed by the
+  # reservation sweep once its holder has ended.
+  defp give_back_charge(state) do
+    Charge.give_back(state.authority, charge: state.charge, ctx: state.ctx)
+  catch
+    :exit, reason ->
+      Logger.error(
+        "[Cyfr.Execution.Attempt] #{state.execution_id}'s charge was not given back: " <>
+          inspect(reason)
+      )
+  end
+
+  # A waiter that exited kills its run. The kill of a runner that attached
+  # is counted before the attempt gives back its slot, so the athanor's next
+  # acquisition sees it.
+  defp kill_runner(%__MODULE__{worker: nil}), do: :ok
+
+  defp kill_runner(state) do
+    killed =
+      try do
+        state.worker.kill(state.execution_id)
+      catch
+        :exit, reason -> {:error, reason}
+      end
+
+    if killed == :ok and is_binary(state.claimed_by),
+      do: note_unreaped(state)
+
+    :ok
+  end
+
+  defp lapse(%__MODULE__{runner_id: nil}), do: :ok
+  defp lapse(state), do: Lapse.dispatched(state.runner_id, [state.attempt])
+
+  defp note_unreaped(state) do
+    tenant = state.ctx.athanor_id
+
+    case Cyfr.Execution.Semaphore.note_unreaped(tenant, state.execution_id) do
+      :ok ->
+        :ok
+
+      {:error, :unavailable} ->
+        Logger.error(
+          "[Cyfr.Execution.Attempt] unreaped kill of #{state.execution_id} for tenant " <>
+            "#{inspect(tenant)} is uncharged: the semaphore did not answer"
+        )
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -317,6 +496,7 @@ defmodule Cyfr.Execution.Attempt do
   defp unseal(state, caller) do
     case fetch_secrets(state) do
       {:ok, secrets} ->
+        StepSpans.guest_started(state.close.step_spans)
         {:reply, {:ok, secrets}, %{state | claimed_by: caller.runner, secrets: secrets}}
 
       {:setup_required, reason} ->
@@ -413,6 +593,8 @@ defmodule Cyfr.Execution.Attempt do
 
   defp run({:fail, %Outcome{status: :failed} = outcome}, state) do
     if names_outcome?(state, outcome) do
+      if outcome.abandoned, do: note_unreaped(state)
+
       close_run(state, fn _result -> :ok end, fn ->
         Close.fail(state.close, masking_set(state), outcome.error)
       end)
@@ -461,8 +643,9 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   # A close sends what the emitter holds, masked with the set as it stands,
-  # before the terminal row is written; the waiter hears the result before
-  # the runner is answered and the attempt stops.
+  # before the terminal row is written; what the run held goes back before
+  # the waiter hears the result, and the waiter hears it before the runner
+  # is answered and the attempt stops.
   defp close_run(state, answer, close) do
     result =
       try do
@@ -477,6 +660,7 @@ defmodule Cyfr.Execution.Attempt do
           )
       end
 
+    state = release_holds(state)
     send(state.waiter, {__MODULE__, self(), result})
     {:stop, :normal, answer.(result), state}
   end

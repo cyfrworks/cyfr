@@ -16,6 +16,14 @@ defmodule Opus.HostClient do
 
   Each function answers as the `Cyfr.HostAPI` callback of the same name.
   An answer that cannot be read is `{:error, :lost}`.
+
+  Two calls reach CYFR beside `transport/2`. `admitted/1` asks, for a
+  runner in this BEAM, what its attempt runs with beyond the assignment:
+  the context its guest's in-process calls run in, the run's authority and
+  the component's bytes (`Cyfr.Execution.Host.admitted/2`), signed as
+  every host call is. `runner_exited/3` is a worker service's report that
+  one of its runners exited, signed with the dispatch key
+  (`Cyfr.Execution.Host.runner_exited/2`); it carries only strings.
   """
 
   alias Cyfr.WorkerAuth
@@ -85,10 +93,15 @@ defmodule Opus.HostClient do
     })
   end
 
-  @doc "Close the attempt failed with the sentence `error`."
-  @spec fail(t(), String.t()) :: :ok | {:error, term()}
-  def fail(%__MODULE__{} = client, error) when is_binary(error) do
-    case request(client, "fail", %{"outcome" => outcome(client, "failed", %{"error" => error})}) do
+  @doc """
+  Close the attempt failed with the sentence `error`. `abandoned: true`
+  says the runner stopped the guest's component call before it returned.
+  """
+  @spec fail(t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def fail(%__MODULE__{} = client, error, opts \\ []) when is_binary(error) do
+    fields = %{"error" => error, "abandoned" => Keyword.get(opts, :abandoned, false) == true}
+
+    case request(client, "fail", %{"outcome" => outcome(client, "failed", fields)}) do
       {:ok, true} -> :ok
       {:ok, _other} -> {:error, :lost}
       {:error, reason} -> {:error, reason}
@@ -138,6 +151,41 @@ defmodule Opus.HostClient do
   end
 
   @doc """
+  What the attempt runs with beyond its assignment, for a runner in this
+  BEAM: `{:ok, %{ctx: ctx, authority: authority, wasm_bytes: bytes}}`, or
+  `{:error, :lost | :unavailable}`.
+  """
+  @spec admitted(t()) :: {:ok, map()} | {:error, :lost | :unavailable}
+  def admitted(%__MODULE__{} = client) do
+    body = Jason.encode!(%{"op" => "admitted", "args" => %{}})
+
+    case WorkerAuth.host_call_header(client.key, call_fields(client), body) do
+      {:ok, header} -> Cyfr.Execution.Host.admitted(header, body)
+      {:error, _invalid} -> {:error, :lost}
+    end
+  end
+
+  @doc """
+  Report, for the worker service `worker` holding `dispatch_key`, that one
+  of its runners exited while it held `attempts`. Answers `:ok`, or
+  `{:error, :lost | :unavailable}`.
+  """
+  @spec runner_exited(binary(), String.t(), [String.t()]) :: :ok | {:error, term()}
+  def runner_exited(dispatch_key, worker, attempts)
+      when is_binary(dispatch_key) and is_binary(worker) and is_list(attempts) do
+    body = Jason.encode!(%{"op" => "runner_exited", "args" => %{"attempts" => attempts}})
+    report = %{worker: worker, ts: System.system_time(:millisecond), nonce: nonce()}
+
+    with {:ok, header} <- WorkerAuth.report_header(dispatch_key, report, body),
+         {:ok, true} <- header |> Cyfr.Execution.Host.runner_exited(body) |> answer() do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :lost}
+    end
+  end
+
+  @doc """
   Carry one signed host call to CYFR: the header and the JSON body it
   signs, answered with CYFR's JSON.
   """
@@ -163,9 +211,11 @@ defmodule Opus.HostClient do
       generation: client.generation,
       runner: client.runner,
       ts: System.system_time(:millisecond),
-      nonce: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+      nonce: nonce()
     }
   end
+
+  defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
   defp outcome(client, status, fields) do
     Map.merge(fields, %{

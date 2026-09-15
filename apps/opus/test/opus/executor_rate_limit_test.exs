@@ -68,7 +68,10 @@ defmodule Opus.ExecutorRateLimitTest do
       # math.wasm is a core module so Component Model load may fail,
       # but the important thing is the rate limiter allowed it through.
       result =
-        Opus.Executor.run(ctx, ref, input, type: :reagent, authority: Cyfr.Authority.zero())
+        Cyfr.Execution.Dispatch.run(ctx, ref, input,
+          type: :reagent,
+          authority: Cyfr.Authority.zero()
+        )
 
       case result do
         {:ok, _} ->
@@ -81,7 +84,7 @@ defmodule Opus.ExecutorRateLimitTest do
 
     test "passing the policy gate records one policy_consultation row", %{ctx: ctx, ref: ref} do
       _result =
-        Opus.Executor.run(ctx, ref, %{"a" => 1, "b" => 2},
+        Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 1, "b" => 2},
           type: :reagent,
           authority: Cyfr.Authority.zero()
         )

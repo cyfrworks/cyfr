@@ -510,7 +510,7 @@ defmodule Opus.ChainTest do
       # nothing executes, so the blob below is provably the only policy in
       # play.
       assert {:error, no_authority_error} =
-               Opus.Executor.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
+               Cyfr.Execution.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
 
       assert no_authority_error =~ "without an authority is not a thing"
 

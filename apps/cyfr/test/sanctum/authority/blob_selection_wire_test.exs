@@ -13,12 +13,6 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
   alias Cyfr.Authority.Blob
   alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    :ok
-  end
-
   @formula "formula:local.assistant"
   @catalyst "catalyst:local.claude"
 
@@ -38,8 +32,6 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
     }
   end
 
-  defp reserve!(auth), do: Sanctum.Test.AuthorityFixtures.reserve!(auth)
-
   test "an authority whose edge selects a vault survives the wire" do
     {:ok, blob} = Blob.parse(graph(%{"via" => %{"label" => "default"}}))
 
@@ -56,9 +48,9 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
       Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
 
     {:ok, edge} = Blob.lookup_edge(root.policy, @formula, @catalyst, "")
-    child = reserve!(Authority.bound_child(root, @catalyst, edge))
+    child = Authority.bound_child(root, @catalyst, edge)
 
-    assert {:ok, back} = Sanctum.Authority.from_wire(Authority.to_wire(child))
+    assert {:ok, back} = Authority.from_wire(Authority.to_wire(child))
 
     assert back.resources.vault == %{
              via: %{label: "default", binding_digest: nil},
@@ -101,8 +93,8 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
       Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
 
     {:ok, edge} = Blob.lookup_edge(root.policy, @formula, @catalyst, "")
-    child = reserve!(Authority.bound_child(root, @catalyst, edge))
-    assert {:ok, back} = Sanctum.Authority.from_wire(Authority.to_wire(child))
+    child = Authority.bound_child(root, @catalyst, edge)
+    assert {:ok, back} = Authority.from_wire(Authority.to_wire(child))
 
     assert back.resources.vault.lender == %{
              profile_id: "prof-claude",

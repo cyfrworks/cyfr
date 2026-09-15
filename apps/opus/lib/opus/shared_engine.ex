@@ -27,7 +27,7 @@ defmodule Opus.SharedEngine do
 
   Wasmex also exposes no epoch interruption, and component calls run on a
   detached native thread (wasmex spawns the call and drops the JoinHandle),
-  so the wall-clock timeout kill in `Opus.Executor` cannot preempt a
+  so the wall-clock timeout kill in `Opus.Runner` cannot preempt a
   component that never yields (e.g. a tight compute loop). Killing the
   waiting BEAM process frees the execution slot, but the native thread
   keeps spinning one CPU core until node restart. Mitigations: the

@@ -296,8 +296,9 @@ defmodule Cyfr.Execution.Record do
   Admit the execution BEFORE it begins: the row, its first attempt and,
   for a root carrying a reservation, its budget row, in one transaction
   (`Arca.Execution.admit/2`). `opts` carry the admission barriers a
-  loop-dispatched child passes through (`:charge`, `:step`) and a
-  scheduled run's `:occurrence_id`.
+  loop-dispatched child passes through (`:charge`, `:step`), a
+  scheduled run's `:occurrence_id`, and `:runner_id`, the boot id of the
+  worker service the attempt is dispatched to (`runner_id/0` when absent).
 
   The row keeps an input envelope — the reference, digest, sizes,
   top-level keys and attachment digests — and the input itself is the
@@ -359,7 +360,7 @@ defmodule Cyfr.Execution.Record do
                reservation: record.reservation,
                payloads: payloads
              ],
-             Keyword.take(opts, [:charge, :step, :occurrence_id])
+             Keyword.take(opts, [:charge, :step, :occurrence_id, :runner_id])
            )
          ) do
       {:ok, %{execution: execution}} ->
@@ -389,8 +390,9 @@ defmodule Cyfr.Execution.Record do
   def lease_seconds, do: Arca.ExecutionAttempts.lease_seconds()
 
   @doc """
-  Returns the application boot id stored as the execution’s runner id.
-  Each restart has a different id.
+  This boot's id, the runner id of an attempt this boot holds itself (a
+  turn root's) and of a row admitted with no `:runner_id`. Each restart
+  has a different id.
   """
   @spec runner_id() :: String.t()
   def runner_id, do: Cyfr.Boot.id()

@@ -629,28 +629,22 @@ defmodule Opus.FormulaHandler do
                Cyfr.Execution.Admission.step_invoke(authority, reference, need, child_opts),
              :ok <- Cyfr.Execution.Charge.take(decision.authority, child_opts) do
           fun = fn ->
-            # The task holds the charged slot from here on: the guard's
-            # :DOWN compensation releases it if the task is brutally
-            # killed (cancel / await timeout), where the `after` below
-            # cannot run; the charge row is reclaimed by the sweep once
-            # its holder ends.
+            # The task holds the charged slot under the guard until the
+            # child's attempt takes it over, with the charge row; the
+            # attempt gives both back when it stops, and a child refused
+            # before its attempt opens gives them back at once.
             Sanctum.Authority.guard_invoke(decision.authority)
             start_time = System.monotonic_time(:millisecond)
 
-            try do
-              case Opus.Chain.execute_child(decision, input, child_opts) do
-                {:ok, output} ->
-                  emit_telemetry(parent_execution_id, "execution.run", :ok, start_time)
+            case Opus.Chain.execute_child(decision, input, child_opts) do
+              {:ok, output} ->
+                emit_telemetry(parent_execution_id, "execution.run", :ok, start_time)
 
-                  {encode_success(normalize_keys(output)), %{tool: "execution", action: "run"}}
+                {encode_success(normalize_keys(output)), %{tool: "execution", action: "run"}}
 
-                {:error, reason} ->
-                  emit_telemetry(parent_execution_id, "execution.run", :error, start_time)
-                  {encode_child_error(reason), %{tool: "execution", action: "run"}}
-              end
-            after
-              Sanctum.Authority.release_invoke(decision.authority)
-              Cyfr.Execution.Charge.give_back(decision.authority, child_opts)
+              {:error, reason} ->
+                emit_telemetry(parent_execution_id, "execution.run", :error, start_time)
+                {encode_child_error(reason), %{tool: "execution", action: "run"}}
             end
           end
 
@@ -658,7 +652,7 @@ defmodule Opus.FormulaHandler do
           # (dead tracker, call timeout) would bypass the release arms
           # below and leak the slot for the root's remaining life. A
           # timed-out call has still landed in the tracker's mailbox —
-          # the task will run and its own `after` releases the charge, so
+          # the task will run and its child gives the charge back, so
           # releasing here too would free a concurrent sibling's slot
           # (mirrors Sanctum.Authority.BudgetGuard.release_after_exit/2);
           # any other exit means the spawn never landed.

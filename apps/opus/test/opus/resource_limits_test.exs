@@ -86,7 +86,7 @@ defmodule Opus.ResourceLimitsTest do
       assert Authority.limits(auth).max_memory_bytes == 8 * 1024 * 1024
 
       {:error, error_msg} =
-        Opus.Executor.run(ctx, ref, %{"a" => 10, "b" => 10},
+        Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 10, "b" => 10},
           type: :reagent,
           authority: auth
         )
@@ -100,7 +100,7 @@ defmodule Opus.ResourceLimitsTest do
       auth = authority_with_limits(16 * 1024 * 1024)
 
       {:error, error_msg} =
-        Opus.Executor.run(ctx, ref, %{"a" => 3, "b" => 7},
+        Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 3, "b" => 7},
           type: :reagent,
           authority: auth
         )

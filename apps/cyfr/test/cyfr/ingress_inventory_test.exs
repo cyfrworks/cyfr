@@ -19,9 +19,8 @@ defmodule Cyfr.IngressInventoryTest do
   # Adding a row is a deliberate act: it means "this is an ingress, and
   # the credential gate covers it".
   @allowed %{
-    # The chain and the executor themselves — where execution is defined.
+    # The chain — where execution is defined.
     "apps/opus/lib/opus/chain.ex" => :internal,
-    "apps/opus/lib/opus/executor.ex" => :internal,
     "apps/opus/lib/opus.ex" => :facade,
     # Ingresses proper.
     "apps/cyfr/lib/cyfr/execution/mcp.ex" => :mcp,
@@ -55,7 +54,7 @@ defmodule Cyfr.IngressInventoryTest do
     "Cyfr.Execution.Admission.step_invoke(",
     "Cyfr.Execution.Admission.admit(",
     "Opus.Chain.execute_child(",
-    "Opus.Executor.run("
+    "Cyfr.Execution.Dispatch.run("
   ]
 
   test "every execution entry point is a classified ingress" do
@@ -108,7 +107,6 @@ defmodule Cyfr.IngressInventoryTest do
   @engine_internals ~w(
     apps/opus/lib/opus.ex
     apps/opus/lib/opus/chain.ex
-    apps/opus/lib/opus/executor.ex
     apps/opus/lib/opus/formula_handler.ex
   )
 

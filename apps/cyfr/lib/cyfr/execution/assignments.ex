@@ -12,8 +12,9 @@ defmodule Cyfr.Execution.Assignments do
   it names the attempt its header does and claims the attempt.
 
   An assignment is issued under the current generation
-  (`Cyfr.Execution.Keys.generation/0`), to this boot as its audience, and
-  may be claimed for 30 seconds after it is issued. Its deadline is its
+  (`Cyfr.Execution.Keys.generation/0`), to the worker service it is
+  dispatched to as its audience, and may be claimed for 30 seconds after
+  it is issued. Its deadline is its
   timeout from issue, and its lease runs one lease period from issue.
   """
 
@@ -26,8 +27,9 @@ defmodule Cyfr.Execution.Assignments do
   @typedoc """
   What an assignment is built from: the admission context, the admitted
   row, the run's authority, its component (`ref`, `type`, `digest`,
-  `declared_needs`, `activation_digest`), its input, its consented timeout
-  and the turn step that dispatched it (nil when none did).
+  `declared_needs`, `activation_digest`), its input, its consented timeout,
+  the boot id of the worker service it is dispatched to and the turn step
+  that dispatched it (nil when none did).
   """
   @type admitted :: %{
           required(:ctx) => Context.t(),
@@ -36,6 +38,7 @@ defmodule Cyfr.Execution.Assignments do
           required(:component) => Assignment.component(),
           required(:input) => map(),
           required(:timeout_ms) => pos_integer(),
+          required(:audience) => String.t(),
           optional(:step) => Assignment.step() | nil
         }
 
@@ -68,7 +71,7 @@ defmodule Cyfr.Execution.Assignments do
 
     assignment = %Assignment{
       generation: attempt.generation,
-      audience: Cyfr.Boot.id(),
+      audience: admitted.audience,
       issued_at: now,
       claim_by: now + @claim_window_ms,
       execution_id: record.id,

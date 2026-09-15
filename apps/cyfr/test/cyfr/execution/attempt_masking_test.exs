@@ -23,7 +23,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
 
   import Cyfr.Test.Wait
 
-  alias Cyfr.Execution.Attempt
+  alias Cyfr.Execution.Dispatch
   alias Cyfr.Test.AttemptFixtures
 
   @token "ya29.token-0123456789"
@@ -52,7 +52,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert %{"ok" => answered} = complete(fixture, %{"said" => "#{@token} / #{@field}"})
     assert answered == %{"said" => "#{@redacted} / #{@redacted}"}
 
-    assert {:ok, result} = Attempt.await(fixture.pid, fixture.close)
+    assert {:ok, result} = Dispatch.await(fixture.pid, fixture.close)
     assert result.output == %{"said" => "#{@redacted} / #{@redacted}"}
     refute_unmasked(result)
 
@@ -75,7 +75,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert %{"ok" => @token} = token(fixture)
 
     assert %{"ok" => _output} = complete(fixture, %{"said" => "done"})
-    assert {:ok, _result} = Attempt.await(fixture.pid, fixture.close)
+    assert {:ok, _result} = Dispatch.await(fixture.pid, fixture.close)
 
     live = live_events()
     assert Enum.map(emitted(live), & &1["text"]) == ["the token is ", @redacted]
@@ -93,7 +93,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     emit!(fixture, %{"type" => "text.delta", "text" => "partial ya29.tok"})
 
     assert %{"ok" => true} = fail(fixture, "upstream failed")
-    assert {:error, "upstream failed"} = Attempt.await(fixture.pid, fixture.close)
+    assert {:error, "upstream failed"} = Dispatch.await(fixture.pid, fixture.close)
 
     live = live_events()
     assert Enum.map(emitted(live), & &1["text"]) == ["partial ", "ya29.tok"]
@@ -106,7 +106,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert %{"ok" => @token} = token(fixture)
 
     assert %{"ok" => true} = fail(fixture, "upstream said #{@token} for #{@field}")
-    assert {:error, message} = Attempt.await(fixture.pid, fixture.close)
+    assert {:error, message} = Dispatch.await(fixture.pid, fixture.close)
     assert message == "upstream said #{@redacted} for #{@redacted}"
 
     row = Arca.Repo.get!(Arca.Execution, id)
@@ -136,7 +136,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert %{"ok" => @token} = Task.await(during)
     assert %{"ok" => %{"said" => @redacted}} = Task.await(closing)
     assert %{"error" => "lost"} = Task.await(after_close)
-    assert {:ok, %{output: %{"said" => @redacted}}} = Attempt.await(attempt, fixture.close)
+    assert {:ok, %{output: %{"said" => @redacted}}} = Dispatch.await(attempt, fixture.close)
     refute_unmasked(Arca.Repo.get!(Arca.Execution, id))
   end
 
@@ -156,7 +156,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert %{"error" => "lost"} = push(fixture, %{"text" => @token})
 
     assert {:error, "Execution attempt ended before it closed"} =
-             Attempt.await(attempt, fixture.close)
+             Dispatch.await(attempt, fixture.close)
 
     row = Arca.Repo.get!(Arca.Execution, id)
     assert row.status == "failed"

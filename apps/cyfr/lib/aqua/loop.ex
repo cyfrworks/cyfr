@@ -37,7 +37,7 @@ defmodule Aqua.Loop do
   @launch_timeout_ms 10 * 60 * 1000
   @retry_delays_ms [2_000, 8_000, 20_000]
   # `{"operation":"chat","params":}` around the request, which is what
-  # `Opus.Executor` encodes and weighs against the node's cap.
+  # `Cyfr.Execution.Admission` encodes and weighs against the node's cap.
   @envelope_bytes 30
   @resume_backoff_ms [500, 2_000, 8_000]
   @recoverable ~w(rate_limited overloaded)

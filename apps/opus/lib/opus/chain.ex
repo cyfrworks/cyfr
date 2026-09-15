@@ -5,13 +5,20 @@ defmodule Opus.Chain do
   Root and child execution under the authority `Cyfr.Execution.Admission`
   decides.
 
-  `run_root/5` is the external-ingress entry: the executor runs the
+  `run_root/5` is the external-ingress entry: it runs the
   reference under the authority its selected profile's consent grants.
   `run_root_edge/5` roots at a tincture's profile and runs one of its
   dependencies under that edge. `run_child/5` and `run_child_stream/5`
   are the in-chain entries: the target runs under the child authority the
   caller's authority steps to — bound, or zero. Every decision is taken
-  before the executor is called; a refusal runs nothing.
+  before the run is dispatched (`Cyfr.Execution.Dispatch.run/4`); a refusal
+  runs nothing.
+
+  A spawn-shaped child's invoke-budget slot is charged by its step and
+  held under the guard by the process that dispatches it, with its charge
+  row; the child's attempt takes both over and gives them back when it
+  stops, and a child refused before its attempt opens gives them back at
+  once.
   """
 
   alias Cyfr.Authority
@@ -25,7 +32,7 @@ defmodule Opus.Chain do
   `profile_selector` and the options `:route`, `:consent_source`,
   `:ceiling` and `:live_shape_digest` are
   `Cyfr.Execution.Admission.authority_for/4`'s. Remaining options pass
-  through to `Opus.Executor.run/4`.
+  through to `Cyfr.Execution.Dispatch.run/4`.
   """
   @spec run_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
@@ -49,7 +56,7 @@ defmodule Opus.Chain do
           profile_id: profile.id
         )
 
-      Opus.Executor.run(ctx, reference, input, exec_opts)
+      Cyfr.Execution.Dispatch.run(ctx, reference, input, exec_opts)
     end
   end
 
@@ -70,18 +77,12 @@ defmodule Opus.Chain do
     with {:ok, decision} <- Admission.step_invoke(authority, reference, need, opts) do
       if Keyword.get(opts, :guest_fn) == :spawn do
         # A spawn-shaped step charged the invoke budget; this process holds
-        # the slot for the call and the guard's :DOWN releases it if the
-        # process dies inside. The hold is a row too
-        # (`Arca.BudgetReservations`), released with the slot.
+        # the slot under the guard until the child's attempt takes it over.
+        # The hold is a row too (`Arca.BudgetReservations`), given back with
+        # the slot.
         with :ok <- Charge.take(decision.authority, opts) do
           Sanctum.Authority.guard_invoke(decision.authority)
-
-          try do
-            execute_child(decision, input, opts)
-          after
-            Sanctum.Authority.release_invoke(decision.authority)
-            Charge.give_back(decision.authority, opts)
-          end
+          execute_child(decision, input, opts)
         end
       else
         execute_child(decision, input, opts)
@@ -127,7 +128,7 @@ defmodule Opus.Chain do
 
   A guest call of `execution.run_stream` returns while work continues, so
   it is spawn-shaped: the decision charges the root invoke budget and the
-  task's `after` releases it. A denial charges nothing.
+  child's attempt gives it back. A denial charges nothing.
   """
   @spec run_child_stream(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
           {:ok, map()} | {:error, term()}
@@ -143,20 +144,14 @@ defmodule Opus.Chain do
       start =
         Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
           Cyfr.LoggerContext.restore(logger_metadata)
-          # The task holds the charged slot: a kill through the registry
-          # (execution.cancel) skips the `after`, so the guard's :DOWN
-          # compensation releases it instead. Guard BEFORE registering —
-          # the registry is what cancel kills through, so the compensation
-          # must exist before the pid is findable, or a kill in the gap
-          # leaked the slot step_invoke charged.
+          # The task holds the charged slot until the child's attempt takes
+          # it over. Guard BEFORE registering: the registry is what a cancel
+          # kills through, so the compensation must exist before the pid is
+          # findable, or a kill in the gap leaked the slot step_invoke
+          # charged.
           Sanctum.Authority.guard_invoke(decision.authority)
           Registry.register(Cyfr.Execution.Registry, execution_id, :running)
-
-          try do
-            execute_child(decision, input, opts)
-          after
-            Sanctum.Authority.release_invoke(decision.authority)
-          end
+          execute_child(decision, input, opts)
         end)
 
       case start do
@@ -176,15 +171,25 @@ defmodule Opus.Chain do
 
   A bound target that no longer resolves is `setup_required` — the consent
   names a dependency the installed world cannot satisfy. An unresolvable
-  *unbound* target proceeds to the executor and fails there, so dynamic
-  dispatch to a bad ref keeps the executor's error shape.
+  *unbound* target proceeds to admission and fails there, so dynamic
+  dispatch to a bad ref keeps admission's error shape.
+
+  A spawn-shaped step (`opts[:guest_fn]` is `:spawn`) is dispatched with
+  the invoke-budget slot the calling process holds (`:held_invoke`).
   """
   @spec execute_child(Admission.child_decision(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def execute_child(decision, input, opts) do
     ctx = Keyword.fetch!(opts, :ctx)
 
+    spawned? = Keyword.get(opts, :guest_fn) == :spawn
+
     if decision.bound? and is_nil(decision.component) do
+      if spawned? do
+        Sanctum.Authority.release_invoke(decision.authority)
+        Charge.give_back(decision.authority, opts)
+      end
+
       {:error,
        {:setup_required,
         %{
@@ -225,8 +230,9 @@ defmodule Opus.Chain do
         |> Arca.QueryHelpers.maybe_put(:step, step_of(opts))
         # The port's clock (`Cyfr.Execution.StepSpans`), marked by the run.
         |> Arca.QueryHelpers.maybe_put(:step_spans, Keyword.get(opts, :step_spans))
+        |> Arca.QueryHelpers.maybe_put(:held_invoke, spawned? || nil)
 
-      Opus.Executor.run(ctx, decision.reference, input, exec_opts)
+      Cyfr.Execution.Dispatch.run(ctx, decision.reference, input, exec_opts)
     end
   end
 

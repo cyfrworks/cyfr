@@ -100,7 +100,7 @@ defmodule Opus.ActivationStampingTest do
     # stamping is exercised where it still runs: a direct execution under
     # an authority that carries no activation of its own.
     {:ok, result} =
-      Opus.Executor.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
+      Cyfr.Execution.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
         type: :formula,
         authority: Cyfr.Authority.zero()
       )

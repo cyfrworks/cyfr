@@ -10,12 +10,16 @@ defmodule Cyfr.Execution.Outcome do
   A completed outcome carries the guest's `output` exactly as the runner
   received it. CYFR masks it, checks it against the node's response size,
   stages it and closes the row. A failed outcome carries the `error`
-  message the row records. An outcome names the attempt it closes, and CYFR
-  refuses one whose attempt is not the calling attempt.
+  message the row records. A failed outcome is `abandoned` when the runner
+  stopped the guest's component call before it returned (a timeout, a
+  lost lease or a cancel): the call's native work may still be running,
+  and CYFR counts the kill against the athanor. An outcome names the
+  attempt it closes, and CYFR refuses one whose attempt is not the calling
+  attempt.
   """
 
   @enforce_keys [:execution_id, :attempt, :fence, :status]
-  defstruct [:execution_id, :attempt, :fence, :status, :output, :error]
+  defstruct [:execution_id, :attempt, :fence, :status, :output, :error, abandoned: false]
 
   @type t :: %__MODULE__{
           execution_id: String.t(),
@@ -23,6 +27,7 @@ defmodule Cyfr.Execution.Outcome do
           fence: pos_integer(),
           status: :completed | :failed,
           output: term(),
-          error: String.t() | nil
+          error: String.t() | nil,
+          abandoned: boolean()
         }
 end

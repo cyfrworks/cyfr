@@ -12,8 +12,8 @@ defmodule Cyfr.Test.AttemptFixtures do
   `athanor_id`, `execution_id`, `attempt`, `fence` and `generation`, the
   `runner` and the attempt `key`) together with the row's `record`, its
   `close` state, the attempt `pid`, the `ctx`, `authority` and
-  `component_ref` it runs under, the signed `assignment` and the `secrets`
-  attach answered.
+  `component_ref` it runs under, its `input`, the signed `assignment` and
+  the `secrets` attach answered.
   """
 
   import ExUnit.Assertions
@@ -36,6 +36,10 @@ defmodule Cyfr.Test.AttemptFixtures do
   - `:limits` — the node's limits (default the authority's);
   - `:stream_id` — the stream its events go on (default the execution's);
   - `:runner` — the attaching runner's id (default a fresh one);
+  - `:runner_id` — the worker service boot the attempt is dispatched to:
+    the row's runner, the assignment's audience and the attempt's (default
+    this boot's id, and the attempt names none);
+  - `:wasm_bytes` — the bytes the attempt answers its runner;
   - `:attach` — `false` to stop before attaching.
   """
   @spec attached!(keyword()) :: map()
@@ -53,7 +57,8 @@ defmodule Cyfr.Test.AttemptFixtures do
 
     component_type = Keyword.get(opts, :component_type, :catalyst)
     record = Record.new(ctx, component_ref, input, component_type: component_type)
-    :ok = Record.write_started(record)
+    runner_id = Keyword.get(opts, :runner_id)
+    :ok = Record.write_started(record, if(runner_id, do: [runner_id: runner_id], else: []))
     close = %Close{ctx: ctx, record: record, limits: limits, started: true}
 
     {:ok, pid} =
@@ -65,7 +70,9 @@ defmodule Cyfr.Test.AttemptFixtures do
         component_ref: component_ref,
         limits: limits,
         close: close,
-        stream_id: Keyword.get(opts, :stream_id, record.id)
+        stream_id: Keyword.get(opts, :stream_id, record.id),
+        runner_id: runner_id,
+        wasm_bytes: Keyword.get(opts, :wasm_bytes)
       )
 
     {:ok, issued} =
@@ -81,7 +88,8 @@ defmodule Cyfr.Test.AttemptFixtures do
           activation_digest: nil
         },
         input: input,
-        timeout_ms: 60_000
+        timeout_ms: 60_000,
+        audience: runner_id || Record.runner_id()
       })
 
     fixture =
@@ -96,6 +104,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         authority: authority,
         component_ref: component_ref,
         entry: entry,
+        input: input,
         secrets: nil
       })
 

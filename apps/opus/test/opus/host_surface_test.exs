@@ -43,15 +43,14 @@ defmodule Opus.HostSurfaceTest do
     "Compendium.NamespacePolicy",
 
     # Shared primitives — glue, by construction available to any node.
-    # The execution port, and what CYFR owns of a run: its admission (the
-    # authority, the resolved and attested component, the consented limits
-    # and policy, the admitted row and its signed assignment), the waiter
-    # that awaits the run's attempt, the invoke charge row, the execution
-    # slots and the registry a cancel finds a run's processes through, the
-    # cascade a cancel fails children through, and the host calls of
-    # `Opus.HostClient` — attach, renew, complete, fail, emit, the OAuth
-    # dispense and the egress rate — which are the only way opus reaches a
-    # run's attempt (the test below).
+    # The execution port, and what CYFR owns of a run: the child step
+    # (`Admission.step_invoke`) and its charge row, the dispatch a run and
+    # a cancel go through (`Dispatch.run`, `Dispatch.cancel`), which admits,
+    # waits and stops runs, the registry a streamed child's task registers
+    # in, the dispatch and seal keys the worker service holds, and the host
+    # calls of `Opus.HostClient` — attach, admitted, renew, complete, fail,
+    # emit, the OAuth dispense, the egress rate and the runner exit report —
+    # which are the only way opus reaches a run's attempt (the tests below).
     "Cyfr.Execution",
     # Egress pinning: a guest request's host resolved and checked against
     # its consented private policy before the connection is made.
@@ -142,19 +141,20 @@ defmodule Opus.HostSurfaceTest do
     assert transports == ["apps/opus/lib/opus/host_client.ex"],
            "Cyfr.Execution.Host is reached outside Opus.HostClient: #{inspect(transports)}"
 
-    # The attempt's state (its masking set, emitter, rates, claim and
-    # close) and the lease are CYFR's: opus asks for them through host
-    # calls. What opus names of the attempt itself is the waiter's two
-    # calls, `await` and `abandon`.
+    # The attempt's state (its masking set, emitter, rates, claim, holds
+    # and close), its waiter and the lease are CYFR's: opus asks for them
+    # through host calls and names nothing of the attempt itself. Of the
+    # keys it holds only the worker service's dispatch and seal keys.
     reaches =
       for {path, line} <- code,
           pattern <- [
-            ~r/Cyfr\.Execution\.(Rates|Emit|Close|Keys|Assignments)\b/,
+            ~r/Cyfr\.Execution\.(Rates|Emit|Close|Assignments|Attempt|Lapse)\b/,
+            ~r/Cyfr\.Execution\.Keys\.(?!dispatch_key\(|dispatch_seal_key\()/,
             ~r/\b(Close|Rates|Emit)\.[a-z_]+\(/,
             ~r/\brenew_lease\(/,
             ~r/\bArca\.ExecutionAttempts\b/,
             ~r/\bSanctum\.VaultReader\b/,
-            ~r/\bAttempt\.(?!await\(|abandon\()[a-z_]+/
+            ~r/\bAttempt\.[a-z_]+/
           ],
           line =~ pattern,
           do: "#{path}: #{String.trim(line)}"
@@ -165,6 +165,33 @@ defmodule Opus.HostSurfaceTest do
 
            #{Enum.join(reaches, "\n")}
            """
+  end
+
+  test "the runner and the worker service reach CYFR only through Opus.HostClient and the dispatch keys" do
+    contracts = contracts()
+
+    reaches =
+      for {path, line} <- opus_code(),
+          path in ["apps/opus/lib/opus/runner.ex", "apps/opus/lib/opus/worker_service.ex"],
+          [_, module] <- Regex.scan(@namespace, line),
+          not MapSet.member?(contracts, module),
+          module != "Cyfr.Execution.Keys",
+          uniq: true,
+          do: "#{path}: #{module}"
+
+    assert reaches == [],
+           """
+           the runner or the worker service reaches CYFR other than through
+           Opus.HostClient and the worker service's dispatch keys:
+
+           #{Enum.join(reaches, "\n")}
+           """
+
+    keys =
+      for {path, line} <- opus_code(), line =~ "Cyfr.Execution.Keys", uniq: true, do: path
+
+    assert keys == ["apps/opus/lib/opus/worker_service.ex"],
+           "Cyfr.Execution.Keys is reached outside the worker service: #{inspect(keys)}"
   end
 
   test "Opus.Host covers the consent plane a host function crosses" do

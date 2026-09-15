@@ -876,13 +876,45 @@ defmodule Arca.Execution do
         select: {e, a}
       )
       |> Arca.Repo.all()
-      |> Enum.map(fn {e, a} ->
-        e
-        |> Map.from_struct()
-        |> Map.delete(:__meta__)
-        |> Map.merge(%{attempt: a.attempt, runner_id: a.runner_id, lease_until: a.lease_until})
-      end)
+      |> Enum.map(&attempt_row/1)
     end)
+  end
+
+  @doc """
+  The running executions whose current attempt is one of `attempts`,
+  running and dispatched to the worker service boot `runner_id`, in the
+  shape `list_stale_running/2` answers. Spans every tenant: the ids come
+  from a verified worker service report or from an attempt's own state,
+  never from a request. `{:error, :database_error}` when the store cannot
+  answer.
+  """
+  @spec list_running_dispatched([String.t()], String.t()) :: [map()] | {:error, :database_error}
+  def list_running_dispatched(attempts, runner_id)
+      when is_list(attempts) and is_binary(runner_id) do
+    Arca.Repo.Errors.with_db_rescue("Execution.list_running_dispatched", fn ->
+      # arca:unscoped-ok a runner's attempts are lapsed across tenants when
+      # its worker service reports its exit; the ids are the report's.
+      from(a in Arca.Schemas.ExecutionAttempt,
+        join: e in __MODULE__,
+        on: e.id == a.execution_id and e.current_attempt == a.attempt,
+        where: a.attempt in ^attempts and a.runner_id == ^runner_id,
+        where: a.state == "running" and e.status == "running",
+        select: {e, a}
+      )
+      |> Arca.Repo.all()
+      |> Enum.map(&attempt_row/1)
+    end)
+  end
+
+  defp attempt_row({execution, attempt}) do
+    execution
+    |> Map.from_struct()
+    |> Map.delete(:__meta__)
+    |> Map.merge(%{
+      attempt: attempt.attempt,
+      runner_id: attempt.runner_id,
+      lease_until: attempt.lease_until
+    })
   end
 
   @doc """

@@ -18,7 +18,23 @@ defmodule Opus.Application do
       # Supervised fire-and-forget tasks: an in-chain streamed child
       # (`execution.run_stream` from a formula) and a guest's streaming HTTP
       # request.
-      Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000)
+      Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000),
+      # The worker service and the runners it starts. They restart together:
+      # a restarted service has a new boot id and monitors none of the old
+      # runners, so they go with it.
+      %{
+        id: Opus.WorkerService.Tree,
+        type: :supervisor,
+        start:
+          {Supervisor, :start_link,
+           [
+             [
+               {DynamicSupervisor, name: Opus.WorkerService.Runners, strategy: :one_for_one},
+               Opus.WorkerService
+             ],
+             [strategy: :one_for_all, name: Opus.WorkerService.Tree]
+           ]}
+      }
     ]
 
     opts = [strategy: :one_for_one, name: Opus.Supervisor, max_restarts: 10, max_seconds: 60]

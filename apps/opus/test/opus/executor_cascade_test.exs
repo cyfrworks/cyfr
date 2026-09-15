@@ -211,17 +211,18 @@ defmodule Opus.ExecutorCascadeTest do
       # Successful parents leave asynchronous children running. Failure and
       # cancellation cascade; abandoned children are reaped by lease expiry.
       read = fn path -> [__DIR__, path] |> Path.join() |> Path.expand() |> File.read!() end
-      executor = read.("../../lib/opus/executor.ex")
+      dispatch = read.("../../../cyfr/lib/cyfr/execution/dispatch.ex")
+      lapse = read.("../../../cyfr/lib/cyfr/execution/lapse.ex")
       close = read.("../../../cyfr/lib/cyfr/execution/close.ex")
 
       callers =
-        (executor <> "\n" <> close)
+        Enum.join([dispatch, lapse, close], "\n")
         |> String.split("\n")
         |> Enum.filter(&(String.trim(&1) =~ ~r/^Cascade\.fail_children(_of)?\(/))
         |> Enum.map(&String.trim/1)
 
-      assert length(callers) == 2,
-             "expected exactly the failure and cancel cascades, got: #{inspect(callers)}"
+      assert length(callers) == 3,
+             "expected exactly the failure, cancel and lapse cascades, got: #{inspect(callers)}"
 
       # ...and the success path returns without one.
       [_before, complete] = String.split(close, "def complete(", parts: 2)
@@ -292,7 +293,7 @@ defmodule Opus.ExecutorCascadeTest do
           authenticated: true
         )
 
-      assert {:error, :not_found} = Opus.Executor.cancel(foreign_ctx, exec_id)
+      assert {:error, :not_found} = Cyfr.Execution.Dispatch.cancel(foreign_ctx, exec_id)
 
       # The destructive kill must NOT happen before the tenant check.
       assert Process.alive?(target)
@@ -339,7 +340,7 @@ defmodule Opus.ExecutorCascadeTest do
           authenticated: true
         )
 
-      assert {:ok, %{cancelled: true}} = Opus.Executor.cancel(owner_ctx, exec_id)
+      assert {:ok, %{cancelled: true}} = Cyfr.Execution.Dispatch.cancel(owner_ctx, exec_id)
 
       # The running process is killed and the record is no longer running.
       assert_receive {:DOWN, ^ref, :process, ^target, _}, 1000

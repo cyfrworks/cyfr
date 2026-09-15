@@ -12,13 +12,23 @@ defmodule Cyfr.WorkerAuth do
   | Key | Derived over | Held by | Use |
   |---|---|---|---|
   | `dispatch_key/1` | `cyfr-worker/v1/dispatch` | CYFR and worker services | signs WorkerAPI requests and the worker service's reports |
-  | `dispatch_seal_key/1` | `cyfr-worker/v1/dseal` | CYFR and worker services | seals start bodies |
+  | `dispatch_seal_key/1` | `cyfr-worker/v1/dseal` | CYFR and worker services | seals the attempt key a start carries (`seal_attempt_key/2`) |
   | `assign_key/1` | `cyfr-worker/v1/assign` | CYFR only | MACs assignments (`Cyfr.Assignment`) |
   | `attempt_key/2` | `cyfr-worker/v1/attempt`, then the athanor, execution, attempt, fence and generation, one per line | the runner of that attempt | signs and seals its host calls |
 
   An attempt key is bound to one control-plane generation, so a new
   generation retires every attempt key, and CYFR re-derives it from a host
   call's header without storing anything.
+
+  ## Sealed attempt keys
+
+  CYFR hands a worker service the key of the attempt it starts sealed
+  (`seal_attempt_key/2`): `base64url(attempt) <> "." <> sealed`, where
+  `attempt` is the JCS of the attempt's five fields and `sealed` is
+  `Cyfr.MacEnvelope`'s AES-256-GCM seal of the key under the dispatch seal
+  key, its additional data `cyfr-worker/v1/attempt-key` followed by those
+  fields one per line. `open_attempt_key/2` answers the attempt and its key
+  only when the seal opens as the attempt it names.
 
   ## Headers
 
@@ -67,6 +77,9 @@ defmodule Cyfr.WorkerAuth do
     generation: :integer
   ]
 
+  @attempt_names Enum.map(@attempt_fields, fn {name, _type} -> Atom.to_string(name) end)
+  @attempt_key_label "cyfr-worker/v1/attempt-key"
+
   @call %MacEnvelope{
     prefix: "cyfr-worker/v1",
     kind: "call",
@@ -86,6 +99,9 @@ defmodule Cyfr.WorkerAuth do
           required(:generation) => pos_integer(),
           optional(atom()) => term()
         }
+
+  @typedoc "An attempt and the key its runner signs host calls with."
+  @type attempt_key :: %{attempt: attempt(), key: binary()}
 
   @typedoc "A host call's header fields: the attempt's, the presenting runner, `ts` in Unix ms and a nonce."
   @type host_call :: %{
@@ -125,6 +141,42 @@ defmodule Cyfr.WorkerAuth do
           {:ok, binary()} | {:error, MacEnvelope.invalid_field()}
   def attempt_key(root, attempt) when byte_size(root) == 32 and is_map(attempt),
     do: MacEnvelope.derive(root, "cyfr-worker/v1/attempt", @attempt_fields, attempt)
+
+  @doc """
+  Seal an attempt's key with the dispatch seal key, naming the attempt.
+  `iv` is 12 random bytes unless given.
+  """
+  @spec seal_attempt_key(binary(), attempt_key(), binary()) ::
+          {:ok, String.t()} | {:error, MacEnvelope.invalid_field()}
+  def seal_attempt_key(seal_key, attempt_key, iv \\ :crypto.strong_rand_bytes(12))
+
+  def seal_attempt_key(seal_key, %{attempt: attempt, key: key}, iv)
+      when byte_size(seal_key) == 32 and is_map(attempt) and byte_size(key) == 32 and
+             byte_size(iv) == 12 do
+    with {:ok, sealed} <-
+           MacEnvelope.seal(seal_key, @attempt_key_label, @attempt_fields, attempt, key, iv),
+         {:ok, named} <- attempt_json(attempt) do
+      {:ok, Base.url_encode64(named, padding: false) <> "." <> sealed}
+    end
+  end
+
+  @doc """
+  The attempt and key `seal_attempt_key/2` sealed, opened with the dispatch
+  seal key. Anything that does not open as the attempt it names, or whose
+  key is not 32 bytes, is `{:error, :unsealable}`.
+  """
+  @spec open_attempt_key(binary(), term()) :: {:ok, attempt_key()} | {:error, :unsealable}
+  def open_attempt_key(seal_key, sealed) when byte_size(seal_key) == 32 do
+    with true <- is_binary(sealed),
+         [named, box] <- String.split(sealed, "."),
+         {:ok, attempt} <- read_attempt(named),
+         {:ok, <<_::binary-size(32)>> = key} <-
+           MacEnvelope.open(seal_key, @attempt_key_label, @attempt_fields, attempt, box) do
+      {:ok, %{attempt: attempt, key: key}}
+    else
+      _ -> {:error, :unsealable}
+    end
+  end
 
   @doc "The header for a host call of `body`, signed with the attempt's key."
   @spec host_call_header(binary(), host_call(), binary()) ::
@@ -182,6 +234,28 @@ defmodule Cyfr.WorkerAuth do
       {:ok, fields}
     end
   end
+
+  defp attempt_json(attempt) do
+    @attempt_fields
+    |> Map.new(fn {name, _type} -> {Atom.to_string(name), Map.get(attempt, name)} end)
+    |> Cyfr.JCS.encode()
+  end
+
+  # The attempt a sealed key names: exactly its five fields, each of its
+  # type. `Cyfr.MacEnvelope.open/5` checks their values.
+  defp read_attempt(named) do
+    with {:ok, json} <- Base.url_decode64(named, padding: false),
+         {:ok, %{} = wire} <- Jason.decode(json),
+         true <- Enum.sort(Map.keys(wire)) == Enum.sort(@attempt_names),
+         true <- Enum.all?(@attempt_fields, &typed?(&1, wire)) do
+      {:ok, Map.new(@attempt_fields, fn {name, _type} -> {name, wire[Atom.to_string(name)]} end)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp typed?({name, :string}, wire), do: is_binary(wire[Atom.to_string(name)])
+  defp typed?({name, :integer}, wire), do: is_integer(wire[Atom.to_string(name)])
 
   defp within_window(ts, now) when abs(ts - now) <= @window_ms, do: :ok
   defp within_window(_ts, _now), do: {:error, :outside_window}

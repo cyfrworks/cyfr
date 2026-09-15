@@ -10,9 +10,18 @@ defmodule Opus.ApplicationTest do
 
       ids = for {id, _pid, _type, _modules} <- Supervisor.which_children(Opus.Supervisor), do: id
 
-      for id <- [Opus.SharedEngine, Opus.TaskSupervisor] do
+      for id <- [Opus.SharedEngine, Opus.TaskSupervisor, Opus.WorkerService.Tree] do
         assert id in ids, "#{inspect(id)} is not a child of Opus.Supervisor"
       end
+    end
+
+    test "the worker service and its runners' supervisor restart together" do
+      ids =
+        for {id, _pid, _type, _modules} <- Supervisor.which_children(Opus.WorkerService.Tree),
+            do: id
+
+      assert Enum.sort(ids) == Enum.sort([Opus.WorkerService, Opus.WorkerService.Runners])
+      assert Supervisor.count_children(Opus.WorkerService.Tree).active == 2
     end
 
     test "the execution slots, rates, event streams, attempts, root tasks and sweeper are cyfr's, not the engine's" do
@@ -34,7 +43,7 @@ defmodule Opus.ApplicationTest do
   end
 
   describe "readiness" do
-    test "the engine is ready once the execution slots and its WASM engine are up" do
+    test "the engine is ready once the execution slots, its WASM engine and its worker service are up" do
       assert Opus.ready?()
       assert Cyfr.Execution.available?()
     end

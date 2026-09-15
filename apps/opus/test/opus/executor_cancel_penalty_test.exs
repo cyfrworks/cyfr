@@ -2,14 +2,13 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.ExecutorCancelPenaltyTest do
-  # N cancels of a spinning guest, through the executor's own cancel path,
-  # charge the tenant by execution before each kill until the penalty box
-  # refuses the tenant's next root.
+  # N cancels of a registered holder spinning in native code, through the
+  # cancel path, charge the tenant by execution before each kill until the
+  # penalty box refuses the tenant's next root.
   use ExUnit.Case, async: false
 
   alias Arca.Execution
-  alias Cyfr.Execution.Semaphore
-  alias Opus.Executor
+  alias Cyfr.Execution.{Dispatch, Semaphore}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -59,7 +58,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     pid
   end
 
-  test "N cancels through the executor trip the tenant's penalty box", %{ctx: ctx} do
+  test "N cancels trip the tenant's penalty box", %{ctx: ctx} do
     threshold = max(2, div(Semaphore.status().tenant_max, 2))
 
     for _ <- 1..threshold do
@@ -67,7 +66,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
       pid = spinning!(id)
       ref = Process.monitor(pid)
 
-      assert {:ok, %{cancelled: true, execution_id: ^id}} = Executor.cancel(ctx, id)
+      assert {:ok, %{cancelled: true, execution_id: ^id}} = Dispatch.cancel(ctx, id)
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
     end
 

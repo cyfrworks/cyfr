@@ -58,8 +58,6 @@ defmodule Opus.Runtime do
   - `:authority_required` - Defaults to true: a nil `:authority` raises instead
     of executing (a WASM run always carries one; this is the final invariant
     guard). Pass `false` only for authority-free harness runs in tests.
-  - `:step_spans` - The caller's `Cyfr.Execution.StepSpans` clock, marked
-    when the guest starts
   - `:execution_id` - The admitted execution
   - `:host` - The attached `Opus.HostClient` of the execution's attempt:
     the guest's `emit`, OAuth token and HTTP rate checks are its host calls
@@ -92,12 +90,10 @@ defmodule Opus.Runtime do
     authority = Keyword.get(opts, :authority)
     declared_needs = Keyword.get(opts, :declared_needs)
     activation_digest = Keyword.get(opts, :activation_digest)
-    step_spans = Keyword.get(opts, :step_spans)
     host = Keyword.get(opts, :host)
 
-    # Second line of defense behind the executor's own check: if an opts
-    # filter between the caller and here dropped :authority but kept the
-    # requirement flag, the execution must die rather than run on ambient
+    # Admission refuses a run without an authority; this is the last guard:
+    # a runtime reached without one dies rather than run on ambient
     # permissions.
     if Keyword.get(opts, :authority_required, true) and is_nil(authority) do
       raise ArgumentError,
@@ -190,7 +186,6 @@ defmodule Opus.Runtime do
                    ) do
                 {:ok, pid} ->
                   try do
-                    Cyfr.Execution.StepSpans.guest_started(step_spans)
                     result = execute_with_convention(pid, input, component_type: component_type)
                     GenServer.stop(pid, :normal)
                     add_execution_metadata(result, %{})
@@ -438,7 +433,7 @@ defmodule Opus.Runtime do
 
       {:ok, json_input} ->
         # Components (especially Catalysts) can make HTTP calls that take much longer
-        # than the default 5s GenServer.call timeout. The Executor enforces its own
+        # than the default 5s GenServer.call timeout. The runner enforces its own
         # wall-clock timeout, so we use :infinity here to avoid double-timeout races.
         case Wasmex.Components.call_function(pid, call_name, [json_input], :infinity) do
           {:ok, json_output} when is_binary(json_output) ->
@@ -476,7 +471,7 @@ defmodule Opus.Runtime do
   # ===========================================================================
 
   # Wrap a successful result in the {:ok, output, metadata} shape the
-  # executor consumes. The metadata map is currently empty — it is the seam
+  # runner consumes. The metadata map is currently empty — it is the seam
   # where real per-execution metrics ride when the engine can report them;
   # nothing is fabricated here.
   defp add_execution_metadata({:ok, output}, metadata) when is_map(metadata) do

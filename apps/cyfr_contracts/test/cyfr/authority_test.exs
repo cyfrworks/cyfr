@@ -198,4 +198,94 @@ defmodule Cyfr.AuthorityTest do
       assert_raise FunctionClauseError, fn -> Authority.limits(forged) end
     end
   end
+
+  # ============================================================================
+  # Wire
+  # ============================================================================
+
+  # The budget crosses as its id alone.
+  defp decoded(auth), do: %{auth | budget: %{auth.budget | cap: 0}}
+
+  describe "from_wire/1" do
+    setup do
+      {:ok, root} = Authority.root(profile(), blob(), ceiling: @ceiling)
+      {:ok, edge} = Blob.lookup_edge(root.policy, @formula, @catalyst, "source")
+      %{root: root, child: Authority.bound_child(root, @catalyst, edge)}
+    end
+
+    test "reads back a root, a bound child, an unbound child and the zero authority",
+         %{root: root, child: child} do
+      for auth <- [root, child, Authority.unbound_child(child, "formula:evil.corp.tool")] do
+        wire = Authority.to_wire(auth)
+        assert {:ok, back} = Authority.from_wire(wire)
+        assert back == decoded(auth)
+        assert {:ok, ^back} = wire |> Jason.encode!() |> Jason.decode!() |> Authority.from_wire()
+        assert Authority.limits(back) == Authority.limits(auth)
+      end
+
+      zero = Authority.zero()
+      assert {:ok, back} = Authority.from_wire(Authority.to_wire(zero))
+      assert back == decoded(zero)
+    end
+
+    test "reads an absent member as nil, as an assignment carries the map", %{child: child} do
+      unbound = Authority.unbound_child(child, "formula:evil.corp.tool")
+      sparse = unbound |> Authority.to_wire() |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+      refute Map.has_key?(sparse, "profile_id")
+      refute Map.has_key?(sparse, "policy")
+      assert {:ok, back} = Authority.from_wire(sparse)
+      assert back == decoded(unbound)
+    end
+
+    test "a decoded budget charges nothing: its cap is 0, its id the root's", %{child: child} do
+      assert {:ok, %{budget: budget}} = Authority.from_wire(Authority.to_wire(child))
+      assert budget == %Authority.Budget{id: child.budget.id, cap: 0}
+    end
+
+    test "fails closed on a malformed map", %{child: child} do
+      wire = Authority.to_wire(child)
+
+      assert {:error, {:invalid_wire_keys, ["extra"]}} =
+               Authority.from_wire(Map.put(wire, "extra", 1))
+
+      assert {:error, {:invalid_wire_budget, nil}} =
+               Authority.from_wire(Map.delete(wire, "budget"))
+
+      assert {:error, {:invalid_wire_budget, _}} =
+               Authority.from_wire(%{wire | "budget" => %{"id" => "x", "cap" => 1}})
+
+      assert {:error, {:invalid_wire_cursor, _}} =
+               Authority.from_wire(%{wire | "cursor" => "bound"})
+
+      assert {:error, {:invalid_wire_value, _}} =
+               Authority.from_wire(%{wire | "invoke_mode" => "anything"})
+
+      assert {:error, {:invalid_wire_value, "profile_id"}} =
+               Authority.from_wire(%{wire | "profile_id" => 7})
+
+      assert {:error, {:invalid_wire_chain, _}} = Authority.from_wire(%{wire | "chain" => [""]})
+
+      assert {:error, {:invalid_wire_activation, _}} =
+               Authority.from_wire(%{wire | "activation" => %{"a" => 1}})
+
+      bad_policy = put_in(wire, ["policy", "canonical"], "jcs-9")
+      assert {:error, {:invalid_wire_policy, _}} = Authority.from_wire(bad_policy)
+
+      assert {:error, {:invalid_wire_resources, _}} =
+               Authority.from_wire(%{wire | "resources" => "all"})
+
+      assert {:error, {:invalid_wire, _}} = Authority.from_wire("not a map")
+    end
+
+    test "cannot hand back an authority past the depth cap", %{child: child} do
+      wire = Authority.to_wire(child)
+
+      assert {:error, {:invalid_wire_depth, _}} =
+               Authority.from_wire(%{wire | "depth" => Authority.depth_cap() + 1})
+
+      assert {:error, {:invalid_wire_depth, _}} = Authority.from_wire(%{wire | "depth" => -1})
+      assert {:ok, _} = Authority.from_wire(%{wire | "depth" => Authority.depth_cap()})
+    end
+  end
 end

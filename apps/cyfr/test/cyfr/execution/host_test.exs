@@ -18,7 +18,7 @@ defmodule Cyfr.Execution.HostTest do
   import ExUnit.CaptureLog
 
   alias Cyfr.Assignment
-  alias Cyfr.Execution.{Attempt, Close, Keys}
+  alias Cyfr.Execution.{Close, Dispatch, Keys}
   alias Cyfr.Test.AttemptFixtures
 
   setup do
@@ -125,7 +125,7 @@ defmodule Cyfr.Execution.HostTest do
                attach(fixture)
 
       assert {:error, {:setup_required, %{reason: "consent_moved"}}} =
-               Attempt.await(fixture.pid, fixture.close)
+               Dispatch.await(fixture.pid, fixture.close)
 
       assert %{status: "failed", error_message: message} = row(fixture)
       assert message =~ ": consent_moved"
@@ -233,7 +233,7 @@ defmodule Cyfr.Execution.HostTest do
       assert %{"ok" => %{"said" => "[REDACTED]"}} = complete(fixture, %{"said" => "sk-fixture"})
 
       assert {:ok, %{status: :completed, output: %{"said" => "[REDACTED]"}}} =
-               Attempt.await(fixture.pid, fixture.close)
+               Dispatch.await(fixture.pid, fixture.close)
 
       assert row(fixture).status == "completed"
     end
@@ -244,7 +244,7 @@ defmodule Cyfr.Execution.HostTest do
 
       outcome = AttemptFixtures.outcome(fixture, "failed", %{"error" => "saw sk-fixture"})
       assert %{"ok" => true} = AttemptFixtures.call(fixture, "fail", %{"outcome" => outcome})
-      assert {:error, "saw [REDACTED]"} = Attempt.await(fixture.pid, fixture.close)
+      assert {:error, "saw [REDACTED]"} = Dispatch.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: "saw [REDACTED]"} = row(fixture)
     end
 
@@ -263,7 +263,7 @@ defmodule Cyfr.Execution.HostTest do
     test "a delta pushed after the terminal row is refused" do
       fixture = AttemptFixtures.attached!()
       assert %{"ok" => _} = complete(fixture, %{"done" => true})
-      assert {:ok, _} = Attempt.await(fixture.pid, fixture.close)
+      assert {:ok, _} = Dispatch.await(fixture.pid, fixture.close)
 
       :ok = Cyfr.Execution.Events.subscribe(fixture.execution_id, fixture.ctx)
       assert %{"error" => "lost"} = push(fixture, %{"type" => "note", "text" => "late"})
@@ -310,7 +310,7 @@ defmodule Cyfr.Execution.HostTest do
       wait_until(fn -> not Process.alive?(fixture.pid) end)
 
       assert {:error, "Execution attempt ended before it closed"} =
-               Attempt.await(fixture.pid, fixture.close)
+               Dispatch.await(fixture.pid, fixture.close)
 
       assert %{status: "running", current_attempt: current} = row(fixture)
       assert current == successor.attempt
@@ -383,7 +383,7 @@ defmodule Cyfr.Execution.HostTest do
       fixture = AttemptFixtures.attached!(component_type: :formula)
       child = child_of!(fixture)
       assert %{"ok" => %{"done" => true}} = complete(fixture, %{"done" => true})
-      assert {:ok, _result} = Attempt.await(fixture.pid, fixture.close)
+      assert {:ok, _result} = Dispatch.await(fixture.pid, fixture.close)
 
       handler = "host-test-lost-#{System.unique_integer([:positive])}"
       test = self()
@@ -403,6 +403,102 @@ defmodule Cyfr.Execution.HostTest do
       assert row(fixture).status == "completed"
       assert Arca.Repo.get!(Arca.Execution, child).status == "running"
       refute_received {:exception, _}
+    end
+  end
+
+  describe "admitted" do
+    test "answers the attached runner the context, authority and bytes its attempt runs with" do
+      fixture = AttemptFixtures.attached!(wasm_bytes: "component bytes")
+      body = AttemptFixtures.body("admitted", %{})
+
+      assert {:ok, %{ctx: ctx, authority: authority, wasm_bytes: "component bytes"}} =
+               Cyfr.Execution.Host.admitted(AttemptFixtures.header(fixture, body), body)
+
+      assert ctx.plane == :guest and ctx.athanor_id == fixture.athanor_id
+      assert authority == fixture.authority
+    end
+
+    @tag :capture_log
+    test "is lost to a runner that did not attach, a forged header and another operation" do
+      fixture = AttemptFixtures.attached!(attach: false)
+      body = AttemptFixtures.body("admitted", %{})
+
+      assert {:error, :lost} =
+               Cyfr.Execution.Host.admitted(AttemptFixtures.header(fixture, body), body)
+
+      assert %{"ok" => _} = attach(fixture)
+
+      forged = AttemptFixtures.header(fixture, body, key: :crypto.strong_rand_bytes(32))
+      assert {:error, :lost} = Cyfr.Execution.Host.admitted(forged, body)
+
+      other = AttemptFixtures.body("renew", %{})
+
+      assert {:error, :lost} =
+               Cyfr.Execution.Host.admitted(AttemptFixtures.header(fixture, other), other)
+    end
+  end
+
+  describe "a runner exit report" do
+    @worker "worker_host_test"
+
+    defp report(worker, attempts, key \\ Keys.dispatch_key()) do
+      body = AttemptFixtures.body("runner_exited", %{"attempts" => attempts})
+      fields = %{worker: worker, ts: now(), nonce: "n_#{System.unique_integer([:positive])}"}
+      {:ok, header} = Cyfr.WorkerAuth.report_header(key, fields, body)
+      header |> Cyfr.Execution.Host.runner_exited(body) |> Jason.decode!()
+    end
+
+    test "lapses the reporting worker's running attempts at once and stops their attempts" do
+      fixture = AttemptFixtures.attached!(runner_id: @worker, component_type: :formula)
+      child = child_of!(fixture)
+
+      assert %{"ok" => true} = report(@worker, [fixture.attempt])
+
+      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+               Dispatch.await(fixture.pid, fixture.close)
+
+      assert %{status: "failed"} = row(fixture)
+
+      assert %{state: "lapsed", outcome: "uncertain"} =
+               Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+
+      assert {:ok, events} =
+               Arca.ExecutionEvents.since(fixture.athanor_id, fixture.execution_id, 0)
+
+      assert "execution.lapsed" in Enum.map(events, & &1.type)
+
+      assert %{status: "failed", error_message: message} = Arca.Repo.get!(Arca.Execution, child)
+      assert message == "Parent execution (#{fixture.execution_id}) terminated"
+    end
+
+    @tag :capture_log
+    test "lapses nothing dispatched to another worker, and a forged report nothing at all" do
+      fixture = AttemptFixtures.attached!(runner_id: @worker)
+
+      assert %{"ok" => true} = report("worker_other", [fixture.attempt])
+      assert %{"error" => "lost"} = report(@worker, [fixture.attempt], Keys.assign_key())
+
+      forged_body = AttemptFixtures.body("renew", %{"attempts" => [fixture.attempt]})
+      fields = %{worker: @worker, ts: now(), nonce: "n_forged"}
+      {:ok, header} = Cyfr.WorkerAuth.report_header(Keys.dispatch_key(), fields, forged_body)
+
+      assert %{"error" => "lost"} =
+               header |> Cyfr.Execution.Host.runner_exited(forged_body) |> Jason.decode!()
+
+      assert row(fixture).status == "running"
+      assert Process.alive?(fixture.pid)
+      assert %{"ok" => _} = renew(fixture)
+      Cyfr.Execution.Attempt.refuse(fixture.pid, "not started")
+    end
+
+    test "leaves a closed attempt's row as it closed, and is idempotent" do
+      fixture = AttemptFixtures.attached!(runner_id: @worker)
+      assert %{"ok" => _} = complete(fixture, %{"done" => true})
+      assert {:ok, _} = Dispatch.await(fixture.pid, fixture.close)
+
+      assert %{"ok" => true} = report(@worker, [fixture.attempt])
+      assert %{"ok" => true} = report(@worker, [fixture.attempt])
+      assert row(fixture).status == "completed"
     end
   end
 

@@ -7,9 +7,10 @@ defmodule Cyfr.WorkerAuthTest do
   label and per attempt field; a host call verifies against the root at the
   current generation and is refused, in order, when its timestamp is outside
   the 30-second window, when its MAC is forged or made with any key but its
-  attempt's, and when its generation is not current; WorkerAPI requests and
-  worker service reports verify only as their own kind, under the dispatch
-  key.
+  attempt's, and when its generation is not current; a sealed attempt key
+  opens only under the dispatch seal key, as the attempt it names;
+  WorkerAPI requests and worker service reports verify only as their own
+  kind, under the dispatch key.
   """
   use ExUnit.Case, async: true
 
@@ -41,6 +42,15 @@ defmodule Cyfr.WorkerAuthTest do
   defp call_header!(call, key \\ nil, body \\ @body) do
     {:ok, header} = WorkerAuth.host_call_header(key || attempt_key!(call), call, body)
     header
+  end
+
+  @iv :binary.copy(<<9>>, 12)
+
+  defp sealed!(attempt \\ @attempt, iv \\ @iv) do
+    key = attempt_key!(attempt)
+    seal_key = WorkerAuth.dispatch_seal_key(@root)
+    {:ok, sealed} = WorkerAuth.seal_attempt_key(seal_key, %{attempt: attempt, key: key}, iv)
+    sealed
   end
 
   defp verify(header, opts \\ []) do
@@ -183,6 +193,75 @@ defmodule Cyfr.WorkerAuthTest do
       assert {:error, :malformed} = verify(String.replace(header, "fence=2", "fence=02"))
       assert {:error, :malformed} = verify(String.replace(header, " runner=run_4f3c2a1e", ""))
       assert {:error, :malformed} = verify(header <> " nonce=n_again")
+    end
+  end
+
+  describe "sealed attempt key" do
+    test "opens under the dispatch seal key as the attempt it names" do
+      seal_key = WorkerAuth.dispatch_seal_key(@root)
+      key = attempt_key!(@attempt)
+
+      assert {:ok, %{attempt: @attempt, key: ^key}} =
+               WorkerAuth.open_attempt_key(seal_key, sealed!())
+
+      assert sealed!() == sealed!()
+      refute sealed!() == sealed!(@attempt, :binary.copy(<<1>>, 12))
+      refute sealed!() =~ Base.url_encode64(key, padding: false)
+
+      extra = Map.put(@attempt, :runner, "run_4f3c2a1e")
+      assert {:ok, %{attempt: @attempt}} = WorkerAuth.open_attempt_key(seal_key, sealed!(extra))
+    end
+
+    test "does not open under any other key" do
+      other_root = :binary.list_to_bin(Enum.to_list(1..32))
+
+      for key <- [
+            WorkerAuth.dispatch_key(@root),
+            WorkerAuth.assign_key(@root),
+            attempt_key!(@attempt),
+            WorkerAuth.dispatch_seal_key(other_root)
+          ] do
+        assert {:error, :unsealable} = WorkerAuth.open_attempt_key(key, sealed!())
+      end
+    end
+
+    test "does not open as another attempt, or once its seal was changed" do
+      seal_key = WorkerAuth.dispatch_seal_key(@root)
+      [named, box] = String.split(sealed!(), ".")
+
+      renamed =
+        @attempt
+        |> Map.new(fn {name, value} -> {Atom.to_string(name), value} end)
+        |> Map.put("fence", 3)
+        |> Jason.encode!()
+        |> Base.url_encode64(padding: false)
+
+      <<first, rest::binary>> = Base.url_decode64!(box, padding: false)
+      flipped = Base.url_encode64(<<Bitwise.bxor(first, 1), rest::binary>>, padding: false)
+
+      for sealed <- [
+            renamed <> "." <> box,
+            named <> "." <> flipped,
+            named <> "." <> box <> "." <> box,
+            box,
+            "!!!." <> box,
+            "",
+            nil
+          ] do
+        assert {:error, :unsealable} = WorkerAuth.open_attempt_key(seal_key, sealed),
+               inspect(sealed)
+      end
+    end
+
+    test "refuses an attempt with an invalid field" do
+      seal_key = WorkerAuth.dispatch_seal_key(@root)
+      key = attempt_key!(@attempt)
+
+      assert {:error, {:invalid_field, :attempt}} =
+               WorkerAuth.seal_attempt_key(seal_key, %{
+                 attempt: %{@attempt | attempt: "att 1"},
+                 key: key
+               })
     end
   end
 
