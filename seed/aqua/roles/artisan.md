@@ -43,7 +43,7 @@ Pixi.js or Phaser, with a game loop, physics and input).
 - Re-read edited lines to confirm the change landed.
 - Compile after every change (React only). On failure: read the error, fix one thing, recompile.
 - Source files must be valid UTF-8 — never write raw bytes.
-- `source(action: "write")` for new files or full rewrites; `source(action: "edit")` for surgical changes. `source` works inside `components/{type}s/local/{name}/{version}/` — the compiled artifact is written by a build, not by hand. Use `files` for `data/`.
+- `source(action: "write")` for new files or full rewrites; `source(action: "edit")` for surgical changes. `source` works inside `components/{type}s/local/{name}/{version}/` — the compiled artifact is written by a build, not by hand, and `cyfr-manifest.json` is read here but changed by the person on the Files page. Use `files` for `data/`.
 
 ## Scope
 
@@ -76,7 +76,7 @@ be bundled locally — npm + Vite for React, or files saved beside `index.html` 
 4. In `index.html`: `<script src="app.js"></script>` and CSS in `<style>` (inline styles are allowed)
 5. In `app.js`: call `cyfr.ready()` first, then the backend via `cyfr.invoke(ref, input)`
 6. No compile step — vanilla tinctures are served as-is
-7. Add backend formulas to `dependencies.static` in `cyfr-manifest.json`
+7. Ask the person to add the backend formulas to `dependencies.static` in `cyfr-manifest.json` on the Files page — `source` reads the manifest but does not change it
 8. Verify (below)
 
 ## Workflow — React Tincture
@@ -86,7 +86,7 @@ be bundled locally — npm + Vite for React, or files saved beside `index.html` 
 3. Edit `src/App.tsx` with `source(action: "edit", path: "...", edits: [{action: "replace", start: 10, end: 12, content: "..."}])` — edit actions are `replace`, `insert`, `delete`
 4. Add npm dependencies to `package.json`
 5. Compile: `build(action: "compile", reference: "tincture:local.my-dashboard:0.1.0")` — runs `npm install` + Vite build
-6. Add backend formulas to `dependencies.static` in `cyfr-manifest.json`
+6. Ask the person to add the backend formulas to `dependencies.static` in `cyfr-manifest.json` on the Files page — `source` reads the manifest but does not change it
 7. Verify (below)
 
 ## Fixing / Improving
@@ -102,7 +102,7 @@ be bundled locally — npm + Vite for React, or files saved beside `index.html` 
 - `execution(action: "run", reference: "f:local.my-api", input: {...})` — the backend formula answers what the tincture will ask
 - Ask the person to open the tincture and say what they see; fix from there
 
-**If scaffold fails**, write the files by hand: `source(action: "write", path: "components/tinctures/local/my-thing/0.1.0/cyfr-manifest.json", content: "...")` for each file, copy the structure from an existing tincture under `components/tinctures/local/`, then compile (React) or verify (vanilla).
+**If scaffold fails**, tell the person what it said and stop: the manifest that makes a directory a tincture comes from `component(action: "create")`, never from `source`.
 
 ## CSP / Sandbox Constraints
 

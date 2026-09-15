@@ -7,18 +7,24 @@ defmodule Compendium.MCP.SourceTool do
 
   Paths are `components/{type}s/local/{name}/{version}/…`. The tool reads,
   searches and edits the files inside a version directory, through
-  `Cyfr.Files`, so the tier rules, the storage cap, manifest validation and
-  the component's re-registration are the ones the Files page applies. It
-  refuses:
+  `Cyfr.Files`, so the tier rules, the storage cap and the component's
+  re-registration are the ones the Files page applies. It refuses:
 
     * another publisher's component — a pulled component is forked, not
       rewritten;
-    * the version directory itself — a component version is made and
-      removed whole by the component verbs;
-    * deleting `cyfr-manifest.json`, which is what makes the directory a
-      component;
+    * writing, editing or deleting the version directory itself — a
+      component version is made and removed whole by the component verbs
+      (`tree` lists it);
+    * writing, editing or deleting `cyfr-manifest.json` — it declares what
+      the component may reach and depend on, and a person changes it on
+      the Files page (`read`, `grep` and `tree` show it);
     * the compiled artifact (`{type}.wasm`) and a tincture's `dist/`, which
       a build writes.
+
+  `scoped/2` is the one decision. It validates the segments with
+  `Cyfr.PathSafety` and compares names after Unicode compatibility
+  normalisation and case folding, so no spelling a case-insensitive
+  filesystem resolves to a refused file reaches `Cyfr.Files`.
 
   The tool is in-chain only; a person edits through Files. Its actions are
   their own policy keys, so a grant for `files.write` on `data/` never
@@ -36,6 +42,7 @@ defmodule Compendium.MCP.SourceTool do
   @max_tree_entries 500
   @mutations ~w(write edit delete)
   @manifest Compendium.ComponentPath.manifest_name()
+  @dist "dist"
 
   @impl true
   def service, do: "source"
@@ -138,26 +145,47 @@ defmodule Compendium.MCP.SourceTool do
   # Refusals are worded, so an agent is told what it may edit rather than
   # being handed a storage error.
   defp scoped(path, action) when is_binary(path) do
-    case String.split(path, "/", trim: true) do
-      ["components", plural, publisher, _name, _version | rest] = segments ->
-        with :ok <- local_publisher(publisher),
-             :ok <- source_file(plural, rest, action) do
-          {:ok, Enum.join(segments, "/")}
-        end
+    segments = String.split(path, "/", trim: true)
 
-      ["components", _plural, publisher, _name] = segments when action == "tree" ->
-        with :ok <- local_publisher(publisher), do: {:ok, Enum.join(segments, "/")}
+    with :ok <- safe(segments) do
+      case segments do
+        ["components", plural, publisher, _name, _version | rest] ->
+          with :ok <- local_publisher(publisher),
+               :ok <- source_file(plural, Enum.map(rest, &fold/1), action) do
+            {:ok, Enum.join(segments, "/")}
+          end
 
-      _ ->
-        {:error,
-         {:invalid_argument,
-          "source works inside components/{type}s/local/{name}/{version}/ — " <>
-            "'#{path}' is not a component version's own source"}}
+        ["components", _plural, publisher, _name] when action == "tree" ->
+          with :ok <- local_publisher(publisher), do: {:ok, Enum.join(segments, "/")}
+
+        _ ->
+          {:error,
+           {:invalid_argument,
+            "source works inside components/{type}s/local/{name}/{version}/ — " <>
+              "'#{path}' is not a component version's own source"}}
+      end
     end
   end
 
   defp scoped(_path, _action),
     do: {:error, {:invalid_argument, "source needs a path"}}
+
+  # `.`, `..`, empty and encoded segments never reach a name comparison.
+  defp safe(segments) do
+    case Cyfr.PathSafety.validate_segments(segments) do
+      :ok -> :ok
+      {:error, {_refusal, message}} -> {:error, {:invalid_argument, message}}
+    end
+  end
+
+  # The spelling a comparison sees: `CYFR-Manifest.JSON` and its fullwidth
+  # forms are the manifest to a case-insensitive filesystem.
+  defp fold(name) do
+    case :unicode.characters_to_nfkc_binary(name) do
+      normalized when is_binary(normalized) -> String.downcase(normalized)
+      _invalid -> name
+    end
+  end
 
   defp local_publisher(publisher) do
     if Compendium.ComponentPath.local_publisher?(publisher),
@@ -168,6 +196,7 @@ defmodule Compendium.MCP.SourceTool do
           "'#{publisher}' is another publisher's component — its source is not yours to edit"}}
   end
 
+  # `rest` is folded (`fold/1`): every name below compares folded.
   defp source_file(_plural, [], action) when action in @mutations,
     do:
       {:error,
@@ -175,14 +204,9 @@ defmodule Compendium.MCP.SourceTool do
         "a component version is created and deleted whole, not through its source — " <>
           "name a file inside it"}}
 
-  defp source_file(_plural, [@manifest], "delete"),
-    do:
-      {:error,
-       {:invalid_argument,
-        "#{@manifest} is what makes this directory a component — edit it instead"}}
-
-  defp source_file(plural, rest, _action) do
-    artifact = plural |> String.trim_trailing("s") |> Compendium.ComponentPath.wasm_name()
+  defp source_file(plural, rest, action) do
+    artifact =
+      plural |> fold() |> String.trim_trailing("s") |> Compendium.ComponentPath.wasm_name()
 
     cond do
       rest == [artifact] ->
@@ -190,9 +214,15 @@ defmodule Compendium.MCP.SourceTool do
          {:invalid_argument,
           "#{artifact} is written by a build, not by hand — edit the source and compile"}}
 
-      match?(["dist" | _], rest) ->
+      match?([@dist | _], rest) ->
         {:error,
          {:invalid_argument, "dist/ holds a build's output — edit the source it is built from"}}
+
+      rest == [@manifest] and action in @mutations ->
+        {:error,
+         {:invalid_argument,
+          "#{@manifest} declares what this component may reach and depend on, so a person " <>
+            "changes it on the Files page — read it here, and ask for the change it needs"}}
 
       true ->
         :ok

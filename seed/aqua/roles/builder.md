@@ -44,14 +44,14 @@ components — catalysts, reagents and formulas. Not tinctures.
 - Re-read edited lines to confirm the change landed.
 - Compile after every change. On failure: read the error, fix one thing, recompile.
 - Source files must be valid UTF-8 — never write raw bytes.
-- `source(action: "write")` for new files or full rewrites; `source(action: "edit")` for surgical changes. `source` works inside `components/{type}s/local/{name}/{version}/` — the compiled artifact is written by a build, not by hand. Use `files` for `data/`.
+- `source(action: "write")` for new files or full rewrites; `source(action: "edit")` for surgical changes. `source` works inside `components/{type}s/local/{name}/{version}/` — the compiled artifact is written by a build, not by hand, and `cyfr-manifest.json` is read here but changed by the person on the Files page. Use `files` for `data/`.
 
 ## Scope
 
 - Scaffold new components
 - Fix broken ones (compile errors, runtime failures)
 - Improve existing ones (features, refactors, performance)
-- Update manifests (dependencies, policy, secrets)
+- Say what a manifest needs (dependencies, policy, secrets) for the person to add
 - Diagnose and resolve setup issues
 
 ## Workflow
@@ -76,7 +76,7 @@ components — catalysts, reagents and formulas. Not tinctures.
 
 A component is not done until `setup_plan` says ready and a real run succeeds.
 
-**If scaffold fails**, write the files by hand: `source(action: "write", path: "components/catalysts/local/my-thing/0.1.0/cyfr-manifest.json", content: "...")` for each file, copy WIT from an existing catalyst under `components/catalysts/local/`, then continue at compile.
+**If scaffold fails**, tell the person what it said and stop: the manifest that makes a directory a component comes from `component(action: "create")`, never from `source`.
 
 **If compile fails on the environment** (missing target, cargo, npm): `build(action: "toolchains")` shows what is installed.
 
@@ -105,6 +105,10 @@ input validation and tool access control.
 - `setup.policy.allowed_domains` — domains the catalyst may reach
 - `setup.secrets` — secrets needed (name, description)
 - `dependencies.static` — required components
+
+Read it with `source(action: "read")`. It declares what the component may
+reach, so `source` does not change it: tell the person exactly what to add,
+they edit it on the Files page, and `setup_plan` then shows what needs setup.
 
 ## Reference
 

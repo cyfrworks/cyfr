@@ -5,8 +5,8 @@ defmodule Compendium.MCP.SourceToolTest do
   @moduledoc """
   The `source` tool: an agent's `files(path: "components/…")` call routes
   here, host-side, and reads and edits a local component version's own
-  source — never its version directory whole, its manifest's existence,
-  or what a build writes.
+  source — never its version directory whole, its manifest, or what a
+  build writes, at any spelling of their paths.
   """
   use ExUnit.Case, async: false
 
@@ -14,6 +14,19 @@ defmodule Compendium.MCP.SourceToolTest do
   alias Compendium.MCP.SourceTool
 
   @dir "components/catalysts/local/widget/0.1.0"
+  @manifest_segments String.split(@dir, "/") ++ ["cyfr-manifest.json"]
+  @actions ["tree", "read", "grep", "write", "edit", "delete"]
+
+  # One call of `action` at `path`, carrying what every action needs.
+  defp mutation(action, path) do
+    %{
+      "action" => action,
+      "path" => path,
+      "content" => "{}",
+      "pattern" => "x",
+      "edits" => [%{"action" => "replace", "start" => 1, "end" => 1, "content" => "{}"}]
+    }
+  end
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -68,93 +81,94 @@ defmodule Compendium.MCP.SourceToolTest do
       assert msg =~ "another publisher"
     end
 
-    test "the compiled artifact is written by a build, not by hand", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, msg}} =
-               SourceTool.handle("source", ctx, %{
-                 "action" => "write",
-                 "path" => "#{@dir}/catalyst.wasm",
-                 "content" => "nope"
-               })
+    test "the compiled artifact is written by a build, not by hand, at any spelling",
+         %{ctx: ctx} do
+      for name <- ["catalyst.wasm", "CATALYST.WASM", "Catalyst.Wasm"], action <- @actions do
+        assert {:error, {:invalid_argument, msg}} =
+                 SourceTool.handle("source", ctx, mutation(action, "#{@dir}/#{name}")),
+               "#{action} #{name} was not refused"
 
-      assert msg =~ "written by a build"
+        assert msg =~ "written by a build"
+      end
     end
 
-    test "a tincture's dist/ is a build's output", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, msg}} =
-               SourceTool.handle("source", ctx, %{
-                 "action" => "write",
-                 "path" => "components/tinctures/local/panel/0.1.0/dist/index.html",
-                 "content" => "nope"
-               })
+    test "a tincture's dist/ is a build's output, at any spelling", %{ctx: ctx} do
+      for dist <- ["dist", "DIST", "Dist"], action <- @actions do
+        path = "components/tinctures/local/panel/0.1.0/#{dist}/index.html"
 
-      assert msg =~ "build's output"
+        assert {:error, {:invalid_argument, msg}} =
+                 SourceTool.handle("source", ctx, mutation(action, path)),
+               "#{action} #{path} was not refused"
+
+        assert msg =~ "build's output"
+      end
     end
 
     test "the version directory itself is never written, edited or deleted", %{ctx: ctx} do
-      for action <- ["write", "edit", "delete"] do
+      for path <- [@dir, @dir <> "/", "/" <> @dir, String.replace(@dir, "/", "//")],
+          action <- ["write", "edit", "delete"] do
         assert {:error, {:invalid_argument, msg}} =
-                 SourceTool.handle("source", ctx, %{
-                   "action" => action,
-                   "path" => @dir,
-                   "content" => "x",
-                   "edits" => [%{"action" => "delete", "start" => 1, "end" => 1}]
-                 })
+                 SourceTool.handle("source", ctx, mutation(action, path)),
+               "#{action} #{path} was not refused"
 
         assert msg =~ "created and deleted whole"
       end
 
       assert {:ok, %{files: [_ | _]}} =
                SourceTool.handle("source", ctx, %{"action" => "tree", "path" => @dir})
+
+      assert {:ok, _} = Arca.get(ctx, @manifest_segments)
     end
 
-    test "the manifest is edited, never deleted", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, msg}} =
+    test "the manifest is read here and never written, edited or deleted, at any spelling",
+         %{ctx: ctx} do
+      spellings = [
+        "#{@dir}/cyfr-manifest.json",
+        "#{@dir}/CYFR-MANIFEST.JSON",
+        "#{@dir}/Cyfr-Manifest.Json",
+        # Fullwidth letters: the same name after compatibility normalisation.
+        "#{@dir}/ｃｙｆｒ-ｍａｎｉｆｅｓｔ.ｊｓｏｎ",
+        "/#{@dir}/cyfr-manifest.json",
+        "#{String.replace(@dir, "/", "//")}//cyfr-manifest.json"
+      ]
+
+      for path <- spellings, action <- ["write", "edit", "delete"] do
+        assert {:error, {:invalid_argument, msg}} =
+                 SourceTool.handle("source", ctx, mutation(action, path)),
+               "#{action} #{path} was not refused"
+
+        assert msg =~ "Files page"
+      end
+
+      assert {:ok, ~s({"name":"widget"})} = Arca.get(ctx, @manifest_segments)
+
+      assert {:ok, %{content: ~s({"name":"widget"})}} =
                SourceTool.handle("source", ctx, %{
-                 "action" => "delete",
+                 "action" => "read",
                  "path" => "#{@dir}/cyfr-manifest.json"
                })
 
-      assert msg =~ "edit it instead"
-      assert {:ok, _} = Arca.get(ctx, String.split(@dir, "/") ++ ["cyfr-manifest.json"])
+      assert {:ok, %{files: files}} =
+               SourceTool.handle("source", ctx, %{"action" => "tree", "path" => @dir})
+
+      assert "cyfr-manifest.json" in files
     end
 
-    test "a manifest write must be a manifest", %{ctx: ctx} do
-      manifest = "#{@dir}/cyfr-manifest.json"
+    test "a dot or encoded segment refuses before any name is compared", %{ctx: ctx} do
+      for path <- [
+            "#{@dir}/./cyfr-manifest.json",
+            "#{@dir}/src/../cyfr-manifest.json",
+            "#{@dir}/src/%2e%2e/cyfr-manifest.json",
+            "#{@dir}/.",
+            "#{@dir}/src\\..\\cyfr-manifest.json"
+          ],
+          action <- @actions do
+        assert {:error, {:invalid_argument, _msg}} =
+                 SourceTool.handle("source", ctx, mutation(action, path)),
+               "#{action} #{path} was not refused"
+      end
 
-      assert {:error, {:invalid_argument, msg}} =
-               SourceTool.handle("source", ctx, %{
-                 "action" => "write",
-                 "path" => manifest,
-                 "content" => "{not json"
-               })
-
-      assert msg =~ "not a JSON object"
-
-      assert {:error, {:invalid_argument, msg}} =
-               SourceTool.handle("source", ctx, %{
-                 "action" => "write",
-                 "path" => manifest,
-                 "content" => ~s({"name":"widget","surprise":true})
-               })
-
-      assert msg =~ "cyfr-manifest.json"
-
-      assert {:error, {:invalid_argument, _}} =
-               SourceTool.handle("source", ctx, %{
-                 "action" => "edit",
-                 "path" => manifest,
-                 "edits" => [%{"action" => "replace", "start" => 1, "end" => 1, "content" => "["}]
-               })
-
-      assert {:ok, ~s({"name":"widget"})} =
-               Arca.get(ctx, String.split(@dir, "/") ++ ["cyfr-manifest.json"])
-
-      assert {:ok, _} =
-               SourceTool.handle("source", ctx, %{
-                 "action" => "write",
-                 "path" => manifest,
-                 "content" => ~s({"name":"widget","description":"edited"})
-               })
+      assert {:ok, ~s({"name":"widget"})} = Arca.get(ctx, @manifest_segments)
     end
 
     test "a path outside a component version refuses in words", %{ctx: ctx} do
