@@ -7,7 +7,9 @@ defmodule Locus.BuilderService do
   `Locus.Builder.compile/3` and returns the artifact.
 
   Served only when `:cyfr, :builder_listen` is true — the `builder`
-  release sets `CYFR_BUILDER_LISTEN=true`; the app image never listens.
+  release sets `CYFR_BUILDER_LISTEN=true`; the app image never listens —
+  and only on a node cyfr-spawn started, so every build it serves runs
+  under a pooled uid of its own (`Locus.Spawner`, `Locus.Application`).
   The client half is `Locus.BuilderClient`, selected by
   `CYFR_BUILDER_URL` on the server node.
 
@@ -175,11 +177,11 @@ defmodule Locus.BuilderService do
 
   defp run_build(conn, source_files, language, target_type, resolve?) do
     log = :ets.new(:build_log, [:public])
-    # [line_seq, bytes_retained] — the byte budget mirrors Locus.Builder's
-    # own retained-output cap, so a chatty build cannot grow this table
+    # [line_seq, bytes_retained] — the byte budget mirrors the executor's
+    # own retained-log cap, so a chatty build cannot grow this table
     # without bound while its lines wait to be replayed.
     counter = :counters.new(2, [])
-    max_log_bytes = Locus.Builder.max_port_output_bytes()
+    max_log_bytes = Locus.Executor.max_log_bytes()
 
     on_progress = fn stage, message ->
       line = "#{stage}: #{message}"
@@ -234,6 +236,9 @@ defmodule Locus.BuilderService do
           logs: logs
         })
 
+      {:error, :builder_at_capacity} ->
+        send_json(conn, 429, %{ok: false, error: render_reason(:builder_at_capacity), logs: logs})
+
       {:error, reason} ->
         send_json(conn, 422, %{ok: false, error: render_reason(reason), logs: logs})
     end
@@ -243,6 +248,9 @@ defmodule Locus.BuilderService do
     do: "Compilation failed (exit #{exit_code}): #{output}"
 
   defp render_reason(:compilation_timeout), do: "Compilation timed out"
+
+  defp render_reason(:builder_at_capacity),
+    do: "builder at capacity (no build uid is free)"
 
   defp render_reason({:toolchain_not_found, lang}),
     do: "Toolchain not found in the builder image: #{lang}"

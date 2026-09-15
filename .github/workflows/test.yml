@@ -266,7 +266,7 @@ jobs:
         run: docker logs minio
 
   builder-image:
-    name: Builder image (Rust lock lifecycle, diagnostics, tincture)
+    name: Builder image (lock lifecycle, diagnostics, tincture, build isolation)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -280,10 +280,22 @@ jobs:
           tags: cyfr-builder:smoke
           cache-from: type=gha,scope=builder
           cache-to: type=gha,scope=builder,mode=max
-      # Run as compose runs it: a read-only root and the build scratch alone
-      # writable. Builds fetch from crates.io and the npm registry.
+      # docker-compose.yml's builder service with its own settings (layered
+      # with tests/builder-image/compose.builder.yml for the image and a
+      # loopback port). Builds fetch from crates.io and the npm registry.
       - name: Build a component through its lock lifecycle, and a tincture
         run: python3 scripts/builder-smoke.py cyfr-builder:smoke
+
+      # Under the same settings: cyfr-spawn holds exactly SETUID|SETGID|KILL
+      # and the release none, with no distribution listener, and the release
+      # refuses to serve without cyfr-spawn; a build runs under a pooled uid
+      # in a 0700 home, cannot read or signal the release (whose environ
+      # holds the token), list the home root or read a concurrent build's
+      # tree; a daemon a build.rs starts is gone, with the home, when the
+      # response arrives; and with a pool of one uid nothing a build leaves
+      # outside its home (tests/fixtures/residue-canary.go) reaches the next.
+      - name: Build isolation and uid reuse
+        run: python3 tests/builder-image/isolation.py cyfr-builder:smoke
 
   bridge-e2e:
     name: MCP bridge failures and leaks (cyfr + mcp-bridge images)

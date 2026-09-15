@@ -99,14 +99,37 @@ services:
     # listening on it (CYFR_BUILDER_BIND is for a builder outside compose).
     networks:
       - builder
+    # docker-init is PID 1 and forwards stop signals to cyfr-spawn, the
+    # child subreaper of every build process.
+    init: true
+    # cyfr-spawn refuses to start with any capability other than these: it
+    # starts the builder release and each build under their own uids and
+    # signals their processes. The release and every build run with none.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - KILL
+    security_opt:
+      - no-new-privileges:true
     # No /data mount, read-only root: the builder holds no tenant state —
-    # sources arrive in the request, artifacts leave in the response, and
-    # the only writable surface is its own build scratch, where each build
-    # keeps its tree and its homes. Build scripts and bundler binaries run
-    # from there, so the scratch allows exec.
+    # sources arrive in the request, artifacts leave in the response. The
+    # tmpfs mounts below are the only writable surfaces, and cyfr-spawn
+    # refuses to start if any other location is writable by a build's uid
+    # (`ipc: none` leaves /dev/shm unmounted). Build homes: each build's
+    # uid creates its own 0700 home holding its sources, Cargo home, npm
+    # cache, temporary files and target directory; mode 1733 lets it create
+    # one without listing the others, and build scripts and bundler
+    # binaries run from there, so it allows exec. Its size bounds what all
+    # concurrent builds write, and counts against the memory limit below.
+    # /run/cyfr-builder holds the release's temporary files and the socket
+    # builds' relays attach to.
     read_only: true
+    ipc: none
     tmpfs:
-      - /tmp:size=2g,exec
+      - /var/lib/cyfr-builder/homes:mode=1733,exec,size=2g
+      - /run/cyfr-builder:uid=10001,gid=10001,mode=0700,size=16m
     restart: unless-stopped
     logging:
       driver: json-file
@@ -117,7 +140,9 @@ services:
       resources:
         limits:
           # The one container that runs multi-minute cargo/npm compiles —
-          # without a ceiling a runaway build starves the host.
+          # without a ceiling a runaway build starves the host. No build has
+          # a memory bound of its own: this limit bounds every concurrent
+          # build, their homes' tmpfs pages and the release together.
           memory: ${CYFR_BUILDER_MEMORY_LIMIT:-3G}
           cpus: "${CYFR_BUILDER_CPU_LIMIT:-2}"
 

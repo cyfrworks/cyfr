@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml by the builder image tests
+# (tests/builder-image/stack.py): the builder service keeps every setting
+# compose gives it; this adds only the image under test, a loopback port,
+# the residue canary (tests/fixtures/residue-canary.go) and the build
+# pool's uid range, which a test chooses. The tests supply
+# CYFR_BUILDER_TOKEN through the environment compose interpolates.
+services:
+  builder:
+    image: ${BUILDER_IMAGE:?set BUILDER_IMAGE}
+    pull_policy: never
+    ports:
+      - "127.0.0.1::4100"
+    volumes:
+      - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
+    entrypoint: ["cyfr-spawn", "serve", "--pool", "build:${BUILD_POOL:?set BUILD_POOL}", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/builder", "start"]
