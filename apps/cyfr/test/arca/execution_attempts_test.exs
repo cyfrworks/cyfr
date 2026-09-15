@@ -7,7 +7,9 @@ defmodule Arca.ExecutionAttemptsTest do
   and closing match the attempt and the pointer; the sweeper retires a
   lapsed attempt on the lease it observed; a takeover retires the
   predecessor, opens the successor and moves the pointer in one
-  transaction; running time is accounted once per interval.
+  transaction; running time is accounted once per interval. A child is
+  admitted under its parent's attempt only while that attempt owns its
+  running parent, running with no cancel asked of it.
   """
 
   use ExUnit.Case, async: false
@@ -248,5 +250,86 @@ defmodule Arca.ExecutionAttemptsTest do
              )
 
     refute Arca.Repo.get(Arca.Execution, "exec_child_2")
+  end
+
+  describe "a child admitted under its parent's attempt" do
+    defp admit_child(ctx, parent, parent_attempt) do
+      id = "exec_child_#{System.unique_integer([:positive])}"
+
+      result =
+        Arca.Execution.admit(
+          %{
+            id: id,
+            reference: "reagent:local.child:0.1.0",
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "reagent",
+            parent_execution_id: parent.id,
+            root_execution_id: parent.id
+          },
+          parent_attempt: parent_attempt
+        )
+
+      {result, id}
+    end
+
+    test "is admitted while the attempt owns its running parent", %{ctx: ctx} do
+      {parent, attempt} = admit!(ctx)
+
+      assert {{:ok, %{execution: child}}, _id} = admit_child(ctx, parent, attempt.attempt)
+      assert child.parent_execution_id == parent.id
+
+      assert %{fence: 1, state: "running"} =
+               ExecutionAttempts.get(ctx.athanor_id, attempt.attempt)
+    end
+
+    test "is refused once the parent closed, lapsed, was cancelled or taken over", %{ctx: ctx} do
+      ended = [
+        fn parent, attempt ->
+          {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "completed", "ok")
+
+          {1, _} =
+            Arca.Repo.update_all(from(e in Arca.Execution, where: e.id == ^parent.id),
+              set: [status: "completed"]
+            )
+        end,
+        fn parent, attempt ->
+          {1, _} =
+            Arca.Execution.mark_failed_if_running(
+              parent.id,
+              %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: "lapsed"},
+              attempt: attempt.attempt,
+              lease_until: attempt.lease_until,
+              event: "execution.lapsed"
+            )
+        end,
+        fn parent, _attempt ->
+          {:ok, 1} = ExecutionAttempts.request_cancel(ctx.athanor_id, parent.id)
+        end,
+        fn parent, _attempt ->
+          {:ok, _} =
+            ExecutionAttempts.takeover(ctx.athanor_id, parent.id,
+              runner_id: Cyfr.Boot.id(),
+              lease_until: ExecutionAttempts.lease_until()
+            )
+        end
+      ]
+
+      for end_parent <- ended do
+        {parent, attempt} = admit!(ctx)
+        end_parent.(parent, attempt)
+
+        assert {{:error, :parent_ended}, id} = admit_child(ctx, parent, attempt.attempt)
+        refute Arca.Repo.get(Arca.Execution, id)
+      end
+    end
+
+    test "is refused under an attempt of another execution", %{ctx: ctx} do
+      {parent, _attempt} = admit!(ctx)
+      {_other, other_attempt} = admit!(ctx)
+
+      assert {{:error, :parent_ended}, id} = admit_child(ctx, parent, other_attempt.attempt)
+      refute Arca.Repo.get(Arca.Execution, id)
+    end
   end
 end

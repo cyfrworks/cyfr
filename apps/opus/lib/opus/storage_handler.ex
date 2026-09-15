@@ -24,6 +24,13 @@ defmodule Opus.StorageHandler do
   - Path traversal (`..`) segments are rejected
   - Only paths matching the edge's `storage.paths` prefixes are permitted
 
+  A guest's operation runs only while the execution's attempt still holds
+  its row: the import asks the attempt, through its host client
+  (`Opus.HostClient.admitted/1`), for the context each operation runs in
+  (`execute_held/6`), so a guest whose run was cancelled, lapsed or closed
+  reads and writes nothing, whether or not its process has been stopped
+  yet.
+
   Size is enforced at the same boundary, from the node's limits: writes are
   bounded by `max_request_size` (measured on the decoded payload) and reads
   by `max_response_size` — the one host import without a ceiling would
@@ -76,7 +83,7 @@ defmodule Opus.StorageHandler do
   alias Cyfr.Authority.Blob.Edge
   alias Sanctum.Context
   alias Cyfr.Limits
-  alias Opus.EdgeGuard
+  alias Opus.{EdgeGuard, HostClient}
 
   # ============================================================================
   # Public API
@@ -87,14 +94,15 @@ defmodule Opus.StorageHandler do
 
   Returns a map suitable for merging into `Wasmex.Components.start_link` opts.
   When the component calls `cyfr:storage/files.call(json)`, the host function
-  parses the request, validates against the consent edge, dispatches to Arca,
-  and returns the JSON result.
+  runs `execute_held/6`: it asks the attempt for the context, parses the
+  request, validates against the consent edge, dispatches to Arca, and
+  returns the JSON result.
 
   ## Parameters
 
   - `edge` - The `Cyfr.Authority.Blob.Edge` carrying `storage` grants
     (nil = deny all storage)
-  - `ctx` - The execution `Sanctum.Context`
+  - `host` - The attached `Opus.HostClient` of the execution's attempt
   - `component_ref` - Component reference string for telemetry/audit
 
   ## Returns
@@ -104,22 +112,50 @@ defmodule Opus.StorageHandler do
   @spec build_storage_imports(
           Edge.t() | nil,
           Limits.t() | nil,
-          Context.t(),
+          HostClient.t(),
           String.t(),
           keyword()
         ) ::
           map()
-  def build_storage_imports(edge, limits, %Context{} = ctx, component_ref, opts \\ []) do
+  def build_storage_imports(edge, limits, %HostClient{} = host, component_ref, opts \\ []) do
     %{
       "cyfr:storage/files@0.1.0" => %{
         "call" =>
           {:fn,
            fn json_request ->
-             execute(json_request, edge, limits, ctx, component_ref, opts)
+             execute_held(json_request, edge, limits, host, component_ref, opts)
            end}
       }
     }
   end
+
+  @doc """
+  Execute a guest's storage operation in the context its attempt answers
+  (`Opus.HostClient.admitted/1`), as `execute/6` does. An attempt that no
+  longer holds its row, or a store that cannot say, answers `storage_error`
+  and nothing is read or written.
+  """
+  @spec execute_held(
+          String.t(),
+          Edge.t() | nil,
+          Limits.t() | nil,
+          HostClient.t(),
+          String.t(),
+          keyword()
+        ) :: String.t()
+  def execute_held(json_request, edge, limits, %HostClient{} = host, component_ref, opts \\ []) do
+    case HostClient.admitted(host) do
+      {:ok, %{ctx: %Context{} = ctx}} ->
+        execute(json_request, edge, limits, ctx, component_ref, opts)
+
+      {:error, refusal} ->
+        emit_telemetry(component_ref, "unknown", :error, System.monotonic_time(:millisecond))
+        encode_error(:storage_error, held_refusal(refusal))
+    end
+  end
+
+  defp held_refusal(:unavailable), do: "Storage refused: the execution store is unavailable."
+  defp held_refusal(_lost), do: "Storage refused: the execution attempt is not current."
 
   @doc """
   Execute a storage operation from a catalyst.

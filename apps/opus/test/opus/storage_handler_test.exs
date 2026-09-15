@@ -13,7 +13,8 @@ defmodule Opus.StorageHandlerTest do
 
   alias Opus.StorageHandlerTest.UnreadableUsageAdapter
 
-  alias Opus.StorageHandler
+  alias Cyfr.Test.AttemptFixtures
+  alias Opus.{HostClient, StorageHandler}
   alias Opus.Test.EdgeFixtures
 
   setup do
@@ -49,7 +50,17 @@ defmodule Opus.StorageHandlerTest do
   # Build Imports
   # ============================================================================
 
-  describe "build_storage_imports/3" do
+  # The host client of a real attached attempt in `ctx`'s athanor.
+  defp host!(ctx) do
+    attempt = AttemptFixtures.attached!(ctx: ctx)
+    HostClient.new(attempt.keys, attempt.runner)
+  end
+
+  defp write_request(path, text) do
+    Jason.encode!(%{"action" => "write", "path" => path, "content" => Base.encode64(text)})
+  end
+
+  describe "build_storage_imports/5" do
     test "returns correct namespace structure", %{ctx: ctx, component_ref: ref} do
       edge =
         EdgeFixtures.edge(
@@ -57,7 +68,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
+      imports = StorageHandler.build_storage_imports(edge, nil, host!(ctx), ref)
 
       assert Map.has_key?(imports, "cyfr:storage/files@0.1.0")
       assert Map.has_key?(imports["cyfr:storage/files@0.1.0"], "call")
@@ -71,7 +82,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
+      imports = StorageHandler.build_storage_imports(edge, nil, host!(ctx), ref)
       {:fn, call_fn} = imports["cyfr:storage/files@0.1.0"]["call"]
 
       # Write a file first
@@ -90,6 +101,60 @@ defmodule Opus.StorageHandlerTest do
   end
 
   # ============================================================================
+  # Held by the attempt
+  # ============================================================================
+
+  describe "execute_held/6" do
+    setup %{ctx: ctx} do
+      attempt = AttemptFixtures.attached!(ctx: ctx)
+      host = HostClient.new(attempt.keys, attempt.runner)
+      edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write", "list", "exists"])
+      {:ok, attempt: attempt, host: host, edge: edge}
+    end
+
+    test "runs while the attempt holds its row, and reads and writes nothing once it is cancelled",
+         %{ctx: ctx, component_ref: ref, attempt: attempt, host: host, edge: edge} do
+      held = fn request ->
+        request |> StorageHandler.execute_held(edge, nil, host, ref) |> Jason.decode!()
+      end
+
+      assert %{"written" => true} = held.(write_request("data/before.txt", "kept"))
+      assert {:ok, "kept"} = Arca.get(ctx, ["data", "before.txt"])
+
+      assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, attempt.execution_id)
+
+      for request <- [
+            write_request("data/after.txt", "late"),
+            write_request("data/before.txt", "overwritten"),
+            Jason.encode!(%{"action" => "read", "path" => "data/before.txt"}),
+            Jason.encode!(%{"action" => "list", "path" => "data/"})
+          ] do
+        assert %{"error" => %{"type" => "storage_error", "message" => message}} = held.(request)
+        assert message =~ "not current"
+      end
+
+      refute Arca.exists?(ctx, ["data", "after.txt"])
+      assert {:ok, "kept"} = Arca.get(ctx, ["data", "before.txt"])
+    end
+
+    test "writes nothing once a successor attempt took the row over",
+         %{ctx: ctx, component_ref: ref, attempt: attempt, host: host, edge: edge} do
+      {:ok, _successor} =
+        Arca.ExecutionAttempts.takeover(ctx.athanor_id, attempt.execution_id,
+          runner_id: Cyfr.Boot.id(),
+          lease_until: Arca.ExecutionAttempts.lease_until()
+        )
+
+      assert %{"error" => %{"type" => "storage_error"}} =
+               write_request("data/stale.txt", "late")
+               |> StorageHandler.execute_held(edge, nil, host, ref)
+               |> Jason.decode!()
+
+      refute Arca.exists?(ctx, ["data", "stale.txt"])
+    end
+  end
+
+  # ============================================================================
   # Bare-root listing
   # ============================================================================
 
@@ -100,7 +165,7 @@ defmodule Opus.StorageHandlerTest do
     } do
       # The widest grant there is — the synthetic answer must hold even here.
       edge = EdgeFixtures.edge(paths: ["*"], actions: ["read", "write", "list", "exists"])
-      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
+      imports = StorageHandler.build_storage_imports(edge, nil, host!(ctx), ref)
       {:fn, call_fn} = imports["cyfr:storage/files@0.1.0"]["call"]
 
       # Host state a raw root walk would have surfaced to the guest.
@@ -120,7 +185,7 @@ defmodule Opus.StorageHandlerTest do
       component_ref: ref
     } do
       edge = EdgeFixtures.edge(paths: ["*"], actions: ["read", "write", "append", "delete"])
-      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
+      imports = StorageHandler.build_storage_imports(edge, nil, host!(ctx), ref)
       {:fn, call_fn} = imports["cyfr:storage/files@0.1.0"]["call"]
 
       # `""` and a bare scope name directories — a write there would wedge

@@ -127,15 +127,17 @@ defmodule Opus.Chain do
   the process supervisor with its id pre-registered, returning immediately.
 
   A guest call of `execution.run_stream` returns while work continues, so
-  it is spawn-shaped: the decision charges the root invoke budget and the
-  child's attempt gives it back. A denial charges nothing.
+  it is spawn-shaped: the decision charges the root invoke budget and takes
+  its charge row, as a spawn does (`Cyfr.Execution.Charge`), and the
+  child's attempt gives both back. A denial charges nothing.
   """
   @spec run_child_stream(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_child_stream(%Authority{} = authority, reference, need, input, opts) do
-    opts = Keyword.put(opts, :guest_fn, :spawn)
+    opts = opts |> Keyword.put(:guest_fn, :spawn) |> Charge.identify()
 
-    with {:ok, decision} <- Admission.step_invoke(authority, reference, need, opts) do
+    with {:ok, decision} <- Admission.step_invoke(authority, reference, need, opts),
+         :ok <- Charge.take(decision.authority, opts) do
       execution_id = Keyword.get(opts, :execution_id) || Cyfr.Execution.Record.generate_id()
       opts = Keyword.put(opts, :execution_id, execution_id)
 
@@ -161,6 +163,7 @@ defmodule Opus.Chain do
 
         {:error, reason} ->
           Sanctum.Authority.release_invoke(decision.authority)
+          Charge.give_back(decision.authority, opts)
           {:error, {:stream_start_failed, reason}}
       end
     end
@@ -206,6 +209,9 @@ defmodule Opus.Chain do
           Keyword.get(opts, :parent_execution_id)
         )
         |> Arca.QueryHelpers.maybe_put(:root_execution_id, Keyword.get(opts, :root_execution_id))
+        # The parent's attempt a formula's child is admitted under: a parent
+        # that is no longer running admits nothing.
+        |> Arca.QueryHelpers.maybe_put(:parent_attempt, parent_attempt(opts))
         |> Arca.QueryHelpers.maybe_put(:activation_digest, Keyword.get(opts, :activation_digest))
         |> Arca.QueryHelpers.maybe_put(:activation_stamp, Keyword.get(opts, :activation_stamp))
         |> Arca.QueryHelpers.maybe_put(:client_ip, Keyword.get(opts, :client_ip))
@@ -234,6 +240,10 @@ defmodule Opus.Chain do
 
       Cyfr.Execution.Dispatch.run(ctx, decision.reference, input, exec_opts)
     end
+  end
+
+  defp parent_attempt(opts) do
+    if Keyword.get(opts, :parent_execution_id), do: Keyword.get(opts, :attempt)
   end
 
   defp hold_of(%Authority{budget: budget}, opts) do

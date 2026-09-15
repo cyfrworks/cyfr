@@ -230,7 +230,9 @@ defmodule Cyfr.Execution.Admission do
   `:parent_execution_id`, `:root_execution_id`, `:profile_id`,
   `:retention_class`, `:retained_input`, `:schedule_id`,
   `:activation_stamp`, `:activation_digest`, `:dep_ref`, `:need`,
-  `:client_ip`, the barriers `:charge`, `:step` and `:occurrence_id`,
+  `:client_ip`, the barriers `:charge`, `:step`, `:occurrence_id` and
+  `:parent_attempt` (the attempt of `:parent_execution_id` a child is
+  admitted under),
   `:step_spans`, and what the attempt is opened with
   (`Cyfr.Execution.Attempt.open/1`): `:runner_id` (the boot id of the
   worker service the run is dispatched to, which is also the row's runner
@@ -240,8 +242,11 @@ defmodule Cyfr.Execution.Admission do
   `:charge` naming its row).
 
   Answers `{:ok, admitted}`. A reference that cannot be resolved or typed
-  answers `{:error, reason}` with no row; any later refusal closes the row
-  failed first and answers what `Cyfr.Execution.Close.fail/3` answers.
+  answers `{:error, reason}` with no row, and so does a child whose parent
+  attempt no longer owns its running parent when the row would be admitted:
+  nothing may run, or be recorded, under a parent that ended. Any other
+  later refusal closes the row failed first and answers what
+  `Cyfr.Execution.Close.fail/3` answers.
   """
   @spec admit(Context.t(), String.t(), map(), keyword()) :: {:ok, admitted()} | {:error, term()}
   def admit(%Context{} = ctx, reference, input, opts)
@@ -279,7 +284,8 @@ defmodule Cyfr.Execution.Admission do
           step_spans: opts[:step_spans],
           setup_stream: opts[:root_execution_id] || opts[:parent_execution_id],
           signature_verified: component["signature_verified"] || false,
-          admission: Keyword.take(opts, [:charge, :step, :occurrence_id, :runner_id])
+          admission:
+            Keyword.take(opts, [:charge, :step, :parent_attempt, :occurrence_id, :runner_id])
         }
       }
 
@@ -289,7 +295,11 @@ defmodule Cyfr.Execution.Admission do
            {:ok, admitted} <- stage(run, &open_attempt(&1, input)) do
         {:ok, admitted}
       else
-        {:error, run, reason} -> Close.fail(run.close, [], reason)
+        {:error, _run, :parent_ended} ->
+          {:error, "Execution refused: its parent execution is no longer running"}
+
+        {:error, run, reason} ->
+          Close.fail(run.close, [], reason)
       end
     end
   end

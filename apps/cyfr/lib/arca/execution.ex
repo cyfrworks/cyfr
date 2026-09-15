@@ -196,6 +196,11 @@ defmodule Arca.Execution do
     belongs to; the step barrier binds the child to it while the step is
     dispatched, on its generation and not cancelled, and admission is
     refused `{:error, :step_superseded}` otherwise.
+  - `:parent_attempt` — the attempt of the row's `parent_execution_id` this
+    child is admitted under; the parent barrier holds it while it owns its
+    running parent, running with no cancel asked of it
+    (`Arca.ExecutionAttempts.hold_for_child!/3`), and admission is refused
+    `{:error, :parent_ended}` otherwise.
   - `:payloads` — staged payloads (`Arca.ExecutionPayloads.Staged`)
     committed for the attempt in the same transaction; one that cannot
     be kept refuses admission `{:error, {:payload_not_retained, why}}`.
@@ -260,6 +265,17 @@ defmodule Arca.Execution do
           %{id: step_id, generation: generation} ->
             if Arca.TurnStorage.bind_child!(athanor_id, step_id, generation, execution.id) != 1,
               do: Arca.Repo.rollback(:step_superseded)
+
+          nil ->
+            :ok
+        end
+
+        case Keyword.get(opts, :parent_attempt) do
+          parent_attempt when is_binary(parent_attempt) ->
+            parent_id = Map.fetch!(attrs, :parent_execution_id)
+
+            if Arca.ExecutionAttempts.hold_for_child!(athanor_id, parent_id, parent_attempt) != 1,
+              do: Arca.Repo.rollback(:parent_ended)
 
           nil ->
             :ok

@@ -295,10 +295,11 @@ defmodule Cyfr.Execution.Record do
   @doc """
   Admit the execution BEFORE it begins: the row, its first attempt and,
   for a root carrying a reservation, its budget row, in one transaction
-  (`Arca.Execution.admit/2`). `opts` carry the admission barriers a
-  loop-dispatched child passes through (`:charge`, `:step`), a
-  scheduled run's `:occurrence_id`, and `:runner_id`, the boot id of the
-  worker service the attempt is dispatched to (`runner_id/0` when absent).
+  (`Arca.Execution.admit/2`). `opts` carry the admission barriers a child
+  passes through (`:charge`, `:step`, and `:parent_attempt`, the attempt of
+  its parent it is admitted under), a scheduled run's `:occurrence_id`, and
+  `:runner_id`, the boot id of the worker service the attempt is dispatched
+  to (`runner_id/0` when absent).
 
   The row keeps an input envelope — the reference, digest, sizes,
   top-level keys and attachment digests — and the input itself is the
@@ -360,7 +361,7 @@ defmodule Cyfr.Execution.Record do
                reservation: record.reservation,
                payloads: payloads
              ],
-             Keyword.take(opts, [:charge, :step, :occurrence_id, :runner_id])
+             Keyword.take(opts, [:charge, :step, :parent_attempt, :occurrence_id, :runner_id])
            )
          ) do
       {:ok, %{execution: execution}} ->

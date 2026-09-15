@@ -10,7 +10,8 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   held at their guest's entry ever being let go, no process of the run is
   left alive — no waiter, attempt, runner, component process or formula
   tracker, the `run_stream` child's driver included — and the in-flight
-  count, the execution slots and the charge rows are back where they were.
+  count, the execution slots and the charge rows (one for each child, the
+  `run_stream` child's included) are back where they were.
   A cancel racing the formula's own completion leaves exactly one terminal
   outcome.
 
@@ -97,6 +98,9 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     assert_receive {:held, stream_component, ^stream_id}, 30_000
 
     assert Sanctum.Authority.budget(authority).in_flight == 2
+
+    holders = for charge <- charges(ctx, authority), do: charge.holder_execution_id
+    assert Enum.sort(holders) == Enum.sort([spawned_id, stream_id])
 
     runners = runners([root_id, spawned_id, stream_id])
 

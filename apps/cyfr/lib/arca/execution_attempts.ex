@@ -174,6 +174,36 @@ defmodule Arca.ExecutionAttempts do
     end)
   end
 
+  @doc """
+  Hold the attempt a child is admitted under, inside the caller's admission
+  transaction: `attempt` must own `execution_id`, be `running` with no
+  cancel asked of it, and the execution must be `running`. Answers 1 when
+  it is, 0 when it is not (the caller rolls back). The write takes the
+  attempt row's lock, so a close, cancel or lapse of the attempt either
+  commits first, and the child is refused, or waits for the admission to
+  commit, and finds the child to fail.
+  """
+  @spec hold_for_child!(String.t(), String.t(), String.t()) :: non_neg_integer()
+  # arca:db-raise-ok inside the caller's transaction
+  def hold_for_child!(athanor_id, execution_id, attempt)
+      when is_binary(athanor_id) and is_binary(execution_id) and is_binary(attempt) do
+    running_execution =
+      from(e in Arca.Execution,
+        where: e.id == ^execution_id and e.athanor_id == ^athanor_id and e.status == "running",
+        select: e.current_attempt
+      )
+
+    {count, _} =
+      from(a in ExecutionAttempt,
+        where: a.athanor_id == ^athanor_id and a.execution_id == ^execution_id,
+        where: a.attempt == ^attempt and a.state == "running" and is_nil(a.cancel_requested_at),
+        where: a.attempt in subquery(running_execution)
+      )
+      |> Arca.Repo.update_all(inc: [fence: 0])
+
+    count
+  end
+
   @doc "Ask the execution's current attempt to stop at its next tick."
   @spec request_cancel(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def request_cancel(athanor_id, execution_id) when is_binary(athanor_id) do
