@@ -5,7 +5,9 @@ defmodule Cyfr.Execution.KeysTest do
   @moduledoc """
   The worker root is the configured `:worker_key` when one is set, and 32
   random bytes of this boot's own otherwise; every key CYFR issues derives
-  from it.
+  from it. Keys are issued under the control plane's generation, `1` for a
+  boot that claims none, and under no generation when the control plane
+  cannot answer one.
   """
 
   use ExUnit.Case, async: false
@@ -37,6 +39,18 @@ defmodule Cyfr.Execution.KeysTest do
     assert Keys.root() == root
     assert Keys.assign_key() == WorkerAuth.assign_key(root)
     assert Keys.worker_key("wrk_1") == WorkerAuth.worker_key(root, "wrk_1")
+  end
+
+  test "the generation is the claim's, 1 without a claim, and refused when it is unknown" do
+    assert {:ok, 7} = Keys.generation({:ok, 7})
+    assert {:ok, 1} = Keys.generation(:none)
+
+    for unknown <- [{:error, :unavailable}, {:error, :database_error}, {:ok, 0}, nil] do
+      assert {:error, :unavailable} = Keys.generation(unknown)
+    end
+
+    assert {:ok, generation} = Keys.generation()
+    assert is_integer(generation) and generation > 0
   end
 
   test "without one, each boot mints a root of its own" do

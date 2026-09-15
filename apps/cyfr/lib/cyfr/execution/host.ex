@@ -22,7 +22,8 @@ defmodule Cyfr.Execution.Host do
        rows are the holder's to write.
     1. The header verifies (`Cyfr.WorkerAuth.verify_host_call/5`) under the
        call key of the attempt it names, derived from the worker root, and
-       the current generation (`Cyfr.Execution.Keys`), and the body is a
+       the current generation (`Cyfr.Execution.Keys.generation/0`; one the
+       control plane cannot answer refuses every call), and the body is a
        known operation with well-formed arguments.
     2. `attach`: the assignment verifies (`Cyfr.Assignment.verify/3`), it
        names the header's athanor, execution, attempt, fence and
@@ -200,11 +201,12 @@ defmodule Cyfr.Execution.Host do
     end
   end
 
+  # A generation the control plane cannot answer verifies nothing.
   defp verify(header, body, now) do
-    case WorkerAuth.verify_host_call(Keys.root(), header, body, now, Keys.generation()) do
-      {:ok, caller} ->
-        {:ok, caller}
-
+    with {:ok, generation} <- Keys.generation(),
+         {:ok, caller} <- WorkerAuth.verify_host_call(Keys.root(), header, body, now, generation) do
+      {:ok, caller}
+    else
       {:error, reason} ->
         Logger.warning("[Cyfr.Execution.Host] host call refused: #{reason}")
         {:error, :lost}

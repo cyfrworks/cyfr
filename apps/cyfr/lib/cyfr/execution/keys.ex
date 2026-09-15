@@ -17,6 +17,8 @@ defmodule Cyfr.Execution.Keys do
   under and host calls are checked against: the generation of the claim
   this boot holds (`Cyfr.ControlPlane.generation/0`), or `1` for a boot
   that claims no control plane (a cluster node, or claiming switched off).
+  A generation the control plane cannot answer is a refusal, never `1`:
+  no assignment is issued and no host call verifies under it.
   """
 
   alias Cyfr.WorkerAuth
@@ -66,12 +68,23 @@ defmodule Cyfr.Execution.Keys do
           {:ok, WorkerAuth.attempt_keys()} | {:error, Cyfr.MacEnvelope.invalid_field()}
   def attempt_keys(attempt) when is_map(attempt), do: WorkerAuth.attempt_keys(root(), attempt)
 
-  @doc "The generation assignments are issued under and host calls must present."
-  @spec generation() :: pos_integer()
-  def generation do
-    case Cyfr.ControlPlane.generation() do
-      {:ok, generation} -> generation
-      :none -> 1
-    end
-  end
+  @doc """
+  The generation assignments are issued under and host calls must present
+  (`generation/1` of the control plane's answer).
+  """
+  @spec generation() :: {:ok, pos_integer()} | {:error, :unavailable}
+  def generation, do: generation(Cyfr.ControlPlane.generation())
+
+  @doc """
+  The generation a control-plane answer (`Cyfr.ControlPlane.generation/0`)
+  issues and checks keys under: the claim's own, `1` for `:none` (a boot
+  that claims no control plane), and `{:error, :unavailable}` for anything
+  else, a refusal to read the claim included.
+  """
+  @spec generation(term()) :: {:ok, pos_integer()} | {:error, :unavailable}
+  def generation({:ok, generation}) when is_integer(generation) and generation > 0,
+    do: {:ok, generation}
+
+  def generation(:none), do: {:ok, 1}
+  def generation(_unknown), do: {:error, :unavailable}
 end

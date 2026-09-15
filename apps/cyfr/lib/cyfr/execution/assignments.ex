@@ -51,11 +51,18 @@ defmodule Cyfr.Execution.Assignments do
 
   @doc """
   Sign the assignment of the admitted attempt at fence 1. Answers
-  `{:error, reason}` when what admission settled is not a valid
-  assignment (`Cyfr.Assignment.sign/2`).
+  `{:error, :unavailable}` when the control-plane generation is not known
+  (`Cyfr.Execution.Keys.generation/0`), and `{:error, reason}` when what
+  admission settled is not a valid assignment (`Cyfr.Assignment.sign/2`).
   """
   @spec issue(admitted()) :: {:ok, issued()} | {:error, term()}
   def issue(%{record: %Record{} = record} = admitted) do
+    with {:ok, generation} <- Keys.generation() do
+      sign(admitted, record, generation)
+    end
+  end
+
+  defp sign(admitted, record, generation) do
     now = System.system_time(:millisecond)
 
     attempt = %{
@@ -63,7 +70,7 @@ defmodule Cyfr.Execution.Assignments do
       execution_id: record.id,
       attempt: record.attempt,
       fence: 1,
-      generation: Keys.generation(),
+      generation: generation,
       worker: admitted.audience
     }
 

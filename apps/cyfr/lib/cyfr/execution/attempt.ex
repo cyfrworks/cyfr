@@ -53,8 +53,11 @@ defmodule Cyfr.Execution.Attempt do
   closes the run lost (`Cyfr.Execution.Close.lost/1`), which writes nothing
   over a row the attempt no longer holds.
 
-  A process killed outright gives back its slots through their monitors,
-  and its charge row through the reservation sweep.
+  A stop by its supervisor runs to the end: a waiter already gone is
+  reacted to as above, whether or not its exit was handled yet, and what
+  the run held goes back. A process killed outright gives back its slots
+  through their monitors, and its charge row through the reservation
+  sweep.
 
   ## A boot that does not hold the control plane
 
@@ -329,6 +332,10 @@ defmodule Cyfr.Execution.Attempt do
     Process.put(:"$callers", Keyword.fetch!(opts, :callers))
     Cyfr.LoggerContext.restore(Keyword.fetch!(opts, :logger))
 
+    # Trapped, so a supervisor's stop runs `terminate/2` instead of cutting
+    # off a reaction to the waiter partway.
+    Process.flag(:trap_exit, true)
+
     execution_id = Keyword.fetch!(opts, :execution_id)
     authority = Keyword.fetch!(opts, :authority)
     ctx = Context.enter_guest(Keyword.fetch!(opts, :ctx))
@@ -456,8 +463,7 @@ defmodule Cyfr.Execution.Attempt do
 
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %__MODULE__{owner: ref} = state) do
-    kill_runner(state)
-    lapse(state)
+    waiter_gone(state)
     {:stop, :normal, release_holds(state)}
   end
 
@@ -473,6 +479,17 @@ defmodule Cyfr.Execution.Attempt do
   def handle_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
+  end
+
+  # Every stop but a normal one (after which nothing is held) finishes here:
+  # a supervisor's shutdown can arrive before the waiter's exit is handled.
+  @impl true
+  def terminate(:normal, _state), do: :ok
+
+  def terminate(_reason, state) do
+    unless Process.alive?(state.waiter), do: waiter_gone(state)
+    _ = release_holds(state)
+    :ok
   end
 
   @impl true
@@ -540,9 +557,14 @@ defmodule Cyfr.Execution.Attempt do
       )
   end
 
-  # A waiter that exited kills its run. The kill of a runner that attached
-  # is counted before the attempt gives back its slot, so the athanor's next
-  # acquisition sees it.
+  # A waiter that exited kills its run and lapses its row. The kill of a
+  # runner that attached is counted before the attempt gives back its slot,
+  # so the athanor's next acquisition sees it.
+  defp waiter_gone(state) do
+    kill_runner(state)
+    lapse(state)
+  end
+
   defp kill_runner(%__MODULE__{worker: nil}), do: :ok
 
   defp kill_runner(state) do

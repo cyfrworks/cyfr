@@ -40,6 +40,8 @@ defmodule Cyfr.Test.AttemptFixtures do
   - `:runner_id` — the worker service boot the attempt is dispatched to:
     the row's runner, the assignment's audience, the worker its keys are
     bound to and the attempt's (default this boot's id);
+  - `:worker` — the `Cyfr.WorkerAPI` module the attempt kills its runner
+    through (default none);
   - `:wasm_bytes` — the bytes the attempt answers its runner;
   - `:attach` — `false` to stop before attaching.
   """
@@ -74,6 +76,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         close: close,
         stream_id: Keyword.get(opts, :stream_id, record.id),
         runner_id: runner_id,
+        worker: Keyword.get(opts, :worker),
         wasm_bytes: Keyword.get(opts, :wasm_bytes)
       )
 
@@ -173,13 +176,15 @@ defmodule Cyfr.Test.AttemptFixtures do
     %Arca.Schemas.ExecutionAttempt{} =
       row = Arca.ExecutionAttempts.current(athanor_id, execution_id)
 
+    {:ok, generation} = Keys.generation()
+
     {:ok, keys} =
       Keys.attempt_keys(%{
         athanor_id: athanor_id,
         execution_id: execution_id,
         attempt: row.attempt,
         fence: row.fence,
-        generation: Keys.generation(),
+        generation: generation,
         worker: row.runner_id
       })
 
