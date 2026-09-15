@@ -385,29 +385,71 @@ jobs:
       - name: Seed ships no build droppings
         run: |
           set -uo pipefail
-          hits="$(find seed -type d \( -name target -o -name node_modules -o -name .git \) -print || true)"
+          # A scan of a missing tree finds nothing; refuse it.
+          for root in seed/components seed/aqua; do
+            if [ -z "$(git ls-files -- "$root" | head -1)" ]; then
+              echo "::error::$root holds no tracked file — the scan would read nothing"
+              exit 1
+            fi
+          done
+          hits="$(find seed -type d \( -name target -o -name node_modules -o -name .git \) -print)"
           if [ -n "$hits" ]; then
             echo "::error::build droppings under seed/ — install media must be clean"
             echo "$hits"
             exit 1
           fi
-      # A tincture ships its entry file: a declared build's output is part of
-      # the seed media, so a checkout that lacks it cannot register the
-      # tincture.
-      - name: Every seed tincture's entry is tracked
+      # A tincture ships its entry file and every asset the entry loads: a
+      # declared build's output (`dist/`) is part of the seed media, so a
+      # checkout that lacks any of it cannot register or serve the tincture.
+      # Paths are matched literally, never as git pathspec globs.
+      - name: Every seed tincture's entry and built assets are tracked
         run: |
           set -uo pipefail
+          shopt -s nullglob
+          tracked() { git ls-files --error-unmatch -- ":(literal)$1" >/dev/null 2>&1; }
           bad=""
-          for manifest in seed/components/tinctures/local/*/*/cyfr-manifest.json; do
+          manifests=(seed/components/tinctures/local/*/*/cyfr-manifest.json)
+          if [ "${#manifests[@]}" -eq 0 ]; then
+            echo "::error::no seed tincture manifest matched — the step would check nothing"
+            exit 1
+          fi
+          for manifest in "${manifests[@]}"; do
             vdir="$(dirname "$manifest")"
-            entry="$(jq -r '.tincture.entry // "index.html"' "$manifest")"
-            if ! git ls-files --error-unmatch "$vdir/$entry" >/dev/null 2>&1; then
-              bad="$bad"$'\n'"$vdir/$entry"
+            entry="$(jq -r '.tincture.entry // "index.html"' "$manifest")" || { bad="$bad"$'\n'"$manifest: unreadable"; continue; }
+            case "/$entry/" in
+              */../*|*/./*|//*) bad="$bad"$'\n'"$manifest: entry '$entry' leaves the version directory"; continue ;;
+            esac
+            if ! tracked "$vdir/$entry"; then
+              bad="$bad"$'\n'"$vdir/$entry: entry not tracked"
+              continue
             fi
+            # A built tincture is served from its build output, all of it tracked.
+            if jq -e '.tincture.build' "$manifest" >/dev/null; then
+              case "$entry" in
+                dist/*) ;;
+                *) bad="$bad"$'\n'"$manifest: a built tincture's entry lives under dist/, not '$entry'" ;;
+              esac
+              untracked="$(git ls-files --others -- "$vdir/dist")"
+              if [ -n "$untracked" ]; then
+                bad="$bad"$'\n'"$untracked"
+              fi
+            fi
+            # Every local script, stylesheet and link the entry names.
+            base="$(dirname "$vdir/$entry")"
+            refs="$( (grep -oE '(src|href)="[^"]+"' "$vdir/$entry" || true) | sed -E 's/^(src|href)="([^"?#]*).*/\2/')"
+            while IFS= read -r ref; do
+              case "$ref" in
+                ''|'#'*|/*|*:*) continue ;;
+              esac
+              ref="${ref#./}"
+              if ! tracked "$base/$ref"; then
+                bad="$bad"$'\n'"$base/$ref: named by $vdir/$entry, not tracked"
+              fi
+            done <<< "$refs"
           done
           bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
           if [ -n "$bad" ]; then
-            echo "::error::seed tincture entries not tracked"
+            echo "::error::seed tincture entries or their assets are not tracked"
             echo "$bad"
             exit 1
           fi
@@ -430,6 +472,11 @@ jobs:
               echo "no comparable base for this push — nothing to check"
               exit 0
             fi
+          fi
+          # A diff of a tree that is not there is empty; refuse it.
+          if [ -z "$(git ls-files -- seed/components | head -1)" ]; then
+            echo "::error::seed/components holds no tracked file — the check would compare nothing"
+            exit 1
           fi
           # The rule is about paths, not file identity: every query runs with
           # --no-renames. Rename detection reports a rename under its
