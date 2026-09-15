@@ -33,10 +33,26 @@ defmodule Cyfr.ControlPlane.ClaimTest do
     assert :lost = Claim.renew("boot-a", 60_000)
   end
 
-  test "an unreadable row is nobody's" do
+  test "a row that does not decode refuses the claim and is left as it is" do
     assert {:ok, :recorded} = Arca.ServerMetaStorage.put_new("control_plane_owner", "garbage")
+
+    assert {:error, :unavailable} = Claim.claim("boot-a", 60_000)
+    assert {:error, :unavailable} = Claim.holder()
+    assert :lost = Claim.renew("boot-a", 60_000)
+    assert {:ok, "garbage"} = Arca.ServerMetaStorage.get("control_plane_owner")
+  end
+
+  @tag :capture_log
+  test "a store that cannot answer refuses the claim, never a claim at generation 1" do
     assert {:ok, _, 1} = Claim.claim("boot-a", 60_000)
-    assert {:ok, "boot-a", _} = Claim.holder()
+    assert :ok = Claim.release("boot-a")
+
+    Arca.Repo.query!("DROP TABLE server_meta")
+
+    assert {:error, :unavailable} = Claim.claim("boot-b", 60_000)
+    assert {:error, :unavailable} = Claim.holder()
+    assert :lost = Claim.renew("boot-a", 60_000)
+    assert {:error, :database_error} = Claim.release("boot-a")
   end
 
   test "every claim raises the generation; renewal and release keep it" do

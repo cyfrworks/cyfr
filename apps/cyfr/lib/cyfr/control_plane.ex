@@ -50,16 +50,22 @@ defmodule Cyfr.ControlPlane do
   end
 
   @doc """
-  The generation of the claim this boot last won (`Cyfr.ControlPlane.Claim`),
-  or `:none` for a boot that has claimed nothing — a cluster node, or one
-  whose claim is switched off. Work this boot issues under its generation
-  is fenced against a later holder's.
+  The generation of the claim this boot last won (`Cyfr.ControlPlane.Claim`).
+  Work this boot issues under its generation is fenced against a later
+  holder's.
+
+  `:none` for a boot that claims no control plane — a cluster node, or one
+  whose claim is switched off. A boot that claims one but holds no
+  generation — before its claim is won, or after its server stopped —
+  answers `{:error, :unavailable}`, never `:none`: its generation is not
+  known, so nothing may be issued or checked under one.
   """
-  @spec generation() :: {:ok, pos_integer()} | :none
+  @spec generation() :: {:ok, pos_integer()} | :none | {:error, :unavailable}
   def generation do
     case :persistent_term.get(@generation_key, nil) do
       generation when is_integer(generation) -> {:ok, generation}
-      nil -> :none
+      :none -> :none
+      nil -> if claim_enabled?(), do: {:error, :unavailable}, else: :none
     end
   end
 
@@ -104,6 +110,7 @@ defmodule Cyfr.ControlPlane do
 
     cond do
       cluster? ->
+        :persistent_term.put(@generation_key, :none)
         mark({:held, :forever})
         {:ok, state}
 
@@ -124,7 +131,8 @@ defmodule Cyfr.ControlPlane do
                     "the same turn and fill the same estate."
 
           {:error, reason} ->
-            raise "[Cyfr] FATAL: the control-plane claim could not be written (#{inspect(reason)})."
+            raise "[Cyfr] FATAL: the control-plane claim could not be read or written " <>
+                    "(#{inspect(reason)})."
         end
     end
   end

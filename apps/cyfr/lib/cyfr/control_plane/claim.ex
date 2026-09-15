@@ -21,10 +21,15 @@ defmodule Cyfr.ControlPlane.Claim do
   recorded at generation 1, an expired row or one already `me`'s is
   replaced one generation up, a live row held by another boot refuses with
   `{:error, {:held, owner, until}}`.
+
+  A row that cannot be read — the store fails, or what it holds does not
+  decode — refuses with `{:error, :unavailable}` and writes nothing: its
+  generation is unknown, and a claim at generation 1 would reissue a
+  generation an earlier holder already used.
   """
   @spec claim(String.t(), pos_integer()) ::
           {:ok, DateTime.t(), pos_integer()}
-          | {:error, {:held, String.t(), DateTime.t()} | term()}
+          | {:error, {:held, String.t(), DateTime.t()} | :unavailable | :racing | term()}
   def claim(me, lease_ms), do: claim(me, lease_ms, 2)
 
   defp claim(_me, _lease_ms, 0), do: {:error, :racing}
@@ -52,12 +57,11 @@ defmodule Cyfr.ControlPlane.Claim do
             end
 
           :error ->
-            # An unreadable row is nobody's: replace it.
-            replace(previous, me, lease_ms, 1, retry)
+            {:error, :unavailable}
         end
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _unreadable} ->
+        {:error, :unavailable}
     end
   end
 
@@ -104,14 +108,24 @@ defmodule Cyfr.ControlPlane.Claim do
     end
   end
 
-  @doc "The current holder, for diagnostics."
-  @spec holder() :: {:ok, String.t(), DateTime.t()} | :none
+  @doc """
+  The current holder, for diagnostics: `:none` when no boot has recorded a
+  claim, `{:error, :unavailable}` when the row cannot be read.
+  """
+  @spec holder() :: {:ok, String.t(), DateTime.t()} | :none | {:error, :unavailable}
   def holder do
-    with {:ok, raw} <- Arca.ServerMetaStorage.get(@key),
-         {:ok, owner, until, _generation} <- decode(raw) do
-      {:ok, owner, until}
-    else
-      _ -> :none
+    case Arca.ServerMetaStorage.get(@key) do
+      {:ok, raw} ->
+        case decode(raw) do
+          {:ok, owner, until, _generation} -> {:ok, owner, until}
+          :error -> {:error, :unavailable}
+        end
+
+      {:error, :not_found} ->
+        :none
+
+      {:error, _unreadable} ->
+        {:error, :unavailable}
     end
   end
 
