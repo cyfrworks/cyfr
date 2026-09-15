@@ -48,6 +48,11 @@ defmodule Aqua.Runner do
   holds the turns behind it, and recovers the turn then, while the boot
   still owns the control plane.
 
+  Every loop result, notification and timer checks ownership again. If
+  ownership is lost or expired, the runner stops its loop and exits
+  without changing the tape or advancing queued turns. An owning runner
+  recovers the open work from its durable rows.
+
   ## Broadcasts — `{:thread, thread_id, event}`
 
   The rows from the tape (`{:message, row}`, `{:turn_finished}`,
@@ -612,17 +617,32 @@ defmodule Aqua.Runner do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def handle_info({ref, result}, %{live: %{task: %Task{ref: ref}}} = state) do
+  def handle_info(message, state) do
+    if Cyfr.ControlPlane.owner?() do
+      handle_owned_info(message, state)
+    else
+      # Stop local work without aborting or settling its durable turn. The
+      # owning boot recovers those rows; process exit retires subscriptions,
+      # held monitors and timers addressed to this runner.
+      if state.live, do: Task.shutdown(state.live.task, :brutal_kill)
+      {:stop, :normal, state}
+    end
+  end
+
+  defp handle_owned_info({ref, result}, %{live: %{task: %Task{ref: ref}}} = state) do
     Process.demonitor(ref, [:flush])
     {:noreply, after_loop(state, result)}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{live: %{task: %Task{ref: ref}}} = state) do
+  defp handle_owned_info(
+         {:DOWN, ref, :process, _pid, reason},
+         %{live: %{task: %Task{ref: ref}}} = state
+       ) do
     {:noreply, crashed(state, reason)}
   end
 
   # The process that held a turn is gone: the turn is recovered now.
-  def handle_info({:DOWN, ref, :process, _pid, _reason} = msg, state) do
+  defp handle_owned_info({:DOWN, ref, :process, _pid, _reason} = msg, state) do
     case Enum.find(state.held, fn {_turn_id, held} -> held == ref end) do
       {turn_id, _ref} ->
         {:noreply, recover_held(state, turn_id)}
@@ -634,70 +654,62 @@ defmodule Aqua.Runner do
   end
 
   # A card decided: the paused turn continues once none is pending.
-  def handle_info(
-        {:thread, _id, {:approval_resolved, %{turn_id: turn_id}}},
-        %{paused: %{turn_id: turn_id}} = state
-      ) do
+  defp handle_owned_info(
+         {:thread, _id, {:approval_resolved, %{turn_id: turn_id}}},
+         %{paused: %{turn_id: turn_id}} = state
+       ) do
     {:noreply, settle_paused(state)}
   end
 
-  def handle_info({:thread, _id, {:usage, usage}}, state),
+  defp handle_owned_info({:thread, _id, {:usage, usage}}, state),
     do: {:noreply, %{state | usage: usage}}
 
-  def handle_info({:thread, _id, {:tool_activity, list}}, state),
+  defp handle_owned_info({:thread, _id, {:tool_activity, list}}, state),
     do: {:noreply, %{state | tool_activity: list}}
 
-  def handle_info(
-        {:thread, _id, {:turn_fence, turn_id, fence}},
-        %{live: %{turn_id: turn_id}} = state
-      ),
-      do: {:noreply, %{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)}}
+  defp handle_owned_info(
+         {:thread, _id, {:turn_fence, turn_id, fence}},
+         %{live: %{turn_id: turn_id}} = state
+       ),
+       do: {:noreply, %{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)}}
 
-  def handle_info(
-        {:thread, _id, {:delta_abandoned, %{turn_id: turn_id} = marker}},
-        %{live: %{turn_id: turn_id}} = state
-      ),
-      do: {:noreply, %{state | partials: Aqua.Loop.Stream.abandoned(state.partials, marker)}}
+  defp handle_owned_info(
+         {:thread, _id, {:delta_abandoned, %{turn_id: turn_id} = marker}},
+         %{live: %{turn_id: turn_id}} = state
+       ),
+       do: {:noreply, %{state | partials: Aqua.Loop.Stream.abandoned(state.partials, marker)}}
 
-  def handle_info(
-        {:thread, _id, {:delta, %{turn_id: turn_id} = delta}},
-        %{live: %{turn_id: turn_id}} = state
-      ),
-      do: {:noreply, %{state | partials: Aqua.Loop.Stream.add(state.partials, delta)}}
+  defp handle_owned_info(
+         {:thread, _id, {:delta, %{turn_id: turn_id} = delta}},
+         %{live: %{turn_id: turn_id}} = state
+       ),
+       do: {:noreply, %{state | partials: Aqua.Loop.Stream.add(state.partials, delta)}}
 
-  def handle_info({:thread, _id, {:message, row}}, state),
+  defp handle_owned_info({:thread, _id, {:message, row}}, state),
     do: {:noreply, %{state | partials: Aqua.Loop.Stream.landed(state.partials, row)}}
 
-  def handle_info({:thread, _id, _event}, state), do: {:noreply, state}
+  defp handle_owned_info({:thread, _id, _event}, state), do: {:noreply, state}
 
-  # A paused turn's timers write only while this boot owns the control
-  # plane; otherwise they ask again later.
-  def handle_info({:expire, turn_id} = timer, %{paused: %{turn_id: turn_id}} = state) do
-    case Cyfr.ControlPlane.when_owner(fn -> Aqua.Approvals.expire_due(state.ctx) end) do
-      :not_owner -> {:noreply, retry_timer(timer, state)}
-      _expired -> {:noreply, settle_paused(%{state | paused: %{state.paused | expiry: nil}})}
-    end
+  defp handle_owned_info({:expire, turn_id}, %{paused: %{turn_id: turn_id}} = state) do
+    Aqua.Approvals.expire_due(state.ctx)
+    {:noreply, settle_paused(%{state | paused: %{state.paused | expiry: nil}})}
   end
 
-  def handle_info({:expire, _turn_id}, state), do: {:noreply, state}
+  defp handle_owned_info({:expire, _turn_id}, state), do: {:noreply, state}
 
-  def handle_info({:resume, turn_id} = timer, %{paused: %{turn_id: turn_id}} = state) do
-    case Cyfr.ControlPlane.when_owner(fn -> settle_paused(state) end) do
-      :not_owner -> {:noreply, retry_timer(timer, state)}
-      settled -> {:noreply, settled}
-    end
-  end
+  defp handle_owned_info({:resume, turn_id}, %{paused: %{turn_id: turn_id}} = state),
+    do: {:noreply, settle_paused(state)}
 
-  def handle_info({:resume, _turn_id}, state), do: {:noreply, state}
+  defp handle_owned_info({:resume, _turn_id}, state), do: {:noreply, state}
 
-  def handle_info({:recover, turn_id}, %{held: held} = state)
-      when is_map_key(held, turn_id) and :erlang.map_get(turn_id, held) == nil,
-      do: {:noreply, recover_held(state, turn_id)}
+  defp handle_owned_info({:recover, turn_id}, %{held: held} = state)
+       when is_map_key(held, turn_id) and :erlang.map_get(turn_id, held) == nil,
+       do: {:noreply, recover_held(state, turn_id)}
 
-  def handle_info({:recover, _turn_id}, state), do: {:noreply, state}
+  defp handle_owned_info({:recover, _turn_id}, state), do: {:noreply, state}
 
   # The athanor changed: an archive ends the runner, its turns cut.
-  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
+  defp handle_owned_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
     case Athanors.get(state.athanor_id) do
       {:ok, %{status: "archived"}} ->
         state =
@@ -712,16 +724,16 @@ defmodule Aqua.Runner do
     end
   end
 
-  def handle_info({:notify, _athanor_id, _kind, _payload}, state), do: {:noreply, state}
-  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+  defp handle_owned_info({:notify, _athanor_id, _kind, _payload}, state), do: {:noreply, state}
+  defp handle_owned_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
-  def handle_info(:idle, %{live: nil, paused: nil, queue: [], held: held} = state)
-      when map_size(held) == 0,
-      do: {:stop, :normal, state}
+  defp handle_owned_info(:idle, %{live: nil, paused: nil, queue: [], held: held} = state)
+       when map_size(held) == 0,
+       do: {:stop, :normal, state}
 
-  def handle_info(:idle, state), do: {:noreply, touch(state)}
+  defp handle_owned_info(:idle, state), do: {:noreply, touch(state)}
 
-  def handle_info(msg, state) do
+  defp handle_owned_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
@@ -990,24 +1002,18 @@ defmodule Aqua.Runner do
     end
   end
 
-  # A held turn whose holder is gone, planned again from its row while this
-  # boot owns the control plane; otherwise, or when the rows cannot be
-  # read, it is asked again later and the turns behind it keep waiting.
+  # A held turn whose holder is gone, planned again from its row. When the
+  # rows cannot be read, retry later and keep the turns behind it waiting.
   defp recover_held(state, turn_id) do
     state = %{state | held: Map.put(state.held, turn_id, nil)}
 
-    planned =
-      Cyfr.ControlPlane.when_owner(fn ->
-        RecoveryTable.plan_turn(state.ctx, state.id, turn_id)
-      end)
-
-    case planned do
+    case RecoveryTable.plan_turn(state.ctx, state.id, turn_id) do
       {:ok, actions} ->
         state = %{state | held: Map.delete(state.held, turn_id)}
         state = Enum.reduce(actions, state, &recover_one/2)
         if busy?(state), do: touch(state), else: start_next(state)
 
-      _not_owner_or_unreadable ->
+      _unreadable ->
         retry_timer({:recover, turn_id}, state)
     end
   end

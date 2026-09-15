@@ -19,8 +19,7 @@ defmodule Cyfr.Execution.MCPCutoverTest do
 
   setup do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
     start_supervised!(Source.Memory)
 
     test_path = Path.join(System.tmp_dir!(), "mcp_cutover_#{:rand.uniform(100_000)}")
@@ -53,6 +52,8 @@ defmodule Cyfr.Execution.MCPCutoverTest do
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
     end)
+
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {:ok, ctx: ctx, component: component}
   end

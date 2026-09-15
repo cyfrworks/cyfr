@@ -55,12 +55,21 @@ defmodule Cyfr.ControlPlaneWorkersTest do
     assert sessions(hash) == 0
   end
 
-  test "no runner starts on a boot that does not own the control plane" do
-    ControlPlane.mark(:lost)
-    thread_id = "thr_#{System.unique_integer([:positive])}"
+  for loss <- [:lost, :expired] do
+    test "no runner starts when ownership is #{loss}" do
+      ownership =
+        case unquote(loss) do
+          :lost -> :lost
+          :expired -> {:held, DateTime.add(DateTime.utc_now(), -1, :second)}
+        end
 
-    assert {:error, :control_plane_lost} = Aqua.Runner.ensure(thread_id, "ath_test")
-    assert Aqua.Runner.whereis(thread_id) == nil
+      ControlPlane.mark(ownership)
+      thread_id = "thr_#{System.unique_integer([:positive])}"
+
+      assert {:error, :control_plane_lost} = Aqua.Runner.ensure(thread_id, "ath_test")
+      assert :ignore = Aqua.Runner.start_link({thread_id, "ath_test"})
+      assert Aqua.Runner.whereis(thread_id) == nil
+    end
   end
 
   defp sessions(hash) do

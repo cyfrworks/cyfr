@@ -9,8 +9,8 @@ defmodule Aqua.RunnerTest do
   member's waits; a stop cuts the turn and drops the queue; a card pauses
   the turn and its decision continues it; a runner that starts finds the
   open turns and does what their rows say. A runner's loop dies with it;
-  a runner starts only on a boot that owns the control plane, and never
-  takes a turn another process on this boot holds.
+  a runner starts and handles loop events only on a boot that owns the
+  control plane, and never takes a turn another process on this boot holds.
   """
 
   use ExUnit.Case, async: false
@@ -115,6 +115,40 @@ defmodule Aqua.RunnerTest do
     # The supervisor has answered the runner's exit: restarted it or not.
     _ = :sys.get_state(Aqua.RunnerSupervisor)
     :ok
+  end
+
+  defp lose_ownership(loss) do
+    ownership =
+      case loss do
+        :lost -> :lost
+        :expired -> {:held, DateTime.add(DateTime.utc_now(), -1, :second)}
+      end
+
+    Cyfr.ControlPlane.mark(ownership)
+    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+  end
+
+  defp tape_snapshot(ctx, thread_id, turn_ids, approval_ids \\ []) do
+    turns =
+      for id <- turn_ids do
+        {:ok, turn} = Tape.turn(ctx, id)
+        {:ok, steps} = Tape.steps(ctx, turn)
+        {turn, steps}
+      end
+
+    %{
+      thread: Tape.thread(ctx, thread_id),
+      messages: Threads.messages(ctx, thread_id),
+      turns: turns,
+      approvals: Enum.map(approval_ids, &Tape.approval(ctx, &1))
+    }
+  end
+
+  defp await_retired(runner, ref) do
+    assert_receive {:DOWN, ^ref, :process, ^runner, :normal}, 5_000
+    _ = :sys.get_state(Aqua.RunnerSupervisor)
+    refute Process.alive?(runner)
   end
 
   test "a send is admitted in order, and refused with nothing written", %{
@@ -761,6 +795,177 @@ defmodule Aqua.RunnerTest do
     end
   end
 
+  describe "an existing runner loses control-plane ownership" do
+    for loss <- [:lost, :expired], event <- [:result, :down] do
+      @tag :ownership_loss
+      test "a queued loop #{event} leaves the tape and queued turn unchanged when ownership is #{loss}",
+           %{ctx: ctx, thread: thread} do
+        other = second_member(ctx)
+        script!([{:probe, self()}, reply("first"), reply("second")])
+        {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
+        pids = running!(thread)
+        {:ok, %{turn_id: second}} = Runner.send_message(other, thread.id, "@aqua me too")
+        %{live: %{task: %Task{ref: task_ref}}} = :sys.get_state(pids.runner)
+
+        :sys.replace_state(pids.runner, fn state ->
+          :ok = Runner.unsubscribe(thread.id, ctx.athanor_id)
+          state
+        end)
+
+        runner_ref = Process.monitor(pids.runner)
+        loop_ref = Process.monitor(pids.loop)
+        :ok = :sys.suspend(pids.runner)
+
+        if unquote(event) == :result do
+          send(pids.call, :continue)
+          assert_receive {:DOWN, ^loop_ref, :process, _, :normal}, 60_000
+          assert_receive {:thread, _, {:turn_finished}}, 60_000
+          assert {:ok, %{status: "completed"}} = Tape.turn(ctx, first)
+          {:messages, messages} = Process.info(pids.runner, :messages)
+          assert Enum.any?(messages, &match?({^task_ref, _result}, &1))
+        end
+
+        before = tape_snapshot(ctx, thread.id, [first, second])
+        calls = ScriptedWorker.calls()
+        lose_ownership(unquote(loss))
+
+        if unquote(event) == :down do
+          Process.exit(pids.loop, :kill)
+          assert_receive {:DOWN, ^loop_ref, :process, _, :killed}, 5_000
+        end
+
+        :ok = :sys.resume(pids.runner)
+        await_retired(pids.runner, runner_ref)
+        assert tape_snapshot(ctx, thread.id, [first, second]) == before
+        assert ScriptedWorker.calls() == calls
+        assert {:error, :control_plane_lost} = Runner.ensure(thread.id, ctx.athanor_id)
+
+        Cyfr.ControlPlane.mark(:unclaimed)
+        assert {:ok, successor} = Runner.ensure(thread.id, ctx.athanor_id)
+        refute successor == pids.runner
+
+        wait_until(
+          fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, second)) end,
+          60_000
+        )
+
+        assert {:ok, %{status: "completed"} = first_turn} = Tape.turn(ctx, first)
+        assert first_turn.recovery_attempts == if(unquote(event) == :down, do: 1, else: 0)
+        if unquote(event) == :down, do: assert(first_turn.fence > 1)
+      end
+    end
+
+    for loss <- [:lost, :expired], event <- [:approval, :resume, :expire] do
+      @tag :ownership_loss
+      test "a resolved approval cannot resume on #{event} when ownership is #{loss}",
+           %{ctx: ctx, thread: thread} do
+        script!([
+          call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}),
+          reply("kept it"),
+          reply("second")
+        ])
+
+        {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua keep it")
+        runner = Runner.whereis(thread.id)
+
+        wait_until(fn -> match?(%{paused: %{}}, :sys.get_state(runner)) end, 60_000)
+        {:ok, turn} = Tape.turn(ctx, first)
+        {:ok, [approval]} = Tape.pending_approvals(ctx, turn)
+
+        {:ok, %{turn_id: second}} =
+          Runner.send_message(second_member(ctx), thread.id, "@aqua me too")
+
+        # Resolve with delivery held back: the timer also has to recover a
+        # committed decision whose PubSub notification never arrived.
+        %{paused: %{expiry: expiry}, idle_ref: idle} =
+          :sys.replace_state(runner, fn state ->
+            :ok = Runner.unsubscribe(thread.id, ctx.athanor_id)
+            state
+          end)
+
+        assert {:ok, %{decision: "approved", replayed: false}} =
+                 Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+        before = tape_snapshot(ctx, thread.id, [first, second], [approval.id])
+        calls = ScriptedWorker.calls()
+        runner_ref = Process.monitor(runner)
+        lose_ownership(unquote(loss))
+
+        message =
+          case unquote(event) do
+            :approval -> {:thread, thread.id, {:approval_resolved, %{turn_id: first}}}
+            :resume -> {:resume, first}
+            :expire -> {:expire, first}
+          end
+
+        send(runner, message)
+        await_retired(runner, runner_ref)
+        assert Process.read_timer(expiry) == false
+        assert Process.read_timer(idle) == false
+        assert tape_snapshot(ctx, thread.id, [first, second], [approval.id]) == before
+        assert ScriptedWorker.calls() == calls
+
+        Cyfr.ControlPlane.mark(:unclaimed)
+        assert {:ok, _successor} = Runner.ensure(thread.id, ctx.athanor_id)
+
+        wait_until(
+          fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, second)) end,
+          60_000
+        )
+
+        assert {:ok, %{status: "completed"} = resumed} = Tape.turn(ctx, first)
+        {:ok, steps} = Tape.steps(ctx, resumed)
+        assert [%{outcome: "ok"}] = Enum.filter(steps, &(&1.action == "keep"))
+
+        assert {:ok, %{decision: "approved", replayed: true}} =
+                 Approvals.resolve(ctx, approval.id, %{decision: :approved})
+      end
+    end
+
+    for loss <- [:lost, :expired] do
+      @tag :ownership_loss
+      test "a live loop and its call stop without settling an unknown effect when ownership is #{loss}",
+           %{ctx: ctx, thread: thread} do
+        start_supervised!(
+          {ScriptedWorker,
+           ref: [@model, "catalyst:local.http"],
+           script: [
+             call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+             {:probe, self()},
+             reply("never sent")
+           ]}
+        )
+
+        {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua fetch")
+        pids = running!(thread)
+        runner_ref = Process.monitor(pids.runner)
+        worker_refs = for pid <- [pids.loop, pids.call], do: Process.monitor(pid)
+        before = tape_snapshot(ctx, thread.id, [turn_id])
+        calls = ScriptedWorker.calls()
+        lose_ownership(unquote(loss))
+        send(pids.runner, {:notify, ctx.athanor_id, :athanor_changed, %{}})
+
+        await_retired(pids.runner, runner_ref)
+        for ref <- worker_refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
+        assert tape_snapshot(ctx, thread.id, [turn_id]) == before
+        assert ScriptedWorker.calls() == calls
+
+        Cyfr.ControlPlane.mark(:unclaimed)
+        {:ok, _successor} = Runner.ensure(thread.id, ctx.athanor_id)
+        assert_receive {:thread, _, {:turn_paused, ^turn_id, :uncertain}}, 60_000
+
+        assert {:ok, %{status: "paused", recovery_attempts: 1, fence: fence} = turn} =
+                 Tape.turn(ctx, turn_id)
+
+        assert fence > 1
+        {:ok, steps} = Tape.steps(ctx, turn)
+        assert [%{dispatch_state: "uncertain"}] = Enum.filter(steps, &(&1.action == "get"))
+        send(pids.call, :continue)
+        assert ScriptedWorker.calls() == calls
+      end
+    end
+  end
+
   test "a turn another process on this boot holds is left to it, and recovered once it is gone while this boot owns the control plane",
        %{ctx: ctx, thread: thread} do
     other = second_member(ctx)
@@ -790,25 +995,26 @@ defmodule Aqua.RunnerTest do
     assert %{running: false, queued: 1} = Runner.state(thread.id, ctx.athanor_id)
     assert {:ok, %{status: "accepted"}} = Tape.turn(ctx, second)
 
-    # The holder goes while the boot does not own the control plane: nothing
-    # is taken, and the next recovery tick asks again.
-    Cyfr.ControlPlane.mark(:lost)
-    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+    # The holder goes after ownership loss. The runner retires, leaving
+    # both turns for a runner admitted on the owning boot.
+    before = tape_snapshot(ctx, thread.id, [turn.id, second])
+    runner_ref = Process.monitor(runner)
+    lose_ownership(:lost)
 
     refs = for pid <- [holder, call], do: Process.monitor(pid)
     Process.exit(holder, :kill)
     for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
-    _ = :sys.get_state(runner)
+    await_retired(runner, runner_ref)
 
-    assert {:ok, %{status: "running", fence: 1, recovery_attempts: 0}} = Tape.turn(ctx, turn.id)
-    assert %{live: nil, queue: [%{turn_id: ^second}]} = :sys.get_state(runner)
+    assert tape_snapshot(ctx, thread.id, [turn.id, second]) == before
 
     Cyfr.ControlPlane.mark(:unclaimed)
-    send(runner, {:recover, turn.id})
+    {:ok, successor} = Runner.ensure(thread.id, ctx.athanor_id)
+    refute successor == runner
 
     assert_receive {:thread, _, {:turn_finished}}, 60_000
     assert_receive {:thread, _, {:turn_finished}}, 60_000
-    assert Runner.whereis(thread.id) == runner
+    assert Runner.whereis(thread.id) == successor
     assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, turn.id)
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, second)
   end
