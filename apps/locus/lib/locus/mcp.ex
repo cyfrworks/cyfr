@@ -98,8 +98,14 @@ defmodule Locus.MCP do
   def handle("build", %Context{} = _ctx, %{"action" => "toolchains"}) do
     if Locus.BuilderClient.enabled?() do
       case Locus.BuilderClient.toolchains() do
-        {:ok, toolchains} -> {:ok, %{toolchains: toolchains}}
-        {:error, :builder_unreachable} -> {:error, {:unavailable, "The builder service"}}
+        {:ok, toolchains} ->
+          {:ok, %{toolchains: toolchains}}
+
+        {:error, :builder_unreachable} ->
+          {:error, {:unavailable, "The builder service"}}
+
+        {:error, {:builder_protocol_mismatch, protocol, release}} ->
+          {:error, "Builder: " <> Locus.BuilderProtocol.mismatch(protocol, release)}
       end
     else
       {:ok, %{toolchains: Locus.Builder.available_toolchains()}}
@@ -589,6 +595,9 @@ defmodule Locus.MCP do
 
       {:error, {:builder_failed, message}} ->
         {:error, "Builder: #{message}"}
+
+      {:error, {:builder_protocol_mismatch, protocol, release}} ->
+        {:error, "Builder: " <> Locus.BuilderProtocol.mismatch(protocol, release)}
 
       {:error, :builder_unreachable} ->
         Logger.warning(

@@ -13,6 +13,11 @@ defmodule Locus.BuilderClient do
   caller cannot tell which path built the artifact. Progress cannot
   stream over one POST; the builder's log lines are replayed into
   `on_progress` at completion.
+
+  A builder at another protocol (`Locus.BuilderProtocol`) is refused as
+  `{:builder_protocol_mismatch, builder_protocol, builder_release}`, its
+  own values or nil when it reported none, whether it refused this
+  server's request or answered in a shape this release does not read.
   """
 
   require Logger
@@ -33,20 +38,28 @@ defmodule Locus.BuilderClient do
   shape of `Locus.Builder.available_toolchains/0`: every language this
   node speaks, unavailable when the builder does not name it.
   """
-  @spec toolchains() :: {:ok, map()} | {:error, :builder_unreachable}
+  @spec toolchains() ::
+          {:ok, map()}
+          | {:error, :builder_unreachable | {:builder_protocol_mismatch, term(), term()}}
   def toolchains do
+    protocol = Locus.BuilderProtocol.version()
+
     case Req.request(
            method: :get,
            url: url() <> "/health",
            receive_timeout: 5_000,
            max_retries: 0
          ) do
-      {:ok, %Req.Response{status: 200, body: %{"toolchains" => reported}}}
+      {:ok,
+       %Req.Response{status: 200, body: %{"protocol" => ^protocol, "toolchains" => reported}}}
       when is_map(reported) ->
         {:ok,
          Map.new(Locus.Builder.languages(), fn language ->
            {language, toolchain(reported[Atom.to_string(language)])}
          end)}
+
+      {:ok, %Req.Response{status: 200, body: %{"toolchains" => _} = body}} ->
+        {:error, mismatch(body)}
 
       other ->
         Logger.error("[Locus.BuilderClient] builder health unreadable: #{inspect(other)}")
@@ -103,7 +116,12 @@ defmodule Locus.BuilderClient do
       method: :post,
       url: url() <> "/build",
       json: body,
-      headers: [{"authorization", "Bearer " <> (token() || "")}],
+      headers: [
+        {"authorization", "Bearer " <> (token() || "")},
+        {Locus.BuilderProtocol.protocol_header(),
+         Integer.to_string(Locus.BuilderProtocol.version())},
+        {Locus.BuilderProtocol.release_header(), Locus.BuilderProtocol.release()}
+      ],
       receive_timeout: @receive_timeout_ms,
       max_retries: 0,
       compressed: false,
@@ -134,20 +152,37 @@ defmodule Locus.BuilderClient do
     end
   end
 
-  defp handle_response(200, %{"ok" => true} = built, on_progress) do
+  @doc false
+  # Public for its test: how each answer of the builder is read.
+  @spec handle_response(integer(), map(), (atom(), String.t() -> any())) ::
+          {:ok, map()} | {:error, term()}
+  def handle_response(401, _body, _on_progress), do: {:error, :builder_unauthorized}
+
+  # Not JSON: a proxy's or a server's own error page, not a builder's answer.
+  def handle_response(status, body, _on_progress) when body == %{},
+    do: {:error, {:builder_unexpected_status, status}}
+
+  def handle_response(status, body, on_progress) do
+    if Map.get(body, "protocol") == Locus.BuilderProtocol.version(),
+      do: handle_current(status, body, on_progress),
+      else: {:error, mismatch(body)}
+  end
+
+  defp handle_current(200, %{"ok" => true} = built, on_progress) do
     replay_logs(built, on_progress)
     decode_result(built)
   end
 
-  defp handle_response(422, %{"error" => error} = built, on_progress) do
+  defp handle_current(status, %{"error" => error} = built, on_progress)
+       when status in [422, 429] do
     replay_logs(built, on_progress)
     {:error, {:builder_failed, error}}
   end
 
-  defp handle_response(401, _body, _on_progress), do: {:error, :builder_unauthorized}
-
-  defp handle_response(status, _body, _on_progress),
+  defp handle_current(status, _body, _on_progress),
     do: {:error, {:builder_unexpected_status, status}}
+
+  defp mismatch(body), do: {:builder_protocol_mismatch, body["protocol"], body["version"]}
 
   defp decode_json_body(raw) do
     case Jason.decode(raw) do
@@ -210,7 +245,9 @@ defmodule Locus.BuilderClient do
     do: {:error, {:builder_malformed_result, Map.keys(built)}}
 
   # A lock becomes part of the unit's sources, so it is held to the source
-  # ceiling.
+  # ceiling. A build that left none answers without one.
+  defp lockfile(nil), do: {:ok, nil}
+
   defp lockfile(lockfile) when is_binary(lockfile) do
     if byte_size(lockfile) <= Locus.Builder.max_source_bytes(),
       do: {:ok, lockfile},

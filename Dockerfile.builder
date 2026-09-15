@@ -14,7 +14,7 @@
 
 # ---- cyfr-spawn, the process helper: a static Go binary, pinned to the Go
 # release apps/spawn/go.mod names ----
-FROM golang:1.26.5-alpine AS spawn
+FROM golang:1.26.6-alpine AS spawn
 WORKDIR /src
 COPY apps/spawn/go.mod apps/spawn/go.sum ./
 RUN go mod download
@@ -57,7 +57,11 @@ LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
 # FSL-licensed modules.
 LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
 
-RUN apt-get update && apt-get install -y \
+# Debian publishes a fixed package before the base image is rebuilt around
+# it, so take what the archive has at build time: the image scan in
+# test.yml's builder-image job and docker.yml fails on a fixable HIGH or
+# CRITICAL.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
     openssl \
     libncurses6 \

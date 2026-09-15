@@ -297,6 +297,17 @@ jobs:
       - name: Build isolation and uid reuse
         run: python3 tests/builder-image/isolation.py cyfr-builder:smoke
 
+      # The same scan docker.yml runs before publishing the builder image.
+      - name: Scan the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cyfr-builder:smoke
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+
   bridge-e2e:
     name: MCP bridge failures and leaks (cyfr + mcp-bridge images)
     runs-on: ubuntu-latest

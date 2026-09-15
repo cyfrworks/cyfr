@@ -197,6 +197,19 @@ if config_env() != :test do
   # crates the scaffold depends on; unset, a build fetches every crate.
   config :cyfr, :build_cargo_seed, env_str.("CYFR_BUILD_CARGO_SEED", nil)
 
+  # A build's deadline in milliseconds, where the build runs (the builder
+  # container, or this server for in-process builds): past it every process
+  # the build started is killed and the build fails as timed out. Default
+  # 270000, 30 s under the MCP tool layer's five-minute limit on a
+  # synchronous compile; accepted 1000..600000, since a server waits 12
+  # minutes for its builder's answer.
+  if build_timeout_ms = env_int.("CYFR_BUILD_TIMEOUT_MS", nil) do
+    unless build_timeout_ms in 1_000..600_000,
+      do: raise("CYFR_BUILD_TIMEOUT_MS must be within 1000..600000, got #{build_timeout_ms}")
+
+    config :cyfr, :build_timeout_ms, build_timeout_ms
+  end
+
   # Whether this server builds components at all — `build.compile` on every
   # surface. An appliance that only runs what it pulled turns it off, and
   # then needs no builder container to boot with authentication on.

@@ -71,8 +71,8 @@ services:
     # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
     # port and the probed path have one author.
 
-  # Optional builder: `docker compose --profile builder up -d`.
-  # Set CYFR_BUILDER_URL=http://builder:4100 and CYFR_BUILDER_TOKEN in .env.
+  # Optional builder: `docker compose --profile builder up -d`, or `cyfr up`
+  # once .env sets CYFR_BUILDER_URL=http://builder:4100 and CYFR_BUILDER_TOKEN.
   # Compose forwards the token; put builder-only overrides in .env.builder.
   builder:
     container_name: cyfr-builder

@@ -148,6 +148,7 @@ defmodule Locus.Builder do
   - `opts` - Keyword options:
     - `:target_type` - Component type (`:reagent`, `:catalyst`, `:formula`, `:tincture`)
     - `:timeout_ms` - The build's deadline, in milliseconds. Defaults to
+      `:cyfr, :build_timeout_ms` (`CYFR_BUILD_TIMEOUT_MS`), or else
       `#{@default_timeout_ms}`, 30 s under the MCP tool layer's five-minute
       brutal kill, so an over-budget build ends here as
       `{:error, :compilation_timeout}` with its slot released rather than
@@ -182,7 +183,10 @@ defmodule Locus.Builder do
          :ok <- validate_source_files(source_files, language),
          :ok <- check_toolchain(language) do
       settings = %{
-        timeout_ms: Keyword.get(opts, :timeout_ms, @default_timeout_ms),
+        timeout_ms:
+          Keyword.get_lazy(opts, :timeout_ms, fn ->
+            Application.get_env(:cyfr, :build_timeout_ms, @default_timeout_ms)
+          end),
         on_progress: Keyword.get(opts, :on_progress, fn _phase, _message -> :ok end),
         resolve?: Keyword.get(opts, :resolve, false) == true
       }

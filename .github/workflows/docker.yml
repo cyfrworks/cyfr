@@ -59,8 +59,33 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "arch=$arch" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push by digest
-        id: build
+      - name: Build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          load: true
+          tags: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }}
+          cache-to: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }},mode=max
+
+      # The builder image is scanned before it is pushed: a fixable HIGH or
+      # CRITICAL finding fails the release. The findings .trivyignore.yaml
+      # lists are npm's bundled dependencies, which the builder runs for
+      # tincture builds as the bridge runs them for its backends.
+      - name: Scan the builder image
+        if: matrix.image == 'cyfr-builder'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+
+      - name: Push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -69,7 +94,6 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
           platforms: ${{ matrix.platform }}
           cache-from: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }}
-          cache-to: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }},mode=max
 
   merge:
     if: github.repository == 'cyfrworks/cyfr'

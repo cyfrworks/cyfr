@@ -4,9 +4,9 @@
 
 A Stack runs docker-compose.yml's `builder` service (profile `builder`)
 layered with compose.builder.yml, which adds only the image under test, a
-loopback port, the residue canary and the pool's uid range. Everything
-else — capabilities, read-only root, `ipc: none`, tmpfs mounts, limits —
-is the shipped service.
+loopback port, the residue canary, the pool's uid range and the build
+deadline. Everything else — capabilities, read-only root, `ipc: none`,
+tmpfs mounts, limits — is the shipped service.
 """
 
 import base64
@@ -49,7 +49,7 @@ def build_canary():
         "docker", "run", "--rm",
         "-v", f"{os.path.join(ROOT, 'tests', 'fixtures')}:/src:ro", "-v", f"{out}:/out",
         "-e", "CGO_ENABLED=0", "-e", "GOCACHE=/tmp/go-cache", "-e", "GOFLAGS=-buildvcs=false",
-        "-w", "/src", "golang:1.26.5-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
+        "-w", "/src", "golang:1.26.6-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
     )
     return out
 
@@ -71,9 +71,11 @@ class Stack:
             "CANARY_DIR": self.canary_dir,
             "CYFR_BUILDER_TOKEN": TOKEN,
             "BUILD_POOL": self.pool,
+            "CYFR_BUILD_TIMEOUT_MS": str(self.timeout_ms or ""),
         }
 
     pool = f"{POOL_FIRST}-{POOL_LAST}"
+    timeout_ms = None
 
     def compose(self, *args, check=True):
         return run(
@@ -84,9 +86,10 @@ class Stack:
             env=self.env(), check=check,
         )
 
-    def up(self, pool=f"{POOL_FIRST}-{POOL_LAST}"):
-        """(Re)creates the builder with this pool and waits for /health."""
+    def up(self, pool=f"{POOL_FIRST}-{POOL_LAST}", timeout_ms=None):
+        """(Re)creates the builder with this pool and build deadline and waits for /health."""
         self.pool = pool
+        self.timeout_ms = timeout_ms
         self.compose("up", "--detach", "--no-build", "--force-recreate", "builder")
         self.container = self.compose("ps", "--quiet", "builder").stdout.strip()
         address = self.compose("port", "builder", "4100").stdout.strip().splitlines()[0]
@@ -137,7 +140,9 @@ class Stack:
         """The entries of the home root, read as root inside the container."""
         return self.exec(f"ls -A {HOME_ROOT}").stdout.split()
 
-    def build(self, sources, language, target_type, resolve=False):
+    def build(self, sources, language, target_type, resolve=False, protocol=None):
+        """POSTs a build; `protocol` is the (protocol, release) presented, the builder's own by default."""
+        protocol = protocol or (self.health["protocol"], self.health["version"])
         body = json.dumps({
             "source_files": {path: base64.b64encode(text.encode()).decode() for path, text in sources.items()},
             "language": language,
@@ -146,7 +151,12 @@ class Stack:
         }).encode()
         request = urllib.request.Request(
             f"{self.base}/build", data=body, method="POST",
-            headers={"authorization": f"Bearer {TOKEN}", "content-type": "application/json"},
+            headers={
+                "authorization": f"Bearer {TOKEN}",
+                "content-type": "application/json",
+                "cyfr-builder-protocol": str(protocol[0]),
+                "cyfr-version": protocol[1],
+            },
         )
         try:
             with urllib.request.urlopen(request, timeout=900) as response:

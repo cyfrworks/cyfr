@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -123,14 +124,71 @@ func TestImagesFromCompose(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
 		t.Fatal(err)
 	}
-	got := imagesFromCompose(path)
-	want := []string{"ghcr.io/cyfrworks/cyfr:latest"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("images mismatch\n  got:  %v\n  want: %v", got, want)
+	for _, tc := range []struct {
+		profiles []string
+		want     []string
+	}{
+		{nil, []string{"ghcr.io/cyfrworks/cyfr:latest"}},
+		{[]string{"builder"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-builder:latest"}},
+		{[]string{"tls", "builder"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-builder:latest"}},
+		{[]string{"other"}, []string{"ghcr.io/cyfrworks/cyfr:latest"}},
+	} {
+		got := imagesFromCompose(path, tc.profiles)
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("profiles %v: images mismatch\n  got:  %v\n  want: %v", tc.profiles, got, tc.want)
+		}
 	}
 
-	if imagesFromCompose(filepath.Join(dir, "missing.yml")) != nil {
+	if imagesFromCompose(filepath.Join(dir, "missing.yml"), nil) != nil {
 		t.Error("expected nil for a missing file")
+	}
+}
+
+func TestComposeProfilesFollowTheProjectEnv(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	cases := []struct {
+		body string
+		want []string
+	}{
+		{"", nil},
+		{"CYFR_BEHIND_PROXY=true\n", []string{"tls"}},
+		{"CYFR_BUILDER_URL=http://builder:4100\n", []string{"builder"}},
+		{"CYFR_BEHIND_PROXY=yes\nCYFR_BUILDER_URL=\"http://builder:4100\"\n", []string{"tls", "builder"}},
+		{"# CYFR_BUILDER_URL=http://builder:4100\n", nil},
+		{"CYFR_BUILDER_URL=\n", nil},
+		{"CYFR_BUILDER_URL=https://builds.example.com\n", nil},
+	}
+	for _, tc := range cases {
+		if err := os.WriteFile(path, []byte(tc.body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if got := composeProfiles(path); strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("composeProfiles(%q) = %v, want %v", tc.body, got, tc.want)
+		}
+	}
+	if got := composeProfiles(filepath.Join(dir, "missing")); got != nil {
+		t.Errorf("a missing .env selects %v", got)
+	}
+
+	if got := profileArgs([]string{"tls", "builder"}); strings.Join(got, " ") != "--profile tls --profile builder" {
+		t.Errorf("profileArgs = %v", got)
+	}
+}
+
+// The shipped compose file and .env.example: a project that points builds at
+// the builder service pulls and starts the builder image.
+func TestShippedComposePullsTheBuilderWhenBuildsUseIt(t *testing.T) {
+	compose := filepath.Join("..", "..", "..", "docker-compose.yml")
+	if got := imagesFromCompose(compose, nil); slices.Contains(got, "ghcr.io/cyfrworks/cyfr-builder:latest") {
+		t.Errorf("the builder image is pulled without its profile: %v", got)
+	}
+	env := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(env, []byte("CYFR_BUILDER_URL=http://builder:4100\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := imagesFromCompose(compose, composeProfiles(env)); !slices.Contains(got, "ghcr.io/cyfrworks/cyfr-builder:latest") {
+		t.Errorf("a project using the builder service does not pull its image: %v", got)
 	}
 }
 

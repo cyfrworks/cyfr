@@ -106,7 +106,7 @@ export function buildCanary() {
     "-v", `${dir}:/out`,
     "-e", "CGO_ENABLED=0", "-e", "GOCACHE=/tmp/go-cache", "-e", "GOFLAGS=-buildvcs=false",
     "-w", "/src",
-    "golang:1.26.5-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
+    "golang:1.26.6-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
   ]);
   return dir;
 }

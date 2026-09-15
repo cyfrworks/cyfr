@@ -51,6 +51,8 @@ defmodule Locus.BuilderToolchainsTest do
     url =
       serve_health(%{
         "ok" => true,
+        "protocol" => Locus.BuilderProtocol.version(),
+        "version" => Locus.BuilderProtocol.release(),
         "toolchains" => %{
           "rust" => %{
             "available" => true,
@@ -67,6 +69,23 @@ defmodule Locus.BuilderToolchainsTest do
 
     assert toolchains.rust == %{available: true, command: "cargo-component", description: "Rust"}
     assert toolchains.javascript.available == false
+  end
+
+  test "a builder at another protocol, or older than the handshake, names both ends' versions" do
+    for {body, named} <- [
+          {%{"ok" => true, "toolchains" => %{}, "protocol" => 0, "version" => "0.1.0"},
+           "builder protocol 0 (release 0.1.0)"},
+          {%{"ok" => true, "toolchains" => %{}}, "no builder protocol"}
+        ] do
+      Application.put_env(:cyfr, :builder_url, serve_health(body))
+
+      assert {:error, message} =
+               MCP.handle("build", Sanctum.TestContext.local(), %{"action" => "toolchains"})
+
+      assert message =~ named
+      assert message =~ "this server speaks builder protocol #{Locus.BuilderProtocol.version()}"
+      assert message =~ Locus.BuilderProtocol.release()
+    end
   end
 
   test "a builder that cannot be reached is unavailable" do

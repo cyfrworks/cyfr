@@ -13,13 +13,16 @@ defmodule Locus.BuilderService do
   The client half is `Locus.BuilderClient`, selected by
   `CYFR_BUILDER_URL` on the server node.
 
-  The contract is deliberately small: `POST /build` carries the source
-  map (base64 values), the language and the target type; the response
-  carries the compiled bytes (or a tincture's output files), the digest,
-  and the build log lines. Progress cannot stream over one POST — the
-  client replays the returned log lines to its own progress sink at
-  completion. Auth is one static bearer (`CYFR_BUILDER_TOKEN`), compared
-  constant-time; the compose network is internal-only on top.
+  The contract is deliberately small (`Locus.BuilderProtocol`): `POST
+  /build` carries the source map (base64 values), the language and the
+  target type; the response carries the compiled bytes (or a tincture's
+  output files), the digest, and the build log lines. Progress cannot
+  stream over one POST — the client replays the returned log lines to its
+  own progress sink at completion. Auth is one static bearer
+  (`CYFR_BUILDER_TOKEN`), compared constant-time; the compose network is
+  internal-only on top. A request at another protocol is refused with 409
+  before its body is read, and every answer names this builder's protocol
+  and release.
   """
 
   use Plug.Router
@@ -35,6 +38,7 @@ defmodule Locus.BuilderService do
   # until this ran first the concurrency cap bounded toolchain processes but
   # not memory, on a port that binds 0.0.0.0.
   plug(:authenticate)
+  plug(:handshake)
   plug(Plug.Parsers, parsers: [:json], json_decoder: Jason, length: @max_body_bytes)
   plug(:dispatch)
 
@@ -57,6 +61,22 @@ defmodule Locus.BuilderService do
         |> halt()
     end
   end
+
+  defp handshake(%Plug.Conn{request_path: "/build"} = conn, _opts) do
+    protocol = List.first(get_req_header(conn, Locus.BuilderProtocol.protocol_header()))
+
+    if protocol == Integer.to_string(Locus.BuilderProtocol.version()) do
+      conn
+    else
+      release = List.first(get_req_header(conn, Locus.BuilderProtocol.release_header()))
+
+      conn
+      |> send_json(409, %{ok: false, error: Locus.BuilderProtocol.refusal(protocol, release)})
+      |> halt()
+    end
+  end
+
+  defp handshake(conn, _opts), do: conn
 
   post "/build" do
     with {:ok, source_files, language, target_type, resolve?} <- decode_request(conn.body_params),
@@ -258,6 +278,12 @@ defmodule Locus.BuilderService do
   defp render_reason(reason), do: "Compilation error: #{inspect(reason)}"
 
   defp send_json(conn, status, payload) do
+    payload =
+      Map.merge(payload, %{
+        protocol: Locus.BuilderProtocol.version(),
+        version: Locus.BuilderProtocol.release()
+      })
+
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(payload))
