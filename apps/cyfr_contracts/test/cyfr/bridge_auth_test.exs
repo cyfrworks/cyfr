@@ -5,8 +5,9 @@ defmodule Cyfr.BridgeAuthTest do
   @moduledoc """
   The server's half of the bridge authentication reproduces every shared
   vector (`tests/fixtures/bridge_auth.json`, which the bridge's suite reads
-  too): keys, canonical strings, headers and sealed values; a sealed value
-  opens for its owner and bridge lifetime only; an invalid field is refused.
+  too): keys, canonical strings, headers, header parsing and sealed values;
+  a sealed value opens for its owner and bridge lifetime only; a valid field
+  is accepted, and an invalid field or a malformed header is refused.
   """
   use ExUnit.Case, async: true
 
@@ -31,6 +32,9 @@ defmodule Cyfr.BridgeAuthTest do
   end
 
   defp hex(bytes), do: Base.encode16(bytes, case: :lower)
+
+  defp atom_keys(map),
+    do: Map.new(map, fn {key, value} -> {String.to_existing_atom(key), value} end)
 
   test "keys derive as the vectors say", %{root: root, owner: owner} do
     assert hex(BridgeAuth.control_key(root)) == @vectors["control_key_hex"]
@@ -83,6 +87,25 @@ defmodule Cyfr.BridgeAuthTest do
     assert {:error, :malformed} = BridgeAuth.parse_header(:control, v["header"])
   end
 
+  test "every accepted header parses as its kind to its fields and MAC" do
+    for %{"kind" => kind, "header" => header, "fields" => fields, "mac" => mac} <-
+          @vectors["header_parse"]["accepted"] do
+      expected = atom_keys(fields)
+
+      assert {:ok, ^expected, ^mac} =
+               BridgeAuth.parse_header(String.to_existing_atom(kind), header),
+             header
+    end
+  end
+
+  test "every malformed header is refused as its kind" do
+    for %{"kind" => kind, "header" => header} <- @vectors["header_parse"]["malformed"] do
+      assert {:error, :malformed} =
+               BridgeAuth.parse_header(String.to_existing_atom(kind), header),
+             inspect(header)
+    end
+  end
+
   test "every valid root text decodes to the root, and every invalid one is refused",
        %{root: root} do
     for text <- @vectors["root_text"]["valid"] do
@@ -112,8 +135,16 @@ defmodule Cyfr.BridgeAuthTest do
     assert {:error, :unsealable} = BridgeAuth.open(key, owner, v["boot"], "not-sealed")
   end
 
-  test "every invalid field is refused", %{root: root, owner: owner} do
+  test "every valid field is accepted and every invalid field is refused",
+       %{root: root, owner: owner} do
     invoke = Map.merge(owner, %{boot: "bb", ts: 1, nonce: "n"})
+
+    for %{"field" => field, "value" => value} <- @vectors["valid_fields"] do
+      name = String.to_existing_atom(field)
+
+      assert {:ok, _canonical} =
+               BridgeAuth.canonical(:invoke, Map.put(invoke, name, value), "{}")
+    end
 
     for %{"field" => field, "value" => value} <- @vectors["invalid_fields"] do
       name = String.to_existing_atom(field)

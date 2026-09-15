@@ -24,10 +24,11 @@ defmodule Cyfr.MacEnvelope do
       values only.
 
   Every field value is 1 to 256 bytes of printable ASCII without spaces. An
-  `:integer` field takes a non-negative integer and is written in decimal
-  without leading zeros; a `:string` field takes a string. A value outside
-  that is `{:error, {:invalid_field, name}}`, so no canonical string, label
-  or header can be split ambiguously.
+  `:integer` field takes an integer from 0 to 2^53 − 1 and is written in
+  decimal without leading zeros; a `:string` field takes a string, whatever
+  it spells. A value outside that is `{:error, {:invalid_field, name}}`, so
+  no canonical string, label or header can be split ambiguously, and every
+  party reads an integer field as the same number.
 
   An envelope (`t:t/0`) describes one message type: its `prefix`, its `kind`
   and its ordered `fields`. A field's header name is its atom's name unless
@@ -55,6 +56,8 @@ defmodule Cyfr.MacEnvelope do
   @version "v1"
   @text ~r/\A[\x21-\x7E]{1,256}\z/
   @decimal ~r/\A(0|[1-9][0-9]*)\z/
+  # 2^53 − 1: every integer up to it is exact in an IEEE 754 double.
+  @max_integer 9_007_199_254_740_991
 
   @doc "The key HMAC-SHA256 of `root` over `label` derives."
   @spec derive(binary(), String.t()) :: binary()
@@ -95,9 +98,13 @@ defmodule Cyfr.MacEnvelope do
   end
 
   @doc """
-  A header's fields and MAC. Anything but exactly one well-formed `v1`
-  header of the envelope's kind — every field once, in any order, and no
-  other — is `{:error, :malformed}`. Integer fields come back as integers.
+  A header's fields and MAC. A header is `v1` followed by `name=value`
+  tokens, each separated by one space: `kind` naming the envelope's kind,
+  every field once under its header name, and `mac`, in any order and
+  nothing else. A name is everything before a token's first `=`; a field
+  value and the MAC are valid field text, and an integer field's value is
+  its decimal spelling. Anything else is `{:error, :malformed}`. Integer
+  fields come back as integers.
   """
   @spec parse(t(), term()) :: {:ok, message(), String.t()} | {:error, :malformed}
   def parse(%__MODULE__{} = envelope, header) when is_binary(header) do
@@ -200,7 +207,7 @@ defmodule Cyfr.MacEnvelope do
     end
   end
 
-  defp write_value(:integer, value) when is_integer(value) and value >= 0,
+  defp write_value(:integer, value) when is_integer(value) and value in 0..@max_integer,
     do: text(Integer.to_string(value))
 
   defp write_value(:string, value) when is_binary(value), do: text(value)
@@ -239,8 +246,12 @@ defmodule Cyfr.MacEnvelope do
   defp read_value(:string, value), do: text(value)
 
   defp read_value(:integer, value) do
-    if Regex.match?(@text, value) and Regex.match?(@decimal, value),
-      do: {:ok, String.to_integer(value)},
-      else: :error
+    with {:ok, text} <- text(value),
+         true <- Regex.match?(@decimal, text),
+         integer when integer <= @max_integer <- String.to_integer(text) do
+      {:ok, integer}
+    else
+      _ -> :error
+    end
   end
 end

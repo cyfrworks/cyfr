@@ -12,7 +12,9 @@
 // signature is the unpadded base64url HMAC-SHA256 of a canonical string —
 // the kind, its fields, and the hex SHA-256 of the raw body, one per line —
 // carried in `Cyfr-Bridge-Auth: v1 kind=<kind> name=value … mac=<mac>`.
-// Every field is 1 to 256 bytes of printable ASCII without spaces.
+// Every field is 1 to 256 bytes of printable ASCII without spaces: a string
+// field is a string, whatever it spells; an integer field is an integer from
+// 0 to 2^53 − 1, written in decimal without leading zeros.
 
 import {
   createCipheriv,
@@ -24,23 +26,25 @@ import {
 
 const VERSION = "v1";
 const FIELD = /^[\x21-\x7E]{1,256}$/;
-const INTEGER = /^(0|[1-9][0-9]{0,19})$/;
+const DECIMAL = /^(0|[1-9][0-9]*)$/;
+const MAX_INTEGER = BigInt(Number.MAX_SAFE_INTEGER);
 
-const INVOKE_FIELDS = ["athanor", "server", "generation", "epoch", "boot", "ts", "nonce"];
-const CONTROL_FIELDS = ["generation", "seq", "cyfr_boot", "boot", "ts"];
+const KIND_FIELDS = new Map([
+  ["invoke", ["athanor", "server", "generation", "epoch", "boot", "ts", "nonce"]],
+  ["control", ["generation", "seq", "cyfr_boot", "boot", "ts"]],
+]);
 const INTEGER_FIELDS = new Set(["generation", "epoch", "ts", "seq"]);
-const HEADER_NAMES = {
-  athanor: "athanor",
-  server: "server",
-  generation: "gen",
-  epoch: "epoch",
-  boot: "boot",
-  ts: "ts",
-  nonce: "nonce",
-  seq: "seq",
-  cyfr_boot: "cyfr_boot",
-};
-const FIELD_NAMES = Object.fromEntries(Object.entries(HEADER_NAMES).map(([field, header]) => [header, field]));
+const HEADER_NAMES = new Map([
+  ["athanor", "athanor"],
+  ["server", "server"],
+  ["generation", "gen"],
+  ["epoch", "epoch"],
+  ["boot", "boot"],
+  ["ts", "ts"],
+  ["nonce", "nonce"],
+  ["seq", "seq"],
+  ["cyfr_boot", "cyfr_boot"],
+]);
 
 export class InvalidField extends Error {
   constructor(field) {
@@ -65,12 +69,23 @@ function rootKey(root) {
   return root;
 }
 
+// A message field's text: a string field's string, or an integer field's
+// number in decimal. Anything else throws InvalidField(name).
 function field(message, name) {
   const value = message[name];
-  const text = typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? String(value) : value;
+  const text = INTEGER_FIELDS.has(name) ? integerText(value) : value;
   if (typeof text !== "string" || !FIELD.test(text)) throw new InvalidField(name);
-  if (INTEGER_FIELDS.has(name) && !INTEGER.test(text)) throw new InvalidField(name);
   return text;
+}
+
+const integerText = (value) => (Number.isSafeInteger(value) && value >= 0 ? String(value) : null);
+
+// A header value read as a field: a string field's text, or an integer
+// field's decimal spelling as a number. Anything else is null.
+function readField(name, text) {
+  if (typeof text !== "string" || !FIELD.test(text)) return null;
+  if (!INTEGER_FIELDS.has(name)) return text;
+  return DECIMAL.test(text) && BigInt(text) <= MAX_INTEGER ? Number(text) : null;
 }
 
 const values = (message, names) => names.map((name) => field(message, name));
@@ -87,7 +102,7 @@ export function ownerKey(root, owner) {
 }
 
 export function canonical(kind, message, body) {
-  const names = kind === "invoke" ? INVOKE_FIELDS : kind === "control" ? CONTROL_FIELDS : null;
+  const names = KIND_FIELDS.get(kind);
   if (!names) throw new InvalidField("kind");
   const bodyHash = createHash("sha256").update(body).digest("hex");
   return [`cyfr-bridge/${VERSION}/${kind}`, ...values(message, names), bodyHash].join("\n");
@@ -95,48 +110,44 @@ export function canonical(kind, message, body) {
 
 const mac = (key, text) => createHmac("sha256", key).update(text).digest("base64url");
 
-function header(kind, key, message, names, body) {
-  const pairs = names.map((name) => `${HEADER_NAMES[name]}=${field(message, name)}`);
+function header(kind, key, message, body) {
+  const pairs = KIND_FIELDS.get(kind).map((name) => `${HEADER_NAMES.get(name)}=${field(message, name)}`);
   return [`${VERSION} kind=${kind}`, ...pairs, `mac=${mac(key, canonical(kind, message, body))}`].join(" ");
 }
 
-export const invokeHeader = (key, invoke, body) => header("invoke", key, invoke, INVOKE_FIELDS, body);
-export const controlHeader = (key, control, body) => header("control", key, control, CONTROL_FIELDS, body);
+export const invokeHeader = (key, invoke, body) => header("invoke", key, invoke, body);
+export const controlHeader = (key, control, body) => header("control", key, control, body);
 
-// A header's kind, fields and MAC, or null for anything that is not exactly
-// one well-formed v1 header: every expected field once, no other.
-export function parseHeader(text) {
-  if (typeof text !== "string") return null;
+// A header of `kind` ("invoke" or "control") as `{kind, fields, mac}`, or
+// null. A header is v1 followed by name=value tokens, each separated by one
+// space: `kind` naming the kind, every field of the kind once under its
+// header name, and `mac`, in any order and nothing else. A name is everything
+// before a token's first `=`; a field value and the MAC are valid field text,
+// and an integer field's value is its decimal spelling. Integer fields come
+// back as numbers.
+export function parseHeader(kind, text) {
+  const names = KIND_FIELDS.get(kind);
+  if (!names || typeof text !== "string") return null;
   const [version, ...tokens] = text.split(" ");
   if (version !== VERSION) return null;
 
-  const pairs = {};
+  const pairs = new Map();
   for (const token of tokens) {
     const at = token.indexOf("=");
-    if (at <= 0) return null;
-    const name = token.slice(0, at);
-    if (Object.hasOwn(pairs, name)) return null;
-    pairs[name] = token.slice(at + 1);
+    if (at <= 0 || pairs.has(token.slice(0, at))) return null;
+    pairs.set(token.slice(0, at), token.slice(at + 1));
   }
-
-  const kind = pairs.kind;
-  const names = kind === "invoke" ? INVOKE_FIELDS : kind === "control" ? CONTROL_FIELDS : null;
-  if (!names || !FIELD.test(pairs.mac ?? "")) return null;
-  if (Object.keys(pairs).length !== names.length + 2) return null;
+  if (pairs.size !== names.length + 2 || pairs.get("kind") !== kind || !FIELD.test(pairs.get("mac") ?? "")) {
+    return null;
+  }
 
   const fields = {};
   for (const name of names) {
-    const value = pairs[HEADER_NAMES[name]];
-    try {
-      fields[name] = field({ [name]: value }, name);
-    } catch {
-      return null;
-    }
-    if (INTEGER_FIELDS.has(name)) fields[name] = Number(fields[name]);
+    const value = readField(name, pairs.get(HEADER_NAMES.get(name)));
+    if (value === null) return null;
+    fields[name] = value;
   }
-  if (Object.keys(pairs).some((name) => name !== "kind" && name !== "mac" && !FIELD_NAMES[name])) return null;
-
-  return { kind, fields, mac: pairs.mac };
+  return { kind, fields, mac: pairs.get("mac") };
 }
 
 // Whether `parsed` (from parseHeader) is signed over `body` with `key`,

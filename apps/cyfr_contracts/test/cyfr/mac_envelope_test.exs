@@ -69,6 +69,8 @@ defmodule Cyfr.MacEnvelopeTest do
             who: String.duplicate("a", 257),
             who: 7,
             gen: -1,
+            gen: 9_007_199_254_740_992,
+            gen: 1.5,
             gen: "3",
             gen: nil
           ] do
@@ -124,6 +126,25 @@ defmodule Cyfr.MacEnvelopeTest do
       message = %{@message | who: "a=b"}
 
       assert {:ok, ^message, _mac} = MacEnvelope.parse(@envelope, header!(message))
+    end
+
+    test "an integer field holds 0 to 2^53 - 1, and a string field keeps what it spells" do
+      message = %{@message | who: "0042", gen: 0, ts: 9_007_199_254_740_991}
+
+      assert {:ok, ^message, _mac} = MacEnvelope.parse(@envelope, header!(message))
+
+      for ts <- ["9007199254740992", "18446744073709551616", "100000000000000000000"] do
+        header = String.replace(header!(), "ts=1789305249602", "ts=" <> ts)
+        assert {:error, :malformed} = MacEnvelope.parse(@envelope, header), ts
+      end
+    end
+
+    test "refuses a name no field has, whatever it spells" do
+      valid = header!()
+
+      for extra <- ["__proto__=x", "constructor=x", "hasOwnProperty=x", "kind=ping"] do
+        assert {:error, :malformed} = MacEnvelope.parse(@envelope, valid <> " " <> extra), extra
+      end
     end
   end
 

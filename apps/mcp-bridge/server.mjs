@@ -155,12 +155,9 @@ export function createBridge({
   // The signed request's fields, or null for one that does not carry a
   // header of `kind` verified within the window.
   function authenticate(req, kind, keyFor) {
-    const parsed = auth.parseHeader(req.get(AUTH_HEADER));
-    if (!parsed || parsed.kind !== kind) return null;
+    const parsed = auth.parseHeader(kind, req.get(AUTH_HEADER));
+    if (!parsed) return null;
     const { fields } = parsed;
-    for (const name of ["generation", "epoch", "seq", "ts"]) {
-      if (name in fields && !Number.isSafeInteger(fields[name])) return null;
-    }
     if (Math.abs(now() - fields.ts) > TIMESTAMP_WINDOW_MS) return null;
     let key;
     try {

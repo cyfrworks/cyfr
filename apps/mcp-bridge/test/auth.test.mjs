@@ -2,9 +2,9 @@
 // Copyright 2026 CYFR Works Inc.
 
 // The bridge's half of the authentication reproduces every shared vector:
-// root texts, keys, canonical strings, headers and sealed values; a tampered
-// body, key or lifetime does not verify or open; an invalid field or root
-// text is refused.
+// root texts, keys, canonical strings, headers, header parsing and sealed
+// values; a tampered body, key or lifetime does not verify or open; a valid
+// field is accepted, and an invalid field, root text or header is refused.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -43,7 +43,7 @@ test("an invoke's canonical string and header match, and the header verifies", (
   assert.equal(auth.canonical("invoke", invoke, V.invoke.body), V.invoke.canonical);
   assert.equal(auth.invokeHeader(ownerKey, invoke, V.invoke.body), V.invoke.header);
 
-  const parsed = auth.parseHeader(V.invoke.header);
+  const parsed = auth.parseHeader("invoke", V.invoke.header);
   assert.equal(parsed.kind, "invoke");
   assert.deepEqual(parsed.fields, invoke);
   assert.ok(auth.verify(ownerKey, parsed, V.invoke.body));
@@ -56,25 +56,25 @@ test("a control message's canonical string and header match, and the header veri
   assert.equal(auth.canonical("control", control, V.control.body), V.control.canonical);
   assert.equal(auth.controlHeader(key, control, V.control.body), V.control.header);
 
-  const parsed = auth.parseHeader(V.control.header);
+  const parsed = auth.parseHeader("control", V.control.header);
   assert.equal(parsed.kind, "control");
   assert.deepEqual(parsed.fields, control);
   assert.ok(auth.verify(key, parsed, V.control.body));
   assert.ok(!auth.verify(ownerKey, parsed, V.control.body));
 });
 
-test("a header that is not exactly one well-formed v1 header does not parse", () => {
-  const good = V.invoke.header;
-  for (const bad of [
-    good.replace("v1 ", "v2 "),
-    `${good} extra=1`,
-    good.replace(" nonce=n_7d3e9a", ""),
-    good.replace("gen=3", "gen=03"),
-    good.replace("epoch=7", "epoch=7 epoch=8"),
-    good.replace("kind=invoke", "kind=other"),
-  ]) {
-    assert.equal(auth.parseHeader(bad), null, bad);
+test("every accepted header parses as its kind to its fields and MAC", () => {
+  for (const { kind, header, fields, mac } of V.header_parse.accepted) {
+    assert.deepEqual(auth.parseHeader(kind, header), { kind, fields, mac }, header);
   }
+});
+
+test("every malformed header is refused as its kind", () => {
+  for (const { kind, header } of V.header_parse.malformed) {
+    assert.equal(auth.parseHeader(kind, header), null, JSON.stringify(header));
+  }
+  assert.equal(auth.parseHeader("other", V.invoke.header), null);
+  assert.equal(auth.parseHeader(undefined, V.invoke.header), null);
 });
 
 test("a sealed environment matches, opens for its owner and lifetime only", () => {
@@ -86,8 +86,11 @@ test("a sealed environment matches, opens for its owner and lifetime only", () =
   assert.equal(auth.open(key, { ...owner, epoch: owner.epoch + 1 }, V.seal.boot, V.seal.sealed), null);
 });
 
-test("every invalid field is refused", () => {
+test("every valid field is accepted and every invalid field is refused", () => {
+  for (const { field, value } of V.valid_fields) {
+    assert.doesNotThrow(() => auth.canonical("invoke", { ...invoke, [field]: value }, "{}"), `${field}=${value}`);
+  }
   for (const { field, value } of V.invalid_fields) {
-    assert.throws(() => auth.canonical("invoke", { ...invoke, [field]: value }, "{}"), auth.InvalidField, field);
+    assert.throws(() => auth.canonical("invoke", { ...invoke, [field]: value }, "{}"), auth.InvalidField, `${field}=${value}`);
   }
 });
