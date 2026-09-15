@@ -4,16 +4,12 @@
 # Include :requires_opus tests when the Opus application is loaded.
 # :requires_opus_modules needs only loadable Opus code.
 # :s3_integration requires MinIO and runs only when explicitly selected.
-# :requires_local_docs runs only when the gitignored CLAUDE.md exists.
 excludes =
   [:s3_integration] ++
     Enum.concat(
       if(is_nil(Application.spec(:opus)), do: [:requires_opus], else: []),
       if(Code.ensure_loaded?(Opus.Runtime), do: [], else: [:requires_opus_modules])
-    ) ++
-    if File.exists?(Path.expand("../../../CLAUDE.md", __DIR__)),
-      do: [],
-      else: [:requires_local_docs]
+    )
 
 ExUnit.configure(exclude: excludes)
 

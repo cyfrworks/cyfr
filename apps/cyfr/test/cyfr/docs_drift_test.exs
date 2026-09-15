@@ -6,35 +6,12 @@ defmodule Cyfr.DocsDriftTest do
   Checks documented storage roots and manifest fields against their
   runtime definitions.
 
-  ## Local documentation
-
-  The CLAUDE.md check runs only when that gitignored file exists.
-  `test_helper.exs` otherwise excludes the :requires_local_docs tag.
-
   README and guide checks use tracked files and run in every checkout.
   """
   use ExUnit.Case, async: true
 
   @repo_root Path.expand("../../../..", __DIR__)
-  @claude_md Path.join(@repo_root, "CLAUDE.md")
   @readme Path.join(@repo_root, "README.md")
-
-  @tag :requires_local_docs
-  test "CLAUDE.md's storage tree names every tenant root and global prefix" do
-    doc = File.read!(@claude_md)
-
-    # The tenant roots appear in one brace group after the athanor id.
-    for root <- Arca.Storage.tenant_roots() do
-      assert doc =~ root,
-             "tenant root #{root} is missing from CLAUDE.md's storage tree"
-    end
-
-    # The global server roots ride in a `data/{...}` group of their own.
-    for prefix <- Arca.Storage.global_prefixes() do
-      assert doc =~ prefix,
-             "global prefix #{prefix} is missing from CLAUDE.md's storage tree"
-    end
-  end
 
   test "README's storage tree names every tenant root and global prefix" do
     doc = File.read!(@readme)

@@ -32,6 +32,7 @@ erl_crash.dump
 .gemini
 .kilocode
 .claude
+AGENTS.md
 CLAUDE.md
 
 # macOS
