@@ -756,6 +756,34 @@ defmodule Emissary.MCP.BridgeTest do
     refute_receive {:control, _type, _message, _fields}, 200
   end
 
+  test "while the generation cannot be read nothing is sent and no owner synced, and the next tick that reads it goes on",
+       %{ctx: ctx, fake: fake} do
+    reading = start_supervised!({Agent, fn -> :none end}, id: :generation_reading)
+    bridge = start_bridge(fake, generation: fn -> Agent.get(reading, & &1) end)
+    row = stdio_row(ctx, "unreadable", %{"NODE_ENV" => "production"})
+    connect(ctx, row)
+    assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
+
+    Agent.update(reading, fn _ -> {:error, :unavailable} end)
+    tick(bridge)
+    refute_receive {:control, _type, _message, _fields}, 200
+
+    assert {:error, :control_plane_lost} =
+             Bridge.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+
+    assert Process.alive?(bridge)
+    assert %{generation: 1, boot: "bb_first"} = :sys.get_state(bridge)
+
+    Agent.update(reading, fn _ -> :none end)
+    tick(bridge)
+
+    assert_receive {:control, "renew", %{"owners" => [%{"server" => server}]}, %{generation: 1}},
+                   2_000
+
+    assert server == row.id
+    refute_received {:control, "hello", _hello, _fields}
+  end
+
   test "a call refused as epoch_ahead syncs again and is sent once more", %{ctx: ctx, fake: fake} do
     start_bridge(fake)
     row = stdio_row(ctx, "ahead", %{"NODE_ENV" => "production"})

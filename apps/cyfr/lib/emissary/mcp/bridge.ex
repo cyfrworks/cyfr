@@ -53,8 +53,9 @@ defmodule Emissary.MCP.Bridge do
   minutes unless set) and to start it again for its next call.
 
   Nothing is sent while this boot does not own the control plane
-  (`Cyfr.ControlPlane.owner?/0`): `sync/1` refuses and leases lapse on the
-  bridge.
+  (`Cyfr.ControlPlane.owner?/0`), or while its generation cannot be read:
+  `sync/1` refuses, queued messages are dropped, and leases lapse on the
+  bridge until a tick finds both again.
 
   ## Grants and readiness
 
@@ -124,6 +125,7 @@ defmodule Emissary.MCP.Bridge do
       :pool_size,
       :inflight,
       :poll_timer,
+      generation_source: &Cyfr.ControlPlane.generation/0,
       lease_ms: 30_000,
       idle_ms: 900_000,
       tick_ms: 10_000,
@@ -149,8 +151,10 @@ defmodule Emissary.MCP.Bridge do
   sync and renewal asks for (default `:mcp_bridge_lease_ms`, else 30 s),
   `:idle_ms` the idle period each sync asks for (default
   `:mcp_bridge_idle_ms`, else 15 minutes), `:tick_ms` the renewal cadence
-  (default a third of the lease) and `:ready_wait_ms` how long a sync's
-  caller waits for its backends (default 15 s).
+  (default a third of the lease), `:ready_wait_ms` how long a sync's
+  caller waits for its backends (default 15 s) and `:generation` the
+  zero-arity function the control-plane generation is read from (default
+  `Cyfr.ControlPlane.generation/0`).
   """
   def start_link(opts \\ []) do
     url = Keyword.get(opts, :url, Application.get_env(:cyfr, :mcp_bridge_url))
@@ -255,7 +259,8 @@ defmodule Emissary.MCP.Bridge do
           Application.get_env(:cyfr, :mcp_bridge_idle_ms, @default_idle_ms)
         ),
       tick_ms: Keyword.get(opts, :tick_ms, div(lease_ms, 3)),
-      ready_wait_ms: Keyword.get(opts, :ready_wait_ms, @ready_wait_ms)
+      ready_wait_ms: Keyword.get(opts, :ready_wait_ms, @ready_wait_ms),
+      generation_source: Keyword.get(opts, :generation, &Cyfr.ControlPlane.generation/0)
     }
 
     send(self(), :tick)
@@ -268,7 +273,7 @@ defmodule Emissary.MCP.Bridge do
     epoch = owner.epoch
 
     cond do
-      not Cyfr.ControlPlane.owner?() ->
+      plane_generation(state) == :not_owner ->
         {:reply, {:error, :control_plane_lost}, state}
 
       match?(%{epoch: registered} when registered > epoch, state.owners[key]) ->
@@ -322,13 +327,15 @@ defmodule Emissary.MCP.Bridge do
     Process.send_after(self(), :tick, state.tick_ms)
 
     state =
-      if Cyfr.ControlPlane.owner?() do
-        state = check_generation(state)
-        state = if state.boot == nil, do: enqueue(state, {:hello}), else: state
-        state = if live_keys(state) != [], do: enqueue(state, {:renew}), else: state
-        enqueue_release(state)
-      else
-        state
+      case plane_generation(state) do
+        {:ok, generation} ->
+          state = check_generation(state, generation)
+          state = if state.boot == nil, do: enqueue(state, {:hello}), else: state
+          state = if live_keys(state) != [], do: enqueue(state, {:renew}), else: state
+          enqueue_release(state)
+
+        :not_owner ->
+          state
       end
 
     {:noreply, state |> dispatch() |> schedule_poll()}
@@ -338,7 +345,7 @@ defmodule Emissary.MCP.Bridge do
     state = reply_overdue(%{state | poll_timer: nil})
 
     state =
-      if Cyfr.ControlPlane.owner?() and live_keys(state) != [],
+      if plane_generation(state) != :not_owner and live_keys(state) != [],
         do: enqueue(state, {:renew}),
         else: state
 
@@ -575,19 +582,27 @@ defmodule Emissary.MCP.Bridge do
   # Lifetimes and generations
   # ============================================================================
 
-  defp current_generation do
-    case Cyfr.ControlPlane.generation() do
-      {:ok, generation} -> generation
-      :none -> 1
+  # The generation this boot speaks while it owns the control plane — 1 for
+  # a boot that has claimed nothing — or `:not_owner` while it does not, or
+  # while its generation cannot be read. Nothing is sent without one.
+  defp plane_generation(state) do
+    if Cyfr.ControlPlane.owner?() do
+      case state.generation_source.() do
+        {:ok, generation} when is_integer(generation) and generation > 0 -> {:ok, generation}
+        :none -> {:ok, 1}
+        _unreadable -> :not_owner
+      end
+    else
+      :not_owner
     end
   end
 
   # This boot won the plane again under a new generation, so every grant it
   # issued names the old one: greet the bridge under the new generation.
-  defp check_generation(%State{generation: nil} = state), do: state
+  defp check_generation(%State{generation: nil} = state, _generation), do: state
 
-  defp check_generation(state) do
-    if current_generation() == state.generation do
+  defp check_generation(state, generation) do
+    if generation == state.generation do
       state
     else
       Logger.warning("[MCP.Bridge] the control-plane generation changed; greeting the bridge")
@@ -667,11 +682,13 @@ defmodule Emissary.MCP.Bridge do
         state
 
       {job, state} ->
+        generation = plane_generation(state)
+
         cond do
-          not Cyfr.ControlPlane.owner?() ->
+          generation == :not_owner ->
             state |> refuse(job, :control_plane_lost) |> dispatch()
 
-          job != {:hello} and state.boot != nil and current_generation() != state.generation ->
+          job != {:hello} and state.boot != nil and generation != {:ok, state.generation} ->
             state
             |> forget_bridge()
             |> enqueue_front(job)
@@ -682,7 +699,9 @@ defmodule Emissary.MCP.Bridge do
             state |> enqueue_front(job) |> enqueue_front({:hello}) |> dispatch()
 
           true ->
-            case prepare(job, state) do
+            {:ok, speaking} = generation
+
+            case prepare(job, %{state | generation: speaking}) do
               :skip ->
                 dispatch(state)
 
@@ -747,16 +766,10 @@ defmodule Emissary.MCP.Bridge do
     }
   end
 
+  # `state.generation` is the generation this boot speaks now (dispatch/1).
   defp prepare({:hello}, state) do
-    generation = current_generation()
-    body = %{"type" => "hello", "g" => generation, "cyfr_boot" => state.cyfr_boot}
-
-    spec =
-      state
-      |> base_spec(:hello)
-      |> Map.merge(%{boot: "-", generation: generation, body: body})
-
-    {:send, spec}
+    body = %{"type" => "hello", "g" => state.generation, "cyfr_boot" => state.cyfr_boot}
+    {:send, state |> base_spec(:hello) |> Map.merge(%{boot: "-", body: body})}
   end
 
   defp prepare({:reconcile}, state) do
