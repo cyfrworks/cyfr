@@ -13,6 +13,12 @@ defmodule Aqua.Runner.RecoveryTable do
   holding an unacknowledged unknown outcome is set down paused on it; any
   other running turn is taken over (its predecessor's attempt retired, a
   successor opened) and adopted, or ended uncertain past the recovery cap.
+
+  A turn another process on this boot holds (`Aqua.Loop.holder/1`) is
+  none of these: it is answered held, and nothing is written for it. Every
+  take is made from the fence the turn was read with; a turn whose fence
+  moved, or which left the state it was read in, belongs to whoever moved
+  it and has no action.
   """
 
   alias Aqua.Tape
@@ -23,16 +29,40 @@ defmodule Aqua.Runner.RecoveryTable do
           | {:wait, Tape.turn()}
           | {:continue, Tape.turn()}
           | {:adopt, Tape.turn()}
+          | {:held, Tape.turn(), pid()}
           | {:uncertain, Tape.turn(), String.t()}
+
+  # A take refused for one of these found the turn moved since it was read.
+  @moved [:superseded, :not_open, :not_running]
 
   @doc """
   The action for every open root turn of the thread, oldest first.
   A store that cannot answer refuses: no plan is not an empty plan.
   """
   @spec plan(Context.t(), String.t()) :: {:ok, [action()]} | {:error, term()}
-  def plan(%Context{} = ctx, thread_id) do
+  def plan(%Context{} = ctx, thread_id), do: plan_turns(ctx, thread_id, fn _turn -> true end)
+
+  @doc """
+  `plan/2` for the one root turn `turn_id` of the thread, read again: no
+  action once it is over.
+  """
+  @spec plan_turn(Context.t(), String.t(), String.t()) :: {:ok, [action()]} | {:error, term()}
+  def plan_turn(%Context{} = ctx, thread_id, turn_id),
+    do: plan_turns(ctx, thread_id, &(&1.id == turn_id))
+
+  defp plan_turns(ctx, thread_id, wanted?) do
     with {:ok, turns} <- Tape.open_turns(ctx, thread_id) do
-      {:ok, turns |> Enum.reject(& &1.parent_turn_id) |> Enum.map(&classify(ctx, &1))}
+      {:ok,
+       turns
+       |> Enum.filter(&(is_nil(&1.parent_turn_id) and wanted?.(&1)))
+       |> Enum.flat_map(&List.wrap(action(ctx, &1)))}
+    end
+  end
+
+  defp action(ctx, turn) do
+    case Aqua.Loop.holder(turn.id) do
+      nil -> classify(ctx, turn)
+      holder -> {:held, turn, holder}
     end
   end
 
@@ -77,6 +107,9 @@ defmodule Aqua.Runner.RecoveryTable do
            }) do
       classify(ctx, paused)
     else
+      {:error, reason} when reason in @moved ->
+        nil
+
       {:error, reason} ->
         {:uncertain, turn, "the launch could not be settled: #{inspect(reason)}"}
 
@@ -94,6 +127,7 @@ defmodule Aqua.Runner.RecoveryTable do
            "the server restarted while a call's outcome was unknown"
          ) do
       {:ok, paused} -> {:wait, paused}
+      {:error, reason} when reason in @moved -> nil
       {:error, reason} -> {:uncertain, turn, "the turn could not be set down: #{inspect(reason)}"}
     end
   end
@@ -108,6 +142,9 @@ defmodule Aqua.Runner.RecoveryTable do
 
       {:error, :recovery_exhausted} ->
         {:uncertain, turn, "the turn was interrupted too many times"}
+
+      {:error, reason} when reason in @moved ->
+        nil
 
       {:error, reason} ->
         {:uncertain, turn, "the turn could not be taken over: #{inspect(reason)}"}

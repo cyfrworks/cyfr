@@ -34,9 +34,19 @@ defmodule Aqua.Runner do
   (`Sanctum.Tenancy.continuation/2`), or ends uncertain when that person
   is no longer seated. A loop that dies without an answer is aborted
   from here (`Aqua.Loop.abort/3`) and its turn ended uncertain, or
-  cancelled when a cancel asked for it. A runner that starts finds the
-  thread's open turns and does what their rows say
-  (`Aqua.Runner.RecoveryTable`).
+  cancelled when a cancel asked for it.
+
+  ## Recovery
+
+  A runner starts only on a boot that owns the control plane
+  (`Cyfr.ControlPlane`) — started on demand or restarted after a crash
+  alike — and finds the thread's open turns and does what their rows say
+  (`Aqua.Runner.RecoveryTable`), taking a turn only from the fence it read
+  it with. A turn another process on this boot still holds
+  (`Aqua.Loop.holder/1`) — the loop of a runner that just died, until its
+  kill lands — is not taken: the runner waits for that process to end,
+  holds the turns behind it, and recovers the turn then, while the boot
+  still owns the control plane.
 
   ## Broadcasts — `{:thread, thread_id, event}`
 
@@ -106,6 +116,8 @@ defmodule Aqua.Runner do
     end
   end
 
+  # A runner that declines to start answers why: the plane was lost in
+  # between, or the thread is not an active estate's.
   defp start_runner(thread_id, athanor_id) do
     case DynamicSupervisor.start_child(
            @supervisor,
@@ -113,7 +125,7 @@ defmodule Aqua.Runner do
          ) do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
-      :ignore -> {:error, :not_found}
+      :ignore -> with :ok <- Cyfr.ControlPlane.assert_owner(), do: {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -246,6 +258,9 @@ defmodule Aqua.Runner do
   # GenServer
   # ---------------------------------------------------------------------------
 
+  # A boot that does not own the control plane starts no runner, a restart
+  # after a crash included: it recovers nothing, and the supervisor drops
+  # the child rather than retrying it.
   @impl true
   def init({thread_id, athanor_id}) do
     Process.flag(:trap_exit, true)
@@ -253,7 +268,8 @@ defmodule Aqua.Runner do
     ctx =
       Sanctum.internal_context(user_id: "_threads", athanor_id: athanor_id, scope: :athanor)
 
-    with {:ok, thread} <- Tape.thread(ctx, thread_id),
+    with :ok <- Cyfr.ControlPlane.assert_owner(),
+         {:ok, thread} <- Tape.thread(ctx, thread_id),
          {:ok, %{status: "active"}} <- Athanors.get(athanor_id) do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor_id))
       :ok = subscribe(thread.id, athanor_id)
@@ -269,6 +285,9 @@ defmodule Aqua.Runner do
           paused: nil,
           # Turns accepted behind the running one, oldest first.
           queue: [],
+          # Open turns another process on this boot still holds: turn id =>
+          # the monitor on that holder, or nil while a recovery retries.
+          held: %{},
           usage: %{input: 0, output: 0},
           tool_activity: [],
           # The running turn's streamed answers (`Aqua.Loop.Stream`).
@@ -419,7 +438,7 @@ defmodule Aqua.Runner do
 
   defp steer?(_state, _ctx, _name), do: false
 
-  defp busy?(%{live: nil, paused: nil}), do: false
+  defp busy?(%{live: nil, paused: nil, held: held}) when map_size(held) == 0, do: false
   defp busy?(_state), do: true
 
   defp steer(state, ctx, name, text, opts) do
@@ -602,6 +621,18 @@ defmodule Aqua.Runner do
     {:noreply, crashed(state, reason)}
   end
 
+  # The process that held a turn is gone: the turn is recovered now.
+  def handle_info({:DOWN, ref, :process, _pid, _reason} = msg, state) do
+    case Enum.find(state.held, fn {_turn_id, held} -> held == ref end) do
+      {turn_id, _ref} ->
+        {:noreply, recover_held(state, turn_id)}
+
+      nil ->
+        Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+        {:noreply, state}
+    end
+  end
+
   # A card decided: the paused turn continues once none is pending.
   def handle_info(
         {:thread, _id, {:approval_resolved, %{turn_id: turn_id}}},
@@ -659,6 +690,12 @@ defmodule Aqua.Runner do
 
   def handle_info({:resume, _turn_id}, state), do: {:noreply, state}
 
+  def handle_info({:recover, turn_id}, %{held: held} = state)
+      when is_map_key(held, turn_id) and :erlang.map_get(turn_id, held) == nil,
+      do: {:noreply, recover_held(state, turn_id)}
+
+  def handle_info({:recover, _turn_id}, state), do: {:noreply, state}
+
   # The athanor changed: an archive ends the runner, its turns cut.
   def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
     case Athanors.get(state.athanor_id) do
@@ -678,8 +715,9 @@ defmodule Aqua.Runner do
   def handle_info({:notify, _athanor_id, _kind, _payload}, state), do: {:noreply, state}
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
-  def handle_info(:idle, %{live: nil, paused: nil, queue: []} = state),
-    do: {:stop, :normal, state}
+  def handle_info(:idle, %{live: nil, paused: nil, queue: [], held: held} = state)
+      when map_size(held) == 0,
+      do: {:stop, :normal, state}
 
   def handle_info(:idle, state), do: {:noreply, touch(state)}
 
@@ -711,6 +749,9 @@ defmodule Aqua.Runner do
 
         broadcast(state, {:turn_paused, live.turn_id, reason})
         settle_paused(state)
+
+      {:error, :held} ->
+        hold_back(state, live.turn_id)
 
       {:error, reason} ->
         Logger.warning("[Aqua.Runner] turn #{live.turn_id} did not run: #{inspect(reason)}")
@@ -918,8 +959,56 @@ defmodule Aqua.Runner do
           do: %{state | queue: state.queue ++ [entry]},
           else: continue(state, entry, :adopt)
 
+      {:held, turn, holder} ->
+        %{state | held: Map.put(state.held, turn.id, Process.monitor(holder))}
+
       {:uncertain, turn, why} ->
-        state |> abort_turn(turn.id, why) |> end_turn(turn.id, "uncertain", why)
+        give_up(state, turn, why)
+    end
+  end
+
+  # A turn recovery cannot continue is aborted from the fence it was read
+  # with and ended under the fence the abort raised. A fence that moved in
+  # between belongs to whoever moved it, and the turn is left to them.
+  defp give_up(state, turn, why) do
+    with {:ok, aborted} <- Aqua.Loop.abort(state.ctx, turn, why),
+         {:ok, _ended} <- Tape.finish(state.ctx, aborted, "uncertain", %{error: why}) do
+      touch(state)
+    else
+      {:error, reason} ->
+        Logger.warning("[Aqua.Runner] turn #{turn.id} not ended: #{inspect(reason)}")
+        touch(state)
+    end
+  end
+
+  # A loop refused a turn another process on this boot holds: the turn
+  # waits for that holder like one found at start.
+  defp hold_back(state, turn_id) do
+    case Aqua.Loop.holder(turn_id) do
+      nil -> recover_held(%{state | held: Map.put(state.held, turn_id, nil)}, turn_id)
+      holder -> %{state | held: Map.put(state.held, turn_id, Process.monitor(holder))}
+    end
+  end
+
+  # A held turn whose holder is gone, planned again from its row while this
+  # boot owns the control plane; otherwise, or when the rows cannot be
+  # read, it is asked again later and the turns behind it keep waiting.
+  defp recover_held(state, turn_id) do
+    state = %{state | held: Map.put(state.held, turn_id, nil)}
+
+    planned =
+      Cyfr.ControlPlane.when_owner(fn ->
+        RecoveryTable.plan_turn(state.ctx, state.id, turn_id)
+      end)
+
+    case planned do
+      {:ok, actions} ->
+        state = %{state | held: Map.delete(state.held, turn_id)}
+        state = Enum.reduce(actions, state, &recover_one/2)
+        if busy?(state), do: touch(state), else: start_next(state)
+
+      _not_owner_or_unreadable ->
+        retry_timer({:recover, turn_id}, state)
     end
   end
 

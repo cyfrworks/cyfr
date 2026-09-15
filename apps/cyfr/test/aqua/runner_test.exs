@@ -8,7 +8,9 @@ defmodule Aqua.RunnerTest do
   one turn runs at a time, the sender's own line steers it and another
   member's waits; a stop cuts the turn and drops the queue; a card pauses
   the turn and its decision continues it; a runner that starts finds the
-  open turns and does what their rows say. A runner's loop dies with it.
+  open turns and does what their rows say. A runner's loop dies with it;
+  a runner starts only on a boot that owns the control plane, and never
+  takes a turn another process on this boot holds.
   """
 
   use ExUnit.Case, async: false
@@ -757,5 +759,84 @@ defmodule Aqua.RunnerTest do
       refute fetch == "chat"
       assert %{running: false, paused: true} = Runner.state(thread.id, ctx.athanor_id)
     end
+
+    test "on a boot that lost the control plane is not restarted; the owner's runner recovers the turn",
+         %{ctx: ctx, thread: thread} do
+      script!([{:probe, self()}, reply("taken over")])
+
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      pids = running!(thread)
+
+      Cyfr.ControlPlane.mark(:lost)
+      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      :ok = kill_and_await!(pids)
+
+      assert nil == Runner.whereis(thread.id)
+      assert %{active: 0} = DynamicSupervisor.count_children(Aqua.RunnerSupervisor)
+      assert {:error, :control_plane_lost} = Runner.ensure(thread.id, ctx.athanor_id)
+
+      # The rows stand as the dead runner left them.
+      assert {:ok, %{status: "running", fence: 1, recovery_attempts: 0}} =
+               Tape.turn(ctx, turn_id)
+
+      refute Enum.any?(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
+
+      Cyfr.ControlPlane.mark(:unclaimed)
+      {:ok, _runner} = Runner.ensure(thread.id, ctx.athanor_id)
+      assert_receive {:thread, _, {:turn_finished}}, 60_000
+      assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, turn_id)
+    end
+  end
+
+  test "a turn another process on this boot holds is left to it, and recovered once it is gone while this boot owns the control plane",
+       %{ctx: ctx, thread: thread} do
+    other = second_member(ctx)
+    script!([{:probe, self()}, reply("taken over"), reply("second")])
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, content: "@aqua go"},
+        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+      })
+
+    holder = spawn(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+    assert_receive {:scripted_probe, call, _}, 60_000
+    assert Aqua.Loop.holder(turn.id) == holder
+
+    {:ok, runner} = Runner.ensure(thread.id, ctx.athanor_id)
+    assert %{running: false, paused: false} = Runner.state(thread.id, ctx.athanor_id)
+    assert {:ok, %{status: "running", fence: 1, recovery_attempts: 0}} = Tape.turn(ctx, turn.id)
+
+    # A second loop over the held turn refuses before it reads anything.
+    assert {:error, :held} = Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
+
+    # A turn accepted meanwhile waits behind the held one.
+    assert {:ok, %{admitted: :turn, turn_id: second}} =
+             Runner.send_message(other, thread.id, "@aqua me too")
+
+    assert %{running: false, queued: 1} = Runner.state(thread.id, ctx.athanor_id)
+    assert {:ok, %{status: "accepted"}} = Tape.turn(ctx, second)
+
+    # The holder goes while the boot does not own the control plane: nothing
+    # is taken, and the next recovery tick asks again.
+    Cyfr.ControlPlane.mark(:lost)
+    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+
+    refs = for pid <- [holder, call], do: Process.monitor(pid)
+    Process.exit(holder, :kill)
+    for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
+    _ = :sys.get_state(runner)
+
+    assert {:ok, %{status: "running", fence: 1, recovery_attempts: 0}} = Tape.turn(ctx, turn.id)
+    assert %{live: nil, queue: [%{turn_id: ^second}]} = :sys.get_state(runner)
+
+    Cyfr.ControlPlane.mark(:unclaimed)
+    send(runner, {:recover, turn.id})
+
+    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert Runner.whereis(thread.id) == runner
+    assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, turn.id)
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, second)
   end
 end

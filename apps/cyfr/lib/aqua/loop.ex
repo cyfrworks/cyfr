@@ -31,6 +31,8 @@ defmodule Aqua.Loop do
   alias Arca.Schemas.TurnStep
   alias Sanctum.Context
 
+  # A root turn's holder on this boot registers here (`holder/1`).
+  @holders Aqua.RunnerRegistry
   @max_steps 30
   @model_timeout_ms 10 * 60 * 1000
   @step_timeout_ms 5 * 60 * 1000
@@ -94,33 +96,37 @@ defmodule Aqua.Loop do
   Run an accepted turn as its root: claim the root on this process,
   start the turn with its pins, and loop. `opts`: `:ctx` (the actor's
   external-plane context), `:turn_id`. Ends the turn itself on every
-  outcome but a pause.
+  outcome but a pause. A turn another process on this boot holds is
+  refused `{:error, :held}` before anything is read (`holder/1`).
   """
   @spec run(keyword()) :: result() | {:error, term()}
   def run(opts) do
     ctx = Keyword.fetch!(opts, :ctx)
+    turn_id = Keyword.fetch!(opts, :turn_id)
 
-    with {:ok, turn} <- Tape.turn(ctx, Keyword.fetch!(opts, :turn_id)) do
-      case claim_and_start(ctx, turn) do
-        {:ok, state} ->
-          Aqua.Loop.Stream.announce_fence(state.spec.guest, state.turn)
-          conclude(state, loop(state))
+    hold(turn_id, fn ->
+      with {:ok, turn} <- Tape.turn(ctx, turn_id) do
+        case claim_and_start(ctx, turn) do
+          {:ok, state} ->
+            Aqua.Loop.Stream.announce_fence(state.spec.guest, state.turn)
+            conclude(state, loop(state))
 
-        {:error, {:after_claim, claim, turn, reason}} ->
-          never_ran(ctx, claim, turn, reason)
+          {:error, {:after_claim, claim, turn, reason}} ->
+            never_ran(ctx, claim, turn, reason)
 
-        # The source has no consent to run under: the person is asked for it.
-        {:error, :no_profile} ->
-          setup_required(ctx, turn)
+          # The source has no consent to run under: the person is asked for it.
+          {:error, :no_profile} ->
+            setup_required(ctx, turn)
 
-        {:error, {:profile_unavailable, _}} ->
-          setup_required(ctx, turn)
+          {:error, {:profile_unavailable, _}} ->
+            setup_required(ctx, turn)
 
-        {:error, reason} ->
-          _ = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
-          {:failed, reason}
+          {:error, reason} ->
+            _ = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
+            {:failed, reason}
+        end
       end
-    end
+    end)
   end
 
   # The root is held but the turn never ran: ended with the actor's own
@@ -163,34 +169,71 @@ defmodule Aqua.Loop do
   Continue a turn on this process: `:resume` a paused turn (the root is
   taken back first; a refusal leaves it paused), or `:adopt` a running
   turn whose successor attempt a takeover already opened. `opts`: `:ctx`,
-  `:turn_id`, `:mode`. Open steps are settled before the loop goes on.
+  `:turn_id`, `:mode`. Open steps are settled before the loop goes on. A
+  turn another process on this boot holds is refused `{:error, :held}`
+  before anything is read (`holder/1`).
   """
   @spec run_nested(keyword()) :: result() | {:error, term()}
   def run_nested(opts) do
     ctx = Keyword.fetch!(opts, :ctx)
     mode = Keyword.get(opts, :mode, :resume)
+    turn_id = Keyword.fetch!(opts, :turn_id)
 
-    with {:ok, turn} <- Tape.turn(ctx, Keyword.fetch!(opts, :turn_id)),
-         {:ok, claim, turn} <- reclaim(ctx, turn, mode),
-         {:ok, authority} <- pinned_authority(ctx, turn),
-         {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false),
-         {:ok, turn} <- Tape.pin_catalyst(ctx, turn, spec.catalyst) do
-      spec = Turn.with_turn(spec, turn)
+    hold(turn_id, fn ->
+      with {:ok, turn} <- Tape.turn(ctx, turn_id),
+           {:ok, claim, turn} <- reclaim(ctx, turn, mode),
+           {:ok, authority} <- pinned_authority(ctx, turn),
+           {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false),
+           {:ok, turn} <- Tape.pin_catalyst(ctx, turn, spec.catalyst) do
+        spec = Turn.with_turn(spec, turn)
 
-      state = %State{
-        spec: spec,
-        claim: claim,
-        turn: turn,
-        since: now(),
-        active_ms: turn.active_ms
-      }
+        state = %State{
+          spec: spec,
+          claim: claim,
+          turn: turn,
+          since: now(),
+          active_ms: turn.active_ms
+        }
 
-      Aqua.Loop.Stream.announce_fence(spec.guest, turn)
+        Aqua.Loop.Stream.announce_fence(spec.guest, turn)
 
-      case settle(state) do
-        {:continue, state} -> conclude(state, loop(state))
-        {:halt, result, state} -> conclude(state, {result, state})
+        case settle(state) do
+          {:continue, state} -> conclude(state, loop(state))
+          {:halt, result, state} -> conclude(state, {result, state})
+        end
       end
+    end)
+  end
+
+  @doc """
+  The process on this boot that holds the root turn `turn_id`, or nil. A
+  loop holds its turn from the moment `run/1` or `run_nested/1` is entered
+  until it returns or its process ends; the pid answered may already be
+  exiting, and a monitor on it says when it has.
+  """
+  @spec holder(String.t()) :: pid() | nil
+  def holder(turn_id) when is_binary(turn_id) do
+    case Registry.lookup(@holders, {:turn, turn_id}) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  # The hold is let go before the result is returned, so the process that
+  # awaits this loop can start the turn's next loop at once.
+  defp hold(turn_id, fun) do
+    key = {:turn, turn_id}
+
+    case Registry.register(@holders, key, nil) do
+      {:ok, _} ->
+        try do
+          fun.()
+        after
+          Registry.unregister(@holders, key)
+        end
+
+      {:error, {:already_registered, _holder}} ->
+        {:error, :held}
     end
   end
 

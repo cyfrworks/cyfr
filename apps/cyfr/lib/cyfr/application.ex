@@ -212,9 +212,11 @@ defmodule Cyfr.Application do
       {Task.Supervisor, name: Aqua.TaskSupervisor},
       # Thread runners: one process per thread with open
       # turns, started on demand; the recovery task starts one for every
-      # thread holding an open turn when the server last stopped.
-      # Registry and the supervisor whose children register in it restart
-      # together.
+      # thread holding an open turn when the server last stopped. The
+      # registry names each runner by its thread and each loop by the root
+      # turn it holds (`Aqua.Loop.holder/1`). Registry and the supervisor
+      # whose children register in it restart together; a runner's loop
+      # dies with the runner.
       group(Aqua.RunnerTree, [
         {Registry, keys: :unique, name: Aqua.RunnerRegistry},
         {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one},
