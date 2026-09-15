@@ -1020,7 +1020,7 @@ A refusal is typed, with the provider's own body beside it when the refusal is t
 {"status": 429, "error": {"type": "rate_limited", "message": "…", "provider": {"…": "the provider's body"}}}
 ```
 
-`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer), `unknown_model`, `unknown_operation`.
+`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer; the assistant retries it, as it does `rate_limited` and `overloaded`), `unknown_model`, `unknown_operation`.
 
 **Streaming.** While `chat` runs, the catalyst streams the answer as events on its execution's event stream through `cyfr:emit/events.emit`, then answers the whole response as above:
 

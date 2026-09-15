@@ -927,6 +927,61 @@ defmodule Aqua.LoopTest do
     assert Aqua.Loop.Stream.texts(Aqua.Loop.Stream.add(kept, %{late | step_id: "older"})) == []
   end
 
+  test "a stream cut short is retried, and the thread and its answer hold the retry's text once",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+
+    script!([
+      {:emit, [%{"type" => "text.delta", "text" => "the ans"}]},
+      {:refuse, %{"type" => "incomplete_stream", "message" => "the stream ended early"}},
+      {:emit,
+       [
+         %{"type" => "text.delta", "text" => "the "},
+         %{"type" => "text.delta", "text" => "answer"}
+       ]},
+      reply("the answer")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+
+    assert {:ok,
+            [
+              %{kind: "model", outcome: "error", error: "incomplete_stream"} = cut,
+              %{kind: "model", outcome: "ok"} = retried
+            ]} = Tape.steps(ctx, turn)
+
+    events = for {:thread, _, event} <- drain(), do: event
+    deltas = for {:delta, delta} <- events, do: delta
+
+    assert [
+             %{text: "the ans", step_id: cut_step, ordinal: cut_ordinal},
+             %{text: "the ", step_id: retry_step, ordinal: retry_ordinal},
+             %{text: "answer", step_id: retry_step}
+           ] = deltas
+
+    assert cut_step == cut.id and retry_step == retried.id
+    assert retry_ordinal > cut_ordinal
+    assert [%{step_id: ^cut_step}] = for({:delta_abandoned, marker} <- events, do: marker)
+
+    # A viewer following the thread keeps only the retry's answer while it
+    # streams, and nothing once its row lands.
+    {streaming, [landed | _]} =
+      Enum.split_while(events, &(not match?({:message, %{kind: "text", author: "aqua"}}, &1)))
+
+    assert [%{step_id: ^retry_step, text: "the answer"}] =
+             Aqua.Loop.Stream.texts(keep(streaming))
+
+    assert Aqua.Loop.Stream.texts(keep(streaming ++ [landed])) == []
+
+    assert [%{content: "the answer"} = row] =
+             Enum.filter(
+               Threads.messages(ctx, thread.id),
+               &(&1.kind == "text" and &1.author == "aqua")
+             )
+
+    assert Tape.payload(row)["step_id"] == retry_step
+  end
+
   test "a model its catalyst does not know ends the turn before any request, and a missing key asks for setup",
        %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua hello")

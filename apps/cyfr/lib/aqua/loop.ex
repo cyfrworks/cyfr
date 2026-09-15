@@ -42,7 +42,10 @@ defmodule Aqua.Loop do
   # `Cyfr.Execution.Admission` encodes and weighs against the node's cap.
   @envelope_bytes 30
   @resume_backoff_ms [500, 2_000, 8_000]
-  @recoverable ~w(rate_limited overloaded)
+  # A retry opens a new step at a higher ordinal, and the refused step is
+  # abandoned, so text a refused step streamed is withdrawn, never shown
+  # beside the retry's (`Aqua.Loop.Stream`).
+  @recoverable ~w(rate_limited overloaded incomplete_stream)
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
   @setup ~w(authentication secret_denied)
   # A note flush offers this action alone, and keeps a note this large at most.
