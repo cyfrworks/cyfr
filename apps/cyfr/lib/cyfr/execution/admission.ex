@@ -36,7 +36,7 @@ defmodule Cyfr.Execution.Admission do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Authority.RootSelect
-  alias Cyfr.Execution.{Assignments, Attempt, Attestation, Close, Record, Telemetry}
+  alias Cyfr.Execution.{Artifacts, Assignments, Attempt, Attestation, Close, Record, Telemetry}
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
@@ -621,71 +621,37 @@ defmodule Cyfr.Execution.Admission do
   end
 
   # The bytes are fetched by the registry digest and verified on their way
-  # into the cache, then their attestation is checked.
+  # into the cache (`Cyfr.Execution.Artifacts`), then their attestation is
+  # checked. The runner fetches them again by the same digest.
   defp fetch_and_verify(run) do
-    with {:ok, wasm_bytes, component_digest} <- fetch_component_bytes(run),
+    digest = run.component["digest"]
+
+    with :ok <- artifact(run, digest),
          :ok <- verify_attestation(run) do
       record = %{
         run.close.record
-        | component_digest: component_digest,
+        | component_digest: digest,
           host_policy: host_policy(run.edge, run.limits)
       }
 
-      {:ok,
-       run
-       |> Map.put(:wasm_bytes, wasm_bytes)
-       |> put_in([:close, Access.key!(:record)], record)}
+      {:ok, put_in(run, [:close, Access.key!(:record)], record)}
     end
   end
 
-  # Bytes are content-addressed and immutable; an entry is cached (10 min)
-  # only after its sha256 matched the registry, so a hit is verified by
-  # construction and is not hashed again.
-  defp fetch_component_bytes(run) do
-    digest = run.component["digest"]
-    cache_key = Arca.Cache.Keys.wasm_bytes(digest)
+  defp artifact(run, digest) do
+    case Artifacts.fetch(run.ctx, digest, run.reference) do
+      {:ok, _bytes} ->
+        :ok
 
-    case digest && Arca.Cache.get(cache_key) do
-      {:ok, bytes} ->
-        emit_fetch(run.reference, false)
-        {:ok, bytes, digest}
+      {:error, :blob_not_found} ->
+        {:error, "Failed to fetch component bytes: blob not found for #{digest}"}
 
-      _ ->
-        case Compendium.Component.get_blob(run.ctx, digest) do
-          {:ok, bytes} ->
-            actual = Cyfr.Digest.sha256(bytes)
-            emit_fetch(run.reference, true)
+      {:error, {:integrity, sentence}} ->
+        {:error, sentence}
 
-            with :ok <- verify_integrity(digest, actual, run.reference) do
-              Arca.Cache.put(cache_key, bytes, :timer.minutes(10))
-              {:ok, bytes, actual}
-            end
-
-          {:error, :blob_not_found} ->
-            {:error, "Failed to fetch component bytes: blob not found for #{digest}"}
-
-          {:error, reason} ->
-            {:error, "Failed to fetch component bytes: #{inspect(reason)}"}
-        end
+      {:error, reason} ->
+        {:error, "Failed to fetch component bytes: #{inspect(reason)}"}
     end
-  end
-
-  defp emit_fetch(reference, hashed?) do
-    :telemetry.execute([:cyfr, :opus, :fetch], %{count: 1}, %{
-      reference: reference,
-      hashed: hashed?
-    })
-  end
-
-  # `Cyfr.Digest` is the only producer of both digests, so they carry the
-  # same sha256:-prefixed spelling and one comparison decides.
-  defp verify_integrity(expected, expected, _reference), do: :ok
-
-  defp verify_integrity(expected, actual, reference) do
-    {:error,
-     "Integrity check failed for #{reference}. " <>
-       "Expected: #{expected}, Got: #{actual}. " <>
-       "Component may have been modified. Re-register with `cyfr register`."}
   end
 
   # Every run's recorded attestation is checked. The signed-pulls setting
@@ -776,7 +742,7 @@ defmodule Cyfr.Execution.Admission do
         step_spans: run.opts[:step_spans],
         worker: run.opts[:worker],
         runner_id: run.opts[:runner_id],
-        wasm_bytes: run.wasm_bytes,
+        digest: run.component["digest"],
         held_invoke: run.opts[:held_invoke] == true,
         charge: if(run.opts[:held_invoke] == true, do: run.opts[:charge])
       )

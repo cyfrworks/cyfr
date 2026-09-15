@@ -8,6 +8,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
   attempt that is not the running owner at the named fence is `:lost`. An
   attempt is held only by its claimant, at its fence, while it runs and
   owns its execution; a turn root is never claimed and so never held.
+  Work run while the attempt is held runs only once that decision is taken,
+  in the same transaction.
   """
 
   use ExUnit.Case, async: false
@@ -99,6 +101,11 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
 
     assert {:error, :lost} =
+             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", &ran/0)
+
+    refute_received :ran
+
+    assert {:error, :lost} =
              ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_b")
 
     assert :ok = ExecutionAttempts.claim(ctx.athanor_id, successor.attempt, 2, "runner_b")
@@ -127,6 +134,43 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
   end
 
+  test "work runs while its claimant holds the attempt, and not once the attempt closed",
+       %{ctx: ctx} do
+    {execution, attempt} = admit!(ctx)
+    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+
+    assert {:ok, :ran} =
+             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", &ran/0)
+
+    assert_received :ran
+
+    for {athanor, fence, runner} <- [
+          {ctx.athanor_id, 1, "runner_b"},
+          {ctx.athanor_id, 2, "runner_a"},
+          {"ath_gamma", 1, "runner_a"}
+        ] do
+      assert {:error, :lost} =
+               ExecutionAttempts.while_held(athanor, attempt.attempt, fence, runner, &ran/0)
+    end
+
+    refute_received :ran
+    assert Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, attempt.attempt).fence == 1
+
+    {:ok, _} =
+      Arca.Execution.record_end(
+        ctx,
+        execution.id,
+        "cancelled",
+        %{completed_at: DateTime.utc_now(), duration_ms: 1},
+        nil
+      )
+
+    assert {:error, :lost} =
+             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", &ran/0)
+
+    refute_received :ran
+  end
+
   test "a turn root's attempt is never claimed, so no runner holds it", %{ctx: ctx} do
     {_execution, attempt} = admit!(ctx, %{kind: "turn", component_type: "agent"})
 
@@ -145,6 +189,16 @@ defmodule Arca.ExecutionAttemptsClaimTest do
 
     assert {:error, :database_error} =
              ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+
+    assert {:error, :database_error} =
+             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", &ran/0)
+
+    refute_received :ran
+  end
+
+  defp ran do
+    send(self(), :ran)
+    :ran
   end
 
   # An outage, simulated: the table is gone. Postgres drops the tables that

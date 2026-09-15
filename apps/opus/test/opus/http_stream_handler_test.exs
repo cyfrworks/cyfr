@@ -19,19 +19,17 @@ defmodule Opus.HttpStreamHandlerTest do
   end
 
   # ============================================================================
-  # build_stream_imports/5
+  # build_stream_imports/4
   # ============================================================================
 
-  describe "build_stream_imports/5" do
+  describe "build_stream_imports/4" do
     test "returns {imports, exec_ref} tuple with correct Wasmex import shape" do
       edge = EdgeFixtures.edge()
-      ctx = Sanctum.TestContext.local()
 
       {imports, exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          ctx,
           attached_host("catalyst:local.test-component:1.0.0", EdgeFixtures.limits()),
           "catalyst:local.test-component:1.0.0"
         )
@@ -65,14 +63,12 @@ defmodule Opus.HttpStreamHandlerTest do
 
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
-      ctx = Sanctum.TestContext.local()
       component_ref = "catalyst:local.test-stream:1.0.0"
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          ctx,
           attached_host(component_ref, EdgeFixtures.limits()),
           component_ref
         )
@@ -130,13 +126,10 @@ defmodule Opus.HttpStreamHandlerTest do
       # Need to allow localhost domain first
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["POST"])
 
-      ctx = Sanctum.TestContext.local()
-
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          ctx,
           attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
           "catalyst:local.test:1.0.0"
         )
@@ -167,13 +160,10 @@ defmodule Opus.HttpStreamHandlerTest do
     setup do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
-      ctx = Sanctum.TestContext.local()
-
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          ctx,
           attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
           "catalyst:local.test:1.0.0"
         )
@@ -211,13 +201,10 @@ defmodule Opus.HttpStreamHandlerTest do
     test "enforces max concurrent streams" do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
-      ctx = Sanctum.TestContext.local()
-
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          ctx,
           attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
           "catalyst:local.test:1.0.0"
         )
@@ -265,13 +252,11 @@ defmodule Opus.HttpStreamHandlerTest do
     test "rejects a body exceeding the node's max_request_size" do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
       limits = EdgeFixtures.limits(max_request_size: 16)
-      ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           limits,
-          ctx,
           attached_host("catalyst:local.test-req-size:1.0.0", limits),
           "catalyst:local.test-req-size:1.0.0"
         )
@@ -294,13 +279,11 @@ defmodule Opus.HttpStreamHandlerTest do
 
     test "rejects multipart on the streaming interface" do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
-      ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          ctx,
           attached_host("catalyst:local.test-mp:1.0.0", EdgeFixtures.limits()),
           "catalyst:local.test-mp:1.0.0"
         )
@@ -335,13 +318,11 @@ defmodule Opus.HttpStreamHandlerTest do
         EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
 
       limits = EdgeFixtures.limits(timeout: "0s")
-      ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           limits,
-          ctx,
           attached_host("catalyst:local.test-timeout:1.0.0", limits),
           "catalyst:local.test-timeout:1.0.0"
         )
@@ -402,13 +383,11 @@ defmodule Opus.HttpStreamHandlerTest do
         EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
 
       limits = EdgeFixtures.limits(max_response_size: 8)
-      ctx = Sanctum.TestContext.local()
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           limits,
-          ctx,
           attached_host("catalyst:local.test-collector-cap:1.0.0", limits),
           "catalyst:local.test-collector-cap:1.0.0"
         )
@@ -446,7 +425,6 @@ defmodule Opus.HttpStreamHandlerTest do
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          Sanctum.TestContext.local(),
           attached_host("catalyst:local.test-read:1.0.0", EdgeFixtures.limits()),
           "catalyst:local.test-read:1.0.0"
         )
@@ -539,7 +517,6 @@ defmodule Opus.HttpStreamHandlerTest do
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          Sanctum.TestContext.local(),
           attached_host("catalyst:local.test-wait:1.0.0", EdgeFixtures.limits()),
           "catalyst:local.test-wait:1.0.0"
         )
@@ -611,7 +588,6 @@ defmodule Opus.HttpStreamHandlerTest do
 
     test "cleanup works on exec_ref from build_stream_imports" do
       edge = EdgeFixtures.edge()
-      ctx = Sanctum.TestContext.local()
 
       # build_stream_imports creates the exec_ref internally;
       # cleanup_registry is called by the executor after completion.
@@ -621,7 +597,6 @@ defmodule Opus.HttpStreamHandlerTest do
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          ctx,
           attached_host("catalyst:local.test-cleanup:1.0.0", EdgeFixtures.limits()),
           "catalyst:local.test-cleanup:1.0.0"
         )

@@ -28,7 +28,7 @@ defmodule Cyfr.Execution.Attempt do
     plane), the node's reference, the need its edge was reached through
     and its limits;
   - the worker service the run is dispatched to (its `Cyfr.WorkerAPI`
-    module and boot id) and the component's bytes its runner runs;
+    module and boot id) and the digest of the component its runner runs;
   - what the run holds while it is open: its execution slot
     (`take_slot/3`), and, for a spawned child, the invoke-budget slot its
     waiter charged (taken over from the waiter) and its charge row.
@@ -73,7 +73,7 @@ defmodule Cyfr.Execution.Attempt do
 
   Its status (`:sys.get_status/1`) and a crash report of it show the
   attempt's identity and claim, never the masking set, the emitter's held
-  text, the component's bytes or what its last call carried.
+  text or what its last call carried.
   """
 
   use GenServer, restart: :temporary
@@ -83,7 +83,7 @@ defmodule Cyfr.Execution.Attempt do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Delta
-  alias Cyfr.Execution.{Charge, Close, Emit, Lapse, Outcome, Slot, StepSpans}
+  alias Cyfr.Execution.{Charge, Close, Emit, Host, Lapse, Outcome, Slot, StepSpans}
   alias Sanctum.Context
 
   @registry __MODULE__.Registry
@@ -122,7 +122,7 @@ defmodule Cyfr.Execution.Attempt do
                 :claimed_by,
                 :worker,
                 :runner_id,
-                :wasm_bytes,
+                :digest,
                 :slot,
                 :charge,
                 held_invoke: false,
@@ -141,13 +141,14 @@ defmodule Cyfr.Execution.Attempt do
           | {:push_deltas, [Delta.t()]}
           | {:oauth_token, String.t()}
           | {:take_rate, String.t()}
+          | Host.Storage.op()
 
   @typedoc """
   What a runner in this BEAM runs its attempt with beyond its assignment:
   the context its guest's in-process calls run in (the admission context on
-  the guest plane), the run's authority and the component's bytes.
+  the guest plane) and the run's authority.
   """
-  @type admitted :: %{ctx: Context.t(), authority: Authority.t(), wasm_bytes: binary()}
+  @type admitted :: %{ctx: Context.t(), authority: Authority.t()}
 
   @doc """
   Open the attempt of an admitted execution. The calling process is its
@@ -162,7 +163,8 @@ defmodule Cyfr.Execution.Attempt do
   execution's), `:budget_id` (the root whose emit budget they draw on,
   default the execution's), `:step_spans`, `:worker` and `:runner_id` (the
   `Cyfr.WorkerAPI` module and the boot id of the worker service the run is
-  dispatched to), `:wasm_bytes` (the component's bytes), `:held_invoke`
+  dispatched to), `:digest` (the digest of the component's artifact, which
+  the runner fetches), `:held_invoke`
   (true when the waiter holds a charged invoke-budget slot of the
   authority's budget, which the attempt takes over) and `:charge` (the
   charge row that slot holds, `%{id: charge_id}`).
@@ -286,6 +288,13 @@ defmodule Cyfr.Execution.Attempt do
   - `{:take_rate, bucket}` takes one request from the node's consented rate
     for `bucket`, which must be `"http:"` followed by the node's reference:
     `:ok`, or `{:error, {:guest_error, "rate_limited", sentence}}`.
+  - `{:storage, op, args}`, `{:fetch_artifact, digest}` and
+    `{:record_denial, denial}` run as `Cyfr.Execution.Host.Storage.run/2`
+    answers them, in the attempt's context, under its edge and limits, for
+    its component. A storage write runs only while the row is still held
+    by the caller, decided with the write
+    (`Arca.ExecutionAttempts.while_held/5`); one refused there is `:lost`
+    and stops the attempt.
 
   An outcome or delta naming another attempt than the caller's is refused
   without closing anything.
@@ -363,7 +372,7 @@ defmodule Cyfr.Execution.Attempt do
       waiter: owner,
       worker: Keyword.get(opts, :worker),
       runner_id: Keyword.get(opts, :runner_id),
-      wasm_bytes: Keyword.get(opts, :wasm_bytes),
+      digest: Keyword.get(opts, :digest),
       charge: Keyword.get(opts, :charge),
       held_invoke: take_over_invoke(Keyword.get(opts, :held_invoke, false), authority, owner)
     }
@@ -509,7 +518,6 @@ defmodule Cyfr.Execution.Attempt do
       | secrets: @redacted,
         tokens: @redacted,
         nonces: @redacted,
-        wasm_bytes: @redacted,
         emit: %{state.emit | held: @redacted}
     }
   end
@@ -529,8 +537,7 @@ defmodule Cyfr.Execution.Attempt do
 
   defp reason_shape(_reason), do: @redacted
 
-  defp admitted(state),
-    do: %{ctx: state.ctx, authority: state.authority, wasm_bytes: state.wasm_bytes}
+  defp admitted(state), do: %{ctx: state.ctx, authority: state.authority}
 
   # ---------------------------------------------------------------------------
   # Holds
@@ -740,6 +747,13 @@ defmodule Cyfr.Execution.Attempt do
     {:reply, take_rate(state, bucket), state}
   end
 
+  defp run(op, state) when elem(op, 0) in [:storage, :fetch_artifact, :record_denial] do
+    case Host.Storage.run(op, host_storage(state)) do
+      {:error, :lost} -> {:stop, :normal, {:error, :lost}, release_holds(state)}
+      reply -> {:reply, reply, state}
+    end
+  end
+
   defp run(_op, state), do: {:reply, {:error, :lost}, state}
 
   defp names_outcome?(state, %Outcome{} = outcome) do
@@ -826,6 +840,34 @@ defmodule Cyfr.Execution.Attempt do
   defp emit_failed, do: Cyfr.WitResponse.encode_error(:dispatch_error, "The emit call failed.")
 
   defp masking_set(state), do: Map.values(state.secrets) ++ state.tokens
+
+  defp host_storage(state) do
+    %{
+      ctx: state.ctx,
+      admission_ctx: state.close.ctx,
+      authority: state.authority,
+      limits: state.limits,
+      component_ref: state.component_ref,
+      digest: state.digest,
+      hold: &while_held(state, &1)
+    }
+  end
+
+  # The claim the call was checked against: this attempt, at its fence, held
+  # by the runner that attached.
+  defp while_held(state, write) do
+    case Arca.ExecutionAttempts.while_held(
+           state.ctx.athanor_id,
+           state.attempt,
+           state.fence,
+           state.claimed_by,
+           write
+         ) do
+      {:ok, result} -> {:ok, result}
+      {:error, :lost} -> {:error, :lost}
+      {:error, :database_error} -> {:error, :unavailable}
+    end
+  end
 
   # Each HTTP request draws on the node's `http:` bucket under its consented
   # limit; a limiter that cannot answer refuses.

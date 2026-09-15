@@ -270,10 +270,10 @@ defmodule Opus.HttpHandlerTest do
   end
 
   # ============================================================================
-  # execute/6 - edge enforcement
+  # execute/5 - edge enforcement
   # ============================================================================
 
-  describe "execute/6 edge enforcement" do
+  describe "execute/5 edge enforcement" do
     setup do
       # Start the rate limiter for this test.
       case GenServer.whereis(Cyfr.Execution.Rates) do
@@ -286,13 +286,11 @@ defmodule Opus.HttpHandlerTest do
 
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
 
-      ctx = Sanctum.TestContext.local()
       component_ref = "catalyst:local.test-catalyst:1.0.0"
 
       {:ok,
        edge: edge,
        limits: limits,
-       ctx: ctx,
        host: attached_host(component_ref, limits),
        component_ref: component_ref}
     end
@@ -300,7 +298,6 @@ defmodule Opus.HttpHandlerTest do
     test "blocks request to non-allowed domain", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -312,7 +309,7 @@ defmodule Opus.HttpHandlerTest do
           "body" => ""
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "domain_blocked"
@@ -321,7 +318,6 @@ defmodule Opus.HttpHandlerTest do
     test "blocks request with disallowed method", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -333,7 +329,7 @@ defmodule Opus.HttpHandlerTest do
           "body" => ""
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "method_blocked"
@@ -352,7 +348,6 @@ defmodule Opus.HttpHandlerTest do
       test "#{label} is a typed error, never a raise", %{
         edge: edge,
         limits: limits,
-        ctx: ctx,
         host: host,
         component_ref: ref
       } do
@@ -361,7 +356,7 @@ defmodule Opus.HttpHandlerTest do
             Map.merge(%{"headers" => %{}, "body" => ""}, unquote(Macro.escape(request)))
           )
 
-        result = HttpHandler.execute(json, edge, limits, ctx, host, ref)
+        result = HttpHandler.execute(json, edge, limits, host, ref)
         decoded = Jason.decode!(result)
 
         assert is_binary(decoded["error"]["type"])
@@ -372,7 +367,6 @@ defmodule Opus.HttpHandlerTest do
     test "blocks request with oversized body", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -386,7 +380,7 @@ defmodule Opus.HttpHandlerTest do
           "body" => large_body
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "request_too_large"
@@ -396,11 +390,10 @@ defmodule Opus.HttpHandlerTest do
     test "returns error for invalid JSON request", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
-      result = HttpHandler.execute("not-json", edge, limits, ctx, host, ref)
+      result = HttpHandler.execute("not-json", edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_json"
@@ -410,12 +403,11 @@ defmodule Opus.HttpHandlerTest do
     test "returns error for request missing required fields", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
       request = Jason.encode!(%{"url" => "https://api.stripe.com"})
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -425,12 +417,11 @@ defmodule Opus.HttpHandlerTest do
     test "returns error for request with invalid URL", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
       request = Jason.encode!(%{"method" => "GET", "url" => "not-a-url"})
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -439,7 +430,6 @@ defmodule Opus.HttpHandlerTest do
 
     test "blocks request to private IP (localhost)", %{
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -454,7 +444,7 @@ defmodule Opus.HttpHandlerTest do
           "body" => ""
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "private_ip_blocked"
@@ -463,20 +453,18 @@ defmodule Opus.HttpHandlerTest do
   end
 
   # ============================================================================
-  # build_http_imports/5
+  # build_http_imports/4
   # ============================================================================
 
-  describe "build_http_imports/5" do
+  describe "build_http_imports/4" do
     test "returns correct Wasmex import shape" do
       edge = EdgeFixtures.edge()
       limits = EdgeFixtures.limits()
-      ctx = Sanctum.TestContext.local()
 
       imports =
         HttpHandler.build_http_imports(
           edge,
           limits,
-          ctx,
           attached_host("catalyst:local.test-component:1.0.0", limits),
           "catalyst:local.test-component:1.0.0"
         )
@@ -495,13 +483,10 @@ defmodule Opus.HttpHandlerTest do
       edge = EdgeFixtures.edge(domains: ["blocked-only.test"], methods: ["GET"])
       limits = EdgeFixtures.limits()
 
-      ctx = Sanctum.TestContext.local()
-
       imports =
         HttpHandler.build_http_imports(
           edge,
           limits,
-          ctx,
           attached_host("catalyst:local.test-component:1.0.0", limits),
           "catalyst:local.test-component:1.0.0"
         )
@@ -525,10 +510,10 @@ defmodule Opus.HttpHandlerTest do
   end
 
   # ============================================================================
-  # execute/6 - base64 body encoding
+  # execute/5 - base64 body encoding
   # ============================================================================
 
-  describe "execute/6 base64 body encoding" do
+  describe "execute/5 base64 body encoding" do
     setup do
       case GenServer.whereis(Cyfr.Execution.Rates) do
         nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
@@ -539,13 +524,11 @@ defmodule Opus.HttpHandlerTest do
 
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
 
-      ctx = Sanctum.TestContext.local()
       component_ref = "catalyst:local.test-catalyst-b64:1.0.0"
 
       {:ok,
        edge: edge,
        limits: limits,
-       ctx: ctx,
        host: attached_host(component_ref, limits),
        component_ref: component_ref}
     end
@@ -553,7 +536,6 @@ defmodule Opus.HttpHandlerTest do
     test "rejects invalid base64 body", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -566,7 +548,7 @@ defmodule Opus.HttpHandlerTest do
           "body_encoding" => "base64"
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -576,7 +558,6 @@ defmodule Opus.HttpHandlerTest do
     test "validates decoded body size against the node limit", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -593,7 +574,7 @@ defmodule Opus.HttpHandlerTest do
           "body_encoding" => "base64"
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "request_too_large"
@@ -601,10 +582,10 @@ defmodule Opus.HttpHandlerTest do
   end
 
   # ============================================================================
-  # execute/6 - multipart support
+  # execute/5 - multipart support
   # ============================================================================
 
-  describe "execute/6 multipart" do
+  describe "execute/5 multipart" do
     setup do
       case GenServer.whereis(Cyfr.Execution.Rates) do
         nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
@@ -615,13 +596,11 @@ defmodule Opus.HttpHandlerTest do
 
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
 
-      ctx = Sanctum.TestContext.local()
       component_ref = "catalyst:local.test-catalyst-mp:1.0.0"
 
       {:ok,
        edge: edge,
        limits: limits,
-       ctx: ctx,
        host: attached_host(component_ref, limits),
        component_ref: component_ref}
     end
@@ -629,7 +608,6 @@ defmodule Opus.HttpHandlerTest do
     test "rejects request with both body and multipart", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -644,7 +622,7 @@ defmodule Opus.HttpHandlerTest do
           ]
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -654,7 +632,6 @@ defmodule Opus.HttpHandlerTest do
     test "rejects multipart with invalid base64 data", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -674,7 +651,7 @@ defmodule Opus.HttpHandlerTest do
           ]
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -684,7 +661,6 @@ defmodule Opus.HttpHandlerTest do
     test "validates multipart total decoded size against the node limit", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -708,7 +684,7 @@ defmodule Opus.HttpHandlerTest do
           ]
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "request_too_large"
@@ -718,7 +694,6 @@ defmodule Opus.HttpHandlerTest do
     test "rejects multipart part without name", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -732,7 +707,7 @@ defmodule Opus.HttpHandlerTest do
           ]
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -890,7 +865,7 @@ defmodule Opus.HttpHandlerTest do
   # SSRF via URL parsing edge cases
   # ============================================================================
 
-  describe "execute/6 SSRF URL edge cases" do
+  describe "execute/5 SSRF URL edge cases" do
     setup do
       case GenServer.whereis(Cyfr.Execution.Rates) do
         nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
@@ -902,13 +877,11 @@ defmodule Opus.HttpHandlerTest do
 
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
 
-      ctx = Sanctum.TestContext.local()
       component_ref = "catalyst:local.ssrf-test:1.0.0"
 
       {:ok,
        edge: edge,
        limits: limits,
-       ctx: ctx,
        host: attached_host(component_ref, limits),
        component_ref: component_ref}
     end
@@ -916,7 +889,6 @@ defmodule Opus.HttpHandlerTest do
     test "blocks numeric IP for private address", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -928,7 +900,7 @@ defmodule Opus.HttpHandlerTest do
           "body" => ""
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "private_ip_blocked"
@@ -937,7 +909,6 @@ defmodule Opus.HttpHandlerTest do
     test "blocks 0.0.0.0 as direct IP", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -949,7 +920,7 @@ defmodule Opus.HttpHandlerTest do
           "body" => ""
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "private_ip_blocked"
@@ -958,7 +929,6 @@ defmodule Opus.HttpHandlerTest do
     test "blocks metadata endpoint IP 169.254.169.254", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -970,7 +940,7 @@ defmodule Opus.HttpHandlerTest do
           "body" => ""
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "private_ip_blocked"
@@ -979,7 +949,6 @@ defmodule Opus.HttpHandlerTest do
     test "blocks [::1] IPv6 loopback", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -991,7 +960,7 @@ defmodule Opus.HttpHandlerTest do
           "body" => ""
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "private_ip_blocked"
@@ -1000,7 +969,6 @@ defmodule Opus.HttpHandlerTest do
     test "rejects URL with empty hostname", %{
       edge: edge,
       limits: limits,
-      ctx: ctx,
       host: host,
       component_ref: ref
     } do
@@ -1012,7 +980,7 @@ defmodule Opus.HttpHandlerTest do
           "body" => ""
         })
 
-      result = HttpHandler.execute(request, edge, limits, ctx, host, ref)
+      result = HttpHandler.execute(request, edge, limits, host, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"

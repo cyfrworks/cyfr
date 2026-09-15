@@ -24,32 +24,23 @@ defmodule Opus.HostSurfaceTest do
     # would take and release it through a client. The authority as data is
     # `Cyfr.Authority`, in the contracts.
     "Sanctum.Authority",
+    # The context a formula's children and catalog tools run in, as the
+    # attempt answers it (`Opus.HostClient.admitted/1`).
     "Sanctum.Context",
-    # A guest's egress denial recorded for the audit trail, through
-    # `Opus.Host.enforce/1`.
-    "Sanctum.Policy",
 
     # Infrastructure a worker would need a client for, not a behaviour it
-    # would implement.
-    "Arca",
+    # would implement: the compiled-component and stream-handle cache.
     "Arca.Cache",
-    "Arca.Storage",
-    "Arca.Usage",
 
-    # The local-namespace trust policy: the storage boundary asks it before
-    # a guest write lands in components/ — pulled components are
-    # fork-to-modify, and the refusal sentence lives with the policy.
-    "Compendium.NamespacePolicy",
-
-    # Shared primitives — glue, by construction available to any node.
     # What CYFR owns of a run: a formula's children, run through
     # `Cyfr.Execution` (`run_child`, `run_child_stream`, `execute_child`)
     # with the child step (`Admission.step_invoke`) and its charge row taken
     # for a spawn, the setup event a refused child announces, the worker key
     # the worker service holds, and the host calls of `Opus.HostClient` —
     # attach, admitted, renew, complete, fail, emit, the OAuth dispense, the
-    # egress rate and the runner exit report — which are the only way opus
-    # reaches a run's attempt (the tests below).
+    # egress rate and denials, storage, the component's artifact and the
+    # runner exit report — which are the only way opus reaches a run's
+    # attempt (the tests below).
     "Cyfr.Execution",
     # Egress pinning: a guest request's host resolved and checked against
     # its consented private policy before the connection is made.
@@ -196,7 +187,7 @@ defmodule Opus.HostSurfaceTest do
   test "Opus.Host covers the consent plane a host function crosses" do
     exports = Opus.Host.__info__(:functions) |> Keyword.keys() |> MapSet.new()
 
-    for name <- [:tool_call, :host_intercepted?, :enforce] do
+    for name <- [:tool_call, :host_intercepted?] do
       assert MapSet.member?(exports, name),
              "Opus.Host no longer delegates #{name} — the plane it does cover must stay covered"
     end

@@ -70,6 +70,14 @@ defmodule Opus.HostClientTest do
         assert {:ok, [_reply]} = HostClient.push_deltas(client, [~s({"type":"note"})])
         assert {:error, {:guest_error, _, _}} = HostClient.oauth_token(client, "google")
         assert :ok = HostClient.take_rate(client, "http:" <> attempt.component_ref)
+
+        assert {:error, {:guest_error, "action_denied", _}} =
+                 HostClient.storage(client, :read, %{"path" => "data/a.txt"})
+
+        assert {:error, :not_found} =
+                 HostClient.fetch_artifact(client, Cyfr.Digest.sha256("not the component"))
+
+        assert :ok = HostClient.record_denial(client, "invalid_json", "Invalid JSON request")
         assert {:ok, %{"done" => true}} = HostClient.complete(client, %{"done" => true})
         assert {:error, :lost} = HostClient.fail(client, "after the close")
       end)
@@ -84,7 +92,8 @@ defmodule Opus.HostClientTest do
         op
       end
 
-    assert ops == ~w(attach renew push_deltas oauth_token take_rate complete fail)
+    assert ops ==
+             ~w(attach renew push_deltas oauth_token take_rate storage fetch_artifact record_denial complete fail)
   end
 
   test "a client's inspection names its attempt and not its keys" do

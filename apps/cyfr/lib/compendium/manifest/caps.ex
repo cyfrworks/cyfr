@@ -137,8 +137,8 @@ defmodule Compendium.Manifest.Caps do
 
   # A grant no runtime would honor is refused at parse: every path must
   # name a guest scope (`Arca.Storage.valid_guest_path?/1` — the predicate
-  # `Opus.StorageHandler` gates requests with), or be the wildcard `"*"`
-  # (grant grammar, not a path — `Opus.EdgeGuard`'s concern).
+  # `Cyfr.Execution.GuestStorage` gates requests with), or be the wildcard
+  # `"*"` (grant grammar, not a path).
   defp validate_storage_paths(nil), do: :ok
 
   defp validate_storage_paths(paths) when is_list(paths) do

@@ -3,13 +3,15 @@
 
 defmodule Opus.EdgeGuard do
   @moduledoc """
-  Resource checks over a consent edge, shared by every WASI host handler.
+  Egress checks over a consent edge, shared by the runner's HTTP host
+  handlers.
 
   An execution's capability is the `%Cyfr.Authority.Blob.Edge{}` it runs
-  under plus the node's `%Cyfr.Limits{}`. This module is the single home
-  for matching a concrete request against that edge — domains, schemes,
-  methods, private IPs, storage paths and actions — and for the request /
-  response size checks against the limits.
+  under plus the node's `%Cyfr.Limits{}`. This module is the runner's home
+  for matching a concrete request against that edge's egress — domains,
+  schemes, methods and private IPs — and for the envelope, request and
+  response size checks against the limits. Storage grants are checked on
+  CYFR (`Cyfr.Execution.GuestStorage`).
 
   ## Semantics
 
@@ -17,8 +19,7 @@ defmodule Opus.EdgeGuard do
   or a `nil` resource group behaves as all-empty lists, and an empty list
   denies. Schemes are always explicit in blobs — there is no "no scheme
   restriction" value. Domain patterns support `"*"` and `"*.example.com"`
-  wildcards; storage paths support `"*"`, trailing-`/` prefixes, and exact
-  file matches. Cloud-metadata addresses are denied regardless of the
+  wildcards. Cloud-metadata addresses are denied regardless of the
   private-IP allowlist.
 
   Denial messages are part of the guest-visible contract: components and
@@ -115,43 +116,6 @@ defmodule Opus.EdgeGuard do
           Enum.any?(entries, &ip_entry_matches?(&1, ip_tuple, ip_string))
         end
     end
-  end
-
-  # ============================================================================
-  # Storage checks
-  # ============================================================================
-
-  @doc """
-  Whether a storage action is allowed by the edge (case-insensitive).
-  """
-  @spec allows_action?(edge(), String.t()) :: boolean()
-  def allows_action?(edge, action) when is_binary(action) do
-    down = String.downcase(action)
-    Enum.any?(Edge.actions(edge), &(String.downcase(&1) == down))
-  end
-
-  @doc """
-  Whether a storage path is allowed by the edge.
-
-  - `"*"` allows everything
-  - a trailing-`/` entry is a directory prefix
-  - anything else is an exact file match
-
-  Empty allowlist denies all.
-  """
-  @spec allows_path?(edge(), String.t()) :: boolean()
-  def allows_path?(edge, path) when is_binary(path) do
-    Enum.any?(Edge.paths(edge), fn
-      "*" ->
-        true
-
-      entry ->
-        if String.ends_with?(entry, "/") do
-          String.starts_with?(path, entry)
-        else
-          path == entry
-        end
-    end)
   end
 
   # ============================================================================

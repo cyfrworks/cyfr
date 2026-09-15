@@ -55,7 +55,7 @@ defmodule Arca.Storage do
     module owns both planes' spellings); `data/` — what components
     store — has none by design (the guest names its own paths inside it;
     `guest_scopes/0` says which roots a guest may name at all, applied by
-    `Opus.StorageHandler` at the guest boundary, so a `data/` grant can
+    `Cyfr.Execution.GuestStorage` at the guest boundary, so a `data/` grant can
     never see a host scope). The
     global roots keep their literal at their single consumer, with a
     roster-membership witness in that consumer's test.
@@ -323,7 +323,7 @@ defmodule Arca.Storage do
 
   @doc """
   The guest storage scopes: what a WASM guest may name in a path, mapped
-  to the tenant scope each one stores under. `Opus.StorageHandler`
+  to the tenant scope each one stores under. `Cyfr.Execution.GuestStorage`
   applies this at the guest boundary; keeping the map here means the
   roots a guest may reach are written down in the one layout table.
   """
@@ -529,8 +529,8 @@ defmodule Arca.Storage do
   Whether a guest-facing storage path names a guest scope: the empty string
   (the scope listing), a bare scope (`"data"`, `"components"`), or anything
   under one (`"data/notes.txt"`). One predicate shared by the manifest
-  parser (`Compendium.Manifest.Caps`) and the WIT boundary
-  (`Opus.StorageHandler.validate_path_scope/1`), so a grant no runtime
+  parser (`Compendium.Manifest.Caps`) and the guest storage boundary
+  (`Cyfr.Execution.GuestStorage`), so a grant no runtime
   would honor is refused at parse — and the two layers cannot drift.
 
   ## Examples
@@ -565,7 +565,7 @@ defmodule Arca.Storage do
   Whether this context can name a tenant tree at all: a resolved
   `athanor_id` matching the id grammar. The boundary spelling of the
   invariant `tenant_segments/1` enforces by raising — total predicates
-  (`Arca.exists?/2`) and guest-facing refusals (`Opus.StorageHandler`)
+  (`Arca.exists?/2`) and guest-facing refusals (`Cyfr.Execution.GuestStorage`)
   consume this; everything else keeps the fail-closed raise.
   """
   @spec athanor_ready?(Context.t()) :: boolean()

@@ -6,9 +6,7 @@ defmodule Arca.Storage.TestDouble do
   A compiler-checked storage-adapter double: `use` it and override only
   the callbacks the test bends — everything else delegates to the Local
   adapter, with the behaviour declared, so a change to the
-  `Arca.Storage` contract breaks these doubles at compile time instead
-  of letting them drift (three hand-copied doubles once delegated
-  `serve_to_conn` with an argument order the behaviour does not have).
+  `Arca.Storage` contract breaks these doubles at compile time.
 
       defmodule UnreadableAdapter do
         use Arca.Storage.TestDouble

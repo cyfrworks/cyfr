@@ -45,7 +45,6 @@ defmodule Opus.HttpStreamHandler do
   require Logger
 
   alias Cyfr.Authority.Blob.Edge
-  alias Sanctum.Context
   alias Cyfr.Limits
   alias Opus.{HostClient, HttpHandler, HttpRequestValidation}
 
@@ -77,22 +76,12 @@ defmodule Opus.HttpStreamHandler do
 
   Returns a map with `request`, `read`, and `close` functions. `host` is the
   attached `Opus.HostClient` of the execution's attempt, which takes each
-  request from the consented rate.
+  request from the consented rate and records each refusal for the audit
+  trail.
   """
-  @spec build_stream_imports(
-          Edge.t() | nil,
-          Limits.t(),
-          Context.t(),
-          HostClient.t(),
-          String.t()
-        ) :: {map(), String.t()}
-  def build_stream_imports(
-        edge,
-        %Limits{} = limits,
-        %Context{} = ctx,
-        %HostClient{} = host,
-        component_ref
-      ) do
+  @spec build_stream_imports(Edge.t() | nil, Limits.t(), HostClient.t(), String.t()) ::
+          {map(), String.t()}
+  def build_stream_imports(edge, %Limits{} = limits, %HostClient{} = host, component_ref) do
     # Create a unique execution ref for cache-based stream tracking
     exec_ref = create_registry()
 
@@ -102,7 +91,7 @@ defmodule Opus.HttpStreamHandler do
           {:fn,
            fn json_req ->
              guarded(component_ref, "request", fn ->
-               stream_request(json_req, edge, limits, ctx, host, component_ref, exec_ref)
+               stream_request(json_req, edge, limits, host, component_ref, exec_ref)
              end)
            end},
         "read" =>
@@ -178,7 +167,7 @@ defmodule Opus.HttpStreamHandler do
       encode_error(:stream_error, "The streaming request could not be served.")
   end
 
-  defp stream_request(json_request, edge, limits, ctx, host, component_ref, exec_ref) do
+  defp stream_request(json_request, edge, limits, host, component_ref, exec_ref) do
     # Check concurrent stream limit
     stream_count =
       Arca.Cache.match({:http_stream, exec_ref, :_})
@@ -197,7 +186,7 @@ defmodule Opus.HttpStreamHandler do
           start_stream(request, exec_ref, component_ref, limits)
 
         {:error, type, message} ->
-          HttpHandler.record_egress_denial(ctx, component_ref, type, message)
+          HttpHandler.record_refusal(host, type, message)
           encode_error(type, message)
       end
     end

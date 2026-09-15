@@ -110,7 +110,9 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :opus, :fetch] => %{
       consumers: [:operator],
-      note: "component-bytes fetch during execution setup; execute.start/stop carry the outcome"
+      note:
+        "a component's bytes read by digest, at admission and for its runner's fetch_artifact; " <>
+          "execute.start/stop carry the outcome"
     },
     [:cyfr, :opus, :runtime, :authority_entered] => %{
       consumers: [:operator],

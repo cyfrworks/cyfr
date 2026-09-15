@@ -4,14 +4,15 @@
 defmodule Opus.Host do
   @moduledoc """
   The seams a running component's host functions cross into the
-  platform's consent plane: an in-chain tool call, whether the host runs
-  an action itself, and a policy decision recorded.
+  platform's consent plane: an in-chain tool call, and whether the host
+  runs an action itself.
 
   A run's admission is `Cyfr.Execution.Admission`'s; its unsealed
-  credentials, its events, its OAuth tokens, its egress rate, its lease and
-  its terminal row are host calls of its attempt (`Opus.HostClient`). Opus
-  also calls CYFR storage, network and utility modules directly;
-  `Opus.HostSurfaceTest` keeps that list from growing quietly.
+  credentials, its events, its OAuth tokens, its egress rate and denials,
+  its storage, its component's artifact, its lease and its terminal row are
+  host calls of its attempt (`Opus.HostClient`). Opus also calls CYFR
+  network and utility modules directly; `Opus.HostSurfaceTest` keeps that
+  list from growing quietly.
   """
 
   alias Sanctum.Context
@@ -26,8 +27,4 @@ defmodule Opus.Host do
   @doc "Whether the host, not the catalog, runs `tool.action` for a chain."
   @spec host_intercepted?(String.t(), String.t() | nil) :: boolean()
   defdelegate host_intercepted?(name, action), to: Cyfr.Ops.Catalog
-
-  @doc "Record a policy decision (allowed or denied) for the audit trail."
-  @spec enforce(map()) :: :ok
-  defdelegate enforce(attrs), to: Sanctum.Policy.Enforcement, as: :record
 end

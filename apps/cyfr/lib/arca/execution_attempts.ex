@@ -175,6 +175,35 @@ defmodule Arca.ExecutionAttempts do
   end
 
   @doc """
+  Run `fun` while `runner` holds the attempt, as `held?/4` decides it, in
+  one transaction with that decision: the write that finds the attempt
+  takes its row's lock, and `fun` runs before the transaction commits. A
+  close, cancel, lapse or takeover of the attempt writes its row, so it
+  either commits first, and `fun` does not run, or waits until `fun` has
+  returned.
+
+  Answers `{:ok, result}` with what `fun` returned; `{:error, :lost}`
+  when the attempt is not held, and `fun` did not run;
+  `{:error, :database_error}` when the store cannot answer.
+  """
+  @spec while_held(String.t(), String.t(), pos_integer(), String.t(), (-> result)) ::
+          {:ok, result} | {:error, :lost | :database_error}
+        when result: term()
+  def while_held(athanor_id, attempt, fence, runner, fun)
+      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
+             is_binary(runner) and is_function(fun, 0) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.while_held", fn ->
+      Arca.Repo.transaction(fn ->
+        {count, _} =
+          from(a in running_owner(athanor_id, attempt, fence), where: a.claimed_by == ^runner)
+          |> Arca.Repo.update_all(inc: [fence: 0])
+
+        if count == 1, do: fun.(), else: Arca.Repo.rollback(:lost)
+      end)
+    end)
+  end
+
+  @doc """
   Hold the attempt a child is admitted under, inside the caller's admission
   transaction: `attempt` must own `execution_id`, be `running` with no
   cancel asked of it, and the execution must be `running`. Answers 1 when

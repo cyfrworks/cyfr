@@ -7,7 +7,7 @@ defmodule Arca.Usage do
   to the cached counters (`account/4`, called from the `Arca` facade's
   write gate), and how the two enforcement surfaces read them back —
   the athanor byte cap (`Sanctum.Tenancy.Caps`) through
-  `athanor_bytes/1`, the public per-scope quota (`Opus.StorageHandler`)
+  `athanor_bytes/1`, the public per-scope quota (`Cyfr.Execution.GuestStorage`)
   through `scope_usage/2` — under ONE TTL.
 
   The discipline: a successful create BUMPS the cached totals by what

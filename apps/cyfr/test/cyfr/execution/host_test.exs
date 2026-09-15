@@ -445,12 +445,14 @@ defmodule Cyfr.Execution.HostTest do
   end
 
   describe "admitted" do
-    test "answers the attached runner the context, authority and bytes its attempt runs with" do
-      fixture = AttemptFixtures.attached!(wasm_bytes: "component bytes")
+    test "answers the attached runner the context and authority its attempt runs with" do
+      fixture = AttemptFixtures.attached!()
       body = AttemptFixtures.body("admitted", %{})
 
-      assert {:ok, %{ctx: ctx, authority: authority, wasm_bytes: "component bytes"}} =
+      assert {:ok, %{ctx: ctx, authority: authority} = admitted} =
                Cyfr.Execution.Host.admitted(AttemptFixtures.header(fixture, body), body)
+
+      assert Map.keys(admitted) |> Enum.sort() == [:authority, :ctx]
 
       assert ctx.plane == :guest and ctx.athanor_id == fixture.athanor_id
       assert authority == fixture.authority

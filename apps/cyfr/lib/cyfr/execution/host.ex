@@ -4,8 +4,8 @@
 defmodule Cyfr.Execution.Host do
   @moduledoc """
   Where a runner's host calls reach CYFR: `attach`, `renew`, `complete`,
-  `fail`, `push_deltas`, `oauth_token` and `take_rate`, as
-  `Cyfr.HostAPI` describes them.
+  `fail`, `push_deltas`, `oauth_token`, `take_rate`, `storage`,
+  `fetch_artifact` and `record_denial`, as `Cyfr.HostAPI` describes them.
 
   `call/2` is the one entry point. It takes a host call's header
   (`Cyfr.WorkerAuth.host_call_header/3`) and its JSON body,
@@ -52,6 +52,7 @@ defmodule Cyfr.Execution.Host do
       when another runner holds the claim, and `setup_required` with its
       `payload` when the run's vault edge cannot be unsealed;
     * `failed` with its `message`, when `complete` closed the run failed;
+    * `not_found`, when `fetch_artifact` names no artifact of the attempt's;
     * `guest_error` with its `type` and `message`, a refusal the runner
       hands its guest.
 
@@ -64,16 +65,20 @@ defmodule Cyfr.Execution.Host do
   | `push_deltas` | `deltas` (each `execution_id`, `attempt`, `fence`, `event` text) | one emit reply per delta |
   | `oauth_token` | `provider` | the token |
   | `take_rate` | `bucket` | `true` |
+  | `storage` | `action`, `path`, optional `content` | the answer's members |
+  | `fetch_artifact` | `digest` | the artifact's bytes, base64 |
+  | `record_denial` | `type`, `message` | `true` |
 
-  An outcome names its `execution_id`, `attempt` and `fence`.
+  An outcome names its `execution_id`, `attempt` and `fence`. The last
+  three operations are `Cyfr.Execution.Host.Storage`'s.
 
   ## A runner in this BEAM
 
   `admitted/2` answers a host call's attached runner what it runs the
   attempt with beyond its assignment (`t:Cyfr.Execution.Attempt.admitted/0`):
-  the context its guest's in-process calls run in, the run's authority and
-  the component's bytes. It is checked as every call but attach is, needs
-  no fresh nonce, and answers terms, not JSON.
+  the context its guest's in-process calls run in and the run's authority.
+  It is checked as every call but attach is, needs no fresh nonce, and
+  answers terms, not JSON.
 
   ## A worker service's report
 
@@ -104,7 +109,8 @@ defmodule Cyfr.Execution.Host do
     :malformed,
     :bad_mac,
     :unknown_version,
-    :claim_expired
+    :claim_expired,
+    :not_found
   ]
 
   @doc "Answer one host call: `header` and the JSON `body` it signs, answered as JSON."
@@ -333,6 +339,9 @@ defmodule Cyfr.Execution.Host do
 
   defp operation("take_rate", %{"bucket" => bucket}) when is_binary(bucket),
     do: {:ok, {:take_rate, bucket}}
+
+  defp operation(op, args) when op in ["storage", "fetch_artifact", "record_denial"],
+    do: Cyfr.Execution.Host.Storage.operation(op, args)
 
   defp operation(_op, _args), do: {:error, :lost}
 

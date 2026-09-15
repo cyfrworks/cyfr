@@ -31,14 +31,13 @@ defmodule Opus.HttpHandler do
 
   ## Usage
 
-      imports = Opus.HttpHandler.build_http_imports(edge, limits, ctx, host, "my-catalyst")
+      imports = Opus.HttpHandler.build_http_imports(edge, limits, host, "my-catalyst")
       # Merge with other imports and pass to Wasmex.Components.start_link
   """
 
   require Logger
 
   alias Cyfr.Authority.Blob.Edge
-  alias Sanctum.Context
   alias Cyfr.Limits
   alias Opus.EdgeGuard
   alias Opus.HostClient
@@ -61,31 +60,21 @@ defmodule Opus.HttpHandler do
 
   - `edge` - The `Cyfr.Authority.Blob.Edge` to enforce (nil = deny all egress)
   - `limits` - The node's `Cyfr.Limits` (sizes, timeout)
-  - `ctx` - The execution `Sanctum.Context`
   - `host` - The attached `Opus.HostClient` of the execution's attempt,
-    which takes each request from the consented rate
+    which takes each request from the consented rate and records each
+    refusal for the audit trail
   - `component_ref` - Component reference string for telemetry/audit
 
   ## Returns
 
   A map with the `"cyfr:http/fetch"` namespace containing a `"request"` function.
   """
-  @spec build_http_imports(Edge.t() | nil, Limits.t(), Context.t(), HostClient.t(), String.t()) ::
-          map()
-  def build_http_imports(
-        edge,
-        %Limits{} = limits,
-        %Context{} = ctx,
-        %HostClient{} = host,
-        component_ref
-      ) do
+  @spec build_http_imports(Edge.t() | nil, Limits.t(), HostClient.t(), String.t()) :: map()
+  def build_http_imports(edge, %Limits{} = limits, %HostClient{} = host, component_ref) do
     %{
       "cyfr:http/fetch@0.1.0" => %{
         "request" =>
-          {:fn,
-           fn json_req ->
-             execute(json_req, edge, limits, ctx, host, component_ref)
-           end}
+          {:fn, fn json_req -> execute(json_req, edge, limits, host, component_ref) end}
       }
     }
   end
@@ -150,25 +139,13 @@ defmodule Opus.HttpHandler do
 
   All errors are returned as JSON strings (never raised).
   """
-  @spec execute(String.t(), Edge.t() | nil, Limits.t(), Context.t(), HostClient.t(), String.t()) ::
-          String.t()
-  def execute(
-        json_request,
-        edge,
-        %Limits{} = limits,
-        %Context{} = ctx,
-        %HostClient{} = host,
-        component_ref
-      ) do
-    do_execute(json_request, edge, limits, ctx, host, component_ref)
+  @spec execute(String.t(), Edge.t() | nil, Limits.t(), HostClient.t(), String.t()) :: String.t()
+  def execute(json_request, edge, %Limits{} = limits, %HostClient{} = host, component_ref) do
+    do_execute(json_request, edge, limits, host, component_ref)
   rescue
-    # Keeps the moduledoc's "never raised" promise, the way
-    # `Opus.StorageHandler.dispatch_caught/6` keeps it for its own boundary.
-    # The guest controls this JSON: a non-string `method` or `url` reached
-    # `String.upcase/1` and `URI.parse/1` unguarded, and the raise took the
-    # Wasmex process with it — killing the whole execution instead of
-    # handing the guest a typed error it could act on. The message stays
-    # generic; the exception goes to the host log.
+    # The guest controls this JSON; a raise below here would take the
+    # Wasmex process with it. The message stays generic and the exception
+    # goes to the host log.
     exception ->
       Logger.error(
         "[Opus.HttpHandler] #{component_ref} request raised: " <>
@@ -178,45 +155,25 @@ defmodule Opus.HttpHandler do
       encode_error(:invalid_request, "Malformed HTTP request.")
   end
 
-  defp do_execute(json_request, edge, limits, ctx, host, component_ref) do
+  defp do_execute(json_request, edge, limits, host, component_ref) do
     case HttpRequestValidation.validate(json_request, edge, limits, host, component_ref) do
       {:ok, request} ->
-        perform_request(request, limits, component_ref, ctx)
+        perform_request(request, limits, component_ref, host)
 
       {:error, type, message} ->
-        record_egress_denial(ctx, component_ref, type, message)
+        record_refusal(host, type, message)
         encode_error(type, message)
     end
   end
 
-  # Audit policy-driven egress denials. DNS/transport failures are not policy
-  # decisions and are skipped. Public so HttpStreamHandler shares the same
-  # audit mapping for the shared validation path.
   @doc false
-  def record_egress_denial(ctx, component_ref, type, message) do
-    event_type =
-      case type do
-        :domain_blocked -> :domain_blocked
-        :method_blocked -> :method_blocked
-        :scheme_blocked -> :scheme_blocked
-        :request_too_large -> :request_size
-        :response_too_large -> :request_size
-        :private_ip_blocked -> :denied
-        :rate_limited -> :denied
-        _ -> nil
-      end
-
-    if event_type do
-      Opus.Host.enforce(%{
-        ctx: ctx,
-        component_ref: component_ref,
-        component_type: :catalyst,
-        event_type: event_type,
-        decision: :denied,
-        decision_reason: message
-      })
-    end
-
+  # Report a refusal of the egress checks to CYFR, which records the policy
+  # decisions among them for the audit trail
+  # (`Opus.HostClient.record_denial/3`). A request that was made and failed
+  # is not a refusal. Shared with `Opus.HttpStreamHandler`.
+  @spec record_refusal(HostClient.t(), atom(), String.t()) :: :ok
+  def record_refusal(%HostClient{} = host, type, message) when is_atom(type) do
+    _ = HostClient.record_denial(host, Atom.to_string(type), message)
     :ok
   end
 
@@ -243,7 +200,7 @@ defmodule Opus.HttpHandler do
   # Private: HTTP Execution
   # ============================================================================
 
-  defp perform_request(request, limits, component_ref, ctx) do
+  defp perform_request(request, limits, component_ref, host) do
     start_time = System.monotonic_time(:millisecond)
 
     # The response ceiling is enforced WHILE the body streams in — the
@@ -277,14 +234,14 @@ defmodule Opus.HttpHandler do
 
               {:error, type, message} ->
                 emit_telemetry(component_ref, request, :response_too_large, duration_ms)
-                record_egress_denial(ctx, component_ref, type, message)
+                record_refusal(host, type, message)
                 encode_error(type, message)
             end
 
           {:error, {:response_too_large, size, _max}} ->
             {:error, type, message} = EdgeGuard.check_response_bytes(limits, size)
             emit_telemetry(component_ref, request, :response_too_large, duration_ms)
-            record_egress_denial(ctx, component_ref, type, message)
+            record_refusal(host, type, message)
             encode_error(type, message)
         end
 

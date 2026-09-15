@@ -19,12 +19,15 @@ defmodule Opus.Runner do
        guest's HTTP requests are checked against and the node's limits;
     3. asks what the attempt runs with beyond its assignment
        (`Opus.HostClient.admitted/1`): the context and the authority its
-       guest's in-process calls (storage, egress denials, formula children
-       and catalog tools) run under, and the component's bytes;
+       guest's in-process calls (formula children and catalog tools) run
+       under;
     4. runs the component in a process of its own
        (`Opus.Runtime.execute_component/3`) under the assignment's
        timeout, renewing the lease every minute; a timeout, a lost lease
-       and a cancel asked of the attempt each kill that process;
+       and a cancel asked of the attempt each kill that process. The
+       component's bytes are fetched by the assignment's digest
+       (`Opus.HostClient.fetch_artifact/2`) only when no compiled component
+       for that digest is cached, and are run only if they hash to it;
     5. closes the attempt: `complete` with the guest's output, or `fail`
        with a sentence, marked `abandoned` when it killed the component
        call.
@@ -112,9 +115,11 @@ defmodule Opus.Runner do
 
       watch = %{client: client, until: DateTime.from_unix!(assignment.lease_until, :millisecond)}
 
+      artifact = artifact(client, assignment.component.digest)
+
       outcome =
         try do
-          execute(admitted.wasm_bytes, start.input, runtime_opts, assignment.timeout_ms, watch)
+          execute(artifact, start.input, runtime_opts, assignment.timeout_ms, watch)
         rescue
           e -> {:error, exception_message(e, __STACKTRACE__)}
         end
@@ -160,6 +165,29 @@ defmodule Opus.Runner do
 
   defp edge(%Authority{resources: %Edge{} = edge}), do: edge
   defp edge(%Authority{resources: :none}), do: nil
+
+  # The component's bytes as CYFR answers them for the assignment's digest,
+  # refused unless they hash to it.
+  defp artifact(client, digest) do
+    fn ->
+      case HostClient.fetch_artifact(client, digest) do
+        {:ok, bytes} ->
+          if Cyfr.Digest.sha256(bytes) == digest,
+            do: {:ok, bytes},
+            else:
+              {:error,
+               {:artifact, "Execution error: the component's bytes do not match its digest"}}
+
+        {:error, refusal} ->
+          Logger.warning(
+            "[Opus.Runner] artifact #{digest} of #{client.execution_id} refused: " <>
+              inspect(refusal)
+          )
+
+          {:error, {:artifact, "Execution error: the component's bytes could not be fetched"}}
+      end
+    end
+  end
 
   defp close(client, {:ok, {output, _metadata}}) do
     case HostClient.complete(client, output) do
@@ -213,7 +241,7 @@ defmodule Opus.Runner do
   # told of it (ahead of any exit of the runner's), and a kill names it. Answers `{:ok, {output, metadata}}`,
   # `{:error, reason}`, or `{:abandoned, reason}` when the component call was
   # killed.
-  defp execute(wasm_bytes, input, runtime_opts, timeout_ms, watch) do
+  defp execute(artifact, input, runtime_opts, timeout_ms, watch) do
     runner = self()
     ref = make_ref()
     start_time = System.monotonic_time(:millisecond)
@@ -234,7 +262,7 @@ defmodule Opus.Runner do
 
         result =
           try do
-            Opus.Runtime.execute_component(wasm_bytes, input, runtime_opts)
+            Opus.Runtime.execute_component(artifact, input, runtime_opts)
           rescue
             e -> {:error, Exception.message(e)}
           catch

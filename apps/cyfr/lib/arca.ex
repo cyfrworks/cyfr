@@ -73,7 +73,7 @@ defmodule Arca do
   adapter's single validation site) and an athanor-less context on a
   tenant path (`ArgumentError` from `Arca.Storage.tenant_segments/1`).
   Every untrusted-path ingress validates at its own boundary first
-  (`Opus.StorageHandler`, the MCP resource read, attachment filenames);
+  (`Cyfr.Execution.GuestStorage`, the MCP resource read, attachment filenames);
   `exists?/2` alone is total over both path and context.
 
   ## Usage

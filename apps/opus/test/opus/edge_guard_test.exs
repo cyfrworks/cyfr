@@ -3,9 +3,9 @@
 
 defmodule Opus.EdgeGuardTest do
   @moduledoc """
-  `Opus.EdgeGuard` is the one place a concrete request is matched against
-  the consent edge an execution runs under. Every WASI host handler asks it
-  before touching a domain, a scheme, a method, an IP, a storage path or a
+  `Opus.EdgeGuard` is the runner's one place a concrete egress request is
+  matched against the consent edge an execution runs under. Every HTTP host
+  handler asks it before touching a domain, a scheme, a method, an IP or a
   byte budget — so a bug here is not a bug in one import, it is the guest
   reaching past its consent in all of them.
 
@@ -63,8 +63,6 @@ defmodule Opus.EdgeGuardTest do
       assert {:error, _} = EdgeGuard.check_scheme(nil, "https")
       assert {:error, _} = EdgeGuard.check_method(nil, "GET")
       refute EdgeGuard.allows_private_ip?(nil, {10, 0, 0, 1})
-      refute EdgeGuard.allows_path?(nil, "anything")
-      refute EdgeGuard.allows_action?(nil, "read")
     end
 
     test "a nil resource group denies as hard as a nil edge" do
@@ -76,8 +74,6 @@ defmodule Opus.EdgeGuardTest do
       assert Edge.domains(bare) == []
       assert Edge.paths(bare) == []
       assert {:error, _} = EdgeGuard.check_domain(bare, "example.com")
-      refute EdgeGuard.allows_path?(bare, "notes.md")
-      refute EdgeGuard.allows_action?(bare, "read")
       assert Edge.tools(bare) == ["component.list"]
     end
 
@@ -241,53 +237,6 @@ defmodule Opus.EdgeGuardTest do
       refute EdgeGuard.allows_private_ip?(everything, {192, 0, 0, 192})
 
       assert EdgeGuard.allows_private_ip?(wide, {0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 0x0001})
-    end
-  end
-
-  # ==========================================================================
-  # Storage
-  # ==========================================================================
-
-  describe "allows_path?/2" do
-    test "an entry without a trailing slash is an exact file" do
-      e = edge(storage: %{paths: ["notes/todo.md"], actions: []})
-
-      assert EdgeGuard.allows_path?(e, "notes/todo.md")
-      refute EdgeGuard.allows_path?(e, "notes/todo.md.bak")
-      refute EdgeGuard.allows_path?(e, "notes/")
-      refute EdgeGuard.allows_path?(e, "notes/other.md")
-    end
-
-    test "a trailing slash is a directory prefix" do
-      e = edge(storage: %{paths: ["notes/"], actions: []})
-
-      assert EdgeGuard.allows_path?(e, "notes/todo.md")
-      assert EdgeGuard.allows_path?(e, "notes/deep/todo.md")
-
-      # The slash is what makes it a directory: a sibling whose name starts
-      # with the same letters is a different directory.
-      refute EdgeGuard.allows_path?(e, "notes-private/todo.md")
-      refute EdgeGuard.allows_path?(e, "other/todo.md")
-    end
-
-    test "\"*\" allows every path" do
-      e = edge(storage: %{paths: ["*"], actions: []})
-
-      assert EdgeGuard.allows_path?(e, "anything/at/all.md")
-      assert EdgeGuard.allows_path?(e, "")
-    end
-  end
-
-  describe "allows_action?/2" do
-    test "an action matches case-insensitively and nothing else does" do
-      e = edge(storage: %{paths: [], actions: ["read", "LIST"]})
-
-      assert EdgeGuard.allows_action?(e, "read")
-      assert EdgeGuard.allows_action?(e, "READ")
-      assert EdgeGuard.allows_action?(e, "list")
-
-      refute EdgeGuard.allows_action?(e, "write")
-      refute EdgeGuard.allows_action?(e, "delete")
     end
   end
 

@@ -6,13 +6,10 @@ defmodule Cyfr.PathSafety do
   Canonical path-safety denylist for storage paths.
 
   Single source of truth shared by `Arca.Storage.validate_path!/1`
-  (raising, segment-list contract) and `Opus.StorageHandler.validate_path_safe/1`
-  (tuple-returning, string contract). Before consolidation the two
-  validators enforced different subsets (Arca: `..` + null bytes + encoded
-  `..`; Opus: `..` + absolute paths) — neither a superset, so what "safe"
-  meant could drift between the storage layer and the WASM policy boundary.
+  (raising, segment-list contract) and the guest storage boundary,
+  `Cyfr.Execution.GuestStorage` (tuple-returning, string contract).
 
-  The shared core is the union of both, plus backslash rejection:
+  It refuses:
 
     * literal `..` and `.` segments (and their URI-encoded spellings,
       multi-layer included — `%2e%2e`, `%252e...`)
@@ -27,9 +24,6 @@ defmodule Cyfr.PathSafety do
       rename suffix), more than 32 segments, or a joined path past
       1024 bytes — one ceiling for both adapters, so a path S3 would
       store cannot be one Local `:enametoolong`s on
-
-  Everything here rejects-more than either previous validator; no legitimate
-  relative storage path is affected.
 
   No unicode normalization happens here — this module validates, it never
   transforms, and the layer stores exactly the bytes it is given. The one

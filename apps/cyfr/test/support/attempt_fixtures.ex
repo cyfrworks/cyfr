@@ -42,7 +42,8 @@ defmodule Cyfr.Test.AttemptFixtures do
     bound to and the attempt's (default this boot's id);
   - `:worker` — the `Cyfr.WorkerAPI` module the attempt kills its runner
     through (default none);
-  - `:wasm_bytes` — the bytes the attempt answers its runner;
+  - `:digest` — the digest of the component's artifact, in the assignment
+    and the attempt (default the digest of the reference's own bytes);
   - `:attach` — `false` to stop before attaching.
   """
   @spec attached!(keyword()) :: map()
@@ -58,6 +59,7 @@ defmodule Cyfr.Test.AttemptFixtures do
       end)
 
     limits = Keyword.get_lazy(opts, :limits, fn -> Authority.limits(authority) end)
+    digest = Keyword.get_lazy(opts, :digest, fn -> Cyfr.Digest.sha256(component_ref) end)
     input = %{"fixture" => true}
 
     record = Record.new(ctx, component_ref, input, component_type: component_type)
@@ -77,7 +79,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         stream_id: Keyword.get(opts, :stream_id, record.id),
         runner_id: runner_id,
         worker: Keyword.get(opts, :worker),
-        wasm_bytes: Keyword.get(opts, :wasm_bytes)
+        digest: digest
       )
 
     {:ok, issued} =
@@ -88,7 +90,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         component: %{
           ref: component_ref,
           type: Atom.to_string(component_type),
-          digest: Cyfr.Digest.sha256(component_ref),
+          digest: digest,
           declared_needs: [],
           activation_digest: nil
         },

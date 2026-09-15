@@ -11,7 +11,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   File storage operations (read, write, list, delete, exists) are handled by
   the `cyfr:storage/files@0.1.0` host function for catalysts via
-  `Opus.StorageHandler`, not as an MCP tool. The `retention` tool manages
+  `Cyfr.Execution.GuestStorage`, not as an MCP tool. The `retention` tool manages
   data retention policies (get, set, cleanup).
 
   The `arca://files/{path}` resource is read-only (MCP resources have no

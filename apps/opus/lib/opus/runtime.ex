@@ -48,11 +48,17 @@ defmodule Opus.Runtime do
   components via `Opus.ComponentCache`. Stores are built explicitly with
   the shared engine.
 
+  `wasm` is the component's bytes, or a function answering them
+  (`{:ok, bytes}` or `{:error, {:artifact, sentence}}`), called only when
+  no compiled component for `:digest` is cached; a refusal it answers is
+  the run's error sentence.
+
   ## Options
 
   - `:component_type` - One of `:reagent`, `:catalyst`, `:formula`. Defaults to `:reagent`.
   - `:reference` - Component reference string (for telemetry and errors)
-  - `:digest` - Content digest (the compiled-component cache key)
+  - `:digest` - Content digest (the compiled-component cache key); required
+    when `wasm` is a function
   - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
   - `:authority` - The `Cyfr.Authority` this execution runs under
   - `:authority_required` - Defaults to true: a nil `:authority` raises instead
@@ -60,7 +66,8 @@ defmodule Opus.Runtime do
     guard). Pass `false` only for authority-free harness runs in tests.
   - `:execution_id` - The admitted execution
   - `:host` - The attached `Opus.HostClient` of the execution's attempt:
-    the guest's `emit`, OAuth token and HTTP rate checks are its host calls
+    the guest's `emit`, OAuth tokens, storage, HTTP rate checks and egress
+    denials are its host calls
 
   ## Examples
 
@@ -71,10 +78,13 @@ defmodule Opus.Runtime do
       iex> result
       %{"sum" => 8}
   """
-  @spec execute_component(binary(), map(), keyword()) ::
-          {:ok, map()} | {:ok, map(), map()} | {:error, term()}
-  def execute_component(wasm_bytes, input, opts \\ [])
-      when is_binary(wasm_bytes) and is_map(input) do
+  @spec execute_component(
+          binary() | (-> {:ok, binary()} | {:error, {:artifact, String.t()}}),
+          map(),
+          keyword()
+        ) :: {:ok, map()} | {:ok, map(), map()} | {:error, term()}
+  def execute_component(wasm, input, opts \\ [])
+      when (is_binary(wasm) or is_function(wasm, 0)) and is_map(input) do
     component_type = Keyword.get(opts, :component_type, :reagent)
     wasi_opts = Opus.ComponentType.wasi_options(component_type)
 
@@ -170,14 +180,7 @@ defmodule Opus.Runtime do
       case store_result do
         {:ok, store} ->
           # Get or compile the component (cache hit skips JIT)
-          component_result =
-            if is_binary(digest) and digest != "" do
-              Opus.ComponentCache.get_or_compile(digest, wasm_bytes, store)
-            else
-              Wasmex.Components.Component.new(store, wasm_bytes)
-            end
-
-          case component_result do
+          case compile(store, wasm, digest) do
             {:ok, component} ->
               # Start GenServer directly with pre-built store + component
               case GenServer.start_link(
@@ -198,6 +201,9 @@ defmodule Opus.Runtime do
                 {:error, reason} ->
                   {:error, "Component instantiation failed: #{inspect(reason)}"}
               end
+
+            {:error, {:artifact, sentence}} ->
+              {:error, sentence}
 
             {:error, reason} ->
               {:error,
@@ -244,28 +250,22 @@ defmodule Opus.Runtime do
       end
 
     http_imports =
-      if component_type == :catalyst && limits && ctx && host do
-        Opus.HttpHandler.build_http_imports(edge, limits, ctx, host, component_ref)
+      if component_type == :catalyst && limits && host do
+        Opus.HttpHandler.build_http_imports(edge, limits, host, component_ref)
       else
         %{}
       end
 
     {stream_imports, stream_exec_ref} =
-      if component_type == :catalyst && limits && ctx && host do
-        Opus.HttpStreamHandler.build_stream_imports(edge, limits, ctx, host, component_ref)
+      if component_type == :catalyst && limits && host do
+        Opus.HttpStreamHandler.build_stream_imports(edge, limits, host, component_ref)
       else
         {%{}, nil}
       end
 
     storage_imports =
       if component_type == :catalyst && limits && host do
-        Opus.StorageHandler.build_storage_imports(
-          edge,
-          limits,
-          host,
-          component_ref,
-          public_storage_opts(authority_info.authority)
-        )
+        Opus.StorageHandler.build_storage_imports(limits, host, component_ref)
       else
         %{}
       end
@@ -357,10 +357,15 @@ defmodule Opus.Runtime do
     end
   end
 
-  # Public-profile storage rides explicit opts derived from the authority's
-  # profile kind — never a flag a guest could influence.
-  defp public_storage_opts(%Cyfr.Authority{profile_kind: :public}), do: [public?: true]
-  defp public_storage_opts(_authority), do: []
+  defp compile(store, wasm, digest) when is_binary(digest) and digest != "",
+    do: Opus.ComponentCache.get_or_compile(digest, fn -> artifact(wasm) end, store)
+
+  defp compile(store, wasm, _digest) do
+    with {:ok, bytes} <- artifact(wasm), do: Wasmex.Components.Component.new(store, bytes)
+  end
+
+  defp artifact(bytes) when is_binary(bytes), do: {:ok, bytes}
+  defp artifact(fetch) when is_function(fetch, 0), do: fetch.()
 
   # Build secrets host functions for WASI import from pre-resolved secrets map.
   # The map is unsealed once per execution, at attach, so each get() is a

@@ -67,7 +67,8 @@ defmodule Cyfr.SanctumSurfacesTest do
     # attaches, Cyfr.Execution.Attempt checks its consent is still the
     # profile's head (Sanctum.Consent) and unseals its vault edge
     # (Sanctum.VaultReader), and it dispenses the run's OAuth tokens from
-    # that edge (Sanctum.VaultReader).
+    # that edge (Sanctum.VaultReader). A runner's egress denials are recorded
+    # through its attempt (Cyfr.Execution.Host.Storage, Sanctum.Policy).
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
       Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth

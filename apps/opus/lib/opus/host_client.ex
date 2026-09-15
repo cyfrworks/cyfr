@@ -21,10 +21,10 @@ defmodule Opus.HostClient do
 
   Two calls reach CYFR beside `transport/2`. `admitted/1` asks, for a
   runner in this BEAM, what its attempt runs with beyond the assignment:
-  the context its guest's in-process calls run in, the run's authority and
-  the component's bytes (`Cyfr.Execution.Host.admitted/2`), signed as
-  every host call is. `runner_exited/3` is a worker service's report that
-  one of its runners exited, signed with that worker service's dispatch key
+  the context its guest's in-process calls run in and the run's authority
+  (`Cyfr.Execution.Host.admitted/2`), signed as every host call is.
+  `runner_exited/3` is a worker service's report that one of its runners
+  exited, signed with that worker service's dispatch key
   (`Cyfr.Execution.Host.runner_exited/2`); it carries only strings.
   """
 
@@ -63,7 +63,8 @@ defmodule Opus.HostClient do
     "malformed" => :malformed,
     "bad_mac" => :bad_mac,
     "unknown_version" => :unknown_version,
-    "claim_expired" => :claim_expired
+    "claim_expired" => :claim_expired,
+    "not_found" => :not_found
   }
 
   @doc """
@@ -169,8 +170,50 @@ defmodule Opus.HostClient do
   end
 
   @doc """
+  Run the guest's storage operation `op` with the guest request's `args`
+  (`"path"`, and `"content"` for a write or append), answering the
+  success answer's members.
+  """
+  @spec storage(t(), Cyfr.HostAPI.storage_op(), map()) :: {:ok, map()} | {:error, term()}
+  def storage(%__MODULE__{} = client, op, args)
+      when op in [:read, :write, :append, :list, :delete, :exists] and is_map(args) do
+    case request(client, "storage", Map.put(args, "action", Atom.to_string(op))) do
+      {:ok, %{} = members} -> {:ok, members}
+      {:ok, _other} -> {:error, :lost}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc "The bytes of the attempt's component artifact with `digest`."
+  @spec fetch_artifact(t(), String.t()) :: {:ok, binary()} | {:error, term()}
+  def fetch_artifact(%__MODULE__{} = client, digest) when is_binary(digest) do
+    with {:ok, encoded} when is_binary(encoded) <-
+           request(client, "fetch_artifact", %{"digest" => digest}),
+         {:ok, bytes} <- Base.decode64(encoded) do
+      {:ok, bytes}
+    else
+      {:error, reason} -> {:error, reason}
+      _unreadable -> {:error, :lost}
+    end
+  end
+
+  @doc """
+  Record a refusal of the runner's own egress checks for the attempt's
+  component: its WIT error `type` and `message`.
+  """
+  @spec record_denial(t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def record_denial(%__MODULE__{} = client, type, message)
+      when is_binary(type) and is_binary(message) do
+    case request(client, "record_denial", %{"type" => type, "message" => message}) do
+      {:ok, true} -> :ok
+      {:ok, _other} -> {:error, :lost}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   What the attempt runs with beyond its assignment, for a runner in this
-  BEAM: `{:ok, %{ctx: ctx, authority: authority, wasm_bytes: bytes}}`, or
+  BEAM: `{:ok, %{ctx: ctx, authority: authority}}`, or
   `{:error, :lost | :unavailable}`.
   """
   @spec admitted(t()) :: {:ok, map()} | {:error, :lost | :unavailable}
