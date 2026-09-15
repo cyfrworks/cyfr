@@ -75,7 +75,7 @@ test("admission checks a nonce, records it only when asked, keeps it for its win
       backends: validateBackends([{ name: "b", command: `node ${CHILD} well-behaved`, env_names: [] }]),
       openEnv: () => ({ b: {} }),
     });
-    assert.equal(synced.status, "running");
+    assert.deepEqual([synced.status, synced.rev], ["starting", 0]);
 
     owners.admit({ ...base, ts: clock, nonce: "n0" });
     owners.admit({ ...base, ts: clock, nonce: "n0" }, record);

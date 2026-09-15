@@ -48,7 +48,9 @@ const ownerOf = (label) => ({ athanor: `ath_${label}`, server: `mcp_${label}`, e
 async function syncProbe(owner) {
   const answer = await c.sync({ ...owner, backends: [{ name: "probe", command: PROBE, env: {} }] });
   assert.equal(answer.status, 200, JSON.stringify(answer.body));
-  assert.deepEqual(answer.body.backends.map((b) => b.status), ["ready"], JSON.stringify(answer.body));
+  await c.running(owner);
+  const [status] = (await c.status([owner])).body.owners;
+  assert.deepEqual(status.backends.map((b) => b.status), ["ready"], JSON.stringify(status));
   return c.tool(owner, "probe__whoami");
 }
 

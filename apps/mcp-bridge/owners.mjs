@@ -6,12 +6,20 @@
 // with the stdio MCP backends that sync defined. An owner lives while its
 // lease does; nothing about it is persisted.
 //
-// Owner states: starting (a sync is spawning its backends) → running →
-// draining (its spawns are being retired) → gone. A backend is spawning →
-// initializing → ready; a backend that exits is crashed and restarts after
-// 1, 2, 4, 8 then 16 s, and its fifth exit within ten minutes marks it
-// failed, with its tools withdrawn, until a sync at a new version replaces
-// the owner.
+// Owner states: starting (admitted; its backends spawn once the version it
+// replaces is retired, and start) → running (every backend has been ready
+// or failed once) → draining (its spawns are being retired) → gone. Each
+// change to what the owner's tools/list answers, and its move to running,
+// raises the owner's `rev`, which sync, renew and status report.
+//
+// A backend is spawning → initializing → ready. A backend that exits is
+// crashed and restarts after 1, 2, 4, 8 then 16 s, and its fifth exit within
+// ten minutes marks it failed, with its tools withdrawn, until a sync at a
+// new version replaces the owner.
+//
+// Every backend the bridge runs, or will run once a retirement finishes,
+// holds a slot of the uid pool: a sync that would hold more slots than the
+// pool has is refused.
 //
 // A backend's stdout carries MCP JSON-RPC frames and nothing of it is
 // logged; its stderr is kept in memory (the last 64 KiB) and never logged.
@@ -34,7 +42,6 @@ export const STDERR_TAIL_BYTES = 64 * 1024;
 const STDERR_SLACK_BYTES = 4 * 1024;
 
 export const MAX_LEASE_MS = 60_000;
-export const SYNC_READY_TIMEOUT_MS = 15_000;
 export const NONCE_WINDOW_MS = 30_000;
 export const MAX_NONCES = 8192;
 export const MAX_BACKENDS = 16;
@@ -73,6 +80,7 @@ export class RpcRefusal extends Error {}
 // returned masked, never logged.
 class ChildError extends Error {}
 
+// Resolves with `promise`, or with undefined once `ms` pass.
 function withTimeout(promise, ms) {
   let timer;
   return Promise.race([
@@ -180,18 +188,23 @@ const ownerKey = (athanor, server) => `${athanor}/${server}`;
 
 /**
  * The owner table over a spawner. The spawner starts a backend with
- * `spawn({ argv, env })`, answers `pool()` with `{size, free}`, and returns a
- * handle shaped like a ChildProcess (`stdin`, `stdout`, `stderr`, `spawn`,
- * `error` and `exit` events) plus `release(graceMs)`, which retires every
- * process of the backend and resolves once that is done.
+ * `spawn({ argv, env })`, answers `pool()` with `{size, free, quarantined}`,
+ * and returns a handle shaped like a ChildProcess (`stdin`, `stdout`,
+ * `stderr`, `spawn`, `error` and `exit` events) plus `release(graceMs)`,
+ * which retires every process of the backend and resolves once that is done.
+ *
+ * `sync`, `renew`, `release` and `reconcile` are control messages, and their
+ * caller applies them one at a time, in the order the controller sent them.
  */
 export class Owners {
   #spawner;
   #now;
   #log;
   #owners = new Map();
-  #locks = new Map();
-  #leaseTimer;
+  // Owners whose spawns are being retired, routed or not: they hold their
+  // slots until the retirement finishes.
+  #retiring = new Set();
+  #timer;
   #options;
 
   constructor({
@@ -200,11 +213,11 @@ export class Owners {
     log = console,
     rpcTimeoutMs = 30_000,
     initTimeoutMs = 15_000,
-    readyTimeoutMs = SYNC_READY_TIMEOUT_MS,
     maxInFlight = 32,
     stopGraceMs = 2000,
     releaseTimeoutMs = 15_000,
     spawnTimeoutMs = 15_000,
+    poolTimeoutMs = 5_000,
     leaseCheckMs = 1000,
     restartBackoffMs = RESTART_BACKOFF_MS,
   }) {
@@ -214,15 +227,15 @@ export class Owners {
     this.#options = {
       rpcTimeoutMs,
       initTimeoutMs,
-      readyTimeoutMs,
       maxInFlight,
       stopGraceMs,
       releaseTimeoutMs,
       spawnTimeoutMs,
+      poolTimeoutMs,
       restartBackoffMs,
     };
-    this.#leaseTimer = setInterval(() => this.#expireLeases(), leaseCheckMs);
-    this.#leaseTimer.unref?.();
+    this.#timer = setInterval(() => this.#expireLeases(), leaseCheckMs);
+    this.#timer.unref?.();
   }
 
   /** The owner of (athanor, server), draining ones included. */
@@ -235,22 +248,18 @@ export class Owners {
   }
 
   /**
-   * Starts, replaces or extends an owner. `backends` come from
+   * Starts, replaces or extends an owner, and answers at once with
+   * `{status, rev, backends}`; throws a Refusal. `backends` come from
    * `validateBackends`; `openEnv()` answers the opened environment
    * (`{backend: {NAME: value}}`) and is called only for a new version.
-   * A new version answers once every backend is ready or failed, or after
-   * the ready bound or half the lease, whichever comes first: the lease runs
-   * from the sync, so a backend still starting is reported as such rather
-   * than lapsing its owner. Syncs of one owner run one at a time. Resolves
-   * to `{status, backends}`; throws a Refusal.
+   *
+   * The same version with the same definition extends the lease. A higher
+   * version retires the one it replaces, then — refused as `capacity` when
+   * the pool cannot hold its backends beside every other owner's — is
+   * admitted as starting: its backends spawn once every earlier version is
+   * retired, and become ready on their own time.
    */
-  sync({ athanor, server, g, e, leaseMs, backends, openEnv }) {
-    return this.#locked(ownerKey(athanor, server), () =>
-      this.#sync({ athanor, server, g, e, leaseMs, backends, openEnv }),
-    );
-  }
-
-  async #sync({ athanor, server, g, e, leaseMs, backends, openEnv }) {
+  async sync({ athanor, server, g, e, leaseMs, backends, openEnv }) {
     const key = ownerKey(athanor, server);
     const existing = this.#owners.get(key);
     const definition = JSON.stringify(backends);
@@ -271,16 +280,17 @@ export class Owners {
 
     if (existing) {
       this.#unroute(existing);
-      await this.#drain(existing);
+      this.#drain(existing);
     }
 
     let pool;
     try {
-      pool = await this.#spawner.pool();
+      pool = await this.pool();
     } catch {
       throw new Refusal("capacity");
     }
-    if (!(pool.free >= backends.length)) throw new Refusal("capacity");
+    const replacing = existing ? slotsHeld(existing) : 0;
+    if (this.#slotsHeld() - replacing + backends.length > capacity(pool)) throw new Refusal("capacity");
 
     const owner = {
       athanor,
@@ -291,44 +301,35 @@ export class Owners {
       definition,
       state: "starting",
       leaseUntil: this.#now() + leaseMs,
+      rev: 0,
       secrets: secretValues(env),
       nonces: new Map(),
       backends: new Map(),
       drained: null,
+      // Resolves once every earlier version of this owner is retired.
+      retiredBefore: existing ? Promise.all([existing.retiredBefore, existing.drained]) : Promise.resolve(),
     };
     for (const { name, command } of backends) {
       owner.backends.set(name, this.#newBackend(owner, name, command, env[name]));
     }
     this.#owners.set(key, owner);
 
-    const started = await Promise.allSettled([...owner.backends.values()].map((b) => this.#spawn(b)));
-    const refused = started.find((r) => r.status === "rejected");
-    if (refused) {
-      this.#unroute(owner);
-      await this.#drain(owner);
-      const code = refused.reason?.code === "capacity" ? "capacity" : "spawn_failed";
-      throw new Refusal(code);
-    }
-
-    await withTimeout(
-      Promise.all([...owner.backends.values()].map((b) => b.settled)),
-      Math.min(this.#options.readyTimeoutMs, leaseMs / 2),
-    );
-
-    if (this.#owners.get(key) !== owner || owner.state === "draining") throw new Refusal("conflict");
-    owner.state = "running";
-    owner.leaseUntil = this.#now() + leaseMs;
+    owner.retiredBefore.then(() => this.#start(owner));
     return this.#answer(owner);
   }
 
   #answer(owner) {
     return {
       status: owner.state,
+      rev: owner.rev,
       backends: [...owner.backends.values()].map((b) => ({ name: b.name, status: b.status, tools: b.tools.length })),
     };
   }
 
-  /** Extends the leases of the owners running at exactly (g, e). */
+  /**
+   * Extends the leases of the owners running at exactly (g, e), and answers
+   * each one's state and rev; the rest are unknown.
+   */
   renew(entries, g, leaseMs) {
     const renewed = [];
     const unknown = [];
@@ -337,7 +338,7 @@ export class Owners {
       const owner = this.#owners.get(ownerKey(athanor, server));
       if (owner && owner.state !== "draining" && owner.g === g && owner.e === e && owner.leaseUntil > now) {
         owner.leaseUntil = now + leaseMs;
-        renewed.push({ athanor, server, e });
+        renewed.push({ athanor, server, e, state: owner.state, rev: owner.rev });
       } else {
         unknown.push({ athanor, server, e });
       }
@@ -386,6 +387,7 @@ export class Owners {
         g: owner.g,
         e: owner.e,
         state: owner.state,
+        rev: owner.rev,
         lease_ms_left: Math.max(0, owner.leaseUntil - now),
         backends: [...owner.backends.values()].map((b) => ({
           name: b.name,
@@ -430,7 +432,6 @@ export class Owners {
   tools(owner) {
     const out = [];
     for (const b of owner.backends.values()) {
-      if (b.status !== "ready") continue;
       for (const t of b.tools) {
         out.push({
           name: `${b.name}__${t.name}`,
@@ -465,7 +466,7 @@ export class Owners {
 
   /** Drains every owner and resolves once each is retired. */
   async close() {
-    clearInterval(this.#leaseTimer);
+    clearInterval(this.#timer);
     const owners = [...this.#owners.values()];
     for (const owner of owners) this.#unroute(owner);
     await Promise.allSettled(owners.map((owner) => this.#drain(owner)));
@@ -475,20 +476,50 @@ export class Owners {
     return { athanor: owner.athanor, server: owner.server, g: owner.g, e: owner.e };
   }
 
-  // Serializes syncs for one owner.
-  #locked(key, fn) {
-    const previous = this.#locks.get(key) || Promise.resolve();
-    const run = previous.then(fn, fn);
-    const tail = run.catch(() => {});
-    this.#locks.set(key, tail);
-    tail.then(() => {
-      if (this.#locks.get(key) === tail) this.#locks.delete(key);
-    });
-    return run;
-  }
-
   #unroute(owner) {
     if (this.#owners.get(owner.key) === owner) this.#owners.delete(owner.key);
+  }
+
+  // Spawns an admitted owner's backends, unless it was retired while the
+  // version it replaces was.
+  #start(owner) {
+    if (this.#owners.get(owner.key) !== owner || owner.state !== "starting") return;
+    const backends = [...owner.backends.values()];
+    for (const backend of backends) this.#spawn(backend);
+    Promise.all(backends.map((b) => b.settled)).then(() => {
+      if (owner.state !== "starting") return;
+      owner.state = "running";
+      this.#touch(owner);
+    });
+  }
+
+  #touch(owner) {
+    owner.rev += 1;
+  }
+
+  // The slots of the uid pool the bridge's backends hold or are promised.
+  #slotsHeld() {
+    let held = 0;
+    for (const owner of new Set([...this.#owners.values(), ...this.#retiring])) held += slotsHeld(owner);
+    return held;
+  }
+
+  /** The spawner's `{size, free, quarantined}`; rejects when it does not answer within its bound. */
+  async pool() {
+    let timer;
+    try {
+      const pool = await Promise.race([
+        this.#spawner.pool(),
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("the spawner did not answer pool")), this.#options.poolTimeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+      if (!Number.isSafeInteger(pool?.size)) throw new Error("the spawner's pool answer is malformed");
+      return pool;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   #expireLeases() {
@@ -505,11 +536,15 @@ export class Owners {
   }
 
   // Retires every spawn of the owner; resolves once each is released or its
-  // bound passes.
+  // bound passes, when the owner's slots are free.
   #drain(owner) {
     if (owner.drained) return owner.drained;
     owner.state = "draining";
-    owner.drained = Promise.allSettled([...owner.backends.values()].map((b) => this.#stopBackend(b))).then(() => {});
+    this.#retiring.add(owner);
+    owner.drained = Promise.allSettled([...owner.backends.values()].map((b) => this.#stopBackend(b))).then(() => {
+      for (const backend of owner.backends.values()) backend.slot = false;
+      this.#retiring.delete(owner);
+    });
     return owner.drained;
   }
 
@@ -540,33 +575,27 @@ export class Owners {
       buffer: "",
       stderr: [],
       stderrBytes: 0,
+      // Whether the backend holds a slot of the pool.
+      slot: true,
       settled,
       settle,
     };
   }
 
-  // Spawns the backend's process and starts its handshake. Resolves once the
-  // spawner confirms the process started; rejects with its refusal.
+  // Spawns the backend's process and starts its handshake once the spawner
+  // confirms it. A spawn the spawner refuses, or that is not confirmed in
+  // time, is a crash.
   #spawn(backend) {
     backend.status = "spawning";
-    backend.tools = [];
     backend.buffer = "";
     backend.nextId = 0;
     const proc = this.#spawner.spawn({ argv: ["/bin/sh", "-c", backend.command], env: backend.env });
     backend.proc = proc;
 
-    const confirmed = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(Object.assign(new Error("spawn timed out"), { code: "timeout" })), this.#options.spawnTimeoutMs);
-      timer.unref?.();
-      proc.once("spawn", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-      proc.once("error", (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-    });
+    const timer = setTimeout(() => {
+      if (backend.proc === proc) this.#crashed(backend, proc, "spawn timed out");
+    }, this.#options.spawnTimeoutMs);
+    timer.unref?.();
 
     proc.stdout.setEncoding("utf8");
     proc.stdout.on("data", (chunk) => this.#onStdout(backend, proc, chunk));
@@ -579,22 +608,21 @@ export class Owners {
       });
     }
 
-    let started = false;
-    proc.once("spawn", () => (started = true));
+    proc.once("spawn", () => {
+      clearTimeout(timer);
+      if (backend.proc === proc && !backend.stopped) this.#initialize(backend, proc);
+    });
+
     proc.on("error", (err) => {
+      clearTimeout(timer);
       if (backend.proc !== proc) return;
-      // A first spawn the spawner refuses fails the sync, which retires the owner.
-      if (!started && backend.restarts === 0) return;
       this.#crashed(backend, proc, err.code ? `spawn refused: ${err.code}` : err.message);
     });
 
     proc.on("exit", (code, signal) => {
+      clearTimeout(timer);
       if (backend.proc !== proc) return;
       this.#crashed(backend, proc, `exited code=${code} signal=${signal}`);
-    });
-
-    return confirmed.then(() => {
-      if (backend.proc === proc && !backend.stopped) this.#initialize(backend, proc);
     });
   }
 
@@ -614,11 +642,14 @@ export class Owners {
       this.#notify(backend, "notifications/initialized");
       const listed = await this.#rpc(backend, "tools/list", undefined, this.#options.initTimeoutMs);
       if (backend.proc !== proc || backend.stopped) return;
-      backend.tools = Array.isArray(listed?.tools) ? listed.tools : [];
+      const tools = Array.isArray(listed?.tools) ? listed.tools : [];
+      const changed = JSON.stringify(tools) !== JSON.stringify(backend.tools);
+      backend.tools = tools;
       backend.status = "ready";
       backend.error = null;
       this.#log.log(`[owner ${backend.label}] ready, ${backend.tools.length} tools`);
       backend.settle();
+      if (changed) this.#touch(backend.owner);
     } catch (err) {
       // A process that already exited was counted as crashed when it did.
       if (backend.proc !== proc || backend.stopped || backend.status !== "initializing") return;
@@ -634,12 +665,13 @@ export class Owners {
       this.#failPending(backend, new Error("backend stopped"));
       return;
     }
+    const withdrawn = backend.tools.length > 0;
     backend.status = "crashed";
     backend.error = backend.initError ? `${backend.initError}; ${reason}` : reason;
     backend.initError = null;
     backend.tools = [];
     this.#failPending(backend, new Error(reason));
-    proc.release(0);
+    const released = proc.release(0);
 
     const now = this.#now();
     backend.crashes = backend.crashes.filter((at) => now - at < CRASH_WINDOW_MS);
@@ -648,8 +680,13 @@ export class Owners {
       backend.status = "failed";
       this.#log.error(`[owner ${backend.label}] failed after ${backend.crashes.length} crashes`);
       backend.settle();
+      this.#touch(backend.owner);
+      released.then(() => {
+        if (backend.status === "failed") backend.slot = false;
+      });
       return;
     }
+    if (withdrawn) this.#touch(backend.owner);
     const backoff = this.#options.restartBackoffMs;
     const delay = backoff[Math.min(backend.crashes.length - 1, backoff.length - 1)];
     this.#log.error(`[owner ${backend.label}] crashed; restarting in ${delay} ms`);
@@ -657,7 +694,7 @@ export class Owners {
       backend.restartTimer = null;
       if (backend.stopped) return;
       backend.restarts += 1;
-      this.#spawn(backend).catch(() => {});
+      this.#spawn(backend);
     }, delay);
     backend.restartTimer.unref?.();
   }
@@ -796,6 +833,16 @@ export class Owners {
     this.#write(backend, { jsonrpc: "2.0", method, ...(params !== undefined ? { params } : {}) });
   }
 }
+
+// The slots an owner's backends hold.
+function slotsHeld(owner) {
+  let held = 0;
+  for (const backend of owner.backends.values()) if (backend.slot) held += 1;
+  return held;
+}
+
+// The slots of the pool a backend may hold: every uid not quarantined.
+const capacity = (pool) => pool.size - (pool.quarantined || 0);
 
 function stderrTail(backend) {
   return Buffer.concat(backend.stderr).toString("utf8");

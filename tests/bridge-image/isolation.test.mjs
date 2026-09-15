@@ -56,11 +56,14 @@ function inspect(script) {
 
 const ownerOf = (label) => ({ athanor: `ath_${label}`, server: `mcp_${label}`, e: 1 });
 
+// Syncs one probe backend for `owner` and answers its status once it runs.
 async function syncProbe(controller, owner, env = {}) {
   const answer = await controller.sync({ ...owner, backends: [{ name: "probe", command: PROBE, env }] });
   assert.equal(answer.status, 200, JSON.stringify(answer.body));
-  assert.deepEqual(answer.body.backends.map((b) => b.status), ["ready"], JSON.stringify(answer.body));
-  return answer.body;
+  await controller.running(owner);
+  const [status] = (await controller.status([owner])).body.owners;
+  assert.deepEqual(status.backends.map((b) => b.status), ["ready"], JSON.stringify(status));
+  return status;
 }
 
 before(async () => {

@@ -10,6 +10,12 @@ if (mode === "exit-at-start") process.exit(4);
 
 // `never-ready` reads its input and answers nothing.
 
+// `stubborn` behaves as `well-behaved` but ignores SIGTERM.
+if (mode === "stubborn") process.on("SIGTERM", () => {});
+
+// `ready-after <ms>` answers initialize only once <ms> have passed since it started.
+const readyAt = mode === "ready-after" ? Date.now() + Number(process.argv[3] || 0) : 0;
+
 // `stderr-env` writes its PROBE_OWN value to stderr as it starts.
 if (mode === "stderr-env") process.stderr.write(`starting with ${process.env.PROBE_OWN}\n`);
 
@@ -48,7 +54,7 @@ process.stdin.on("data", (chunk) => {
         send({ jsonrpc: "2.0", id: 1, method: "roots/list" });
       }
 
-      send({
+      const answer = {
         jsonrpc: "2.0",
         id: msg.id,
         result: {
@@ -56,7 +62,9 @@ process.stdin.on("data", (chunk) => {
           capabilities: {},
           serverInfo: { name: "fake-child", version: "0.0.0" },
         },
-      });
+      };
+      if (mode === "ready-after") setTimeout(() => send(answer), Math.max(0, readyAt - Date.now()));
+      else send(answer);
       continue;
     }
 

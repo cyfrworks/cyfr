@@ -13,6 +13,8 @@ import * as auth from "../../apps/mcp-bridge/auth.mjs";
 
 export const PROTOCOL_VERSION = "2026-07-28";
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export class Controller {
   /**
    * @param {object} options
@@ -80,6 +82,24 @@ export class Controller {
       },
       options,
     );
+  }
+
+  /**
+   * Renews `owner` (`{athanor, server, e}`) until the bridge reports it
+   * running — every backend ready or failed once — and answers its renewed
+   * entry; fails once `timeoutMs` pass or the bridge no longer knows it.
+   */
+  async running(owner, { leaseMs = 30_000, timeoutMs = 20_000 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    const ref = { athanor: owner.athanor, server: owner.server, e: owner.e };
+    for (;;) {
+      const answer = await this.renew([ref], leaseMs);
+      const [entry] = answer.body?.renewed ?? [];
+      if (!entry) throw new Error(`the bridge does not run ${JSON.stringify(ref)}: ${answer.status} ${JSON.stringify(answer.body)}`);
+      if (entry.state === "running") return entry;
+      if (Date.now() > deadline) throw new Error(`${JSON.stringify(ref)} is still ${entry.state}`);
+      await sleep(50);
+    }
   }
 
   renew(owners, leaseMs = 30_000, options) {

@@ -32,6 +32,12 @@ defmodule Emissary.MCP.ExternalServer do
   retry the call once; `stale_epoch` re-reads the row, and a row whose epoch
   moved leaves this process in error until it is replaced. Stopping the
   process releases its owner on the bridge within 3 s.
+
+  The tool catalogue is listed again whenever the controller issues a new
+  grant or reports that the owner's catalogue changed — a backend that
+  became ready after the sync answered, crashed or restarted — and a
+  changed catalogue invalidates the athanor's cached external tool list and
+  tells its subscribers (`Cyfr.Bus.mcp_servers/1`).
   """
 
   use GenServer
@@ -423,10 +429,17 @@ defmodule Emissary.MCP.ExternalServer do
 
   # The controller synced this server's owner again and issued a new grant.
   def handle_info({:bridge_owner, %{epoch: epoch} = grant}, %State{epoch: epoch} = state) do
-    {:noreply, %{state | bridge: grant, url: grant.url}}
+    {:noreply, relist_tools(%{state | bridge: grant, url: grant.url})}
   end
 
   def handle_info({:bridge_owner, _grant_for_another_epoch}, state), do: {:noreply, state}
+
+  # The bridge reports that this owner's tool catalogue changed.
+  def handle_info({:bridge_tools_changed, epoch}, %State{epoch: epoch} = state) do
+    {:noreply, relist_tools(state)}
+  end
+
+  def handle_info({:bridge_tools_changed, _another_epoch}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
@@ -486,6 +499,40 @@ defmodule Emissary.MCP.ExternalServer do
 
   defp max_in_flight,
     do: Application.get_env(:cyfr, :external_server_max_in_flight, @default_max_in_flight)
+
+  # A connected stdio server lists its tools again under its grant. A
+  # refused or failed listing leaves the catalogue as it was: the next call
+  # meets the refusal and recovers from it.
+  defp relist_tools(%State{transport: :stdio, status: :ready, bridge: %{}} = state) do
+    listing = %{state | timeout_ms: min(state.timeout_ms, @initialize_timeout_ms)}
+
+    case send_tools_list(listing) do
+      {:ok, tools, listed} when tools != state.tools ->
+        Logger.info("[ExternalServer] #{state.name}: #{length(tools)} tools after a change")
+        tools_changed(state.athanor_id)
+        %{listed | timeout_ms: state.timeout_ms, tools: tools}
+
+      {:ok, _same, listed} ->
+        %{listed | timeout_ms: state.timeout_ms}
+
+      _refused ->
+        state
+    end
+  end
+
+  defp relist_tools(state), do: state
+
+  defp tools_changed(athanor_id) do
+    Emissary.MCP.ExternalProvider.invalidate_external_tools_cache(
+      Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
+    )
+
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      Cyfr.Bus.mcp_servers(athanor_id),
+      :mcp_servers_changed
+    )
+  end
 
   # Bring a not-yet-ready server up before dispatching, mirroring the
   # get_tools arms: disconnected always retries, error retries when the
@@ -698,6 +745,9 @@ defmodule Emissary.MCP.ExternalServer do
 
   defp bridge_reason({:pool_share, limit}),
     do: "this athanor already runs its share of the MCP bridge (#{limit} backends)"
+
+  defp bridge_reason({:control_too_large, limit}),
+    do: "this server's backends and their env exceed what one sync may carry (#{limit} bytes)"
 
   defp bridge_reason({:env_unresolved, backend, name}),
     do: "backend '#{backend}' env #{name} does not resolve to a single-field vault entry"

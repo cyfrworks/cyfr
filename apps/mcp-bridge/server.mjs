@@ -11,7 +11,12 @@
 //   POST /control  CYFR's controller: hello, reconcile, sync, renew, release
 //                  and status, signed with the control key. A sync carries
 //                  the owner's backend definitions and their environment
-//                  sealed to the owner and this bridge lifetime.
+//                  sealed to the owner and this bridge lifetime. Control
+//                  messages are applied one at a time, in sequence order,
+//                  and each is answered without waiting on a backend: a
+//                  sync is answered once its version is admitted, and the
+//                  owner's state and rev (owners.mjs) in every later renew
+//                  and status say when its backends are ready.
 //   POST /mcp      One owner's MCP requests (server/discover, tools/list,
 //                  tools/call), signed with that owner's key for the
 //                  generation and epoch it runs at. It reaches that owner's
@@ -153,7 +158,7 @@ function readBody(req, limit) {
  * Builds the bridge around a spawner and the root key.
  *
  * The spawner starts a backend with `spawn({ argv, env })`, answers `pool()`
- * with `{size, free}`, and returns a handle shaped like a ChildProcess —
+ * with `{size, free, quarantined}`, and returns a handle shaped like a ChildProcess —
  * `stdin`, `stdout`, `stderr`, `spawn`, `error` and `exit` events — plus
  * `release(graceMs)`, which retires every process of the backend and
  * resolves once that is done. `env` is the backend's whole environment
@@ -177,11 +182,24 @@ export function createBridge({
   const sealKey = auth.sealKey(rootKey);
   const owners = new Owners({ spawner, now, rpcTimeoutMs, initTimeoutMs, maxInFlight, ...ownerOptions });
 
-  // The highest (generation, seq) a control message has carried.
+  // The highest (generation, seq) a control message has carried, and the
+  // tail of the control messages being applied.
   let highWater = { generation: 0, seq: 0 };
+  let controlTail = Promise.resolve();
 
   const above = ({ generation, seq }) =>
     generation > highWater.generation || (generation === highWater.generation && seq > highWater.seq);
+
+  // Applies control messages one at a time, in the order their bodies were
+  // verified; `apply` raises the high-water mark as it starts.
+  function inOrder(apply) {
+    const run = controlTail.then(apply);
+    controlTail = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  }
 
   const app = express();
   app.disable("x-powered-by");
@@ -274,11 +292,13 @@ export function createBridge({
     const expectedBoot = message.type === "hello" ? "-" : boot;
     if (fields.boot !== expectedBoot) return refuse(res, new Refusal("stale_boot"));
 
-    if (!above(fields)) return refuse(res, new Refusal("stale_control"));
-    highWater = { generation: fields.generation, seq: fields.seq };
-
     try {
-      return res.json(await control(message, fields));
+      const answer = await inOrder(() => {
+        if (!above(fields)) throw new Refusal("stale_control");
+        highWater = { generation: fields.generation, seq: fields.seq };
+        return control(message, fields);
+      });
+      return res.json(answer);
     } catch (err) {
       if (err instanceof Refusal) return refuse(res, err);
       console.error("[mcp-bridge] control error:", err);
@@ -290,7 +310,12 @@ export function createBridge({
     switch (message.type) {
       case "hello": {
         if (message.g !== g || message.cyfr_boot !== cyfrBoot) throw new Refusal("bad_request", 400);
-        const pool = await spawner.pool();
+        let pool;
+        try {
+          pool = await owners.pool();
+        } catch {
+          throw new Refusal("unavailable", 503);
+        }
         console.log(`[mcp-bridge] hello from ${cyfrBoot} at generation ${g}`);
         return { boot, pool: { size: pool.size, free: pool.free } };
       }

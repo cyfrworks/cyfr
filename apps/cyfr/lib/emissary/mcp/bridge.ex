@@ -19,7 +19,10 @@ defmodule Emissary.MCP.Bridge do
   Control messages are POSTed to `<url>/control` one at a time, each signed
   with the control key (`Cyfr.BridgeAuth.control_header/3`) under a sequence
   number that only grows, so the bridge refuses a replayed, reordered or
-  delayed one:
+  delayed one. The bridge answers each without waiting on a backend, so no
+  message holds the channel for longer than a store read and a round trip.
+  Lease maintenance — `renew` and `release`, with `hello` and `reconcile`
+  ahead of them — is sent before any `sync` or `status` still waiting:
 
     * `hello` at start, and whenever the bridge's boot id or this boot's
       generation changes; then `reconcile`, which releases every owner the
@@ -29,28 +32,40 @@ defmodule Emissary.MCP.Bridge do
       the same epoch, enabled, stdio, its athanor active), its env templates
       are resolved through `Sanctum.VaultReader` and sealed for the owner
       and the bridge's lifetime (`Cyfr.BridgeAuth.seal/5`). The resolved
-      values live only in the task that sends the message;
+      values live only in the task that sends the message. The bridge
+      admits the version and answers at once; its backends start on their
+      own time;
     * `renew` every third of the lease for every live owner whose row
       still passes the fence, asking for the lease again (`:mcp_bridge_lease_ms`,
-      `CYFR_MCP_BRIDGE_LEASE_MS`: 30 s unless set). An owner that fails the
-      fence is released; an owner the bridge no longer knows has its epoch
-      raised. Either way its process is stopped;
+      `CYFR_MCP_BRIDGE_LEASE_MS`: 30 s unless set), and more often — every
+      250 ms while a server process waits for its backends, every second
+      while any backend is still starting — to learn each owner's state and
+      rev. An owner that fails the fence is released; an owner the bridge
+      no longer knows has its epoch raised. Either way its process is
+      stopped;
     * `release` on every stop path — a server process that stops or exits,
       a failed fence, `release_referencing/2` — retried on every tick until
-      the bridge acknowledges it;
+      the bridge acknowledges it or a later sync of the owner supersedes it;
     * `status` for `mcp_servers.get`.
 
   Nothing is sent while this boot does not own the control plane
   (`Cyfr.ControlPlane.owner?/0`): `sync/1` refuses and leases lapse on the
   bridge.
 
+  ## Grants and readiness
+
   A server process receives a **grant** for its owner — the bridge's `/mcp`
   URL, the generation, epoch and bridge boot id, and the owner key
   (`Cyfr.BridgeAuth.owner_key/2`) it signs its requests with — as the answer
-  to `sync/1`, and as `{:bridge_owner, grant}` whenever a re-sync issues a
-  new one.
+  to `sync/1`, once every backend of the owner has been ready or failed, or
+  15 s after the bridge admitted it, whichever comes first. A re-sync the
+  controller starts itself sends the process `{:bridge_owner, grant}`; a
+  later change to the owner's tool catalogue, which the bridge reports as a
+  new rev, sends it `{:bridge_tools_changed, epoch}`.
 
-  One athanor's live owners hold at most a quarter of the bridge's pool of
+  ## Shares
+
+  One athanor's live owners run at most a quarter of the bridge's pool of
   backends; a sync past that share is refused.
   """
 
@@ -64,11 +79,15 @@ defmodule Emissary.MCP.Bridge do
 
   @default_lease_ms 30_000
   @control_timeout_ms 10_000
-  # The bridge answers a sync once every backend is ready or failed (within
-  # 15 s), after draining the version it replaces.
-  @sync_timeout_ms 45_000
+  # How long a sync's caller waits, after the bridge admitted the owner, for
+  # its backends to be ready or failed.
+  @ready_wait_ms 15_000
+  @poll_waiting_ms 250
+  @poll_starting_ms 1_000
   @release_wait_ms 3_000
   @max_response_bytes 1_048_576
+  # The bridge reads at most this much of a control message's body.
+  @max_control_bytes 1_048_576
 
   @typedoc "One stdio server of one athanor at one epoch."
   @type owner :: %{athanor_id: String.t(), server_id: String.t(), epoch: pos_integer()}
@@ -96,11 +115,15 @@ defmodule Emissary.MCP.Bridge do
       :generation,
       :pool_size,
       :inflight,
+      :poll_timer,
       lease_ms: 30_000,
       tick_ms: 10_000,
+      ready_wait_ms: 15_000,
       owners: %{},
       releases: %{},
       release_waiters: %{},
+      # Lease maintenance, sent first; then syncs and status reads.
+      urgent: :queue.new(),
       queue: :queue.new()
     ]
   end
@@ -114,8 +137,10 @@ defmodule Emissary.MCP.Bridge do
   root key are configured (`:mcp_bridge_url` and `:mcp_bridge_key`, or the
   `:url` and `:root` options), and while `:cluster` is on: a cluster of
   control planes runs no stdio servers. `:lease_ms` sets the lease each
-  sync and renewal asks for (default `:mcp_bridge_lease_ms`, else 30 s) and
-  `:tick_ms` the renewal cadence (default a third of the lease).
+  sync and renewal asks for (default `:mcp_bridge_lease_ms`, else 30 s),
+  `:tick_ms` the renewal cadence (default a third of the lease) and
+  `:ready_wait_ms` how long a sync's caller waits for its backends (default
+  15 s).
   """
   def start_link(opts \\ []) do
     url = Keyword.get(opts, :url, Application.get_env(:cyfr, :mcp_bridge_url))
@@ -138,13 +163,15 @@ defmodule Emissary.MCP.Bridge do
 
   @doc """
   Ask the bridge to run `owner` for the calling server process, and answer
-  its grant. Refused with a reason when the row no longer passes the fence,
-  an env template does not resolve, the athanor would hold more than its
-  share of the pool, the pool is full, this boot does not own the control
-  plane, or the bridge cannot be reached.
+  its grant once its backends are ready or failed, or the readiness wait
+  passed. Refused with a reason when the row no longer passes the fence, an
+  env template does not resolve, the athanor would hold more than its share
+  of the pool, the pool is full, this boot does not own the control plane,
+  or the bridge cannot be reached.
   """
   @spec sync(owner()) :: {:ok, grant()} | {:error, term()}
-  def sync(owner), do: call({:sync, owner, self()}, @sync_timeout_ms + @control_timeout_ms)
+  def sync(owner),
+    do: call({:sync, owner, self()}, @ready_wait_ms + 3 * @control_timeout_ms)
 
   @doc """
   Release `owner` on the bridge. Answers once the bridge acknowledged the
@@ -211,7 +238,8 @@ defmodule Emissary.MCP.Bridge do
       seal_key: BridgeAuth.seal_key(root),
       cyfr_boot: Cyfr.Boot.id(),
       lease_ms: lease_ms,
-      tick_ms: Keyword.get(opts, :tick_ms, div(lease_ms, 3))
+      tick_ms: Keyword.get(opts, :tick_ms, div(lease_ms, 3)),
+      ready_wait_ms: Keyword.get(opts, :ready_wait_ms, @ready_wait_ms)
     }
 
     send(self(), :tick)
@@ -287,12 +315,25 @@ defmodule Emissary.MCP.Bridge do
         state
       end
 
-    {:noreply, dispatch(state)}
+    {:noreply, state |> dispatch() |> schedule_poll()}
+  end
+
+  def handle_info(:poll, state) do
+    state = reply_overdue(%{state | poll_timer: nil})
+
+    state =
+      if Cyfr.ControlPlane.owner?() and live_keys(state) != [],
+        do: enqueue(state, {:renew}),
+        else: state
+
+    {:noreply, state |> dispatch() |> schedule_poll()}
   end
 
   def handle_info({ref, result}, %State{inflight: {ref, job, spec}} = state) do
     Process.demonitor(ref, [:flush])
-    {:noreply, %{state | inflight: nil} |> settle(job, spec, result) |> dispatch()}
+
+    {:noreply,
+     %{state | inflight: nil} |> settle(job, spec, result) |> dispatch() |> schedule_poll()}
   end
 
   def handle_info(
@@ -300,7 +341,9 @@ defmodule Emissary.MCP.Bridge do
         %State{inflight: {ref, job, spec}} = state
       ) do
     result = {:error, {:crashed, reason}}
-    {:noreply, %{state | inflight: nil} |> settle(job, spec, result) |> dispatch()}
+
+    {:noreply,
+     %{state | inflight: nil} |> settle(job, spec, result) |> dispatch() |> schedule_poll()}
   end
 
   # A server process that exits, however it exits, has its owner released.
@@ -367,7 +410,10 @@ defmodule Emissary.MCP.Bridge do
           live?: false,
           names: [],
           backends: 0,
-          waiters: [from]
+          waiters: [from],
+          rev: nil,
+          running?: false,
+          ready_by: nil
         })
     end
   end
@@ -391,6 +437,18 @@ defmodule Emissary.MCP.Bridge do
 
   defp enqueue_release(%State{releases: releases} = state) when releases == %{}, do: state
   defp enqueue_release(state), do: enqueue(state, {:release})
+
+  # A sync the bridge acknowledged at `epoch` replaces any version of the
+  # owner at or below it, so a release still pending for one is moot.
+  defp supersede_release(state, key, epoch) do
+    case state.releases do
+      %{^key => pending} when pending <= epoch ->
+        reply_release_waiters(%{state | releases: Map.delete(state.releases, key)}, [key])
+
+      _ ->
+        state
+    end
+  end
 
   # Out of service here first — no renewal, no grant — then released on the
   # bridge, and the process stopped. The stop runs in another process,
@@ -420,12 +478,84 @@ defmodule Emissary.MCP.Bridge do
         do: key
   end
 
+  # The backends every other live owner of `key`'s athanor holds.
   defp athanor_backends(state, {athanor_id, _server} = key) do
     for {{^athanor_id, _} = other, %{live?: true, backends: count}} <- state.owners,
         other != key,
         reduce: 0,
         do: (acc -> acc + count)
   end
+
+  # ============================================================================
+  # Readiness
+  # ============================================================================
+
+  defp grant_waiters(state, key) do
+    entry = state.owners[key]
+    grant = grant(state, key, entry)
+    Enum.each(entry.waiters, &GenServer.reply(&1, {:ok, grant}))
+    put_owner(state, key, %{entry | waiters: []})
+  end
+
+  defp overdue?(entry), do: System.monotonic_time(:millisecond) >= entry.ready_by
+
+  defp reply_overdue(state) do
+    Enum.reduce(live_keys(state), state, fn key, acc ->
+      case acc.owners[key] do
+        %{waiters: [_ | _]} = entry -> if overdue?(entry), do: grant_waiters(acc, key), else: acc
+        _ -> acc
+      end
+    end)
+  end
+
+  # What a renewal reports of a live owner: its state, and a rev that moves
+  # whenever its tool catalogue does.
+  defp observe_renewed(state, %{"athanor" => athanor, "server" => server, "e" => epoch} = item) do
+    key = {athanor, server}
+
+    case state.owners[key] do
+      %{epoch: ^epoch, live?: true} = entry ->
+        running? = item["state"] == "running"
+        changed? = item["rev"] != entry.rev
+        state = put_owner(state, key, %{entry | rev: item["rev"], running?: running?})
+
+        cond do
+          entry.waiters != [] and (running? or overdue?(entry)) ->
+            grant_waiters(state, key)
+
+          entry.waiters == [] and changed? ->
+            send(entry.pid, {:bridge_tools_changed, epoch})
+            state
+
+          true ->
+            state
+        end
+
+      _other ->
+        state
+    end
+  end
+
+  defp observe_renewed(state, _item), do: state
+
+  # Renew sooner than the tick while a process waits for its backends, or
+  # any backend is still starting.
+  defp schedule_poll(%State{poll_timer: nil} = state) do
+    entries = for key <- live_keys(state), do: state.owners[key]
+
+    interval =
+      cond do
+        Enum.any?(entries, &(&1.waiters != [])) -> @poll_waiting_ms
+        Enum.any?(entries, &(not &1.running?)) -> @poll_starting_ms
+        true -> nil
+      end
+
+    if interval,
+      do: %{state | poll_timer: Process.send_after(self(), :poll, interval)},
+      else: state
+  end
+
+  defp schedule_poll(state), do: state
 
   # ============================================================================
   # Lifetimes and generations
@@ -462,36 +592,67 @@ defmodule Emissary.MCP.Bridge do
 
   # Every registered owner is synced again after the next hello.
   defp forget_bridge(state) do
-    owners = Map.new(state.owners, fn {key, entry} -> {key, %{entry | live?: false}} end)
+    owners =
+      Map.new(state.owners, fn {key, entry} ->
+        {key, %{entry | live?: false, rev: nil, running?: false}}
+      end)
+
     enqueue(%{state | boot: nil, owners: owners}, {:hello})
   end
 
   # ============================================================================
-  # Queue
+  # Lanes
   # ============================================================================
 
   # One message is in flight at a time, so sequence numbers reach the
-  # bridge in the order they were issued.
+  # bridge in the order they were issued. A release is sent before a sync
+  # still waiting: a sync of the same owner reads the owner as registered
+  # when it is prepared, so it never names a version a release it follows
+  # covers.
+  defp lane({:sync, _key}), do: :queue
+  defp lane({:status, _key, _from}), do: :queue
+  defp lane(_job), do: :urgent
+
   defp enqueue(state, job) do
-    if queued?(state, job), do: state, else: %{state | queue: :queue.in(job, state.queue)}
+    if queued?(state, job) do
+      state
+    else
+      Map.update!(state, lane(job), &:queue.in(job, &1))
+    end
   end
 
   defp enqueue_front(state, job) do
-    queue = :queue.filter(&(&1 != job), state.queue)
-    %{state | queue: :queue.in_r(job, queue)}
+    Map.update!(state, lane(job), fn queue ->
+      :queue.in_r(job, :queue.filter(&(&1 != job), queue))
+    end)
   end
 
-  defp queued?(%State{inflight: {_ref, {:sync, _} = job, _spec}}, job), do: true
-  defp queued?(state, job), do: :queue.member(job, state.queue)
+  # A sync in flight for the owner's registered epoch answers its waiters.
+  defp queued?(%State{inflight: {_ref, {:sync, key} = job, %{epoch: epoch}}} = state, job) do
+    match?(%{epoch: ^epoch}, state.owners[key]) or :queue.member(job, state.queue)
+  end
+
+  defp queued?(state, job), do: :queue.member(job, Map.fetch!(state, lane(job)))
+
+  defp next_job(state) do
+    case :queue.out(state.urgent) do
+      {{:value, job}, urgent} ->
+        {job, %{state | urgent: urgent}}
+
+      {:empty, _urgent} ->
+        case :queue.out(state.queue) do
+          {{:value, job}, queue} -> {job, %{state | queue: queue}}
+          {:empty, _queue} -> :empty
+        end
+    end
+  end
 
   defp dispatch(%State{inflight: nil} = state) do
-    case :queue.out(state.queue) do
-      {:empty, _queue} ->
+    case next_job(state) do
+      :empty ->
         state
 
-      {{:value, job}, queue} ->
-        state = %{state | queue: queue}
-
+      {job, state} ->
         cond do
           not Cyfr.ControlPlane.owner?() ->
             state |> refuse(job, :control_plane_lost) |> dispatch()
@@ -543,11 +704,21 @@ defmodule Emissary.MCP.Bridge do
 
   defp refuse(state, _job, _reason), do: state
 
+  defp refuse_queued(state, reason) do
+    jobs = :queue.to_list(state.urgent) ++ :queue.to_list(state.queue)
+
+    Enum.reduce(
+      jobs,
+      %{state | urgent: :queue.new(), queue: :queue.new()},
+      &refuse(&2, &1, reason)
+    )
+  end
+
   # ============================================================================
   # Building messages
   # ============================================================================
 
-  defp base_spec(state, kind, timeout) do
+  defp base_spec(state, kind) do
     %{
       kind: kind,
       url: state.url,
@@ -556,8 +727,7 @@ defmodule Emissary.MCP.Bridge do
       boot: state.boot,
       generation: state.generation,
       seq: System.unique_integer([:monotonic, :positive]),
-      lease_ms: state.lease_ms,
-      timeout: timeout
+      lease_ms: state.lease_ms
     }
   end
 
@@ -567,7 +737,7 @@ defmodule Emissary.MCP.Bridge do
 
     spec =
       state
-      |> base_spec(:hello, @control_timeout_ms)
+      |> base_spec(:hello)
       |> Map.merge(%{boot: "-", generation: generation, body: body})
 
     {:send, spec}
@@ -579,7 +749,7 @@ defmodule Emissary.MCP.Bridge do
           do: %{"athanor" => athanor, "server" => server, "e" => state.owners[key].epoch}
 
     body = %{"type" => "reconcile", "keep" => keep}
-    {:send, state |> base_spec(:reconcile, @control_timeout_ms) |> Map.put(:body, body)}
+    {:send, state |> base_spec(:reconcile) |> Map.put(:body, body)}
   end
 
   defp prepare({:sync, key}, state) do
@@ -592,13 +762,13 @@ defmodule Emissary.MCP.Bridge do
 
         spec =
           state
-          |> base_spec(:sync, @sync_timeout_ms)
+          |> base_spec(:sync)
           |> Map.merge(%{
             athanor_id: athanor_id,
             server_id: server_id,
             epoch: entry.epoch,
             seal_key: state.seal_key,
-            pool_limit: pool_limit(state),
+            share: share(state),
             athanor_backends: athanor_backends(state, key)
           })
 
@@ -613,7 +783,7 @@ defmodule Emissary.MCP.Bridge do
 
       keys ->
         owners = Map.new(keys, &{&1, state.owners[&1].epoch})
-        {:send, state |> base_spec(:renew, @control_timeout_ms) |> Map.put(:owners, owners)}
+        {:send, state |> base_spec(:renew) |> Map.put(:owners, owners)}
     end
   end
 
@@ -626,7 +796,7 @@ defmodule Emissary.MCP.Bridge do
 
     spec =
       state
-      |> base_spec(:release, @control_timeout_ms)
+      |> base_spec(:release)
       |> Map.merge(%{
         releases: state.releases,
         body: %{"type" => "release", "owners" => owners}
@@ -637,11 +807,12 @@ defmodule Emissary.MCP.Bridge do
 
   defp prepare({:status, {athanor, server}, _from}, state) do
     body = %{"type" => "status", "owners" => [%{"athanor" => athanor, "server" => server}]}
-    {:send, state |> base_spec(:status, @control_timeout_ms) |> Map.put(:body, body)}
+    {:send, state |> base_spec(:status) |> Map.put(:body, body)}
   end
 
-  defp pool_limit(%State{pool_size: size}) when is_integer(size), do: max(div(size, 4), 1)
-  defp pool_limit(_state), do: nil
+  # The most backends one athanor's owners may run.
+  defp share(%State{pool_size: size}) when is_integer(size), do: max(div(size, 4), 1)
+  defp share(_state), do: nil
 
   # ============================================================================
   # Performing: store reads, vault reads and HTTP, in the task
@@ -661,7 +832,7 @@ defmodule Emissary.MCP.Bridge do
     with {:ok, row} <- fence_one(owner),
          config = Arca.McpServerStorage.config(row),
          {:ok, backends} <- BackendDefinition.validate(config["backends"]),
-         :ok <- within_pool_share(spec, backends),
+         :ok <- within_share(spec, length(backends)),
          {:ok, sealed} <- seal_env(spec, backends) do
       body = %{
         "type" => "sync",
@@ -702,9 +873,9 @@ defmodule Emissary.MCP.Bridge do
 
   # An owner the bridge no longer knows lapsed there: its epoch is raised,
   # so the grant its process holds names a version nothing will run again.
-  defp renew(spec, keys) do
+  defp renew(spec, kept) do
     owners =
-      for {athanor, server} = key <- keys,
+      for {athanor, server} = key <- kept,
           do: %{"athanor" => athanor, "server" => server, "e" => spec.owners[key]}
 
     answer = post(spec, %{"type" => "renew", "lease_ms" => spec.lease_ms, "owners" => owners})
@@ -747,12 +918,12 @@ defmodule Emissary.MCP.Bridge do
 
   defp passes_fence?(fenced, epoch), do: match?({:ok, _row}, fence_verdict(fenced, epoch))
 
-  defp within_pool_share(%{pool_limit: nil}, _backends), do: :ok
+  defp within_share(%{share: nil}, _count), do: :ok
 
-  defp within_pool_share(spec, backends) do
-    if spec.athanor_backends + length(backends) <= spec.pool_limit,
+  defp within_share(spec, count) do
+    if spec.athanor_backends + count <= spec.share,
       do: :ok,
-      else: {:error, {:pool_share, spec.pool_limit}}
+      else: {:error, {:pool_share, spec.share}}
   end
 
   defp seal_env(spec, backends) do
@@ -819,11 +990,12 @@ defmodule Emissary.MCP.Bridge do
       ts: System.os_time(:millisecond)
     }
 
-    with {:ok, header} <- BridgeAuth.control_header(spec.control_key, control, body) do
+    with :ok <- within_control_size(body),
+         {:ok, header} <- BridgeAuth.control_header(spec.control_key, control, body) do
       headers = [{"content-type", "application/json"}, {"cyfr-bridge-auth", header}]
 
       opts = [
-        receive_timeout: spec.timeout,
+        receive_timeout: @control_timeout_ms,
         private_policy: :operator,
         max_response_bytes: @max_response_bytes
       ]
@@ -837,6 +1009,9 @@ defmodule Emissary.MCP.Bridge do
       end
     end
   end
+
+  defp within_control_size(body) when byte_size(body) <= @max_control_bytes, do: :ok
+  defp within_control_size(_body), do: {:error, {:control_too_large, @max_control_bytes}}
 
   @doc false
   # The bridge boot id a response names, from its `Cyfr-Bridge-Boot` header.
@@ -890,10 +1065,7 @@ defmodule Emissary.MCP.Bridge do
 
   defp settle_job(state, {:hello}, _spec, result) do
     log_failure("hello", result)
-
-    state.queue
-    |> :queue.to_list()
-    |> Enum.reduce(%{state | queue: :queue.new()}, &refuse(&2, &1, :bridge_unavailable))
+    refuse_queued(state, :bridge_unavailable)
   end
 
   # The bridge released everything not kept, so nothing pending remains.
@@ -914,24 +1086,38 @@ defmodule Emissary.MCP.Bridge do
     state
   end
 
-  defp settle_job(state, {:sync, key}, spec, {:synced, {:http, 200, _, _}, names, count}) do
+  defp settle_job(
+         state,
+         {:sync, key},
+         spec,
+         {:synced, {:http, 200, _boot, body}, names, count}
+       ) do
     case state.owners[key] do
       %{epoch: epoch} = entry when epoch == spec.epoch ->
-        grant = grant(state, spec)
-
-        case entry.waiters do
-          [] -> send(entry.pid, {:bridge_owner, grant})
-          waiters -> Enum.each(waiters, &GenServer.reply(&1, {:ok, grant}))
-        end
-
-        put_owner(state, key, %{
+        entry = %{
           entry
           | live?: true,
             generation: spec.generation,
             names: names,
             backends: count,
-            waiters: []
-        })
+            rev: body["rev"],
+            running?: body["status"] == "running",
+            ready_by: System.monotonic_time(:millisecond) + state.ready_wait_ms
+        }
+
+        state = state |> put_owner(key, entry) |> supersede_release(key, epoch)
+
+        cond do
+          entry.waiters == [] ->
+            send(entry.pid, {:bridge_owner, grant(state, key, entry)})
+            state
+
+          entry.running? ->
+            grant_waiters(state, key)
+
+          true ->
+            state
+        end
 
       _gone_or_replaced ->
         state |> pend_release(key, spec.epoch) |> enqueue_release()
@@ -970,8 +1156,10 @@ defmodule Emissary.MCP.Bridge do
 
     state =
       case answer do
-        {:http, 200, _boot, %{"unknown" => unknown}} when is_list(unknown) ->
-          Enum.reduce(unknown, state, &lapsed(&2, &1))
+        {:http, 200, _boot, %{"renewed" => renewed, "unknown" => unknown}}
+        when is_list(renewed) and is_list(unknown) ->
+          state = Enum.reduce(unknown, state, &lapsed(&2, &1))
+          Enum.reduce(renewed, state, &observe_renewed(&2, &1))
 
         :nothing_to_renew ->
           state
@@ -1045,34 +1233,45 @@ defmodule Emissary.MCP.Bridge do
     %{state | release_waiters: rest}
   end
 
-  defp grant(state, spec) do
+  defp grant(state, {athanor_id, server_id}, entry) do
     owner = %{
-      athanor: spec.athanor_id,
-      server: spec.server_id,
-      generation: spec.generation,
-      epoch: spec.epoch
+      athanor: athanor_id,
+      server: server_id,
+      generation: entry.generation,
+      epoch: entry.epoch
     }
 
     {:ok, owner_key} = BridgeAuth.owner_key(state.root, owner)
 
     %{
       url: state.url <> "/mcp",
-      generation: spec.generation,
-      epoch: spec.epoch,
-      boot: spec.boot,
+      generation: entry.generation,
+      epoch: entry.epoch,
+      boot: state.boot,
       owner_key: owner_key
     }
   end
 
-  @refusal_codes ~w(stale_boot stale_control stale_epoch epoch_ahead capacity spawn_failed lapsed conflict bad_request)
+  @refusals %{
+    "stale_boot" => :stale_boot,
+    "stale_control" => :stale_control,
+    "stale_epoch" => :stale_epoch,
+    "epoch_ahead" => :epoch_ahead,
+    "capacity" => :capacity,
+    "lapsed" => :lapsed,
+    "conflict" => :conflict,
+    "bad_request" => :bad_request,
+    "too_large" => :too_large,
+    "unavailable" => :bridge_unavailable
+  }
 
   defp refusal({:synced, answer, _names, _count}), do: refusal(answer)
   defp refusal({:renewed, answer, _fenced_out}), do: refusal(answer)
   defp refusal({:http, 401, _boot, _body}), do: :bridge_refused_signature
 
   defp refusal({:http, status, _boot, %{"error" => code}})
-       when status in [400, 409, 503] and code in @refusal_codes,
-       do: String.to_existing_atom(code)
+       when status in [400, 409, 413, 503] and is_map_key(@refusals, code),
+       do: Map.fetch!(@refusals, code)
 
   defp refusal({:http, status, _boot, _body}), do: {:bridge_status, status}
   defp refusal({:error, {:transport, _}}), do: :bridge_unavailable

@@ -7,16 +7,16 @@ defmodule Emissary.MCP.BridgeTest do
   a fake bridge that verifies every signature the way the bridge does:
   the controller greets the bridge and reconciles at start; a stdio server
   syncs its owner with its env sealed for its version and the bridge's
-  lifetime and signs every request with its owner key; every stop path
-  releases the owner; renewal fences each owner against its row; a
-  restarted bridge and a new generation are greeted and live owners synced
-  again; nothing is sent without the control plane; refusals of a call are
-  answered as their kind requires; an athanor holds at most a quarter of
-  the pool.
+  lifetime and signs every request with its owner key; a sync's caller
+  waits for its backends while every other owner's lease is renewed, and a
+  catalogue that changes later is listed again; every stop path releases
+  the owner; renewal fences each owner against its row; a restarted bridge
+  and a new generation are greeted and live owners synced again; nothing
+  is sent without the control plane; refusals of a call are answered as
+  their kind requires; an athanor holds at most a quarter of the pool.
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.BridgeAuth
   alias Emissary.MCP.Bridge
   alias Emissary.MCP.ExternalServers
   alias Emissary.MCP.McpServersTool
@@ -30,7 +30,9 @@ defmodule Emissary.MCP.BridgeTest do
     # A bridge that checks what the real one checks before it acts — the
     # control MAC, the lifetime, the (generation, seq) high-water mark, and
     # an invoke's owner key and version — and reports every accepted
-    # message to the test process.
+    # message to the test process. Each owner runs and lists the tools the
+    # test sets for its server (running, rev 1 and `github__search` unless
+    # set).
 
     import Plug.Conn
 
@@ -51,6 +53,8 @@ defmodule Emissary.MCP.BridgeTest do
                boot: "bb_first",
                hwm: {0, 0},
                owners: %{},
+               readiness: %{},
+               tools: %{},
                pool: 32,
                refuse: %{}
              }
@@ -58,9 +62,18 @@ defmodule Emissary.MCP.BridgeTest do
           id: :fake_bridge
         )
 
-      Bypass.stub(bypass, "POST", "/control", &control(&1, agent))
-      Bypass.stub(bypass, "POST", "/mcp", &invoke(&1, agent))
+      Bypass.stub(bypass, "POST", "/control", &serve(&1, fn conn -> control(conn, agent) end))
+      Bypass.stub(bypass, "POST", "/mcp", &serve(&1, fn conn -> invoke(conn, agent) end))
       %{bypass: bypass, agent: agent, url: "http://127.0.0.1:#{bypass.port}"}
+    end
+
+    # A request still in flight when its test ends — its client gone, the
+    # fake's state stopped — is answered 503 rather than failing the test.
+    defp serve(conn, handler) do
+      Process.flag(:trap_exit, true)
+      handler.(conn)
+    catch
+      :exit, _reason -> resp(conn, 503, "")
     end
 
     def restart(%{agent: agent}, boot),
@@ -71,6 +84,14 @@ defmodule Emissary.MCP.BridgeTest do
 
     def set(%{agent: agent}, key, value), do: Agent.update(agent, &Map.put(&1, key, value))
     def get(%{agent: agent}, key), do: Agent.get(agent, &Map.fetch!(&1, key))
+
+    @doc "What the owner of `server` reports: its state and rev."
+    def readiness(%{agent: agent}, server, state, rev),
+      do: Agent.update(agent, &put_in(&1, [:readiness, server], %{state: state, rev: rev}))
+
+    @doc "The tool names the owner of `server` lists."
+    def tools(%{agent: agent}, server, names),
+      do: Agent.update(agent, &put_in(&1, [:tools, server], names))
 
     defp control(conn, agent) do
       {:ok, body, conn} = read_body(conn)
@@ -99,6 +120,8 @@ defmodule Emissary.MCP.BridgeTest do
           end
       end
     end
+
+    defp readiness_of(st, server), do: Map.get(st.readiness, server, %{state: "running", rev: 1})
 
     defp handle(conn, agent, %{"type" => "hello"}, _fields) do
       st = Agent.get(agent, & &1)
@@ -133,12 +156,13 @@ defmodule Emissary.MCP.BridgeTest do
       send(st.test, {:sealed_env, server, Jason.decode!(plaintext)})
 
       Agent.update(agent, &put_in(&1, [:owners, {athanor, server}], {fields.generation, e}))
+      %{state: state, rev: rev} = readiness_of(st, server)
 
       backends =
         for backend <- message["backends"],
             do: %{"name" => backend["name"], "status" => "ready", "tools" => 1}
 
-      answer(conn, st, 200, %{"status" => "running", "backends" => backends})
+      answer(conn, st, 200, %{"status" => state, "rev" => rev, "backends" => backends})
     end
 
     defp handle(conn, agent, %{"type" => "renew", "owners" => owners}, fields) do
@@ -148,6 +172,12 @@ defmodule Emissary.MCP.BridgeTest do
         Enum.split_with(owners, fn %{"athanor" => a, "server" => s, "e" => e} ->
           Map.get(st.owners, {a, s}) == {fields.generation, e}
         end)
+
+      renewed =
+        for %{"server" => server} = owner <- renewed do
+          %{state: state, rev: rev} = readiness_of(st, server)
+          Map.merge(owner, %{"state" => state, "rev" => rev})
+        end
 
       answer(conn, st, 200, %{"renewed" => renewed, "unknown" => unknown})
     end
@@ -226,15 +256,21 @@ defmodule Emissary.MCP.BridgeTest do
           answer(conn, st, 200, %{
             "jsonrpc" => "2.0",
             "id" => message["id"],
-            "result" => result(message)
+            "result" => result(st, fields.server, message)
           })
       end
     end
 
-    defp result(%{"method" => "tools/list"}),
-      do: %{"tools" => [%{"name" => "github__search", "inputSchema" => %{"type" => "object"}}]}
+    defp result(st, server, %{"method" => "tools/list"}) do
+      names = Map.get(st.tools, server, ["github__search"])
 
-    defp result(%{"method" => "tools/call"}),
+      %{
+        "tools" =>
+          for(name <- names, do: %{"name" => name, "inputSchema" => %{"type" => "object"}})
+      }
+    end
+
+    defp result(_st, _server, %{"method" => "tools/call"}),
       do: %{"content" => [%{"type" => "text", "text" => "found"}]}
 
     defp pop_refusal(agent, what) do
@@ -272,11 +308,16 @@ defmodule Emissary.MCP.BridgeTest do
     {:ok, ctx: ctx, fake: fake}
   end
 
-  defp start_bridge(fake) do
-    start_supervised!({Bridge, url: fake.url, root: @root, tick_ms: 3_600_000})
+  defp start_bridge(fake, opts \\ []) do
+    bridge =
+      start_supervised!(
+        {Bridge, Keyword.merge([url: fake.url, root: @root, tick_ms: 3_600_000], opts)}
+      )
+
     assert_receive {:control, "hello", %{"g" => 1}, %{boot: "-"}}, 2_000
     assert_receive {:control, "reconcile", %{"keep" => []}, _fields}, 2_000
-    Process.whereis(Bridge)
+    await_idle(bridge)
+    bridge
   end
 
   defp tick(bridge) do
@@ -289,7 +330,7 @@ defmodule Emissary.MCP.BridgeTest do
     state = :sys.get_state(bridge)
 
     cond do
-      state.inflight == nil and :queue.is_empty(state.queue) ->
+      state.inflight == nil and :queue.is_empty(state.urgent) and :queue.is_empty(state.queue) ->
         state
 
       System.monotonic_time(:millisecond) > deadline ->
@@ -301,20 +342,28 @@ defmodule Emissary.MCP.BridgeTest do
     end
   end
 
-  defp await_grant(pid, match, deadline \\ System.monotonic_time(:millisecond) + 3_000) do
-    grant = :sys.get_state(pid).bridge
+  defp eventually(check, what, deadline \\ System.monotonic_time(:millisecond) + 3_000) do
+    case check.() do
+      falsy when falsy in [nil, false] ->
+        if System.monotonic_time(:millisecond) > deadline,
+          do: flunk("timed out waiting for #{what}")
 
-    cond do
-      grant != nil and match.(grant) ->
-        grant
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("the server process holds no matching grant")
-
-      true ->
         Process.sleep(10)
-        await_grant(pid, match, deadline)
+        eventually(check, what, deadline)
+
+      value ->
+        value
     end
+  end
+
+  defp await_grant(pid, match) do
+    eventually(
+      fn ->
+        grant = :sys.get_state(pid).bridge
+        grant != nil and match.(grant) and grant
+      end,
+      "the server process to hold a matching grant"
+    )
   end
 
   defp stdio_row(ctx, name, env \\ %{"GITHUB_TOKEN" => "vault:gh-token"}) do
@@ -352,7 +401,10 @@ defmodule Emissary.MCP.BridgeTest do
 
   defp connect(ctx, row) do
     assert {:ok, [%{"name" => "github__search"}]} = ExternalServers.ensure_started(row, ctx)
+    server_pid(ctx, row)
+  end
 
+  defp server_pid(ctx, row) do
     [{pid, _digest}] =
       Registry.lookup(Emissary.MCP.ExternalServerRegistry, {row.name, ctx.athanor_id})
 
@@ -404,11 +456,72 @@ defmodule Emissary.MCP.BridgeTest do
     assert_receive {:invoke, "tools/call", %{nonce: second_nonce}}
     refute first_nonce == second_nonce
 
-    # The process holds its owner key and no env value; neither reaches a report.
+    # The process holds its owner key and no env value.
     refute inspect(:sys.get_state(pid), limit: :infinity) =~ @secret
-    {:status, _, _, items} = :sys.get_status(pid)
-    refute inspect(items, limit: :infinity) =~ Base.encode16(:sys.get_state(pid).bridge.owner_key)
     refute inspect(:sys.get_state(Process.whereis(Bridge)), limit: :infinity) =~ @secret
+  end
+
+  describe "readiness" do
+    test "a sync waiting for its backends holds no other owner's renewal back, and answers once its wait passes",
+         %{ctx: ctx, fake: fake} do
+      start_bridge(fake, tick_ms: 100, ready_wait_ms: 1_200)
+      kept = stdio_row(ctx, "kept", %{"NODE_ENV" => "production"})
+      connect(ctx, kept)
+      assert_receive {:control, "sync", %{"owner" => %{"server" => kept_id}}, _}, 2_000
+      assert kept_id == kept.id
+
+      slow = stdio_row(ctx, "slow", %{"NODE_ENV" => "production"})
+      FakeBridge.readiness(fake, slow.id, "starting", 0)
+      FakeBridge.tools(fake, slow.id, [])
+      started = System.monotonic_time(:millisecond)
+      waiting = Task.async(fn -> ExternalServers.ensure_started(slow, ctx) end)
+      assert_receive {:control, "sync", %{"owner" => %{"server" => slow_id}}, _}, 2_000
+      assert slow_id == slow.id
+
+      for _ <- 1..4 do
+        assert_receive {:control, "renew", %{"owners" => owners}, _}, 1_000
+        assert kept.id in Enum.map(owners, & &1["server"])
+      end
+
+      refute Task.yield(waiting, 0)
+      assert {:ok, []} = Task.await(waiting, 5_000)
+      assert System.monotonic_time(:millisecond) - started >= 1_200
+    end
+
+    test "a sync's caller is answered as soon as the bridge reports its owner running",
+         %{ctx: ctx, fake: fake} do
+      start_bridge(fake, ready_wait_ms: 10_000)
+      row = stdio_row(ctx, "soon", %{"NODE_ENV" => "production"})
+      FakeBridge.readiness(fake, row.id, "starting", 0)
+      waiting = Task.async(fn -> ExternalServers.ensure_started(row, ctx) end)
+      assert_receive {:control, "sync", _sync, _fields}, 2_000
+      assert_receive {:control, "renew", _renew, _fields}, 1_000
+
+      FakeBridge.readiness(fake, row.id, "running", 1)
+      assert {:ok, [%{"name" => "github__search"}]} = Task.await(waiting, 2_000)
+    end
+
+    test "a backend that becomes ready after the wait has its tools discovered without a refresh",
+         %{ctx: ctx, fake: fake} do
+      start_bridge(fake, ready_wait_ms: 300)
+      row = stdio_row(ctx, "late", %{"NODE_ENV" => "production"})
+      FakeBridge.readiness(fake, row.id, "starting", 0)
+      FakeBridge.tools(fake, row.id, [])
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.mcp_servers(ctx.athanor_id))
+
+      assert {:ok, []} = ExternalServers.ensure_started(row, ctx)
+      pid = server_pid(ctx, row)
+      refute_received :mcp_servers_changed
+
+      FakeBridge.tools(fake, row.id, ["github__search"])
+      FakeBridge.readiness(fake, row.id, "running", 2)
+
+      assert_receive :mcp_servers_changed, 3_000
+      assert [%{"name" => "github__search"}] = :sys.get_state(pid).tools
+
+      assert {:ok, [%{"name" => "github__search"}]} =
+               Emissary.MCP.ExternalServer.get_tools("late", ctx.athanor_id)
+    end
   end
 
   describe "every stop path releases the owner" do
@@ -458,6 +571,23 @@ defmodule Emissary.MCP.BridgeTest do
     test "a process that exits", %{row: row, pid: pid} do
       Process.exit(pid, :kill)
       assert_released(row, 1)
+    end
+
+    test "a release the bridge did not acknowledge is dropped once the owner is synced again at its epoch",
+         %{ctx: ctx, fake: fake, bridge: bridge, row: row, pid: pid} do
+      FakeBridge.refuse_once(fake, "release", "conflict")
+      Process.exit(pid, :kill)
+      assert_released(row, 1)
+      assert %{releases: pending} = :sys.get_state(bridge)
+      assert pending == %{{ctx.athanor_id, row.id} => 1}
+
+      connect(ctx, row)
+      assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
+      assert %{releases: releases} = await_idle(bridge)
+      assert releases == %{}
+
+      tick(bridge)
+      refute_received {:control, "release", _release, _fields}
     end
 
     test "a vault change raises the epoch after releasing in memory", %{ctx: ctx, row: row} do

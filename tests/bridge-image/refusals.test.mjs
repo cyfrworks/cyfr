@@ -37,6 +37,7 @@ before(async () => {
   assert.equal((await c.hello()).status, 200);
   const synced = await c.sync({ ...MAIN, backends: [probe()] });
   assert.equal(synced.status, 200, JSON.stringify(synced.body));
+  await c.running(MAIN);
 });
 
 after(() => stack.stop());
@@ -94,7 +95,8 @@ test("a timestamp outside the 30 s window is refused on both endpoints", async (
 
 test("a control message at or below the high-water mark is refused", async () => {
   const accepted = await c.renew([MAIN]);
-  assert.deepEqual(accepted.body, { renewed: [MAIN], unknown: [] });
+  assert.deepEqual(accepted.body.unknown, []);
+  assert.deepEqual(accepted.body.renewed.map(({ athanor, server, e }) => ({ athanor, server, e })), [MAIN]);
   const seq = c.seq;
   for (const options of [{ seq }, { seq: seq - 1 }, { generation: 0, seq: seq + 100 }]) {
     const stale = await c.renew([MAIN], 30_000, options);
@@ -123,6 +125,7 @@ test("a sync the uid pool cannot hold spawns nothing", async () => {
   const fill = { athanor: "ath_fill", server: "mcp_fill", e: 1 };
   const filled = await c.sync({ ...fill, backends: [probe("one"), probe("two")] });
   assert.equal(filled.status, 200, JSON.stringify(filled.body));
+  await c.running(fill);
   assert.equal((await c.hello()).body.pool.free, 0);
   const before = poolProcesses().map((p) => p.pid).sort();
 
