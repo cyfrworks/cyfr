@@ -13,8 +13,9 @@
 //     under a higher generation and runs the new definition;
 //   * a sync held back across a bridge restart is refused as stale_boot,
 //     and cyfr syncs its live owners again unprompted;
-//   * with the control channel lost, a revoked credential's tool is refused
-//     at once and its backends end within the lease;
+//   * a revoked credential's tool is refused at once: with the control
+//     channel up its backends are released, and with it lost they end
+//     within the lease;
 //   * a dead controller's backends are retired within the lease;
 //   * killing the spawner takes the container, and every backend, down with
 //     it, compose restarts it and cyfr syncs its owners again; a
@@ -446,6 +447,27 @@ test("a crash-looping backend ends failed, and no uid it held is quarantined", a
   assert.deepEqual([...new Set(poolProcesses().flatMap((p) => p.uids.filter(inPool)))], [live], "a uid outside the live backend's still runs");
 
   await tool("mcp_servers", { action: "delete", name: "crashloop" });
+});
+
+test("with the control channel up, a revoked credential's tool is refused at once and its backends are released rather than left to lapse", async (t) => {
+  const { entry } = await tool("vault", { action: "create", name: "revocable-up", kind: "api_key", fields: { value: `revocable-up-${randomBytes(16).toString("hex")}` } });
+  const revocable = await stdioServer("revocable-up", { PROBE_SECRET: "vault:revocable-up" });
+  const who = probe("revocable-up", "whoami");
+
+  const revoked = Date.now();
+  await tool("vault", { action: "revoke", id: entry.id });
+
+  const asked = Date.now();
+  const refused = callTool("revocable-up:probe__whoami");
+  const answeredIn = Date.now() - asked;
+  assert.ok(refused.error, `the tool answered after its credential was revoked: ${JSON.stringify(refused)}`);
+  assert.ok(answeredIn < LEASE_MS, `the refusal took ${answeredIn} ms`);
+
+  const retired = await retiredWithin(who.uid, revoked, "the revoked owner");
+  t.diagnostic(`refused in ${answeredIn} ms: ${refused.error}; uid ${who.uid} retired ${retired} ms after the revoke`);
+  // Released by cyfr's message: the bridge never saw the lease lapse.
+  assert.doesNotMatch(currentLifetimeLog(), new RegExp(`\\[owner ${session.athanor}/${revocable.id}\\] lease lapsed`));
+  assert.ok(probe("leak", "whoami").pid > 0, "the revoke disturbed another server");
 });
 
 test("with the control channel lost, a revoked credential's tool is refused at once and its backends end within the lease", async (t) => {
