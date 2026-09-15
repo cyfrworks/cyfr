@@ -55,6 +55,22 @@ defmodule Cyfr.Execution.Attempt do
 
   A process killed outright gives back its slots through their monitors,
   and its charge row through the reservation sweep.
+
+  ## A boot that does not hold the control plane
+
+  An attempt writes only while its boot holds the control plane
+  (`Cyfr.ControlPlane.owner?/0`). Once it does not, the attempt stops
+  without closing its run and gives back what the run held: at its next
+  call, before any close would write, and within a second on its own. It
+  unseals nothing, dispenses nothing and lapses nothing, and its waiter's
+  lost close writes nothing (`Cyfr.Execution.Close.lost/1`); the rows are
+  the holder's to settle.
+
+  ## What it shows
+
+  Its status (`:sys.get_status/1`) and a crash report of it show the
+  attempt's identity and claim, never the masking set, the emitter's held
+  text, the component's bytes or what its last call carried.
   """
 
   use GenServer, restart: :temporary
@@ -78,6 +94,12 @@ defmodule Cyfr.Execution.Attempt do
   # timestamp must fall within, so a replay inside that window is refused.
   @nonce_ttl_ms 60_000
 
+  @owner_check_ms 1_000
+
+  @redacted "[REDACTED]"
+
+  @derive {Inspect,
+           only: [:execution_id, :attempt, :fence, :component_ref, :claimed_by, :runner_id]}
   @enforce_keys [
     :execution_id,
     :attempt,
@@ -336,6 +358,7 @@ defmodule Cyfr.Execution.Attempt do
       held_invoke: take_over_invoke(Keyword.get(opts, :held_invoke, false), authority, owner)
     }
 
+    Process.send_after(self(), :owner_check, @owner_check_ms)
     {:ok, state}
   end
 
@@ -353,17 +376,41 @@ defmodule Cyfr.Execution.Attempt do
         {:reply, :ok, %{state | slot: token}}
 
       {:error, sentence} ->
-        close_run(state, fn _result -> :closed end, fn ->
-          Close.fail(state.close, [], sentence)
-        end)
+        refuse_run(state, sentence)
     end
   end
 
-  def handle_call({:refuse, sentence}, _from, state) do
-    close_run(state, fn _result -> :closed end, fn -> Close.fail(state.close, [], sentence) end)
+  def handle_call({:refuse, sentence}, _from, state), do: refuse_run(state, sentence)
+
+  def handle_call({kind, _caller} = message, _from, state) when kind in [:attach, :admitted],
+    do: owned(message, state)
+
+  def handle_call({:call, _caller, _op} = message, _from, state), do: owned(message, state)
+
+  def handle_call({:stop_unclosed, attempt, runner_id}, _from, state) do
+    if state.attempt == attempt and state.runner_id == runner_id,
+      do: {:stop, :normal, :ok, release_holds(state)},
+      else: {:reply, :ok, state}
   end
 
-  def handle_call({:attach, caller}, _from, state) do
+  # A call no clause names is refused without matching its terms, which
+  # can carry what a runner sent.
+  def handle_call(message, _from, state) do
+    Logger.error(
+      "[Cyfr.Execution.Attempt] #{state.execution_id} refused an unknown call " <>
+        inspect(message_shape(message))
+    )
+
+    {:reply, {:error, :lost}, state}
+  end
+
+  defp owned(message, state) do
+    if Cyfr.ControlPlane.owner?(),
+      do: handle_owned(message, state),
+      else: stop_unowned({:error, :lost}, state)
+  end
+
+  defp handle_owned({:attach, caller}, state) do
     cond do
       not names_attempt?(state, caller) ->
         {:reply, {:error, :lost}, state}
@@ -379,7 +426,7 @@ defmodule Cyfr.Execution.Attempt do
     end
   end
 
-  def handle_call({:admitted, caller}, _from, state) do
+  defp handle_owned({:admitted, caller}, state) do
     with :ok <- claimant(state, caller) do
       case held(caller) do
         :ok -> {:reply, {:ok, admitted(state)}, state}
@@ -391,7 +438,7 @@ defmodule Cyfr.Execution.Attempt do
     end
   end
 
-  def handle_call({:call, caller, op}, _from, state) do
+  defp handle_owned({:call, caller, op}, state) do
     with :ok <- claimant(state, caller),
          {:ok, noted} <- fresh_nonce(state, caller) do
       case held(caller) do
@@ -404,12 +451,6 @@ defmodule Cyfr.Execution.Attempt do
     end
   end
 
-  def handle_call({:stop_unclosed, attempt, runner_id}, _from, state) do
-    if state.attempt == attempt and state.runner_id == runner_id,
-      do: {:stop, :normal, :ok, release_holds(state)},
-      else: {:reply, :ok, state}
-  end
-
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %__MODULE__{owner: ref} = state) do
     kill_runner(state)
@@ -417,10 +458,56 @@ defmodule Cyfr.Execution.Attempt do
     {:stop, :normal, release_holds(state)}
   end
 
+  def handle_info(:owner_check, state) do
+    if Cyfr.ControlPlane.owner?() do
+      Process.send_after(self(), :owner_check, @owner_check_ms)
+      {:noreply, state}
+    else
+      {:stop, :normal, release_holds(state)}
+    end
+  end
+
   def handle_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
+
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, %__MODULE__{} = state} -> {:state, redact(state)}
+      {:message, message} -> {:message, message_shape(message)}
+      {:reason, reason} -> {:reason, reason_shape(reason)}
+      {:log, _log} -> {:log, []}
+      other -> other
+    end)
+  end
+
+  defp redact(state) do
+    %{
+      state
+      | secrets: @redacted,
+        tokens: @redacted,
+        nonces: @redacted,
+        wasm_bytes: @redacted,
+        emit: %{state.emit | held: @redacted}
+    }
+  end
+
+  # A call's operation, without the outcome, deltas or assignment it carried.
+  defp message_shape({:call, _caller, op}) when is_tuple(op), do: {:call, elem(op, 0)}
+  defp message_shape(message) when is_tuple(message), do: elem(message, 0)
+  defp message_shape(_message), do: @redacted
+
+  # An exit reason can carry what the attempt held or a call carried (an
+  # exception's fields, a failed match's value): only its kind is shown.
+  defp reason_shape(reason) when is_atom(reason), do: reason
+  defp reason_shape(%module{__exception__: true}), do: module
+
+  defp reason_shape(reason) when is_tuple(reason) and is_atom(elem(reason, 0)),
+    do: elem(reason, 0)
+
+  defp reason_shape(_reason), do: @redacted
 
   defp admitted(state),
     do: %{ctx: state.ctx, authority: state.authority, wasm_bytes: state.wasm_bytes}
@@ -646,7 +733,28 @@ defmodule Cyfr.Execution.Attempt do
   # before the terminal row is written; what the run held goes back before
   # the waiter hears the result, and the waiter hears it before the runner
   # is answered and the attempt stops.
-  defp close_run(state, answer, close) do
+  defp close_run(state, answer, close, unowned \\ {:error, :lost}) do
+    if Cyfr.ControlPlane.owner?(),
+      do: close_owned(state, answer, close),
+      else: stop_unowned(unowned, state)
+  end
+
+  # A run its runner was not started for answers its waiter `:closed`,
+  # closed or not.
+  defp refuse_run(state, sentence) do
+    close_run(
+      state,
+      fn _result -> :closed end,
+      fn -> Close.fail(state.close, [], sentence) end,
+      :closed
+    )
+  end
+
+  # Nothing of the run is sent, written or unsealed: its waiter's lost
+  # close answers without writing either.
+  defp stop_unowned(reply, state), do: {:stop, :normal, reply, release_holds(state)}
+
+  defp close_owned(state, answer, close) do
     result =
       try do
         _flushed = Emit.flush(state.emit, masking_set(state))

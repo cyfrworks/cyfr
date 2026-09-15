@@ -151,6 +151,14 @@ defmodule Cyfr.Test.AttemptFixtures do
     header
   end
 
+  @doc "The verified header fields a host call of `fixture`'s runner carries."
+  @spec caller(map()) :: Cyfr.WorkerAuth.host_call()
+  def caller(fixture) do
+    fixture
+    |> Map.take([:athanor_id, :execution_id, :attempt, :fence, :generation, :runner])
+    |> Map.merge(%{ts: System.system_time(:millisecond), nonce: nonce()})
+  end
+
   @doc """
   The host-call fields of the attempt that currently owns `execution_id`,
   as its claimant presents them: usable with `call/4` from a process that

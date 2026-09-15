@@ -11,7 +11,8 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
   the answers the runner and the waiter get. A token asked for while the
   run closes is either masked or never dispensed. An attempt that ends
   before it closes its run, or whose opener exits, leaves nothing unmasked
-  behind.
+  behind. Its status and its crash report show neither a credential nor the
+  text its emitter holds back, nor what a call carried.
 
   Every call reaches the attempt as its runner's does: a signed host call
   (`Cyfr.Execution.Host`). The vault field begins with the token, so text
@@ -22,6 +23,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
   use ExUnit.Case, async: false
 
   import Cyfr.Test.Wait
+  import ExUnit.CaptureLog
 
   alias Cyfr.Execution.Dispatch
   alias Cyfr.Test.AttemptFixtures
@@ -188,6 +190,48 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert Arca.Repo.get!(Arca.Execution, fixture.execution_id).status == "running"
   end
 
+  test "its status names the attempt and its claim, and nothing it masks or holds back",
+       %{fixture: fixture} do
+    emit!(fixture, %{"type" => "text.delta", "text" => "the key is " <> @token})
+    assert %{"ok" => @token} = token(fixture)
+
+    status = :sys.get_status(fixture.pid)
+    shown = inspect(status, limit: :infinity, printable_limit: :infinity)
+
+    assert shown =~ fixture.attempt
+    assert shown =~ fixture.runner
+    refute_unmasked(status)
+    refute_bytes(status)
+
+    state = :sys.get_state(fixture.pid)
+    assert map_size(state.secrets) == 1
+    assert map_size(state.emit.held) == 1
+    refute_unmasked(state)
+    refute_unmasked(state.emit)
+  end
+
+  test "a crash report shows neither a credential, the held text nor the call that crashed it",
+       %{fixture: fixture} do
+    emit!(fixture, %{"type" => "text.delta", "text" => "the key is " <> @token})
+    assert %{"ok" => @token} = token(fixture)
+    ref = Process.monitor(fixture.pid)
+
+    # A delta list that is not a list raises inside the call.
+    caller = AttemptFixtures.caller(fixture)
+
+    log =
+      capture_log(fn ->
+        assert {:error, :lost} =
+                 Cyfr.Execution.Attempt.call(fixture.execution_id, caller, {:push_deltas, @field})
+
+        assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+        Process.sleep(100)
+      end)
+
+    assert log =~ "Cyfr.Execution.Attempt"
+    refute_unmasked(log)
+  end
+
   # ---------------------------------------------------------------------------
 
   # An attempt whose edge binds a vault entry holding the field and an OAuth
@@ -239,6 +283,15 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
   defp event_rows(ctx, id) do
     {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, id, 0)
     Enum.map(rows, &%{type: &1.type, data: Arca.ExecutionEvents.data(&1)})
+  end
+
+  # The raw term, not only its inspection: no binary in it carries a secret.
+  defp refute_bytes(term) do
+    bytes = :erlang.term_to_binary(term)
+
+    for secret <- [@token, @field] do
+      assert :binary.match(bytes, secret) == :nomatch
+    end
   end
 
   defp refute_unmasked(term) do

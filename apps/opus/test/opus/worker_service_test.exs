@@ -6,7 +6,8 @@ defmodule Opus.WorkerServiceTest do
   A run lives only as long as what waits for it and what runs it. A waiter
   that is killed kills its run: the runner and its component process stop,
   the attempt lapses at once, and the in-flight count, the execution slot
-  and the charge row the run held all go back. A runner that exits is
+  and the charge row the run held all go back. Neither the worker service
+  nor its runners' supervisor shows a runner's attempt key. A runner that exits is
   reported at once: its attempt lapses and its waiter answers, while a
   sibling run on the same worker service keeps running and completes. The
   worker service starts only an assignment addressed to it, with the input
@@ -102,6 +103,15 @@ defmodule Opus.WorkerServiceTest do
     assert Sanctum.Authority.budget(authority).in_flight == 1
     assert Semaphore.status().child_active == children_before + 1
     assert [%{admitted_at: %DateTime{}}] = charges(ctx, authority)
+
+    # The runner's attempt key is in neither the worker service's status
+    # nor its runners' supervisor's.
+    key = AttemptFixtures.current!(ctx.athanor_id, id).key
+
+    for process <- [Opus.WorkerService, Opus.WorkerService.Runners] do
+      status = :erlang.term_to_binary(:sys.get_status(process))
+      assert :binary.match(status, key) == :nomatch
+    end
 
     Process.exit(waiter, :kill)
 

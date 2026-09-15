@@ -16,6 +16,10 @@ defmodule Cyfr.Execution.Host do
 
   ## Checks, in order
 
+    0. This boot holds the control plane (`Cyfr.ControlPlane.owner?/0`). A
+       boot that does not has no attempt to answer for: its open attempts
+       stop without closing their runs (`Cyfr.Execution.Attempt`), and the
+       rows are the holder's to write.
     1. The header verifies (`Cyfr.WorkerAuth.verify_host_call/5`) under the
        worker root and the current generation (`Cyfr.Execution.Keys`), and
        the body is a known operation with well-formed arguments.
@@ -35,9 +39,10 @@ defmodule Cyfr.Execution.Host do
 
   `{"ok": value}` on success. A refusal is `{"error": name}`:
 
-    * `lost` — the header does not verify, the body is not an operation,
-      the nonce was presented before, or the attempt is not open, current,
-      running, at the header's fence and claimed by its runner;
+    * `lost` — this boot does not hold the control plane, the header does
+      not verify, the body is not an operation, the nonce was presented
+      before, or the attempt is not open, current, running, at the header's
+      fence and claimed by its runner;
     * `unavailable` — the store could not answer;
     * at attach, `malformed`, `bad_mac`, `unknown_version` or
       `claim_expired` for an assignment that does not verify, `replayed`
@@ -78,8 +83,8 @@ defmodule Cyfr.Execution.Host do
   (`Cyfr.Execution.Lapse`), and the attempt process open for each is
   stopped without closing its run (`Cyfr.Execution.Attempt.stop_unclosed/2`).
   It answers `{"ok": true}`, `{"error": "lost"}` for a report that does not
-  verify, and `{"error": "unavailable"}` when the store cannot list the
-  attempts.
+  verify, and `{"error": "unavailable"}` when this boot does not hold the
+  control plane (nothing is lapsed) or the store cannot list the attempts.
   """
 
   require Logger
@@ -104,7 +109,8 @@ defmodule Cyfr.Execution.Host do
     now = System.system_time(:millisecond)
 
     answer =
-      with {:ok, caller} <- verify(header, body, now),
+      with :ok <- owner(:lost),
+           {:ok, caller} <- verify(header, body, now),
            {:ok, op} <- decode(body) do
         dispatch(caller, op, now)
       end
@@ -128,7 +134,8 @@ defmodule Cyfr.Execution.Host do
   @spec admitted(String.t(), String.t()) ::
           {:ok, Attempt.admitted()} | {:error, :lost | :unavailable}
   def admitted(header, body) when is_binary(header) and is_binary(body) do
-    with {:ok, caller} <- verify(header, body, System.system_time(:millisecond)),
+    with :ok <- owner(:lost),
+         {:ok, caller} <- verify(header, body, System.system_time(:millisecond)),
          {:ok, %{"op" => "admitted", "args" => %{}}} <- Jason.decode(body) do
       Attempt.admitted(caller.execution_id, caller)
     else
@@ -142,7 +149,8 @@ defmodule Cyfr.Execution.Host do
     now = System.system_time(:millisecond)
 
     answer =
-      with {:ok, report} <- verify_report(header, body, now),
+      with :ok <- owner(:unavailable),
+           {:ok, report} <- verify_report(header, body, now),
            {:ok, attempts} <- reported_attempts(body),
            :ok <- Lapse.dispatched(report.worker, attempts) do
         Enum.each(attempts, &Attempt.stop_unclosed(&1, report.worker))
@@ -157,6 +165,15 @@ defmodule Cyfr.Execution.Host do
       )
 
       encode({:error, :unavailable})
+  end
+
+  defp owner(refusal) do
+    if Cyfr.ControlPlane.owner?() do
+      :ok
+    else
+      Logger.warning("[Cyfr.Execution.Host] refused: this boot does not hold the control plane")
+      {:error, refusal}
+    end
   end
 
   defp verify_report(header, body, now) do

@@ -28,6 +28,7 @@ defmodule Opus.HostClient do
 
   alias Cyfr.WorkerAuth
 
+  @derive {Inspect, except: [:key]}
   @enforce_keys [:athanor_id, :execution_id, :attempt, :fence, :generation, :runner, :key]
   defstruct @enforce_keys
 

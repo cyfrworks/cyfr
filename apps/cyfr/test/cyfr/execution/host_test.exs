@@ -9,7 +9,10 @@ defmodule Cyfr.Execution.HostTest do
   deadline, that it names the header's attempt, and the claim on the row;
   on every other call, a nonce not presented before and a row still held
   by the calling runner. Anything that fails answers `lost`, or the
-  specific refusal attach names.
+  specific refusal attach names. A boot that does not hold the control
+  plane answers every call `lost`: it unseals nothing, its open attempts
+  stop without closing their runs, and neither they, their waiters nor a
+  runner exit report writes a row.
   """
 
   use ExUnit.Case, async: false
@@ -20,6 +23,8 @@ defmodule Cyfr.Execution.HostTest do
   alias Cyfr.Assignment
   alias Cyfr.Execution.{Close, Dispatch, Keys}
   alias Cyfr.Test.AttemptFixtures
+
+  @worker "worker_host_test"
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -438,9 +443,99 @@ defmodule Cyfr.Execution.HostTest do
     end
   end
 
-  describe "a runner exit report" do
-    @worker "worker_host_test"
+  describe "a boot that does not hold the control plane" do
+    setup do
+      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      :ok
+    end
 
+    @tag :capture_log
+    test "refuses attach, unseals nothing, and its waiter's lost close writes nothing" do
+      fixture =
+        AttemptFixtures.attached!(
+          attach: false,
+          vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
+        )
+
+      Cyfr.ControlPlane.mark(:lost)
+
+      assert %{"error" => "lost"} = attach(fixture)
+
+      assert {:error, :lost} =
+               Cyfr.Execution.Attempt.attach(
+                 fixture.execution_id,
+                 AttemptFixtures.caller(fixture)
+               )
+
+      assert {:error, "Execution attempt ended before it closed"} =
+               Dispatch.await(fixture.pid, fixture.close)
+
+      assert Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt).claimed_by == nil
+
+      assert {:ok, %{last_used_at: nil}} =
+               Arca.VaultStorage.get(fixture.athanor_id, fixture.entry.id)
+
+      assert %{status: "running"} = row(fixture)
+      assert terminal_events(fixture) == []
+    end
+
+    @tag :capture_log
+    test "refuses emit, renew and complete mid-run; the attempt stops and nothing closes the row" do
+      fixture =
+        AttemptFixtures.attached!(vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}})
+
+      :ok = Cyfr.Execution.Events.subscribe(fixture.execution_id, fixture.ctx)
+      Cyfr.ControlPlane.mark(:lost)
+
+      assert %{"error" => "lost"} = push(fixture, %{"type" => "note", "text" => "late"})
+      assert %{"error" => "lost"} = renew(fixture)
+      assert %{"error" => "lost"} = complete(fixture, %{"said" => "done"})
+
+      assert {:error, "Execution attempt ended before it closed"} =
+               Dispatch.await(fixture.pid, fixture.close)
+
+      refute Process.alive?(fixture.pid)
+      assert %{status: "running"} = row(fixture)
+      assert live_events() == []
+      assert terminal_events(fixture) == []
+
+      Cyfr.ControlPlane.mark(:unclaimed)
+      assert %{"error" => "lost"} = complete(fixture, %{"said" => "done"})
+      assert %{status: "running"} = row(fixture)
+    end
+
+    test "an open attempt stops on its own within a second, without closing its run" do
+      fixture = AttemptFixtures.attached!()
+      Cyfr.ControlPlane.mark(:lost)
+
+      wait_until(fn -> not Process.alive?(fixture.pid) end, 3_000)
+      assert %{status: "running"} = row(fixture)
+      assert terminal_events(fixture) == []
+    end
+
+    test "a run refused before its runner started is left for the holder, not closed" do
+      fixture = AttemptFixtures.attached!(attach: false)
+      Cyfr.ControlPlane.mark(:lost)
+
+      assert :closed = Cyfr.Execution.Attempt.refuse(fixture.pid, "not started")
+      refute Process.alive?(fixture.pid)
+      assert %{status: "running"} = row(fixture)
+      assert terminal_events(fixture) == []
+    end
+
+    @tag :capture_log
+    test "a runner exit report lapses nothing" do
+      fixture = AttemptFixtures.attached!(runner_id: @worker)
+      Cyfr.ControlPlane.mark(:lost)
+
+      assert %{"error" => "unavailable"} = report(@worker, [fixture.attempt])
+
+      assert %{status: "running"} = row(fixture)
+      assert %{state: "running"} = Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+    end
+  end
+
+  describe "a runner exit report" do
     defp report(worker, attempts, key \\ Keys.dispatch_key()) do
       body = AttemptFixtures.body("runner_exited", %{"attempts" => attempts})
       fields = %{worker: worker, ts: now(), nonce: "n_#{System.unique_integer([:positive])}"}
@@ -512,6 +607,11 @@ defmodule Cyfr.Execution.HostTest do
       assert %{"ok" => true} = report(@worker, [fixture.attempt])
       assert row(fixture).status == "completed"
     end
+  end
+
+  defp terminal_events(fixture) do
+    {:ok, rows} = Arca.ExecutionEvents.since(fixture.athanor_id, fixture.execution_id, 0)
+    for %{type: type} <- rows, type in Arca.ExecutionEvents.terminal_types(), do: type
   end
 
   defp delta(fixture, text),

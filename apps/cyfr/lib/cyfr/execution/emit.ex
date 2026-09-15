@@ -37,6 +37,8 @@ defmodule Cyfr.Execution.Emit do
 
   @budget %{requests: 3000, window: "1m"}
 
+  # The held text is guest text not yet masked whole.
+  @derive {Inspect, except: [:held]}
   @enforce_keys [:stream_id, :budget_id, :ctx, :authority]
   defstruct [:stream_id, :budget_id, :ctx, :authority, :step_spans, held: %{}]
 

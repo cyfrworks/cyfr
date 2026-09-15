@@ -5,7 +5,8 @@ defmodule Opus.HostClientTest do
   @moduledoc """
   A runner's client reaches its attempt only through `transport/2`, and only
   strings cross it: a signed header, a JSON body naming the operation, and
-  a JSON answer. Every host call this client makes goes that way.
+  a JSON answer. Every host call this client makes goes that way. A
+  client's inspection shows its attempt and never its key.
   """
 
   use ExUnit.Case, async: false
@@ -84,6 +85,17 @@ defmodule Opus.HostClientTest do
       end
 
     assert ops == ~w(attach renew push_deltas oauth_token take_rate complete fail)
+  end
+
+  test "a client's inspection names its attempt and not its key" do
+    attempt = AttemptFixtures.attached!(attach: false)
+    client = HostClient.new(attempt, attempt.key)
+    shown = inspect(client, limit: :infinity)
+
+    assert shown =~ attempt.attempt
+    refute shown =~ "key:"
+    refute shown =~ inspect(attempt.key, limit: :infinity)
+    Cyfr.Execution.Attempt.refuse(attempt.pid, "not started")
   end
 
   test "a client whose key is not its attempt's is answered lost" do

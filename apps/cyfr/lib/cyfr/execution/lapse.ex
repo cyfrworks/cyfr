@@ -16,6 +16,9 @@ defmodule Cyfr.Execution.Lapse do
   exited, by the attempts it was started with
   (`Cyfr.Execution.Host.runner_exited/2`); and an attempt whose waiter
   exited, by its own id (`Cyfr.Execution.Attempt`).
+
+  A boot that does not hold the control plane (`Cyfr.ControlPlane.owner?/0`)
+  lapses nothing: the rows are the holder's to settle.
   """
 
   require Logger
@@ -31,6 +34,10 @@ defmodule Cyfr.Execution.Lapse do
   """
   @spec lapse(map()) :: boolean()
   def lapse(record) do
+    Cyfr.ControlPlane.owner?() and lapse_owned(record)
+  end
+
+  defp lapse_owned(record) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
 
