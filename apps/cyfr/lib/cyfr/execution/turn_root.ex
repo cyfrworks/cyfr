@@ -8,14 +8,15 @@ defmodule Cyfr.Execution.TurnRoot do
   calling process — admitted like a WASM root, without a guest.
 
   The calling process is the slot holder for the turn's life: it claims
-  here, dispatches every child from a worker of its own (the semaphore
-  keeps one slot per process), and pauses, resumes or releases from the
-  same pid. A pause stops the keeper, moves the turn, its attempt and its
-  root out of `running` in one transaction (`Arca.TurnStorage.pause/3`),
-  and only then gives the slot back, so a crash between leaves a paused
-  row and a slot the semaphore's monitor releases — never a running row
-  with no holder. A resume takes the slot first and moves the rows only
-  once it holds one.
+  here, and pauses, resumes or releases from the same pid. It waits on no
+  child itself: every child is dispatched from a worker of its own, the
+  child's waiter, so a child that is stopped or times out ends that
+  worker and never the holder. A pause stops the keeper, moves the turn,
+  its attempt and its root out of `running` in one transaction
+  (`Arca.TurnStorage.pause/3`), and only then gives the slot back, so a
+  crash between leaves a paused row and a slot the semaphore's monitor
+  releases — never a running row with no holder. A resume takes the slot
+  first and moves the rows only once it holds one.
   """
 
   alias Cyfr.Execution.{Admission, LeaseWatch, Record}
