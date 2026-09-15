@@ -581,6 +581,12 @@ All four required vars must be set or the server refuses to start.
 > On S3 the bucket holds the Arca objects only — the `data/` volume still
 > holds the database (`cyfr.db`), so backing up an S3 deployment means both.
 
+> A built tincture's compile (one whose manifest declares `tincture.build`)
+> is not saved on S3: a build replaces the tincture's `dist/` so that nobody
+> is served a partial build, and an object store cannot swap a tree. The
+> compile answers that it was not saved and the previous build stays served.
+> WASM components compile as usual.
+
 ### Proxy trust and rate limits
 
 - `CYFR_TRUSTED_PROXY_HOPS` (default `1`) — how many reverse-proxy hops sit

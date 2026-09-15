@@ -39,7 +39,7 @@ defmodule Arca.Overlay do
   unit is atomic by construction — a single put — and counts as
   completed when the tenant file exists. A build's output replaces one
   subtree of a completed unit (`replace_subtree/5`) and never touches its
-  sentinel.
+  sentinel; readers see the previous subtree until the new one is whole.
 
   ## Whose unit it is
 
@@ -175,6 +175,21 @@ defmodule Arca.Overlay do
 
   @impl true
   def exists?(%Context{} = ctx, path), do: tenant().exists?(ctx, path)
+
+  # Under the containing unit's lock, inside a directory unit or outside
+  # the units; the tenant adapter decides whether it can swap at all.
+  @impl true
+  def replace_tree(%Context{} = ctx, path, files) do
+    with_unit_lock(ctx, path, fn ->
+      with :ok <- replaceable(path) do
+        adapter = tenant()
+
+        if Code.ensure_loaded?(adapter) and function_exported?(adapter, :replace_tree, 3),
+          do: adapter.replace_tree(ctx, path, files),
+          else: {:error, :atomic_replace_unsupported}
+      end
+    end)
+  end
 
   @impl true
   def usage(%Context{} = ctx, path), do: tenant().usage(ctx, path)
@@ -564,11 +579,16 @@ defmodule Arca.Overlay do
   @doc """
   Replace one subtree of a complete directory unit with `files`, under one
   hold of the unit's lock. `subtree` is relative to the unit and `files`
-  relative to the subtree: the subtree is cleared, the files are written,
-  and nothing else in the unit — its sentinel included — is touched. A
-  concurrent writer to the unit waits for the whole replacement. A failure
-  part-way leaves the subtree incomplete and the rest of the unit as it
-  was; the next replacement lays the subtree whole.
+  relative to the subtree; nothing else in the unit — its sentinel
+  included — is touched, and a concurrent writer to the unit waits for the
+  whole replacement.
+
+  The replacement is `Arca.replace_tree/4`: readers see the previous
+  subtree until the new one is whole, then the new one, and a replacement
+  that fails before the swap leaves the previous subtree whole and
+  readable. On an adapter that cannot swap a tree
+  (`c:Arca.Storage.replace_tree/3`, which an object store does not export)
+  it refuses with `{:error, :atomic_replace_unsupported}`.
 
   `cap:` (required) is `commit_unit/4`'s, checked before any write.
   `{:error, :not_found}` when the unit is not complete.
@@ -587,17 +607,8 @@ defmodule Arca.Overlay do
     case Arca.Storage.locate(unit) do
       {:dir, ^unit, sentinel} when top != sentinel ->
         with_unit_lock_at(ctx, unit, fn ->
-          internal = internal_ctx(ctx)
-
-          with :ok <- complete_unit(internal, unit, sentinel),
-               :ok <- check_commit_cap(ctx, cap) do
-            with_internal_writes(fn ->
-              with :ok <- clean_slate(internal, unit ++ subtree),
-                   {:ok, _written} <-
-                     write_source(internal, unit ++ subtree, sentinel, {:files, files}) do
-                :ok
-              end
-            end)
+          with :ok <- complete_unit(internal_ctx(ctx), unit, sentinel) do
+            Arca.replace_tree(ctx, unit ++ subtree, files, cap: cap)
           end
         end)
 
@@ -813,6 +824,22 @@ defmodule Arca.Overlay do
   # ---------------------------------------------------------------------------
   # Write shapes, and the delete refusal
   # ---------------------------------------------------------------------------
+
+  # A tree is replaced inside a directory unit or outside the units: at a
+  # unit, above units, in place of a sentinel or below a file unit it would
+  # take a unit's shape with it.
+  defp replaceable(path) do
+    case Arca.Storage.locate(path) do
+      :not_overlaid ->
+        :ok
+
+      {:dir, unit, sentinel} ->
+        if path in [unit, unit ++ [sentinel]], do: {:error, :invalid_path}, else: :ok
+
+      _above_or_at_a_file_unit ->
+        {:error, :invalid_path}
+    end
+  end
 
   # A put or append must land inside a unit, or outside the units
   # altogether: below a file unit there is no interior to write into, and

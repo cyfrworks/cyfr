@@ -47,6 +47,15 @@ defmodule Arca.Adapters.S3 do
   object back anyway — a node whose manifest raises its own response limit
   does not raise this ceiling; the two deliberately track only the default).
 
+  ## Tree replacement
+
+  This adapter does not export `c:Arca.Storage.replace_tree/3`. An object
+  store has no rename, and a reader resolves each key directly, so a
+  replacement written key by key would be visible part-way. Replacing a
+  tree (`Arca.replace_tree/4`, and so a tincture build saved into its
+  `dist/`) refuses with `{:error, :atomic_replace_unsupported}` and writes
+  nothing.
+
   ## Configuration
 
       config :cyfr,

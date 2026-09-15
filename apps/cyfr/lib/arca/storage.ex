@@ -370,11 +370,12 @@ defmodule Arca.Storage do
 
   @doc """
   Whether `name` is spelled like an in-flight atomic write (`<file>.tmp.<n>`,
-  the shape `Arca.Adapters.Local` renames over its target). One predicate,
-  two consumers: the facade reserves the shape on writes so no adapter
-  ever stores content a Local listing would hide, and the Local adapter —
-  the only one that creates the shape — hides it from listings and walks
-  (S3 never stores one, so it filters nothing).
+  the shape `Arca.Adapters.Local` renames over its target, and the staged
+  and retired trees of its `replace_tree/3`). One predicate, two consumers:
+  the facade reserves the shape on writes so no adapter ever stores content
+  a Local listing would hide, and the Local adapter — the only one that
+  creates the shape — hides it from listings and walks (S3 never stores
+  one, so it filters nothing).
   """
   @spec tmp_name?(String.t()) :: boolean()
   def tmp_name?(name) when is_binary(name), do: name =~ ~r/\.tmp\.\d+$/
@@ -905,5 +906,30 @@ defmodule Arca.Storage do
   """
   @callback sweep_stale_tmp(non_neg_integer()) :: {:ok, non_neg_integer()} | {:error, term()}
 
-  @optional_callbacks sweep_stale_tmp: 1
+  @typedoc """
+  One file of a replacement tree: its path relative to the tree, and its
+  bytes or a function answering them (resolved while the tree is staged,
+  one file at a time).
+  """
+  @type tree_file :: {path(), binary() | (-> {:ok, binary()} | {:error, term()})}
+
+  @doc """
+  Optional: replace the directory tree at `path` with `files` so a reader
+  sees the previous tree until the new one is whole, then the new one.
+
+  The adapter stages every file where no reader looks and swaps the staged
+  tree in for the one at `path`. A failure before the swap — a file
+  function's error, a write error — answers that error, leaves the tree at
+  `path` as it was and leaves nothing staged. A path with no tree becomes
+  the new tree.
+
+  An adapter that cannot hide a partial tree from its readers does not
+  export this: `Arca.replace_tree/4` then refuses with
+  `{:error, :atomic_replace_unsupported}` and writes nothing.
+  Implementations must validate every path through their one path
+  builder, as for any other callback.
+  """
+  @callback replace_tree(Context.t(), path(), [tree_file()]) :: :ok | error()
+
+  @optional_callbacks sweep_stale_tmp: 1, replace_tree: 3
 end

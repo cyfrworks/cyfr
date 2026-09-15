@@ -415,6 +415,11 @@ defmodule Locus.MCP do
                registration: "pending"
              }}
 
+          {:error, :atomic_replace_unsupported} ->
+            {:error,
+             "This server's storage cannot replace a tincture's dist/ without readers " <>
+               "seeing a partial build, so the build was not saved"}
+
           {:error, reason} ->
             Logger.error("[Locus.MCP] compiled artifact save failed: #{inspect(reason)}")
             {:error, {:unavailable, "The build store"}}
