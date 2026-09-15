@@ -73,4 +73,27 @@ defmodule Cyfr.NetworkPrivatePolicyTest do
 
     assert {:error, _} = Cyfr.Network.validate_redirect_url("http://127.0.0.1:1/")
   end
+
+  test "link-local embedded in an IPv6 address is refused whatever the list or policy admits" do
+    Application.put_env(:cyfr, :private_egress_targets, [
+      "::/0",
+      "64:ff9b::/96",
+      "64:ff9b:1::/48",
+      "2002::/16"
+    ])
+
+    for host <- ["64:ff9b::a9fe:a9fe", "64:ff9b:1::a9fe:a9fe", "2002:a9fe:a9fe::1", "::a9fe:a9fe"] do
+      url = "http://[#{host}]/latest/meta-data/"
+
+      for policy <- [:operator, :allow_all, {:fun, fn _ip -> true end}] do
+        assert {:error, :private_ip_blocked, msg} = Cyfr.Network.pin(url, private_policy: policy)
+        assert msg =~ "link-local", "#{host} under #{inspect(policy)}: #{msg}"
+      end
+    end
+
+    assert :ok =
+             Cyfr.Network.validate_redirect_url("http://[64:ff9b::a00:1]/",
+               private_policy: :operator
+             )
+  end
 end

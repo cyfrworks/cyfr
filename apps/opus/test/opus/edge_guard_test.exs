@@ -222,6 +222,17 @@ defmodule Opus.EdgeGuardTest do
 
       wide = egress_edge(%{domains: [], methods: [], schemes: [], private_ips: ["::/0"]})
       refute EdgeGuard.allows_private_ip?(wide, {0xFE80, 0, 0, 0, 0, 0, 0, 1})
+
+      # The metadata address behind NAT64, local-use NAT64 and 6to4.
+      for embedded <- [
+            {0x64, 0xFF9B, 0, 0, 0, 0, 0xA9FE, 0xA9FE},
+            {0x64, 0xFF9B, 1, 0, 0, 0, 0xA9FE, 0xA9FE},
+            {0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 1}
+          ] do
+        refute EdgeGuard.allows_private_ip?(wide, embedded), inspect(embedded)
+      end
+
+      assert EdgeGuard.allows_private_ip?(wide, {0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 0x0001})
     end
   end
 

@@ -116,6 +116,73 @@ defmodule Cyfr.CidrTest do
       assert Cidr.link_local?({0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0x0001})
       refute Cidr.link_local?({0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001})
     end
+
+    test "every IPv6 form embedding 169.254.169.254 is link-local, and its public twin is not" do
+      forms = [
+        # ::a9fe:a9fe, IPv4-compatible
+        {{0, 0, 0, 0, 0, 0, 0xA9FE, 0xA9FE}, {0, 0, 0, 0, 0, 0, 0x0808, 0x0808}},
+        # ::ffff:0:a9fe:a9fe, IPv4-translated
+        {{0, 0, 0, 0, 0xFFFF, 0, 0xA9FE, 0xA9FE}, {0, 0, 0, 0, 0xFFFF, 0, 0x0808, 0x0808}},
+        # 64:ff9b::a9fe:a9fe, NAT64 well-known prefix
+        {{0x64, 0xFF9B, 0, 0, 0, 0, 0xA9FE, 0xA9FE}, {0x64, 0xFF9B, 0, 0, 0, 0, 0x0808, 0x0808}},
+        # 64:ff9b:1::a9fe:a9fe, local-use NAT64 at /96
+        {{0x64, 0xFF9B, 1, 0, 0, 0, 0xA9FE, 0xA9FE}, {0x64, 0xFF9B, 1, 0, 0, 0, 0x0808, 0x0808}},
+        # 64:ff9b:1:a9fe:a9:fe00::, local-use NAT64 at /48
+        {{0x64, 0xFF9B, 1, 0xA9FE, 0x00A9, 0xFE00, 0, 0},
+         {0x64, 0xFF9B, 1, 0x0808, 0x0008, 0x0800, 0x0808, 0x0808}},
+        # 64:ff9b:1:a9:fe:a9fe::, local-use NAT64 at /56
+        {{0x64, 0xFF9B, 1, 0x00A9, 0x00FE, 0xA9FE, 0, 0},
+         {0x64, 0xFF9B, 1, 0x0008, 0x0008, 0x0808, 0x0808, 0x0808}},
+        # 64:ff9b:1:0:a9:fea9:fe00:0, local-use NAT64 at /64
+        {{0x64, 0xFF9B, 1, 0, 0x00A9, 0xFEA9, 0xFE00, 0},
+         {0x64, 0xFF9B, 1, 0x0808, 0x0008, 0x0808, 0x0808, 0x0808}},
+        # 2002:a9fe:a9fe::1, 6to4
+        {{0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 1}, {0x2002, 0x0808, 0x0808, 0, 0, 0, 0, 1}}
+      ]
+
+      for {metadata, public} <- forms do
+        assert Cidr.link_local?(metadata), inspect(metadata)
+        assert Cidr.private_ip?(metadata), inspect(metadata)
+        refute Cidr.link_local?(public), inspect(public)
+      end
+    end
+  end
+
+  describe "embedded_ipv4/1" do
+    test "reads the IPv4 address each standard embedding carries" do
+      assert Cidr.embedded_ipv4({0, 0, 0, 0, 0, 0, 0x0A00, 0x0001}) == [{10, 0, 0, 1}]
+      assert Cidr.embedded_ipv4({0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001}) == [{10, 0, 0, 1}]
+      assert Cidr.embedded_ipv4({0, 0, 0, 0, 0xFFFF, 0, 0x0A00, 0x0001}) == [{10, 0, 0, 1}]
+      assert Cidr.embedded_ipv4({0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 0x0001}) == [{10, 0, 0, 1}]
+      assert Cidr.embedded_ipv4({0x2002, 0x0A00, 0x0001, 0, 0, 0, 0, 1}) == [{10, 0, 0, 1}]
+    end
+
+    test "reads local-use NAT64 at every placement a prefix within the /48 can use" do
+      # 64:ff9b:1:c000:2:21:: at /48, and each other placement of its bits
+      assert Cidr.embedded_ipv4({0x64, 0xFF9B, 1, 0xC000, 0x0002, 0x2100, 0, 0}) == [
+               {192, 0, 2, 33},
+               {0, 2, 33, 0},
+               {2, 33, 0, 0},
+               {0, 0, 0, 0}
+             ]
+
+      assert {192, 0, 2, 33} in Cidr.embedded_ipv4(
+               {0x64, 0xFF9B, 1, 0x00C0, 0x0000, 0x0221, 0, 0}
+             )
+
+      assert {192, 0, 2, 33} in Cidr.embedded_ipv4(
+               {0x64, 0xFF9B, 1, 0, 0x00C0, 0x0002, 0x2100, 0}
+             )
+
+      assert {192, 0, 2, 33} in Cidr.embedded_ipv4({0x64, 0xFF9B, 1, 0, 0, 0, 0xC000, 0x0221})
+    end
+
+    test "any other address carries none" do
+      assert Cidr.embedded_ipv4({10, 0, 0, 1}) == []
+      assert Cidr.embedded_ipv4({0x2607, 0xF8B0, 0x4004, 0x800, 0, 0, 0, 0x200E}) == []
+      assert Cidr.embedded_ipv4({0x64, 0xFF9B, 0, 1, 0, 0, 0x0A00, 0x0001}) == []
+      assert Cidr.embedded_ipv4({0, 0, 0, 0, 1, 0xFFFF, 0x0A00, 0x0001}) == []
+    end
   end
 
   describe "private_ip?/1" do
@@ -200,6 +267,22 @@ defmodule Cyfr.CidrTest do
       assert Cidr.private_ip?({0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 1})
       # 2002:808:808:: ≡ 8.8.8.8
       refute Cidr.private_ip?({0x2002, 0x0808, 0x0808, 0, 0, 0, 0, 1})
+    end
+
+    test "IPv4-compatible and IPv4-translated forms embed the IPv4 verdict" do
+      # ::a00:1 ≡ 10.0.0.1, ::7f00:1 ≡ 127.0.0.1
+      assert Cidr.private_ip?({0, 0, 0, 0, 0, 0, 0x0A00, 0x0001})
+      assert Cidr.private_ip?({0, 0, 0, 0, 0, 0, 0x7F00, 0x0001})
+      refute Cidr.private_ip?({0, 0, 0, 0, 0, 0, 0x0808, 0x0808})
+      # ::ffff:0:c0a8:101 ≡ 192.168.1.1
+      assert Cidr.private_ip?({0, 0, 0, 0, 0xFFFF, 0, 0xC0A8, 0x0101})
+      refute Cidr.private_ip?({0, 0, 0, 0, 0xFFFF, 0, 0x0808, 0x0808})
+    end
+
+    test "local-use NAT64 (64:ff9b:1::/48) is private as a whole" do
+      assert Cidr.private_ip?({0x64, 0xFF9B, 1, 0, 0, 0, 0x0808, 0x0808})
+      assert Cidr.private_ip?({0x64, 0xFF9B, 1, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF})
+      refute Cidr.private_ip?({0x64, 0xFF9B, 2, 0, 0, 0, 0x0808, 0x0808})
     end
 
     test "IPv6 public" do

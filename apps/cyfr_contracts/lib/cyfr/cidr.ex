@@ -11,7 +11,10 @@ defmodule Cyfr.Cidr do
 
   `private_ip?/1` is the fixed SSRF range table — a different question from
   allowlist matching. `Cyfr.Network` blocks what it answers true for unless
-  the caller's private policy admits the address.
+  the caller's private policy admits the address, and blocks what
+  `link_local?/1` answers true for whatever the policy. Both judge an IPv6
+  address that embeds an IPv4 address (`embedded_ipv4/1`) by the address it
+  embeds.
 
   Fail-closed: any unparseable IP/CIDR, an out-of-range or cross-family
   prefix, or a family mismatch yields no match (never a collapsed mask that
@@ -146,15 +149,49 @@ defmodule Cyfr.Cidr do
   def ip_in_network?(_, _, _), do: false
 
   @doc """
-  True for link-local / cloud-metadata ranges: IPv4 `169.254.0.0/16`,
-  IPv6 `fe80::/10`, and their IPv4-mapped-IPv6 forms.
+  The IPv4 addresses an IPv6 address carries under a standard embedding:
+
+    * IPv4-compatible `::/96` and IPv4-mapped `::ffff:0:0/96` (RFC 4291),
+      IPv4-translated `::ffff:0:0:0/96` (RFC 2765) and NAT64 `64:ff9b::/96`
+      (RFC 6052) — the low 32 bits;
+    * local-use NAT64 `64:ff9b:1::/48` (RFC 8215) — the address does not
+      carry its translator's prefix length, so one address for each
+      RFC 6052 placement a prefix within the /48 can use: /48, /56, /64 and
+      /96;
+    * 6to4 `2002::/16` (RFC 3056) — bits 16 to 47.
+
+  Any other address, IPv4 included, carries none.
+  """
+  @spec embedded_ipv4(:inet.ip_address()) :: [:inet.ip4_address()]
+  def embedded_ipv4({0, 0, 0, 0, 0, 0, hi, lo}), do: [v4(hi, lo)]
+  def embedded_ipv4({0, 0, 0, 0, 0, 0xFFFF, hi, lo}), do: [v4(hi, lo)]
+  def embedded_ipv4({0, 0, 0, 0, 0xFFFF, 0, hi, lo}), do: [v4(hi, lo)]
+  def embedded_ipv4({0x64, 0xFF9B, 0, 0, 0, 0, hi, lo}), do: [v4(hi, lo)]
+
+  def embedded_ipv4({0x64, 0xFF9B, 1, h3, h4, h5, h6, h7}) do
+    [
+      {bsr(h3, 8), band(h3, 0xFF), band(h4, 0xFF), bsr(h5, 8)},
+      {band(h3, 0xFF), band(h4, 0xFF), bsr(h5, 8), band(h5, 0xFF)},
+      {band(h4, 0xFF), bsr(h5, 8), band(h5, 0xFF), bsr(h6, 8)},
+      v4(h6, h7)
+    ]
+  end
+
+  def embedded_ipv4({0x2002, hi, lo, _, _, _, _, _}), do: [v4(hi, lo)]
+  def embedded_ipv4(_ip), do: []
+
+  @doc """
+  True for the link-local / cloud-metadata ranges: IPv4 `169.254.0.0/16`,
+  IPv6 `fe80::/10`, and any IPv6 address embedding an IPv4 link-local
+  address (`embedded_ipv4/1`).
   """
   @spec link_local?(:inet.ip_address()) :: boolean()
   def link_local?({169, 254, _, _}), do: true
+  def link_local?({_, _, _, _}), do: false
   def link_local?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFE80 and w1 <= 0xFEBF, do: true
 
-  def link_local?({0, 0, 0, 0, 0, 0xFFFF, _ab, _cd} = ip),
-    do: link_local?(unwrap_v4_mapped(ip))
+  def link_local?({_, _, _, _, _, _, _, _} = ip),
+    do: Enum.any?(embedded_ipv4(ip), &link_local?/1)
 
   def link_local?(_), do: false
 
@@ -182,25 +219,12 @@ defmodule Cyfr.Cidr do
   # IPv6 link-local fe80::/10
   def private_ip?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFE80 and w1 <= 0xFEBF, do: true
 
-  # IPv4-mapped IPv6 (::ffff:x.x.x.x) — delegate to IPv4 check
-  def private_ip?({0, 0, 0, 0, 0, 0xFFFF, ab, cd}) do
-    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
-  end
+  # Local-use IPv4/IPv6 translation space 64:ff9b:1::/48 (RFC 8215)
+  def private_ip?({0x64, 0xFF9B, 1, _, _, _, _, _}), do: true
 
-  # NAT64 well-known prefix 64:ff9b::/96 (RFC 6052) — the embedded IPv4
-  # decides. Without this, 64:ff9b::a9fe:a9fe reaches 169.254.169.254
-  # through a NAT64 gateway.
-  def private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, ab, cd}) do
-    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
-  end
-
-  # 6to4 2002::/16 (RFC 3056) — the embedded IPv4 decides.
-  def private_ip?({0x2002, ab, cd, _, _, _, _, _}) do
-    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
-  end
-
-  # All other IPv6 addresses are considered public
-  def private_ip?({_, _, _, _, _, _, _, _}), do: false
+  # Any other IPv6 address is private when an IPv4 address it embeds is.
+  def private_ip?({_, _, _, _, _, _, _, _} = ip),
+    do: Enum.any?(embedded_ipv4(ip), &private_ip?/1)
 
   # ============================================================================
   # Internal
@@ -210,10 +234,11 @@ defmodule Cyfr.Cidr do
   defp coerce_ip(ip) when is_binary(ip), do: parse_ip(ip)
   defp coerce_ip(_), do: :error
 
-  defp unwrap_v4_mapped({0, 0, 0, 0, 0, 0xFFFF, ab, cd}),
-    do: {bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)}
+  defp unwrap_v4_mapped({0, 0, 0, 0, 0, 0xFFFF, hi, lo}), do: v4(hi, lo)
 
   defp unwrap_v4_mapped(ip), do: ip
+
+  defp v4(hi, lo), do: {bsr(hi, 8), band(hi, 0xFF), bsr(lo, 8), band(lo, 0xFF)}
 
   defp max_prefix_for(ip) when is_tuple(ip) do
     case tuple_size(ip) do

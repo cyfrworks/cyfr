@@ -81,9 +81,10 @@ defmodule Cyfr.Network do
 
     * `:private_policy` — `:deny` (default) | `:allow_all` | `:operator`
       (the `CYFR_PRIVATE_EGRESS_TARGETS` allowlist) | `{:fun, (ip_tuple ->
-      boolean)}` (the guest's consent check). Link-local is always
-      blocked, whatever the policy — that range is the cloud metadata
-      endpoint.
+      boolean)}` (the guest's consent check). Link-local
+      (`Cyfr.Cidr.link_local?/1`, IPv6 forms embedding it included) is
+      always blocked, whatever the policy — that range is the cloud
+      metadata endpoint.
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
@@ -231,23 +232,23 @@ defmodule Cyfr.Network do
     end
   end
 
+  # Link-local is the cloud metadata range: it is refused before the private
+  # classification or any policy is consulted.
   defp check_ip(ip_tuple, hostname, policy) do
-    if Cyfr.Cidr.private_ip?(ip_tuple) do
-      cond do
-        # 169.254.0.0/16 always blocked — cloud metadata endpoint
-        Cyfr.Cidr.link_local?(ip_tuple) ->
-          {:error, :private_ip_blocked,
-           "link-local IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
+    cond do
+      Cyfr.Cidr.link_local?(ip_tuple) ->
+        {:error, :private_ip_blocked,
+         "link-local IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
 
-        private_permitted?(policy, hostname, ip_tuple) ->
-          :ok
+      not Cyfr.Cidr.private_ip?(ip_tuple) ->
+        :ok
 
-        true ->
-          {:error, :private_ip_blocked,
-           "private IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
-      end
-    else
-      :ok
+      private_permitted?(policy, hostname, ip_tuple) ->
+        :ok
+
+      true ->
+        {:error, :private_ip_blocked,
+         "private IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
     end
   end
 
