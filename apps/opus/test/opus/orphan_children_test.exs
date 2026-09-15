@@ -101,7 +101,7 @@ defmodule Opus.OrphanChildrenTest do
     send(component, :continue)
     wait_until(fn -> Arca.Repo.get!(Arca.Execution, stream_id).status == "completed" end, 30_000)
     wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
-    assert charges(ctx, authority) == []
+    wait_until(fn -> charges(ctx, authority) == [] end)
 
     send(row.component, :continue)
     assert_receive {:root, {:ok, _}}, 30_000
