@@ -26,7 +26,7 @@ defmodule Opus.SeedModelCatalystsTest do
     {"claude", "ANTHROPIC_API_KEY", :keyed},
     {"openai", "OPENAI_API_KEY", {:table, "gpt-5", 400_000}},
     {"gemini", "GEMINI_API_KEY", :keyed},
-    {"grok", "GROK_API_KEY", {:table, "grok-4", 256_000}},
+    {"grok", "GROK_API_KEY", {:table, "grok-4.3", 1_000_000}},
     {"openrouter", "OPENROUTER_API_KEY", :keyed}
   ]
 

@@ -36,7 +36,8 @@ defmodule Cyfr.Models do
 
   A refusal is `{"status": N, "error": {"type", "message", "provider"?}}`
   with `type` one of `invalid_request`, `secret_denied`, `authentication`,
-  `rate_limited`, `overloaded`, `provider_error`, `unknown_model`,
+  `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (the
+  provider's stream ended before its closing signal), `unknown_model`,
   `unknown_operation`.
   The provider's HTTP call and the key stay in the catalyst; this module
   only names the contract, reads the envelope, and runs the listing the

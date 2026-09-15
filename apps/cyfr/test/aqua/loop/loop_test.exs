@@ -70,7 +70,7 @@ defmodule Aqua.LoopTest do
     {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
 
     # What `Aqua.AgentConfig` resolves, and so what the spec holds.
-    versioned = @model <> ":1.3.0"
+    versioned = @model <> ":1.3.1"
     {:ok, name_ref} = Cyfr.ComponentRef.to_name_ref(versioned)
 
     # The graph is keyed the way `Cyfr.Execution.Admission` steps: by name. Asking with
@@ -424,7 +424,7 @@ defmodule Aqua.LoopTest do
              Tape.turn(ctx, turn.id)
 
     assert {:error, :catalyst_pinned} =
-             Arca.TurnStorage.pin_catalyst(ctx, turn.id, "catalyst:local.openai:1.3.0", %{
+             Arca.TurnStorage.pin_catalyst(ctx, turn.id, "catalyst:local.openai:1.3.1", %{
                fence: paused.fence
              })
 

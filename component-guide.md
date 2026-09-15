@@ -952,7 +952,7 @@ With a `model`, the same answer carries that model's `context_window` and, where
   "context_window": 200000, "max_output_tokens": 64000, "...": "the capabilities above"}}
 ```
 
-The window comes from the provider's models API where it reports one (claude, gemini, openrouter — this takes the key) and from a table in the catalyst otherwise (openai, grok). A model the catalyst does not know is refused as `unknown_model` (status 404). The assistant sizes every request against this answer, and a turn whose model cannot be described does not start.
+The window comes from the provider's models API where it reports one (claude, gemini, openrouter — this takes the key) and from a table in the catalyst otherwise (openai, grok), which knows a model only by an id the provider documents for it (and, for openai, its dated snapshots `<id>-YYYY-MM-DD`). A model the catalyst does not know is refused as `unknown_model` (status 404), and so is a model name outside the provider's id grammar — ASCII letters, digits, `.`, `_`, `-`, plus only the separators that provider's ids use, at most 128 bytes, with no `.` or `..` segment — in `describe` and `chat` alike, before the key is read or any request is made. The assistant sizes every request against this answer, and a turn whose model cannot be described does not start.
 
 **`models`** — the models the bound key can reach, in one shape:
 
@@ -1020,7 +1020,7 @@ A refusal is typed, with the provider's own body beside it when the refusal is t
 {"status": 429, "error": {"type": "rate_limited", "message": "…", "provider": {"…": "the provider's body"}}}
 ```
 
-`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `unknown_model`, `unknown_operation`.
+`type` is one of `invalid_request` (the request is off the contract — refused before the key is read — or the provider rejected it), `secret_denied` (the key read was refused), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer), `unknown_model`, `unknown_operation`.
 
 **Streaming.** While `chat` runs, the catalyst streams the answer as events on its execution's event stream through `cyfr:emit/events.emit`, then answers the whole response as above:
 

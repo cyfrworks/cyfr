@@ -13,7 +13,7 @@ defmodule Cyfr.ModelsCapabilitiesTest do
 
   alias Cyfr.Models
 
-  @ref "catalyst:local.claude:1.3.0"
+  @ref "catalyst:local.claude:1.3.1"
 
   setup do
     Arca.Cache.init()
