@@ -81,6 +81,7 @@ defmodule Emissary.MCP.Bridge do
 
   alias Cyfr.BridgeAuth
   alias Emissary.MCP.BackendDefinition
+  alias Emissary.MCP.StatusRedaction
   alias Emissary.MCP.VaultRef
 
   @default_lease_ms 30_000
@@ -379,15 +380,7 @@ defmodule Emissary.MCP.Bridge do
   end
 
   @impl true
-  def format_status(status) do
-    Map.new(status, fn
-      {:state, %State{} = state} ->
-        {:state, %{state | root: "[REDACTED]", control_key: "[REDACTED]", seal_key: "[REDACTED]"}}
-
-      other ->
-        other
-    end)
-  end
+  def format_status(status), do: StatusRedaction.format_status(status)
 
   # ============================================================================
   # Owners
@@ -694,7 +687,10 @@ defmodule Emissary.MCP.Bridge do
                 dispatch(state)
 
               {:send, spec} ->
-                task = Task.async(fn -> perform(spec) end)
+                # The keys reach the task through its closure only: a spec
+                # is printed wherever the state is, a crash's reason included.
+                keys = %{control: state.control_key, seal: state.seal_key}
+                task = Task.async(fn -> perform(spec, keys) end)
                 %{state | inflight: {task.ref, job, spec}}
             end
         end
@@ -743,7 +739,6 @@ defmodule Emissary.MCP.Bridge do
     %{
       kind: kind,
       url: state.url,
-      control_key: state.control_key,
       cyfr_boot: state.cyfr_boot,
       boot: state.boot,
       generation: state.generation,
@@ -789,7 +784,6 @@ defmodule Emissary.MCP.Bridge do
             athanor_id: athanor_id,
             server_id: server_id,
             epoch: entry.epoch,
-            seal_key: state.seal_key,
             idle_ms: state.idle_ms,
             share: share(state),
             athanor_backends: athanor_backends,
@@ -842,22 +836,24 @@ defmodule Emissary.MCP.Bridge do
   # Performing: store reads, vault reads and HTTP, in the task
   # ============================================================================
 
-  defp perform(spec) do
-    do_perform(spec)
+  # A raised exception is reported by its module only: its message can
+  # carry a resolved env value.
+  defp perform(spec, keys) do
+    do_perform(spec, keys)
   rescue
-    error -> {:error, {:crashed, Exception.message(error)}}
+    error -> {:error, {:crashed, error.__struct__}}
   catch
-    kind, reason -> {:error, {:crashed, {kind, reason}}}
+    kind, _reason -> {:error, {:crashed, kind}}
   end
 
-  defp do_perform(%{kind: :sync} = spec) do
+  defp do_perform(%{kind: :sync} = spec, keys) do
     owner = %{athanor_id: spec.athanor_id, server_id: spec.server_id, epoch: spec.epoch}
 
     with {:ok, row} <- fence_one(owner),
          config = Arca.McpServerStorage.config(row),
          {:ok, backends} <- BackendDefinition.validate(config["backends"]),
          :ok <- within_shares(spec, row.created_by, length(backends)),
-         {:ok, sealed} <- seal_env(spec, backends) do
+         {:ok, sealed} <- seal_env(spec, keys.seal, backends) do
       body = %{
         "type" => "sync",
         "owner" => %{"athanor" => spec.athanor_id, "server" => spec.server_id},
@@ -868,7 +864,7 @@ defmodule Emissary.MCP.Bridge do
         "sealed" => sealed
       }
 
-      case post(spec, body) do
+      case post(spec, keys.control, body) do
         {:http, _status, _boot, _body} = answer ->
           {:synced, answer, BackendDefinition.entry_names(backends), length(backends),
            row.created_by}
@@ -879,7 +875,7 @@ defmodule Emissary.MCP.Bridge do
     end
   end
 
-  defp do_perform(%{kind: :renew} = spec) do
+  defp do_perform(%{kind: :renew} = spec, keys) do
     pairs = Map.keys(spec.owners)
 
     case Arca.McpServerStorage.fenced(pairs) do
@@ -887,7 +883,7 @@ defmodule Emissary.MCP.Bridge do
         {kept, fenced_out} =
           Enum.split_with(pairs, fn key -> passes_fence?(rows[key], spec.owners[key]) end)
 
-        answer = if kept == [], do: :nothing_to_renew, else: renew(spec, kept)
+        answer = if kept == [], do: :nothing_to_renew, else: renew(spec, keys.control, kept)
         {:renewed, answer, fenced_out}
 
       {:error, _} ->
@@ -895,16 +891,17 @@ defmodule Emissary.MCP.Bridge do
     end
   end
 
-  defp do_perform(spec), do: post(spec, spec.body)
+  defp do_perform(spec, keys), do: post(spec, keys.control, spec.body)
 
   # An owner the bridge no longer knows lapsed there: its epoch is raised,
   # so the grant its process holds names a version nothing will run again.
-  defp renew(spec, kept) do
+  defp renew(spec, control_key, kept) do
     owners =
       for {athanor, server} = key <- kept,
           do: %{"athanor" => athanor, "server" => server, "e" => spec.owners[key]}
 
-    answer = post(spec, %{"type" => "renew", "lease_ms" => spec.lease_ms, "owners" => owners})
+    body = %{"type" => "renew", "lease_ms" => spec.lease_ms, "owners" => owners}
+    answer = post(spec, control_key, body)
 
     with {:http, 200, _boot, %{"unknown" => [_ | _] = unknown}} <- answer do
       for %{"athanor" => athanor, "server" => server, "e" => epoch} <- unknown do
@@ -959,7 +956,7 @@ defmodule Emissary.MCP.Bridge do
     end
   end
 
-  defp seal_env(spec, backends) do
+  defp seal_env(spec, seal_key, backends) do
     owner = %{
       athanor: spec.athanor_id,
       server: spec.server_id,
@@ -968,7 +965,7 @@ defmodule Emissary.MCP.Bridge do
     }
 
     with {:ok, env} <- resolve_env(spec.athanor_id, backends) do
-      BridgeAuth.seal(spec.seal_key, owner, spec.boot, Jason.encode!(env))
+      BridgeAuth.seal(seal_key, owner, spec.boot, Jason.encode!(env))
     end
   end
 
@@ -1012,7 +1009,7 @@ defmodule Emissary.MCP.Bridge do
     end
   end
 
-  defp post(spec, body_map) do
+  defp post(spec, control_key, body_map) do
     body = Jason.encode!(body_map)
 
     control = %{
@@ -1024,7 +1021,7 @@ defmodule Emissary.MCP.Bridge do
     }
 
     with :ok <- within_control_size(body),
-         {:ok, header} <- BridgeAuth.control_header(spec.control_key, control, body) do
+         {:ok, header} <- BridgeAuth.control_header(control_key, control, body) do
       headers = [{"content-type", "application/json"}, {"cyfr-bridge-auth", header}]
 
       opts = [

@@ -599,31 +599,11 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
-  # OTP crash reports and :sys.get_status print the full state — which
-  # holds resolved credential header values and a stdio owner's key. Redact
-  # them so a crashed server process cannot page a credential into the log.
+  # OTP crash reports and :sys.get_status print the state, the last message
+  # and the exit reason — which can hold resolved credential header values
+  # and a stdio owner's key.
   @impl true
-  def format_status(status) do
-    Map.new(status, fn
-      {:state, %State{} = state} ->
-        {:state,
-         %{
-           state
-           | headers: redact_values(state.headers),
-             raw_headers: redact_values(state.raw_headers),
-             bridge: redact_grant(state.bridge)
-         }}
-
-      other ->
-        other
-    end)
-  end
-
-  defp redact_values(map) when is_map(map), do: Map.new(map, fn {k, _} -> {k, "[REDACTED]"} end)
-  defp redact_values(other), do: other
-
-  defp redact_grant(%{owner_key: _} = grant), do: %{grant | owner_key: "[REDACTED]"}
-  defp redact_grant(grant), do: grant
+  def format_status(status), do: Emissary.MCP.StatusRedaction.format_status(status)
 
   @impl true
   def terminate(reason, state) do

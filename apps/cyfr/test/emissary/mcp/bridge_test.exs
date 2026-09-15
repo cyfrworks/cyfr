@@ -14,10 +14,14 @@ defmodule Emissary.MCP.BridgeTest do
   and a new generation are greeted and live owners synced again; nothing
   is sent without the control plane; refusals of a call are answered as
   their kind requires; an athanor, and the person who created the rows,
-  each hold at most a quarter of the pool.
+  each hold at most a quarter of the pool; no key reaches a status or a
+  crash report.
   """
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
+  alias Cyfr.BridgeAuth
   alias Emissary.MCP.Bridge
   alias Emissary.MCP.ExternalServers
   alias Emissary.MCP.McpServersTool
@@ -56,6 +60,7 @@ defmodule Emissary.MCP.BridgeTest do
                owners: %{},
                readiness: %{},
                tools: %{},
+               hold: MapSet.new(),
                pool: 32,
                refuse: %{}
              }
@@ -94,6 +99,10 @@ defmodule Emissary.MCP.BridgeTest do
     def tools(%{agent: agent}, server, names),
       do: Agent.update(agent, &put_in(&1, [:tools, server], names))
 
+    @doc "Hold the next message of `type` until the test sends `:go` to the pid it reports."
+    def hold(%{agent: agent}, type),
+      do: Agent.update(agent, &%{&1 | hold: MapSet.put(&1.hold, type)})
+
     defp control(conn, agent) do
       {:ok, body, conn} = read_body(conn)
       st = Agent.get(agent, & &1)
@@ -114,11 +123,27 @@ defmodule Emissary.MCP.BridgeTest do
         true ->
           Agent.update(agent, &%{&1 | hwm: {fields.generation, fields.seq}})
           send(st.test, {:control, message["type"], message, fields})
+          held(agent, message["type"])
 
           case pop_refusal(agent, message["type"]) do
             nil -> handle(conn, agent, message, fields)
             code -> answer(conn, st, 409, %{"error" => code})
           end
+      end
+    end
+
+    defp held(agent, type) do
+      st = Agent.get(agent, & &1)
+
+      if MapSet.member?(st.hold, type) do
+        Agent.update(agent, &%{&1 | hold: MapSet.delete(&1.hold, type)})
+        send(st.test, {:held, type, self()})
+
+        receive do
+          :go -> :ok
+        after
+          5_000 -> :ok
+        end
       end
     end
 
@@ -417,6 +442,11 @@ defmodule Emissary.MCP.BridgeTest do
     assert %{"server" => row.id, "e" => epoch} in Enum.map(owners, &Map.delete(&1, "athanor"))
     await_idle(Process.whereis(Bridge))
   end
+
+  # How a binary looks wherever a term holding it is inspected, from its
+  # first bytes, so a truncated rendering is caught too.
+  defp rendered(key),
+    do: inspect(binary_part(key, 0, 8), binaries: :as_binaries) |> String.trim_trailing(">>")
 
   test "at start the controller greets the bridge under generation 1 and keeps nothing", %{
     fake: fake
@@ -826,5 +856,113 @@ defmodule Emissary.MCP.BridgeTest do
 
     assert_receive {:control, "status", %{"owners" => [%{"server" => server}]}, _fields}, 2_000
     assert server == row.id
+  end
+
+  describe "no key reaches a status or a crash report" do
+    test "the controller's, with a sync in flight", %{ctx: ctx, fake: fake} do
+      bridge = start_bridge(fake)
+      vault_entry(ctx)
+      row = stdio_row(ctx, "held")
+      FakeBridge.hold(fake, "sync")
+      Task.start(fn -> ExternalServers.ensure_started(row, ctx) end)
+      assert_receive {:held, "sync", held}, 2_000
+
+      keys = [@root, BridgeAuth.control_key(@root), BridgeAuth.seal_key(@root)]
+      assert %{inflight: {_ref, {:sync, _key}, spec}} = :sys.get_state(bridge)
+      for key <- keys, do: refute(inspect(spec, limit: :infinity) =~ rendered(key))
+
+      {:status, _pid, _module, items} = :sys.get_status(bridge)
+
+      assert %Bridge.State{root: "[REDACTED]", control_key: "[REDACTED]", seal_key: "[REDACTED]"} =
+               status_state(items, Bridge.State)
+
+      status = inspect(items, limit: :infinity, printable_limit: :infinity)
+      for key <- keys, do: refute(status =~ rendered(key))
+
+      # The report of a crash prints the state its reason carries, spec and all.
+      log =
+        capture_log(fn ->
+          catch_exit(GenServer.call(bridge, :no_such_call))
+          Process.sleep(200)
+        end)
+
+      released = Process.monitor(held)
+      send(held, :go)
+      assert_receive {:DOWN, ^released, :process, ^held, _reason}, 5_000
+      assert log =~ "Emissary.MCP.Bridge.handle_call(:no_such_call"
+      assert log =~ "inflight: {"
+      for key <- keys, do: refute(log =~ rendered(key))
+    end
+
+    test "a server process's, with its grant and resolved headers", %{ctx: ctx, fake: fake} do
+      start_bridge(fake)
+      vault_entry(ctx)
+      pid = connect(ctx, stdio_row(ctx, "granted"))
+      owner_key = :sys.get_state(pid).bridge.owner_key
+
+      {:status, _pid, _module, items} = :sys.get_status(pid)
+
+      assert %Emissary.MCP.ExternalServer.State{bridge: %{owner_key: "[REDACTED]"}} =
+               status_state(items, Emissary.MCP.ExternalServer.State)
+
+      refute inspect(items, limit: :infinity, printable_limit: :infinity) =~ rendered(owner_key)
+
+      log =
+        capture_log(fn ->
+          catch_exit(GenServer.call(pid, :no_such_call))
+          Process.sleep(200)
+        end)
+
+      assert log =~ "Emissary.MCP.ExternalServer"
+      refute log =~ rendered(owner_key)
+      refute log =~ @secret
+    end
+
+    test "a message carrying a grant, and a reason carrying a state, are redacted" do
+      grant = %{url: "http://bridge/mcp", owner_key: :crypto.strong_rand_bytes(32), epoch: 1}
+      spec = %{control_key: :crypto.strong_rand_bytes(32), seal_key: <<1>>, sealed: "x", seq: 7}
+
+      headers = %{"authorization" => "Bearer #{@secret}"}
+
+      reason =
+        {:function_clause, [{Bridge, :handle_call, [:bogus, spec, [headers: headers]], []}]}
+
+      assert %{
+               message: {:bridge_owner, %{owner_key: "[REDACTED]", url: "http://bridge/mcp"}},
+               reason:
+                 {:function_clause,
+                  [
+                    {Bridge, :handle_call,
+                     [
+                       :bogus,
+                       %{
+                         control_key: "[REDACTED]",
+                         seal_key: "[REDACTED]",
+                         sealed: "[REDACTED]",
+                         seq: 7
+                       },
+                       [headers: %{"authorization" => "[REDACTED]"}]
+                     ], []}
+                  ]},
+               log: [[:io | "data"]]
+             } =
+               Emissary.MCP.StatusRedaction.format_status(%{
+                 message: {:bridge_owner, grant},
+                 reason: reason,
+                 log: [[:io | "data"]]
+               })
+    end
+  end
+
+  # The state term `:sys.get_status/1` reports for a GenServer.
+  defp status_state(items, module) do
+    items
+    |> List.last()
+    |> Keyword.get_values(:data)
+    |> List.flatten()
+    |> Enum.find_value(fn
+      {~c"State", %^module{} = state} -> state
+      _ -> nil
+    end)
   end
 end
