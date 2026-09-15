@@ -128,7 +128,6 @@ your-project/
     ├── cyfr.db             # Vault entries, consents, execution records
     ├── cache/              # Immutable cached artifacts (OCI blobs)
     ├── system/             # Server-internal scratch (health probes)
-    ├── mcp-bridge/         # The mcp-bridge sidecar's own files (not managed by cyfr)
     └── athanors/           # One tree per athanor — each person's and each group's
         └── <athanor id>/
             ├── components/ # {type}s/{publisher}/{name}/{version}/

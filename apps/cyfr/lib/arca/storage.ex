@@ -77,15 +77,14 @@ defmodule Arca.Storage do
 
       data/
       ├── cyfr.db                        # SQLite database (all structured data)
-      ├── mcp-bridge/                    # the mcp-bridge sidecar's own files — inside the
-      │                                  # root (compose mounts it), never an Arca path
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/                       # blobs/sha256/{hex}; manifests/{registry}/{repo}/{tag}.json
       ├── system/                        # Global: server-internal scratch (health probe)
       └── athanors/{athanor_id}/         # Tenant-scoped: everything the athanor owns
           ├── components/{type}s/{publisher}/{name}/{version}/
           ├── aqua/                      # the athanor's AQUA agent definitions
-          ├── threads/             # chat attachment blobs
+          ├── threads/                   # chat attachment blobs
+          ├── notes/                     # host-only notes kept out of a thread
           ├── payloads/                  # retained execution bodies — tenant-reserved, system-written
           └── data/                      # what components store — the guest's `data/` scope
 
@@ -223,9 +222,9 @@ defmodule Arca.Storage do
   #   `:read` is shown and downloaded here, managed on its own page;
   #   `:system` is the server's own and is not shown at all.
   #
-  # The volume holds more than Arca paths: `cyfr.db` (+ WAL/SHM) and the
-  # `mcp-bridge/` sidecar state live inside `:base_path`, and Caddy keeps
-  # its own named volumes — none of them are, or should become, rows here.
+  # The volume holds more than Arca paths: `cyfr.db` (+ WAL/SHM) lives
+  # inside `:base_path`, and Caddy keeps its own named volumes — none of
+  # them are, or should become, rows here.
   # Arca addresses tenant and global blobs; everything else on the volume
   # is another program's file.
   @layout [
