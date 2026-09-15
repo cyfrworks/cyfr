@@ -3,10 +3,11 @@
 
 // The mcp-bridge image refuses, before any state changes, every request it
 // cannot attribute to the lifetime, order, owner version and nonce it names:
-// a forged MAC and a timestamp outside the window (401), a control message
-// at or below the high-water mark, an invoke at a stale or future epoch, a
-// replayed nonce, and a captured invoke sent again after the container
-// restarts (409). A sync the uid pool cannot hold spawns nothing.
+// a forged MAC and a timestamp outside the window (401), answered before a
+// large body is sent; a control message at or below the high-water mark, an
+// invoke at a stale or future epoch, a replayed nonce, and a captured invoke
+// sent again after the container restarts (409). A sync the uid pool cannot
+// hold spawns nothing.
 //
 // Run: node --test tests/bridge-image/refusals.test.mjs
 // BRIDGE_IMAGE names an image already built from Dockerfile.node's mcp-bridge
@@ -15,6 +16,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import net from "node:net";
+import * as auth from "../../apps/mcp-bridge/auth.mjs";
 import { Controller } from "./controller.mjs";
 import { PROBE, Stack, eventually, processes, run } from "./harness.mjs";
 
@@ -44,11 +47,40 @@ test("a forged MAC is refused on both endpoints", async () => {
   const invoke = await c.invoke(MAIN, "tools/list", {}, { key: randomBytes(32) });
   assert.deepEqual([invoke.status, invoke.body], [401, unauthorizedRpc]);
 
-  // A valid signature over another body does not carry to this one.
-  const signed = await c.invoke(MAIN, "tools/list");
-  assert.equal(signed.status, 200);
-  const tampered = await c.resend({ ...signed.request, body: signed.request.body.replace('"id":1', '"id":2') });
+  // A valid signature over another body does not carry to this one, and
+  // spends no nonce.
+  const signed = c.signInvoke(MAIN, "tools/list");
+  const tampered = await c.resend({ ...signed, body: signed.body.replace('"id":1', '"id":2') });
   assert.deepEqual([tampered.status, tampered.body], [401, unauthorizedRpc]);
+  assert.equal((await c.resend(signed)).status, 200);
+});
+
+test("a request refused by its header is answered before its body is sent", async () => {
+  const declared = 28 * 1024 * 1024;
+  const { hostname, port } = new URL(stack.base);
+  for (const [endpoint, header] of [
+    ["control", auth.controlHeader(randomBytes(32), { generation: 1, seq: 1, cyfr_boot: c.cyfrBoot, boot: c.boot, ts: Date.now() }, "{}")],
+    ["mcp", c.signInvoke(MAIN, "tools/list", {}, { key: randomBytes(32) }).headers["cyfr-bridge-auth"]],
+  ]) {
+    const status = await new Promise((resolve, reject) => {
+      const socket = net.connect(Number(port), hostname, () => {
+        socket.write(`POST /${endpoint} HTTP/1.1\r\nhost: ${hostname}\r\ncontent-length: ${declared}\r\ncyfr-bridge-auth: ${header}\r\n\r\n`);
+        socket.write(Buffer.alloc(1024, 0x7b));
+      });
+      let head = "";
+      socket.setEncoding("latin1");
+      socket.on("data", (chunk) => {
+        head += chunk;
+        if (head.includes("\r\n")) {
+          socket.destroy();
+          resolve(Number(head.split(" ")[1]));
+        }
+      });
+      socket.on("error", reject);
+      setTimeout(() => reject(new Error(`/${endpoint} did not answer before the body was sent`)), 5_000).unref();
+    });
+    assert.equal(status, 401, endpoint);
+  }
 });
 
 test("a timestamp outside the 30 s window is refused on both endpoints", async () => {

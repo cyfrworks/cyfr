@@ -46,9 +46,14 @@ test("an invoke's canonical string and header match, and the header verifies", (
   const parsed = auth.parseHeader("invoke", V.invoke.header);
   assert.equal(parsed.kind, "invoke");
   assert.deepEqual(parsed.fields, invoke);
-  assert.ok(auth.verify(ownerKey, parsed, V.invoke.body));
-  assert.ok(!auth.verify(ownerKey, parsed, V.invoke.body + " "));
-  assert.ok(!auth.verify(auth.ownerKey(root, { ...owner, epoch: owner.epoch + 1 }), parsed, V.invoke.body));
+  assert.equal(parsed.bodyHash, V.invoke.canonical.split("\n").at(-1));
+  assert.ok(auth.verify(ownerKey, parsed));
+  assert.ok(auth.bodyMatches(parsed, V.invoke.body));
+  assert.ok(!auth.bodyMatches(parsed, V.invoke.body + " "));
+  assert.ok(!auth.verify(auth.ownerKey(root, { ...owner, epoch: owner.epoch + 1 }), parsed));
+
+  // The MAC covers the body hash the header names: another hash does not verify.
+  assert.ok(!auth.verify(ownerKey, { ...parsed, bodyHash: auth.bodyHash(V.invoke.body + " ") }));
 });
 
 test("a control message's canonical string and header match, and the header verifies", () => {
@@ -59,13 +64,14 @@ test("a control message's canonical string and header match, and the header veri
   const parsed = auth.parseHeader("control", V.control.header);
   assert.equal(parsed.kind, "control");
   assert.deepEqual(parsed.fields, control);
-  assert.ok(auth.verify(key, parsed, V.control.body));
-  assert.ok(!auth.verify(ownerKey, parsed, V.control.body));
+  assert.ok(auth.verify(key, parsed));
+  assert.ok(auth.bodyMatches(parsed, V.control.body));
+  assert.ok(!auth.verify(ownerKey, parsed));
 });
 
-test("every accepted header parses as its kind to its fields and MAC", () => {
-  for (const { kind, header, fields, mac } of V.header_parse.accepted) {
-    assert.deepEqual(auth.parseHeader(kind, header), { kind, fields, mac }, header);
+test("every accepted header parses as its kind to its fields, body hash and MAC", () => {
+  for (const { kind, header, fields, body_hash: bodyHash, mac } of V.header_parse.accepted) {
+    assert.deepEqual(auth.parseHeader(kind, header), { kind, fields, bodyHash, mac }, header);
   }
 });
 

@@ -22,9 +22,11 @@ defmodule Cyfr.BridgeAuth do
   A signature is the unpadded base64url HMAC-SHA256 of a canonical string:
   `cyfr-bridge/v1/<kind>`, then the message's fields and the hex SHA-256 of
   the raw body, one per line. It travels in the `Cyfr-Bridge-Auth` header as
-  `v1 kind=<kind>` followed by `name=value` pairs and `mac=`. Every field is
-  1 to 256 bytes of printable ASCII without spaces, so neither the canonical
-  string nor the header can be split ambiguously.
+  `v1 kind=<kind>` followed by `name=value` pairs, `body=<hex SHA-256>` and
+  `mac=`. Naming the body's hash in the header lets the bridge verify a
+  request's MAC before it reads the body, and refuse an unauthenticated one
+  unread. Every field is 1 to 256 bytes of printable ASCII without spaces,
+  so neither the canonical string nor the header can be split ambiguously.
 
   A sealed environment is `base64url(iv ‖ tag ‖ ciphertext)` under
   AES-256-GCM with the seal key, its additional data naming the owner,
@@ -41,14 +43,16 @@ defmodule Cyfr.BridgeAuth do
     prefix: "cyfr-bridge/v1",
     kind: "invoke",
     fields: @owner_fields ++ [boot: :string, ts: :integer, nonce: :string],
-    header_names: @header_names
+    header_names: @header_names,
+    body_hash_in_header: true
   }
 
   @control %MacEnvelope{
     prefix: "cyfr-bridge/v1",
     kind: "control",
     fields: [generation: :integer, seq: :integer, cyfr_boot: :string, boot: :string, ts: :integer],
-    header_names: @header_names
+    header_names: @header_names,
+    body_hash_in_header: true
   }
 
   @typedoc "The owner a key or a sealed environment is bound to."
@@ -123,16 +127,20 @@ defmodule Cyfr.BridgeAuth do
     do: MacEnvelope.canonical(@control, message, body)
 
   @doc """
-  An invoke's or control message's fields and MAC from its `Cyfr-Bridge-Auth`
-  header, or `{:error, :malformed}` for anything but exactly one well-formed
-  header of that kind.
+  An invoke's or control message's fields, with the body hash it names as
+  `:body_hash`, and MAC from its `Cyfr-Bridge-Auth` header, or
+  `{:error, :malformed}` for anything but exactly one well-formed header of
+  that kind.
   """
   @spec parse_header(:invoke | :control, term()) ::
           {:ok, map(), String.t()} | {:error, :malformed}
   def parse_header(:invoke, header), do: MacEnvelope.parse(@invoke, header)
   def parse_header(:control, header), do: MacEnvelope.parse(@control, header)
 
-  @doc "Whether `mac` signs the message's fields and `body` with `key`, compared in constant time."
+  @doc """
+  Whether `mac` signs the message's fields and `body` with `key`, and the
+  header named that body's hash, compared in constant time.
+  """
   @spec verify(:invoke | :control, binary(), map(), String.t(), binary()) :: boolean()
   def verify(:invoke, key, message, mac, body),
     do: MacEnvelope.verify(@invoke, key, message, mac, body)

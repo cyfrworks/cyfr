@@ -1,12 +1,12 @@
 {
-  "comment": "The vectors binding Cyfr.BridgeAuth (Elixir) and apps/mcp-bridge/auth.mjs (Node): both suites derive every key, canonical string, header and sealed value here from the root and fields, decode every valid root text to the root, accept every valid field and refuse every invalid field and every invalid root text, parse every accepted header as its kind to its fields and MAC, and refuse every malformed header as its kind. Integers are written in decimal in canonical strings and headers.",
+  "comment": "The vectors binding Cyfr.BridgeAuth (Elixir) and apps/mcp-bridge/auth.mjs (Node): both suites derive every key, canonical string, header and sealed value here from the root and fields, decode every valid root text to the root, accept every valid field and refuse every invalid field and every invalid root text, parse every accepted header as its kind to its fields and MAC, and refuse every malformed header as its kind. Integers are written in decimal in canonical strings and headers; a header names its body's hex SHA-256, the canonical string's last line, as body=, which an accepted header parses to as its body_hash.",
   "control": {
     "body": "{\"type\":\"renew\",\"owners\":[],\"lease_ms\":30000}",
     "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
     "canonical": "cyfr-bridge/v1/control\n3\n42\nboot_01a09fea-f260-7d7d-9fa5-03bfc30f6653\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249700\n080e69cae04496a1fefd5c0e94c529e10b70d258f4dbd11da32de6cf530b4e28",
     "cyfr_boot": "boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653",
     "generation": 3,
-    "header": "v1 kind=control gen=3 seq=42 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249700 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4",
+    "header": "v1 kind=control gen=3 seq=42 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249700 body=080e69cae04496a1fefd5c0e94c529e10b70d258f4dbd11da32de6cf530b4e28 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4",
     "seq": 42,
     "ts": 1789305249700
   },
@@ -15,7 +15,7 @@
     "accepted": [
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
         "fields": {
           "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
           "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
@@ -25,11 +25,12 @@
           "ts": 1789305249602,
           "nonce": "n_7d3e9a"
         },
+        "body_hash": "b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553",
         "mac": "cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "control",
-        "header": "v1 kind=control gen=3 seq=42 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249700 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4",
+        "header": "v1 kind=control gen=3 seq=42 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249700 body=080e69cae04496a1fefd5c0e94c529e10b70d258f4dbd11da32de6cf530b4e28 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4",
         "fields": {
           "generation": 3,
           "seq": 42,
@@ -37,11 +38,12 @@
           "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
           "ts": 1789305249700
         },
+        "body_hash": "080e69cae04496a1fefd5c0e94c529e10b70d258f4dbd11da32de6cf530b4e28",
         "mac": "X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4"
       },
       {
         "kind": "invoke",
-        "header": "v1 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 nonce=n_7d3e9a ts=1789305249602 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e epoch=7 gen=3 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 kind=invoke",
+        "header": "v1 body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 nonce=n_7d3e9a ts=1789305249602 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e epoch=7 gen=3 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 kind=invoke",
         "fields": {
           "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
           "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
@@ -51,11 +53,12 @@
           "ts": 1789305249602,
           "nonce": "n_7d3e9a"
         },
+        "body_hash": "b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553",
         "mac": "cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=12345 server=007 gen=3 epoch=7 boot=-1 ts=1789305249602 nonce=9007199254740993 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
+        "header": "v1 kind=invoke athanor=12345 server=007 gen=3 epoch=7 boot=-1 ts=1789305249602 nonce=9007199254740993 body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
         "fields": {
           "athanor": "12345",
           "server": "007",
@@ -65,11 +68,12 @@
           "ts": 1789305249602,
           "nonce": "9007199254740993"
         },
+        "body_hash": "b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553",
         "mac": "cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=a=b mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
+        "header": "v1 kind=invoke athanor=!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=a=b body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
         "fields": {
           "athanor": "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
           "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
@@ -79,11 +83,12 @@
           "ts": 1789305249602,
           "nonce": "a=b"
         },
+        "body_hash": "b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553",
         "mac": "cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
         "fields": {
           "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
           "server": "mcp_01a09fee-07cc-791f-a598-e7f90608c9e2",
@@ -93,11 +98,12 @@
           "ts": 1789305249602,
           "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
+        "body_hash": "b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553",
         "mac": "cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "control",
-        "header": "v1 kind=control gen=0 seq=9007199254740991 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=0 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4",
+        "header": "v1 kind=control gen=0 seq=9007199254740991 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=0 body=080e69cae04496a1fefd5c0e94c529e10b70d258f4dbd11da32de6cf530b4e28 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4",
         "fields": {
           "generation": 0,
           "seq": 9007199254740991,
@@ -105,189 +111,190 @@
           "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
           "ts": 0
         },
+        "body_hash": "080e69cae04496a1fefd5c0e94c529e10b70d258f4dbd11da32de6cf530b4e28",
         "mac": "X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4"
       }
     ],
     "malformed": [
       {
         "kind": "invoke",
-        "header": "v2 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v2 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "V1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "V1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": " v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": " v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 "
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 "
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke  athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke  athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 extra=1"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 extra=1"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 __proto__=x"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 __proto__=x"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 __proto__=x __proto__=y"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 __proto__=x __proto__=y"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 constructor=x"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 constructor=x"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 __proto__=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 __proto__=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 toString=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 toString=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 seq=42 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 seq=42 body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 epoch=8 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 epoch=8 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 kind=invoke"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 kind=invoke"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=control athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=control athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=Invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=Invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 KIND=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 KIND=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=control gen=3 seq=42 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249700 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4"
+        "header": "v1 kind=control gen=3 seq=42 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249700 body=080e69cae04496a1fefd5c0e94c529e10b70d258f4dbd11da32de6cf530b4e28 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4"
       },
       {
         "kind": "control",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=03 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=03 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=+3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=+3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=-3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=-3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3.0 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3.0 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3e0 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3e0 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=0x3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=0x3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen= epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen= epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=३ epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=३ epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=9007199254740992 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=9007199254740992 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=18446744073709551616 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=18446744073709551616 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=100000000000000000000 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=100000000000000000000 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce= mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce= body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=café mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=café body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n\t1 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n\t1 body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n\u007f1 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n\u007f1 body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n\u00a01 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n\u00a01 body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac="
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac="
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 =n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 =n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
-        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       },
       {
         "kind": "invoke",
@@ -300,6 +307,46 @@
       {
         "kind": "invoke",
         "header": null
+      },
+      {
+        "kind": "invoke",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+      },
+      {
+        "kind": "control",
+        "header": "v1 kind=control gen=3 seq=42 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249700 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4"
+      },
+      {
+        "kind": "invoke",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=B9E9DD030C7C21F7951BE2C67C4F74CF2EF76960E7355887B6AFA33C074DF553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+      },
+      {
+        "kind": "invoke",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+      },
+      {
+        "kind": "invoke",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df5530 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+      },
+      {
+        "kind": "invoke",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553g mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+      },
+      {
+        "kind": "invoke",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body= mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+      },
+      {
+        "kind": "invoke",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
+      },
+      {
+        "kind": "control",
+        "header": "v1 kind=control gen=3 seq=42 cyfr_boot=boot_01a09fea-f260-7d7d-9fa5-03bfc30f6653 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249700 body=080e69cae04496a1fefd5c0e94c529e10b70d258f4dbd11da32de6cf530b4e28 body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=X70FYqMbj-RaTg2Mi5PfM_POA8XZJ7sSsDWD1OHegW4"
+      },
+      {
+        "kind": "invoke",
+        "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a Body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38"
       }
     ]
   },
@@ -357,7 +404,7 @@
     "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}",
     "boot": "bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e",
     "canonical": "cyfr-bridge/v1/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249602\nn_7d3e9a\nb9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553",
-    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
+    "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_7d3e9a body=b9e9dd030c7c21f7951be2c67c4f74cf2ef76960e7355887b6afa33c074df553 mac=cOA-rTzxm5vkRSQFoWCwuLaL0nZmuEafeCPI0pX7P38",
     "nonce": "n_7d3e9a",
     "ts": 1789305249602
   },

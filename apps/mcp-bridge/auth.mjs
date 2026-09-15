@@ -11,8 +11,10 @@
 // root over a label, so nothing but the root is configured or stored. A
 // signature is the unpadded base64url HMAC-SHA256 of a canonical string —
 // the kind, its fields, and the hex SHA-256 of the raw body, one per line —
-// carried in `Cyfr-Bridge-Auth: v1 kind=<kind> name=value … mac=<mac>`.
-// Every field is 1 to 256 bytes of printable ASCII without spaces: a string
+// carried in `Cyfr-Bridge-Auth: v1 kind=<kind> name=value … body=<hex> mac=<mac>`.
+// The header names the body's hash, so its MAC verifies before any of the
+// body is read, and the body read afterwards must hash to it. Every field is
+// 1 to 256 bytes of printable ASCII without spaces: a string
 // field is a string, whatever it spells; an integer field is an integer from
 // 0 to 2^53 − 1, written in decimal without leading zeros.
 
@@ -28,6 +30,7 @@ const VERSION = "v1";
 const FIELD = /^[\x21-\x7E]{1,256}$/;
 const DECIMAL = /^(0|[1-9][0-9]*)$/;
 const MAX_INTEGER = BigInt(Number.MAX_SAFE_INTEGER);
+const BODY_HASH = /^[0-9a-f]{64}$/;
 
 const KIND_FIELDS = new Map([
   ["invoke", ["athanor", "server", "generation", "epoch", "boot", "ts", "nonce"]],
@@ -101,30 +104,36 @@ export function ownerKey(root, owner) {
   return derive(rootKey(root), label);
 }
 
-export function canonical(kind, message, body) {
+/** The hex SHA-256 of a raw body, as canonical strings and headers name it. */
+export const bodyHash = (body) => createHash("sha256").update(body).digest("hex");
+
+function canonicalOver(kind, message, hash) {
   const names = KIND_FIELDS.get(kind);
   if (!names) throw new InvalidField("kind");
-  const bodyHash = createHash("sha256").update(body).digest("hex");
-  return [`cyfr-bridge/${VERSION}/${kind}`, ...values(message, names), bodyHash].join("\n");
+  return [`cyfr-bridge/${VERSION}/${kind}`, ...values(message, names), hash].join("\n");
 }
+
+export const canonical = (kind, message, body) => canonicalOver(kind, message, bodyHash(body));
 
 const mac = (key, text) => createHmac("sha256", key).update(text).digest("base64url");
 
 function header(kind, key, message, body) {
+  const hash = bodyHash(body);
   const pairs = KIND_FIELDS.get(kind).map((name) => `${HEADER_NAMES.get(name)}=${field(message, name)}`);
-  return [`${VERSION} kind=${kind}`, ...pairs, `mac=${mac(key, canonical(kind, message, body))}`].join(" ");
+  return [`${VERSION} kind=${kind}`, ...pairs, `body=${hash}`, `mac=${mac(key, canonicalOver(kind, message, hash))}`].join(" ");
 }
 
 export const invokeHeader = (key, invoke, body) => header("invoke", key, invoke, body);
 export const controlHeader = (key, control, body) => header("control", key, control, body);
 
-// A header of `kind` ("invoke" or "control") as `{kind, fields, mac}`, or
-// null. A header is v1 followed by name=value tokens, each separated by one
-// space: `kind` naming the kind, every field of the kind once under its
-// header name, and `mac`, in any order and nothing else. A name is everything
-// before a token's first `=`; a field value and the MAC are valid field text,
-// and an integer field's value is its decimal spelling. Integer fields come
-// back as numbers.
+// A header of `kind` ("invoke" or "control") as `{kind, fields, bodyHash,
+// mac}`, or null. A header is v1 followed by name=value tokens, each
+// separated by one space: `kind` naming the kind, every field of the kind
+// once under its header name, `body` and `mac`, in any order and nothing
+// else. A name is everything before a token's first `=`; a field value and
+// the MAC are valid field text, an integer field's value is its decimal
+// spelling, and `body` is 64 lowercase hexadecimal digits. Integer fields
+// come back as numbers.
 export function parseHeader(kind, text) {
   const names = KIND_FIELDS.get(kind);
   if (!names || typeof text !== "string") return null;
@@ -137,7 +146,12 @@ export function parseHeader(kind, text) {
     if (at <= 0 || pairs.has(token.slice(0, at))) return null;
     pairs.set(token.slice(0, at), token.slice(at + 1));
   }
-  if (pairs.size !== names.length + 2 || pairs.get("kind") !== kind || !FIELD.test(pairs.get("mac") ?? "")) {
+  if (
+    pairs.size !== names.length + 3 ||
+    pairs.get("kind") !== kind ||
+    !FIELD.test(pairs.get("mac") ?? "") ||
+    !BODY_HASH.test(pairs.get("body") ?? "")
+  ) {
     return null;
   }
 
@@ -147,20 +161,28 @@ export function parseHeader(kind, text) {
     if (value === null) return null;
     fields[name] = value;
   }
-  return { kind, fields, mac: pairs.get("mac") };
+  return { kind, fields, bodyHash: pairs.get("body"), mac: pairs.get("mac") };
 }
 
-// Whether `parsed` (from parseHeader) is signed over `body` with `key`,
-// compared in constant time.
-export function verify(key, parsed, body) {
+// Whether `parsed` (from parseHeader) is signed with `key` over its fields
+// and the body hash it names, compared in constant time. That the body is
+// the one named is bodyMatches's to say.
+export function verify(key, parsed) {
   let expected;
   try {
-    expected = Buffer.from(mac(key, canonical(parsed.kind, parsed.fields, body)));
+    expected = Buffer.from(mac(key, canonicalOver(parsed.kind, parsed.fields, parsed.bodyHash)));
   } catch {
     return false;
   }
   const presented = Buffer.from(parsed.mac);
   return presented.length === expected.length && timingSafeEqual(presented, expected);
+}
+
+// Whether `body` hashes to the hash `parsed` names.
+export function bodyMatches(parsed, body) {
+  const actual = Buffer.from(bodyHash(body));
+  const named = Buffer.from(parsed.bodyHash);
+  return actual.length === named.length && timingSafeEqual(actual, named);
 }
 
 const sealAad = (owner, boot) =>

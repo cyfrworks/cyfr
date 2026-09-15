@@ -3,7 +3,8 @@
 
 // The bridge over HTTP with an in-process fake spawner: /control and /mcp
 // accept only requests signed for this lifetime, in order and within the
-// window; an owner runs exactly the backends its sync defined, at exactly its
+// window, and refuse an unauthenticated one before reading its body; an
+// owner runs exactly the backends its sync defined, at exactly its
 // version, while its lease lives; each owner sees only its own backends; what
 // leaves the bridge is masked; and stdio framing, crashes and release behave
 // through the spawner.
@@ -12,10 +13,11 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as auth from "../auth.mjs";
-import { createBridge } from "../server.mjs";
+import { CONTROL_BODY_LIMIT, MCP_BODY_LIMIT, createBridge } from "../server.mjs";
 import { Controller } from "../../../tests/bridge-image/controller.mjs";
 import { FakeSpawner } from "./fake-spawner.mjs";
 
@@ -221,6 +223,85 @@ test("a sync's environment must name exactly its backends and their variables", 
   }
   const good = await c.control({ ...definitions, backends, sealed: seal({ b: { KEY: "v" } }) });
   assert.equal(good.status, 200, JSON.stringify(good.body));
+  await c.release([owner]);
+});
+
+// ============================================================================
+// Reading bodies
+// ============================================================================
+
+// Sends a request head declaring `declared` bytes of body and `sent` of them,
+// and answers the status line of the response and whether it came before
+// the rest of the body was sent.
+function partialPost(base, endpoint, headers, declared, sent) {
+  const { hostname, port } = new URL(base);
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(Number(port), hostname);
+    let response = "";
+    socket.setEncoding("latin1");
+    socket.on("data", (chunk) => {
+      response += chunk;
+      const line = response.split("\r\n")[0];
+      if (response.includes("\r\n\r\n")) {
+        socket.destroy();
+        resolve({ status: Number(line.split(" ")[1]), head: response.split("\r\n\r\n")[0].toLowerCase() });
+      }
+    });
+    socket.on("error", reject);
+    socket.on("connect", () => {
+      const head = [`POST /${endpoint} HTTP/1.1`, `host: ${hostname}`, `content-length: ${declared}`, ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`)];
+      socket.write(`${head.join("\r\n")}\r\n\r\n`);
+      socket.write(Buffer.alloc(sent, 0x7b));
+    });
+    setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`no answer from /${endpoint} before the body was sent`));
+    }, 5_000).unref();
+  });
+}
+
+test("a request whose header does not authenticate is refused before any of its body is read", async () => {
+  const declared = 28 * 1024 * 1024;
+  const forgedControl = auth.controlHeader(randomBytes(32), { generation: 1, seq: 1, cyfr_boot: c.cyfrBoot, boot: c.boot, ts: Date.now() }, "{}");
+  const forgedInvoke = auth.invokeHeader(randomBytes(32), { athanor: "ath_x", server: "mcp_x", generation: 1, epoch: 1, boot: c.boot, ts: Date.now(), nonce: "n_1" }, "{}");
+  for (const [endpoint, headers] of [
+    ["control", {}],
+    ["control", { "cyfr-bridge-auth": forgedControl }],
+    ["mcp", { "cyfr-bridge-auth": forgedInvoke }],
+  ]) {
+    const answer = await partialPost(shared.base, endpoint, headers, declared, 1024);
+    assert.equal(answer.status, 401, endpoint);
+    assert.match(answer.head, /connection: close/);
+  }
+
+  // An authenticated invoke for an owner the bridge does not run is refused unread as well.
+  const invoke = c.signInvoke(newOwner(), "tools/list");
+  const unknown = await partialPost(shared.base, "mcp", { "cyfr-bridge-auth": invoke.headers["cyfr-bridge-auth"] }, declared, 1024);
+  assert.equal(unknown.status, 409);
+});
+
+test("a body past its endpoint's limit is refused, and one that is not the body the header signed is unauthorized", async () => {
+  const owner = newOwner();
+  await synced(owner, [backend("well-behaved")]);
+
+  const fields = { generation: 1, seq: ++c.seq, cyfr_boot: c.cyfrBoot, boot: c.boot, ts: Date.now() };
+  const bigControl = await partialPost(shared.base, "control", { "cyfr-bridge-auth": auth.controlHeader(auth.controlKey(ROOT), fields, "{}") }, CONTROL_BODY_LIMIT + 1, 16);
+  assert.equal(bigControl.status, 413);
+
+  const invoke = c.signInvoke(owner, "tools/list");
+  const bigInvoke = await partialPost(shared.base, "mcp", { "cyfr-bridge-auth": invoke.headers["cyfr-bridge-auth"] }, MCP_BODY_LIMIT + 1, 16);
+  assert.equal(bigInvoke.status, 413);
+
+  // The header verifies but the body is another: refused, and the nonce stays unused.
+  const signed = c.signInvoke(owner, "tools/list");
+  const tampered = await c.resend({ ...signed, body: signed.body.replace('"id":1', '"id":2') });
+  assert.deepEqual([tampered.status, tampered.body?.error?.message], [401, "unauthorized"]);
+  assert.equal((await c.resend(signed)).status, 200);
+
+  const renew = JSON.stringify({ type: "renew", owners: [], lease_ms: 30_000 });
+  const header = auth.controlHeader(auth.controlKey(ROOT), { ...fields, seq: ++c.seq, ts: Date.now() }, renew);
+  const res = await fetch(`${shared.base}/control`, { method: "POST", headers: { "cyfr-bridge-auth": header }, body: renew.replace("30000", "30001") });
+  assert.equal(res.status, 401);
   await c.release([owner]);
 });
 

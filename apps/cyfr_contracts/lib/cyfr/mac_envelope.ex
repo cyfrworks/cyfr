@@ -17,7 +17,11 @@ defmodule Cyfr.MacEnvelope do
       one per line.
     * **A header** (`header/4`) carries the signature as
       `v1 kind=<kind> name=value … mac=<mac>`. `parse/2` reads it back and
-      `verify/5` checks its MAC in constant time.
+      `verify/5` checks its MAC in constant time. An envelope with
+      `body_hash_in_header` also names the body's hex SHA-256 in the header
+      (`body=<hex>`, before `mac=`), so a receiver can verify the MAC before
+      it reads the body and then check the body against that hash; `parse/2`
+      answers it as the message's `:body_hash`.
     * **A sealed value** (`seal/6`) is `base64url(iv ‖ tag ‖ ciphertext)`,
       unpadded, under AES-256-GCM, its additional data a label followed by
       field values one per line; `open/5` opens it under the same label and
@@ -36,7 +40,7 @@ defmodule Cyfr.MacEnvelope do
   """
 
   @enforce_keys [:prefix, :kind, :fields]
-  defstruct [:prefix, :kind, :fields, header_names: %{}]
+  defstruct [:prefix, :kind, :fields, header_names: %{}, body_hash_in_header: false]
 
   @type field_type :: :string | :integer
   @type fields :: [{atom(), field_type()}]
@@ -45,7 +49,8 @@ defmodule Cyfr.MacEnvelope do
           prefix: String.t(),
           kind: String.t(),
           fields: fields(),
-          header_names: %{optional(atom()) => String.t()}
+          header_names: %{optional(atom()) => String.t()},
+          body_hash_in_header: boolean()
         }
 
   @typedoc "A message's fields by name: strings and non-negative integers."
@@ -58,6 +63,7 @@ defmodule Cyfr.MacEnvelope do
   @decimal ~r/\A(0|[1-9][0-9]*)\z/
   # 2^53 − 1: every integer up to it is exact in an IEEE 754 double.
   @max_integer 9_007_199_254_740_991
+  @body_hash ~r/\A[0-9a-f]{64}\z/
 
   @doc """
   A root secret as it is configured: exactly 64 hexadecimal digits, in
@@ -103,18 +109,26 @@ defmodule Cyfr.MacEnvelope do
         end)
 
       mac = mac(key, canonical_string(envelope, values, body))
-      {:ok, Enum.join(["#{@version} kind=#{envelope.kind}" | pairs] ++ ["mac=#{mac}"], " ")}
+
+      {:ok,
+       Enum.join(
+         ["#{@version} kind=#{envelope.kind}" | pairs] ++
+           body_pair(envelope, body) ++ ["mac=#{mac}"],
+         " "
+       )}
     end
   end
 
   @doc """
   A header's fields and MAC. A header is `v1` followed by `name=value`
   tokens, each separated by one space: `kind` naming the envelope's kind,
-  every field once under its header name, and `mac`, in any order and
-  nothing else. A name is everything before a token's first `=`; a field
-  value and the MAC are valid field text, and an integer field's value is
-  its decimal spelling. Anything else is `{:error, :malformed}`. Integer
-  fields come back as integers.
+  every field once under its header name, `body` for an envelope with
+  `body_hash_in_header`, and `mac`, in any order and nothing else. A name is
+  everything before a token's first `=`; a field value and the MAC are valid
+  field text, an integer field's value is its decimal spelling, and `body`
+  is 64 lowercase hexadecimal digits. Anything else is
+  `{:error, :malformed}`. Integer fields come back as integers, and the body
+  hash as the message's `:body_hash`.
   """
   @spec parse(t(), term()) :: {:ok, message(), String.t()} | {:error, :malformed}
   def parse(%__MODULE__{} = envelope, header) when is_binary(header) do
@@ -122,7 +136,8 @@ defmodule Cyfr.MacEnvelope do
          {:ok, pairs} <- pairs(tokens),
          true <- Enum.sort(Map.keys(pairs)) == expected_names(envelope),
          true <- pairs["kind"] == envelope.kind and Regex.match?(@text, pairs["mac"]),
-         {:ok, message} <- read_fields(envelope, pairs) do
+         {:ok, message} <- read_fields(envelope, pairs),
+         {:ok, message} <- read_body_hash(envelope, pairs, message) do
       {:ok, message, pairs["mac"]}
     else
       _ -> {:error, :malformed}
@@ -133,7 +148,9 @@ defmodule Cyfr.MacEnvelope do
 
   @doc """
   Whether `mac` is the signature of `message` and `body` with `key`,
-  compared in constant time. A message with an invalid field is not.
+  compared in constant time. A message with an invalid field is not, nor,
+  for an envelope with `body_hash_in_header`, one whose `:body_hash` is not
+  the body's.
   """
   @spec verify(t(), binary(), message(), String.t(), binary()) :: boolean()
   def verify(%__MODULE__{} = envelope, key, message, mac, body)
@@ -141,12 +158,39 @@ defmodule Cyfr.MacEnvelope do
     case values(envelope.fields, message) do
       {:ok, values} ->
         expected = mac(key, canonical_string(envelope, values, body))
-        byte_size(expected) == byte_size(mac) and :crypto.hash_equals(expected, mac)
+
+        byte_size(expected) == byte_size(mac) and :crypto.hash_equals(expected, mac) and
+          named_body?(envelope, message, body)
 
       {:error, _} ->
         false
     end
   end
+
+  defp body_pair(%__MODULE__{body_hash_in_header: true}, body),
+    do: ["body=#{Cyfr.Digest.sha256_hex(body)}"]
+
+  defp body_pair(_envelope, _body), do: []
+
+  defp named_body?(%__MODULE__{body_hash_in_header: true}, message, body) do
+    case Map.get(message, :body_hash) do
+      hash when is_binary(hash) and byte_size(hash) == 64 ->
+        :crypto.hash_equals(hash, Cyfr.Digest.sha256_hex(body))
+
+      _ ->
+        false
+    end
+  end
+
+  defp named_body?(_envelope, _message, _body), do: true
+
+  defp read_body_hash(%__MODULE__{body_hash_in_header: true}, pairs, message) do
+    if Regex.match?(@body_hash, pairs["body"]),
+      do: {:ok, Map.put(message, :body_hash, pairs["body"])},
+      else: :error
+  end
+
+  defp read_body_hash(_envelope, _pairs, message), do: {:ok, message}
 
   @doc """
   Seal `plaintext` with a 32-byte `key` to `label` and the message's
@@ -229,7 +273,8 @@ defmodule Cyfr.MacEnvelope do
     do: Map.get(envelope.header_names, name, Atom.to_string(name))
 
   defp expected_names(envelope) do
-    Enum.sort(["kind", "mac" | Enum.map(envelope.fields, &header_name(envelope, elem(&1, 0)))])
+    frame = if envelope.body_hash_in_header, do: ["kind", "body", "mac"], else: ["kind", "mac"]
+    Enum.sort(frame ++ Enum.map(envelope.fields, &header_name(envelope, elem(&1, 0))))
   end
 
   defp pairs(tokens) do

@@ -402,9 +402,10 @@ export class Owners {
 
   /**
    * The owner an invoke at (g, e) with `nonce` and timestamp `ts` may use;
-   * throws a Refusal. Records the nonce.
+   * throws a Refusal. With `record`, the nonce is recorded as used — what
+   * an invoke whose body has been verified does.
    */
-  admit({ athanor, server, g, e, ts, nonce }) {
+  admit({ athanor, server, g, e, ts, nonce }, { record = false } = {}) {
     const owner = this.#owners.get(ownerKey(athanor, server));
     if (!owner) throw new Refusal("unknown_owner");
     const order = compareVersions({ g, e }, owner);
@@ -421,7 +422,7 @@ export class Owners {
       for (const [n, expires] of owner.nonces) if (expires <= now) owner.nonces.delete(n);
       if (owner.nonces.size >= MAX_NONCES) throw new Refusal("nonce_cache_full", 503);
     }
-    owner.nonces.set(nonce, ts + NONCE_WINDOW_MS);
+    if (record) owner.nonces.set(nonce, ts + NONCE_WINDOW_MS);
     return owner;
   }
 

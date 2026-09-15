@@ -17,6 +17,12 @@
 //                  generation and epoch it runs at. It reaches that owner's
 //                  backends only.
 //
+// A request's header is authenticated, and its lifetime, sequence or owner
+// version and nonce checked, before its body is read; a request refused
+// there has its connection closed with the body unread. The body is then
+// read up to its endpoint's limit and must hash to the hash the header
+// signed.
+//
 // Every response carries `Cyfr-Bridge-Boot`, the id this process minted at
 // start; a request naming another lifetime is refused. Nothing is persisted:
 // keys are derived, and owners, versions and leases arrive in messages.
@@ -70,6 +76,14 @@ const BOOT_HEADER = "cyfr-bridge-boot";
 // A request's timestamp may differ from this clock by at most this much.
 const TIMESTAMP_WINDOW_MS = 30_000;
 
+// The most body each endpoint reads. A control message is at most a sync of
+// sixteen backend definitions and their sealed environment; CYFR refuses to
+// send a larger one (Emissary.MCP.Bridge). An MCP request carries one tool
+// call's arguments, at most the 10 MiB request ceiling of a CYFR call
+// (Cyfr.Limits.Ceiling), and its JSON-RPC envelope.
+export const CONTROL_BODY_LIMIT = 1024 * 1024;
+export const MCP_BODY_LIMIT = 10 * 1024 * 1024 + 64 * 1024;
+
 // A tool catalogue changes only when an owner is synced or a backend
 // restarts. `private`: each owner's catalogue is its own.
 const TOOLS_TTL_MS = 60_000;
@@ -104,6 +118,37 @@ function leaseMs(value) {
   return value;
 }
 
+class BodyTooLarge extends Error {}
+
+// Reads a request's body, refusing one past `limit` bytes as soon as it is.
+function readBody(req, limit) {
+  const declared = req.get("content-length");
+  if (declared !== undefined && !(Number(declared) <= limit)) return Promise.reject(new BodyTooLarge());
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    const finish = (err) => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", finish);
+      req.off("close", onClose);
+      if (err) reject(err);
+      else resolve(Buffer.concat(chunks, size));
+    };
+    const onData = (chunk) => {
+      size += chunk.length;
+      if (size > limit) finish(new BodyTooLarge());
+      else chunks.push(chunk);
+    };
+    const onEnd = () => finish();
+    const onClose = () => finish(new Error("the request closed before its body was read"));
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", finish);
+    req.on("close", onClose);
+  });
+}
+
 /**
  * Builds the bridge around a spawner and the root key.
  *
@@ -135,6 +180,9 @@ export function createBridge({
   // The highest (generation, seq) a control message has carried.
   let highWater = { generation: 0, seq: 0 };
 
+  const above = ({ generation, seq }) =>
+    generation > highWater.generation || (generation === highWater.generation && seq > highWater.seq);
+
   const app = express();
   app.disable("x-powered-by");
 
@@ -143,17 +191,13 @@ export function createBridge({
     next();
   });
 
-  // Signatures cover the raw bytes; bodies are parsed only after they verify.
-  // Match the server's 28 MB body limit, including base64-encoded attachments.
-  app.use(express.raw({ limit: "28mb", type: () => true }));
-
   // Unauthenticated: it carries no data and the container healthcheck needs it.
   app.get("/health", (_req, res) => {
     res.json({ ok: true });
   });
 
-  // The signed request's fields, or null for one that does not carry a
-  // header of `kind` verified within the window.
+  // The parsed header of a request carrying one of `kind` whose MAC verifies
+  // within the window, or null.
   function authenticate(req, kind, keyFor) {
     const parsed = auth.parseHeader(kind, req.get(AUTH_HEADER));
     if (!parsed) return null;
@@ -165,7 +209,7 @@ export function createBridge({
     } catch {
       return null;
     }
-    return auth.verify(key, parsed, rawBody(req)) ? fields : null;
+    return auth.verify(key, parsed) ? parsed : null;
   }
 
   function unauthorized(req, endpoint) {
@@ -174,20 +218,54 @@ export function createBridge({
 
   const refuse = (res, refusal) => res.status(refusal.status).json({ error: refusal.code });
 
+  // A request answered before its body is read closes its connection, so
+  // the body is never read.
+  const unread = (res) => res.set("connection", "close");
+
+  // The request's body once it is read within `limit` and hashes to what
+  // its header signed; otherwise null, with the refusal answered by
+  // `tooLarge` or `mismatch`.
+  async function verifiedBody(req, res, parsed, limit, { tooLarge, mismatch }) {
+    let body;
+    try {
+      body = await readBody(req, limit);
+    } catch (err) {
+      if (err instanceof BodyTooLarge && !res.headersSent) tooLarge(unread(res));
+      return null;
+    }
+    if (!auth.bodyMatches(parsed, body)) {
+      mismatch(res);
+      return null;
+    }
+    return body;
+  }
+
   // ==========================================================================
   // /control
   // ==========================================================================
 
   app.post("/control", async (req, res) => {
-    const fields = authenticate(req, "control", () => controlKey);
-    if (!fields) {
+    const parsed = authenticate(req, "control", () => controlKey);
+    if (!parsed) {
       unauthorized(req, "/control");
-      return res.status(401).json({ error: "unauthorized" });
+      return unread(res).status(401).json({ error: "unauthorized" });
     }
+    const { fields } = parsed;
+    if (fields.boot !== "-" && fields.boot !== boot) return refuse(unread(res), new Refusal("stale_boot"));
+    if (!above(fields)) return refuse(unread(res), new Refusal("stale_control"));
+
+    const body = await verifiedBody(req, res, parsed, CONTROL_BODY_LIMIT, {
+      tooLarge: (r) => r.status(413).json({ error: "too_large" }),
+      mismatch: (r) => {
+        unauthorized(req, "/control");
+        r.status(401).json({ error: "unauthorized" });
+      },
+    });
+    if (!body) return;
 
     let message;
     try {
-      message = JSON.parse(rawBody(req).toString("utf8"));
+      message = JSON.parse(body.toString("utf8"));
     } catch {
       message = null;
     }
@@ -196,11 +274,8 @@ export function createBridge({
     const expectedBoot = message.type === "hello" ? "-" : boot;
     if (fields.boot !== expectedBoot) return refuse(res, new Refusal("stale_boot"));
 
-    const { generation, seq } = fields;
-    if (generation < highWater.generation || (generation === highWater.generation && seq <= highWater.seq)) {
-      return refuse(res, new Refusal("stale_control"));
-    }
-    highWater = { generation, seq };
+    if (!above(fields)) return refuse(res, new Refusal("stale_control"));
+    highWater = { generation: fields.generation, seq: fields.seq };
 
     try {
       return res.json(await control(message, fields));
@@ -269,25 +344,44 @@ export function createBridge({
     const requestId = req.get("x-request-id") || randomUUID();
     res.set("x-request-id", requestId);
 
-    const fields = authenticate(req, "invoke", (f) =>
+    const parsed = authenticate(req, "invoke", (f) =>
       auth.ownerKey(rootKey, { athanor: f.athanor, server: f.server, generation: f.generation, epoch: f.epoch }),
     );
-    if (!fields) {
+    if (!parsed) {
       unauthorized(req, "/mcp");
-      return rpcError(res, 401, null, -33001, "unauthorized");
+      return rpcError(unread(res), 401, null, -33001, "unauthorized");
     }
-    if (fields.boot !== boot) return refuse(res, new Refusal("stale_boot"));
+    const { fields } = parsed;
+    if (fields.boot !== boot) return refuse(unread(res), new Refusal("stale_boot"));
 
+    const invoke = {
+      athanor: fields.athanor,
+      server: fields.server,
+      g: fields.generation,
+      e: fields.epoch,
+      ts: fields.ts,
+      nonce: fields.nonce,
+    };
+    try {
+      owners.admit(invoke);
+    } catch (err) {
+      if (err instanceof Refusal) return refuse(unread(res), err);
+      throw err;
+    }
+
+    const body = await verifiedBody(req, res, parsed, MCP_BODY_LIMIT, {
+      tooLarge: (r) => rpcError(r, 413, null, -32600, "Request body too large"),
+      mismatch: (r) => {
+        unauthorized(req, "/mcp");
+        rpcError(r, 401, null, -33001, "unauthorized");
+      },
+    });
+    if (!body) return;
+
+    // Admitted again with its body verified, which records its nonce.
     let owner;
     try {
-      owner = owners.admit({
-        athanor: fields.athanor,
-        server: fields.server,
-        g: fields.generation,
-        e: fields.epoch,
-        ts: fields.ts,
-        nonce: fields.nonce,
-      });
+      owner = owners.admit(invoke, { record: true });
     } catch (err) {
       if (err instanceof Refusal) return refuse(res, err);
       throw err;
@@ -295,7 +389,7 @@ export function createBridge({
 
     let msg;
     try {
-      msg = JSON.parse(rawBody(req).toString("utf8"));
+      msg = JSON.parse(body.toString("utf8"));
     } catch {
       return rpcError(res, 400, null, -32700, "Parse error: body is not valid JSON");
     }
@@ -334,14 +428,10 @@ export function createBridge({
     }
   });
 
-  // Render body-parser failures as JSON-RPC errors. Express error middleware
+  // Render a handler's failure as a JSON-RPC error. Express error middleware
   // must be registered after the routes.
   app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
-
-    if (err?.type === "entity.too.large") {
-      return rpcError(res, 413, null, -32600, "Request body too large");
-    }
     console.error("[mcp-bridge] request error:", err);
     // Never the error's own message — at this layer it is an internal term.
     return rpcError(res, 500, null, -32603, "internal error");
@@ -479,10 +569,6 @@ export function createBridge({
   }
 
   return { app, boot, owners, close: () => owners.close() };
-}
-
-function rawBody(req) {
-  return Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
 }
 
 // ============================================================================

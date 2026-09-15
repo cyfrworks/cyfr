@@ -75,10 +75,29 @@ defmodule Cyfr.BridgeAuthTest do
     {:ok, key} = BridgeAuth.owner_key(root, owner)
 
     assert {:ok, fields, mac} = BridgeAuth.parse_header(:invoke, v["header"])
-    assert fields == Map.merge(owner, %{boot: v["boot"], ts: v["ts"], nonce: v["nonce"]})
+    body_hash = Cyfr.Digest.sha256_hex(v["body"])
+
+    assert fields ==
+             Map.merge(owner, %{
+               boot: v["boot"],
+               ts: v["ts"],
+               nonce: v["nonce"],
+               body_hash: body_hash
+             })
+
+    assert v["canonical"] |> String.split("\n") |> List.last() == body_hash
     assert BridgeAuth.verify(:invoke, key, fields, mac, v["body"])
     refute BridgeAuth.verify(:invoke, key, fields, mac, v["body"] <> " ")
     refute BridgeAuth.verify(:invoke, BridgeAuth.control_key(root), fields, mac, v["body"])
+
+    # A header naming another body's hash does not verify, even with a MAC over this one.
+    refute BridgeAuth.verify(
+             :invoke,
+             key,
+             %{fields | body_hash: String.duplicate("0", 64)},
+             mac,
+             v["body"]
+           )
 
     c = @vectors["control"]
     control_key = BridgeAuth.control_key(root)
@@ -87,10 +106,15 @@ defmodule Cyfr.BridgeAuthTest do
     assert {:error, :malformed} = BridgeAuth.parse_header(:control, v["header"])
   end
 
-  test "every accepted header parses as its kind to its fields and MAC" do
-    for %{"kind" => kind, "header" => header, "fields" => fields, "mac" => mac} <-
-          @vectors["header_parse"]["accepted"] do
-      expected = atom_keys(fields)
+  test "every accepted header parses as its kind to its fields, body hash and MAC" do
+    for %{
+          "kind" => kind,
+          "header" => header,
+          "fields" => fields,
+          "body_hash" => body_hash,
+          "mac" => mac
+        } <- @vectors["header_parse"]["accepted"] do
+      expected = fields |> atom_keys() |> Map.put(:body_hash, body_hash)
 
       assert {:ok, ^expected, ^mac} =
                BridgeAuth.parse_header(String.to_existing_atom(kind), header),

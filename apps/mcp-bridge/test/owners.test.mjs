@@ -63,10 +63,11 @@ test("credential values of 8 bytes or more are masked, whole and after their sch
   );
 });
 
-test("admission keeps each nonce for its window and refuses once the cache is full", async () => {
+test("admission checks a nonce, records it only when asked, keeps it for its window and refuses once the cache is full", async () => {
   let clock = 1_000_000;
   const owners = new Owners({ spawner: new FakeSpawner(), now: () => clock, leaseCheckMs: 60_000 });
   const base = { athanor: "ath_1", server: "mcp_1", g: 1, e: 1 };
+  const record = { record: true };
   try {
     const synced = await owners.sync({
       ...base,
@@ -77,15 +78,17 @@ test("admission keeps each nonce for its window and refuses once the cache is fu
     assert.equal(synced.status, "running");
 
     owners.admit({ ...base, ts: clock, nonce: "n0" });
+    owners.admit({ ...base, ts: clock, nonce: "n0" }, record);
     assert.throws(() => owners.admit({ ...base, ts: clock, nonce: "n0" }), refusal("replay"));
+    assert.throws(() => owners.admit({ ...base, ts: clock, nonce: "n0" }, record), refusal("replay"));
 
-    for (let i = 1; i < MAX_NONCES; i++) owners.admit({ ...base, ts: clock, nonce: `n${i}` });
+    for (let i = 1; i < MAX_NONCES; i++) owners.admit({ ...base, ts: clock, nonce: `n${i}` }, record);
     assert.throws(() => owners.admit({ ...base, ts: clock, nonce: "one-more" }), (err) => refusal("nonce_cache_full")(err) && err.status === 503);
 
     // Past their window the nonces are pruned, and admission resumes.
     clock += NONCE_WINDOW_MS + 1;
     owners.renew([{ athanor: "ath_1", server: "mcp_1", e: 1 }], 1, 60_000);
-    owners.admit({ ...base, ts: clock, nonce: "one-more" });
+    owners.admit({ ...base, ts: clock, nonce: "one-more" }, record);
     assert.equal(owners.get("ath_1", "mcp_1").nonces.size, 1);
   } finally {
     await owners.close();

@@ -170,6 +170,39 @@ defmodule Cyfr.MacEnvelopeTest do
       refute MacEnvelope.verify(@envelope, @key, %{message | gen: -1}, mac, @body)
     end
 
+    test "an envelope naming its body's hash in the header parses it and verifies it against the body" do
+      envelope = %{@envelope | body_hash_in_header: true}
+      hash = Cyfr.Digest.sha256_hex(@body)
+      {:ok, plain} = MacEnvelope.header(@envelope, @key, @message, @body)
+      {:ok, header} = MacEnvelope.header(envelope, @key, @message, @body)
+
+      assert header == String.replace(plain, " mac=", " body=#{hash} mac=")
+      assert {:ok, message, mac} = MacEnvelope.parse(envelope, header)
+      assert message == Map.put(@message, :body_hash, hash)
+      assert mac == mac_of(plain)
+      assert MacEnvelope.verify(envelope, @key, message, mac, @body)
+      refute MacEnvelope.verify(envelope, @key, @message, mac, @body)
+
+      refute MacEnvelope.verify(
+               envelope,
+               @key,
+               %{message | body_hash: String.duplicate("0", 64)},
+               mac,
+               @body
+             )
+
+      for refused <- [
+            plain,
+            String.replace(header, "body=#{hash}", "body=#{String.upcase(hash)}"),
+            String.replace(header, "body=#{hash}", "body=#{String.slice(hash, 1..-1//1)}"),
+            header <> " body=#{hash}"
+          ] do
+        assert {:error, :malformed} = MacEnvelope.parse(envelope, refused), refused
+      end
+
+      assert {:error, :malformed} = MacEnvelope.parse(@envelope, header)
+    end
+
     test "fails under another kind or prefix of the same fields" do
       {:ok, message, mac} = MacEnvelope.parse(@envelope, header!())
 

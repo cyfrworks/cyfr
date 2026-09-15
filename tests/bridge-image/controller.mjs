@@ -99,7 +99,13 @@ export class Controller {
    * Answers `{status, body, boot, request}`; `request` can be passed to
    * `resend`.
    */
-  async invoke(owner, method, params = {}, { id = 1, generation = this.generation, boot, ts, nonce, key, notification = false } = {}) {
+  async invoke(owner, method, params = {}, options = {}) {
+    const request = this.signInvoke(owner, method, params, options);
+    return { ...(await post(request.url, request.headers, request.body)), request };
+  }
+
+  /** Signs one MCP request for `owner` as `invoke` does, without sending it. */
+  signInvoke(owner, method, params = {}, { id = 1, generation = this.generation, boot, ts, nonce, key, notification = false } = {}) {
     const body = JSON.stringify({
       jsonrpc: "2.0",
       ...(notification ? {} : { id }),
@@ -129,8 +135,7 @@ export class Controller {
       ...(typeof params.name === "string" ? { "mcp-name": params.name } : {}),
       "cyfr-bridge-auth": auth.invokeHeader(signingKey, fields, body),
     };
-    const request = { url: `${this.base}/mcp`, headers, body };
-    return { ...(await post(request.url, headers, body)), request };
+    return { url: `${this.base}/mcp`, headers, body };
   }
 
   /** Sends a request `invoke` returned again, byte for byte, to `base` (default: its own). */
