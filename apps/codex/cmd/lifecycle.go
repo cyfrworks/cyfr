@@ -351,7 +351,7 @@ var upCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Start the CYFR stack with Docker Compose in detached mode. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
-Always brings up cyfr (the one endpoint: Prism, API, MCP, tinctures) and mcp-bridge (HTTP MCP gateway that wraps stdio/npx MCP servers — register it from Prism's "MCP Servers" page).
+Always brings up cyfr (the one endpoint: Prism, API, MCP, tinctures) and mcp-bridge (runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid of its own; cyfr tells it what to run).
 
 When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fronts cyfr on :80/:443. Otherwise cyfr is reachable directly at http://localhost:4000.`,
 	Example: `  cyfr up`,
@@ -412,7 +412,6 @@ When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fro
 			fmt.Println("")
 			fmt.Println("Optional next steps:")
 			fmt.Println("  cyfr login      authenticate this CLI")
-			fmt.Println("  cyfr register   scan & register the bundled components")
 			fmt.Println("  Then in Prism's \"MCP Servers\" page, click \"Add stdio server\"")
 			fmt.Println("  to run stdio/npx MCP servers (filesystem, github, …) for AQUA.")
 		} else {
