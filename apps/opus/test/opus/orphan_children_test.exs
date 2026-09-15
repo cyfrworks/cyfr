@@ -5,13 +5,14 @@ defmodule Opus.OrphanChildrenTest do
   @moduledoc """
   A formula's children end with it and never outlive their own deadline.
 
-  Every child — called, spawned or streamed — is bounded by the timeout
-  of its own node: held at its guest's entry past that timeout, its
-  component process is killed and its row fails with the timeout, whatever
-  its parent does. A formula whose run was cancelled or has closed admits
-  no new child through `execution.run`, `execution.run_stream` or a spawn:
-  no row, no charge row and no invoke slot is left behind. A `run_stream`
-  child takes a charge row, as a spawned child does, and gives it back.
+  Every child — called, spawned or streamed — runs in a runner of its
+  formula's group, bounded by the timeout of its own node: held at its
+  guest's entry past that timeout, its component process is killed and its
+  row fails with the timeout, whatever its parent does. A formula whose run
+  was cancelled or has closed admits no new child through `execution.run`,
+  `execution.run_stream` or a spawn: no row, no charge row and no invoke
+  slot is left behind. A `run_stream` child takes a charge row, as a spawned
+  child does, and gives it back.
 
   The formula and its children are the `nested-probe`, held at the entry
   to their guest until the test lets them go.
@@ -23,18 +24,19 @@ defmodule Opus.OrphanChildrenTest do
   import Ecto.Query, only: [from: 2]
 
   alias Cyfr.Authority.Blob
+  alias Opus.Test.FormulaHost
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap, Source}
 
   @moduletag timeout: 120_000
+  @moduletag :capture_log
 
   @probe_node "formula:local.nested-probe"
-  @refused "Execution refused: its parent execution is no longer running"
+  @ended "The call failed."
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path =
       Path.join(System.tmp_dir!(), "orphan_children_#{System.unique_integer([:positive])}")
@@ -57,6 +59,8 @@ defmodule Opus.OrphanChildrenTest do
       end
     end)
 
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted
@@ -71,7 +75,7 @@ defmodule Opus.OrphanChildrenTest do
       assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
       assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Execution, root_id)
 
-      refute_orphans_admitted(ctx, root_id, authority, row)
+      refute_orphans_admitted(root_id, authority, row)
     end
 
     test "admits no child once it closed", %{ctx: ctx} do
@@ -81,7 +85,7 @@ defmodule Opus.OrphanChildrenTest do
       assert_receive {:root, {:ok, %{status: :completed}}}, 30_000
       assert %{status: "completed"} = Arca.Repo.get!(Arca.Execution, root_id)
 
-      refute_orphans_admitted(ctx, root_id, authority, row)
+      refute_orphans_admitted(root_id, authority, row)
     end
   end
 
@@ -89,7 +93,7 @@ defmodule Opus.OrphanChildrenTest do
     {root_id, authority, row} = held_root!(ctx)
     hold_children!(root_id)
 
-    streamed = formula_call(ctx, "run_stream", root_id, authority, row)
+    streamed = formula_call(row.host, "run_stream", authority)
     assert %{"output" => %{"execution_id" => stream_id}} = Jason.decode!(streamed)
     assert_receive {:held, component, ^stream_id}, 30_000
 
@@ -108,34 +112,31 @@ defmodule Opus.OrphanChildrenTest do
   end
 
   test "every child is killed at its own deadline, held past it", %{ctx: ctx} do
-    {root_id, authority, row} = held_root!(ctx)
-    hold_children!(root_id)
-    short = with_timeout(authority, "1s")
+    {:ok, consented} = Cyfr.Execution.authority_for(ctx, :default, @probe_node)
+    short = with_timeout(consented, "1s")
+
+    formula =
+      FormulaHost.attached!(ctx: ctx, authority: short, component_ref: Probe.probe_ref())
+
+    host = formula.host
+    hold_children!(host.execution_id)
     test_pid = self()
 
     called =
       spawn_link(fn ->
-        send(test_pid, {:called, formula_call(ctx, "run", root_id, short, row)})
+        send(test_pid, {:called, formula_call(host, "run", short)})
       end)
 
-    streamed = formula_call(ctx, "run_stream", root_id, short, row)
+    streamed = formula_call(host, "run_stream", short)
     assert %{"output" => %{"execution_id" => stream_id}} = Jason.decode!(streamed)
 
-    spawned =
-      spawn_link(fn ->
-        send(
-          test_pid,
-          {:spawned,
-           Cyfr.Execution.run_child(short, Probe.probe_ref(), nil, %{"op" => "echo"},
-             ctx: Sanctum.Context.enter_guest(ctx),
-             attempt: row.attempt,
-             parent_execution_id: root_id,
-             root_execution_id: root_id,
-             declared_needs: [],
-             guest_fn: :spawn
-           )}
-        )
-      end)
+    {imports, tracker} =
+      Opus.FormulaHandler.build_formula_imports(host, FormulaHost.opts(short))
+
+    %{"spawn" => {:fn, spawn_fn}, "await" => {:fn, await_fn}} =
+      imports["cyfr:formula/invoke@0.1.0"]
+
+    assert %{"task_id" => task_id} = Jason.decode!(spawn_fn.(request("run")))
 
     held =
       for _ <- 1..3 do
@@ -164,21 +165,25 @@ defmodule Opus.OrphanChildrenTest do
 
     assert_receive {:called, called_answer}, 5_000
     assert called_answer =~ "Execution timeout after 1000ms"
-    assert_receive {:spawned, {:error, "Execution timeout after 1000ms"}}, 5_000
-    refute Process.alive?(called) or Process.alive?(spawned)
+    refute Process.alive?(called)
+
+    assert %{"status" => "error", "error" => %{"message" => spawned_answer}} =
+             Jason.decode!(await_fn.(task_id))
+
+    assert spawned_answer =~ "Execution timeout after 1000ms"
 
     wait_until(fn -> Sanctum.Authority.budget(short).in_flight == 0 end)
     assert charges(ctx, short) == []
-    assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, root_id)
+    assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, host.execution_id)
 
-    send(row.component, :continue)
-    assert_receive {:root, {:ok, _}}, 30_000
+    Opus.FormulaHandler.cleanup_registry(tracker)
   end
 
   # ---------------------------------------------------------------------------
 
   # The probe as a root, echoing, held at its guest's entry: its id, its
-  # authority as it runs, and its row's attempt and held component.
+  # authority as its assignment carries it, and its row's attempt, its
+  # held component and the client its runner holds.
   defp held_root!(ctx) do
     root_id = Cyfr.UUID7.execution_id()
     test_pid = self()
@@ -220,13 +225,13 @@ defmodule Opus.OrphanChildrenTest do
     {root_id, authority,
      %{
        attempt: execution.current_attempt,
-       activation_digest: execution.activation_digest,
-       component: component
+       component: component,
+       host: FormulaHost.current!(ctx.athanor_id, root_id)
      }}
   end
 
-  # Children of `root_id` wait at their guest's entry for `:continue`.
-  defp hold_children!(root_id) do
+  # Children of `parent_id` wait at their guest's entry for `:continue`.
+  defp hold_children!(parent_id) do
     test_pid = self()
     handler = "orphan-children-#{System.unique_integer([:positive])}"
 
@@ -236,7 +241,7 @@ defmodule Opus.OrphanChildrenTest do
         [:cyfr, :opus, :runtime, :authority_entered],
         fn _event, _measurements, %{execution_id: id}, _config ->
           case Arca.Repo.get(Arca.Execution, id) do
-            %{parent_execution_id: ^root_id} ->
+            %{parent_execution_id: ^parent_id} ->
               send(test_pid, {:held, self(), id})
 
               receive do
@@ -255,10 +260,8 @@ defmodule Opus.OrphanChildrenTest do
     on_exit(fn -> :telemetry.detach(handler) end)
   end
 
-  # What the formula's own `call` host function answers for `action`, made
-  # with the formula's authority, attempt and lineage.
-  defp formula_call(ctx, action, root_id, authority, row) do
-    request = %{
+  defp request(action) do
+    Jason.encode!(%{
       "tool" => "execution",
       "action" => action,
       "args" => %{
@@ -266,42 +269,34 @@ defmodule Opus.OrphanChildrenTest do
         "input" => %{"op" => "echo"},
         "type" => "formula"
       }
-    }
-
-    Opus.FormulaHandler.execute(Jason.encode!(request), Sanctum.Context.enter_guest(ctx),
-      parent_execution_id: root_id,
-      root_execution_id: root_id,
-      attempt: row.attempt,
-      authority: authority,
-      declared_needs: [],
-      activation_digest: row.activation_digest,
-      parent_reference: Probe.probe_ref()
-    )
+    })
   end
 
-  defp refute_orphans_admitted(ctx, root_id, authority, row) do
-    # A called child is refused at its admission; a streamed or spawned one
-    # already at its charge, which only a running parent attempt may take.
-    assert %{"error" => %{"message" => @refused}} =
-             Jason.decode!(formula_call(ctx, "run", root_id, authority, row))
+  # What the formula's own `call` host function answers for `action`,
+  # made through the formula's attempt `host`.
+  defp formula_call(host, action, authority),
+    do: Opus.FormulaHandler.execute(request(action), host, FormulaHost.opts(authority))
 
-    assert %{"error" => %{"message" => "Invocation denied: stale_attempt"}} =
-             Jason.decode!(formula_call(ctx, "run_stream", root_id, authority, row))
+  defp refute_orphans_admitted(root_id, authority, row) do
+    # The formula's attempt is gone: every host call its runner makes for a
+    # child is refused before anything is admitted or charged.
+    assert %{"error" => %{"message" => @ended}} =
+             Jason.decode!(formula_call(row.host, "run", authority))
 
-    assert {:error, {:invoke_denied, :stale_attempt}} =
-             Cyfr.Execution.run_child(authority, Probe.probe_ref(), nil, %{"op" => "echo"},
-               ctx: Sanctum.Context.enter_guest(ctx),
-               attempt: row.attempt,
-               parent_execution_id: root_id,
-               root_execution_id: root_id,
-               declared_needs: [],
-               guest_fn: :spawn
-             )
+    assert %{"error" => %{"message" => @ended}} =
+             Jason.decode!(formula_call(row.host, "run_stream", authority))
+
+    {imports, tracker} =
+      Opus.FormulaHandler.build_formula_imports(row.host, FormulaHost.opts(authority))
+
+    %{"spawn" => {:fn, spawn_fn}} = imports["cyfr:formula/invoke@0.1.0"]
+    assert %{"error" => %{"message" => @ended}} = Jason.decode!(spawn_fn.(request("run")))
+    Opus.FormulaHandler.cleanup_registry(tracker)
 
     children = from(e in Arca.Execution, where: e.parent_execution_id == ^root_id, select: e.id)
     assert Arca.Repo.all(children) == []
     assert Sanctum.Authority.budget(authority).in_flight == 0
-    assert charges(ctx, authority) == []
+    assert charges(Sanctum.TestContext.local(), authority) == []
   end
 
   # `authority` with every node of its graph consenting `timeout`.

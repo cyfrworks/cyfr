@@ -16,12 +16,12 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   outcome.
 
   The formula is the `nested-probe`, spawning one child and awaiting it;
-  its children are the probe too, held at the entry to their guest. The
-  probe issues one operation per run, so the `run_stream` child is started
-  by the test through the formula's own
-  `call` host function (`Opus.FormulaHandler.execute/3`), with the
-  formula's authority, attempt and lineage, while the formula awaits its
-  spawned child.
+  its children are the probe too, held at the entry to their guest, each in
+  a runner of the formula's group. The probe issues one operation per run,
+  so the `run_stream` child is started by the test through the formula's
+  own `call` host function (`Opus.FormulaHandler.execute/3`) with the
+  client of the formula's attempt, while the formula awaits its spawned
+  child.
   """
 
   use ExUnit.Case, async: false
@@ -29,6 +29,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   import Cyfr.Test.Wait
   import Ecto.Query, only: [from: 2]
 
+  alias Opus.Test.FormulaHost
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap, Source}
 
@@ -37,10 +38,9 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   @probe_node "formula:local.nested-probe"
   @terminal Arca.ExecutionEvents.terminal_types()
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path =
       Path.join(System.tmp_dir!(), "cancel_cascade_#{System.unique_integer([:positive])}")
@@ -63,6 +63,8 @@ defmodule Opus.CancelCascadeCharacterizationTest do
       end
     end)
 
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted
@@ -81,17 +83,12 @@ defmodule Opus.CancelCascadeCharacterizationTest do
 
     assert_receive {:entered, ^root_id, root_component, authority}, 30_000
     assert_receive {:held, spawned_component, spawned_id}, 30_000
-    row = Arca.Repo.get!(Arca.Execution, root_id)
 
     streamed =
-      Opus.FormulaHandler.execute(run_json("run_stream"), Sanctum.Context.enter_guest(ctx),
-        parent_execution_id: root_id,
-        root_execution_id: root_id,
-        attempt: row.current_attempt,
-        authority: authority,
-        declared_needs: [],
-        activation_digest: row.activation_digest,
-        parent_reference: Probe.probe_ref()
+      Opus.FormulaHandler.execute(
+        run_json("run_stream"),
+        FormulaHost.current!(ctx.athanor_id, root_id),
+        FormulaHost.opts(authority)
       )
 
     assert %{"output" => %{"execution_id" => stream_id}} = Jason.decode!(streamed)

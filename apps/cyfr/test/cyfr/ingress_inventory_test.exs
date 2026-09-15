@@ -31,8 +31,9 @@ defmodule Cyfr.IngressInventoryTest do
     # and the console shell render its outcomes; neither calls run_root
     # itself any more).
     "apps/cyfr/lib/emissary/tincture/invoke.ex" => :tincture,
-    # Formula children run under the parent's authority, never their own.
-    "apps/opus/lib/opus/formula_handler.ex" => :in_chain,
+    # Formula children run under the authority CYFR holds for the parent's
+    # attempt, never their own, admitted for the parent's runner.
+    "apps/cyfr/lib/cyfr/execution/host/children.ex" => :in_chain,
     # The agent loop: the turn's root is claimed without a guest, and every
     # call it dispatches is a child of that root.
     "apps/cyfr/lib/aqua/loop.ex" => :in_chain,
@@ -46,12 +47,12 @@ defmodule Cyfr.IngressInventoryTest do
     "Cyfr.Execution.claim_turn_root(",
     "Cyfr.Execution.run_child(",
     "&Cyfr.Execution.run_child/",
-    "Cyfr.Execution.run_child_stream(",
-    "&Cyfr.Execution.run_child_stream/",
-    "Cyfr.Execution.execute_child(",
+    "Cyfr.Execution.admit_child(",
+    "&Cyfr.Execution.admit_child/",
     "Admission.step_invoke(",
     "Admission.admit(",
-    "Dispatch.run("
+    "Dispatch.run(",
+    "Dispatch.claim("
   ]
 
   defp root, do: Path.expand("../../../..", __DIR__)
@@ -103,11 +104,11 @@ defmodule Cyfr.IngressInventoryTest do
   )
 
   # Where execution is defined, and where a formula's children are
-  # dispatched under their parent's authority.
+  # admitted under their parent's authority.
   @engine_internals ~w(
     apps/cyfr/lib/cyfr/execution.ex
     apps/cyfr/lib/cyfr/execution/dispatch.ex
-    apps/opus/lib/opus/formula_handler.ex
+    apps/cyfr/lib/cyfr/execution/host/children.ex
   )
 
   test "every ingress starts its root through Cyfr.Execution" do
@@ -116,7 +117,7 @@ defmodule Cyfr.IngressInventoryTest do
         root()
         |> Path.join(file)
         |> code()
-        |> String.match?(~r/\b(Admission\.(admit|step_invoke)|Dispatch\.run)\(/)
+        |> String.match?(~r/\b(Admission\.(admit|step_invoke)|Dispatch\.(run|claim))\(/)
       end)
 
     assert direct == [],

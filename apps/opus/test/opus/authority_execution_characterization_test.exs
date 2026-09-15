@@ -113,7 +113,6 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
     for event <- chain_events do
       assert event.authority.profile_id
-      assert event.plane == :guest
       assert event.authority.resources != :none
     end
 

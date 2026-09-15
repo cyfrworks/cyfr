@@ -21,7 +21,7 @@ defmodule Cyfr.Test.AttemptFixtures do
 
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Execution.{Assignments, Attempt, Close, Keys, Record}
+  alias Cyfr.Execution.{Assignments, Attempt, Close, Delegation, Keys, Record}
 
   @doc """
   Admit, open, sign and attach. Options:
@@ -44,6 +44,13 @@ defmodule Cyfr.Test.AttemptFixtures do
     through (default none);
   - `:digest` — the digest of the component's artifact, in the assignment
     and the attempt (default the digest of the reference's own bytes);
+  - `:input` — the input the row is admitted with (default
+    `%{"fixture" => true}`); a formula's delegation roster is its
+    `sub_agents` (`Cyfr.Execution.Delegation.roster/1`);
+  - `:declared_needs` and `:activation_digest` — the resolver's transition
+    inputs its guest's children are stepped with (default `[]` and none);
+  - `:reservation` — `true` to admit the row with the invocation
+    reservation its authority's budget names, as a root is admitted;
   - `:attach` — `false` to stop before attaching.
   """
   @spec attached!(keyword()) :: map()
@@ -60,9 +67,14 @@ defmodule Cyfr.Test.AttemptFixtures do
 
     limits = Keyword.get_lazy(opts, :limits, fn -> Authority.limits(authority) end)
     digest = Keyword.get_lazy(opts, :digest, fn -> Cyfr.Digest.sha256(component_ref) end)
-    input = %{"fixture" => true}
+    input = Keyword.get(opts, :input, %{"fixture" => true})
 
-    record = Record.new(ctx, component_ref, input, component_type: component_type)
+    record =
+      Record.new(ctx, component_ref, input,
+        component_type: component_type,
+        reservation: reservation(authority, opts)
+      )
+
     runner_id = Keyword.get_lazy(opts, :runner_id, &Record.runner_id/0)
     :ok = Record.write_started(record, runner_id: runner_id)
     close = %Close{ctx: ctx, record: record, limits: limits, started: true}
@@ -77,6 +89,9 @@ defmodule Cyfr.Test.AttemptFixtures do
         limits: limits,
         close: close,
         stream_id: Keyword.get(opts, :stream_id, record.id),
+        declared_needs: Keyword.get(opts, :declared_needs, []),
+        activation_digest: Keyword.get(opts, :activation_digest),
+        roster: if(component_type == :formula, do: Delegation.roster(input), else: []),
         runner_id: runner_id,
         worker: Keyword.get(opts, :worker),
         digest: digest
@@ -91,8 +106,8 @@ defmodule Cyfr.Test.AttemptFixtures do
           ref: component_ref,
           type: Atom.to_string(component_type),
           digest: digest,
-          declared_needs: [],
-          activation_digest: nil
+          declared_needs: Keyword.get(opts, :declared_needs, []),
+          activation_digest: Keyword.get(opts, :activation_digest)
         },
         input: input,
         timeout_ms: 60_000,
@@ -216,6 +231,10 @@ defmodule Cyfr.Test.AttemptFixtures do
   end
 
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+
+  defp reservation(%Authority{budget: %Authority.Budget{id: id, cap: cap}}, opts) do
+    if Keyword.get(opts, :reservation, false), do: %{budget_id: id, cap: cap}
+  end
 
   defp authority(ctx, opts) do
     authority = Keyword.get(opts, :authority, Authority.zero())

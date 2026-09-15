@@ -3,11 +3,14 @@
 
 defmodule Opus.BudgetConcurrencyCharacterizationTest do
   @moduledoc """
-  A root's invoke budget bounds its spawned children however they race:
-  under a cap of 2, five concurrent spawns of a real child never hold more
-  than 2 in flight or 2 admitted charges, the rest are refused, and once
-  the admitted children finish every hold is given back — the in-flight
-  count, the charge rows, the reservation's count and the child slots.
+  A root's invoke budget bounds a formula's spawned children however they
+  race: under a cap of 2, five concurrent spawns of a real child through the
+  formula's `spawn` host function never hold more than 2 in flight or 2
+  admitted charges, the rest are refused, and once the admitted children
+  finish every hold is given back — the in-flight count, the charge rows,
+  the reservation's count and the child slots. CYFR decides each spawn
+  under the authority it holds for the formula's attempt, and the children
+  run in runners of the formula's group.
 
   The children are the `nested-probe` formula, held at the entry to their
   guest until the test lets them go, so the two admitted runs overlap the
@@ -19,19 +22,20 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
   import Cyfr.Test.Wait
 
   alias Cyfr.Authority.Budget
+  alias Opus.Test.FormulaHost
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap, Source}
 
   @moduletag timeout: 120_000
+  @moduletag :capture_log
 
   @probe_node "formula:local.nested-probe"
   @cap 2
   @spawns 5
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path =
       Path.join(System.tmp_dir!(), "budget_concurrency_#{System.unique_integer([:positive])}")
@@ -51,6 +55,8 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
       end
     end)
 
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     ctx = Sanctum.TestContext.local()
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
@@ -58,46 +64,44 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
 
     {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @probe_node)
     authority = %{authority | budget: Budget.new(@cap)}
-    root_id = Cyfr.UUID7.execution_id()
 
-    {:ok, %{attempt: attempt}} =
-      Arca.Execution.admit(
-        %{
-          id: root_id,
-          reference: Probe.probe_ref(),
-          user_id: ctx.user_id,
-          athanor_id: ctx.athanor_id,
-          component_type: "formula"
-        },
-        reservation: %{budget_id: authority.budget.id, cap: @cap}
-      )
+    formula =
+      FormulaHost.attached!(ctx: ctx, authority: authority, component_ref: Probe.probe_ref())
 
-    {:ok, ctx: ctx, authority: authority, root_id: root_id, attempt: attempt.attempt}
+    {:ok, ctx: ctx, authority: authority, formula: formula}
   end
 
   test "five concurrent spawns under a cap of 2 never hold more than 2, and give everything back",
-       %{ctx: ctx, authority: authority, root_id: root_id, attempt: attempt} do
+       %{ctx: ctx, authority: authority, formula: formula} do
+    root_id = formula.execution_id
     children_before = Cyfr.Execution.Semaphore.status().child_active
     hold_children!(root_id)
     sampler = sample(ctx, authority)
 
+    {imports, tracker} =
+      Opus.FormulaHandler.build_formula_imports(formula.host, FormulaHost.opts(authority))
+
+    %{"spawn" => {:fn, spawn_fn}, "await" => {:fn, await_fn}} =
+      imports["cyfr:formula/invoke@0.1.0"]
+
+    request =
+      Jason.encode!(%{
+        "tool" => "execution",
+        "action" => "run",
+        "args" => %{"reference" => Probe.probe_ref(), "input" => %{"op" => "echo"}}
+      })
+
     test_pid = self()
 
     for _ <- 1..@spawns do
-      spawn_link(fn ->
-        result =
-          Cyfr.Execution.run_child(authority, Probe.probe_ref(), nil, %{"op" => "echo"},
-            ctx: Sanctum.Context.enter_guest(ctx),
-            attempt: attempt,
-            parent_execution_id: root_id,
-            root_execution_id: root_id,
-            declared_needs: [],
-            guest_fn: :spawn
-          )
-
-        send(test_pid, {:spawned, result})
-      end)
+      spawn_link(fn -> send(test_pid, {:spawned, Jason.decode!(spawn_fn.(request))}) end)
     end
+
+    spawned =
+      for _ <- 1..@spawns do
+        assert_receive {:spawned, answer}, 30_000
+        answer
+      end
 
     held =
       for _ <- 1..@cap do
@@ -105,9 +109,19 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
         {runner, execution_id}
       end
 
-    for _ <- 1..(@spawns - @cap) do
-      assert_receive {:spawned, {:error, {:invoke_denied, :invoke_budget_exhausted}}}, 30_000
-    end
+    task_ids = for %{"task_id" => task_id} <- spawned, do: task_id
+    refused = for %{"error" => error} <- spawned, do: error
+
+    assert length(task_ids) == @cap
+
+    assert refused ==
+             List.duplicate(
+               %{
+                 "type" => "resource_limit",
+                 "message" => "Invocation denied: invoke_budget_exhausted"
+               },
+               @spawns - @cap
+             )
 
     refute_received {:held, _, _}
     assert Sanctum.Authority.budget(authority).in_flight == @cap
@@ -117,8 +131,8 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
 
     for {runner, _execution_id} <- held, do: send(runner, :continue)
 
-    for _ <- 1..@cap do
-      assert_receive {:spawned, {:ok, %{status: :completed}}}, 60_000
+    for task_id <- task_ids do
+      assert %{"status" => "completed"} = Jason.decode!(await_fn.(task_id))
     end
 
     for {_runner, execution_id} <- held do
@@ -127,13 +141,15 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
     end
 
     wait_until(fn -> Cyfr.Execution.Semaphore.status().child_active == children_before end)
-    assert Sanctum.Authority.budget(authority).in_flight == 0
+    wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
     assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
     assert Arca.BudgetReservations.lookup(ctx.athanor_id, authority.budget.id).charged == 0
 
     assert %{in_flight: in_flight, admitted: admitted} = stop_sampling(sampler)
     assert in_flight <= @cap
     assert admitted <= @cap
+
+    Opus.FormulaHandler.cleanup_registry(tracker)
   end
 
   # Children of `root_id` wait at their guest's entry for `:continue`.

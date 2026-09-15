@@ -204,6 +204,30 @@ defmodule Arca.ExecutionAttempts do
   end
 
   @doc """
+  Whether `runner` holds the attempt (`held?/4`) and it is live: no cancel
+  has been asked of it and its execution is `running`. One read. Answers
+  `{:error, :database_error}` when the store cannot answer.
+  """
+  @spec live?(String.t(), String.t(), pos_integer(), String.t()) ::
+          boolean() | {:error, :database_error}
+  def live?(athanor_id, attempt, fence, runner)
+      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
+             is_binary(runner) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.live?", fn ->
+      Arca.Repo.exists?(
+        from(a in ExecutionAttempt,
+          join: e in Arca.Execution,
+          on: e.id == a.execution_id and e.athanor_id == a.athanor_id,
+          where: a.athanor_id == ^athanor_id and a.attempt == ^attempt and a.fence == ^fence,
+          where: a.state == "running" and a.claimed_by == ^runner,
+          where: is_nil(a.cancel_requested_at),
+          where: e.status == "running" and e.current_attempt == a.attempt
+        )
+      )
+    end)
+  end
+
+  @doc """
   Hold the attempt a child is admitted under, inside the caller's admission
   transaction: `attempt` must own `execution_id`, be `running` with no
   cancel asked of it, and the execution must be `running`. Answers 1 when

@@ -14,21 +14,20 @@ defmodule Opus.HostClient do
   (`Cyfr.WorkerAuth.host_call_header/3`), and its answer is JSON.
   `transport/2` carries the header and body to CYFR and brings the answer
   back; nothing but those strings crosses it. The attempt's seal key is
-  held for the sealed transport (`Cyfr.WorkerAuth.seal_call/5`).
+  held for the sealed transport (`Cyfr.WorkerAuth.seal_call/5`), and opens
+  the keys of a child CYFR admits for this client's runner
+  (`admit_child/5`).
 
   Each function answers as the `Cyfr.HostAPI` callback of the same name.
   An answer that cannot be read is `{:error, :lost}`.
 
-  Two calls reach CYFR beside `transport/2`. `admitted/1` asks, for a
-  runner in this BEAM, what its attempt runs with beyond the assignment:
-  the context its guest's in-process calls run in and the run's authority
-  (`Cyfr.Execution.Host.admitted/2`), signed as every host call is.
-  `runner_exited/3` is a worker service's report that one of its runners
-  exited, signed with that worker service's dispatch key
-  (`Cyfr.Execution.Host.runner_exited/2`); it carries only strings.
+  One call reaches CYFR beside `transport/2`: `runner_exited/3`, a worker
+  service's report that one of its runners exited, signed with that worker
+  service's dispatch key (`Cyfr.Execution.Host.runner_exited/2`); it
+  carries only strings.
   """
 
-  alias Cyfr.WorkerAuth
+  alias Cyfr.{Assignment, WorkerAuth}
 
   @derive {Inspect, except: [:call_key, :seal_key]}
   @enforce_keys [
@@ -55,6 +54,22 @@ defmodule Opus.HostClient do
           call_key: binary(),
           seal_key: binary()
         }
+
+  @typedoc """
+  A child CYFR admitted and claimed for this client's runner: its assignment
+  token and the assignment it carries, the input it was admitted with (which
+  may differ from what the guest asked for), a client for its attempt
+  presenting as the same runner, and the fields its vault edge projects.
+  """
+  @type child :: %{
+          token: Assignment.token(),
+          assignment: Assignment.t(),
+          input: map(),
+          client: t(),
+          secrets: %{optional(String.t()) => String.t()}
+        }
+
+  @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
 
   @refusals %{
     "lost" => :lost,
@@ -113,15 +128,16 @@ defmodule Opus.HostClient do
   end
 
   @doc """
-  Close the attempt failed with the sentence `error`. `abandoned: true`
-  says the runner stopped the guest's component call before it returned.
+  Close the attempt failed with the sentence `error`, answering the failure
+  as recorded, masked. `abandoned: true` says the runner stopped the
+  guest's component call before it returned.
   """
-  @spec fail(t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec fail(t(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def fail(%__MODULE__{} = client, error, opts \\ []) when is_binary(error) do
     fields = %{"error" => error, "abandoned" => Keyword.get(opts, :abandoned, false) == true}
 
     case request(client, "fail", %{"outcome" => outcome(client, "failed", fields)}) do
-      {:ok, true} -> :ok
+      {:ok, message} when is_binary(message) -> {:ok, message}
       {:ok, _other} -> {:error, :lost}
       {:error, reason} -> {:error, reason}
     end
@@ -212,18 +228,68 @@ defmodule Opus.HostClient do
   end
 
   @doc """
-  What the attempt runs with beyond its assignment, for a runner in this
-  BEAM: `{:ok, %{ctx: ctx, authority: authority}}`, or
-  `{:error, :lost | :unavailable}`.
+  Admit a child the attempt's guest starts on `reference`, through the edge
+  named `need`, with `input`, made with `guest_fn` (`:call` or `:spawn`).
+  CYFR admits it under the authority it holds for this attempt and claims
+  it for this client's runner. Answers the child to run (`t:child/0`),
+  once its keys open under this attempt's seal key as the attempt its
+  assignment names on this client's worker service, and its input hashes
+  to the assignment's digest. A refusal of the child is
+  `{:error, guest_error}` (`t:Cyfr.HostAPI.guest_error/0`).
   """
-  @spec admitted(t()) :: {:ok, map()} | {:error, :lost | :unavailable}
-  def admitted(%__MODULE__{} = client) do
-    body = Jason.encode!(%{"op" => "admitted", "args" => %{}})
+  @spec admit_child(t(), String.t(), term(), map(), :call | :spawn) ::
+          {:ok, child()} | {:error, term()}
+  def admit_child(%__MODULE__{} = client, reference, need, input, guest_fn)
+      when is_binary(reference) and is_map(input) and guest_fn in [:call, :spawn] do
+    args = %{
+      "reference" => reference,
+      "need" => need,
+      "input" => input,
+      "guest_fn" => Atom.to_string(guest_fn)
+    }
 
-    case WorkerAuth.host_call_header(client.call_key, call_fields(client), body) do
-      {:ok, header} -> Cyfr.Execution.Host.admitted(header, body)
-      {:error, _invalid} -> {:error, :lost}
+    with {:ok,
+          %{
+            "assignment" => token,
+            "attempt_keys" => sealed,
+            "input" => input_json,
+            "secrets" => %{} = secrets
+          }}
+         when is_binary(input_json) <- request(client, "admit_child", args),
+         {:ok, keys} <- WorkerAuth.open_attempt_keys(client.seal_key, sealed),
+         {:ok, assignment} <- Assignment.read(token),
+         true <- names_attempt?(assignment, keys.attempt, client.worker),
+         true <- Cyfr.Digest.sha256(input_json) == assignment.input_digest,
+         {:ok, %{} = admitted_input} <- Jason.decode(input_json) do
+      {:ok,
+       %{
+         token: token,
+         assignment: assignment,
+         input: admitted_input,
+         client: new(keys, client.runner),
+         secrets: secrets
+       }}
+    else
+      {:error, {:guest_error, _type, _message} = refusal} -> {:error, refusal}
+      {:error, {:guest_error, _type, _message, _remediation} = refusal} -> {:error, refusal}
+      {:error, :unavailable} -> {:error, :unavailable}
+      _unreadable -> {:error, :lost}
     end
+  end
+
+  @doc """
+  Run the catalog tool `name` with `args` for the attempt's guest, which
+  made it with `guest_fn` (`:call` or `:spawn`). Answers the tool's result,
+  or a refusal the guest is handed as `{:error, guest_error}`.
+  """
+  @spec tool_call(t(), String.t(), map(), :call | :spawn) :: {:ok, term()} | {:error, term()}
+  def tool_call(%__MODULE__{} = client, name, args, guest_fn)
+      when is_binary(name) and is_map(args) and guest_fn in [:call, :spawn] do
+    request(client, "tool_call", %{
+      "name" => name,
+      "args" => args,
+      "guest_fn" => Atom.to_string(guest_fn)
+    })
   end
 
   @doc """
@@ -279,6 +345,13 @@ defmodule Opus.HostClient do
 
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
+  # A child's assignment must name the attempt its keys open as, on this
+  # client's worker service.
+  defp names_attempt?(%Assignment{} = assignment, attempt, worker) do
+    Map.take(assignment, @attempt_fields) == Map.take(attempt, @attempt_fields) and
+      assignment.audience == worker and attempt.worker == worker
+  end
+
   defp outcome(client, status, fields) do
     Map.merge(fields, %{
       "execution_id" => client.execution_id,
@@ -296,9 +369,9 @@ defmodule Opus.HostClient do
       {:ok, %{"error" => "setup_required", "payload" => %{} = payload}} ->
         {:error, {:setup_required, payload}}
 
-      {:ok, %{"error" => "guest_error", "type" => type, "message" => message}}
+      {:ok, %{"error" => "guest_error", "type" => type, "message" => message} = refusal}
       when is_binary(type) and is_binary(message) ->
-        {:error, {:guest_error, type, message}}
+        guest_error(refusal, type, message)
 
       {:ok, %{"error" => "failed", "message" => message}} when is_binary(message) ->
         {:error, {:failed, message}}
@@ -310,6 +383,11 @@ defmodule Opus.HostClient do
         {:error, :lost}
     end
   end
+
+  defp guest_error(%{"remediation" => %{} = remediation}, type, message),
+    do: {:error, {:guest_error, type, message, remediation}}
+
+  defp guest_error(_refusal, type, message), do: {:error, {:guest_error, type, message}}
 
   defp renewal(%{"lease_until" => until}) when is_integer(until), do: {:ok, until}
   defp renewal("cancel"), do: :cancel

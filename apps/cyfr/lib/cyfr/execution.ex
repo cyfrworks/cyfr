@@ -8,12 +8,14 @@ defmodule Cyfr.Execution do
   Every way an execution starts is here. `run_root/5` is the external
   ingress: the reference runs under the authority its selected profile's
   consent grants. `run_root_edge/5` roots at a tincture's profile and runs
-  one of its dependencies under that edge. `run_child/5`,
-  `run_child_stream/5` and `execute_child/3` are the in-chain entries: the
-  target runs under the child authority the caller's authority steps to,
-  bound or zero. `claim_turn_root/3` takes a turn's root without a guest.
-  Every decision is taken before the run is dispatched to a worker service
-  (`Cyfr.Execution.Dispatch.run/4`); a refusal runs nothing.
+  one of its dependencies under that edge. `run_child/5` and
+  `admit_child/5` are the in-chain entries: the target runs under the child
+  authority the caller's authority steps to, bound or zero. `run_child/5`
+  runs it on a worker service and waits for it; `admit_child/5` admits a
+  formula's child for the runner that runs the formula, which runs it.
+  `claim_turn_root/3` takes a turn's root without a guest. Every decision
+  is taken before the run is dispatched (`Cyfr.Execution.Dispatch.run/4`,
+  `Cyfr.Execution.Dispatch.claim/4`); a refusal runs nothing.
 
   A run is dispatched to the first worker service `config :cyfr, :workers`
   names that is loaded and answers; with none, `available?/0` is false and
@@ -21,9 +23,9 @@ defmodule Cyfr.Execution do
 
   A spawn-shaped child's invoke-budget slot is charged by its step and
   held under the guard by the process that dispatches it, with its charge
-  row; the child's attempt takes both over and gives them back when it
-  stops, and a child refused before its attempt opens gives them back at
-  once.
+  row; the child's attempt takes both over and gives them back at its
+  terminal write or when it stops, and a child refused before its attempt
+  opens gives them back at once.
   """
 
   alias Cyfr.Authority
@@ -92,10 +94,11 @@ defmodule Cyfr.Execution do
   def run_root_edge(%Context{} = ctx, source_ref, reference, input, opts) when is_list(opts) do
     with {:ok, %{root: root, decision: decision}} <-
            Admission.root_edge(ctx, source_ref, reference, opts) do
-      execute_child(
+      dispatch_child(
         decision,
         input,
-        Keyword.merge(opts, ctx: ctx, activation_stamp: root.stamp, profile_id: root.profile.id)
+        Keyword.merge(opts, ctx: ctx, activation_stamp: root.stamp, profile_id: root.profile.id),
+        &Dispatch.run/4
       )
     end
   end
@@ -136,15 +139,15 @@ defmodule Cyfr.Execution do
   root.
 
   Required options: `:ctx`. `:parent_execution_id`,
-  `:root_execution_id`, `:attempt` (the parent's attempt, which a
-  formula's child is admitted under), `:guest_fn` (`:call` or `:spawn`),
-  `:declared_needs` and `:activation_digest` are host-threaded by the
-  caller. `:retained_input` is the map the payload store keeps as the
-  execution's input in place of `input`, for a request that carries
-  transient content; the row's `input_hash` and envelope still describe
-  `input`. `:charge` and `:step_id` name the hold and the loop step the
-  child is admitted under. `:envelope` true reads the component's answer
-  as its catalyst envelope, whose error is the component's refusal
+  `:root_execution_id`, `:attempt` (the parent's attempt, which a child is
+  admitted under), `:guest_fn` (`:call` or `:spawn`), `:declared_needs`
+  and `:activation_digest` are host-threaded by the caller.
+  `:retained_input` is the map the payload store keeps as the execution's
+  input in place of `input`, for a request that carries transient content;
+  the row's `input_hash` and envelope still describe `input`. `:charge` and
+  `:step_id` name the hold and the loop step the child is admitted under.
+  `:envelope` true reads the component's answer as its catalyst envelope,
+  whose error is the component's refusal
   (`Cyfr.Execution.Admission.admit/4`).
 
   The call is timed (`Cyfr.Execution.StepSpans`): its clock rides to
@@ -159,14 +162,7 @@ defmodule Cyfr.Execution do
       opts = opts |> Keyword.put(:step_spans, clock) |> Charge.identify()
 
       with {:ok, decision} <- Admission.step_invoke(authority, reference, need, opts) do
-        if Keyword.get(opts, :guest_fn) == :spawn do
-          with :ok <- Charge.take(decision.authority, opts) do
-            Sanctum.Authority.guard_invoke(decision.authority)
-            execute_child(decision, input, opts)
-          end
-        else
-          execute_child(decision, input, opts)
-        end
+        dispatch_child(decision, input, opts, &Dispatch.run/4)
       end
     after
       StepSpans.returned(clock)
@@ -174,83 +170,70 @@ defmodule Cyfr.Execution do
   end
 
   @doc """
-  Start an in-chain streamed execution: decide, then run the child under
-  `Cyfr.Execution.TaskSupervisor` with its id registered, answering at once
-  with the execution id and its event stream's URL.
+  Advance a formula's `authority` through one invocation of `reference`
+  its guest asked for, and admit the child for the runner that runs the
+  formula, which runs it (`Cyfr.Execution.Dispatch.claim/4`).
 
-  A streamed child returns while work continues, so it is spawn-shaped: its
-  step charges the root invoke budget and takes its charge row, and the
-  child's attempt gives both back. A denial charges nothing. Options as
-  `run_child/5`'s, and `:execution_id`.
+  A spawn-shaped child (`:guest_fn` `:spawn`, a spawned or streamed child)
+  charges the root invoke budget and takes its charge row, both held by the
+  child's attempt until its terminal write; a synchronous one charges
+  nothing. A refusal charges nothing and admits nothing.
+
+  Options as `run_child/5`'s host-threaded ones (`:ctx`,
+  `:parent_execution_id`, `:root_execution_id`, `:attempt`, `:guest_fn`,
+  `:declared_needs`, `:activation_digest`), and the runner the child is
+  claimed for: `:runner`, with `:runner_id` and `:worker` naming its
+  worker service. Answers `{:ok, claimed}`
+  (`t:Cyfr.Execution.Dispatch.claimed/0`) or `{:error, reason}`.
   """
-  @spec run_child_stream(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def run_child_stream(%Authority{} = authority, reference, need, input, opts)
-      when is_list(opts) do
-    opts = opts |> Keyword.put(:guest_fn, :spawn) |> Charge.identify()
+  @spec admit_child(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
+          {:ok, Dispatch.claimed()} | {:error, term()}
+  def admit_child(%Authority{} = authority, reference, need, input, opts) when is_list(opts) do
+    opts = Charge.identify(opts)
 
-    with {:ok, decision} <- Admission.step_invoke(authority, reference, need, opts),
-         :ok <- Charge.take(decision.authority, opts) do
-      execution_id = Keyword.get(opts, :execution_id) || Record.generate_id()
-      opts = Keyword.put(opts, :execution_id, execution_id)
-      logger_metadata = Cyfr.LoggerContext.capture()
+    with {:ok, decision} <- Admission.step_invoke(authority, reference, need, opts) do
+      dispatch_child(decision, input, opts, &Dispatch.claim/4)
+    end
+  end
 
-      start =
-        Task.Supervisor.start_child(Cyfr.Execution.TaskSupervisor, fn ->
-          Cyfr.LoggerContext.restore(logger_metadata)
-          # The guard is taken before the id is registered: a cancel kills
-          # through the registry, and a kill must find the slot guarded.
-          Sanctum.Authority.guard_invoke(decision.authority)
-          Registry.register(Cyfr.Execution.Registry, execution_id, :running)
-          execute_child(decision, input, opts)
-        end)
+  # A stepped invocation (`Cyfr.Execution.Admission.step_invoke/4`) run
+  # under its child authority by `dispatch`. A spawn-shaped step takes its
+  # charge row and holds its invoke-budget slot under the guard until the
+  # child's attempt takes both over.
+  #
+  # A bound target that no longer resolves is `setup_required`: the consent
+  # names a dependency the installed world cannot satisfy. An unresolvable
+  # unbound target proceeds to admission and is refused there.
+  defp dispatch_child(decision, input, opts, dispatch) do
+    ctx = Keyword.fetch!(opts, :ctx)
+    spawned? = Keyword.get(opts, :guest_fn) == :spawn
 
-      case start do
-        {:ok, _pid} ->
-          {:ok,
-           %{execution_id: execution_id, stream_url: "/api/executions/#{execution_id}/events"}}
-
-        {:error, reason} ->
+    with :ok <- take_charge(decision, opts, spawned?) do
+      if decision.bound? and is_nil(decision.component) do
+        if spawned? do
           Sanctum.Authority.release_invoke(decision.authority)
           Charge.give_back(decision.authority, opts)
-          {:error, {:stream_start_failed, reason}}
+        end
+
+        {:error,
+         {:setup_required,
+          %{
+            profile_id: decision.authority.profile_id,
+            node_ref: decision.reference,
+            need: decision.need || "",
+            reason: :unresolvable_target
+          }}}
+      else
+        dispatch.(ctx, decision.reference, input, dispatch_opts(decision, opts, spawned?))
       end
     end
   end
 
-  @doc """
-  Run a stepped invocation (`Cyfr.Execution.Admission.step_invoke/4`)
-  under its child authority.
+  defp take_charge(_decision, _opts, false), do: :ok
 
-  A bound target that no longer resolves is `setup_required`: the consent
-  names a dependency the installed world cannot satisfy. An unresolvable
-  unbound target proceeds to admission and is refused there.
-
-  A spawn-shaped step (`opts[:guest_fn]` is `:spawn`) is dispatched with
-  the invoke-budget slot the calling process holds under the guard.
-  """
-  @spec execute_child(Admission.child_decision(), map(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def execute_child(decision, input, opts) do
-    ctx = Keyword.fetch!(opts, :ctx)
-    spawned? = Keyword.get(opts, :guest_fn) == :spawn
-
-    if decision.bound? and is_nil(decision.component) do
-      if spawned? do
-        Sanctum.Authority.release_invoke(decision.authority)
-        Charge.give_back(decision.authority, opts)
-      end
-
-      {:error,
-       {:setup_required,
-        %{
-          profile_id: decision.authority.profile_id,
-          node_ref: decision.reference,
-          need: decision.need || "",
-          reason: :unresolvable_target
-        }}}
-    else
-      Dispatch.run(ctx, decision.reference, input, dispatch_opts(decision, opts, spawned?))
+  defp take_charge(decision, opts, true) do
+    with :ok <- Charge.take(decision.authority, opts) do
+      Sanctum.Authority.guard_invoke(decision.authority)
     end
   end
 
@@ -277,6 +260,9 @@ defmodule Cyfr.Execution do
     |> put(:step_spans, Keyword.get(opts, :step_spans))
     |> put(:envelope, Keyword.get(opts, :envelope) == true || nil)
     |> put(:held_invoke, spawned? || nil)
+    |> put(:runner, Keyword.get(opts, :runner))
+    |> put(:runner_id, Keyword.get(opts, :runner_id))
+    |> put(:worker, Keyword.get(opts, :worker))
   end
 
   defp put(opts, _key, nil), do: opts

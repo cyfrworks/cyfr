@@ -281,7 +281,10 @@ defmodule Cyfr.Execution.HostTest do
         AttemptFixtures.attached!(vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}})
 
       outcome = AttemptFixtures.outcome(fixture, "failed", %{"error" => "saw sk-fixture"})
-      assert %{"ok" => true} = AttemptFixtures.call(fixture, "fail", %{"outcome" => outcome})
+
+      assert %{"ok" => "saw [REDACTED]"} =
+               AttemptFixtures.call(fixture, "fail", %{"outcome" => outcome})
+
       assert {:error, "saw [REDACTED]"} = Dispatch.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: "saw [REDACTED]"} = row(fixture)
     end
@@ -441,40 +444,6 @@ defmodule Cyfr.Execution.HostTest do
       assert row(fixture).status == "completed"
       assert Arca.Repo.get!(Arca.Execution, child).status == "running"
       refute_received {:exception, _}
-    end
-  end
-
-  describe "admitted" do
-    test "answers the attached runner the context and authority its attempt runs with" do
-      fixture = AttemptFixtures.attached!()
-      body = AttemptFixtures.body("admitted", %{})
-
-      assert {:ok, %{ctx: ctx, authority: authority} = admitted} =
-               Cyfr.Execution.Host.admitted(AttemptFixtures.header(fixture, body), body)
-
-      assert Map.keys(admitted) |> Enum.sort() == [:authority, :ctx]
-
-      assert ctx.plane == :guest and ctx.athanor_id == fixture.athanor_id
-      assert authority == fixture.authority
-    end
-
-    @tag :capture_log
-    test "is lost to a runner that did not attach, a forged header and another operation" do
-      fixture = AttemptFixtures.attached!(attach: false)
-      body = AttemptFixtures.body("admitted", %{})
-
-      assert {:error, :lost} =
-               Cyfr.Execution.Host.admitted(AttemptFixtures.header(fixture, body), body)
-
-      assert %{"ok" => _} = attach(fixture)
-
-      forged = AttemptFixtures.header(fixture, body, call_key: :crypto.strong_rand_bytes(32))
-      assert {:error, :lost} = Cyfr.Execution.Host.admitted(forged, body)
-
-      other = AttemptFixtures.body("renew", %{})
-
-      assert {:error, :lost} =
-               Cyfr.Execution.Host.admitted(AttemptFixtures.header(fixture, other), other)
     end
   end
 

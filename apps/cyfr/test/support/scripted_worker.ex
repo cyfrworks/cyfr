@@ -14,9 +14,9 @@ defmodule Cyfr.Test.ScriptedWorker do
   sealed keys open as its attempt, then starts a runner. The runner
   reaches its attempt only through `Cyfr.Execution.Host`, signing each
   call with the attempt's call key: it attaches with the signed
-  assignment (the claim, and the unseal of the run's vault edge), asks
-  what the attempt runs with (`Cyfr.Execution.Host.admitted/2`), pushes
-  the script's events (`push_deltas`, masked by the attempt) and closes
+  assignment (the claim, and the unseal of the run's vault edge), records
+  the call with the authority its assignment carries, pushes the script's
+  events (`push_deltas`, masked by the attempt) and closes
   the run (`complete` or `fail`). A runner that exits leaving its attempt
   open is reported (`Cyfr.Execution.Host.runner_exited/2`), signed with
   this worker service's dispatch key.
@@ -370,12 +370,12 @@ defmodule Cyfr.Test.ScriptedWorker do
   defp attached(runner) do
     case host(runner, "attach", %{"assignment" => runner.token}) do
       %{"ok" => %{}} ->
-        case admitted(runner) do
-          {:ok, admitted} ->
+        case Cyfr.Authority.from_wire(runner.assignment.authority) do
+          {:ok, authority} ->
             call = %{
               execution_id: runner.assignment.execution_id,
               input: runner.input,
-              authority: admitted.authority
+              authority: authority
             }
 
             :ok = GenServer.call(__MODULE__, {:called, call})
@@ -498,7 +498,7 @@ defmodule Cyfr.Test.ScriptedWorker do
     fields = %{"error" => to_string(message), "abandoned" => false}
 
     case host(runner, "fail", %{"outcome" => outcome(runner, "failed", fields)}) do
-      %{"ok" => true} -> :normal
+      %{"ok" => message} when is_binary(message) -> :normal
       _refused -> {:shutdown, :attempt_open}
     end
   end
@@ -519,11 +519,6 @@ defmodule Cyfr.Test.ScriptedWorker do
       "fence" => runner.assignment.fence,
       "event" => Jason.encode!(event)
     }
-  end
-
-  defp admitted(runner) do
-    body = Jason.encode!(%{"op" => "admitted", "args" => %{}})
-    Host.admitted(header(runner, body), body)
   end
 
   defp host(runner, op, args) do

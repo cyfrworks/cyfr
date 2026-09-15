@@ -1259,6 +1259,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `resource_limit` | `max_concurrent_tasks`, emit size, or emit rate exceeded |
 | `timeout` | Exceeded `batch_timeout` |
 | `tool_denied` | MCP tool not covered by the granted tool patterns |
+| `encoding_error` | A tool's result could not be encoded as JSON |
 | `unknown` | The host produced a result in an unexpected shape |
 
 `setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan` and a `cyfr profile grant <ref>` command). Formulas can surface this to users via `emit`.

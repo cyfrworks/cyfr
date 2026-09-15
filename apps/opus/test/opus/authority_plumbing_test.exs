@@ -2,8 +2,9 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.AuthorityPlumbingTest do
-  # Verify authority survives the runtime-option allowlist and that
-  # authority_required fails closed in both admission and runtime.
+  # Verify the authority a run's assignment carries survives the
+  # runtime-option allowlist, and that authority_required fails closed in
+  # both admission and runtime.
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
@@ -66,11 +67,19 @@ defmodule Opus.AuthorityPlumbingTest do
     on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
+  # The authority as an assignment carries it to its runner: every member
+  # but the budget's cap, which a decoded copy never charges.
+  defp as_assigned(authority) do
+    {:ok, decoded} = Cyfr.Authority.from_wire(Cyfr.Authority.to_wire(authority))
+    decoded
+  end
+
   # math.wasm is a core module, not a Component Model binary, so every run
   # here fails at component compile. That is irrelevant: the witness fires
   # and the required-check runs before compilation is attempted.
 
-  test "an :authority passed to a dispatched run reaches the runtime intact", %{ctx: ctx} do
+  test "an :authority passed to a dispatched run reaches the runtime as its assignment carries it",
+       %{ctx: ctx} do
     attach_witness()
     authority = Cyfr.Authority.zero()
     execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
@@ -83,7 +92,7 @@ defmodule Opus.AuthorityPlumbingTest do
       )
 
     assert_receive {:authority_entered, metadata}, 30_000
-    assert metadata.authority == authority
+    assert metadata.authority == as_assigned(authority)
     assert metadata.execution_id == execution_id
   end
 
@@ -124,7 +133,7 @@ defmodule Opus.AuthorityPlumbingTest do
       )
 
     assert_receive {:authority_entered, metadata}, 30_000
-    assert metadata.authority == authority
+    assert metadata.authority == as_assigned(authority)
   end
 
   test "the runtime itself re-checks authority_required" do

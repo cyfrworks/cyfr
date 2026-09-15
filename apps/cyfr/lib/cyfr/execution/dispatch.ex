@@ -33,6 +33,12 @@ defmodule Cyfr.Execution.Dispatch do
   kill its runner. The waiter's registration names the worker service, so
   `stop/2` reaches the runner without killing the waiter.
 
+  `claim/4` admits a run for a runner that already runs instead of
+  starting one: a formula's child, run in its parent's runner. The run's
+  attempt is claimed for that runner and handed to it
+  (`Cyfr.Execution.Attempt.hand_over/1`), so nothing on CYFR waits for it,
+  and the runner closes it as it closes its own.
+
   A spawned child's caller holds the invoke-budget slot it charged under
   the guard (`opts[:held_invoke]`, with `opts[:charge]` naming its charge
   row); the run's attempt takes it over, and gives it back when it stops.
@@ -50,6 +56,16 @@ defmodule Cyfr.Execution.Dispatch do
   alias Sanctum.Context
 
   @slot_wait_ms 30_000
+
+  @typedoc """
+  A run claimed for a runner that already runs: its signed assignment, its
+  attempt's keys and the fields its vault edge projects.
+  """
+  @type claimed :: %{
+          assignment: Cyfr.Assignment.token(),
+          attempt_keys: WorkerAuth.attempt_keys(),
+          secrets: %{optional(String.t()) => String.t()}
+        }
 
   @doc """
   Run `reference` with `input` in `ctx` on a worker service. `opts` are
@@ -73,6 +89,37 @@ defmodule Cyfr.Execution.Dispatch do
     case admitted do
       {:ok, admitted, worker} ->
         dispatch(admitted, worker, input, opts)
+
+      {:error, _reason} = refused ->
+        give_back_invoke(ctx, opts)
+        refused
+    end
+  end
+
+  @doc """
+  Admit `reference` with `input` in `ctx` for a runner that already runs
+  on a worker service, and hand it the run. `opts` are
+  `Cyfr.Execution.Admission.admit/4`'s, with `:runner_id` and `:worker`
+  naming the worker service the runner belongs to (its boot id and its
+  `Cyfr.WorkerAPI` module), and `:runner` the runner.
+
+  In order: the run is admitted with the calling process as its waiter;
+  its attempt takes a `:child` execution slot, waiting as `run/4` does; its
+  assignment is signed; the attempt row is claimed for the runner
+  (`Arca.ExecutionAttempts.claim/4`) and the run's vault edge is unsealed
+  (`Cyfr.Execution.Attempt.attach/2`); and the attempt is handed to the
+  runner (`Cyfr.Execution.Attempt.hand_over/1`). Answers
+  `{:ok, claimed}` (`t:claimed/0`), or, when any step refuses, the refusal
+  the run was closed with: `{:error, reason}` as `Cyfr.Execution.Close`
+  answered, a `{:setup_required, payload}` refusal included.
+  """
+  @spec claim(Context.t(), String.t(), map(), keyword()) ::
+          {:ok, claimed()} | {:error, term()}
+  def claim(%Context{} = ctx, reference, input, opts)
+      when is_binary(reference) and is_map(input) and is_list(opts) do
+    case Admission.admit(ctx, reference, input, opts) do
+      {:ok, admitted} ->
+        hand_over(admitted, Keyword.fetch!(opts, :runner))
 
       {:error, _reason} = refused ->
         give_back_invoke(ctx, opts)
@@ -132,12 +179,13 @@ defmodule Cyfr.Execution.Dispatch do
   @doc """
   Stop what runs `execution_id`, found under its id in
   `Cyfr.Execution.Registry`, for a caller that already ended its row. A
-  dispatched run's runner is killed through its worker service
+  dispatched run's runner, or the run a claimed attempt was handed to
+  (`claim/4`), is killed through its worker service
   (`c:Cyfr.WorkerAPI.kill/1`) and the kill is counted against `tenant` as
-  one whose native work may still run; the runner's exit report then stops
-  its attempt, and its waiter answers the row as it stands. Any other
-  holder (a turn root's, a task that has not dispatched yet) is counted the
-  same way and killed.
+  one whose native work may still run; the worker service's exit report
+  then stops its attempt, and its waiter, if any, answers the row as it
+  stands. Any other holder (a turn root's, a task that has not dispatched
+  yet) is counted the same way and killed.
   """
   @spec stop(String.t(), String.t() | nil) :: :ok
   def stop(execution_id, tenant) when is_binary(execution_id) do
@@ -228,6 +276,52 @@ defmodule Cyfr.Execution.Dispatch do
     end
   catch
     :exit, reason -> refuse(admitted, "the execution worker did not start the run", reason)
+  end
+
+  # The attempt of a run claimed for a runner already running. Every
+  # refusal closes the run, which answers its waiter, this process, what the
+  # close recorded.
+  defp hand_over(admitted, runner) do
+    slot_wait = min(admitted.timeout_ms, @slot_wait_ms)
+
+    with :ok <- Attempt.take_slot(admitted.attempt, :child, slot_wait),
+         {:ok, issued} <- sign(admitted),
+         claimant = Map.put(issued.attempt_keys.attempt, :runner, runner),
+         :ok <- claim_row(admitted, claimant),
+         {:ok, secrets} <- Attempt.attach(admitted.execution_id, claimant),
+         :ok <- Attempt.hand_over(admitted.attempt) do
+      {:ok, %{assignment: issued.assignment, attempt_keys: issued.attempt_keys, secrets: secrets}}
+    else
+      _refused ->
+        Attempt.refuse(admitted.attempt, "the execution could not be handed to its runner")
+
+        case wait(admitted.attempt, admitted.close) do
+          {_ended, {:error, _reason} = refused} -> refused
+          {_ended, {:ok, _result}} -> {:error, "Execution attempt ended before it closed"}
+        end
+    end
+  end
+
+  defp sign(admitted) do
+    case Assignments.issue(admitted.assignment) do
+      {:ok, issued} ->
+        {:ok, issued}
+
+      {:error, reason} ->
+        refuse(admitted, "the execution assignment could not be signed", reason)
+    end
+  end
+
+  defp claim_row(admitted, claimant) do
+    case Arca.ExecutionAttempts.claim(
+           claimant.athanor_id,
+           claimant.attempt,
+           claimant.fence,
+           claimant.runner
+         ) do
+      :ok -> :ok
+      {:error, reason} -> refuse(admitted, "the execution could not be claimed", reason)
+    end
   end
 
   defp refuse(admitted, sentence, reason) do

@@ -3,39 +3,48 @@
 
 defmodule Opus.Runner do
   @moduledoc """
-  Runs one assigned execution attempt: attaches, runs the component,
-  renews the attempt's lease while it runs and closes the attempt.
+  Runs one execution attempt: attaches, runs the component, renews the
+  attempt's lease while it runs and closes the attempt.
 
   `Opus.WorkerService` starts a runner with the assignment it read, the
   input the assignment's digest binds and a host client
-  (`Opus.HostClient`) holding the attempt's key. The runner reaches the
-  attempt only through that client. In order it:
+  (`Opus.HostClient`) holding the attempt's key. A formula's child runs in
+  a runner of its own in the formula's runner group
+  (`Opus.WorkerService.start_child/2`), started from the child CYFR
+  admitted and claimed for the formula's runner
+  (`Opus.HostClient.admit_child/5`), with the vault fields that admission
+  unsealed and the process waiting for its answer, if any. The runner
+  reaches the attempt only through its client. In order it:
 
     1. attaches with the assignment (`Opus.HostClient.attach/2`), which
        answers the run's vault fields; an attach CYFR refuses leaves the
-       attempt to CYFR;
+       attempt to CYFR. A child, claimed at its admission, is already
+       attached;
     2. reads the authority the assignment carries
-       (`Cyfr.Authority.from_wire/1`) for its own egress checks: the edge a
-       guest's HTTP requests are checked against and the node's limits;
-    3. asks what the attempt runs with beyond its assignment
-       (`Opus.HostClient.admitted/1`): the context and the authority its
-       guest's in-process calls (formula children and catalog tools) run
-       under;
-    4. runs the component in a process of its own
+       (`Cyfr.Authority.from_wire/1`) for its own egress checks and its
+       guest's host functions: the edge a guest's HTTP requests are checked
+       against and the node's limits. It grants nothing: CYFR decides every
+       child and catalog tool call under the authority it holds;
+    3. runs the component in a process of its own
        (`Opus.Runtime.execute_component/3`) under the assignment's
        timeout, renewing the lease every minute; a timeout, a lost lease
        and a cancel asked of the attempt each kill that process. The
        component's bytes are fetched by the assignment's digest
        (`Opus.HostClient.fetch_artifact/2`) only when no compiled component
        for that digest is cached, and are run only if they hash to it;
-    5. closes the attempt: `complete` with the guest's output, or `fail`
+    4. closes the attempt: `complete` with the guest's output, or `fail`
        with a sentence, marked `abandoned` when it killed the component
        call.
 
   The runner tells its worker service its component process and what that
   process started (`Opus.WorkerService.track/1`), so a kill stops them all.
-  It exits `:normal` once CYFR has closed the attempt, and
-  `{:shutdown, :attempt_open}` when it leaves the attempt open.
+  A child's runner tells its worker service when CYFR has closed its
+  attempt (`Opus.WorkerService.settled/0`), then answers its waiting
+  process what the close recorded, masked:
+  `{Opus.Runner, runner_pid, {:ok, output}}` or
+  `{Opus.Runner, runner_pid, {:error, message}}`. A runner exits `:normal`
+  once CYFR has closed the attempt, and `{:shutdown, :attempt_open}` when
+  it leaves the attempt open.
   """
 
   require Logger
@@ -48,19 +57,28 @@ defmodule Opus.Runner do
   # a slow execution from a dead runner.
   @lease_tick_ms 60_000
 
+  @ended "Execution attempt ended before it closed"
+
   @typedoc """
   What a runner starts with: the assignment token and what it carries, the
   decoded input, the attempt's host client, and the starting caller's
-  process callers and log metadata.
+  process callers and log metadata. A child's start also carries the vault
+  fields its admission unsealed (`:secrets`) and the process waiting for
+  its answer (`:waiter`, nil when none does).
   """
   @type start :: %{
-          token: Cyfr.Assignment.token(),
-          assignment: Cyfr.Assignment.t(),
-          input: map(),
-          client: HostClient.t(),
-          callers: [pid()],
-          logger: keyword()
+          required(:token) => Cyfr.Assignment.token(),
+          required(:assignment) => Cyfr.Assignment.t(),
+          required(:input) => map(),
+          required(:client) => HostClient.t(),
+          required(:callers) => [pid()],
+          required(:logger) => keyword(),
+          optional(:secrets) => %{optional(String.t()) => String.t()},
+          optional(:waiter) => pid() | nil
         }
+
+  @typedoc "What a waiting process is answered: the close as CYFR recorded it."
+  @type answer :: {:ok, term()} | {:error, String.t()}
 
   @doc false
   def child_spec(start) do
@@ -80,35 +98,46 @@ defmodule Opus.Runner do
     Cyfr.LoggerContext.restore(start.logger)
     Cyfr.LoggerContext.set_execution_id(start.assignment.execution_id)
 
-    case run_attempt(start) do
-      :normal -> :ok
-      reason -> exit(reason)
+    {reason, answer} = run_attempt(start)
+
+    case Map.get(start, :waiter) do
+      waiter when is_pid(waiter) ->
+        if reason == :normal, do: WorkerService.settled()
+        send(waiter, {__MODULE__, self(), answer})
+
+      nil ->
+        :ok
     end
+
+    if reason != :normal, do: exit(reason)
+    :ok
   end
+
+  defp run_attempt(%{secrets: secrets} = start) when is_map(secrets),
+    do: run_attached(start, secrets)
 
   defp run_attempt(%{client: client, assignment: assignment} = start) do
     case HostClient.attach(client, start.token) do
       {:ok, fields} ->
         run_attached(start, fields)
 
-      {:error, {:setup_required, _payload}} ->
-        :normal
+      {:error, {refusal, _detail}} when refusal in [:setup_required, :failed] ->
+        {:normal, {:error, @ended}}
 
       {:error, refusal} ->
         Logger.warning(
           "[Opus.Runner] attach of #{assignment.execution_id} refused: #{inspect(refusal)}"
         )
 
-        {:shutdown, :attempt_open}
+        {{:shutdown, :attempt_open}, {:error, @ended}}
     end
   end
 
   defp run_attached(%{client: client, assignment: assignment} = start, fields) do
     with {:ok, authority} <- Authority.from_wire(assignment.authority),
-         {:ok, component_type} <- Opus.ComponentType.parse(assignment.component.type),
-         {:ok, admitted} <- HostClient.admitted(client) do
+         {:ok, component_type} <- Opus.ComponentType.parse(assignment.component.type) do
       runtime_opts =
-        runtime_opts(assignment, authority, component_type, admitted,
+        runtime_opts(assignment, authority, component_type,
           preloaded_fields: fields,
           host: client
         )
@@ -126,9 +155,6 @@ defmodule Opus.Runner do
 
       close(client, outcome)
     else
-      {:error, refusal} when refusal in [:lost, :unavailable] ->
-        {:shutdown, :attempt_open}
-
       {:error, reason} ->
         Logger.error(
           "[Opus.Runner] #{assignment.execution_id} cannot run its assignment: #{inspect(reason)}"
@@ -138,10 +164,10 @@ defmodule Opus.Runner do
     end
   end
 
-  # The options the runtime runs under: the node's limits and the edge
-  # from the assignment's authority, the run's identity and component from
-  # the assignment, and what CYFR answered for the rest.
-  defp runtime_opts(assignment, authority, component_type, admitted, opts) do
+  # The options the runtime runs under: the node's limits, the edge and the
+  # authority as the assignment carries them, the run's identity, its
+  # component and the actions its host intercepts.
+  defp runtime_opts(assignment, authority, component_type, opts) do
     limits = Authority.limits(authority)
     component = assignment.component
 
@@ -153,13 +179,9 @@ defmodule Opus.Runner do
       component_ref: component.ref,
       reference: component.ref,
       digest: component.digest,
-      declared_needs: component.declared_needs,
-      activation_digest: component.activation_digest,
-      ctx: admitted.ctx,
-      authority: admitted.authority,
-      execution_id: assignment.execution_id,
-      execution_attempt: assignment.attempt,
-      root_execution_id: assignment.root_execution_id
+      intercepted: assignment.intercepted,
+      authority: authority,
+      execution_id: assignment.execution_id
     ] ++ opts
   end
 
@@ -191,9 +213,9 @@ defmodule Opus.Runner do
 
   defp close(client, {:ok, {output, _metadata}}) do
     case HostClient.complete(client, output) do
-      {:ok, _recorded} -> :normal
-      {:error, {:failed, _message}} -> :normal
-      {:error, _refusal} -> {:shutdown, :attempt_open}
+      {:ok, recorded} -> {:normal, {:ok, recorded}}
+      {:error, {:failed, message}} -> {:normal, {:error, message}}
+      {:error, _refusal} -> {{:shutdown, :attempt_open}, {:error, @ended}}
     end
   end
 
@@ -202,8 +224,8 @@ defmodule Opus.Runner do
 
   defp fail(client, reason, opts) do
     case HostClient.fail(client, failure_message(reason), opts) do
-      :ok -> :normal
-      {:error, _refusal} -> {:shutdown, :attempt_open}
+      {:ok, message} -> {:normal, {:error, message}}
+      {:error, _refusal} -> {{:shutdown, :attempt_open}, {:error, @ended}}
     end
   end
 
@@ -238,9 +260,9 @@ defmodule Opus.Runner do
   # The component runs in a process of its own, linked to the runner and
   # trapping exits, so a Wasmex crash reaches it as a message. No exit it
   # traps can stop it, so it starts only once its worker service has been
-  # told of it (ahead of any exit of the runner's), and a kill names it. Answers `{:ok, {output, metadata}}`,
-  # `{:error, reason}`, or `{:abandoned, reason}` when the component call was
-  # killed.
+  # told of it (ahead of any exit of the runner's), and a kill names it.
+  # Answers `{:ok, {output, metadata}}`, `{:error, reason}`, or
+  # `{:abandoned, reason}` when the component call was killed.
   defp execute(artifact, input, runtime_opts, timeout_ms, watch) do
     runner = self()
     ref = make_ref()

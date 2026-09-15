@@ -50,8 +50,14 @@ defmodule Cyfr.HostAPI do
   """
   @type refusal :: :lost | :unavailable
 
-  @typedoc "A refusal the runner hands its guest: the type and message of the WIT error envelope (`Cyfr.WitResponse.encode_error/2`)."
-  @type guest_error :: {:guest_error, type :: String.t(), message :: String.t()}
+  @typedoc """
+  A refusal the runner hands its guest: the type and message of the WIT
+  error envelope (`Cyfr.WitResponse.encode_error/2`), and for a
+  `setup_required` refusal its remediation (`Cyfr.Remediation`).
+  """
+  @type guest_error ::
+          {:guest_error, type :: String.t(), message :: String.t()}
+          | {:guest_error, type :: String.t(), message :: String.t(), remediation :: map()}
 
   @typedoc "Vault field values by field name."
   @type secrets :: %{optional(String.t()) => String.t()}
@@ -59,10 +65,17 @@ defmodule Cyfr.HostAPI do
   @typedoc "One attempt's lease renewal: its new expiry in Unix ms, a cancel asked of it, or its loss."
   @type renewal :: {:ok, lease_until :: non_neg_integer()} | :cancel | :lost
 
-  @typedoc "An admitted child: its assignment, already claimed for the calling runner, its attempt's keys and its secrets."
+  @typedoc """
+  An admitted child: its assignment, already claimed for the calling
+  runner, its attempt's keys (sealed with the calling attempt's seal key on
+  the wire, `Cyfr.WorkerAuth.seal_attempt_keys/3`), the input it was
+  admitted with (its JSON on the wire, which the assignment's
+  `input_digest` binds) and its secrets.
+  """
   @type child :: %{
           assignment: Assignment.token(),
           attempt_keys: WorkerAuth.attempt_keys(),
+          input: map(),
           secrets: secrets()
         }
 
@@ -110,9 +123,10 @@ defmodule Cyfr.HostAPI do
   Close the caller's attempt as failed with the outcome's error. CYFR waits
   for the attempt's in-flight `c:push_deltas/2` and releases the deltas it
   holds back, then writes the terminal row and fails the attempt's
-  children.
+  children. Answers the failure as recorded, masked, which is what the
+  runner hands onward (to a parent guest).
   """
-  @callback fail(caller(), Outcome.t()) :: :ok | {:error, refusal()}
+  @callback fail(caller(), Outcome.t()) :: {:ok, message :: String.t()} | {:error, refusal()}
 
   @doc """
   Deliver the caller's guest events, in the order they were emitted. A
@@ -154,11 +168,14 @@ defmodule Cyfr.HostAPI do
 
   @doc """
   Admit a child the caller's guest starts with `guest_fn` on `ref`, through
-  the edge named `need`, with `input`. CYFR steps the caller's authority,
-  checks the delegation roster against the caller's staged input, charges
-  the root budget, applies limits, rates, policy and attestation, writes
-  the child's row and unseals its secrets. The child runs in the caller's
-  runner, under the same deadline.
+  the edge named `need`, with `input`. CYFR steps the authority it holds
+  for the caller's attempt, checks the delegation roster its admitted input
+  carries, charges the root budget for a spawn, applies limits, rates,
+  policy and attestation, writes the child's row under the caller's
+  attempt, claims the child for the caller's runner and unseals its
+  secrets. The child runs in the caller's runner, which closes its attempt;
+  what the child holds goes back at its terminal write. The caller's
+  attempt must be live: no cancel asked of it and its execution running.
   """
   @callback admit_child(
               caller(),
@@ -170,8 +187,10 @@ defmodule Cyfr.HostAPI do
 
   @doc """
   Run the catalog tool `name` with `args` for the caller's guest, which
-  made it with `guest_fn`, on the in-chain plane under the caller's
-  authority.
+  made it with `guest_fn`, on the in-chain plane under the authority CYFR
+  holds for the caller's attempt, with the caller's execution and attempt
+  as its lineage. The caller's attempt must be live: no cancel asked of it
+  and its execution running.
   """
   @callback tool_call(caller(), name :: String.t(), args :: map(), guest_fn :: :call | :spawn) ::
               {:ok, term()} | {:error, refusal() | guest_error()}

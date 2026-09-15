@@ -78,6 +78,13 @@ defmodule Opus.HostClientTest do
                  HostClient.fetch_artifact(client, Cyfr.Digest.sha256("not the component"))
 
         assert :ok = HostClient.record_denial(client, "invalid_json", "Invalid JSON request")
+
+        assert {:error, {:guest_error, "dispatch_error", _}} =
+                 HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call)
+
+        assert {:error, {:guest_error, "dispatch_error", _}} =
+                 HostClient.tool_call(client, "tools", %{"action" => "list"}, :call)
+
         assert {:ok, %{"done" => true}} = HostClient.complete(client, %{"done" => true})
         assert {:error, :lost} = HostClient.fail(client, "after the close")
       end)
@@ -93,7 +100,7 @@ defmodule Opus.HostClientTest do
       end
 
     assert ops ==
-             ~w(attach renew push_deltas oauth_token take_rate storage fetch_artifact record_denial complete fail)
+             ~w(attach renew push_deltas oauth_token take_rate storage fetch_artifact record_denial admit_child tool_call complete fail)
   end
 
   test "a client's inspection names its attempt and not its keys" do

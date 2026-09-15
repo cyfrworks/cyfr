@@ -4,8 +4,9 @@
 defmodule Opus.WorkerService do
   @moduledoc """
   The worker service: it starts a runner for each assignment CYFR
-  dispatches, kills runners, and reports each runner that exits leaving
-  its attempt open. It implements `Cyfr.WorkerAPI` and runs no guest code.
+  dispatches and for each child a formula's runner is admitted, kills
+  runners, and reports each runner that exits leaving its attempt open. It
+  implements `Cyfr.WorkerAPI` and runs no guest code.
 
   Its boot id, minted when it starts, is the audience every assignment it
   accepts must name, and the runner id of every attempt dispatched to it.
@@ -18,13 +19,21 @@ defmodule Opus.WorkerService do
   `Opus.Runner` under `Opus.WorkerService.Runners` with a host client of
   its own id, and monitors it.
 
+  `start_child/2` starts a runner, the same way, for a child CYFR admitted
+  and claimed for a formula's runner (`Opus.HostClient.admit_child/5`): it
+  runs in that runner's group, presenting as the same runner. A child with
+  a waiting process (a formula's synchronous call or spawned task) is
+  killed when that process exits before its runner settles
+  (`settled/0`); a streamed child, with none, runs until it closes.
+
   A runner tells the service its component process and what that process
   started (`track/1`). `kill/1` kills a runner's component process and the
-  runner by name. When a runner exits, its component process (with the
-  formula tracker linked to it) and its streaming requests are stopped; a
-  runner that exits other than `:normal` left its attempt open, and a
-  process of its own reports the exit to CYFR at once, signed with its
-  dispatch key (`Opus.HostClient.runner_exited/3`).
+  runner by name, a child's as a root's. When a runner exits, its
+  component process (with the formula tracker linked to it) and its
+  streaming requests are stopped; a runner that exits other than `:normal`
+  left its attempt open, and a process of its own reports the exit to CYFR
+  at once, signed with its dispatch key
+  (`Opus.HostClient.runner_exited/3`).
 
   Its dispatch and dispatch seal keys derive from its worker key
   (`Cyfr.WorkerAuth.worker_key/2`), which in this BEAM is CYFR's to derive
@@ -50,12 +59,7 @@ defmodule Opus.WorkerService do
   @impl Cyfr.WorkerAPI
   def start(token, input, sealed_keys)
       when is_binary(token) and is_binary(input) and is_binary(sealed_keys) do
-    caller = %{
-      callers: [self() | Process.get(:"$callers", [])],
-      logger: Cyfr.LoggerContext.capture()
-    }
-
-    GenServer.call(__MODULE__, {:start, token, input, sealed_keys, caller})
+    GenServer.call(__MODULE__, {:start, token, input, sealed_keys, caller()})
   end
 
   @impl Cyfr.WorkerAPI
@@ -66,12 +70,37 @@ defmodule Opus.WorkerService do
   def status, do: GenServer.call(__MODULE__, :status)
 
   @doc """
+  Start a runner for `child`, a child CYFR admitted and claimed for a
+  formula's runner (`t:Opus.HostClient.child/0`). `waiter` is the process
+  the runner answers (`Opus.Runner`), whose exit kills the runner until it
+  settles, or nil for a child nothing waits for. Answers
+  `{:ok, runner_pid}`, or `{:error, :malformed}` when the child's client is
+  not for the attempt its assignment names on this worker service, or
+  names an execution this service already runs.
+  """
+  @spec start_child(HostClient.child(), pid() | nil) :: {:ok, pid()} | {:error, :malformed}
+  def start_child(%{assignment: %Assignment{}, client: %HostClient{}} = child, waiter)
+      when is_pid(waiter) or is_nil(waiter),
+      do: GenServer.call(__MODULE__, {:start_child, child, waiter, caller()})
+
+  @doc """
   Record, for the calling runner, its component process (`:component`) or
   the cleanup references its runtime answered (`:cleanup`), which a kill or
   its exit stops.
   """
   @spec track(%{optional(:component) => pid(), optional(:cleanup) => map()}) :: :ok
   def track(fields) when is_map(fields), do: GenServer.cast(__MODULE__, {:track, self(), fields})
+
+  @doc """
+  Record, for the calling runner, that CYFR has closed its attempt: its
+  waiter's exit no longer kills it.
+  """
+  @spec settled() :: :ok
+  def settled, do: GenServer.call(__MODULE__, {:settled, self()})
+
+  defp caller do
+    %{callers: [self() | Process.get(:"$callers", [])], logger: Cyfr.LoggerContext.capture()}
+  end
 
   # ---------------------------------------------------------------------------
   # Server
@@ -83,7 +112,7 @@ defmodule Opus.WorkerService do
     # processes a runner's exit does not.
     Process.flag(:trap_exit, true)
     boot = "#{node()}#" <> Cyfr.UUID7.generate_id("worker")
-    {:ok, %{boot: boot, runners: %{}, executions: %{}}}
+    {:ok, %{boot: boot, runners: %{}, executions: %{}, waiters: %{}}}
   end
 
   @impl true
@@ -96,41 +125,40 @@ defmodule Opus.WorkerService do
            WorkerAuth.open_attempt_keys(WorkerAuth.dispatch_seal_key(worker_key), sealed_keys),
          true <-
            attempt == assignment |> Map.take(@attempt_fields) |> Map.put(:worker, state.boot),
-         false <- Map.has_key?(state.executions, assignment.execution_id),
-         {:ok, %{} = decoded} <- Jason.decode(input),
-         {:ok, pid} <-
-           DynamicSupervisor.start_child(
-             @runners,
-             {Runner,
-              %{
-                token: token,
-                assignment: assignment,
-                input: decoded,
-                client: HostClient.new(keys, Cyfr.UUID7.generate_id("runner")),
-                callers: caller.callers,
-                logger: caller.logger
-              }}
-           ) do
-      ref = Process.monitor(pid)
-
-      runner = %{
-        pid: pid,
-        execution_id: assignment.execution_id,
-        attempt: assignment.attempt,
-        callers: caller.callers,
-        logger: caller.logger,
-        component: nil,
-        cleanup: %{}
+         {:ok, %{} = decoded} <- Jason.decode(input) do
+      start = %{
+        token: token,
+        assignment: assignment,
+        input: decoded,
+        client: HostClient.new(keys, Cyfr.UUID7.generate_id("runner"))
       }
 
-      {:reply, :ok,
-       %{
-         state
-         | runners: Map.put(state.runners, ref, runner),
-           executions: Map.put(state.executions, assignment.execution_id, ref)
-       }}
+      case start_runner(start, caller, nil, state) do
+        {:reply, {:ok, _pid}, state} -> {:reply, :ok, state}
+        refused -> refused
+      end
     else
       _refused -> {:reply, {:error, :malformed}, state}
+    end
+  end
+
+  def handle_call({:start_child, child, waiter, caller}, _from, state) do
+    %{assignment: assignment, client: client} = child
+
+    if client.worker == state.boot and assignment.audience == state.boot and
+         client.execution_id == assignment.execution_id and client.attempt == assignment.attempt do
+      start = %{
+        token: child.token,
+        assignment: assignment,
+        input: child.input,
+        client: client,
+        secrets: child.secrets,
+        waiter: waiter
+      }
+
+      start_runner(start, caller, waiter, state)
+    else
+      {:reply, {:error, :malformed}, state}
     end
   end
 
@@ -144,6 +172,17 @@ defmodule Opus.WorkerService do
 
       :error ->
         {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:settled, pid}, _from, state) do
+    case find_runner(state, pid) do
+      {ref, runner} ->
+        state = forget_waiter_of(state, runner)
+        {:reply, :ok, %{state | runners: Map.put(state.runners, ref, %{runner | waiter: nil})}}
+
+      nil ->
+        {:reply, :ok, state}
     end
   end
 
@@ -161,7 +200,7 @@ defmodule Opus.WorkerService do
 
   @impl true
   def handle_cast({:track, pid, fields}, state) do
-    case Enum.find(state.runners, fn {_ref, runner} -> runner.pid == pid end) do
+    case find_runner(state, pid) do
       {ref, runner} ->
         runner = %{
           runner
@@ -180,18 +219,19 @@ defmodule Opus.WorkerService do
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     case Map.pop(state.runners, ref) do
       {nil, _runners} ->
-        {:noreply, state}
+        {:noreply, waiter_down(ref, state)}
 
       {runner, runners} ->
         kill_component(runner)
         if reason != :normal, do: report(state.boot, runner)
 
-        {:noreply,
-         %{
-           state
-           | runners: runners,
-             executions: Map.delete(state.executions, runner.execution_id)
-         }}
+        state = %{
+          state
+          | runners: runners,
+            executions: Map.delete(state.executions, runner.execution_id)
+        }
+
+        {:noreply, forget_waiter_of(state, runner)}
     end
   end
 
@@ -208,6 +248,73 @@ defmodule Opus.WorkerService do
     end
 
     :ok
+  end
+
+  defp start_runner(start, caller, waiter, state) do
+    execution_id = start.assignment.execution_id
+
+    with false <- Map.has_key?(state.executions, execution_id),
+         {:ok, pid} <-
+           DynamicSupervisor.start_child(
+             @runners,
+             {Runner, Map.merge(start, %{callers: caller.callers, logger: caller.logger})}
+           ) do
+      ref = Process.monitor(pid)
+      waiter_ref = if is_pid(waiter), do: Process.monitor(waiter)
+
+      runner = %{
+        pid: pid,
+        execution_id: execution_id,
+        attempt: start.assignment.attempt,
+        callers: caller.callers,
+        logger: caller.logger,
+        waiter: waiter_ref,
+        component: nil,
+        cleanup: %{}
+      }
+
+      waiters = if waiter_ref, do: Map.put(state.waiters, waiter_ref, ref), else: state.waiters
+
+      {:reply, {:ok, pid},
+       %{
+         state
+         | runners: Map.put(state.runners, ref, runner),
+           executions: Map.put(state.executions, execution_id, ref),
+           waiters: waiters
+       }}
+    else
+      _refused -> {:reply, {:error, :malformed}, state}
+    end
+  end
+
+  defp find_runner(state, pid), do: Enum.find(state.runners, fn {_ref, r} -> r.pid == pid end)
+
+  # A waiting process that exits before its child's runner settles kills
+  # the runner, whose exit is then reported.
+  defp waiter_down(waiter_ref, state) do
+    case Map.pop(state.waiters, waiter_ref) do
+      {nil, _waiters} ->
+        state
+
+      {ref, waiters} ->
+        case Map.fetch(state.runners, ref) do
+          {:ok, runner} ->
+            kill_component(runner)
+            Process.exit(runner.pid, :kill)
+
+          :error ->
+            :ok
+        end
+
+        %{state | waiters: waiters}
+    end
+  end
+
+  defp forget_waiter_of(state, %{waiter: nil}), do: state
+
+  defp forget_waiter_of(state, %{waiter: waiter_ref}) do
+    Process.demonitor(waiter_ref, [:flush])
+    %{state | waiters: Map.delete(state.waiters, waiter_ref)}
   end
 
   # The component process traps exits, so it is killed by name. Its formula

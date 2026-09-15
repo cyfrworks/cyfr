@@ -146,7 +146,6 @@ defmodule Cyfr.Execution.MCPCutoverTest do
 
     assert_receive {:authority_entered, metadata}, 30_000
     assert metadata.authority.profile_id == "prof-cutover"
-    assert metadata.plane == :guest
   end
 
   test "an explicit selector that matches nothing surfaces, never falls back", %{

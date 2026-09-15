@@ -5,7 +5,8 @@ defmodule Cyfr.Execution.Host do
   @moduledoc """
   Where a runner's host calls reach CYFR: `attach`, `renew`, `complete`,
   `fail`, `push_deltas`, `oauth_token`, `take_rate`, `storage`,
-  `fetch_artifact` and `record_denial`, as `Cyfr.HostAPI` describes them.
+  `fetch_artifact`, `record_denial`, `admit_child` and `tool_call`, as
+  `Cyfr.HostAPI` describes them.
 
   `call/2` is the one entry point. It takes a host call's header
   (`Cyfr.WorkerAuth.host_call_header/3`) and its JSON body,
@@ -37,6 +38,9 @@ defmodule Cyfr.Execution.Host do
     4. Every other operation: the header's nonce has not been presented to
        the attempt before, and the attempt row is held by the header's
        runner, before the attempt runs it (`Cyfr.Execution.Attempt.call/3`).
+       `admit_child` and `tool_call` act under what the attempt holds
+       (`Cyfr.Execution.Host.Children`), and need the row live as well: no
+       cancel asked of it and its execution running.
 
   ## Answers
 
@@ -53,32 +57,27 @@ defmodule Cyfr.Execution.Host do
       `payload` when the run's vault edge cannot be unsealed;
     * `failed` with its `message`, when `complete` closed the run failed;
     * `not_found`, when `fetch_artifact` names no artifact of the attempt's;
-    * `guest_error` with its `type` and `message`, a refusal the runner
-      hands its guest.
+    * `guest_error` with its `type` and `message`, and a `remediation` for
+      a `setup_required` one, a refusal the runner hands its guest.
 
   | Operation | `args` | `ok` |
   |---|---|---|
   | `attach` | `assignment` (token) | the run's vault fields, name to value |
   | `renew` | `attempts` (ids) | attempt id to `{"lease_until": ms}`, `"cancel"` or `"lost"` |
   | `complete` | `outcome` (`status` `completed`, `output`) | `output`, masked |
-  | `fail` | `outcome` (`status` `failed`, `error`, optional `abandoned`) | `true` |
+  | `fail` | `outcome` (`status` `failed`, `error`, optional `abandoned`) | the failure as recorded, masked |
   | `push_deltas` | `deltas` (each `execution_id`, `attempt`, `fence`, `event` text) | one emit reply per delta |
   | `oauth_token` | `provider` | the token |
   | `take_rate` | `bucket` | `true` |
   | `storage` | `action`, `path`, optional `content` | the answer's members |
   | `fetch_artifact` | `digest` | the artifact's bytes, base64 |
   | `record_denial` | `type`, `message` | `true` |
+  | `admit_child` | `reference`, optional `need`, `input` (object), `guest_fn` (`call` or `spawn`) | `assignment`, `attempt_keys` (sealed), `input` (JSON text), `secrets` |
+  | `tool_call` | `name`, `args` (object), `guest_fn` (`call` or `spawn`) | the tool's result |
 
-  An outcome names its `execution_id`, `attempt` and `fence`. The last
-  three operations are `Cyfr.Execution.Host.Storage`'s.
-
-  ## A runner in this BEAM
-
-  `admitted/2` answers a host call's attached runner what it runs the
-  attempt with beyond its assignment (`t:Cyfr.Execution.Attempt.admitted/0`):
-  the context its guest's in-process calls run in and the run's authority.
-  It is checked as every call but attach is, needs no fresh nonce, and
-  answers terms, not JSON.
+  An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
+  `fetch_artifact` and `record_denial` are `Cyfr.Execution.Host.Storage`'s;
+  `admit_child` and `tool_call` are `Cyfr.Execution.Host.Children`'s.
 
   ## A worker service's report
 
@@ -100,6 +99,7 @@ defmodule Cyfr.Execution.Host do
 
   alias Cyfr.{Assignment, Delta, WorkerAuth}
   alias Cyfr.Execution.{Attempt, Keys, Lapse, Outcome, Record}
+  alias Cyfr.Execution.Host.Children
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @refusals [
@@ -134,23 +134,6 @@ defmodule Cyfr.Execution.Host do
       )
 
       encode({:error, :lost})
-  end
-
-  @doc """
-  What the attached runner of a host call runs its attempt with beyond its
-  assignment: `header` and the JSON body `{"op": "admitted", "args": {}}`
-  it signs. Answers `{:ok, admitted}` or `{:error, :lost | :unavailable}`.
-  """
-  @spec admitted(String.t(), String.t()) ::
-          {:ok, Attempt.admitted()} | {:error, :lost | :unavailable}
-  def admitted(header, body) when is_binary(header) and is_binary(body) do
-    with :ok <- owner(:lost),
-         {:ok, caller} <- verify(header, body, System.system_time(:millisecond)),
-         {:ok, %{"op" => "admitted", "args" => %{}}} <- Jason.decode(body) do
-      Attempt.admitted(caller.execution_id, caller)
-    else
-      _ -> {:error, :lost}
-    end
   end
 
   @doc "Answer one worker service report of a runner's exit: `header` and the JSON `body` it signs."
@@ -239,6 +222,8 @@ defmodule Cyfr.Execution.Host do
       end
     end)
   end
+
+  defp dispatch(caller, {Children, op}, _now), do: Children.call(caller, op)
 
   defp dispatch(caller, op, _now), do: Attempt.call(caller.execution_id, caller, op)
 
@@ -343,6 +328,10 @@ defmodule Cyfr.Execution.Host do
   defp operation(op, args) when op in ["storage", "fetch_artifact", "record_denial"],
     do: Cyfr.Execution.Host.Storage.operation(op, args)
 
+  defp operation(op, args) when op in ["admit_child", "tool_call"] do
+    with {:ok, call} <- Children.operation(op, args), do: {:ok, {Children, call}}
+  end
+
   defp operation(_op, _args), do: {:error, :lost}
 
   defp outcome(%{"execution_id" => id, "attempt" => attempt, "fence" => fence} = wire, status)
@@ -386,6 +375,15 @@ defmodule Cyfr.Execution.Host do
 
   defp encode({:error, {:guest_error, type, message}}),
     do: Jason.encode!(%{"error" => "guest_error", "type" => type, "message" => message})
+
+  defp encode({:error, {:guest_error, type, message, remediation}}) do
+    Jason.encode!(%{
+      "error" => "guest_error",
+      "type" => type,
+      "message" => message,
+      "remediation" => remediation
+    })
+  end
 
   defp encode({:error, {:failed, message}}),
     do: Jason.encode!(%{"error" => "failed", "message" => message})

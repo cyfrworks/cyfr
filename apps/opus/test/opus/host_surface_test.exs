@@ -5,8 +5,8 @@ defmodule Opus.HostSurfaceTest do
   @moduledoc """
   What opus actually needs from cyfr, written down.
 
-  Inventories direct CYFR dependencies in Opus beyond the delegates exposed by `Opus.Host`.
-  The shared contracts (`apps/cyfr_contracts`) are not cyfr and are not counted.
+  Inventories the CYFR modules opus names directly. The shared contracts
+  (`apps/cyfr_contracts`) are not cyfr and are not counted.
 
   The claim is fixed. This is what keeps it fixed: a namespace opus starts
   reaching into that is not on this list fails here, and adding it means
@@ -16,38 +16,37 @@ defmodule Opus.HostSurfaceTest do
 
   use ExUnit.Case, async: true
 
+  alias Cyfr.Test.SourceTree
+
   # The cyfr namespaces opus reaches into, and what a remote worker would
   # have to do about each.
   @surface [
-    # `Sanctum.Authority` is the authority's live half: the invoke-budget
-    # slot a spawned child holds and gives back — a worker on another node
-    # would take and release it through a client. The authority as data is
-    # `Cyfr.Authority`, in the contracts.
-    "Sanctum.Authority",
-    # The context a formula's children and catalog tools run in, as the
-    # attempt answers it (`Opus.HostClient.admitted/1`).
-    "Sanctum.Context",
-
     # Infrastructure a worker would need a client for, not a behaviour it
     # would implement: the compiled-component and stream-handle cache.
     "Arca.Cache",
 
-    # What CYFR owns of a run: a formula's children, run through
-    # `Cyfr.Execution` (`run_child`, `run_child_stream`, `execute_child`)
-    # with the child step (`Admission.step_invoke`) and its charge row taken
-    # for a spawn, the setup event a refused child announces, the worker key
-    # the worker service holds, and the host calls of `Opus.HostClient` —
-    # attach, admitted, renew, complete, fail, emit, the OAuth dispense, the
-    # egress rate and denials, storage, the component's artifact and the
-    # runner exit report — which are the only way opus reaches a run's
-    # attempt (the tests below).
+    # What CYFR owns of a run, reached only through `Opus.HostClient`'s host
+    # calls — attach, renew, complete, fail, emit, the OAuth dispense, the
+    # egress rate and denials, storage, the component's artifact, a
+    # formula's children and catalog tools, and the runner exit report —
+    # and the worker key the worker service holds (the tests below).
     "Cyfr.Execution",
     # Egress pinning: a guest request's host resolved and checked against
     # its consented private policy before the connection is made.
     "Cyfr.Network",
-    # The operation catalog: an in-chain tool call is dispatched through it.
+    # The guest error vocabulary a formula's invoke functions render their
+    # own refusals in (`Cyfr.Ops.Error`).
     "Cyfr.Ops"
   ]
+
+  # The CYFR modules opus names outside `Opus.HostClient`, each exactly.
+  @beside_the_client %{
+    "Arca.Cache" => "the compiled-component and stream-handle cache",
+    "Arca.Cache.Keys" => "the cache's key spellings",
+    "Cyfr.Network" => "egress pinning",
+    "Cyfr.Ops.Error" => "the guest error vocabulary",
+    "Cyfr.Execution.Keys" => "the worker key the worker service holds"
+  }
 
   @namespace ~r/\b((?:Arca|Sanctum|Compendium|Emissary|Prism|Cyfr)(?:\.[A-Z]\w+)*)\b/
 
@@ -56,14 +55,10 @@ defmodule Opus.HostSurfaceTest do
   # The shared contracts are not cyfr: their modules are named where they
   # are defined, and a reach into them is not a reach into the control plane.
   defp contracts do
-    modules =
-      for path <- Path.wildcard(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
-          module <- defined_modules(File.read!(path)),
-          into: MapSet.new(),
-          do: module
-
-    if MapSet.size(modules) == 0, do: raise("no modules found under apps/cyfr_contracts/lib")
-    modules
+    for path <- SourceTree.files!(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
+        module <- defined_modules(File.read!(path)),
+        into: MapSet.new(),
+        do: module
   end
 
   # Every `defmodule` in formatted source, a nested one named under the
@@ -79,15 +74,28 @@ defmodule Opus.HostSurfaceTest do
     |> elem(0)
   end
 
-  # A reach counts unless it names a contracts module exactly, so a cyfr
-  # module that shares a contracts module's namespace is still counted.
-  defp reached do
+  # Code lines under apps/opus/lib, by file relative to the umbrella root.
+  defp opus_code do
+    for path <- SourceTree.files!(Path.join(root(), "apps/opus/lib/**/*.ex")),
+        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
+        do: {Path.relative_to(path, root()), line}
+  end
+
+  # Every CYFR module opus code names, by file: a reach counts unless it
+  # names a contracts module exactly, so a cyfr module that shares a
+  # contracts module's namespace is still counted.
+  defp reaches do
     contracts = contracts()
 
-    for path <- Path.wildcard(Path.join(root(), "apps/opus/lib/**/*.ex")),
-        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
+    for {path, line} <- opus_code(),
         [_, module] <- Regex.scan(@namespace, line),
         not MapSet.member?(contracts, module),
+        uniq: true,
+        do: {path, module}
+  end
+
+  defp reached do
+    for {_path, module} <- reaches(),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
   end
@@ -103,8 +111,7 @@ defmodule Opus.HostSurfaceTest do
 
            Add each with a line saying what a worker on another node would
            do about it — implement the behaviour, or need a client for the
-           infrastructure. `Opus.Host` is only the consent plane a host
-           function crosses; it is not the whole answer.
+           infrastructure.
            """
   end
 
@@ -115,11 +122,25 @@ defmodule Opus.HostSurfaceTest do
            "the surface names namespaces opus no longer uses: #{inspect(stale)}"
   end
 
-  # Code lines under apps/opus/lib, by file relative to the umbrella root.
-  defp opus_code do
-    for path <- Path.wildcard(Path.join(root(), "apps/opus/lib/**/*.ex")),
-        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
-        do: {Path.relative_to(path, root()), line}
+  test "opus reaches CYFR only through Opus.HostClient" do
+    refute Code.ensure_loaded?(Opus.Host)
+
+    beside =
+      for {path, module} <- reaches(),
+          path != "apps/opus/lib/opus/host_client.ex",
+          not Map.has_key?(@beside_the_client, module),
+          do: "#{path}: #{module}"
+
+    assert beside == [],
+           """
+           opus names CYFR modules outside Opus.HostClient that are not
+           among the infrastructure it is known to reach:
+
+           #{Enum.join(beside, "\n")}
+
+           A run's authority, its children, its catalog tools and its
+           attempt are CYFR's to decide, through a host call.
+           """
   end
 
   test "opus reaches a run's attempt only through Opus.HostClient's host calls" do
@@ -158,15 +179,10 @@ defmodule Opus.HostSurfaceTest do
   end
 
   test "the runner and the worker service reach CYFR only through Opus.HostClient and the worker key" do
-    contracts = contracts()
-
     reaches =
-      for {path, line} <- opus_code(),
+      for {path, module} <- reaches(),
           path in ["apps/opus/lib/opus/runner.ex", "apps/opus/lib/opus/worker_service.ex"],
-          [_, module] <- Regex.scan(@namespace, line),
-          not MapSet.member?(contracts, module),
           module != "Cyfr.Execution.Keys",
-          uniq: true,
           do: "#{path}: #{module}"
 
     assert reaches == [],
@@ -182,14 +198,5 @@ defmodule Opus.HostSurfaceTest do
 
     assert keys == ["apps/opus/lib/opus/worker_service.ex"],
            "Cyfr.Execution.Keys is reached outside the worker service: #{inspect(keys)}"
-  end
-
-  test "Opus.Host covers the consent plane a host function crosses" do
-    exports = Opus.Host.__info__(:functions) |> Keyword.keys() |> MapSet.new()
-
-    for name <- [:tool_call, :host_intercepted?] do
-      assert MapSet.member?(exports, name),
-             "Opus.Host no longer delegates #{name} — the plane it does cover must stay covered"
-    end
   end
 end

@@ -27,8 +27,9 @@ defmodule Cyfr.Execution.Admission do
   dispatched to and its `Cyfr.Execution.Attempt` opened. A refusal at any
   stage after the row is built closes the row failed
   (`Cyfr.Execution.Close`) before it answers. `Cyfr.Execution.Dispatch`
-  signs the run's assignment and starts it on the worker service; the
-  run's vault edge is unsealed when its runner attaches.
+  signs the run's assignment and starts it on the worker service, or claims
+  it for a runner that already runs; the run's vault edge is unsealed when
+  its runner attaches.
   """
 
   require Logger
@@ -36,7 +37,8 @@ defmodule Cyfr.Execution.Admission do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Authority.RootSelect
-  alias Cyfr.Execution.{Artifacts, Assignments, Attempt, Attestation, Close, Record, Telemetry}
+  alias Cyfr.Execution.{Artifacts, Assignments, Attempt, Attestation, Close, Delegation}
+  alias Cyfr.Execution.{Record, Telemetry}
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
@@ -739,6 +741,10 @@ defmodule Cyfr.Execution.Admission do
         # its own.
         stream_id: if(run.component_type == :formula, do: root_execution_id, else: record.id),
         budget_id: root_execution_id,
+        root_execution_id: root_execution_id,
+        declared_needs: declared_needs(run),
+        activation_digest: activation_digest(run),
+        roster: if(run.component_type == :formula, do: Delegation.roster(input), else: []),
         step_spans: run.opts[:step_spans],
         worker: run.opts[:worker],
         runner_id: run.opts[:runner_id],

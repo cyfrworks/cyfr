@@ -94,7 +94,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
        %{fixture: fixture, id: id} do
     emit!(fixture, %{"type" => "text.delta", "text" => "partial ya29.tok"})
 
-    assert %{"ok" => true} = fail(fixture, "upstream failed")
+    assert %{"ok" => "upstream failed"} = fail(fixture, "upstream failed")
     assert {:error, "upstream failed"} = Dispatch.await(fixture.pid, fixture.close)
 
     live = live_events()
@@ -107,9 +107,10 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
        %{ctx: ctx, fixture: fixture, id: id} do
     assert %{"ok" => @token} = token(fixture)
 
-    assert %{"ok" => true} = fail(fixture, "upstream said #{@token} for #{@field}")
+    assert %{"ok" => answered} = fail(fixture, "upstream said #{@token} for #{@field}")
     assert {:error, message} = Dispatch.await(fixture.pid, fixture.close)
     assert message == "upstream said #{@redacted} for #{@redacted}"
+    assert answered == message
 
     row = Arca.Repo.get!(Arca.Execution, id)
     assert row.status == "failed" and row.error_message == message

@@ -35,10 +35,9 @@ defmodule Opus.ExecutorMaskedOutputTest do
   @key_field "STUB_API_KEY"
   @redacted "[REDACTED]"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "masked_output_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path, :consent_source]
@@ -60,6 +59,8 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
       File.rm_rf!(run_dir)
     end)
+
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
@@ -146,7 +147,15 @@ defmodule Opus.ExecutorMaskedOutputTest do
   test "what a parent is handed of its child is masked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
     {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
-    parent_id = Cyfr.UUID7.execution_id()
+
+    parent =
+      Opus.Test.FormulaHost.attached!(
+        ctx: ctx,
+        authority: authority,
+        component_ref: "formula:local.masked-parent:0.1.0"
+      )
+
+    parent_id = parent.execution_id
 
     request =
       Jason.encode!(%{
@@ -156,15 +165,9 @@ defmodule Opus.ExecutorMaskedOutputTest do
       })
 
     handed =
-      Opus.FormulaHandler.execute(request, Sanctum.Context.enter_guest(ctx),
-        parent_execution_id: parent_id,
-        root_execution_id: parent_id,
-        authority: authority,
-        declared_needs: [],
-        parent_reference: @soul
-      )
+      Opus.FormulaHandler.execute(request, parent.host, Opus.Test.FormulaHost.opts(authority))
 
-    assert %{"status" => "completed", "output" => %{"output" => envelope}} = Jason.decode!(handed)
+    assert %{"status" => "completed", "output" => envelope} = Jason.decode!(handed)
     assert %{"data" => %{"content" => [%{"text" => text}]}} = envelope
     assert text == "The #{@redacted} #{@redacted}."
     refute_unmasked(handed, secrets)

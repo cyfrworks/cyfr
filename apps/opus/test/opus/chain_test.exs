@@ -21,10 +21,9 @@ defmodule Opus.ChainTest do
   @root_act Cyfr.Digest.sha256("root-act")
   @root_activation Cyfr.Digest.sha256("root-activation")
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
     start_supervised!(Source.Memory)
 
     test_path = Path.join(System.tmp_dir!(), "opus_chain_test_#{:rand.uniform(100_000)}")
@@ -73,6 +72,8 @@ defmodule Opus.ChainTest do
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
     end)
+
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {:ok, ctx: ctx, root: root_component, target: target_component}
   end
@@ -169,24 +170,25 @@ defmodule Opus.ChainTest do
     :ok = Source.Memory.put_head_consent(ctx, profile.id, consent)
   end
 
-  # Build the real formula import closures the way the runtime does for an
-  # authority execution: guest-planed ctx, node limits, host-threaded
-  # transition inputs.
-  defp fork_imports(ctx, auth, parent_id, overrides \\ []) do
-    Opus.FormulaHandler.build_formula_imports(
-      Context.enter_guest(ctx),
-      parent_id,
-      Keyword.merge(
+  # A formula's attempt under `auth`, attached by a runner of the worker
+  # service's group, and the real import closures the runtime builds for
+  # it: the node's limits and the actions its assignment intercepts. The
+  # transition inputs its children are stepped with are the attempt's.
+  defp fork_imports(ctx, auth, opts \\ []) do
+    fixture =
+      Opus.Test.FormulaHost.attached!(
         [
-          root_execution_id: parent_id,
-          limits: Cyfr.Authority.limits(auth),
+          ctx: ctx,
           authority: auth,
-          declared_needs: [],
+          component_ref: "formula:local.chain-fork:0.1.0",
           activation_digest: @root_act
-        ],
-        overrides
+        ] ++ opts
       )
-    )
+
+    {imports, tracker} =
+      Opus.FormulaHandler.build_formula_imports(fixture.host, Opus.Test.FormulaHost.opts(auth))
+
+    {fixture.host, imports, tracker}
   end
 
   defp wait_until(fun, timeout_ms \\ 5_000) do
@@ -222,9 +224,6 @@ defmodule Opus.ChainTest do
       assert metadata.authority.profile_id == "prof-chain"
       assert metadata.authority.consent_id == "consent-chain"
       assert metadata.authority.cursor == {:bound, @root_node}
-      # The context crossing into guest closures can never again authorize
-      # an external-plane call.
-      assert metadata.plane == :guest
 
       row = Arca.Repo.get(Arca.Execution, execution_id)
       assert row.activation_digest != nil
@@ -369,7 +368,6 @@ defmodule Opus.ChainTest do
       assert metadata.authority.cursor == {:bound, @target_node}
       assert metadata.authority.depth == 1
       assert metadata.authority.chain == [@root_node, @target_node]
-      assert metadata.plane == :guest
       assert Map.get(target, :release_digest) != nil
 
       row = Arca.Repo.get(Arca.Execution, execution_id)
@@ -535,9 +533,9 @@ defmodule Opus.ChainTest do
     test "the formula closures intercept execution dispatch under an authority", %{ctx: ctx} do
       attach_witness()
       auth = authority_with_edges(%{@target_node => %{}})
-      parent_id = "exec_fork_parent_#{System.unique_integer([:positive])}"
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+      {host, imports, tracker} = fork_imports(ctx, auth)
+      parent_id = host.execution_id
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -583,9 +581,8 @@ defmodule Opus.ChainTest do
 
     test "an omitted need is rejected when the closure declares needs", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
-      parent_id = "exec_fork_need_#{System.unique_integer([:positive])}"
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id, declared_needs: ["source"])
+      {_host, imports, tracker} = fork_imports(ctx, auth, declared_needs: ["source"])
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -606,9 +603,8 @@ defmodule Opus.ChainTest do
     test "the spawn closure charges the budget and releases it on completion", %{ctx: ctx} do
       attach_witness()
       auth = authority_with_edges(%{@target_node => %{}})
-      parent_id = "exec_fork_spawn_#{System.unique_integer([:positive])}"
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+      {_host, imports, tracker} = fork_imports(ctx, auth)
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -631,9 +627,8 @@ defmodule Opus.ChainTest do
     test "an in-chain run_stream is spawn-shaped and returns stream info", %{ctx: ctx} do
       attach_witness()
       auth = authority_with_edges(%{@target_node => %{}})
-      parent_id = "exec_fork_stream_#{System.unique_integer([:positive])}"
 
-      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+      {_host, imports, tracker} = fork_imports(ctx, auth)
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -664,16 +659,7 @@ defmodule Opus.ChainTest do
       auth = authority_with_edges(%{})
 
       # The formula's attempt answers its emit under the node's limits.
-      attempt =
-        Cyfr.Test.AttemptFixtures.attached!(
-          ctx: ctx,
-          authority: auth,
-          component_ref: "formula:local.fork-emit:0.1.0",
-          component_type: :formula
-        )
-
-      host = Opus.HostClient.new(attempt.keys, attempt.runner)
-      {imports, tracker} = fork_imports(ctx, auth, attempt.execution_id, host: host)
+      {_host, imports, tracker} = fork_imports(ctx, auth)
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)

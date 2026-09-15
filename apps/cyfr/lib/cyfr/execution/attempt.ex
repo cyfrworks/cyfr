@@ -12,7 +12,9 @@ defmodule Cyfr.Execution.Attempt do
   registered under the execution's id (with the attempt id as its value)
   in `Cyfr.Execution.Attempt.Registry` and supervised by
   `Cyfr.Execution.Attempt.Supervisor`. The process that opens it is its
-  waiter (`Cyfr.Execution.Dispatch.await/2`). It holds:
+  waiter (`Cyfr.Execution.Dispatch.await/2`) until it hands the attempt to
+  the runner that claimed it (`hand_over/1`), as a formula's child run in
+  its parent's runner is handed over. It holds:
 
   - the close state (`Cyfr.Execution.Close`): the admitted row, the
     admission context and the node's limits, which only this process
@@ -27,6 +29,11 @@ defmodule Cyfr.Execution.Attempt do
   - the context a guest's calls run in (the admission context on the guest
     plane), the node's reference, the need its edge was reached through
     and its limits;
+  - what its guest's children and catalog tools are decided under
+    (`Cyfr.Execution.Host.Children`): the run's authority, its root, the
+    declared needs and activation digest the resolver gave its component,
+    and the delegation roster its admitted input carries
+    (`Cyfr.Execution.Delegation`);
   - the worker service the run is dispatched to (its `Cyfr.WorkerAPI`
     module and boot id) and the digest of the component its runner runs;
   - what the run holds while it is open: its execution slot
@@ -51,7 +58,12 @@ defmodule Cyfr.Execution.Attempt do
   (`Cyfr.Execution.Semaphore.note_unreaped/2`), and lapses its row
   (`Cyfr.Execution.Lapse`). A waiter whose attempt stops without closing
   closes the run lost (`Cyfr.Execution.Close.lost/1`), which writes nothing
-  over a row the attempt no longer holds.
+  over a row the attempt no longer holds. An attempt handed to its runner
+  has no waiter: it is registered under its execution's id in
+  `Cyfr.Execution.Registry` as dispatched to its worker service, so
+  `Cyfr.Execution.Dispatch.stop/2` kills its run through that worker
+  service, and the worker service's report of the run's exit
+  (`stop_unclosed/2`) stops it.
 
   A stop by its supervisor runs to the end: a waiter already gone is
   reacted to as above, whether or not its exit was handled yet, and what
@@ -119,12 +131,16 @@ defmodule Cyfr.Execution.Attempt do
   defstruct @enforce_keys ++
               [
                 :need,
+                :root_execution_id,
+                :activation_digest,
                 :claimed_by,
                 :worker,
                 :runner_id,
                 :digest,
                 :slot,
                 :charge,
+                declared_needs: [],
+                roster: [],
                 held_invoke: false,
                 secrets: %{},
                 tokens: [],
@@ -136,7 +152,8 @@ defmodule Cyfr.Execution.Attempt do
 
   @typedoc "An operation a runner calls on its attempt once it has attached."
   @type op ::
-          {:complete, Outcome.t()}
+          :chain
+          | {:complete, Outcome.t()}
           | {:fail, Outcome.t()}
           | {:push_deltas, [Delta.t()]}
           | {:oauth_token, String.t()}
@@ -144,11 +161,22 @@ defmodule Cyfr.Execution.Attempt do
           | Host.Storage.op()
 
   @typedoc """
-  What a runner in this BEAM runs its attempt with beyond its assignment:
-  the context its guest's in-process calls run in (the admission context on
-  the guest plane) and the run's authority.
+  What a run's guest's children and catalog tools are decided under: the
+  context its guest's calls run in, the run's authority, its component's
+  reference, its root, the declared needs and activation digest the
+  resolver gave its component, the delegation roster its admitted input
+  carries and the `Cyfr.WorkerAPI` module of the worker service it runs on.
   """
-  @type admitted :: %{ctx: Context.t(), authority: Authority.t()}
+  @type chain :: %{
+          ctx: Context.t(),
+          authority: Authority.t(),
+          component_ref: String.t(),
+          root_execution_id: String.t(),
+          declared_needs: [String.t()],
+          activation_digest: String.t() | nil,
+          roster: [map()],
+          worker: module() | nil
+        }
 
   @doc """
   Open the attempt of an admitted execution. The calling process is its
@@ -161,13 +189,16 @@ defmodule Cyfr.Execution.Attempt do
   its edge was reached through), `:limits` (default the authority's node
   limits), `:stream_id` (the stream its guest's events go on, default the
   execution's), `:budget_id` (the root whose emit budget they draw on,
-  default the execution's), `:step_spans`, `:worker` and `:runner_id` (the
-  `Cyfr.WorkerAPI` module and the boot id of the worker service the run is
-  dispatched to), `:digest` (the digest of the component's artifact, which
-  the runner fetches), `:held_invoke`
-  (true when the waiter holds a charged invoke-budget slot of the
-  authority's budget, which the attempt takes over) and `:charge` (the
-  charge row that slot holds, `%{id: charge_id}`).
+  default the execution's), `:root_execution_id` (default the execution's),
+  `:declared_needs` (default `[]`) and `:activation_digest` (the
+  resolver's, for its guest's children), `:roster` (the delegation roster
+  of its admitted input, default `[]`), `:step_spans`, `:worker` and
+  `:runner_id` (the `Cyfr.WorkerAPI` module and the boot id of the worker
+  service the run is dispatched to), `:digest` (the digest of the
+  component's artifact, which the runner fetches), `:held_invoke` (true
+  when the waiter holds a charged invoke-budget slot of the authority's
+  budget, which the attempt takes over) and `:charge` (the charge row that
+  slot holds, `%{id: charge_id}`).
 
   Answers `{:error, {:already_started, pid}}` when the execution already
   has an open attempt.
@@ -228,6 +259,21 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   @doc """
+  Hand the attempt `pid`, attached by the runner that claimed it, from its
+  waiter to that runner: the calling process, its waiter, stops waiting and
+  the attempt is registered under its execution's id in
+  `Cyfr.Execution.Registry` as dispatched to its worker service. Answers
+  `:ok`, or `{:error, :lost}` when the attempt is not attached, is not the
+  caller's to hand over, or has stopped.
+  """
+  @spec hand_over(pid()) :: :ok | {:error, :lost}
+  def hand_over(pid) when is_pid(pid) do
+    GenServer.call(pid, :hand_over, :infinity)
+  catch
+    :exit, _reason -> {:error, :lost}
+  end
+
+  @doc """
   Attach the caller's runner, whose claim on the attempt row is written
   (`Arca.ExecutionAttempts.claim/4`), and answer the fields the run's vault
   edge projects: an empty map when it grants none.
@@ -250,18 +296,6 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   @doc """
-  What the caller's runner runs the attempt with beyond its assignment
-  (`t:admitted/0`), for a runner in this BEAM. The caller must be the
-  attached runner at this attempt, fence and worker service, and the row
-  must still be held
-  by it; otherwise `:lost`, or `:unavailable` when the store cannot answer.
-  """
-  @spec admitted(String.t(), caller()) :: {:ok, admitted()} | {:error, :lost | :unavailable}
-  def admitted(execution_id, caller) when is_binary(execution_id) and is_map(caller) do
-    call(execution_id, {:admitted, caller})
-  end
-
-  @doc """
   Run `op` for the caller's runner. Before it runs, the caller must be the
   attached runner at this attempt, fence and worker service, its nonce must
   not have been
@@ -270,11 +304,17 @@ defmodule Cyfr.Execution.Attempt do
   `:lost`; a row no longer held is `:lost` and stops the attempt; a store
   that cannot answer is `:unavailable`.
 
+  - `:chain` answers what the run's guest's children and catalog tools are
+    decided under (`t:chain/0`). Before it does, the row must also be live
+    (`Arca.ExecutionAttempts.live?/4`): a row with a cancel asked of it, or
+    whose execution is no longer running, is `:lost` without stopping the
+    attempt.
   - `{:complete, outcome}` closes the run with the outcome's output:
     `{:ok, masked_output}`, or `{:error, {:failed, message}}` when the close
     recorded a failure instead.
-  - `{:fail, outcome}` closes the run failed with the outcome's error: `:ok`.
-    An `abandoned` outcome is first counted against the athanor as a kill
+  - `{:fail, outcome}` closes the run failed with the outcome's error:
+    `{:ok, message}`, the failure as the close recorded it, masked. An
+    `abandoned` outcome is first counted against the athanor as a kill
     whose native work may still run (`Cyfr.Execution.Semaphore.note_unreaped/2`).
   - `{:push_deltas, deltas}` emits each delta's event on the attempt's
     stream, masked with its set: `{:ok, replies}`, one reply per delta, the
@@ -370,6 +410,10 @@ defmodule Cyfr.Execution.Attempt do
       close: Keyword.fetch!(opts, :close),
       owner: owner_ref,
       waiter: owner,
+      root_execution_id: Keyword.get(opts, :root_execution_id, execution_id),
+      declared_needs: Keyword.get(opts, :declared_needs, []),
+      activation_digest: Keyword.get(opts, :activation_digest),
+      roster: Keyword.get(opts, :roster, []),
       worker: Keyword.get(opts, :worker),
       runner_id: Keyword.get(opts, :runner_id),
       digest: Keyword.get(opts, :digest),
@@ -401,8 +445,27 @@ defmodule Cyfr.Execution.Attempt do
 
   def handle_call({:refuse, sentence}, _from, state), do: refuse_run(state, sentence)
 
-  def handle_call({kind, _caller} = message, _from, state) when kind in [:attach, :admitted],
-    do: owned(message, state)
+  # Only the waiter hands the attempt over, once a runner has attached, and
+  # only to a worker service that can stop the run.
+  def handle_call(:hand_over, {from, _tag}, %__MODULE__{waiter: from} = state)
+      when is_binary(state.claimed_by) and is_atom(state.worker) and not is_nil(state.worker) do
+    case Registry.register(
+           Cyfr.Execution.Registry,
+           state.execution_id,
+           {:dispatched, state.worker}
+         ) do
+      {:ok, _owner} ->
+        Process.demonitor(state.owner, [:flush])
+        {:reply, :ok, %{state | owner: nil, waiter: nil}}
+
+      {:error, {:already_registered, _holder}} ->
+        {:reply, {:error, :lost}, state}
+    end
+  end
+
+  def handle_call(:hand_over, _from, state), do: {:reply, {:error, :lost}, state}
+
+  def handle_call({:attach, _caller} = message, _from, state), do: owned(message, state)
 
   def handle_call({:call, _caller, _op} = message, _from, state), do: owned(message, state)
 
@@ -445,23 +508,12 @@ defmodule Cyfr.Execution.Attempt do
     end
   end
 
-  defp handle_owned({:admitted, caller}, state) do
-    with :ok <- claimant(state, caller) do
-      case held(caller) do
-        :ok -> {:reply, {:ok, admitted(state)}, state}
-        :gone -> {:stop, :normal, {:error, :lost}, release_holds(state)}
-        :unavailable -> {:reply, {:error, :unavailable}, state}
-      end
-    else
-      :lost -> {:reply, {:error, :lost}, state}
-    end
-  end
-
   defp handle_owned({:call, caller, op}, state) do
     with :ok <- claimant(state, caller),
          {:ok, noted} <- fresh_nonce(state, caller) do
-      case held(caller) do
+      case held(caller, op) do
         :ok -> run(op, noted)
+        :ending -> {:reply, {:error, :lost}, noted}
         :gone -> {:stop, :normal, {:error, :lost}, release_holds(noted)}
         :unavailable -> {:reply, {:error, :unavailable}, noted}
       end
@@ -496,7 +548,7 @@ defmodule Cyfr.Execution.Attempt do
   def terminate(:normal, _state), do: :ok
 
   def terminate(_reason, state) do
-    unless Process.alive?(state.waiter), do: waiter_gone(state)
+    if is_pid(state.waiter) and not Process.alive?(state.waiter), do: waiter_gone(state)
     _ = release_holds(state)
     :ok
   end
@@ -536,8 +588,6 @@ defmodule Cyfr.Execution.Attempt do
     do: elem(reason, 0)
 
   defp reason_shape(_reason), do: @redacted
-
-  defp admitted(state), do: %{ctx: state.ctx, authority: state.authority}
 
   # ---------------------------------------------------------------------------
   # Holds
@@ -686,7 +736,23 @@ defmodule Cyfr.Execution.Attempt do
       else: {:ok, %{state | nonces: Map.put(nonces, nonce, max(ts, now))}}
   end
 
-  defp held(caller) do
+  # A call its guest's children and tools are decided under needs a live
+  # row; one still held but ending (a cancel asked, its execution closed)
+  # is refused without stopping the attempt, which its runner still closes.
+  defp held(caller, :chain) do
+    case Arca.ExecutionAttempts.live?(
+           caller.athanor_id,
+           caller.attempt,
+           caller.fence,
+           caller.runner
+         ) do
+      true -> :ok
+      false -> with(:ok <- held(caller, nil), do: :ending)
+      {:error, _reason} -> :unavailable
+    end
+  end
+
+  defp held(caller, _op) do
     case Arca.ExecutionAttempts.held?(
            caller.athanor_id,
            caller.attempt,
@@ -697,6 +763,21 @@ defmodule Cyfr.Execution.Attempt do
       false -> :gone
       {:error, _reason} -> :unavailable
     end
+  end
+
+  defp run(:chain, state) do
+    chain = %{
+      ctx: state.ctx,
+      authority: state.authority,
+      component_ref: state.component_ref,
+      root_execution_id: state.root_execution_id,
+      declared_needs: state.declared_needs,
+      activation_digest: state.activation_digest,
+      roster: state.roster,
+      worker: state.worker
+    }
+
+    {:reply, {:ok, chain}, state}
   end
 
   defp run({:complete, %Outcome{status: :completed} = outcome}, state) do
@@ -715,7 +796,7 @@ defmodule Cyfr.Execution.Attempt do
     if names_outcome?(state, outcome) do
       if outcome.abandoned, do: note_unreaped(state)
 
-      close_run(state, fn _result -> :ok end, fn ->
+      close_run(state, &failed_answer/1, fn ->
         Close.fail(state.close, masking_set(state), outcome.error)
       end)
     else
@@ -809,7 +890,7 @@ defmodule Cyfr.Execution.Attempt do
       end
 
     state = release_holds(state)
-    send(state.waiter, {__MODULE__, self(), result})
+    if is_pid(state.waiter), do: send(state.waiter, {__MODULE__, self(), result})
     {:stop, :normal, answer.(result), state}
   end
 
@@ -819,6 +900,9 @@ defmodule Cyfr.Execution.Attempt do
     do: {:error, {:failed, message}}
 
   defp completed_answer({:error, _typed}), do: {:error, {:failed, "Execution failed"}}
+
+  defp failed_answer({:error, message}) when is_binary(message), do: {:ok, message}
+  defp failed_answer(_result), do: {:ok, "Execution failed"}
 
   defp emit_delta(state, emit, %Delta{} = delta) do
     if delta.execution_id == state.execution_id and delta.attempt == state.attempt and

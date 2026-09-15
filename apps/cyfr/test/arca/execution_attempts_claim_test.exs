@@ -7,7 +7,9 @@ defmodule Arca.ExecutionAttemptsClaimTest do
   claim by that runner holds, another runner's is `:replayed`, and an
   attempt that is not the running owner at the named fence is `:lost`. An
   attempt is held only by its claimant, at its fence, while it runs and
-  owns its execution; a turn root is never claimed and so never held.
+  owns its execution; a turn root is never claimed and so never held. A
+  held attempt is live while no cancel is asked of it and its execution
+  runs.
   Work run while the attempt is held runs only once that decision is taken,
   in the same transaction.
   """
@@ -171,6 +173,37 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute_received :ran
   end
 
+  test "a held attempt is live until a cancel is asked of it or its execution ends", %{ctx: ctx} do
+    {execution, attempt} = admit!(ctx)
+
+    refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+
+    assert ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_b")
+    refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 2, "runner_a")
+    refute ExecutionAttempts.live?("ath_gamma", attempt.attempt, 1, "runner_a")
+
+    assert {:ok, 1} = ExecutionAttempts.request_cancel(ctx.athanor_id, execution.id)
+
+    refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    assert ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+
+    {other, other_attempt} = admit!(ctx)
+    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, other_attempt.attempt, 1, "runner_a")
+
+    {:ok, _} =
+      Arca.Execution.record_end(
+        ctx,
+        other.id,
+        "cancelled",
+        %{completed_at: DateTime.utc_now(), duration_ms: 1},
+        nil
+      )
+
+    refute ExecutionAttempts.live?(ctx.athanor_id, other_attempt.attempt, 1, "runner_a")
+  end
+
   test "a turn root's attempt is never claimed, so no runner holds it", %{ctx: ctx} do
     {_execution, attempt} = admit!(ctx, %{kind: "turn", component_type: "agent"})
 
@@ -189,6 +222,9 @@ defmodule Arca.ExecutionAttemptsClaimTest do
 
     assert {:error, :database_error} =
              ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+
+    assert {:error, :database_error} =
+             ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
 
     assert {:error, :database_error} =
              ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", &ran/0)

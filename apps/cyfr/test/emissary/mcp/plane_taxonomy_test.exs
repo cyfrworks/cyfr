@@ -268,14 +268,21 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # Helpers
   # ============================================================================
 
-  # The formula host intercepts exactly the execution actions the catalog
-  # annotates `host: :intercepted` — it asks, it does not keep a list.
-  @tag :requires_opus_modules
-  test "the host's intercept set is the catalog's annotation" do
-    assert Opus.Host.host_intercepted?("execution", "run")
-    assert Opus.Host.host_intercepted?("execution", "run_stream")
-    refute Opus.Host.host_intercepted?("execution", "cancel")
-    refute Opus.Host.host_intercepted?("execution", "list")
-    refute Opus.Host.host_intercepted?("system", "status")
+  # A formula's host intercepts exactly the actions its assignment names,
+  # and an assignment names the actions the catalog annotates
+  # `host: :intercepted` (`Cyfr.Execution.Assignments`).
+  test "the intercept set an assignment carries is the catalog's annotation" do
+    intercepted = Catalog.host_intercepted_actions()
+
+    assert "execution.run" in intercepted
+    assert "execution.run_stream" in intercepted
+    refute "execution.cancel" in intercepted
+    refute "execution.list" in intercepted
+    refute "system.status" in intercepted
+
+    for name <- intercepted do
+      [tool, action] = String.split(name, ".", parts: 2)
+      assert Catalog.host_intercepted?(tool, action)
+    end
   end
 end

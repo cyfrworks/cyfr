@@ -7,9 +7,11 @@ defmodule Opus.FormulaHandlerTest do
   import Cyfr.Test.Wait
 
   alias Opus.FormulaHandler
+  alias Opus.Test.FormulaHost
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob
-  alias Sanctum.Context
+
+  @moduletag :capture_log
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
@@ -17,13 +19,12 @@ defmodule Opus.FormulaHandlerTest do
   @fh_node "formula:local.fh-root"
   @act_fh Cyfr.Digest.sha256("act-fh")
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "formula_handler_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx = Sanctum.TestContext.local()
 
@@ -38,6 +39,7 @@ defmodule Opus.FormulaHandlerTest do
       })
 
     on_exit(fn ->
+      Cyfr.Execution.Semaphore.forgive_unreaped(ctx.athanor_id)
       File.rm_rf!(test_path)
 
       if original_base_path,
@@ -45,23 +47,22 @@ defmodule Opus.FormulaHandlerTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
-  # The host client of the formula's attached attempt, which answers its
-  # `emit` on the stream `stream_id` the attempt was opened on.
-  defp attached_host!(ctx, stream_id, opts \\ []) do
-    attempt =
-      Cyfr.Test.AttemptFixtures.attached!(
-        [
-          ctx: ctx,
-          component_ref: @fh_node <> ":0.1.0",
-          component_type: :formula,
-          stream_id: stream_id
-        ] ++ opts
-      )
-
-    Opus.HostClient.new(attempt.keys, attempt.runner)
+  # The host client of a formula's attached attempt under `authority`,
+  # whose events go on `stream_id` when given.
+  defp host!(ctx, authority, opts \\ []) do
+    FormulaHost.attached!(
+      [
+        ctx: ctx,
+        authority: authority,
+        component_ref: @fh_node <> ":0.1.0",
+        activation_digest: @act_fh
+      ] ++ opts
+    ).host
   end
 
   # Helper to build MCP-format requests
@@ -133,42 +134,51 @@ defmodule Opus.FormulaHandlerTest do
     auth
   end
 
-  # The opts an execute/3 closure carries under an authority, with the
-  # guest-planed context the runtime would hand it.
-  defp auth_opts(auth, parent_id, extra \\ []) do
-    Keyword.merge([parent_execution_id: parent_id, authority: auth], extra)
-  end
+  defp execute(json, host, auth), do: FormulaHandler.execute(json, host, FormulaHost.opts(auth))
 
-  defp fork_imports(ctx, auth, parent_id, overrides \\ []) do
-    FormulaHandler.build_formula_imports(
-      Context.enter_guest(ctx),
-      parent_id,
-      Keyword.merge(
-        [
-          root_execution_id: parent_id,
-          limits: Cyfr.Authority.limits(auth),
-          authority: auth,
-          declared_needs: [],
-          activation_digest: @act_fh
-        ],
-        overrides
+  # Children of `parent_id` wait at their guest's entry for `:continue`.
+  defp hold_children!(parent_id) do
+    test_pid = self()
+    handler = "formula-handler-hold-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :opus, :runtime, :authority_entered],
+        fn _event, _measurements, %{execution_id: id}, _config ->
+          case Arca.Repo.get(Arca.Execution, id) do
+            %{parent_execution_id: ^parent_id} ->
+              send(test_pid, {:held, self(), id})
+
+              receive do
+                :continue -> :ok
+              after
+                60_000 -> :ok
+              end
+
+            _ ->
+              :ok
+          end
+        end,
+        nil
       )
-    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
   end
 
+  defp imports(host, auth),
+    do: FormulaHandler.build_formula_imports(host, FormulaHost.opts(auth))
+
   # ============================================================================
-  # build_formula_imports/2,3
+  # build_formula_imports/2
   # ============================================================================
 
-  describe "build_formula_imports/3" do
+  describe "build_formula_imports/2" do
     test "returns {imports, tracker_pid} tuple with all eight functions", %{ctx: ctx} do
-      limits = Cyfr.Limits.defaults(:formula)
+      host = host!(ctx, Authority.zero())
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
+        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
 
       assert is_map(imports)
       assert is_pid(tracker_pid)
@@ -196,10 +206,7 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "works without limits (defaults)", %{ctx: ctx} do
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
-          authority: Cyfr.Authority.zero()
-        )
+      {imports, tracker_pid} = FormulaHandler.build_formula_imports(host!(ctx, Authority.zero()))
 
       assert is_map(imports)
       assert is_pid(tracker_pid)
@@ -209,60 +216,52 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # execute/4 - JSON Parsing (MCP format)
+  # execute/3 - JSON Parsing (MCP format)
   # ============================================================================
 
   describe "execute/3 - JSON parsing" do
-    test "returns error for invalid JSON", %{ctx: ctx} do
-      result = FormulaHandler.execute("not json", ctx, parent_execution_id: "exec_parent")
+    setup %{ctx: ctx} do
+      {:ok, host: host!(ctx, Authority.zero())}
+    end
 
-      parsed = Jason.decode!(result)
+    test "returns error for invalid JSON", %{host: host} do
+      parsed = Jason.decode!(FormulaHandler.execute("not json", host))
       assert parsed["error"]["type"] == "invalid_json"
       assert parsed["error"]["message"] =~ "Invalid JSON"
     end
 
-    test "returns error when tool is missing", %{ctx: ctx} do
-      json = Jason.encode!(%{"action" => "run"})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent")
-
-      parsed = Jason.decode!(result)
+    test "returns error when tool is missing", %{host: host} do
+      parsed = Jason.decode!(FormulaHandler.execute(Jason.encode!(%{"action" => "run"}), host))
       assert parsed["error"]["type"] == "invalid_request"
       assert parsed["error"]["message"] =~ "tool"
     end
 
-    test "returns error when action is missing", %{ctx: ctx} do
-      json = Jason.encode!(%{"tool" => "execution"})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent")
+    test "returns error when action is missing", %{host: host} do
+      parsed =
+        Jason.decode!(FormulaHandler.execute(Jason.encode!(%{"tool" => "execution"}), host))
 
-      parsed = Jason.decode!(result)
       assert parsed["error"]["type"] == "invalid_request"
     end
 
-    test "returns error when args is not a map", %{ctx: ctx} do
+    test "returns error when args is not a map", %{host: host} do
       json = Jason.encode!(%{"tool" => "execution", "action" => "run", "args" => "string"})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent")
-
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(FormulaHandler.execute(json, host))
       assert parsed["error"]["type"] == "invalid_request"
       assert parsed["error"]["message"] =~ "args"
     end
   end
 
   # ============================================================================
-  # execute/4 - MCP Dispatch
+  # execute/3 - MCP Dispatch
   # ============================================================================
 
   describe "execute/3 - MCP dispatch" do
     test "dispatches execution.run through the chain on a consented edge", %{ctx: ctx, ref: ref} do
-      parent_exec_id = "exec_formula-parent-#{:rand.uniform(100_000)}"
       auth = authority(edges: %{@test_node => %{}})
+      host = host!(ctx, auth)
 
-      json = execution_run_request(ref, %{"a" => 5, "b" => 3})
-
-      result =
-        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, parent_exec_id))
-
-      parsed = Jason.decode!(result)
+      parsed =
+        Jason.decode!(execute(execution_run_request(ref, %{"a" => 5, "b" => 3}), host, auth))
 
       # math.wasm is a core module, so the bound child fails at component
       # compile — after the edge decision, never as a denial.
@@ -272,13 +271,7 @@ defmodule Opus.FormulaHandlerTest do
 
     test "dispatches to non-execution tools", %{ctx: ctx} do
       auth = authority(tools: ["tools.list"])
-
-      json = mcp_request("tools", "list")
-
-      result =
-        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_tools_test"))
-
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(execute(mcp_request("tools", "list"), host!(ctx, auth), auth))
 
       assert parsed["status"] == "completed"
       assert is_map(parsed["output"])
@@ -286,34 +279,42 @@ defmodule Opus.FormulaHandlerTest do
 
     test "returns dispatch error for unregistered component", %{ctx: ctx} do
       # Dynamic dispatch to a ref the registry cannot resolve keeps its
-      # error shape: the zero child reaches the executor and fails there.
+      # error shape: the zero child is refused at its admission.
       auth = authority()
       json = execution_run_request("reagent:local.missing:0.1.0", %{"a" => 1})
-
-      result =
-        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_parent-123"))
-
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "dispatch_error"
       assert parsed["error"]["message"] =~ "resolve"
     end
+
+    test "an intercepted action is the host's only when the assignment names it", %{ctx: ctx} do
+      auth = authority(tools: ["execution.run"])
+      host = host!(ctx, auth)
+      json = execution_run_request("reagent:local.missing:0.1.0", %{})
+
+      # Not intercepted, execution.run is a catalog call, which a running
+      # chain cannot make.
+      parsed =
+        Jason.decode!(
+          FormulaHandler.execute(json, host, limits: Authority.limits(auth), intercepted: [])
+        )
+
+      assert parsed["error"]["type"] == "dispatch_error"
+      assert parsed["error"]["message"] =~ "not reachable from a running chain"
+    end
   end
 
   # ============================================================================
-  # execute/4 - Invoke containment
+  # execute/3 - Invoke containment
   # ============================================================================
 
   describe "execute/3 - invoke containment" do
     test "an edge_only authority denies an off-edge invoke", %{ctx: ctx, ref: ref} do
       auth = authority(invoke_mode: :edge_only)
 
-      json = execution_run_request(ref, %{"a" => 1, "b" => 2})
-
-      result =
-        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_parent"))
-
-      parsed = Jason.decode!(result)
+      parsed =
+        Jason.decode!(execute(execution_run_request(ref, %{"a" => 1}), host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "tool_denied"
       assert parsed["error"]["message"] =~ "edge_only"
@@ -325,12 +326,8 @@ defmodule Opus.FormulaHandlerTest do
     } do
       auth = authority()
 
-      json = execution_run_request(ref, %{"a" => 1, "b" => 2})
-
-      result =
-        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_parent"))
-
-      parsed = Jason.decode!(result)
+      parsed =
+        Jason.decode!(execute(execution_run_request(ref, %{"a" => 1}), host!(ctx, auth), auth))
 
       # The zero child carries nothing but is not a refusal.
       refute match?(%{"error" => %{"type" => "tool_denied"}}, parsed)
@@ -338,7 +335,7 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # execute/4 - In-chain plane containment
+  # execute/3 - In-chain plane containment
   # ============================================================================
 
   describe "execute/3 - in-chain plane containment" do
@@ -348,17 +345,8 @@ defmodule Opus.FormulaHandlerTest do
 
     test "blocks an external-only tool with no grant", %{ctx: ctx} do
       auth = authority()
-
       json = mcp_request("session", "login", %{"user" => "admin"})
-
-      result =
-        FormulaHandler.execute(
-          json,
-          Context.enter_guest(ctx),
-          auth_opts(auth, "exec_restricted_nil")
-        )
-
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "dispatch_error"
       assert parsed["error"]["message"] =~ "not reachable from a running chain"
@@ -366,17 +354,8 @@ defmodule Opus.FormulaHandlerTest do
 
     test "blocks an external-only tool even when the edge grants it", %{ctx: ctx} do
       auth = authority(tools: ["vault.create"])
-
       json = mcp_request("vault", "create", %{"name" => "n", "fields" => %{}})
-
-      result =
-        FormulaHandler.execute(
-          json,
-          Context.enter_guest(ctx),
-          auth_opts(auth, "exec_restricted_allowed")
-        )
-
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "dispatch_error"
       assert parsed["error"]["message"] =~ "not reachable from a running chain"
@@ -384,17 +363,7 @@ defmodule Opus.FormulaHandlerTest do
 
     test "blocks key.create in-chain regardless of grants", %{ctx: ctx} do
       auth = authority(tools: ["key.create"])
-
-      json = mcp_request("key", "create", %{})
-
-      result =
-        FormulaHandler.execute(
-          json,
-          Context.enter_guest(ctx),
-          auth_opts(auth, "exec_restricted_star")
-        )
-
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(execute(mcp_request("key", "create", %{}), host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "dispatch_error"
       assert parsed["error"]["message"] =~ "not reachable from a running chain"
@@ -402,13 +371,7 @@ defmodule Opus.FormulaHandlerTest do
 
     test "allows granted in-chain tools through normally", %{ctx: ctx} do
       auth = authority(tools: ["tools.list"])
-
-      json = mcp_request("tools", "list")
-
-      result =
-        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_safe_tool"))
-
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(execute(mcp_request("tools", "list"), host!(ctx, auth), auth))
 
       refute match?(%{"error" => _}, parsed)
       assert parsed["status"] == "completed"
@@ -424,8 +387,7 @@ defmodule Opus.FormulaHandlerTest do
       # vault.delete is external-plane only: even a consented edge grant
       # cannot make credential mutation reachable from a running chain.
       auth = authority(tools: ["vault.delete"])
-
-      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_spawn_restricted")
+      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -445,7 +407,7 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # execute/4 - Telemetry
+  # execute/3 - Telemetry
   # ============================================================================
 
   describe "execute/3 - telemetry" do
@@ -461,14 +423,13 @@ defmodule Opus.FormulaHandlerTest do
         nil
       )
 
-      parent_exec_id = "exec_formula-telem-#{:rand.uniform(100_000)}"
       auth = authority(edges: %{@test_node => %{}})
+      host = host!(ctx, auth)
 
-      json = execution_run_request(ref, %{"a" => 2, "b" => 3})
-      FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, parent_exec_id))
+      execute(execution_run_request(ref, %{"a" => 2, "b" => 3}), host, auth)
 
-      assert_receive {:mcp_tool_call, metadata}, 5000
-      assert metadata.execution_id == parent_exec_id
+      assert_receive {:mcp_tool_call, metadata}, 30_000
+      assert metadata.execution_id == host.execution_id
       assert metadata.tool_action == "execution.run"
       assert metadata.status in [:ok, :error]
 
@@ -488,8 +449,7 @@ defmodule Opus.FormulaHandlerTest do
       )
 
       auth = authority(invoke_mode: :edge_only)
-      json = execution_run_request(ref, %{})
-      FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_denied"))
+      execute(execution_run_request(ref, %{}), host!(ctx, auth), auth)
 
       assert_receive {:mcp_tool_status, :error}, 5000
 
@@ -504,11 +464,10 @@ defmodule Opus.FormulaHandlerTest do
   describe "spawn + await integration" do
     test "spawn returns task_id, await returns result", %{ctx: ctx, ref: ref} do
       auth = authority(edges: %{@test_node => %{}})
-      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_spawn_test")
+      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
 
-      # Spawn a task using MCP format
       spawn_fn = elem(invoke_ns["spawn"], 1)
       spawn_result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
 
@@ -516,26 +475,24 @@ defmodule Opus.FormulaHandlerTest do
       assert Map.has_key?(parsed_spawn, "task_id")
       task_id = parsed_spawn["task_id"]
 
-      # Await the task
       await_fn = elem(invoke_ns["await"], 1)
-      await_result = await_fn.(task_id)
+      parsed_await = Jason.decode!(await_fn.(task_id))
 
-      parsed_await = Jason.decode!(await_result)
       assert parsed_await["task_id"] == task_id
       # Could be completed or error (math.wasm is core module)
       assert parsed_await["status"] in ["completed", "error"]
 
       FormulaHandler.cleanup_registry(tracker_pid)
+      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     end
 
     test "spawn returns error when request is invalid", %{ctx: ctx} do
-      {imports, tracker_pid} = fork_imports(ctx, authority(), "exec_spawn_err")
+      auth = authority()
+      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      spawn_fn = elem(invoke_ns["spawn"], 1)
+      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
 
-      result = spawn_fn.("not valid json")
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(spawn_fn.("not valid json"))
       assert parsed["error"]["type"] == "invalid_json"
 
       FormulaHandler.cleanup_registry(tracker_pid)
@@ -543,17 +500,44 @@ defmodule Opus.FormulaHandlerTest do
 
     test "spawn denies an off-edge invoke under edge_only, synchronously", %{ctx: ctx, ref: ref} do
       auth = authority(invoke_mode: :edge_only)
-      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_spawn_denied")
+      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      spawn_fn = elem(invoke_ns["spawn"], 1)
+      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
 
-      # The transition decides before any task exists: a denied spawn
-      # consumes no task slot and no budget.
-      result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
-      parsed = Jason.decode!(result)
+      # CYFR decides before any task exists: a denied spawn consumes no task
+      # slot and no budget.
+      parsed = Jason.decode!(spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2})))
       assert parsed["error"]["type"] == "tool_denied"
       assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Opus.AsyncTracker.room?(tracker_pid)
+
+      FormulaHandler.cleanup_registry(tracker_pid)
+    end
+
+    test "spawn under a full tracker admits no child", %{ctx: ctx, ref: ref} do
+      auth = authority(edges: %{@test_node => %{}})
+      host = host!(ctx, auth)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(host,
+          limits: %{Authority.limits(auth) | max_concurrent_tasks: 0},
+          intercepted: FormulaHost.intercepted()
+        )
+
+      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
+
+      parsed = Jason.decode!(spawn_fn.(execution_run_request(ref, %{})))
+      assert parsed["error"]["type"] == "resource_limit"
+      assert Sanctum.Authority.budget(auth).in_flight == 0
+
+      import Ecto.Query, only: [from: 2]
+
+      assert Arca.Repo.all(
+               from(e in Arca.Execution,
+                 where: e.parent_execution_id == ^host.execution_id,
+                 select: e.id
+               )
+             ) == []
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -566,22 +550,19 @@ defmodule Opus.FormulaHandlerTest do
   describe "spawn + await-all integration" do
     test "spawns multiple tasks and awaits all results", %{ctx: ctx, ref: ref} do
       auth = authority(edges: %{@test_node => %{}})
-      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_await_all")
+      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
       await_all_fn = elem(invoke_ns["await-all"], 1)
 
-      # Spawn two tasks
       r1 = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
       r2 = spawn_fn.(execution_run_request(ref, %{"a" => 3, "b" => 4}))
 
       id1 = Jason.decode!(r1)["task_id"]
       id2 = Jason.decode!(r2)["task_id"]
 
-      # Await all
-      result = await_all_fn.(Jason.encode!(%{"task_ids" => [id1, id2]}))
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(await_all_fn.(Jason.encode!(%{"task_ids" => [id1, id2]})))
 
       assert parsed["count"] == 2
       assert is_list(parsed["results"])
@@ -596,13 +577,12 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "await-all returns error for invalid JSON", %{ctx: ctx} do
-      {imports, tracker_pid} = fork_imports(ctx, authority(), "exec_aa_err")
+      auth = authority()
+      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      await_all_fn = elem(invoke_ns["await-all"], 1)
+      await_all_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["await-all"], 1)
 
-      result = await_all_fn.("not json")
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(await_all_fn.("not json"))
       assert parsed["error"]["type"] == "invalid_json"
 
       FormulaHandler.cleanup_registry(tracker_pid)
@@ -616,20 +596,19 @@ defmodule Opus.FormulaHandlerTest do
   describe "poll integration" do
     test "poll reports the spawned task's own terminal status", %{ctx: ctx, ref: ref} do
       auth = authority(edges: %{@test_node => %{}})
-      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_poll")
+      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
       poll_fn = elem(invoke_ns["poll"], 1)
 
-      spawn_result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
-      task_id = Jason.decode!(spawn_result)["task_id"]
+      task_id = Jason.decode!(spawn_fn.(execution_run_request(ref, %{"a" => 1})))["task_id"]
 
       # Poll until the named task leaves pending. This fixture may complete
       # or error; either terminal result verifies task-status progress.
       wait_until(
         fn -> Jason.decode!(poll_fn.(task_id))["status"] != "pending" end,
-        5_000,
+        30_000,
         "the spawned task to leave 'pending'"
       )
 
@@ -642,13 +621,12 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "poll returns error for unknown task_id", %{ctx: ctx} do
-      {imports, tracker_pid} = fork_imports(ctx, authority(), "exec_poll_err")
+      auth = authority()
+      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      poll_fn = elem(invoke_ns["poll"], 1)
+      poll_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["poll"], 1)
 
-      result = poll_fn.("nonexistent_task")
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(poll_fn.("nonexistent_task"))
       assert parsed["error"]["type"] == "invalid_request"
       assert parsed["error"]["message"] =~ "Unknown"
 
@@ -661,56 +639,76 @@ defmodule Opus.FormulaHandlerTest do
   # ============================================================================
 
   describe "cancel integration" do
-    test "cancel returns cancelled response for running task", %{ctx: ctx, ref: ref} do
+    test "cancelling a spawned child's task stops its runner and gives back what it held",
+         %{ctx: ctx, ref: ref} do
       auth = authority(edges: %{@test_node => %{}})
-      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_cancel_test")
+      host = host!(ctx, auth)
+      hold_children!(host.execution_id)
+      {imports, tracker_pid} = imports(host, auth)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
       cancel_fn = elem(invoke_ns["cancel"], 1)
 
-      # Spawn a task
-      spawn_result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
-      task_id = Jason.decode!(spawn_result)["task_id"]
+      task_id = Jason.decode!(spawn_fn.(execution_run_request(ref, %{"a" => 1})))["task_id"]
+      assert_receive {:held, component, child_id}, 30_000
+      assert Sanctum.Authority.budget(auth).in_flight == 1
 
-      # Cancel it
-      cancel_result = cancel_fn.(task_id)
-      parsed = Jason.decode!(cancel_result)
+      parsed = Jason.decode!(cancel_fn.(task_id))
 
       assert parsed["cancelled"] == true
       assert parsed["task_id"] == task_id
 
+      wait_until(fn -> not Process.alive?(component) end)
+      wait_until(fn -> Arca.Repo.get!(Arca.Execution, child_id).status == "failed" end)
+      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
+      wait_until(fn -> Cyfr.Execution.Attempt.whereis(child_id) == nil end)
+
       FormulaHandler.cleanup_registry(tracker_pid)
+    end
+
+    test "stopping the tracker stops every child its tasks wait for, and CYFR reclaims their holds",
+         %{ctx: ctx, ref: ref} do
+      auth = authority(edges: %{@test_node => %{}})
+      host = host!(ctx, auth)
+      hold_children!(host.execution_id)
+      {imports, tracker_pid} = imports(host, auth)
+
+      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
+
+      for _ <- 1..2,
+          do:
+            assert(%{"task_id" => _} = Jason.decode!(spawn_fn.(execution_run_request(ref, %{}))))
+
+      held =
+        for _ <- 1..2 do
+          assert_receive {:held, component, child_id}, 30_000
+          {component, child_id}
+        end
+
+      assert Sanctum.Authority.budget(auth).in_flight == 2
+
+      FormulaHandler.cleanup_registry(tracker_pid)
+
+      for {component, child_id} <- held do
+        wait_until(fn -> not Process.alive?(component) end)
+        wait_until(fn -> Arca.Repo.get!(Arca.Execution, child_id).status == "failed" end)
+        wait_until(fn -> Cyfr.Execution.Attempt.whereis(child_id) == nil end)
+      end
+
+      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     end
 
     test "cancel returns error for unknown task_id", %{ctx: ctx} do
-      {imports, tracker_pid} = fork_imports(ctx, authority(), "exec_cancel_unknown")
+      auth = authority()
+      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      cancel_fn = elem(invoke_ns["cancel"], 1)
+      cancel_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["cancel"], 1)
 
-      result = cancel_fn.("nonexistent_task")
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(cancel_fn.("nonexistent_task"))
 
       assert parsed["error"]["type"] == "invalid_request"
       assert parsed["error"]["message"] =~ "Unknown"
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
-
-    test "build_formula_imports includes cancel function", %{ctx: ctx} do
-      limits = Cyfr.Limits.defaults(:formula)
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_cancel_check",
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
-
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      assert Map.has_key?(invoke_ns, "cancel")
-      assert {:fn, func} = invoke_ns["cancel"]
-      assert is_function(func, 1)
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -734,19 +732,21 @@ defmodule Opus.FormulaHandlerTest do
       )
 
       auth = authority(edges: %{@test_node => %{}})
-      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_cancel_telem")
+      host = host!(ctx, auth)
+      hold_children!(host.execution_id)
+      {imports, tracker_pid} = imports(host, auth)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
       cancel_fn = elem(invoke_ns["cancel"], 1)
 
-      spawn_result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
-      task_id = Jason.decode!(spawn_result)["task_id"]
+      task_id = Jason.decode!(spawn_fn.(execution_run_request(ref, %{"a" => 1})))["task_id"]
+      assert_receive {:held, _component, _child_id}, 30_000
 
       cancel_fn.(task_id)
 
       assert_receive {:formula_cancel, metadata}, 5000
-      assert metadata.parent_execution_id == "exec_cancel_telem"
+      assert metadata.parent_execution_id == host.execution_id
       assert metadata.task_id == task_id
 
       :telemetry.detach("test-formula-cancel")
@@ -772,15 +772,14 @@ defmodule Opus.FormulaHandlerTest do
       )
 
       auth = authority(edges: %{@test_node => %{}})
-      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_telem_spawn")
+      host = host!(ctx, auth)
+      {imports, tracker_pid} = imports(host, auth)
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      spawn_fn = elem(invoke_ns["spawn"], 1)
-
+      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
       spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
 
       assert_receive {:formula_spawn, metadata}, 5000
-      assert metadata.parent_execution_id == "exec_telem_spawn"
+      assert metadata.parent_execution_id == host.execution_id
       assert metadata.task_id == "task_1"
 
       :telemetry.detach("test-formula-spawn")
@@ -794,12 +793,9 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "cleanup_registry/1" do
     test "stops tracker and returns :ok", %{ctx: ctx} do
-      limits = Cyfr.Limits.defaults(:formula)
-
       {_imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_cleanup",
-          limits: limits,
-          authority: Cyfr.Authority.zero()
+        FormulaHandler.build_formula_imports(host!(ctx, Authority.zero()),
+          limits: Cyfr.Limits.defaults(:formula)
         )
 
       assert Process.alive?(tracker_pid)
@@ -813,14 +809,6 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "a tracker that is already gone is not an error" do
-      # Every caller reaches this after a check-then-act window — the cancel
-      # path has just killed the process the tracker is linked to — so the
-      # tracker is routinely dead by the time we ask it to stop.
-      # `GenServer.stop/2` EXITS with :noproc for a dead pid; it does not
-      # raise, so rescuing ArgumentError/RuntimeError never caught it and the
-      # exit unwound the caller instead: cancel skipped its terminal event and
-      # its child cascade, and the timeout path skipped writing the failed
-      # record.
       {:ok, pid} = Opus.AsyncTracker.start_link([])
       # Unlink before killing: the tracker is linked to whoever started it,
       # which here is the test process.
@@ -840,22 +828,14 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "emit integration" do
     test "emit returns ok with sequence number", %{ctx: ctx} do
-      limits = Cyfr.Limits.defaults(:formula)
-
-      host = attached_host!(ctx, "exec_emit_test")
+      host = host!(ctx, Authority.zero(), stream_id: "exec_emit_test")
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_emit_test",
-          host: host,
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
+        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      emit_fn = elem(invoke_ns["emit"], 1)
+      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
-      result = emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1})))
 
       assert parsed["ok"] == true
       # No durable event yet: the delta rides prefix 0.
@@ -865,19 +845,12 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "emit sequence increments across calls", %{ctx: ctx} do
-      limits = Cyfr.Limits.defaults(:formula)
-
-      host = attached_host!(ctx, "exec_emit_seq")
+      host = host!(ctx, Authority.zero(), stream_id: "exec_emit_seq")
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_emit_seq",
-          host: host,
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
+        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      emit_fn = elem(invoke_ns["emit"], 1)
+      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
       r1 = Jason.decode!(emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1})))
       r2 = Jason.decode!(emit_fn.(Jason.encode!(%{"kind" => "text_delta", "content" => "hi"})))
@@ -891,22 +864,14 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "emit handles invalid JSON gracefully", %{ctx: ctx} do
-      limits = Cyfr.Limits.defaults(:formula)
-
-      host = attached_host!(ctx, "exec_emit_bad")
+      host = host!(ctx, Authority.zero(), stream_id: "exec_emit_bad")
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_emit_bad",
-          host: host,
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
+        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      emit_fn = elem(invoke_ns["emit"], 1)
+      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
-      result = emit_fn.("not valid json")
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(emit_fn.("not valid json"))
 
       # Under an authority a malformed emit is refused loudly, not
       # swallowed: the guest gets a typed error envelope.
@@ -917,23 +882,14 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit delivers events via PubSub", %{ctx: ctx} do
       execution_id = "exec_emit_pubsub_#{:rand.uniform(100_000)}"
-      limits = Cyfr.Limits.defaults(:formula)
-
-      host = attached_host!(ctx, execution_id)
+      host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id,
-          host: host,
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
+        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
 
-      # Subscribe to the execution events topic
       Cyfr.Execution.Events.subscribe(execution_id, ctx)
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      emit_fn = elem(invoke_ns["emit"], 1)
-
+      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
       assert_receive {:execution_event, event}, 2000
@@ -949,24 +905,19 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit masks dispensed secrets before the event leaves the runtime", %{ctx: ctx} do
       execution_id = "exec_emit_mask_#{:rand.uniform(100_000)}"
-      limits = Cyfr.Limits.defaults(:formula)
 
       host =
-        attached_host!(ctx, execution_id,
+        host!(ctx, Authority.zero(),
+          stream_id: execution_id,
           vault: %{kind: "api_key", fields: %{"KEY" => "sk-super-secret-value"}}
         )
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id,
-          host: host,
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
+        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
 
       Cyfr.Execution.Events.subscribe(execution_id, ctx)
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      emit_fn = elem(invoke_ns["emit"], 1)
+      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
       emit_fn.(
         Jason.encode!(%{"kind" => "text_delta", "content" => "key is sk-super-secret-value"})
@@ -982,21 +933,13 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit buffers events for replay via since/2", %{ctx: ctx} do
       execution_id = "exec_emit_buffer_#{:rand.uniform(100_000)}"
-      limits = Cyfr.Limits.defaults(:formula)
-
-      host = attached_host!(ctx, execution_id)
+      host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id,
-          host: host,
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
+        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      emit_fn = elem(invoke_ns["emit"], 1)
+      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
-      # Emit three events
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
       emit_fn.(Jason.encode!(%{"kind" => "text_delta", "content" => "hello"}))
       emit_fn.(Jason.encode!(%{"kind" => "tool_use", "tool" => "read_file"}))
@@ -1004,13 +947,11 @@ defmodule Opus.FormulaHandlerTest do
       # Flush pending buffer writes before reading
       Cyfr.Execution.Events.flush(execution_id)
 
-      # Replay everything from the start
       events = Cyfr.Execution.Events.since(execution_id, {0, 0}, ctx.athanor_id)
       assert length(events) == 3
       assert Enum.map(events, & &1.sequence) == ["0.1", "0.2", "0.3"]
       assert Enum.map(events, & &1.data["kind"]) == ["turn_start", "text_delta", "tool_use"]
 
-      # Replay only the deltas after 0.1
       events_after_1 = Cyfr.Execution.Events.since(execution_id, {0, 1}, ctx.athanor_id)
       assert length(events_after_1) == 2
       assert Enum.map(events_after_1, & &1.sequence) == ["0.2", "0.3"]
@@ -1031,20 +972,12 @@ defmodule Opus.FormulaHandlerTest do
         nil
       )
 
-      limits = Cyfr.Limits.defaults(:formula)
-
-      host = attached_host!(ctx, execution_id)
+      host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id,
-          host: host,
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
+        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      emit_fn = elem(invoke_ns["emit"], 1)
-
+      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
       assert_receive {:emitted, metadata, measurements}, 2000
@@ -1057,45 +990,32 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # emit routes to root_execution_id
+  # emit routes to the stream its attempt is opened on
   # ============================================================================
 
   describe "emit routes to the stream its attempt is opened on" do
     test "a formula's attempt on its root delivers there, not to the formula's own stream",
          %{ctx: ctx} do
       root_id = "exec_root_#{:rand.uniform(100_000)}"
-      parent_id = "exec_child_#{:rand.uniform(100_000)}"
-      limits = Cyfr.Limits.defaults(:formula)
-
-      host = attached_host!(ctx, root_id)
+      host = host!(ctx, Authority.zero(), stream_id: root_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, parent_id,
-          host: host,
-          root_execution_id: root_id,
-          limits: limits,
-          authority: Cyfr.Authority.zero()
-        )
+        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
 
-      # Subscribe to both root and parent
       Cyfr.Execution.Events.subscribe(root_id, ctx)
-      Cyfr.Execution.Events.subscribe(parent_id, ctx)
+      Cyfr.Execution.Events.subscribe(host.execution_id, ctx)
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      emit_fn = elem(invoke_ns["emit"], 1)
-
+      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
-      # Event should arrive on root's buffer
       assert_receive {:execution_event, event}, 2000
       assert event.execution_id == root_id
       assert event.data["kind"] == "turn_start"
 
-      # Should NOT arrive on parent's buffer
       refute_receive {:execution_event, _}, 100
 
       Cyfr.Execution.Events.unsubscribe(root_id, ctx)
-      Cyfr.Execution.Events.unsubscribe(parent_id, ctx)
+      Cyfr.Execution.Events.unsubscribe(host.execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
   end
@@ -1134,8 +1054,7 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "encode_error/2" do
     test "encodes error as JSON" do
-      result = FormulaHandler.encode_error(:test_error, "something failed")
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(FormulaHandler.encode_error(:test_error, "something failed"))
 
       assert parsed["error"]["type"] == "test_error"
       assert parsed["error"]["message"] == "something failed"
@@ -1143,7 +1062,7 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # execute/5 - Setup error remediation
+  # execute/3 - Setup error remediation
   # ============================================================================
 
   describe "execute/3 - setup error remediation" do
@@ -1151,7 +1070,6 @@ defmodule Opus.FormulaHandlerTest do
       # The consent names an edge to a component the installed world
       # cannot resolve: the bound invoke refuses with a remediation the
       # surface can act on, instead of a bare dispatch failure.
-      parent_exec_id = "exec_remediation_#{:rand.uniform(100_000)}"
       auth = authority(edges: %{"catalyst:local.no-policy-test" => %{}})
 
       json =
@@ -1161,10 +1079,7 @@ defmodule Opus.FormulaHandlerTest do
           "type" => "catalyst"
         })
 
-      result =
-        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, parent_exec_id))
-
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "setup_required"
 
@@ -1177,7 +1092,6 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "normal errors remain unchanged when not a setup issue", %{ctx: ctx} do
-      parent_exec_id = "exec_normal_err_#{:rand.uniform(100_000)}"
       auth = authority()
 
       # A missing component off the consent graph gives dispatch_error,
@@ -1188,10 +1102,7 @@ defmodule Opus.FormulaHandlerTest do
           "input" => %{}
         })
 
-      result =
-        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, parent_exec_id))
-
-      parsed = Jason.decode!(result)
+      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "dispatch_error"
       refute Map.has_key?(parsed["error"], "remediation")

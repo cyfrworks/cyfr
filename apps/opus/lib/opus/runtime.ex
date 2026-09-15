@@ -67,7 +67,10 @@ defmodule Opus.Runtime do
   - `:execution_id` - The admitted execution
   - `:host` - The attached `Opus.HostClient` of the execution's attempt:
     the guest's `emit`, OAuth tokens, storage, HTTP rate checks and egress
-    denials are its host calls
+    denials, and a formula's children and catalog tool calls, are its host
+    calls
+  - `:intercepted` - The `tool.action` names a formula's host runs rather
+    than the catalog, as its assignment carries them
 
   ## Examples
 
@@ -92,14 +95,10 @@ defmodule Opus.Runtime do
     component_ref = Keyword.get(opts, :component_ref)
     edge = Keyword.get(opts, :edge)
     limits = Keyword.get(opts, :limits)
-    ctx = Keyword.get(opts, :ctx)
     execution_id = Keyword.get(opts, :execution_id)
-    root_execution_id = Keyword.get(opts, :root_execution_id)
     reference = Keyword.get(opts, :reference)
     digest = Keyword.get(opts, :digest)
     authority = Keyword.get(opts, :authority)
-    declared_needs = Keyword.get(opts, :declared_needs)
-    activation_digest = Keyword.get(opts, :activation_digest)
     host = Keyword.get(opts, :host)
 
     # Admission refuses a run without an authority; this is the last guard:
@@ -118,8 +117,7 @@ defmodule Opus.Runtime do
         %{
           authority: authority,
           execution_id: execution_id,
-          reference: reference,
-          plane: ctx && ctx.plane
+          reference: reference
         }
       )
     end
@@ -130,11 +128,8 @@ defmodule Opus.Runtime do
 
     authority_info = %{
       authority: authority,
-      declared_needs: declared_needs,
-      activation_digest: activation_digest,
-      # The attempt that owns this execution's row, for the lineage of
-      # every call a formula makes.
-      attempt: Keyword.get(opts, :execution_attempt)
+      # The actions a formula's host runs rather than the catalog.
+      intercepted: Keyword.get(opts, :intercepted, [])
     }
 
     # Build imports and collect cleanup refs
@@ -145,12 +140,9 @@ defmodule Opus.Runtime do
         component_ref,
         edge,
         limits,
-        ctx,
         host,
         execution_id,
-        root_execution_id,
-        authority_info,
-        input
+        authority_info
       )
 
     # Notify caller of cleanup_refs so they can clean up on timeout kill
@@ -235,12 +227,9 @@ defmodule Opus.Runtime do
          component_ref,
          edge,
          limits,
-         ctx,
          host,
          execution_id,
-         root_execution_id,
-         authority_info,
-         input
+         authority_info
        ) do
     vault_imports =
       if component_type == :catalyst do
@@ -279,8 +268,6 @@ defmodule Opus.Runtime do
         %{}
       end
 
-    root_execution_id = root_execution_id || execution_id
-
     emit_imports =
       if component_type == :catalyst && host && authority_info.authority do
         build_emit_imports(host)
@@ -289,20 +276,10 @@ defmodule Opus.Runtime do
       end
 
     {formula_imports, formula_tracker_pid} =
-      if component_type == :formula && ctx && execution_id do
-        Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
-          host: host,
-          root_execution_id: root_execution_id,
-          attempt: authority_info.attempt,
+      if component_type == :formula && host do
+        Opus.FormulaHandler.build_formula_imports(host,
           limits: limits,
-          authority: authority_info.authority,
-          declared_needs: authority_info.declared_needs,
-          activation_digest: authority_info.activation_digest,
-          # What this formula was started as and with: a child of the same
-          # formula is admitted only as a delegate its roster lists, with
-          # the roster's own configuration (`Opus.FormulaHandler`).
-          parent_reference: component_ref,
-          parent_roster: Opus.FormulaHandler.roster_of(input)
+          intercepted: authority_info.intercepted
         )
       else
         {%{}, nil}
