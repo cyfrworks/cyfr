@@ -72,6 +72,7 @@ test("admission checks a nonce, records it only when asked, keeps it for its win
     const synced = await owners.sync({
       ...base,
       leaseMs: 60_000,
+      idleMs: 60_000,
       backends: validateBackends([{ name: "b", command: `node ${CHILD} well-behaved`, env_names: [] }]),
       openEnv: () => ({ b: {} }),
     });

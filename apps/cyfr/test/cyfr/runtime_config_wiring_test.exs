@@ -109,6 +109,39 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
+  describe "the MCP bridge's lease and idle period" do
+    test "unset, neither is configured; set, each is taken in milliseconds" do
+      with_env(%{"CYFR_MCP_BRIDGE_LEASE_MS" => nil, "CYFR_MCP_BRIDGE_IDLE_MS" => nil}, fn ->
+        cyfr = read_prod_config!()[:cyfr]
+        refute Keyword.has_key?(cyfr, :mcp_bridge_lease_ms)
+        refute Keyword.has_key?(cyfr, :mcp_bridge_idle_ms)
+      end)
+
+      with_env(
+        %{"CYFR_MCP_BRIDGE_LEASE_MS" => "5000", "CYFR_MCP_BRIDGE_IDLE_MS" => "600000"},
+        fn ->
+          cyfr = read_prod_config!()[:cyfr]
+          assert cyfr[:mcp_bridge_lease_ms] == 5_000
+          assert cyfr[:mcp_bridge_idle_ms] == 600_000
+        end
+      )
+    end
+
+    test "a value that is not a whole number of milliseconds in range refuses the boot" do
+      for {key, bad} <- [
+            {"CYFR_MCP_BRIDGE_LEASE_MS", "999"},
+            {"CYFR_MCP_BRIDGE_LEASE_MS", "30s"},
+            {"CYFR_MCP_BRIDGE_IDLE_MS", "86400001"},
+            {"CYFR_MCP_BRIDGE_IDLE_MS", "15m"}
+          ] do
+        with_env(%{key => bad}, fn ->
+          error = assert_raise RuntimeError, fn -> read_prod_config!() end
+          assert Exception.message(error) =~ key
+        end)
+      end
+    end
+  end
+
   describe "CYFR_DATABASE — the one setting `.env` cannot decide" do
     # Verify .env selection agrees with the compile-time adapter; Ecto cannot switch adapters at runtime.
 

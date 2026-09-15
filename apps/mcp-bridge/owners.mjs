@@ -15,11 +15,13 @@
 // A backend is spawning → initializing → ready. A backend that exits is
 // crashed and restarts after 1, 2, 4, 8 then 16 s, and its fifth exit within
 // ten minutes marks it failed, with its tools withdrawn, until a sync at a
-// new version replaces the owner.
+// new version replaces the owner. A ready backend with no call for the
+// owner's idle period is idle: its processes are retired and its uid freed,
+// its tools stay listed, and the next call to it starts it again.
 //
 // Every backend the bridge runs, or will run once a retirement finishes,
-// holds a slot of the uid pool: a sync that would hold more slots than the
-// pool has is refused.
+// holds a slot of the uid pool: a sync or the start of an idle backend that
+// would hold more slots than the pool has is refused.
 //
 // A backend's stdout carries MCP JSON-RPC frames and nothing of it is
 // logged; its stderr is kept in memory (the last 64 KiB) and never logged.
@@ -42,6 +44,7 @@ export const STDERR_TAIL_BYTES = 64 * 1024;
 const STDERR_SLACK_BYTES = 4 * 1024;
 
 export const MAX_LEASE_MS = 60_000;
+export const MAX_IDLE_MS = 24 * 60 * 60_000;
 export const NONCE_WINDOW_MS = 30_000;
 export const MAX_NONCES = 8192;
 export const MAX_BACKENDS = 16;
@@ -234,7 +237,7 @@ export class Owners {
       poolTimeoutMs,
       restartBackoffMs,
     };
-    this.#timer = setInterval(() => this.#expireLeases(), leaseCheckMs);
+    this.#timer = setInterval(() => this.#tick(), leaseCheckMs);
     this.#timer.unref?.();
   }
 
@@ -253,13 +256,13 @@ export class Owners {
    * `validateBackends`; `openEnv()` answers the opened environment
    * (`{backend: {NAME: value}}`) and is called only for a new version.
    *
-   * The same version with the same definition extends the lease. A higher
-   * version retires the one it replaces, then — refused as `capacity` when
-   * the pool cannot hold its backends beside every other owner's — is
-   * admitted as starting: its backends spawn once every earlier version is
-   * retired, and become ready on their own time.
+   * The same version with the same definition extends the lease and sets
+   * the idle period. A higher version retires the one it replaces, then —
+   * refused as `capacity` when the pool cannot hold its backends beside
+   * every other owner's — is admitted as starting: its backends spawn once
+   * the replaced version is retired, and become ready on their own time.
    */
-  async sync({ athanor, server, g, e, leaseMs, backends, openEnv }) {
+  async sync({ athanor, server, g, e, leaseMs, idleMs, backends, openEnv }) {
     const key = ownerKey(athanor, server);
     const existing = this.#owners.get(key);
     const definition = JSON.stringify(backends);
@@ -271,6 +274,7 @@ export class Owners {
         if (existing.definition !== definition) throw new Refusal("conflict");
         if (existing.state === "draining") throw new Refusal("lapsed");
         existing.leaseUntil = this.#now() + leaseMs;
+        existing.idleMs = idleMs;
         return this.#answer(existing);
       }
     }
@@ -301,6 +305,7 @@ export class Owners {
       definition,
       state: "starting",
       leaseUntil: this.#now() + leaseMs,
+      idleMs,
       rev: 0,
       secrets: secretValues(env),
       nonces: new Map(),
@@ -428,7 +433,10 @@ export class Owners {
     return owner;
   }
 
-  /** The owner's ready backends' tools, renamed `<backend>__<tool>` and masked. */
+  /**
+   * The owner's backends' tools, renamed `<backend>__<tool>` and masked: a
+   * ready or idle backend's catalogue, as it last listed it.
+   */
   tools(owner) {
     const out = [];
     for (const b of owner.backends.values()) {
@@ -443,15 +451,20 @@ export class Owners {
     return mask(out, owner.secrets);
   }
 
-  /** Calls `<backend>__<tool>` on one of the owner's backends; the result is masked. */
+  /**
+   * Calls `<backend>__<tool>` on one of the owner's backends, starting it
+   * first when it is idle; the result is masked.
+   */
   async callTool(owner, toolName, args) {
     const sep = toolName.indexOf("__");
     if (sep <= 0) throw new RpcRefusal(`unknown tool: ${toolName}`);
     const backend = owner.backends.get(toolName.slice(0, sep));
     if (!backend) throw new RpcRefusal(`unknown tool: ${toolName}`);
+    if (backend.status === "idle" || backend.waking) await this.#wake(backend);
     if (backend.status !== "ready") {
       throw new RpcRefusal(mask(`backend '${backend.name}' not ready: ${backend.error || backend.status}`, owner.secrets));
     }
+    backend.lastUsed = this.#now();
     try {
       const result = await this.#rpc(backend, "tools/call", { name: toolName.slice(sep + 2), arguments: args || {} });
       return mask(result, owner.secrets);
@@ -461,6 +474,8 @@ export class Owners {
       // did not finish (a timeout, an exit).
       const text = err instanceof ChildError ? err.message : `backend '${backend.name}' call failed: ${err.message}`;
       throw new RpcRefusal(mask(text, owner.secrets));
+    } finally {
+      backend.lastUsed = this.#now();
     }
   }
 
@@ -522,10 +537,20 @@ export class Owners {
     }
   }
 
-  #expireLeases() {
+  // Once a second: lapses expired leases, and retires backends idle past
+  // their owner's idle period.
+  #tick() {
     const now = this.#now();
     for (const owner of this.#owners.values()) {
-      if (owner.state !== "draining" && owner.leaseUntil <= now) this.#lapse(owner);
+      if (owner.state === "draining") continue;
+      if (owner.leaseUntil <= now) {
+        this.#lapse(owner);
+        continue;
+      }
+      for (const backend of owner.backends.values()) {
+        if (backend.status !== "ready" || backend.waking || backend.pending.size > 0) continue;
+        if (now - backend.lastUsed >= owner.idleMs) this.#retireIdle(backend);
+      }
     }
   }
 
@@ -577,6 +602,12 @@ export class Owners {
       stderrBytes: 0,
       // Whether the backend holds a slot of the pool.
       slot: true,
+      lastUsed: 0,
+      // The retirement of an idle backend's processes, and the start that
+      // wakes it again.
+      retired: null,
+      waking: null,
+      readyWaiters: [],
       settled,
       settle,
     };
@@ -647,8 +678,10 @@ export class Owners {
       backend.tools = tools;
       backend.status = "ready";
       backend.error = null;
+      backend.lastUsed = this.#now();
       this.#log.log(`[owner ${backend.label}] ready, ${backend.tools.length} tools`);
       backend.settle();
+      for (const { resolve } of backend.readyWaiters.splice(0)) resolve();
       if (changed) this.#touch(backend.owner);
     } catch (err) {
       // A process that already exited was counted as crashed when it did.
@@ -671,6 +704,7 @@ export class Owners {
     backend.initError = null;
     backend.tools = [];
     this.#failPending(backend, new Error(reason));
+    this.#failReady(backend);
     const released = proc.release(0);
 
     const now = this.#now();
@@ -699,6 +733,57 @@ export class Owners {
     backend.restartTimer.unref?.();
   }
 
+  // Retires an idle backend's processes and frees its slot; its tools stay
+  // listed until it starts again.
+  #retireIdle(backend) {
+    const proc = backend.proc;
+    backend.proc = null;
+    backend.status = "idle";
+    this.#log.log(`[owner ${backend.label}] idle for ${backend.owner.idleMs} ms; retiring until its next call`);
+    const { stopGraceMs, releaseTimeoutMs } = this.#options;
+    backend.retired = withTimeout(proc.release(stopGraceMs), stopGraceMs + releaseTimeoutMs).then(() => {
+      if (backend.status === "idle") backend.slot = false;
+    });
+  }
+
+  // Starts an idle backend for a call; concurrent calls share one start.
+  #wake(backend) {
+    backend.waking ??= this.#startIdle(backend).finally(() => {
+      backend.waking = null;
+    });
+    return backend.waking;
+  }
+
+  async #startIdle(backend) {
+    const { name, owner } = backend;
+    await backend.retired;
+    let pool;
+    try {
+      pool = await this.pool();
+    } catch {
+      throw new RpcRefusal(`backend '${name}' is idle and the MCP bridge cannot start it now`);
+    }
+    if (backend.stopped || backend.status !== "idle") return;
+    if (this.#slotsHeld() + 1 > capacity(pool)) {
+      throw new RpcRefusal(`backend '${name}' is idle and the MCP bridge has no free slot to start it`);
+    }
+    backend.slot = true;
+    const ready = new Promise((resolve, reject) => backend.readyWaiters.push({ resolve, reject }));
+    this.#log.log(`[owner ${backend.label}] starting for a call`);
+    this.#spawn(backend);
+    const started = await withTimeout(
+      ready.then(() => true, () => false),
+      this.#options.spawnTimeoutMs + this.#options.initTimeoutMs,
+    );
+    if (!started) {
+      throw new RpcRefusal(mask(`backend '${name}' did not start: ${backend.error || backend.status}`, owner.secrets));
+    }
+  }
+
+  #failReady(backend) {
+    for (const { reject } of backend.readyWaiters.splice(0)) reject(new Error("backend did not start"));
+  }
+
   // Retires the backend's processes: SIGTERM, the grace period, then SIGKILL
   // for every process of its uid. Settles once the spawner reports the uid
   // retired, or after a bound if it never does.
@@ -708,9 +793,10 @@ export class Owners {
     backend.restartTimer = null;
     backend.tools = [];
     this.#failPending(backend, new Error("backend stopped"));
+    this.#failReady(backend);
     backend.settle();
     const proc = backend.proc;
-    if (!proc) return Promise.resolve();
+    if (!proc) return backend.retired ?? Promise.resolve();
     const { stopGraceMs, releaseTimeoutMs } = this.#options;
     return withTimeout(proc.release(stopGraceMs), stopGraceMs + releaseTimeoutMs);
   }

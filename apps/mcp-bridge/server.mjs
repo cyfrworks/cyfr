@@ -45,7 +45,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes, randomUUID } from "node:crypto";
 import * as auth from "./auth.mjs";
-import { MAX_LEASE_MS, Owners, Refusal, RpcRefusal, validateBackends } from "./owners.mjs";
+import { MAX_IDLE_MS, MAX_LEASE_MS, Owners, Refusal, RpcRefusal, validateBackends } from "./owners.mjs";
 import { SpawnerClient } from "./spawn-client.mjs";
 
 // Single source for the bridge version: package.json.
@@ -118,8 +118,8 @@ function ownerRefs(value, options) {
   return value.map((entry) => ownerRef(entry, options));
 }
 
-function leaseMs(value) {
-  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_LEASE_MS) throw new Refusal("bad_request", 400);
+function milliseconds(value, max) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Refusal("bad_request", 400);
   return value;
 }
 
@@ -325,7 +325,8 @@ export function createBridge({
         const { athanor, server } = ownerRef(message.owner, { epoch: false });
         const e = message.e;
         if (!positiveInteger(e) || typeof message.sealed !== "string") throw new Refusal("bad_request", 400);
-        const lease = leaseMs(message.lease_ms);
+        const leaseMs = milliseconds(message.lease_ms, MAX_LEASE_MS);
+        const idleMs = milliseconds(message.idle_ms, MAX_IDLE_MS);
         const backends = validateBackends(message.backends);
         const openEnv = () => {
           const plaintext = auth.open(sealKey, { athanor, server, generation: g, epoch: e }, boot, message.sealed);
@@ -336,10 +337,10 @@ export function createBridge({
             throw new Refusal("bad_request", 400);
           }
         };
-        return owners.sync({ athanor, server, g, e, leaseMs: lease, backends, openEnv });
+        return owners.sync({ athanor, server, g, e, leaseMs, idleMs, backends, openEnv });
       }
       case "renew":
-        return owners.renew(ownerRefs(message.owners, { epoch: true }), g, leaseMs(message.lease_ms));
+        return owners.renew(ownerRefs(message.owners, { epoch: true }), g, milliseconds(message.lease_ms, MAX_LEASE_MS));
       case "release":
         return owners.release(ownerRefs(message.owners, { epoch: true }), g);
       case "status":

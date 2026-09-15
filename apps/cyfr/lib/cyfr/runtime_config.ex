@@ -49,6 +49,32 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
+  Read a duration in whole milliseconds from the environment, within `range`.
+
+  Unset or blank values answer `{:ok, nil}`, so the setting keeps its
+  default. Anything but a decimal integer inside `range` — a unit suffix,
+  a fraction, a sign — returns `{:error, message}`.
+  """
+  @spec milliseconds(getenv, String.t(), Range.t()) ::
+          {:ok, pos_integer() | nil} | {:error, String.t()}
+  def milliseconds(getenv, key, first..last//1 = range) when is_function(getenv, 1) do
+    text = getenv.(key) |> to_string() |> String.trim()
+
+    cond do
+      text == "" ->
+        {:ok, nil}
+
+      Regex.match?(~r/\A[0-9]{1,12}\z/, text) and String.to_integer(text) in range ->
+        {:ok, String.to_integer(text)}
+
+      true ->
+        {:error,
+         "#{key}=#{inspect(getenv.(key))} must be a whole number of milliseconds " <>
+           "from #{first} to #{last}."}
+    end
+  end
+
+  @doc """
   Resolve the auth provider module from the environment.
 
   - unset `CYFR_AUTH_PROVIDER` → auto-detect: GitHub/Google client present ⇒

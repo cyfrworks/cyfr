@@ -437,6 +437,7 @@ defmodule Emissary.MCP.BridgeTest do
              "owner" => %{"athanor" => athanor, "server" => server},
              "e" => 1,
              "lease_ms" => 30_000,
+             "idle_ms" => 900_000,
              "backends" => [%{"name" => "github", "env_names" => ["GITHUB_TOKEN"]}]
            } = sync
 
@@ -648,18 +649,26 @@ defmodule Emissary.MCP.BridgeTest do
     end
   end
 
-  test "the configured lease is what a sync and a renewal ask for, renewed every third of it",
+  test "the configured lease and idle period are what a sync asks for, renewed every third of the lease",
        %{ctx: ctx, fake: fake} do
     Application.put_env(:cyfr, :mcp_bridge_lease_ms, 6_000)
-    on_exit(fn -> Application.delete_env(:cyfr, :mcp_bridge_lease_ms) end)
+    Application.put_env(:cyfr, :mcp_bridge_idle_ms, 120_000)
+
+    on_exit(fn ->
+      Application.delete_env(:cyfr, :mcp_bridge_lease_ms)
+      Application.delete_env(:cyfr, :mcp_bridge_idle_ms)
+    end)
 
     bridge = start_supervised!({Bridge, url: fake.url, root: @root})
-    assert %{lease_ms: 6_000, tick_ms: 2_000} = :sys.get_state(bridge)
+    assert %{lease_ms: 6_000, idle_ms: 120_000, tick_ms: 2_000} = :sys.get_state(bridge)
     assert_receive {:control, "hello", _hello, _fields}, 2_000
 
     vault_entry(ctx)
     connect(ctx, stdio_row(ctx, "leased"))
-    assert_receive {:control, "sync", %{"lease_ms" => 6_000}, _fields}, 2_000
+
+    assert_receive {:control, "sync", %{"lease_ms" => 6_000, "idle_ms" => 120_000}, _fields},
+                   2_000
+
     tick(bridge)
     assert_receive {:control, "renew", %{"lease_ms" => 6_000}, _fields}, 2_000
   end

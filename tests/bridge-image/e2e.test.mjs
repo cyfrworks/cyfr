@@ -392,6 +392,7 @@ test("a sync held back across a bridge restart is refused as stale_boot, and cyf
     owner: { athanor: owner.athanor, server: owner.server },
     e: epoch,
     lease_ms: LEASE_MS,
+    idle_ms: 900_000,
     backends: [{ name: "probe", command: PROBE, env_names: ["PROBE_SECRET"] }],
     sealed,
   });

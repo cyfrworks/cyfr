@@ -142,14 +142,27 @@ if config_env() != :test do
     # this server, in milliseconds: 1000 to 60000, default 30000. Every sync
     # and renewal asks for this lease and renewals go out every third of it,
     # so backends whose server crashed, lost the control plane or cannot
-    # reach the bridge are retired within one lease. A value outside the
-    # range refuses the boot.
-    if lease_ms = env_int.("CYFR_MCP_BRIDGE_LEASE_MS", nil) do
-      unless lease_ms in 1_000..60_000 do
-        raise "[Cyfr] FATAL: CYFR_MCP_BRIDGE_LEASE_MS must be between 1000 and 60000 (milliseconds)"
+    # reach the bridge are retired within one lease. Anything but a whole
+    # number in the range refuses the boot.
+    mcp_bridge_ms = fn key, range ->
+      case Cyfr.RuntimeConfig.milliseconds(getenv, key, range) do
+        {:ok, ms} -> ms
+        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
       end
+    end
 
+    if lease_ms = mcp_bridge_ms.("CYFR_MCP_BRIDGE_LEASE_MS", 1_000..60_000) do
       config :cyfr, :mcp_bridge_lease_ms, lease_ms
+    end
+
+    # How long the bridge keeps a stdio backend running with no tool call to
+    # it, in milliseconds: 1000 to 86400000, default 900000 (15 minutes).
+    # An idle backend's processes are retired and its pool slot freed; its
+    # tools stay listed, and the next call to it starts it again, which for
+    # an `npx -y` package means downloading it again. Anything but a whole
+    # number in the range refuses the boot.
+    if idle_ms = mcp_bridge_ms.("CYFR_MCP_BRIDGE_IDLE_MS", 1_000..86_400_000) do
+      config :cyfr, :mcp_bridge_idle_ms, idle_ms
     end
 
     # Device label attached to registry credentials (unset = hostname).

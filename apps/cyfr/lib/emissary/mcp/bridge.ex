@@ -48,6 +48,10 @@ defmodule Emissary.MCP.Bridge do
       the bridge acknowledges it or a later sync of the owner supersedes it;
     * `status` for `mcp_servers.get`.
 
+  Every sync asks the bridge to retire a backend that has had no call for
+  the idle period (`:mcp_bridge_idle_ms`, `CYFR_MCP_BRIDGE_IDLE_MS`: 15
+  minutes unless set) and to start it again for its next call.
+
   Nothing is sent while this boot does not own the control plane
   (`Cyfr.ControlPlane.owner?/0`): `sync/1` refuses and leases lapse on the
   bridge.
@@ -78,6 +82,7 @@ defmodule Emissary.MCP.Bridge do
   alias Emissary.MCP.VaultRef
 
   @default_lease_ms 30_000
+  @default_idle_ms 900_000
   @control_timeout_ms 10_000
   # How long a sync's caller waits, after the bridge admitted the owner, for
   # its backends to be ready or failed.
@@ -117,6 +122,7 @@ defmodule Emissary.MCP.Bridge do
       :inflight,
       :poll_timer,
       lease_ms: 30_000,
+      idle_ms: 900_000,
       tick_ms: 10_000,
       ready_wait_ms: 15_000,
       owners: %{},
@@ -138,9 +144,10 @@ defmodule Emissary.MCP.Bridge do
   `:url` and `:root` options), and while `:cluster` is on: a cluster of
   control planes runs no stdio servers. `:lease_ms` sets the lease each
   sync and renewal asks for (default `:mcp_bridge_lease_ms`, else 30 s),
-  `:tick_ms` the renewal cadence (default a third of the lease) and
-  `:ready_wait_ms` how long a sync's caller waits for its backends (default
-  15 s).
+  `:idle_ms` the idle period each sync asks for (default
+  `:mcp_bridge_idle_ms`, else 15 minutes), `:tick_ms` the renewal cadence
+  (default a third of the lease) and `:ready_wait_ms` how long a sync's
+  caller waits for its backends (default 15 s).
   """
   def start_link(opts \\ []) do
     url = Keyword.get(opts, :url, Application.get_env(:cyfr, :mcp_bridge_url))
@@ -238,6 +245,12 @@ defmodule Emissary.MCP.Bridge do
       seal_key: BridgeAuth.seal_key(root),
       cyfr_boot: Cyfr.Boot.id(),
       lease_ms: lease_ms,
+      idle_ms:
+        Keyword.get(
+          opts,
+          :idle_ms,
+          Application.get_env(:cyfr, :mcp_bridge_idle_ms, @default_idle_ms)
+        ),
       tick_ms: Keyword.get(opts, :tick_ms, div(lease_ms, 3)),
       ready_wait_ms: Keyword.get(opts, :ready_wait_ms, @ready_wait_ms)
     }
@@ -768,6 +781,7 @@ defmodule Emissary.MCP.Bridge do
             server_id: server_id,
             epoch: entry.epoch,
             seal_key: state.seal_key,
+            idle_ms: state.idle_ms,
             share: share(state),
             athanor_backends: athanor_backends(state, key)
           })
@@ -839,6 +853,7 @@ defmodule Emissary.MCP.Bridge do
         "owner" => %{"athanor" => spec.athanor_id, "server" => spec.server_id},
         "e" => spec.epoch,
         "lease_ms" => spec.lease_ms,
+        "idle_ms" => spec.idle_ms,
         "backends" => Enum.map(backends, &definition/1),
         "sealed" => sealed
       }

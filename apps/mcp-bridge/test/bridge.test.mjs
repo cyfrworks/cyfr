@@ -7,8 +7,9 @@
 // messages are applied in order and answered without waiting on a backend;
 // an owner runs exactly the backends its sync defined, at exactly its
 // version, while its lease lives, and reports when they are ready; each
-// owner sees only its own backends; what leaves the bridge is masked; and
-// stdio framing, crashes and release behave through the spawner.
+// owner sees only its own backends; an idle backend is retired and started
+// again by its next call; what leaves the bridge is masked; and stdio
+// framing, crashes and release behave through the spawner.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -225,6 +226,10 @@ test("a control message with an unknown type or invalid fields is refused as a b
     const answer = await c.sync({ ...owner, backends });
     assert.deepEqual([answer.status, answer.body], [400, { error: "bad_request" }], JSON.stringify(backends));
   }
+  for (const idleMs of [0, 24 * 60 * 60_000 + 1, 1.5, undefined]) {
+    const answer = await c.control({ type: "sync", owner: { athanor: owner.athanor, server: owner.server }, e: 1, lease_ms: 30_000, idle_ms: idleMs, backends: [], sealed: "x" });
+    assert.deepEqual([answer.status, answer.body], [400, { error: "bad_request" }], String(idleMs));
+  }
 
   // An environment sealed for another lifetime, another epoch or another owner does not open.
   const env = Buffer.from(JSON.stringify({ b: {} }));
@@ -248,6 +253,7 @@ test("a sync's environment must name exactly its backends and their variables", 
     owner: { athanor: owner.athanor, server: owner.server },
     e: 1,
     lease_ms: 30_000,
+    idle_ms: 60_000,
   };
   const seal = (env) =>
     auth.seal(
@@ -650,6 +656,71 @@ test("release retires an owner at or below the version named; reconcile retires 
     await stopBridge({ instance, server });
   }
   await c.release([two]);
+});
+
+// ============================================================================
+// Idle backends
+// ============================================================================
+
+test("a backend with no call for its idle period is retired, keeps its tools listed, and starts again for its next call", async () => {
+  const { instance, server, controller, spawner } = await startBridge({ leaseCheckMs: 20 });
+  try {
+    const owner = newOwner();
+    await synced(owner, [backend("well-behaved", {}, "sleepy"), backend("well-behaved", {}, "busy")], { controller, idleMs: 400 });
+    const first = spawner.spawns.at(-2).proc;
+
+    // One backend called often enough stays; the other is retired.
+    const idle = await eventually(async () => {
+      assert.equal(await ping(controller, owner, "busy__ping"), "pong");
+      const [entry] = (await controller.status([owner])).body.owners;
+      return entry.backends.find((b) => b.name === "sleepy").status === "idle" ? entry : null;
+    }, "the uncalled backend to be retired");
+    assert.equal(idle.backends.find((b) => b.name === "busy").status, "ready");
+    await eventually(() => first.released, "the idle backend's spawn to be released");
+    assert.equal(spawner.live(), 1);
+
+    const listed = await controller.invoke(owner, "tools/list");
+    assert.deepEqual(listed.body.result.tools.map((t) => t.name), ["sleepy__ping", "busy__ping"]);
+
+    const spawns = spawner.spawns.length;
+    assert.equal(await ping(controller, owner, "sleepy__ping"), "pong");
+    assert.equal(spawner.spawns.length, spawns + 1);
+    const [after] = (await controller.status([owner])).body.owners;
+    assert.deepEqual(after.backends.map(({ name, status, restarts }) => ({ name, status, restarts })), [
+      { name: "sleepy", status: "ready", restarts: 0 },
+      { name: "busy", status: "ready", restarts: 0 },
+    ]);
+    await controller.release([owner]);
+  } finally {
+    await stopBridge({ instance, server });
+  }
+});
+
+test("an idle backend's slot is free for other owners, and its next call is refused while the pool is full", async () => {
+  const spawner = new FakeSpawner({ capacity: 1 });
+  const { instance, server, controller } = await startBridge({ spawner, leaseCheckMs: 20 });
+  try {
+    const sleeper = newOwner();
+    await synced(sleeper, [backend("well-behaved")], { controller, idleMs: 200 });
+    await eventually(async () => {
+      const [entry] = (await controller.status([sleeper])).body.owners;
+      return entry.backends[0].status === "idle" && spawner.live() === 0;
+    }, "the backend to be retired as idle");
+
+    const taker = newOwner();
+    await synced(taker, [backend("well-behaved")], { controller });
+
+    const refused = await controller.invoke(sleeper, "tools/call", { name: "b__ping", arguments: {} });
+    assert.equal(refused.body.result.isError, true);
+    assert.match(refused.body.result.content[0].text, /no free slot/);
+
+    await controller.release([taker]);
+    await eventually(() => spawner.live() === 0, "the taker's spawn to be released");
+    assert.equal(await ping(controller, sleeper), "pong");
+    await controller.release([sleeper]);
+  } finally {
+    await stopBridge({ instance, server });
+  }
 });
 
 // ============================================================================

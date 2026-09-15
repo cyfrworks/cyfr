@@ -13,6 +13,9 @@ import * as auth from "../../apps/mcp-bridge/auth.mjs";
 
 export const PROTOCOL_VERSION = "2026-07-28";
 
+// What CYFR asks for unless CYFR_MCP_BRIDGE_IDLE_MS says otherwise.
+export const IDLE_MS = 15 * 60_000;
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class Controller {
@@ -59,7 +62,7 @@ export class Controller {
   }
 
   /** Syncs an owner: `backends` are `[{name, command, env}]`, sealed here. */
-  sync({ athanor, server, e, leaseMs = 30_000, backends, sealed }, options = {}) {
+  sync({ athanor, server, e, leaseMs = 30_000, idleMs = IDLE_MS, backends, sealed }, options = {}) {
     const generation = options.generation ?? this.generation;
     const env = Object.fromEntries(backends.map((b) => [b.name, b.env || {}]));
     const seal =
@@ -77,6 +80,7 @@ export class Controller {
         owner: { athanor, server },
         e,
         lease_ms: leaseMs,
+        idle_ms: idleMs,
         backends: backends.map((b) => ({ name: b.name, command: b.command, env_names: Object.keys(b.env || {}) })),
         sealed: seal,
       },
