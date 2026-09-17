@@ -21,7 +21,7 @@ defmodule Cyfr.WorkerProtocolTest do
     assert Enum.sort(HostAPI.callbacks()) == behaviour_callbacks(HostAPI)
 
     for callback <- HostAPI.callbacks() do
-      assert HostAPI.retry(callback) in [:idempotent, :outcome, :batch, :never]
+      assert HostAPI.retry(callback) in [:idempotent, :outcome, :batch, :keyed, :never]
       assert HostAPI.request_timeout_ms(callback) == WorkerAuth.window_ms()
     end
 
@@ -37,10 +37,22 @@ defmodule Cyfr.WorkerProtocolTest do
     assert HostAPI.retry(:complete) == :outcome
     assert HostAPI.retry(:fail) == :outcome
     assert HostAPI.retry(:push_deltas) == :batch
+    assert HostAPI.retry(:admit_child) == :keyed
 
-    for effect <- [:admit_child, :tool_call, :storage, :oauth_token, :take_rate, :record_denial] do
+    for effect <- [:tool_call, :storage, :oauth_token, :take_rate, :record_denial] do
       assert HostAPI.retry(effect) == :never
     end
+  end
+
+  test "a child key is unpadded base64url text of 1 to 128 characters" do
+    assert HostAPI.valid_child_key?("c")
+    assert HostAPI.valid_child_key?("ck_" <> String.duplicate("A9-_", 31) <> "z")
+    refute HostAPI.valid_child_key?("")
+    refute HostAPI.valid_child_key?(String.duplicate("a", 129))
+    refute HostAPI.valid_child_key?("with space")
+    refute HostAPI.valid_child_key?("ck=")
+    refute HostAPI.valid_child_key?(nil)
+    refute HostAPI.valid_child_key?(:atom)
   end
 
   test "every worker callback has a retry class and a timeout" do

@@ -385,6 +385,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :output, :text
       add :host_policy, :text
       add :parent_execution_id, :string
+      # The key the parent's runner minted for this child before asking for
+      # its admission, so a lost `admit_child` answer is retried with the
+      # same key and answered with this row. Null for a root.
+      add :child_key, :string
       add :resolver_digest, :string
       add :athanor_id, :string, null: false
       add :activation_digest, :string
@@ -404,6 +408,9 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create unique_index(:executions, [:id, :athanor_id])
+    # One child per key under a parent: two identical admissions race here,
+    # and the loser is answered with the winner's row.
+    create unique_index(:executions, [:athanor_id, :parent_execution_id, :child_key])
     create index(:executions, [:started_at])
     create index(:executions, [:user_id])
     create index(:executions, [:status])

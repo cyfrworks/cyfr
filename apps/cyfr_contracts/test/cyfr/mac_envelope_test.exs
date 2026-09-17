@@ -209,6 +209,33 @@ defmodule Cyfr.MacEnvelopeTest do
       refute MacEnvelope.verify(%{@envelope | kind: "pong"}, @key, message, mac, @body)
       refute MacEnvelope.verify(%{@envelope | prefix: "cyfr-other/v1"}, @key, message, mac, @body)
     end
+
+    test "a header naming its body verifies before the body is read, and the body after" do
+      envelope = %{@envelope | body_hash_in_header: true}
+      {:ok, header} = MacEnvelope.header(envelope, @key, @message, @body)
+      {:ok, message, mac} = MacEnvelope.parse(envelope, header)
+
+      assert MacEnvelope.verify_header(envelope, @key, message, mac)
+      assert MacEnvelope.verify_body(envelope, message, @body)
+      refute MacEnvelope.verify_body(envelope, message, ~s({"a":2}))
+
+      # The pair answers what the one-step verifier answers.
+      refute MacEnvelope.verify_header(envelope, String.duplicate("j", 32), message, mac)
+      refute MacEnvelope.verify_header(envelope, @key, %{message | gen: 4}, mac)
+      refute MacEnvelope.verify_header(envelope, @key, message, "short")
+      refute MacEnvelope.verify_header(%{envelope | kind: "pong"}, @key, message, mac)
+
+      # A header claiming another body's hash has another MAC.
+      other = Cyfr.Digest.sha256_hex(~s({"a":2}))
+      refute MacEnvelope.verify_header(envelope, @key, %{message | body_hash: other}, mac)
+      refute MacEnvelope.verify_header(envelope, @key, Map.delete(message, :body_hash), mac)
+      refute MacEnvelope.verify_header(envelope, @key, %{message | body_hash: "xyz"}, mac)
+
+      # An envelope that names no body cannot be verified without it.
+      {:ok, plain_message, plain_mac} = MacEnvelope.parse(@envelope, header!())
+      refute MacEnvelope.verify_header(@envelope, @key, plain_message, plain_mac)
+      refute MacEnvelope.verify_body(@envelope, plain_message, @body)
+    end
   end
 
   describe "derive" do

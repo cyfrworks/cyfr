@@ -189,6 +189,111 @@ defmodule Arca.ExecutionTest do
     end
   end
 
+  describe "child_by_key/3" do
+    defp start!(attrs) do
+      {:ok, row} =
+        Execution.record_start(
+          Map.merge(
+            %{
+              reference: "catalyst:local.child:1.0.0",
+              user_id: "user_test",
+              athanor_id: @athanor,
+              started_at: DateTime.utc_now(),
+              status: "running",
+              component_type: "catalyst"
+            },
+            attrs
+          )
+        )
+
+      row
+    end
+
+    test "answers the child admitted under a key for its parent, in the caller's athanor" do
+      Sanctum.TestContext.athanor!()
+      ctx = Sanctum.TestContext.local()
+      parent = start!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
+
+      child =
+        start!(%{
+          id: "exec_c_#{System.unique_integer([:positive])}",
+          parent_execution_id: parent.id,
+          child_key: "ck_one"
+        })
+
+      assert {:ok, %Execution{id: id}} = Execution.child_by_key(ctx, parent.id, "ck_one")
+      assert id == child.id
+      assert :none = Execution.child_by_key(ctx, parent.id, "ck_two")
+      assert :none = Execution.child_by_key(ctx, child.id, "ck_one")
+
+      other = %{ctx | athanor_id: "ath_other"}
+      assert :none = Execution.child_by_key(other, parent.id, "ck_one")
+    end
+
+    test "one key admits one child per parent; the same key elsewhere is another child" do
+      parent = start!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
+      sibling = start!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
+
+      _first =
+        start!(%{
+          id: "exec_c_#{System.unique_integer([:positive])}",
+          parent_execution_id: parent.id,
+          child_key: "ck_dup"
+        })
+
+      assert {:error, :duplicate_child_key} =
+               Execution.record_start(%{
+                 id: "exec_c_#{System.unique_integer([:positive])}",
+                 reference: "catalyst:local.child:1.0.0",
+                 user_id: "user_test",
+                 athanor_id: @athanor,
+                 started_at: DateTime.utc_now(),
+                 status: "running",
+                 component_type: "catalyst",
+                 parent_execution_id: parent.id,
+                 child_key: "ck_dup"
+               })
+
+      assert %Execution{} =
+               start!(%{
+                 id: "exec_c_#{System.unique_integer([:positive])}",
+                 parent_execution_id: sibling.id,
+                 child_key: "ck_dup"
+               })
+
+      # Roots carry no key, and two of them never collide.
+      assert %Execution{child_key: nil} =
+               start!(%{id: "exec_r_#{System.unique_integer([:positive])}"})
+
+      assert %Execution{child_key: nil} =
+               start!(%{id: "exec_r_#{System.unique_integer([:positive])}"})
+    end
+
+    test "a malformed key, or a key without a parent, is refused before any write" do
+      base = %{
+        id: "exec_c_#{System.unique_integer([:positive])}",
+        reference: "catalyst:local.child:1.0.0",
+        user_id: "user_test",
+        athanor_id: @athanor,
+        started_at: DateTime.utc_now(),
+        status: "running",
+        component_type: "catalyst"
+      }
+
+      assert {:error, %Ecto.Changeset{errors: errors}} =
+               Execution.record_start(
+                 Map.merge(base, %{parent_execution_id: "exec_p", child_key: "no key"})
+               )
+
+      assert Keyword.has_key?(errors, :child_key)
+
+      assert {:error, %Ecto.Changeset{errors: errors}} =
+               Execution.record_start(Map.put(base, :child_key, "ck_orphan"))
+
+      assert Keyword.has_key?(errors, :parent_execution_id)
+    end
+  end
+
   describe "list_running_children/1" do
     test "returns children with running status" do
       parent_id = "exec_parent_#{System.unique_integer([:positive])}"

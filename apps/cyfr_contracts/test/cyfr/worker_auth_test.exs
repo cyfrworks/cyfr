@@ -290,7 +290,7 @@ defmodule Cyfr.WorkerAuthTest do
       header = call_header!(call)
 
       assert header =~
-               ~r/\Av1 kind=call athanor_id=ath_\S+ execution_id=\S+ attempt=\S+ fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_4f3c2a1e ts=1789305249602 nonce=n_7d3e9a mac=\S+\z/
+               ~r/\Av1 kind=call athanor_id=ath_\S+ execution_id=\S+ attempt=\S+ fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_4f3c2a1e ts=1789305249602 nonce=n_7d3e9a body=[0-9a-f]{64} mac=\S+\z/
 
       assert {:ok, ^call} = verify(header)
     end
@@ -530,6 +530,63 @@ defmodule Cyfr.WorkerAuthTest do
 
       readdressed = String.replace(request, "service=#{@service}", "service=wrk_2")
       assert {:error, :bad_mac} = WorkerAuth.verify_request(key, readdressed, @body, @now)
+    end
+  end
+
+  describe "header-first verification" do
+    test "a host call's header names its body and verifies before the body is read" do
+      call = call()
+      header = call_header!(call)
+      hash = Cyfr.Digest.sha256_hex(@body)
+
+      assert header =~ " body=#{hash} mac="
+      assert {:ok, ^call, ^hash} = WorkerAuth.verify_host_call_header(@root, header, @now, 7)
+      assert :ok = WorkerAuth.verify_body(hash, @body)
+      assert {:error, :bad_mac} = WorkerAuth.verify_body(hash, "{}")
+      assert {:ok, ^call} = verify(header)
+      assert {:error, :bad_mac} = verify(header, body: "{}")
+    end
+
+    test "refuses what the one-step verifier refuses, in the same order" do
+      call = call()
+      header = call_header!(call)
+
+      assert {:error, :malformed} = WorkerAuth.verify_host_call_header(@root, "v1", @now, 7)
+
+      assert {:error, :outside_window} =
+               WorkerAuth.verify_host_call_header(@root, header, @now + 30_001, 7)
+
+      forged = String.replace(header, "runner=run_4f3c2a1e", "runner=run_other")
+      assert {:error, :bad_mac} = WorkerAuth.verify_host_call_header(@root, forged, @now, 7)
+
+      other_body =
+        String.replace(header, Cyfr.Digest.sha256_hex(@body), String.duplicate("0", 64))
+
+      assert {:error, :bad_mac} = WorkerAuth.verify_host_call_header(@root, other_body, @now, 7)
+
+      assert {:error, :generation_mismatch} =
+               WorkerAuth.verify_host_call_header(@root, header, @now, 8)
+    end
+
+    test "a request and a report verify header-first under their own keys" do
+      dispatch = %{service: @service, boot: @boot, ts: @now, nonce: "n_1"}
+      key = WorkerAuth.dispatch_key(worker_key!())
+      hash = Cyfr.Digest.sha256_hex(@body)
+      {:ok, request} = WorkerAuth.request_header(key, dispatch, @body)
+      {:ok, report} = WorkerAuth.report_header(key, dispatch, @body)
+
+      assert {:ok, ^dispatch, ^hash} = WorkerAuth.verify_request_header(key, request, @now)
+      assert {:ok, ^dispatch, ^hash} = WorkerAuth.verify_report_header(@root, report, @now)
+      assert {:error, :malformed} = WorkerAuth.verify_request_header(key, report, @now)
+      assert {:error, :malformed} = WorkerAuth.verify_report_header(@root, request, @now)
+
+      theirs = WorkerAuth.dispatch_key(worker_key!("wrk_other"))
+      {:ok, as_mine} = WorkerAuth.report_header(theirs, dispatch, @body)
+      assert {:error, :bad_mac} = WorkerAuth.verify_report_header(@root, as_mine, @now)
+      assert {:error, :bad_mac} = WorkerAuth.verify_request_header(theirs, request, @now)
+
+      assert {:error, :outside_window} =
+               WorkerAuth.verify_request_header(key, request, @now - 30_001)
     end
   end
 

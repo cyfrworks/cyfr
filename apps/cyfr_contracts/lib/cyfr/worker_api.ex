@@ -44,6 +44,18 @@ defmodule Cyfr.WorkerAPI do
     do: Map.fetch!(@timeouts, callback)
 
   @typedoc """
+  Where CYFR reaches one worker service: its configured service id and
+  the base URL of its listener (`Cyfr.WorkerWire`), with the name-level
+  component references it alone runs, or `nil` when it runs any. Every
+  entry of CYFR's static worker list is one of these.
+  """
+  @type endpoint :: %{
+          id: String.t(),
+          url: String.t(),
+          components: [String.t()] | nil
+        }
+
+  @typedoc """
   A worker service's state: its configured service id; its boot id, which
   changes on every start; its runners, by whether they are fresh, idle or
   busy; and the attempts its runners have claimed.

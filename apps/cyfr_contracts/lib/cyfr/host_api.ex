@@ -49,11 +49,25 @@ defmodule Cyfr.HostAPI do
       recorded, never a second one.
     * `:batch` — one batch is in flight at a time; send the same batch
       again, and acknowledgements name what was already accepted.
+    * `:keyed` — call again with the same caller-chosen key; CYFR answers
+      the admission it already recorded under that key, never a second
+      one.
     * `:never` — do not call again: the effect may have happened, and a
       repeat could act twice. The work ends `uncertain` unless the catalog
       declares the operation replay-safe.
   """
-  @type retry :: :idempotent | :outcome | :batch | :never
+  @type retry :: :idempotent | :outcome | :batch | :keyed | :never
+
+  @typedoc """
+  The key a runner mints for a child before it asks CYFR to admit it:
+  1 to 128 characters of unpadded base64url text, unique within the
+  parent attempt (`valid_child_key?/1`). A lost `admit_child` answer is
+  retried with the same key, and CYFR answers the child it already
+  admitted under it.
+  """
+  @type child_key :: String.t()
+
+  @child_key ~r/\A[A-Za-z0-9_-]{1,128}\z/
 
   @callbacks [
     :attach,
@@ -82,7 +96,7 @@ defmodule Cyfr.HostAPI do
     take_rate: :never,
     fetch_artifact: :idempotent,
     storage: :never,
-    admit_child: :never,
+    admit_child: :keyed,
     tool_call: :never,
     record_denial: :never,
     release_child: :idempotent,
@@ -93,13 +107,14 @@ defmodule Cyfr.HostAPI do
   @spec callbacks() :: [atom()]
   def callbacks, do: @callbacks
 
-  @doc """
-  What a client may do when `callback`'s answer is lost (`t:retry/0`).
-  `admit_child` is `:never` until the wire carries a caller-chosen child
-  key CYFR can answer an existing admission for.
-  """
+  @doc "What a client may do when `callback`'s answer is lost (`t:retry/0`)."
   @spec retry(atom()) :: retry()
   def retry(callback) when is_map_key(@retries, callback), do: Map.fetch!(@retries, callback)
+
+  @doc "Whether `key` is a well-formed `t:child_key/0`."
+  @spec valid_child_key?(term()) :: boolean()
+  def valid_child_key?(key) when is_binary(key), do: Regex.match?(@child_key, key)
+  def valid_child_key?(_key), do: false
 
   @doc """
   How long a client waits for `callback`'s answer, in milliseconds, before
@@ -265,13 +280,20 @@ defmodule Cyfr.HostAPI do
   secrets. The child runs in the caller's runner, which closes its attempt;
   what the child holds goes back at its terminal write. The caller's
   attempt must be live: no cancel asked of it and its execution running.
+
+  `child_key` is the runner's key for this child (`t:child_key/0`). A
+  repeat under the caller's attempt with the same key answers the child
+  already admitted under it, with the same assignment and sealed keys; a
+  key whose child has already ended is refused `:lost`; a malformed key
+  is refused as a guest error.
   """
   @callback admit_child(
               caller(),
               ref :: String.t(),
               need :: String.t() | nil,
               input :: map(),
-              guest_fn :: :call | :spawn
+              guest_fn :: :call | :spawn,
+              child_key()
             ) :: {:ok, child()} | {:error, refusal() | guest_error()}
 
   @doc """

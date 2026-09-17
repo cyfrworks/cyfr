@@ -69,6 +69,10 @@ defmodule Arca.Execution do
     field :output, :string
     field :host_policy, :string
     field :parent_execution_id, :string
+    # The key the parent's runner minted for this child (`Cyfr.HostAPI`
+    # `t:child_key/0`): unique under the parent, so a retried admission is
+    # answered with this row (`child_by_key/3`). Nil for a root.
+    field :child_key, :string
     field :root_execution_id, :string
     field :resolver_digest, :string
     field :activation_digest, :string
@@ -112,6 +116,7 @@ defmodule Arca.Execution do
     :input,
     :host_policy,
     :parent_execution_id,
+    :child_key,
     :root_execution_id,
     :resolver_digest,
     :activation_digest,
@@ -145,7 +150,61 @@ defmodule Arca.Execution do
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:kind, @kinds)
     |> validate_component_type()
+    |> validate_child_key()
   end
+
+  # A child key is the wire's shape and belongs to a child: a root carries
+  # none. The unique index decides the race between two admissions of one
+  # key; `duplicate_child_key/1` names its loss.
+  defp validate_child_key(changeset) do
+    case get_field(changeset, :child_key) do
+      nil ->
+        changeset
+
+      key ->
+        changeset
+        |> validate_change(:child_key, fn :child_key, _key ->
+          if Cyfr.HostAPI.valid_child_key?(key), do: [], else: [child_key: "is malformed"]
+        end)
+        |> validate_required([:parent_execution_id])
+        |> unique_constraint(:child_key,
+          name: :executions_athanor_id_parent_execution_id_child_key_index
+        )
+    end
+  end
+
+  @doc """
+  The child of `parent_execution_id` admitted under `child_key`, scoped to
+  the caller's athanor: `{:ok, row}`, or `:none` when no child carries
+  that key.
+  """
+  @spec child_by_key(Sanctum.Context.t(), String.t(), String.t()) ::
+          {:ok, struct()} | :none | {:error, :database_error}
+  def child_by_key(%Sanctum.Context{} = ctx, parent_execution_id, child_key)
+      when is_binary(parent_execution_id) and is_binary(child_key) do
+    Arca.Repo.Errors.with_db_rescue("Execution.child_by_key", fn ->
+      from(e in __MODULE__,
+        where: e.parent_execution_id == ^parent_execution_id and e.child_key == ^child_key
+      )
+      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.Repo.one()
+      |> case do
+        nil -> :none
+        row -> {:ok, row}
+      end
+    end)
+  end
+
+  # An insert that lost the child-key race answers by name, so the caller
+  # reads the winner instead of a changeset.
+  defp duplicate_child_key({:error, %Ecto.Changeset{errors: errors} = changeset}) do
+    case Keyword.get(errors, :child_key) do
+      {_message, [constraint: :unique, constraint_name: _name]} -> {:error, :duplicate_child_key}
+      _other -> {:error, changeset}
+    end
+  end
+
+  defp duplicate_child_key(other), do: other
 
   # Which component types exist is product vocabulary — sourced from the
   # canonical list rather than re-declared in the persistence layer.
@@ -178,6 +237,7 @@ defmodule Arca.Execution do
       attrs
       |> start_changeset()
       |> Arca.Repo.insert()
+      |> duplicate_child_key()
     end)
   end
 
@@ -223,7 +283,10 @@ defmodule Arca.Execution do
   Answers `{:ok, %{execution: t(), attempt: ExecutionAttempt.t()}}`; the
   execution's `event_seq` is the number of the `execution.started` event
   the transaction appended, for the caller to publish. A barrier's refusal
-  (`barrier_refusal?/1`) writes nothing.
+  (`barrier_refusal?/1`) writes nothing, and neither does a row whose
+  `child_key` another child of the same parent already carries:
+  `{:error, :duplicate_child_key}`, for the caller to answer with that
+  child (`child_by_key/3`).
   """
   @spec admit(map(), keyword()) ::
           {:ok, %{execution: struct(), attempt: struct()}} | {:error, term()}
@@ -315,6 +378,7 @@ defmodule Arca.Execution do
           attempt: attempt
         }
       end)
+      |> duplicate_child_key()
     end)
   end
 

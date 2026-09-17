@@ -20,8 +20,9 @@ defmodule Cyfr.MacEnvelope do
       `verify/5` checks its MAC in constant time. An envelope with
       `body_hash_in_header` also names the body's hex SHA-256 in the header
       (`body=<hex>`, before `mac=`), so a receiver can verify the MAC before
-      it reads the body and then check the body against that hash; `parse/2`
-      answers it as the message's `:body_hash`.
+      it reads the body (`verify_header/4`) and then check the body against
+      that hash (`verify_body/3`); `parse/2` answers it as the message's
+      `:body_hash`.
     * **A sealed value** (`seal/6`) is `base64url(iv ‖ tag ‖ ciphertext)`,
       unpadded, under AES-256-GCM, its additional data a label followed by
       field values one per line; `open/5` opens it under the same label and
@@ -93,7 +94,7 @@ defmodule Cyfr.MacEnvelope do
   def canonical(%__MODULE__{} = envelope, message, body)
       when is_map(message) and is_binary(body) do
     with {:ok, values} <- values(envelope.fields, message) do
-      {:ok, canonical_string(envelope, values, body)}
+      {:ok, canonical_string(envelope, values, Cyfr.Digest.sha256_hex(body))}
     end
   end
 
@@ -108,7 +109,7 @@ defmodule Cyfr.MacEnvelope do
           "#{header_name(envelope, name)}=#{value}"
         end)
 
-      mac = mac(key, canonical_string(envelope, values, body))
+      mac = mac(key, canonical_string(envelope, values, Cyfr.Digest.sha256_hex(body)))
 
       {:ok,
        Enum.join(
@@ -157,14 +158,55 @@ defmodule Cyfr.MacEnvelope do
       when is_binary(key) and is_map(message) and is_binary(mac) and is_binary(body) do
     case values(envelope.fields, message) do
       {:ok, values} ->
-        expected = mac(key, canonical_string(envelope, values, body))
-
-        byte_size(expected) == byte_size(mac) and :crypto.hash_equals(expected, mac) and
+        authentic?(key, canonical_string(envelope, values, Cyfr.Digest.sha256_hex(body)), mac) and
           named_body?(envelope, message, body)
 
       {:error, _} ->
         false
     end
+  end
+
+  @doc """
+  Whether `mac` is the signature, with `key`, of `message` and the body
+  whose hash the message names as `:body_hash`, compared in constant time.
+  This is the first half of verifying a message before its body is read:
+  only an envelope with `body_hash_in_header` can answer `true`, since
+  only its header names the body. `verify_body/3` is the second half. The
+  pair answers exactly what `verify/5` answers over the same header and
+  body.
+  """
+  @spec verify_header(t(), binary(), message(), String.t()) :: boolean()
+  def verify_header(%__MODULE__{body_hash_in_header: true} = envelope, key, message, mac)
+      when is_binary(key) and is_map(message) and is_binary(mac) do
+    with hash when is_binary(hash) and byte_size(hash) == 64 <- Map.get(message, :body_hash),
+         true <- Regex.match?(@body_hash, hash),
+         {:ok, values} <- values(envelope.fields, message) do
+      authentic?(key, canonical_string(envelope, values, hash), mac)
+    else
+      _ -> false
+    end
+  end
+
+  def verify_header(%__MODULE__{}, key, message, mac)
+      when is_binary(key) and is_map(message) and is_binary(mac),
+      do: false
+
+  @doc """
+  Whether `body` is the body a verified header named as the message's
+  `:body_hash`, compared in constant time. An envelope without
+  `body_hash_in_header` names no body, so nothing verifies against it.
+  """
+  @spec verify_body(t(), message(), binary()) :: boolean()
+  def verify_body(%__MODULE__{body_hash_in_header: true} = envelope, message, body)
+      when is_map(message) and is_binary(body),
+      do: named_body?(envelope, message, body)
+
+  def verify_body(%__MODULE__{}, message, body) when is_map(message) and is_binary(body),
+    do: false
+
+  defp authentic?(key, canonical, mac) do
+    expected = mac(key, canonical)
+    byte_size(expected) == byte_size(mac) and :crypto.hash_equals(expected, mac)
   end
 
   defp body_pair(%__MODULE__{body_hash_in_header: true}, body),
@@ -233,11 +275,10 @@ defmodule Cyfr.MacEnvelope do
 
   defp decrypt(_key, _aad, _sealed), do: {:error, :unsealable}
 
-  defp canonical_string(envelope, values, body) do
-    Enum.join(
-      ["#{envelope.prefix}/#{envelope.kind}" | values] ++ [Cyfr.Digest.sha256_hex(body)],
-      "\n"
-    )
+  # The canonical string ends in the body's hash, so a header that names
+  # that hash can be verified before the body it covers is read.
+  defp canonical_string(envelope, values, body_hash) do
+    Enum.join(["#{envelope.prefix}/#{envelope.kind}" | values] ++ [body_hash], "\n")
   end
 
   defp mac(key, text),

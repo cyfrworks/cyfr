@@ -75,7 +75,10 @@ defmodule Cyfr.WorkerAuth do
   request's header (`request_header/3`) and a worker service's report
   header (`report_header/3`) are signed with that worker service's
   dispatch key over its service id, its boot, the timestamp, a nonce and
-  the body; the two kinds never verify as each other.
+  the body; the two kinds never verify as each other. Every header names
+  its body's hex SHA-256 (`body=`), which is what the MAC covers in the
+  body's place, so a listener verifies the header before it reads the body
+  and refuses an unauthenticated caller without reading what it sent.
 
   ## Verifying
 
@@ -94,6 +97,12 @@ defmodule Cyfr.WorkerAuth do
   `verify_report/4` checks the first three with the dispatch key of the
   worker service the report names, derived from the root, and
   `verify_request/4` with the dispatch key a worker service holds.
+
+  `verify_host_call_header/4`, `verify_request_header/3` and
+  `verify_report_header/3` answer the same, over the header alone, with
+  the body hash the header names; `verify_body/2` then checks the body
+  read afterwards against that hash. The pair refuses exactly what the
+  one-step verifier refuses.
 
   Replay and staleness beyond that are the caller's, against state this
   module does not hold: a nonce seen before for the same attempt (or, for
@@ -118,15 +127,29 @@ defmodule Cyfr.WorkerAuth do
 
   @attempt_names Enum.map(@attempt_fields, fn {name, _type} -> Atom.to_string(name) end)
 
+  # Every worker header names its body's hash, so a listener verifies the
+  # header before it reads the body it covers (`verify_host_call_header/4`,
+  # `verify_request_header/3`, `verify_report_header/3`, then `verify_body/2`).
   @call %MacEnvelope{
     prefix: "cyfr-worker/v1",
     kind: "call",
-    fields: @attempt_fields ++ [boot: :string, runner: :string, ts: :integer, nonce: :string]
+    fields: @attempt_fields ++ [boot: :string, runner: :string, ts: :integer, nonce: :string],
+    body_hash_in_header: true
   }
 
   @dispatch_fields [service: :string, boot: :string, ts: :integer, nonce: :string]
-  @request %MacEnvelope{prefix: "cyfr-worker/v1", kind: "request", fields: @dispatch_fields}
-  @report %MacEnvelope{prefix: "cyfr-worker/v1", kind: "report", fields: @dispatch_fields}
+  @request %MacEnvelope{
+    prefix: "cyfr-worker/v1",
+    kind: "request",
+    fields: @dispatch_fields,
+    body_hash_in_header: true
+  }
+  @report %MacEnvelope{
+    prefix: "cyfr-worker/v1",
+    kind: "report",
+    fields: @dispatch_fields,
+    body_hash_in_header: true
+  }
 
   @sealed_directions %{body: "cyfr-worker/v1/call-body", answer: "cyfr-worker/v1/call-answer"}
 
@@ -177,6 +200,12 @@ defmodule Cyfr.WorkerAuth do
 
   @type dispatch_refusal :: :malformed | :outside_window | :bad_mac
   @type call_refusal :: dispatch_refusal() | :generation_mismatch
+
+  @typedoc """
+  The hex SHA-256 a verified header names as its body's, which
+  `verify_body/2` checks the body against.
+  """
+  @type body_hash :: String.t()
 
   @doc """
   The root secret `CYFR_WORKER_KEY` spells: exactly 64 hexadecimal digits,
@@ -352,8 +381,40 @@ defmodule Cyfr.WorkerAuth do
          :ok <- within_window(call.ts, now),
          :ok <- authentic(@call, derived(&attempt_call_key(root, &1), call), call, mac, body),
          :ok <- same_generation(call.generation, generation) do
-      {:ok, call}
+      {:ok, fields(call)}
     end
+  end
+
+  @doc """
+  A host call's authenticated fields and the body hash its header names,
+  verified before the body is read: the same refusals as
+  `verify_host_call/5`, in the same order, over the header alone. The
+  caller then reads the body, bounded, and checks it with `verify_body/2`;
+  together the two answer exactly what `verify_host_call/5` does.
+  """
+  @spec verify_host_call_header(binary(), term(), integer(), pos_integer()) ::
+          {:ok, host_call(), body_hash()} | {:error, call_refusal()}
+  def verify_host_call_header(root, header, now, generation)
+      when byte_size(root) == 32 and is_integer(now) and is_integer(generation) do
+    with {:ok, call, mac} <- MacEnvelope.parse(@call, header),
+         :ok <- within_window(call.ts, now),
+         :ok <- authentic_header(@call, derived(&attempt_call_key(root, &1), call), call, mac),
+         :ok <- same_generation(call.generation, generation) do
+      {:ok, fields(call), call.body_hash}
+    end
+  end
+
+  @doc """
+  Whether `body` is the one a verified header named by `body_hash`. A
+  body that is not is `{:error, :bad_mac}`: the header authenticated a
+  different body, which is what `verify_host_call/5`, `verify_request/4`
+  and `verify_report/4` answer for it.
+  """
+  @spec verify_body(body_hash(), binary()) :: :ok | {:error, :bad_mac}
+  def verify_body(body_hash, body) when is_binary(body_hash) and is_binary(body) do
+    if MacEnvelope.verify_body(@call, %{body_hash: body_hash}, body),
+      do: :ok,
+      else: {:error, :bad_mac}
   end
 
   @doc "The header for a WorkerAPI request of `body` to one worker service, signed with its dispatch key."
@@ -371,7 +432,20 @@ defmodule Cyfr.WorkerAuth do
   def verify_request(dispatch_key, header, body, now) when byte_size(dispatch_key) == 32 do
     with {:ok, fields, mac} <- dispatch_fields(@request, header, now),
          :ok <- authentic(@request, dispatch_key, fields, mac, body) do
-      {:ok, fields}
+      {:ok, fields(fields)}
+    end
+  end
+
+  @doc """
+  A WorkerAPI request's authenticated fields and the body hash its header
+  names, verified before the body is read (`verify_body/2` completes it).
+  """
+  @spec verify_request_header(binary(), term(), integer()) ::
+          {:ok, dispatch(), body_hash()} | {:error, dispatch_refusal()}
+  def verify_request_header(dispatch_key, header, now) when byte_size(dispatch_key) == 32 do
+    with {:ok, fields, mac} <- dispatch_fields(@request, header, now),
+         :ok <- authentic_header(@request, dispatch_key, fields, mac) do
+      {:ok, fields(fields), fields.body_hash}
     end
   end
 
@@ -392,7 +466,22 @@ defmodule Cyfr.WorkerAuth do
     with {:ok, fields, mac} <- dispatch_fields(@report, header, now),
          worker_key = derived(&worker_key(root, &1.service), fields),
          :ok <- authentic(@report, dispatch_key(worker_key), fields, mac, body) do
-      {:ok, fields}
+      {:ok, fields(fields)}
+    end
+  end
+
+  @doc """
+  A worker service report's authenticated fields and the body hash its
+  header names, verified before the body is read (`verify_body/2`
+  completes it).
+  """
+  @spec verify_report_header(binary(), term(), integer()) ::
+          {:ok, dispatch(), body_hash()} | {:error, dispatch_refusal()}
+  def verify_report_header(root, header, now) when byte_size(root) == 32 do
+    with {:ok, fields, mac} <- dispatch_fields(@report, header, now),
+         worker_key = derived(&worker_key(root, &1.service), fields),
+         :ok <- authentic_header(@report, dispatch_key(worker_key), fields, mac) do
+      {:ok, fields(fields), fields.body_hash}
     end
   end
 
@@ -437,6 +526,14 @@ defmodule Cyfr.WorkerAuth do
   defp authentic(envelope, key, fields, mac, body) when is_binary(body) do
     if MacEnvelope.verify(envelope, key, fields, mac, body), do: :ok, else: {:error, :bad_mac}
   end
+
+  defp authentic_header(envelope, key, fields, mac) do
+    if MacEnvelope.verify_header(envelope, key, fields, mac), do: :ok, else: {:error, :bad_mac}
+  end
+
+  # A header's authenticated fields are its message fields; the body hash
+  # it names is framing, answered beside them by the header-first verifiers.
+  defp fields(parsed), do: Map.delete(parsed, :body_hash)
 
   defp same_generation(generation, generation), do: :ok
   defp same_generation(_presented, _current), do: {:error, :generation_mismatch}
