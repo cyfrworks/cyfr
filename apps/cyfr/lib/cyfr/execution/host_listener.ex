@@ -29,18 +29,30 @@ defmodule Cyfr.Execution.HostListener do
     5. the body is at most `Cyfr.HostAPI.max_body_bytes/0`, else `413`,
        and is the one the header named (`Cyfr.WorkerAuth.verify_body/2`),
        else `401`;
-    6. the body's `op` is the route's callback, else `400`.
+    6. a host call's body opens as the `:body` of the call the header
+       names, under the attempt's seal key derived from the root
+       (`Cyfr.WorkerAuth.open_call/4`), else `401`;
+    7. the body's `op` is the route's callback, else `400`.
+
+  A host call crosses sealed: its HTTP body is
+  `Cyfr.WorkerAuth.seal_call/5` of the `{"op", "args"}` JSON in the
+  `:body` direction, the header is computed over those sealed bytes, and
+  the answer is the JSON `Cyfr.Execution.Host.call/2` produces sealed in
+  the `:answer` direction under the same call. `Host.call/2` reads the
+  JSON and verifies its header over it, so the listener hands it the
+  opened JSON under the verified fields re-signed over that JSON with the
+  attempt's call key, which CYFR derives from the root as `Host` does:
+  the fields, timestamp and nonce are the runner's, and `Host` verifies
+  the whole call again itself. A report (`runner_exited`) crosses as
+  plain JSON under its report header, and its answer is plain.
 
   Every listener refusal is `{"error": "lost"}` (`Cyfr.WorkerWire.error/2`)
   but the unknown route's `not_found`, the mismatched body's `malformed`
   and an unowned report's `unavailable`; the reason is logged, the header
-  and body never. A request that passes is handed to
-  `Cyfr.Execution.Host.call/2` or `runner_exited/2` as its header and
-  body, and its answer, the JSON `Host` produces, is sent as `200`
-  whatever it says: a refusal `Host` answers is an answer, not a transport
-  failure. `Host` verifies the whole call again itself; this listener's
-  checks are defence in depth, and keep an unauthenticated caller from
-  making CYFR read what it sent.
+  and body never. An answer, sealed or plain, is sent as `200` whatever
+  it says: a refusal `Host` answers is an answer, not a transport
+  failure. This listener's checks are defence in depth, and keep an
+  unauthenticated caller from making CYFR read what it sent.
 
   Nothing here is configured from the application environment: the
   supervisor that starts it names the bind and port (`child_spec/1`), so a
@@ -95,15 +107,11 @@ defmodule Cyfr.Execution.HostListener do
          :ok <- fresh_nonce(conn, callback, fields, now),
          {:ok, body, conn} <- bounded_body(conn),
          :ok <- verify_body(body_hash, body),
-         :ok <- names_route(callback, body) do
-      answer =
-        if callback == :runner_exited,
-          do: Host.runner_exited(header, body),
-          else: Host.call(header, body)
-
+         {:ok, call} <- open(callback, fields, header, body),
+         :ok <- names_route(callback, call.json) do
       conn
       |> put_resp_content_type("application/json")
-      |> send_resp(200, answer)
+      |> send_resp(200, answer(callback, fields, call))
     else
       {:refused, conn, status, name} -> refuse(conn, status, name)
       {:refused, status, name} -> refuse(conn, status, name)
@@ -240,6 +248,41 @@ defmodule Cyfr.Execution.HostListener do
 
         {:refused, 401, :lost}
     end
+  end
+
+  # A report crosses plain. A host call's body opens under the attempt's
+  # seal key as the `:body` of the header's call, and the opened JSON is
+  # handed to `Host` under the same verified fields, signed over it with
+  # the attempt's call key, since `Host` verifies the header over the body
+  # it reads. Both keys derive from the root and the verified fields.
+  defp open(:runner_exited, _fields, header, body), do: {:ok, %{header: header, json: body}}
+
+  defp open(callback, fields, _header, body) do
+    {:ok, seal_key} = WorkerAuth.attempt_seal_key(Keys.root(), fields)
+
+    case WorkerAuth.open_call(seal_key, :body, fields, body) do
+      {:ok, json} ->
+        {:ok, call_key} = WorkerAuth.attempt_call_key(Keys.root(), fields)
+        {:ok, header} = WorkerAuth.host_call_header(call_key, fields, json)
+        {:ok, %{header: header, json: json, seal_key: seal_key}}
+
+      {:error, :unsealable} ->
+        Logger.warning(
+          "[Cyfr.Execution.HostListener] #{callback} refused: the body does not open as the " <>
+            "header's call"
+        )
+
+        {:refused, 401, :lost}
+    end
+  end
+
+  defp answer(:runner_exited, _fields, call), do: Host.runner_exited(call.header, call.json)
+
+  defp answer(_callback, fields, call) do
+    {:ok, sealed} =
+      WorkerAuth.seal_call(call.seal_key, :answer, fields, Host.call(call.header, call.json))
+
+    sealed
   end
 
   # The route and the body name the same callback, so a body cannot be

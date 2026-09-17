@@ -9,7 +9,9 @@ defmodule Cyfr.Execution.HostListenerTest do
   the body: a wrong key, another worker service, a stale generation, a
   reused nonce, a body that is not the header's, a body over the bound, a
   boot that does not hold the control plane, and a route that is no host
-  route. Nothing refused leaves a claim, an event or a terminal row, and
+  route. A host call's body and answer cross sealed under the attempt's
+  seal key, as the call the header names; a body that does not open so is
+  refused. Nothing refused leaves a claim, an event or a terminal row, and
   the answer of a call that passes is the JSON `Host` produces.
   """
 
@@ -45,17 +47,57 @@ defmodule Cyfr.Execution.HostListenerTest do
         decode_body: false
       )
 
-    {response.status, Jason.decode!(response.body)}
+    if Keyword.get(opts, :raw, false),
+      do: {response.status, response.body},
+      else: {response.status, Jason.decode!(response.body)}
   end
 
-  # A signed host call of `op` for `fixture`, posted to `op`'s route.
-  # `opts` are `Cyfr.Test.AttemptFixtures.header/3`'s, plus `:body` to
-  # post another body than the one signed and `:path` for another route.
+  # A sealed, signed host call of `op` for `fixture`, posted to `op`'s
+  # route, its answer opened. `opts` are `Cyfr.Test.AttemptFixtures.header/3`'s
+  # header overrides, plus `:seal_key` (default the fixture's), `:sealed_as`
+  # (the header fields the body is sealed for, default the call's own),
+  # `:body` to post another body than the one signed and `:path` for
+  # another route.
   defp call(url, fixture, op, args, opts \\ []) do
-    signed = AttemptFixtures.body(op, args)
-    header = AttemptFixtures.header(fixture, signed, opts)
+    fields = fields(fixture, opts)
+    seal_key = Keyword.get(opts, :seal_key, fixture.keys.seal)
+    json = AttemptFixtures.body(op, args)
+
+    {:ok, sealed} =
+      WorkerAuth.seal_call(seal_key, :body, Keyword.get(opts, :sealed_as, fields), json)
+
+    key = Keyword.get(opts, :call_key, fixture.call_key)
+    {:ok, header} = WorkerAuth.host_call_header(key, fields, sealed)
     path = Keyword.get_lazy(opts, :path, fn -> WorkerWire.host_route(String.to_atom(op)) end)
-    post(url, path, [header], Keyword.get(opts, :body, signed))
+
+    {status, answer} = post(url, path, [header], Keyword.get(opts, :body, sealed), raw: true)
+    {status, open_answer(seal_key, fields, answer)}
+  end
+
+  # An answer opens as the `:answer` of the call it was sealed for; a
+  # listener refusal is plain JSON.
+  defp open_answer(seal_key, fields, answer) do
+    case WorkerAuth.open_call(seal_key, :answer, fields, answer) do
+      {:ok, json} -> Jason.decode!(json)
+      {:error, :unsealable} -> Jason.decode!(answer)
+    end
+  end
+
+  # A host call's header fields for `fixture`, with `opts` overriding them
+  # as `Cyfr.Test.AttemptFixtures.header/3` takes them.
+  defp fields(fixture, opts) do
+    %{
+      athanor_id: fixture.athanor_id,
+      execution_id: fixture.execution_id,
+      attempt: fixture.attempt,
+      fence: Keyword.get(opts, :fence, fixture.fence),
+      generation: Keyword.get(opts, :generation, fixture.generation),
+      service: Keyword.get(opts, :service, fixture.service),
+      boot: Keyword.get(opts, :boot, fixture.boot),
+      runner: Keyword.get(opts, :runner, fixture.runner),
+      ts: Keyword.get_lazy(opts, :ts, &now/0),
+      nonce: Keyword.get_lazy(opts, :nonce, fn -> "n_#{System.unique_integer([:positive])}" end)
+    }
   end
 
   defp attach(url, fixture, opts \\ []),
@@ -159,7 +201,11 @@ defmodule Cyfr.Execution.HostListenerTest do
       assert {200, %{"error" => "lost"}} = attach(url, fixture, boot: "boot_other")
 
       assert {200, %{"error" => "lost"}} =
-               attach(url, fixture, service: "wrk_other", call_key: other.call)
+               attach(url, fixture,
+                 service: "wrk_other",
+                 call_key: other.call,
+                 seal_key: other.seal
+               )
 
       assert claimed_by(fixture) == nil
       assert {200, %{"ok" => _}} = attach(url, fixture)
@@ -216,8 +262,10 @@ defmodule Cyfr.Execution.HostListenerTest do
     @tag :capture_log
     test "no header, or more than one", %{url: url} do
       fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
-      body = AttemptFixtures.body("attach", %{"assignment" => fixture.assignment})
-      header = AttemptFixtures.header(fixture, body)
+      fields = fields(fixture, [])
+      json = AttemptFixtures.body("attach", %{"assignment" => fixture.assignment})
+      {:ok, body} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
+      {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, body)
       path = WorkerWire.host_route(:attach)
 
       assert {401, %{"error" => "lost"}} = post(url, path, [], body)
@@ -230,28 +278,21 @@ defmodule Cyfr.Execution.HostListenerTest do
       fixture = AttemptFixtures.attached!(service_id: @service)
       :ok = Cyfr.Execution.Events.subscribe(fixture.execution_id, fixture.ctx)
 
-      body =
-        AttemptFixtures.body("push_deltas", %{
-          "deltas" => [AttemptFixtures.delta(fixture, ~s({"type":"note","text":"once"}))]
-        })
+      nonce = "n_reused"
+      delta = AttemptFixtures.delta(fixture, ~s({"type":"note","text":"once"}))
 
-      header = AttemptFixtures.header(fixture, body)
-      path = WorkerWire.host_route(:push_deltas)
-
-      assert {200, %{"ok" => [_reply]}} = post(url, path, [header], body)
+      assert {200, %{"ok" => [_reply]}} =
+               call(url, fixture, "push_deltas", %{"deltas" => [delta]}, nonce: nonce)
 
       assert capture_log(fn ->
-               assert {401, %{"error" => "lost"}} = post(url, path, [header], body)
+               assert {401, %{"error" => "lost"}} =
+                        call(url, fixture, "push_deltas", %{"deltas" => [delta]}, nonce: nonce)
              end) =~ "presented before"
 
       assert [%{type: "emit", data: %{"text" => "once"}}] = live_events()
 
-      renew_body = AttemptFixtures.body("renew", %{"attempts" => [fixture.attempt]})
-      renew_header = AttemptFixtures.header(fixture, renew_body)
-      renew_path = WorkerWire.host_route(:renew)
-
-      assert {200, %{"ok" => %{}}} = post(url, renew_path, [renew_header], renew_body)
-      assert {200, %{"ok" => %{}}} = post(url, renew_path, [renew_header], renew_body)
+      assert {200, %{"ok" => %{}}} = renew(url, fixture, nonce: nonce)
+      assert {200, %{"ok" => %{}}} = renew(url, fixture, nonce: nonce)
       assert Process.alive?(fixture.pid)
     end
 
@@ -293,6 +334,72 @@ defmodule Cyfr.Execution.HostListenerTest do
     end
   end
 
+  describe "the seal" do
+    test "a call's body opens as the header's call, and its answer is sealed for it", %{
+      url: url
+    } do
+      fixture =
+        AttemptFixtures.attached!(
+          attach: false,
+          service_id: @service,
+          vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
+        )
+
+      fields = fields(fixture, [])
+      json = AttemptFixtures.body("attach", %{"assignment" => fixture.assignment})
+      {:ok, body} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
+      {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, body)
+
+      assert {200, sealed} = post(url, WorkerWire.host_route(:attach), [header], body, raw: true)
+
+      assert {:error, :unsealable} =
+               WorkerAuth.open_call(fixture.keys.seal, :body, fields, sealed)
+
+      assert {:ok, answer} = WorkerAuth.open_call(fixture.keys.seal, :answer, fields, sealed)
+      assert %{"ok" => %{"KEY" => "sk-fixture"}} = Jason.decode!(answer)
+      refute sealed =~ "sk-fixture"
+      assert claimed_by(fixture) == fixture.runner
+    end
+
+    @tag :capture_log
+    test "a body that does not open under the attempt's seal key is refused, and nothing of it is logged",
+         %{url: url} do
+      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+
+      log =
+        capture_log(fn ->
+          assert {401, %{"error" => "lost"}} =
+                   attach(url, fixture, seal_key: :crypto.strong_rand_bytes(32))
+
+          assert {401, %{"error" => "lost"}} =
+                   post(
+                     url,
+                     WorkerWire.host_route(:attach),
+                     [AttemptFixtures.header(fixture, "not sealed at all")],
+                     "not sealed at all"
+                   )
+        end)
+
+      assert log =~ "does not open"
+      refute log =~ fixture.assignment
+      assert claimed_by(fixture) == nil
+      assert {200, %{"ok" => _}} = attach(url, fixture)
+    end
+
+    @tag :capture_log
+    test "a body sealed for another call than the header's is refused", %{url: url} do
+      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      other = fields(fixture, nonce: "n_other")
+
+      assert {401, %{"error" => "lost"}} = attach(url, fixture, sealed_as: other)
+
+      assert {401, %{"error" => "lost"}} =
+               attach(url, fixture, sealed_as: %{other | runner: "r2"})
+
+      assert claimed_by(fixture) == nil
+    end
+  end
+
   describe "refused by the body" do
     @tag :capture_log
     test "a body that is not the one the header names is refused, and nothing of it is logged", %{
@@ -301,10 +408,15 @@ defmodule Cyfr.Execution.HostListenerTest do
       fixture = AttemptFixtures.attached!(service_id: @service)
       :ok = Cyfr.Execution.Events.subscribe(fixture.execution_id, fixture.ctx)
 
-      tampered =
-        AttemptFixtures.body("push_deltas", %{
-          "deltas" => [AttemptFixtures.delta(fixture, ~s({"type":"note","text":"sk-canary"}))]
-        })
+      {:ok, tampered} =
+        WorkerAuth.seal_call(
+          fixture.keys.seal,
+          :body,
+          fields(fixture, []),
+          AttemptFixtures.body("push_deltas", %{
+            "deltas" => [AttemptFixtures.delta(fixture, ~s({"type":"note","text":"sk-canary"}))]
+          })
+        )
 
       log =
         capture_log(fn ->
@@ -325,22 +437,26 @@ defmodule Cyfr.Execution.HostListenerTest do
       max = Cyfr.HostAPI.max_body_bytes()
       text = String.duplicate("x", max)
 
-      body =
+      json =
         AttemptFixtures.body("push_deltas", %{
           "deltas" => [
             AttemptFixtures.delta(fixture, Jason.encode!(%{"type" => "note", "text" => text}))
           ]
         })
 
+      fields = fields(fixture, [])
+      {:ok, body} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
       assert byte_size(body) > max
-      header = AttemptFixtures.header(fixture, body)
+      {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, body)
       path = WorkerWire.host_route(:push_deltas)
 
       assert {413, %{"error" => "lost"}} = post(url, path, [header], body)
 
       # A refused request's nonce was presented all the same; the streamed
-      # repeat is a new call.
-      header = AttemptFixtures.header(fixture, body)
+      # repeat is a new call, sealed for it.
+      fields = fields(fixture, [])
+      {:ok, body} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
+      {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, body)
       chunks = for <<chunk::binary-size(65_536) <- body>>, do: chunk
 
       rest =
@@ -375,8 +491,10 @@ defmodule Cyfr.Execution.HostListenerTest do
   describe "a route that is no host route" do
     test "is not found, whatever it carries", %{url: url} do
       fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
-      body = AttemptFixtures.body("attach", %{"assignment" => fixture.assignment})
-      header = AttemptFixtures.header(fixture, body)
+      fields = fields(fixture, [])
+      json = AttemptFixtures.body("attach", %{"assignment" => fixture.assignment})
+      {:ok, body} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
+      {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, body)
 
       assert {404, %{"error" => "not_found"}} = post(url, "/host/v1/nope", [header], body)
 
