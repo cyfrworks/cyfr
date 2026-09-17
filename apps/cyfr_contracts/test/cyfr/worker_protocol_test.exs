@@ -65,6 +65,43 @@ defmodule Cyfr.WorkerProtocolTest do
     assert WorkerAPI.request_timeout_ms(:status) == 5_000
   end
 
+  test "a status counts runners as fresh, idle, busy or tainted, and nothing else" do
+    assert WorkerAPI.runner_states() == [:fresh, :idle, :busy, :tainted]
+
+    status = %{
+      service: "wrk_4f3c2a1e9d8b7c6a",
+      boot: "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+      runners: %{fresh: 2, idle: 1, busy: 3, tainted: 1},
+      attempts: ["att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"]
+    }
+
+    assert WorkerAPI.valid_status?(status)
+    assert WorkerAPI.valid_status?(%{status | runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0}})
+    assert WorkerAPI.valid_status?(%{status | attempts: []})
+
+    for bad <- [
+          %{status | runners: Map.delete(status.runners, :tainted)},
+          %{status | runners: Map.put(status.runners, :zombie, 1)},
+          %{status | runners: %{status.runners | busy: -1}},
+          %{status | runners: %{status.runners | idle: "1"}},
+          %{status | runners: []},
+          %{status | attempts: [:att]},
+          %{status | service: nil},
+          %{status | boot: 7},
+          Map.delete(status, :attempts),
+          Map.put(status, :extra, true),
+          nil
+        ] do
+      refute WorkerAPI.valid_status?(bad), inspect(bad)
+    end
+
+    # A kill and a status are repeatable on a lost answer, within five seconds.
+    assert WorkerAPI.retry(:kill) == :idempotent
+    assert WorkerAPI.retry(:status) == :idempotent
+    assert WorkerAPI.request_timeout_ms(:kill) == 5_000
+    assert WorkerAPI.request_timeout_ms(:status) == 5_000
+  end
+
   test "the wire's bounds are the shared limits" do
     assert HostAPI.max_body_bytes() == Cyfr.Limits.default_max_request_size()
     assert HostAPI.max_answer_bytes() == Cyfr.Limits.default_max_response_size()
