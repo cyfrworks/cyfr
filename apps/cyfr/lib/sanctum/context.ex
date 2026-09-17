@@ -375,6 +375,33 @@ defmodule Sanctum.Context do
   def enter_guest(%__MODULE__{} = ctx), do: %{ctx | plane: :guest}
 
   @doc """
+  The actor this context projects: a `Cyfr.Actor` with `athanor_id`,
+  `plane`, `anonymous`, `user_id`, `request_id`, `authenticated` and
+  `client_ip` copied one field each, with the meanings they carry here. The
+  context stays the owner of those fields and stores no duplicate `:actor`;
+  the actor is the projection every Arca facade and bus topic takes, and
+  this is the only construction path for that use — a facade accepts no
+  actor assembled by hand.
+
+  A context whose athanor is unresolved projects `athanor_id: nil`, never a
+  sentinel: the facade refuses it before any query, and it stays
+  distinguishable from `anonymous: true`, which is a caller that has a
+  tenant and no credentials of its own.
+  """
+  @spec actor(t()) :: Cyfr.Actor.t()
+  def actor(%__MODULE__{} = ctx) do
+    %Cyfr.Actor{
+      athanor_id: ctx.athanor_id,
+      plane: ctx.plane,
+      anonymous: ctx.anonymous,
+      user_id: ctx.user_id,
+      request_id: ctx.request_id,
+      authenticated: ctx.authenticated,
+      client_ip: ctx.client_ip
+    }
+  end
+
+  @doc """
   The one permission gate, which takes the plane the CALL is on.
 
   Used by MCP tool handlers in `with` chains.

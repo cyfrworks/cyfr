@@ -684,4 +684,75 @@ defmodule Sanctum.ContextTest do
       assert Sanctum.TestContext.local().auth_method == :oidc
     end
   end
+
+  describe "actor/1" do
+    @external [
+      user_id: "user_1",
+      athanor_id: "ath_1",
+      request_id: "req_1",
+      client_ip: "203.0.113.7",
+      permissions: [:execute],
+      auth_method: :oidc,
+      authenticated: true
+    ]
+
+    test "projects an authenticated external context one field each" do
+      ctx = Context.build(@external)
+
+      assert Context.actor(ctx) == %Cyfr.Actor{
+               athanor_id: "ath_1",
+               plane: :external,
+               anonymous: false,
+               user_id: "user_1",
+               request_id: "req_1",
+               authenticated: true,
+               client_ip: "203.0.113.7"
+             }
+    end
+
+    test "keeps the guest plane a context has entered" do
+      external = Context.build(@external)
+      guest = Context.enter_guest(external)
+
+      assert Context.actor(guest).plane == :guest
+      assert %{Context.actor(guest) | plane: :external} == Context.actor(external)
+    end
+
+    test "marks an anonymous caller that still has a tenant" do
+      ctx =
+        @external
+        |> Keyword.merge(user_id: "tincture:public/echo", auth_method: :tincture, anonymous: true)
+        |> Context.build()
+
+      actor = Context.actor(ctx)
+
+      assert actor.anonymous
+      assert actor.athanor_id == "ath_1"
+      assert tenant_resolved?(actor)
+    end
+
+    test "a context without an athanor projects athanor_id: nil, never a sentinel" do
+      for ctx <- [
+            Context.build(user_id: "user_1", permissions: [:execute], authenticated: true),
+            Context.build(user_id: "user_1"),
+            Context.internal()
+          ] do
+        actor = Context.actor(ctx)
+
+        assert is_nil(actor.athanor_id)
+        refute actor.anonymous
+        refute tenant_resolved?(actor)
+      end
+    end
+
+    test "the context stores no duplicate actor field" do
+      refute Map.has_key?(%Context{}, :actor)
+      refute Map.has_key?(Context.build(@external), :actor)
+    end
+  end
+
+  # The clause a facade that takes the actor matches: a resolved tenant is a
+  # binary, and nothing else is admitted before a query.
+  defp tenant_resolved?(%Cyfr.Actor{athanor_id: id}) when is_binary(id), do: true
+  defp tenant_resolved?(%Cyfr.Actor{}), do: false
 end
