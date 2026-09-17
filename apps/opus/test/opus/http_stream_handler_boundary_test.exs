@@ -8,24 +8,19 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
   not exist and a stream that cannot be started each answer the guest a
   typed error, with a host client that holds no context of its own.
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Opus.HttpStreamHandler
-
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    :ok
-  end
+  alias Opus.Test.ScriptedHost
 
   defp imports do
-    attempt = Cyfr.Test.AttemptFixtures.attached!(component_ref: "catalyst:local.streamer:0.1.0")
+    attempt = ScriptedHost.attempt!(ScriptedHost.start!(), component_ref: "catalyst:local.streamer:0.1.0")
 
     {imports, exec_ref} =
       HttpStreamHandler.build_stream_imports(
         nil,
         Cyfr.Limits.defaults(:catalyst),
-        Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot),
+        attempt.client,
         "catalyst:local.streamer:0.1.0"
       )
 

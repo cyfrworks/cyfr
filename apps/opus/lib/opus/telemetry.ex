@@ -6,9 +6,10 @@ defmodule Opus.Telemetry do
   The operational telemetry of a running component: its storage and tool
   calls and its formula concurrency.
 
-  These events are for operator metrics (`Cyfr.Telemetry.Catalog`); the
-  audit-bearing lifecycle of an execution — start, stop, exception — and
-  the events a guest pushes to its stream are `Cyfr.Execution.Telemetry`'s.
+  These events are for operator metrics; the audit-bearing lifecycle of an
+  execution — start, stop, exception — and the events a guest pushes to
+  its stream are CYFR's, recorded where the attempt is closed and where
+  its deltas are numbered.
 
   ## Events
 

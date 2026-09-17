@@ -1,0 +1,431 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+Code.require_file("support/opus_service_helper.exs", __DIR__)
+
+defmodule Opus.SecurityTest do
+  use ExUnit.Case, async: false
+
+  @moduletag :requires_opus
+
+  setup_all do
+    Cyfr.Test.Integration.Opus.ensure_started!()
+    :ok
+  end
+
+  alias Opus.ComponentType
+
+  alias Cyfr.Execution.MCP
+  alias Sanctum.Context
+
+  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
+  @test_ref "reagent:local.test-math:0.1.0"
+
+  setup do
+    # Use a test-specific base path to avoid state leaking between tests
+    test_path = Path.join(System.tmp_dir!(), "opus_security_test_#{:rand.uniform(100_000)}")
+    original_base_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, test_path)
+
+    # Every execution roots under a profile's consent: bootstrap mints one
+    # through the production DB source, and the loader reads it back.
+    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
+
+    # Checkout the Ecto sandbox to isolate SQLite data between tests
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    rand_id = :rand.uniform(100_000)
+
+    ctx =
+      Context.build(
+        user_id: "sec_test_user_#{rand_id}",
+        # Unique athanor per test: executions are athanor-scoped (shared within
+        # a tenant), so isolation between tests — and the cross-tenant checks
+        # below — are by athanor, not user.
+        athanor_id: "ath_sec_test_#{rand_id}",
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        namespace: "testns",
+        authenticated: true
+      )
+
+    # Plant the test WASM in a private seed so bootstrap can mint it.
+    Cyfr.Test.SeedBundle.isolate!()
+    wasm_bytes = File.read!(@math_wasm_path)
+
+    {:ok, _component} =
+      Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm_bytes, %{
+        name: "test-math",
+        version: "0.1.0",
+        type: "reagent",
+        description: "Test math component"
+      })
+
+    {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+
+    on_exit(fn ->
+      File.rm_rf!(test_path)
+      Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.Memory)
+
+      if original_base_path,
+        do: Application.put_env(:cyfr, :base_path, original_base_path),
+        else: Application.delete_env(:cyfr, :base_path)
+    end)
+
+    {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
+  end
+
+  # ============================================================================
+  # Component Type Isolation
+  # ============================================================================
+
+  describe "component type isolation" do
+    test "reagent has WASI but no HTTP capability" do
+      assert %Wasmex.Wasi.WasiP2Options{} = opts = ComponentType.wasi_options(:reagent)
+      assert opts.allow_http == false
+    end
+
+    test "formula has WASI but no HTTP capability" do
+      assert %Wasmex.Wasi.WasiP2Options{} = opts = ComponentType.wasi_options(:formula)
+      assert opts.allow_http == false
+    end
+
+    test "catalyst uses host function HTTP (not native wasi:http)" do
+      assert %Wasmex.Wasi.WasiP2Options{} = opts = ComponentType.wasi_options(:catalyst)
+      # Catalysts use cyfr:http/fetch host function, not wasi:http/outgoing-handler
+      assert opts.allow_http == false
+    end
+
+    test "catalyst does not inherit stdin (prevents prompt injection)" do
+      opts = ComponentType.wasi_options(:catalyst)
+
+      assert opts.inherit_stdin == false
+    end
+
+    test "no component type inherits the host's stdout/stderr" do
+      # Guest output must use emit, which applies masking, rate limits,
+      # and size bounds before reaching operator logs.
+      opts = ComponentType.wasi_options(:catalyst)
+
+      assert opts.inherit_stdout == false
+      assert opts.inherit_stderr == false
+    end
+
+    test "component type defaults to :reagent when nil" do
+      assert {:error, _} = ComponentType.parse(nil)
+    end
+
+    test "invalid component type returns error" do
+      assert {:error, _} = ComponentType.parse("unknown")
+      assert {:error, _} = ComponentType.parse(:invalid)
+    end
+  end
+
+  # ============================================================================
+  # Tenant Isolation
+  # ============================================================================
+
+  describe "tenant isolation" do
+    # Note: math.wasm is a core module, not a Component Model binary. Execution
+    # fails at runtime but still creates execution records, which is sufficient
+    # to test user isolation on the MCP access control layer.
+
+    test "execution access is tenant-scoped", %{ctx: ctx, ref: ref} do
+      # Execute as user — fails at Component Model load but still writes a record
+      _result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
+
+      # List user's executions to find the record
+      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      assert list_result.count >= 1
+      execution_id = hd(list_result.executions).execution_id
+
+      # Same user can see the execution
+      {:ok, logs_result} =
+        MCP.handle("execution", ctx, %{
+          "action" => "logs",
+          "execution_id" => execution_id
+        })
+
+      assert logs_result.execution_id == execution_id
+
+      # A different tenant cannot see the execution (tenant boundary enforced)
+      other_ctx =
+        Context.build(
+          user_id: "other-user-#{:rand.uniform(10000)}",
+          athanor_id: "ath_other_#{:rand.uniform(10000)}",
+          permissions: [:execute, :storage_read],
+          scope: :athanor,
+          auth_method: :api_key,
+          namespace: "testns",
+          authenticated: true
+        )
+
+      {:error, msg} =
+        MCP.handle("execution", other_ctx, %{
+          "action" => "logs",
+          "execution_id" => execution_id
+        })
+
+      assert {:not_found, "Execution", _} = msg
+    end
+
+    test "execution listing is tenant-scoped", %{ctx: ctx, ref: ref} do
+      # Execute as user — record is created even on failure
+      _result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
+
+      # User can see their execution
+      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      assert list_result.count >= 1
+
+      # A different tenant sees none of this athanor's executions.
+      other_ctx =
+        Context.build(
+          user_id: "other-user-#{:rand.uniform(10000)}",
+          athanor_id: "ath_other_#{:rand.uniform(10000)}",
+          permissions: [:execute, :storage_read],
+          scope: :athanor,
+          auth_method: :api_key,
+          namespace: "testns",
+          authenticated: true
+        )
+
+      {:ok, other_list_result} = MCP.handle("execution", other_ctx, %{"action" => "list"})
+      assert other_list_result.count == 0
+    end
+
+    test "execution cancellation is tenant-scoped", %{ctx: ctx} do
+      # Create a running execution record directly (no WASM needed)
+      record = Cyfr.Execution.Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Cyfr.Execution.Record.write_started(record)
+
+      # A different tenant cannot cancel (tenant boundary enforced)
+      other_ctx =
+        Context.build(
+          user_id: "other-user-#{:rand.uniform(10000)}",
+          athanor_id: "ath_other_#{:rand.uniform(10000)}",
+          permissions: [:execute, :storage_read],
+          scope: :athanor,
+          auth_method: :api_key,
+          namespace: "testns",
+          authenticated: true
+        )
+
+      {:error, msg} =
+        MCP.handle("execution", other_ctx, %{
+          "action" => "cancel",
+          "execution_id" => record.id
+        })
+
+      assert {:not_found, "Execution", _} = msg
+    end
+  end
+
+  # ============================================================================
+  # Resource Limits
+  # ============================================================================
+
+  describe "resource limits" do
+    test "default memory limit is 64MB" do
+      # The Runtime module defines @default_max_memory_bytes as 64MB
+      # This test verifies the module compiles with expected defaults
+      assert Code.ensure_loaded?(Opus.Runtime)
+    end
+  end
+
+  # ============================================================================
+  # Component Digest
+  # ============================================================================
+
+  describe "component digest security" do
+    test "execution record includes component_digest", %{ctx: ctx, ref: ref} do
+      # Execute — fails at runtime but the digest is computed and stored before execution
+      _result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
+
+      # Retrieve the execution record to verify digest was captured
+      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      execution_id = hd(list_result.executions).execution_id
+
+      {:ok, logs_result} =
+        MCP.handle("execution", ctx, %{
+          "action" => "logs",
+          "execution_id" => execution_id
+        })
+
+      assert logs_result.component_digest != nil
+      assert String.starts_with?(logs_result.component_digest, "sha256:")
+      # SHA256 produces 64 hex characters
+      # "sha256:" + 64 hex
+      assert String.length(logs_result.component_digest) == 7 + 64
+    end
+
+    test "same component produces same digest", %{ctx: ctx, ref: ref} do
+      # Execute twice — both records should have the same digest
+      _result1 =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
+
+      _result2 =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
+
+      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      assert length(list_result.executions) >= 2
+
+      digests =
+        Enum.map(list_result.executions, fn exec ->
+          {:ok, logs} =
+            MCP.handle("execution", ctx, %{
+              "action" => "logs",
+              "execution_id" => exec.execution_id
+            })
+
+          logs.component_digest
+        end)
+
+      assert length(Enum.uniq(digests)) == 1
+    end
+  end
+
+  # ============================================================================
+  # Size Limits
+  # ============================================================================
+
+  describe "request/response size limits" do
+    test "input size validation accepts normal input", %{ctx: ctx, ref: ref} do
+      # Normal small input passes validation; execution may fail for other reasons
+      # (math.wasm is a core module, not Component Model)
+      result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 5, "b" => 3}
+        })
+
+      # Error (if any) should NOT be about input size — proving validation passed
+      case result do
+        {:ok, r} -> assert r.status == "completed"
+        {:error, msg} -> refute msg =~ "Input size"
+      end
+    end
+
+    test "input size validation rejects oversized input", %{ctx: ctx, ref: ref} do
+      # Create an input that exceeds 1MB default limit
+      # We'll create a large string value
+      # 2MB
+      large_data = String.duplicate("x", 2_000_000)
+      large_input = %{"data" => large_data}
+
+      {:error, msg} =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => large_input
+        })
+
+      assert msg =~ "Input size"
+      assert msg =~ "exceeds maximum"
+    end
+
+    test "default input limit is 1MB" do
+      # Verify the default limit constant
+      limits = Cyfr.Limits.defaults(:reagent)
+      assert limits.max_request_size == 1_048_576
+    end
+
+    test "default output limit is 5MB" do
+      # Verify the default limit constant
+      limits = Cyfr.Limits.defaults(:reagent)
+      assert limits.max_response_size == 5_242_880
+    end
+  end
+
+  # ============================================================================
+  # Signature Verification
+  # ============================================================================
+
+  describe "signature verification" do
+    test "verify block schema is present in tool definition" do
+      tools = MCP.tools()
+      tool = Enum.find(tools, &(&1.name == "execution"))
+
+      # The discovery schema is one flat object, so `verify` is a top-level
+      # property that names the actions declaring it.
+      verify = tool.input_schema["properties"]["verify"]
+      assert verify["type"] == "object"
+      assert verify["description"] =~ "Actions: run"
+      assert verify["properties"]["identity"] != nil
+      assert verify["properties"]["issuer"] != nil
+    end
+
+    test "verify block is optional (no signature error without it)", %{ctx: ctx, ref: ref} do
+      # No verify block — should not fail due to signature verification
+      result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
+
+      case result do
+        {:ok, r} -> assert r.status == "completed"
+        {:error, msg} -> refute msg =~ "Signature verification"
+      end
+    end
+
+    test "registered components skip signature verification", %{ctx: ctx, ref: ref} do
+      # Even with verify block, registered components should not fail on signature verification
+      result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2},
+          "verify" => %{
+            "identity" => "test@example.com",
+            "issuer" => "https://example.com"
+          }
+        })
+
+      case result do
+        {:ok, r} -> assert r.status == "completed"
+        {:error, msg} -> refute msg =~ "Signature verification"
+      end
+    end
+
+    test "unregistered component is refused by the consent gate", %{ctx: ctx} do
+      # No profile exists for a component that was never published, so the
+      # run is refused before resolution — and never as a signature error.
+      {:error, msg} =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => "reagent:local.nonexistent:0.1.0",
+          "input" => %{}
+        })
+
+      assert {:consent_required, %{}} = msg
+      refute Cyfr.Ops.Error.render(msg) =~ "Signature verification"
+    end
+  end
+end

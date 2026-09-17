@@ -6,6 +6,11 @@
 #                 under a uid of its own. Every request between cyfr and the
 #                 bridge is signed under CYFR_MCP_BRIDGE_KEY; the bridge
 #                 keeps no state.
+#   opus        — the execution worker: runs WASM components as CYFR
+#                 assigns them, on the internal `worker` network. Every
+#                 request between cyfr and opus is signed under the worker
+#                 key CYFR derives for OPUS_SERVICE_ID; opus holds no
+#                 tenant state.
 #   caddy       — TLS + reverse proxy in front of cyfr. Opt-in via the `tls`
 #                 profile.                                   [profile: tls]
 #
@@ -52,6 +57,7 @@ services:
     networks:
       - default
       - builder
+      - worker
     restart: unless-stopped
     # The endpoints drain connections for up to 30s on shutdown; compose's
     # default 10s grace would SIGKILL mid-drain.
@@ -145,6 +151,56 @@ services:
           # build, their homes' tmpfs pages and the release together.
           memory: ${CYFR_BUILDER_MEMORY_LIMIT:-3G}
           cpus: "${CYFR_BUILDER_CPU_LIMIT:-2}"
+
+  # The execution worker. cyfr reaches it at http://opus:4200 (CYFR_WORKERS)
+  # and it reaches cyfr's host API at OPUS_HOST_URL; both sit on the worker
+  # network, which nothing else joins.
+  opus:
+    container_name: cyfr-opus
+    image: ghcr.io/cyfrworks/cyfr-opus:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.opus
+    expose:
+      - "4200"
+    # Worker-only settings from .env.opus; OPUS_SERVICE_KEY comes from .env
+    # below. The worker never sees the rest of .env: not the worker root,
+    # not the keyring, not the database, and refuses to start with any of
+    # them in its environment.
+    env_file:
+      - path: .env.opus
+        required: false
+    environment:
+      - OPUS_SERVICE_ID=${OPUS_SERVICE_ID:-wrk_opus}
+      - OPUS_SERVICE_KEY=${OPUS_SERVICE_KEY:-}
+      - OPUS_HOST_URL=${OPUS_HOST_URL:-http://cyfr:4300}
+      - OPUS_BIND=0.0.0.0
+      - OPUS_PORT=4200
+    networks:
+      - worker
+    # The engine holds no tenant state and writes only its release's
+    # temporary files: read-only root, one tmpfs.
+    read_only: true
+    tmpfs:
+      - /run/opus:uid=10002,gid=10002,mode=0700,size=16m
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    # Running attempts close or are reported on shutdown; compose's default
+    # 10s grace would SIGKILL mid-report.
+    stop_grace_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          # Caps aggregate damage from WASM components that never yield
+          # (a killed tight-loop leaks a spinning native thread).
+          cpus: "${OPUS_CPU_LIMIT:-4}"
 
   mcp-bridge:
     # Built locally from Dockerfile.node (not a published image), so `docker
@@ -260,6 +316,10 @@ networks:
   default: {}
   # cyfr <-> builder only (see the builder service).
   builder: {}
+  # cyfr <-> opus only: the bridge, the builder and caddy never see port
+  # 4200. The network is not `internal` — a guest's consented HTTP egress
+  # leaves from the worker — so the isolation is who is attached.
+  worker: {}
 
 volumes:
   caddy_data:

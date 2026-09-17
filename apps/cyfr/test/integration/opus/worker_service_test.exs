@@ -1,0 +1,422 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+Code.require_file("support/opus_service_helper.exs", __DIR__)
+Code.require_file("support/nested_execution_helper.exs", __DIR__)
+
+defmodule Opus.WorkerServiceTest do
+  @moduledoc """
+  A run lives only as long as what waits for it and what runs it. A waiter
+  that is killed kills its run: the runner and its component process stop,
+  the attempt lapses at once, and the in-flight count, the execution slot
+  and the charge row the run held all go back. Neither the worker service
+  nor its runners' supervisor shows a runner's attempt keys. A runner that
+  exits is reported at once: its attempt lapses and its waiter answers,
+  while a sibling run on the same worker service keeps running and
+  completes. A formula's runner killed while its children run in its group
+  takes them with it: every child's runner stops, every row fails, and the
+  invoke slots, charge rows and execution slots they held all go back. The
+  worker service starts only an assignment addressed to it, with the input
+  its digest binds and keys sealed for it that open as its attempt.
+
+  The runs are the `nested-probe` formula as a child of an admitted root,
+  or as a root fanning out to children, held at the entry to their guest
+  until the test lets them go.
+  """
+
+  use ExUnit.Case, async: false
+
+  @moduletag :requires_opus
+
+  setup_all do
+    Cyfr.Test.Integration.Opus.ensure_started!()
+    :ok
+  end
+
+  import Cyfr.Test.Wait
+
+  alias Cyfr.Authority.Budget
+  alias Cyfr.Execution.{Attempt, Keys, Semaphore}
+  alias Cyfr.Test.AttemptFixtures
+  alias Opus.Test.NestedExecution, as: Probe
+  alias Sanctum.Consent.{Bootstrap, Source}
+
+  @moduletag timeout: 120_000
+
+  @probe_node "formula:local.nested-probe"
+  @lapsed "Execution terminated: runner stopped without cleanup"
+
+  setup tags do
+    Arca.Cache.init()
+    Cyfr.Test.Sandbox.setup!(tags)
+
+    test_path =
+      Path.join(System.tmp_dir!(), "worker_service_#{System.unique_integer([:positive])}")
+
+    keys = [:base_path, :consent_source]
+    previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
+    Application.put_env(:cyfr, :base_path, test_path)
+    Application.put_env(:cyfr, :consent_source, Source.DB)
+
+    ctx = Sanctum.TestContext.local()
+
+    on_exit(fn ->
+      Semaphore.forgive_unreaped(ctx.athanor_id)
+      File.rm_rf!(test_path)
+
+      for {key, value} <- previous do
+        if value,
+          do: Application.put_env(:cyfr, key, value),
+          else: Application.delete_env(:cyfr, key)
+      end
+    end)
+
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    :ok = Probe.publish_probe!(ctx)
+    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
+    assert @probe_node in minted
+
+    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @probe_node)
+    authority = %{authority | budget: Budget.new(2)}
+    root_id = Cyfr.UUID7.execution_id()
+
+    {:ok, %{attempt: attempt}} =
+      Arca.Execution.admit(
+        %{
+          id: root_id,
+          reference: Probe.probe_ref(),
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "formula"
+        },
+        reservation: %{budget_id: authority.budget.id, cap: 2}
+      )
+
+    {:ok, ctx: ctx, authority: authority, root_id: root_id, attempt: attempt.attempt}
+  end
+
+  test "a killed waiter's run stops, its attempt lapses at once and what it held goes back", %{
+    ctx: ctx,
+    authority: authority,
+    root_id: root_id,
+    attempt: attempt
+  } do
+    children_before = Semaphore.status().child_active
+    hold_children!(root_id)
+    test_pid = self()
+
+    waiter =
+      spawn(fn ->
+        send(test_pid, {:ran, child!(ctx, authority, root_id, attempt, guest_fn: :spawn)})
+      end)
+
+    assert_receive {:held, component, id}, 30_000
+    attempt_pid = Attempt.whereis(id)
+    runner = runner_of(id)
+
+    assert Sanctum.Authority.budget(authority).in_flight == 1
+    assert Semaphore.status().child_active == children_before + 1
+    assert [%{admitted_at: %DateTime{}}] = charges(ctx, authority)
+
+    # The runner's attempt keys are in neither the worker service's status
+    # nor its runners' supervisor's.
+    %{keys: keys} = AttemptFixtures.current!(ctx.athanor_id, id)
+
+    for process <- [Opus.WorkerService, Opus.WorkerService.Runners],
+        key <- [keys.call, keys.seal] do
+      status = :erlang.term_to_binary(:sys.get_status(process))
+      assert :binary.match(status, key) == :nomatch
+    end
+
+    Process.exit(waiter, :kill)
+
+    wait_until(fn -> row(id).status == "failed" end, 5_000)
+    assert %{error_message: @lapsed} = row(id)
+    assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(ctx, id)
+    assert "execution.lapsed" in event_types(ctx, id)
+
+    wait_until(fn -> not Enum.any?([attempt_pid, runner.pid, component], &Process.alive?/1) end)
+    wait_until(fn -> Semaphore.status().child_active == children_before end)
+    assert Sanctum.Authority.budget(authority).in_flight == 0
+    assert charges(ctx, authority) == []
+    refute_received {:ran, _}
+  end
+
+  test "a runner's exit is reported at once: its attempt lapses, and a sibling keeps running", %{
+    ctx: ctx,
+    authority: authority,
+    root_id: root_id,
+    attempt: attempt
+  } do
+    hold_children!(root_id)
+    test_pid = self()
+
+    for _ <- 1..2 do
+      spawn_link(fn ->
+        id = Cyfr.UUID7.execution_id()
+        ran = child!(ctx, authority, root_id, attempt, execution_id: id)
+        send(test_pid, {:ran, id, ran})
+      end)
+    end
+
+    assert_receive {:held, exited_component, exited}, 30_000
+    assert_receive {:held, sibling_component, sibling}, 30_000
+    exited_runner = runner_of(exited)
+    sibling_attempt = Attempt.whereis(sibling)
+
+    Process.exit(exited_runner.pid, :kill)
+
+    assert_receive {:ran, ^exited, {:error, @lapsed}}, 5_000
+    assert %{status: "failed", error_message: @lapsed} = row(exited)
+    assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(ctx, exited)
+    wait_until(fn -> not Process.alive?(exited_component) end)
+    assert Attempt.whereis(exited) == nil
+
+    assert Process.alive?(sibling_component)
+    assert Attempt.whereis(sibling) == sibling_attempt
+    assert row(sibling).status == "running"
+
+    send(sibling_component, :continue)
+    assert_receive {:ran, ^sibling, {:ok, %{status: :completed}}}, 30_000
+    assert row(sibling).status == "completed"
+  end
+
+  test "killing a formula's runner mid-fan-out reclaims every hold its children took", %{
+    ctx: ctx
+  } do
+    children_before = Semaphore.status().child_active
+    slots_before = Semaphore.status().active
+    root_id = Cyfr.UUID7.execution_id()
+    hold_children!(root_id)
+    test_pid = self()
+
+    request = %{
+      "tool" => "execution",
+      "action" => "run",
+      "args" => %{"reference" => Probe.probe_ref(), "input" => %{"op" => "echo"}}
+    }
+
+    spawn(fn ->
+      send(
+        test_pid,
+        {:root,
+         Cyfr.Execution.run_root(
+           ctx,
+           :default,
+           Probe.probe_ref(),
+           %{"op" => "spawn_await_all", "requests" => List.duplicate(request, 3)},
+           execution_id: root_id
+         )}
+      )
+    end)
+
+    held =
+      for _ <- 1..3 do
+        assert_receive {:held, component, id}, 30_000
+        {id, component}
+      end
+
+    ids = Enum.map(held, &elem(&1, 0))
+    root_runner = runner_of(root_id)
+    child_runners = Enum.map(ids, &runner_of/1)
+    root_authority = reserved_authority(ctx, root_id)
+
+    assert Sanctum.Authority.budget(root_authority).in_flight == 3
+    assert length(charges(ctx, root_authority)) == 3
+    assert Semaphore.status().child_active == children_before + 3
+
+    Process.exit(root_runner.pid, :kill)
+
+    assert_receive {:root, {:error, @lapsed}}, 10_000
+    assert %{status: "failed", error_message: @lapsed} = row(root_id)
+
+    for {id, component} <- held do
+      wait_until(fn -> row(id).status == "failed" end, 10_000)
+      wait_until(fn -> not Process.alive?(component) end)
+      wait_until(fn -> Attempt.whereis(id) == nil end)
+    end
+
+    for runner <- [root_runner | child_runners],
+        do: wait_until(fn -> not Process.alive?(runner.pid) end)
+
+    wait_until(fn -> Semaphore.status().child_active == children_before end)
+    wait_until(fn -> Semaphore.status().active == slots_before end)
+
+    wait_until(fn -> Sanctum.Authority.budget(root_authority).in_flight == 0 end)
+    wait_until(fn -> charges(ctx, root_authority) == [] end)
+  end
+
+  describe "start/3" do
+    setup do
+      {:ok, %{service: service, boot: boot}} = Opus.WorkerService.status()
+      {:ok, service: service, boot: boot}
+    end
+
+    test "refuses an assignment addressed to another worker service, or another boot of this one",
+         %{service: service, boot: boot} do
+      assert service != "wrk_other"
+
+      other_service =
+        AttemptFixtures.attached!(service_id: "wrk_other", boot_id: boot, attach: false)
+
+      assert {:error, :malformed} =
+               Opus.WorkerService.start(
+                 other_service.assignment,
+                 input(other_service),
+                 sealed(other_service)
+               )
+
+      other_boot =
+        AttemptFixtures.attached!(service_id: service, boot_id: "boot_other", attach: false)
+
+      assert {:error, :malformed} =
+               Opus.WorkerService.start(
+                 other_boot.assignment,
+                 input(other_boot),
+                 sealed(other_boot)
+               )
+
+      Attempt.refuse(other_service.pid, "not started")
+      Attempt.refuse(other_boot.pid, "not started")
+    end
+
+    test "refuses input its assignment's digest does not bind", %{service: service, boot: boot} do
+      fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
+
+      assert {:error, :malformed} =
+               Opus.WorkerService.start(
+                 fixture.assignment,
+                 ~s({"fixture":false}),
+                 sealed(fixture)
+               )
+
+      Attempt.refuse(fixture.pid, "not started")
+    end
+
+    test "refuses keys that do not open as the assignment's attempt on this worker service", %{
+      service: service,
+      boot: boot
+    } do
+      fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
+      other = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
+      elsewhere = Cyfr.WorkerAuth.dispatch_seal_key(worker_key!("wrk_other"))
+      signing = Cyfr.WorkerAuth.dispatch_key(worker_key!(service))
+
+      for sealed <- [
+            sealed(other),
+            sealed(fixture, elsewhere),
+            sealed(fixture, signing),
+            "not sealed"
+          ] do
+        assert {:error, :malformed} =
+                 Opus.WorkerService.start(fixture.assignment, input(fixture), sealed)
+      end
+
+      assert %{busy: 0} = elem(Opus.WorkerService.status(), 1).runners
+      Attempt.refuse(fixture.pid, "not started")
+      Attempt.refuse(other.pid, "not started")
+    end
+  end
+
+  # A child of the root: the probe echoing, held at its guest's entry.
+  defp child!(ctx, authority, root_id, attempt, opts) do
+    Cyfr.Execution.run_child(
+      authority,
+      Probe.probe_ref(),
+      nil,
+      %{"op" => "echo"},
+      Keyword.merge(
+        [
+          ctx: Sanctum.Context.enter_guest(ctx),
+          attempt: attempt,
+          parent_execution_id: root_id,
+          root_execution_id: root_id,
+          declared_needs: []
+        ],
+        opts
+      )
+    )
+  end
+
+  # Children of `root_id` wait at their guest's entry for `:continue`.
+  defp hold_children!(root_id) do
+    test_pid = self()
+    handler = "worker-service-hold-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :opus, :runtime, :authority_entered],
+        fn _event, _measurements, %{execution_id: id}, _config ->
+          case Arca.Repo.get(Arca.Execution, id) do
+            %{parent_execution_id: ^root_id} ->
+              send(test_pid, {:held, self(), id})
+
+              receive do
+                :continue -> :ok
+              after
+                60_000 -> :ok
+              end
+
+            _ ->
+              :ok
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  defp runner_of(id) do
+    :sys.get_state(Opus.WorkerService).runners
+    |> Map.values()
+    |> Enum.find(&(&1.execution_id == id))
+  end
+
+  defp input(fixture), do: Jason.encode!(fixture.input)
+
+  # The fixture's attempt keys, sealed with `key` (default the dispatch seal
+  # key of the worker service the attempt is dispatched to).
+  defp sealed(fixture, key \\ nil) do
+    key = key || Cyfr.WorkerAuth.dispatch_seal_key(worker_key!(fixture.service))
+    {:ok, sealed} = Cyfr.WorkerAuth.seal_attempt_keys(key, fixture.keys)
+    sealed
+  end
+
+  defp worker_key!(worker) do
+    {:ok, key} = Keys.worker_key(worker)
+    key
+  end
+
+  defp row(id), do: Arca.Repo.get!(Arca.Execution, id)
+
+  # An authority naming the invocation reservation a root was admitted
+  # with, for reading its budget.
+  defp reserved_authority(ctx, root_id) do
+    import Ecto.Query, only: [from: 2]
+
+    reservation =
+      Arca.Repo.one!(
+        from(r in Arca.Schemas.BudgetReservation,
+          where: r.athanor_id == ^ctx.athanor_id and r.root_execution_id == ^root_id
+        )
+      )
+
+    %{Cyfr.Authority.zero() | budget: %Budget{id: reservation.id, cap: reservation.cap}}
+  end
+
+  defp attempt_row(ctx, id),
+    do: Arca.ExecutionAttempts.get(ctx.athanor_id, row(id).current_attempt)
+
+  defp event_types(ctx, id) do
+    {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, id, 0)
+    Enum.map(rows, & &1.type)
+  end
+
+  defp charges(ctx, authority) do
+    {:ok, charges} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
+    charges
+  end
+end

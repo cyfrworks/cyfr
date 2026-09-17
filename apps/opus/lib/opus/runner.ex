@@ -31,7 +31,8 @@ defmodule Opus.Runner do
        and a cancel asked of the attempt each kill that process. The
        component's bytes are fetched by the assignment's digest
        (`Opus.HostClient.fetch_artifact/2`) only when no compiled component
-       for that digest is cached, and are run only if they hash to it;
+       for that digest is cached, and are run only if they hash to it
+       (`Opus.ComponentCache`);
     4. closes the attempt: `complete` with the guest's output, or `fail`
        with a sentence, marked `abandoned` when it killed the component
        call.
@@ -188,17 +189,13 @@ defmodule Opus.Runner do
   defp edge(%Authority{resources: %Edge{} = edge}), do: edge
   defp edge(%Authority{resources: :none}), do: nil
 
-  # The component's bytes as CYFR answers them for the assignment's digest,
-  # refused unless they hash to it.
+  # The component's bytes as CYFR answers them for the assignment's digest;
+  # the cache runs them only if they hash to it.
   defp artifact(client, digest) do
     fn ->
       case HostClient.fetch_artifact(client, digest) do
         {:ok, bytes} ->
-          if Cyfr.Digest.sha256(bytes) == digest,
-            do: {:ok, bytes},
-            else:
-              {:error,
-               {:artifact, "Execution error: the component's bytes do not match its digest"}}
+          {:ok, bytes}
 
         {:error, refusal} ->
           Logger.warning(

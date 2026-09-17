@@ -46,10 +46,10 @@ defmodule Opus.ComponentType do
   Only Catalysts can request OAuth tokens, and only when the running node's
   consent edge binds an OAuth Vault entry (a manifest declares the need via
   needs/caps; `oauth`/`setup`/`wasi` manifest blocks are refused at
-  registration). The host manages the full lifecycle — client credentials,
-  refresh tokens, and token exchange are never exposed to WASM
-  (`Sanctum.Vault.OAuthGrant` mints the authorize URL and the callback seals
-  the tokens).
+  registration). CYFR manages the full lifecycle — client credentials,
+  refresh tokens, and token exchange are never exposed to WASM: a guest
+  asks its attempt for a token (`Opus.OAuthHandler`) and CYFR dispenses
+  one from the consented vault edge.
 
       # Catalysts call cyfr:oauth/token.get-access-token("google") at runtime.
       # Host refreshes automatically. Access tokens are masked in output.

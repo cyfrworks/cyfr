@@ -446,12 +446,15 @@ defmodule Opus.FormulaHandler do
   defp tool_action(tool, action),
     do: if(String.contains?(tool, ":"), do: "external.call", else: "#{tool}.#{action}")
 
-  # A refusal CYFR rendered for the guest is handed on as it is; a host
-  # call CYFR did not answer is a generic failure.
+  # A refusal CYFR rendered for the guest is handed on as it is; a call
+  # whose answer was lost says so; a host call CYFR did not answer is a
+  # generic failure.
   defp encode_refusal({:guest_error, type, message}), do: encode_error(type, message)
 
   defp encode_refusal({:guest_error, type, message, remediation}),
     do: encode_error_with_remediation(type, message, remediation)
+
+  defp encode_refusal({:uncertain, sentence}), do: encode_error(:uncertain, sentence)
 
   defp encode_refusal(refusal) do
     Logger.warning("[Opus.FormulaHandler] host call refused: #{inspect(refusal)}")
@@ -966,17 +969,17 @@ defmodule Opus.FormulaHandler do
 
   defp stringify_reason(reason), do: render_reason(reason)
 
-  # Guest-facing reason text for terms below the `Cyfr.Ops.Error` vocabulary: a
+  # Guest-facing reason text below the `Cyfr.GuestError` vocabulary: a
   # crafted binary passes, a bare reason atom names itself verbatim, and
-  # anything structured renders through the shared seam or is logged and
-  # generalized — never `inspect/1`, which would hand the guest whatever the
-  # term carried.
+  # anything structured renders through the shared vocabulary or is logged
+  # and generalized — never `inspect/1`, which would hand the guest whatever
+  # the term carried.
   defp guest_reason(reason) when is_binary(reason), do: reason
 
   defp guest_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp guest_reason(reason) do
-    case Cyfr.Ops.Error.render(reason) do
+    case Cyfr.GuestError.render(reason) do
       nil ->
         Logger.warning("[FormulaHandler] unrenderable guest reason: #{inspect(reason)}")
         "the call failed"
@@ -987,15 +990,15 @@ defmodule Opus.FormulaHandler do
   end
 
   @doc """
-  The guest's view of a refusal: the same sentence the wire and the console
-  render, and never an internal term.
-
-  Render recognized typed errors consistently; unknown internal terms must not reach the guest.
+  The guest's view of a refusal: the sentence `Cyfr.GuestError` renders
+  from the reason's data, and never an internal term. A refusal CYFR wants
+  a guest to see crosses the wire already rendered, as a guest error's
+  `type` and `message`.
   """
   @spec render_reason(term()) :: String.t()
   def render_reason(reason) do
     # `nil` means the term is internal — logged where it was produced, never
     # handed to the guest.
-    Cyfr.Ops.Error.render(reason) || "The call failed."
+    Cyfr.GuestError.render(reason) || "The call failed."
   end
 end

@@ -1,0 +1,88 @@
+# syntax=docker/dockerfile:1.7-labs
+# The Opus container: the WASM engine and its worker service, and nothing
+# else. It holds one derived worker key, reaches CYFR's host API over HTTP
+# and is reached by CYFR on its own listener; it has no endpoint of the
+# product's, no database and no tenant state, and the release carries only
+# the shared contracts and the engine (`mix release opus`).
+
+# ---- Stage 1: release build ----
+FROM hexpm/elixir:1.20.3-erlang-29.0.5-debian-bookworm-20260824 AS relbuilder
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    curl \
+    libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV MIX_ENV=prod
+
+WORKDIR /app
+
+RUN mix local.hex --force && mix local.rebar --force
+
+COPY mix.exs mix.lock ./
+COPY --parents apps/*/mix.exs ./
+
+RUN mix deps.get --only prod && mix deps.compile
+
+COPY config/ config/
+COPY apps/ apps/
+COPY component-guide.md tincture-guide.md integration-guide.md ./
+COPY wit/ wit/
+
+RUN mix compile && mix release opus
+
+# ---- Stage 2: runtime ----
+FROM debian:bookworm-slim
+
+LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+# Debian publishes a fixed package before the base image is rebuilt around
+# it, so take what the archive has at build time.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+    libstdc++6 \
+    openssl \
+    libncurses6 \
+    ca-certificates \
+    curl \
+    locales \
+    && rm -rf /var/lib/apt/lists/* \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen
+
+# The engine's user: it writes nothing but the release's temporary files.
+RUN groupadd -r -g 10002 opus \
+    && useradd -r -u 10002 -g opus -d /app -M -s /usr/sbin/nologin opus \
+    && install -d -m 0700 -o opus -g opus /run/opus
+
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+ENV ELIXIR_ERL_OPTIONS="+fnu"
+
+WORKDIR /app
+
+COPY --from=relbuilder /app/_build/prod/rel/opus ./
+COPY LICENSE FAIR_SOURCE.md /app/
+COPY LICENSES/ /app/LICENSES/
+
+# The release starts no Erlang distribution: a listener any guest could
+# reach, authenticated by a cookie any guest could read. Its temporary
+# files go where only its own user can reach them.
+ENV RELEASE_DISTRIBUTION=none \
+    RELEASE_TMP=/run/opus
+
+ARG OPUS_PORT=4200
+EXPOSE ${OPUS_PORT}
+
+# Liveness: the listener refuses an unsigned status request with 401, which
+# is what it answers only once the worker service holds its credentials.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
+    CMD [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:${OPUS_PORT:-4200}/worker/v1/status)" = "401" ] || exit 1
+
+USER opus
+
+ENTRYPOINT ["/app/bin/opus"]
+CMD ["start"]

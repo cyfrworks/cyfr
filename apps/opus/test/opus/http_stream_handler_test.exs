@@ -2,20 +2,16 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.HttpStreamHandlerTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias Cyfr.Test.AttemptFixtures
   alias Opus.HttpStreamHandler
   alias Opus.Test.EdgeFixtures
+  alias Opus.Test.ScriptedHost
 
-  # A real attached attempt's host client for `component_ref`, taking each
-  # request from `limits`' consented rate.
-  defp attached_host(component_ref, limits) do
-    with :ok <- Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo),
-         do: Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-
-    attempt = AttemptFixtures.attached!(component_ref: component_ref, limits: limits)
-    Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot)
+  # The host client of an attempt on a scripted host for `component_ref`,
+  # which takes every request from the rate and records every refusal.
+  defp attached_host(component_ref, _limits) do
+    ScriptedHost.attempt!(ScriptedHost.start!(), component_ref: component_ref).client
   end
 
   # ============================================================================
@@ -56,11 +52,6 @@ defmodule Opus.HttpStreamHandlerTest do
 
   describe "stream edge enforcement" do
     setup do
-      case GenServer.whereis(Cyfr.Execution.Rates) do
-        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
-        _pid -> :ok
-      end
-
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
       component_ref = "catalyst:local.test-stream:1.0.0"

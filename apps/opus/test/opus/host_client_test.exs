@@ -3,131 +3,322 @@
 
 defmodule Opus.HostClientTest do
   @moduledoc """
-  A runner's client reaches its attempt only through `transport/2`, and only
-  strings cross it: a signed header, a JSON body naming the operation, and
-  a JSON answer. Every host call this client makes goes that way. A
-  client's inspection shows its attempt and never its keys.
+  A runner's client reaches its attempt only over the wire: one signed
+  `POST` per call to the callback's route, a JSON body naming the
+  operation, and a JSON answer read as the worker protocol spells it. A
+  lost answer is retried as the callback's class allows — once, under a
+  fresh header, as the same body — or ends uncertain; an answer CYFR gave
+  is never retried. A client's inspection and the transport's log show
+  nothing a call carried.
   """
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias Cyfr.Test.AttemptFixtures
+  import ExUnit.CaptureLog
+
+  alias Cyfr.WorkerWire
   alias Opus.HostClient
+  alias Opus.Test.ScriptedHost
 
   setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    :ok
+    host = ScriptedHost.start!()
+    attempt = ScriptedHost.attempt!(host)
+    {:ok, host: host, attempt: attempt, client: attempt.client}
   end
 
-  # Every call of `Cyfr.Execution.Host.call/2` this process makes while `fun`
-  # runs, with what it answered, as a tracer process saw them.
-  defp crossings(fun) do
-    pattern = {Code.ensure_loaded!(Cyfr.Execution.Host), :call, 2}
-    test = self()
-    tracer = spawn_link(fn -> trace_loop([]) end)
-    1 = :erlang.trace_pattern(pattern, [{:_, [], [{:return_trace}]}], [:global])
-    1 = :erlang.trace(test, true, [:call, {:tracer, tracer}])
+  test "every host call crosses as one signed request to its route and answers as read", %{
+    host: host,
+    attempt: attempt,
+    client: client
+  } do
+    ScriptedHost.script(host, "oauth_token", {:error, {:guest_error, "vault_denied", "no vault"}})
+    ScriptedHost.script(host, "storage", {:error, {:guest_error, "action_denied", "denied"}})
+    ScriptedHost.script(host, "admit_child", {:error, {:guest_error, "dispatch_error", "no"}})
+    ScriptedHost.script(host, "tool_call", {:error, {:guest_error, "dispatch_error", "no"}})
+    ScriptedHost.script(host, "complete", {:ok, %{"done" => true}})
+    ScriptedHost.script(host, "fail", {:error, :lost})
 
-    try do
-      fun.()
-    after
-      :erlang.trace(test, false, [:call])
-      :erlang.trace_pattern(pattern, false, [:global])
-    end
+    assert {:ok, %{}} = HostClient.attach(client, attempt.assignment)
+    assert {:ok, %{} = renewals} = HostClient.renew(client, [client.attempt])
+    assert {:ok, until} = renewals[client.attempt]
+    assert is_integer(until)
+    assert {:ok, [_reply]} = HostClient.push_deltas(client, [~s({"type":"note"})])
+    assert {:error, {:guest_error, "vault_denied", "no vault"}} = HostClient.oauth_token(client, "google")
+    assert :ok = HostClient.take_rate(client, "http:" <> attempt.component_ref)
 
-    send(tracer, {:done, test})
-    assert_receive {:crossings, crossings}, 1_000
-    crossings
-  end
+    assert {:error, {:guest_error, "action_denied", _}} =
+             HostClient.storage(client, :read, %{"path" => "data/a.txt"})
 
-  defp trace_loop(seen) do
-    receive do
-      {:trace, _pid, :call, {Cyfr.Execution.Host, :call, [header, body]}} ->
-        trace_loop([{:call, header, body} | seen])
+    assert {:error, :not_found} = HostClient.fetch_artifact(client, attempt.digest)
+    assert :ok = HostClient.record_denial(client, "invalid_json", "Invalid JSON request")
 
-      {:trace, _pid, :return_from, {Cyfr.Execution.Host, :call, 2}, answer} ->
-        trace_loop([{:answer, answer} | seen])
+    assert {:error, {:guest_error, "dispatch_error", _}} =
+             HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call)
 
-      {:done, test} ->
-        send(test, {:crossings, pair(Enum.reverse(seen))})
-    end
-  end
+    assert {:error, {:guest_error, "dispatch_error", _}} =
+             HostClient.tool_call(client, "tools", %{"action" => "list"}, :call)
 
-  defp pair([{:call, header, body}, {:answer, answer} | rest]),
-    do: [{header, body, answer} | pair(rest)]
+    assert :ok = HostClient.release_child(client, "exec_child")
+    assert {:ok, %{"done" => true}} = HostClient.complete(client, %{"done" => true})
+    assert {:error, :lost} = HostClient.fail(client, "after the close")
 
-  defp pair([]), do: []
-
-  test "every host call crosses the transport as a header, a JSON body and a JSON answer" do
-    attempt = AttemptFixtures.attached!(attach: false)
-    client = HostClient.new(attempt.keys, nil, attempt.boot)
-
-    crossed =
-      crossings(fn ->
-        assert {:ok, %{}} = HostClient.attach(client, attempt.assignment)
-        assert {:ok, %{}} = HostClient.renew(client, [client.attempt])
-        assert {:ok, [_reply]} = HostClient.push_deltas(client, [~s({"type":"note"})])
-        assert {:error, {:guest_error, _, _}} = HostClient.oauth_token(client, "google")
-        assert :ok = HostClient.take_rate(client, "http:" <> attempt.component_ref)
-
-        assert {:error, {:guest_error, "action_denied", _}} =
-                 HostClient.storage(client, :read, %{"path" => "data/a.txt"})
-
-        assert {:error, :not_found} =
-                 HostClient.fetch_artifact(client, Cyfr.Digest.sha256("not the component"))
-
-        assert :ok = HostClient.record_denial(client, "invalid_json", "Invalid JSON request")
-
-        assert {:error, {:guest_error, "dispatch_error", _}} =
-                 HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call)
-
-        assert {:error, {:guest_error, "dispatch_error", _}} =
-                 HostClient.tool_call(client, "tools", %{"action" => "list"}, :call)
-
-        assert {:ok, %{"done" => true}} = HostClient.complete(client, %{"done" => true})
-        assert {:error, :lost} = HostClient.fail(client, "after the close")
-      end)
-
-    ops =
-      for {header, body, answer} <- crossed do
-        assert is_binary(header) and String.starts_with?(header, "v1 kind=call ")
-        assert is_binary(body) and is_binary(answer)
-        assert %{"op" => op, "args" => %{}} = Jason.decode!(body)
-        assert %{} = decoded = Jason.decode!(answer)
-        assert Map.has_key?(decoded, "ok") or Map.has_key?(decoded, "error")
-        op
-      end
+    ops = for %{op: op} <- ScriptedHost.requests(host), do: op
 
     assert ops ==
-             ~w(attach renew push_deltas oauth_token take_rate storage fetch_artifact record_denial admit_child tool_call complete fail)
+             ~w(attach renew push_deltas oauth_token take_rate storage fetch_artifact record_denial admit_child tool_call release_child complete fail)
+
+    for %{op: op, header: header, body: body, caller: caller} <- ScriptedHost.requests(host) do
+      assert String.starts_with?(header, "v1 kind=call ")
+      assert %{"op" => ^op, "args" => %{}} = Jason.decode!(body)
+      assert caller.execution_id == attempt.execution_id
+      assert caller.runner == client.runner
+      assert caller.boot == client.boot
+    end
   end
 
-  test "a client's inspection names its attempt and not its keys" do
-    attempt = AttemptFixtures.attached!(attach: false)
-    client = HostClient.new(attempt.keys, nil, attempt.boot)
+  test "a lost answer to an idempotent call is asked once more, under a fresh header, as the same body", %{
+    host: host,
+    client: client
+  } do
+    ScriptedHost.script(host, "renew", [:drop, {:ok, %{client.attempt => %{"lease_until" => 5}}}])
+
+    assert {:ok, %{}} = HostClient.renew(client, [client.attempt])
+
+    assert [first, second] = ScriptedHost.requests(host, "renew")
+    assert first.body == second.body
+    assert first.caller.nonce != second.caller.nonce
+    assert first.header != second.header
+  end
+
+  test "a lost push_deltas answer sends the same batch again, in order", %{host: host, client: client} do
+    ScriptedHost.script(host, "push_deltas", [:drop, {:ok, ["a", "b"]}])
+    events = [~s({"n":1}), ~s({"n":2})]
+
+    assert {:ok, ["a", "b"]} = HostClient.push_deltas(client, events)
+
+    assert [first, second] = ScriptedHost.requests(host, "push_deltas")
+    assert first.body == second.body
+    assert Enum.map(second.args["deltas"], & &1["event"]) == events
+  end
+
+  test "a lost admit_child answer is asked again under the same child key", %{host: host, client: client} do
+    ScriptedHost.script(host, "admit_child", [:drop, {:error, {:guest_error, "dispatch_error", "no"}}])
+
+    assert {:error, {:guest_error, "dispatch_error", "no"}} =
+             HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn)
+
+    assert [first, second] = ScriptedHost.requests(host, "admit_child")
+    assert first.body == second.body
+    assert Cyfr.HostAPI.valid_child_key?(first.args["child_key"])
+    assert first.args["child_key"] == second.args["child_key"]
+
+    # A new admission mints a new key.
+    ScriptedHost.script(host, "admit_child", {:error, {:guest_error, "dispatch_error", "no"}})
+    HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn)
+    [_, _, third] = ScriptedHost.requests(host, "admit_child")
+    assert third.args["child_key"] != first.args["child_key"]
+  end
+
+  test "a lost answer to a call that is never retried ends uncertain, asked once", %{
+    host: host,
+    client: client
+  } do
+    for op <- ~w(take_rate storage oauth_token tool_call record_denial) do
+      ScriptedHost.script(host, op, :drop)
+    end
+
+    assert {:error, {:uncertain, sentence}} = HostClient.take_rate(client, "http:x")
+    assert sentence =~ "lost"
+    assert {:error, {:uncertain, _}} = HostClient.storage(client, :read, %{"path" => "a"})
+    assert {:error, {:uncertain, _}} = HostClient.oauth_token(client, "google")
+    assert {:error, {:uncertain, _}} = HostClient.tool_call(client, "t", %{}, :call)
+    assert {:error, {:uncertain, _}} = HostClient.record_denial(client, "t", "m")
+
+    ops = for %{op: op} <- ScriptedHost.requests(host), do: op
+    assert ops == ~w(take_rate storage oauth_token tool_call record_denial)
+  end
+
+  test "a second lost answer is lost", %{host: host, client: client} do
+    ScriptedHost.script(host, "renew", :drop)
+    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    assert length(ScriptedHost.requests(host, "renew")) == 2
+  end
+
+  test "an answer CYFR gave is never retried, lost and unavailable included", %{
+    host: host,
+    client: client
+  } do
+    ScriptedHost.script(host, "renew", [{:error, :unavailable}, {:error, :lost}])
+
+    assert {:error, :unavailable} = HostClient.renew(client, [client.attempt])
+    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    assert length(ScriptedHost.requests(host, "renew")) == 2
+  end
+
+  test "an answer past the answer bound, or not an answer, is lost", %{host: host, client: client} do
+    ScriptedHost.script(host, "renew", {:raw, 200, String.duplicate("x", Cyfr.HostAPI.max_answer_bytes() + 1)})
+    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+
+    ScriptedHost.script(host, "renew", {:raw, 200, "not json"})
+    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+
+    ScriptedHost.script(host, "renew", {:raw, 200, ~s({"neither": "ok"})})
+    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+  end
+
+  test "a host that cannot be reached loses every call", %{host: host} do
+    attempt = ScriptedHost.attempt!(host)
+    client = %{attempt.client | host_url: "http://127.0.0.1:9"}
+
+    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    assert {:error, {:uncertain, _}} = HostClient.storage(client, :read, %{"path" => "a"})
+    assert ScriptedHost.requests(host) == []
+  end
+
+  test "a client whose key is not its attempt's is refused by the host and answered lost", %{
+    host: host,
+    attempt: attempt,
+    client: client
+  } do
+    stranger = %{client | call_key: :crypto.strong_rand_bytes(32)}
+
+    assert {:error, :lost} = HostClient.push_deltas(stranger, [~s({"type":"note"})])
+    assert {:error, :lost} = HostClient.renew(stranger, [attempt.attempt])
+
+    # A refusal by status is a lost answer: each retried class asked once more.
+    assert [
+             {:refused, "push_deltas", :bad_mac},
+             {:refused, "push_deltas", :bad_mac},
+             {:refused, "renew", :bad_mac},
+             {:refused, "renew", :bad_mac}
+           ] = ScriptedHost.requests(host)
+  end
+
+  test "a child CYFR admits is opened under this attempt's seal key and runs as the same runner", %{
+    host: host,
+    attempt: attempt,
+    client: client
+  } do
+    child = ScriptedHost.attempt!(host, boot: client.boot, runner: client.runner, input: %{"child" => 1})
+
+    ScriptedHost.script(host, "admit_child", fn _args, _caller ->
+      {:ok,
+       %{
+         "assignment" => child.assignment,
+         "attempt_keys" => sealed_for(attempt.keys.seal, child.keys),
+         "input" => child.input,
+         "secrets" => %{"KEY" => "k"}
+       }}
+    end)
+
+    assert {:ok, admitted} =
+             HostClient.admit_child(client, child.component_ref, nil, %{"child" => 1}, :call)
+
+    assert admitted.assignment.execution_id == child.execution_id
+    assert admitted.input == %{"child" => 1}
+    assert admitted.secrets == %{"KEY" => "k"}
+    assert admitted.client.runner == client.runner
+    assert admitted.client.host_url == client.host_url
+    assert admitted.client.execution_id == child.execution_id
+  end
+
+  test "a child whose keys do not open under this attempt's seal key is given back at once", %{
+    host: host,
+    attempt: attempt,
+    client: client
+  } do
+    child = ScriptedHost.attempt!(host, boot: client.boot, runner: client.runner)
+    other_seal = :crypto.strong_rand_bytes(32)
+
+    ScriptedHost.script(host, "admit_child", fn _args, _caller ->
+      {:ok,
+       %{
+         "assignment" => child.assignment,
+         "attempt_keys" => sealed_for(other_seal, child.keys),
+         "input" => child.input,
+         "secrets" => %{}
+       }}
+    end)
+
+    assert {:error, :lost} = HostClient.admit_child(client, child.component_ref, nil, %{}, :call)
+
+    assert [%{args: %{"execution_id" => released}}] = ScriptedHost.requests(host, "release_child")
+    assert released == child.execution_id
+    assert attempt.execution_id != released
+  end
+
+  test "a worker service's exit report is signed with its dispatch key and posted to the host", %{
+    host: host
+  } do
+    {:ok, credentials} =
+      Opus.Credentials.load(
+        service_id: "wrk_local",
+        service_key: Base.encode16(worker_key(host, "wrk_local"), case: :lower),
+        host_url: host.url,
+        bind: "127.0.0.1",
+        port: 0
+      )
+
+    assert :ok = HostClient.runner_exited(credentials, "boot_x", "runner_1", ["att_1"])
+
+    assert [%{op: "runner_exited", args: args, caller: report, header: header}] =
+             ScriptedHost.requests(host)
+
+    assert args == %{"runner" => "runner_1", "attempts" => ["att_1"]}
+    assert %{service: "wrk_local", boot: "boot_x"} = report
+    assert String.starts_with?(header, "v1 kind=report ")
+
+    # A stranger's report is refused by the host, once more on the retry.
+    stranger = %{credentials | dispatch_key: :crypto.strong_rand_bytes(32)}
+    assert {:error, :lost} = HostClient.runner_exited(stranger, "boot_x", "runner_1", ["att_1"])
+
+    assert [_, {:refused, "runner_exited", :bad_mac}, {:refused, "runner_exited", :bad_mac}] =
+             ScriptedHost.requests(host)
+  end
+
+  test "a client's inspection names its attempt and host, and never its keys", %{
+    attempt: attempt,
+    client: client
+  } do
     shown = inspect(client, limit: :infinity)
 
     assert shown =~ attempt.attempt
+    assert shown =~ client.host_url
     refute shown =~ "_key:"
 
     for key <- [attempt.keys.call, attempt.keys.seal],
         do: refute(shown =~ inspect(key, limit: :infinity))
-
-    Cyfr.Execution.Attempt.refuse(attempt.pid, "not started")
   end
 
-  test "a client whose key is not its attempt's is answered lost" do
-    attempt = AttemptFixtures.attached!()
+  test "the transport's log carries nothing a call carried", %{host: host, client: client} do
+    ScriptedHost.script(host, "storage", :drop)
+    canary = "CANARY-" <> Base.encode16(:crypto.strong_rand_bytes(8))
 
-    client =
-      HostClient.new(
-        %{attempt.keys | call: :crypto.strong_rand_bytes(32)},
-        attempt.runner,
-        attempt.boot
-      )
+    log =
+      capture_log(fn ->
+        assert {:error, {:uncertain, _}} =
+                 HostClient.storage(client, :write, %{"path" => "a", "content" => canary})
+      end)
 
-    assert {:error, :lost} = HostClient.push_deltas(client, [~s({"type":"note"})])
-    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    assert log =~ "storage"
+    refute log =~ canary
+    refute log =~ client.host_url
+    refute log =~ Base.encode16(client.call_key, case: :lower)
+  end
+
+  defp sealed_for(seal_key, keys) do
+    {:ok, sealed} = Cyfr.WorkerAuth.seal_attempt_keys(seal_key, keys)
+    sealed
+  end
+
+  defp worker_key(host, service) do
+    {:ok, key} = Cyfr.WorkerAuth.worker_key(host.root, service)
+    key
+  end
+
+  # The answer envelope the client reads is the one `Cyfr.WorkerWire` builds.
+  test "the answers read are the worker protocol's envelopes" do
+    assert WorkerWire.ok(1) == %{"ok" => 1}
+    assert WorkerWire.error(:lost) == %{"error" => "lost"}
   end
 end

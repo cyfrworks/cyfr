@@ -546,7 +546,7 @@ defmodule Opus.AsyncTracker do
   # These strings reach the guest: `store_result/3` puts them where
   # `Opus.FormulaHandler.format_task_result/2` picks them up, and because
   # they arrive already-stringified they pass through `stringify_reason/1`
-  # and `Cyfr.Ops.Error.render/2` unchanged — the renderers' binary clause is the
+  # and `Cyfr.GuestError.render/1` unchanged — the renderers' binary clause is the
   # identity. `inspect/1` on an exit reason carries the exception struct, the
   # term that failed to match and a stack trace, so it handed Elixir internals
   # to a component. The detail goes to the log, where the operator can read

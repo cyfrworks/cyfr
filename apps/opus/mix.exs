@@ -9,7 +9,7 @@ defmodule Opus.MixProject do
       app: :opus,
       version: "0.5.8",
       build_path: "../../_build",
-      config_path: "../../config/config.exs",
+      config_path: "config/config.exs",
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       elixir: "~> 1.19",
@@ -22,25 +22,49 @@ defmodule Opus.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
+      extra_applications: [:logger, :crypto],
+      env: env(Mix.env()),
       mod: {Opus.Application, []}
     ]
   end
 
+  # The umbrella starts every app before a suite's helper runs, so the
+  # test environment carries bootable defaults: a worker service on this
+  # machine, listening on a port a test asks for, with a key the suites
+  # replace (`test/test_helper.exs`, the cyfr integration suite). Every
+  # other environment configures all of them or refuses to boot
+  # (`Opus.Credentials`).
+  defp env(:test) do
+    [
+      service_id: "wrk_local",
+      service_key: String.duplicate("0", 64),
+      host_url: "http://127.0.0.1:4300",
+      bind: "127.0.0.1",
+      port: 0
+    ]
+  end
+
+  defp env(_env), do: []
+
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  defp aliases do
-    [test: ["ecto.create -r Arca.Repo --quiet", "ecto.migrate -r Arca.Repo --quiet", "test"]]
-  end
+  # The suite starts the application itself (`test/test_helper.exs`), once
+  # it has given the worker service the credentials its scripted host
+  # verifies.
+  defp aliases, do: [test: ["test --no-start"]]
 
+  # The WASM engine and its worker service: the shared contracts, the
+  # runtime, its own listener and its client of CYFR's host API. Nothing of
+  # the control plane: `Opus.HostSurfaceTest` keeps it so.
   defp deps do
     [
       {:wasmex, "~> 0.13.0"},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
-      {:cyfr_contracts, in_umbrella: true},
-      {:cyfr, in_umbrella: true}
+      {:plug, "~> 1.16"},
+      {:bandit, "~> 1.5"},
+      {:cyfr_contracts, in_umbrella: true}
     ]
   end
 end
