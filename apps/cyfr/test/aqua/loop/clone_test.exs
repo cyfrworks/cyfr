@@ -82,7 +82,7 @@ defmodule Aqua.Loop.CloneTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: text},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     turn
@@ -168,7 +168,7 @@ defmodule Aqua.Loop.CloneTest do
 
     assert clone.status == "completed"
     assert clone.root_execution_id == root and clone.attempt == attempt
-    assert clone.orchestrator == "planner"
+    assert clone.agent == "planner"
     assert clone.profile_id == parent.profile_id and is_binary(clone.profile_id)
     assert clone.consent_id == parent.consent_id and is_binary(clone.consent_id)
 
@@ -435,7 +435,7 @@ defmodule Aqua.Loop.CloneTest do
 
     assert {:ok, %{content: content}} = Tape.message(ctx, refused.result_message_id)
     assert content =~ "consent"
-    assert [%{orchestrator: "web"}] = clones_of(turn)
+    assert [%{agent: "web"}] = clones_of(turn)
   end
 
   test "a member's own role, consented through the soul's walk, clones under the soul's consent",
@@ -465,7 +465,7 @@ defmodule Aqua.Loop.CloneTest do
     assert :completed = run!(ctx, turn)
     {:ok, parent} = Tape.turn(ctx, turn.id)
     [clone] = clones_of(turn)
-    assert clone.orchestrator == "scout" and clone.status == "completed"
+    assert clone.agent == "scout" and clone.status == "completed"
     assert clone.profile_id == parent.profile_id
     assert {:ok, []} = Source.DB.profiles(ctx, "agent:local.scout")
     assert %{authority: %{chain: [@soul, "agent:local.scout", @model]}} = call_under("scout")

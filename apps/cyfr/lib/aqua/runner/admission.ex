@@ -27,8 +27,8 @@ defmodule Aqua.Runner.Admission do
   @doc """
   Admit `text` from `ctx` into the thread, or refuse it with the
   reason the sender is told: `:empty`, `:message_too_long`, `:archived`,
-  `:not_member`, `:no_orchestrator`. `opts`: `:attachments`,
-  `:orchestrators` (the sender's roster), `:orchestrator` (an explicit
+  `:not_member`, `:no_agent`. `opts`: `:attachments`,
+  `:agents` (the sender's roster), `:agent` (an explicit
   pick). Answers the decision and the trimmed text.
   """
   @spec check(Context.t(), String.t(), String.t(), keyword()) ::
@@ -68,11 +68,11 @@ defmodule Aqua.Runner.Admission do
   end
 
   defp address(athanor_id, text, opts) do
-    roster = Keyword.get(opts, :orchestrators, [])
+    roster = Keyword.get(opts, :agents, [])
     {_stripped, mentioned} = Roster.parse_mention(text, roster)
 
     if mentioned || Members.solo?(athanor_id) do
-      case pick(roster, mentioned, Keyword.get(opts, :orchestrator), Keyword.get(opts, :last)) do
+      case pick(roster, mentioned, Keyword.get(opts, :agent), Keyword.get(opts, :last)) do
         {:ok, name} -> {:ok, {:turn, name}, text}
         {:error, _} = error -> error
       end
@@ -91,7 +91,7 @@ defmodule Aqua.Runner.Admission do
       is_binary(explicit) and explicit != "" -> {:ok, explicit}
       is_binary(last) -> {:ok, last}
       match?(%{"name" => n} when is_binary(n), List.first(roster)) -> {:ok, hd(roster)["name"]}
-      true -> {:error, :no_orchestrator}
+      true -> {:error, :no_agent}
     end
   end
 end

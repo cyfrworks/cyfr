@@ -155,7 +155,7 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp pinned_agent(turn, bytes) do
-    with {:ok, parsed} <- Compendium.AquaAgent.parse(turn.orchestrator, bytes),
+    with {:ok, parsed} <- Compendium.AquaAgent.parse(turn.agent, bytes),
          {:ok, digest} <- Compendium.AquaAgent.capability_digest(parsed) do
       if is_nil(turn.agent_capability_digest) or digest == turn.agent_capability_digest,
         do: {:ok, agent_map(parsed)},
@@ -164,8 +164,8 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp roster_agent(turn, roster) do
-    case Enum.find(roster, &(&1["name"] == turn.orchestrator)) do
-      nil -> {:error, :no_orchestrator}
+    case Enum.find(roster, &(&1["name"] == turn.agent)) do
+      nil -> {:error, :no_agent}
       entry -> {:ok, agent_map(entry)}
     end
   end

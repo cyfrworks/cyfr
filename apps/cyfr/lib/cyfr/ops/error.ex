@@ -36,7 +36,7 @@ defmodule Cyfr.Ops.Error do
           | :busy
           | :not_member
           | :archived
-          | :no_orchestrator
+          | :no_agent
           | :execution_unavailable
           | :message_too_long
           | :client_id_reused
@@ -64,7 +64,7 @@ defmodule Cyfr.Ops.Error do
   def reason?(:busy), do: true
   def reason?(:not_member), do: true
   def reason?(:archived), do: true
-  def reason?(:no_orchestrator), do: true
+  def reason?(:no_agent), do: true
   def reason?(:client_id_reused), do: true
   def reason?(:message_id_reused), do: true
   def reason?(:execution_unavailable), do: true
@@ -122,7 +122,7 @@ defmodule Cyfr.Ops.Error do
   def message(:not_member), do: "Only a member of the estate can act in its threads"
   def message(:archived), do: "This estate is archived — nothing runs in it"
 
-  def message(:no_orchestrator),
+  def message(:no_agent),
     do: "This estate has no assistant to address — reset its AQUA tree"
 
   def message(:execution_unavailable), do: "The execution engine is unavailable — retry shortly"

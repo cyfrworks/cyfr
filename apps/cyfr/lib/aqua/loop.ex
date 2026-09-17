@@ -358,7 +358,7 @@ defmodule Aqua.Loop do
              thread_id: turn.thread_id,
              envelope: %{"turn" => turn.id}
            ) do
-      with {:ok, snapshot} <- Compendium.AgentIndex.snapshot(ctx, turn.orchestrator),
+      with {:ok, snapshot} <- Compendium.AgentIndex.snapshot(ctx, turn.agent),
            :ok <- consented_release(ctx, claim.authority, turn, snapshot),
            {:ok, started} <-
              Tape.start_turn(ctx, turn, %{
@@ -424,7 +424,7 @@ defmodule Aqua.Loop do
   defp pinned_authority(_ctx, _turn), do: {:error, :no_pin}
 
   # The source a turn runs as: the soul, or the role a person addressed.
-  defp source_ref(%{orchestrator: name}) do
+  defp source_ref(%{agent: name}) do
     if Compendium.AgentSource.soul?(name),
       do: Compendium.AgentSource.soul_ref(),
       else: Compendium.AgentSource.ref(name)

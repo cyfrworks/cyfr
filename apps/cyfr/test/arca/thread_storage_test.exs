@@ -205,9 +205,9 @@ defmodule Arca.ThreadStorageTest do
     assert seqs.(after_seq: 1, upto_seq: 3) == [2, 3]
     assert seqs.(upto_seq: 2) == [1, 2]
 
-    assert {:ok, %{turn_seq: 0, orchestrator: nil}} = Threads.get(ctx, thread.id)
-    {:ok, updated} = Threads.update(ctx, thread.id, %{turn_seq: 3, orchestrator: "aqua"})
-    assert updated.turn_seq == 3 and updated.orchestrator == "aqua"
+    assert {:ok, %{turn_seq: 0, agent: nil}} = Threads.get(ctx, thread.id)
+    {:ok, updated} = Threads.update(ctx, thread.id, %{turn_seq: 3, agent: "aqua"})
+    assert updated.turn_seq == 3 and updated.agent == "aqua"
   end
 
   test "the reserved authors are the schema's, and neither titles a thread", %{ctx: ctx} do
@@ -249,7 +249,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, _} =
       Arca.TurnStorage.accept_message(ctx, running.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     {:ok, _} = Threads.update(ctx, running.id, %{last_message_at: old})

@@ -297,7 +297,7 @@ defmodule Cyfr.Test.StepBench do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "hello"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     task = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)

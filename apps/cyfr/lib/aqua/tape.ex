@@ -42,7 +42,7 @@ defmodule Aqua.Tape do
   @doc """
   Accept a message atomically with the work it opens. `attrs`:
   `:message` (`:author`, `:content`, `:payload`, optional `:id`,
-  `:client_id`), and one of `:turn` (`%{orchestrator, requested_by,
+  `:client_id`), and one of `:turn` (`%{agent, requested_by,
   model, options}`) or `:steer_turn_id`, or neither for room content.
 
   A `client_id` this thread already accepted answers the existing
@@ -556,7 +556,7 @@ defmodule Aqua.Tape do
 
   defp same_work?(%{message_id: message_id} = turn, %{} = wanted, nil)
        when is_binary(message_id) do
-    turn.orchestrator == Map.get(wanted, :orchestrator) and
+    turn.agent == Map.get(wanted, :agent) and
       turn.model == Map.get(wanted, :model) and
       turn.options == encode(Map.get(wanted, :options))
   end

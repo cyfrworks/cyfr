@@ -60,7 +60,7 @@ defmodule Arca.TurnTapeStorageTest do
           client_id: Keyword.get(opts, :client_id)
         },
         turn: %{
-          orchestrator: "aqua",
+          agent: "aqua",
           requested_by: Keyword.get(opts, :author, ctx.user_id),
           model: Keyword.get(opts, :model),
           options: %{"room" => nil}
@@ -142,13 +142,13 @@ defmodule Arca.TurnTapeStorageTest do
       assert turn.message_id == message.id
       assert turn.fence != ""
       assert turn.runner_id == Cyfr.Boot.id()
-      assert {:ok, %{turn_seq: 1, orchestrator: "aqua"}} = Threads.get(ctx, thread.id)
+      assert {:ok, %{turn_seq: 1, agent: "aqua"}} = Threads.get(ctx, thread.id)
 
       # The same client id is one acceptance: the retry finds it.
       assert {:error, :duplicate_client_id} =
                TurnStorage.accept_message(ctx, thread.id, %{
                  message: %{author: ctx.user_id, content: "@aqua do it", client_id: "c-1"},
-                 turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+                 turn: %{agent: "aqua", requested_by: ctx.user_id}
                })
 
       assert {:ok, %{message: %{id: mid}, turn: %{id: tid}}} =

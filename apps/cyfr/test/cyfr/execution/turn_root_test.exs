@@ -57,7 +57,7 @@ defmodule Cyfr.Execution.TurnRootTest do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     {:ok, ctx: ctx, turn: turn}

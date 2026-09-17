@@ -16,7 +16,7 @@ defmodule Arca.Schemas.Turn do
   schema "turns" do
     field :athanor_id, :string
     field :thread_id, :string
-    field :orchestrator, :string
+    field :agent, :string
     field :requested_by, :string
     field :status, :string
     field :error, :string

@@ -172,7 +172,7 @@ defmodule Aqua.RunnerTest do
     # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =
              Runner.send_message(fresh_ctx, fresh_thread.id, "@aqua hi",
-               orchestrators: [%{"name" => "aqua", "title" => "AQUA"}]
+               agents: [%{"name" => "aqua", "title" => "AQUA"}]
              )
 
     assert [] = Threads.messages(fresh_ctx, fresh_thread.id)
@@ -255,7 +255,7 @@ defmodule Aqua.RunnerTest do
     assert_receive {:scripted_probe, worker, _}, 30_000
 
     assert {:ok, %{admitted: :turn, turn_id: second}} =
-             Runner.send_message(ctx, thread.id, "also this", orchestrator: "planner")
+             Runner.send_message(ctx, thread.id, "also this", agent: "planner")
 
     assert second != first
     assert %{running: true, queued: 1} = Runner.state(thread.id, ctx.athanor_id)
@@ -264,8 +264,8 @@ defmodule Aqua.RunnerTest do
     assert_receive {:thread, _, {:turn_finished}}, 60_000
     assert_receive {:thread, _, {:turn_finished}}, 60_000
 
-    assert {:ok, %{status: "completed", orchestrator: "aqua"}} = Tape.turn(ctx, first)
-    assert {:ok, %{status: "completed", orchestrator: "planner"}} = Tape.turn(ctx, second)
+    assert {:ok, %{status: "completed", agent: "aqua"}} = Tape.turn(ctx, first)
+    assert {:ok, %{status: "completed", agent: "planner"}} = Tape.turn(ctx, second)
   end
 
   test "a viewer joining mid-answer reads the text streamed so far, until the step's row lands",
@@ -389,7 +389,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua keep it"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     assert {:paused, :approval} =
@@ -458,7 +458,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     assert {:paused, :uncertain} =
@@ -489,7 +489,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     assert {:paused, :uncertain} =
@@ -538,7 +538,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     # Ended between acceptance and its run: the root is claimed, the start
@@ -560,7 +560,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@ghost go"},
-        turn: %{orchestrator: "ghost", requested_by: ctx.user_id}
+        turn: %{agent: "ghost", requested_by: ctx.user_id}
       })
 
     assert {:failed, :setup_required} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
@@ -589,7 +589,7 @@ defmodule Aqua.RunnerTest do
 
     {:ok, [planner_profile]} = Source.DB.profiles(ctx, "agent:local.planner")
     {:ok, turn} = Tape.turn(ctx, turn_id)
-    assert turn.status == "completed" and turn.orchestrator == "planner"
+    assert turn.status == "completed" and turn.agent == "planner"
     assert turn.profile_id == planner_profile.id
     assert {:ok, bytes} = Tape.agent_revision(ctx, turn)
     assert bytes =~ "Planner"
@@ -685,7 +685,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn: accepted}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua later"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     {:ok, _pid} = Runner.ensure(thread.id, ctx.athanor_id)
@@ -703,7 +703,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, other_thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua carry on"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     {:ok, claim} =
@@ -1018,7 +1018,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua held"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     holder = spawn(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
@@ -1079,7 +1079,7 @@ defmodule Aqua.RunnerTest do
 
       request =
         case unquote(operation) do
-          :send -> {:send, ctx, "@aqua late", [orchestrators: [%{"name" => "aqua"}]]}
+          :send -> {:send, ctx, "@aqua late", [agents: [%{"name" => "aqua"}]]}
           :stop -> {:stop, ctx}
           :revoke_grant -> {:revoke_grant, ctx, "aqua", "notes", "keep"}
           :restart_for_consent -> {:restart_for_consent, ctx, %{}}
@@ -1244,7 +1244,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     holder = spawn(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)

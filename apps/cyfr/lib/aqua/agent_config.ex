@@ -182,7 +182,7 @@ defmodule Aqua.AgentConfig do
   end
 
   @doc """
-  For each orchestrator's catalyst: the installed release it resolves to and
+  For each agent's catalyst: the installed release it resolves to and
   whether its consent is complete — `%{catalyst_ref => {:ready | :needs_key
   | :missing, resolved_ref}}`.
 

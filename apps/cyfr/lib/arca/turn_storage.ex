@@ -65,7 +65,7 @@ defmodule Arca.TurnStorage do
   - `:message` — the row: `:author`, `:content`, `:payload`, optional
     `:id` (a caller-minted id, so attachments stored under it are found)
     and `:client_id` (the sender's retry identity).
-  - `:turn` — `%{orchestrator, requested_by, model, options}` to open an
+  - `:turn` — `%{agent, requested_by, model, options}` to open an
     `accepted` turn keyed by the message; `nil` for room content.
   - `:steer_turn_id` — attach the message to an open turn of the thread
     instead; a turn that has ended answers `{:error, :turn_over}`. The
@@ -159,7 +159,7 @@ defmodule Arca.TurnStorage do
           athanor_id: athanor_id,
           thread_id: thread.id,
           message_id: row.id,
-          orchestrator: Map.get(attrs, :orchestrator),
+          agent: Map.get(attrs, :agent),
           requested_by: Map.get(attrs, :requested_by),
           model: Map.get(attrs, :model),
           options: encode(Map.get(attrs, :options)),
@@ -180,7 +180,7 @@ defmodule Arca.TurnStorage do
     thread
     |> Thread.changeset(%{
       turn_seq: (thread.turn_seq || 0) + 1,
-      orchestrator: Map.get(attrs, :orchestrator)
+      agent: Map.get(attrs, :agent)
     })
     |> Arca.Repo.update!()
 
@@ -1335,7 +1335,7 @@ defmodule Arca.TurnStorage do
   Open a clone turn under `parent_turn_id`: its own `turns` row sharing
   the parent's root execution and attempt, the `clone` step in the
   parent (dispatched), and the task as the clone's first row. `attrs`:
-  `:role` (the orchestrator), `:task`, `:model`, `:step_id` (an existing
+  `:role` (the agent), `:task`, `:model`, `:step_id` (an existing
   clone step to bind, else one is recorded), `:fence`, and the clone's
   pins — `:profile_id`, `:consent_id`, `:agent_revision_digest`,
   `:agent_capability_digest` — written with the row so the clone runs
@@ -1382,7 +1382,7 @@ defmodule Arca.TurnStorage do
                 root_execution_id: parent.root_execution_id,
                 attempt: parent.attempt,
                 budget_id: parent.budget_id,
-                orchestrator: role,
+                agent: role,
                 requested_by: parent.requested_by,
                 model: Map.get(attrs, :model),
                 profile_id: Map.get(attrs, :profile_id),

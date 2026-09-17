@@ -30,7 +30,7 @@ defmodule Emissary.MCP.ThreadToolTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua do a thing"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     {:ok, %{execution: execution, attempt: attempt}} =
@@ -218,7 +218,7 @@ defmodule Emissary.MCP.ThreadToolTest do
           kind: "approval",
           status: "pending",
           content: "Pull component",
-          payload: %{"orchestrator" => "aqua", "intent" => intent}
+          payload: %{"agent" => "aqua", "intent" => intent}
         })
 
       assert {:ok, %{messages: rows}} =

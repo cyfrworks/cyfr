@@ -7,8 +7,8 @@ defmodule Arca.Schemas.Thread do
 
   A thread is the athanor's: every member reads the same thread and
   any member may send the next message. Its transcript is its messages;
-  its turns are their own rows (`Arca.TurnStorage`). `orchestrator` is
-  the agent the last turn addressed, `turn_seq` the cursor of the last
+  its turns are their own rows (`Arca.TurnStorage`). `agent` is
+  the one the last turn addressed, `turn_seq` the cursor of the last
   human row a turn took up.
   """
 
@@ -23,7 +23,7 @@ defmodule Arca.Schemas.Thread do
     field :athanor_id, :string
     field :title, :string, default: "New thread"
     field :created_by, :string
-    field :orchestrator, :string
+    field :agent, :string
     field :turn_seq, :integer, default: 0
     field :last_message_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)
@@ -34,7 +34,7 @@ defmodule Arca.Schemas.Thread do
     :athanor_id,
     :title,
     :created_by,
-    :orchestrator,
+    :agent,
     :turn_seq,
     :last_message_at
   ]
