@@ -220,7 +220,7 @@ defmodule Cyfr.Execution.Host.Children do
         {:error, :lost}
 
       pid ->
-        :closed = Attempt.refuse(pid, sentence)
+        :closed = Attempt.release(pid, sentence)
         {:ok, true}
     end
   end

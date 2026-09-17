@@ -40,8 +40,8 @@ defmodule Cyfr.Schedules.ProviderTest do
 
     # A schedule binds a consented profile at create; seed one owner
     # profile for the target these tests point at.
-    Opus.Test.ConsentFixtures.start_source!()
-    Opus.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.test", profile_id: "prof-cron")
+    Sanctum.Test.ConsentFixtures.start_source!()
+    Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.test", profile_id: "prof-cron")
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)

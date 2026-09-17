@@ -280,6 +280,19 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   @doc """
+  Close the run of the attempt `pid` failed with `sentence` and stop,
+  whether or not a runner has attached: the runner that claimed it gives
+  it back (`c:Cyfr.HostAPI.release_child/2`), which `Cyfr.Execution.Host`
+  verifies before calling. Answers `:closed`.
+  """
+  @spec release(pid(), String.t()) :: :closed
+  def release(pid, sentence) when is_pid(pid) and is_binary(sentence) do
+    GenServer.call(pid, {:release, sentence}, :infinity)
+  catch
+    :exit, _reason -> :closed
+  end
+
+  @doc """
   Hand the attempt `pid`, attached by the runner that claimed it, from its
   waiter to that runner: the calling process, its waiter, stops waiting and
   the attempt is registered under its execution's id in
@@ -501,6 +514,9 @@ defmodule Cyfr.Execution.Attempt do
       do: {:reply, :attached, state}
 
   def handle_call({:refuse, sentence}, _from, state), do: refuse_run(state, sentence)
+
+  # A claimant's give-back closes the run whoever holds the claim.
+  def handle_call({:release, sentence}, _from, state), do: refuse_run(state, sentence)
 
   # Only the waiter hands the attempt over, once a runner has attached, and
   # only to a worker service that can stop the run.

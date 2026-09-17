@@ -66,12 +66,12 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
       assert Opus.FormulaHandler.render_reason({:not_found, "component", "x"}) ==
                Error.message({:not_found, "component", "x"})
 
+      # Opus renders from contract data alone (`Cyfr.GuestError`): a Sanctum
+      # refusal reaches a guest only once CYFR has rendered it into the wire
+      # answer, so the bare term is internal to the engine and generalized.
       unauthorized = {:missing_permission, :vault_read}
-
-      if Sanctum.Unauthorized.reason?(unauthorized) do
-        assert Opus.FormulaHandler.render_reason(unauthorized) ==
-                 Sanctum.Unauthorized.message(unauthorized)
-      end
+      assert Sanctum.Unauthorized.reason?(unauthorized)
+      assert Opus.FormulaHandler.render_reason(unauthorized) == "The call failed."
     end
   end
 end

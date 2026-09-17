@@ -75,7 +75,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
         authority: authority,
         component_ref: "#{@formula}:1.0.0",
         component_type: :formula,
-        worker: ScriptedWorker,
+        worker: ScriptedWorker.endpoint(),
         reservation: true
       ] ++ opts
     )
@@ -206,7 +206,9 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       # reaches it through its worker service.
       pid = Attempt.whereis(child.execution_id)
 
-      assert [{^pid, {:dispatched, ScriptedWorker}}] =
+      endpoint = ScriptedWorker.endpoint()
+
+      assert [{^pid, {:dispatched, ^endpoint}}] =
                Registry.lookup(Cyfr.Execution.Registry, child.execution_id)
 
       assert Sanctum.Authority.budget(authority).in_flight == 1
